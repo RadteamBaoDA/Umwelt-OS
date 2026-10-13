@@ -11,12 +11,12 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings
@@ -475,7 +475,11 @@ __all__ = [
 
 async def list_run_meta(session: AsyncSession, limit: int) -> list[_RunMeta]:
     """Return at most ``limit`` (<=100) newest automation runs as metadata only (no payload, reason text excluded)."""
-    rows = await session.scalars(select(_AutomationRun).order_by(_AutomationRun.created_at.desc()).limit(min(limit, 100)))
+    # Column projection: payload and reason text are never loaded for this metadata page.
+    rows = await session.execute(select(
+        _AutomationRun.id, _AutomationRun.status, _AutomationRun.created_at, _AutomationRun.updated_at,
+        _AutomationRun.finished_at, _AutomationRun.origin_run_id,
+    ).order_by(_AutomationRun.created_at.desc()).limit(min(limit, 100)))
     return [_RunMeta(kind="automation", id=str(r.id), status=r.status, created_at=r.created_at,
                      updated_at=r.updated_at, finished_at=r.finished_at,
                      origin_run_id=str(r.origin_run_id) if r.origin_run_id else None)
@@ -490,3 +494,27 @@ async def get_run_meta_by_id(session: AsyncSession, run_id: UUID) -> _RunMeta | 
     return _RunMeta(kind="automation", id=str(row.id), status=row.status, created_at=row.created_at,
                     updated_at=row.updated_at, finished_at=row.finished_at,
                     origin_run_id=str(row.origin_run_id) if row.origin_run_id else None)
+
+
+RUN_RETENTION = timedelta(days=30)
+# Terminal statuses only: requires_review still waits on the owner, awaiting_approval/queued/running are live.
+_PURGEABLE_RUN_STATUSES = ("succeeded", "failed", "skipped", "dropped")
+
+
+async def purge_finished_runs(session: AsyncSession, *, now: datetime | None = None, limit: int = 1000) -> int:
+    """Delete one bounded slice of long-finished automation runs; the caller commits.
+
+    Schedules can create hundreds of (often no-op) runs a day per rule. Only terminal runs finished
+    over 30 days ago qualify, and runs created in the last hour are always kept because the hourly
+    rate cap in ``execution`` counts them. The run's action ledger rows go with it through the
+    ``automation_run_actions.run_id`` ON DELETE CASCADE. Returns the number of runs deleted.
+    """
+    now = now or datetime.now(UTC)
+    doomed = select(_AutomationRun.id).where(
+        _AutomationRun.status.in_(_PURGEABLE_RUN_STATUSES),
+        _AutomationRun.finished_at.is_not(None),
+        _AutomationRun.finished_at < now - RUN_RETENTION,
+        _AutomationRun.created_at < now - timedelta(hours=1),
+    ).limit(limit)
+    result = await session.execute(delete(_AutomationRun).where(_AutomationRun.id.in_(doomed)))
+    return int(getattr(result, "rowcount", 0) or 0)

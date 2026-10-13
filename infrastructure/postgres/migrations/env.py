@@ -16,7 +16,12 @@ from core.database import Base
 from core.demo_seed import DemoSeedReceipt
 from core.realtime import ReplayHead, ReplayRecord
 from core.remote_heavy_models import RemoteHeavyGuard
-from core.workspaces.models import Workspace, WorkspaceInvitation, WorkspaceMembership, WorkspaceShare
+from core.workspaces.models import (
+    Workspace,
+    WorkspaceInvitation,
+    WorkspaceMembership,
+    WorkspaceShare,
+)
 from modules.agents.models import AgentApproval, AgentEffect, AgentRun, AgentToolCall
 from modules.automations.models import (
     Automation,

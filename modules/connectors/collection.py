@@ -18,7 +18,7 @@ import secrets
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
 from typing import Any, Literal, cast
@@ -355,7 +355,16 @@ async def _accept_generic(
     a = run.attempt
     async with run.factory() as session:
         await lock_access_fence(session, scope=a.scope, expected=a.access_fence, multi_workspace_enabled=a.multi)
-        if not records:
+        parsed = _records(records) if records else []
+        if parsed:
+            # Re-polled items already stored add only garbage rows; an all-seen poll settles as no-change.
+            parsed = await ingestion.drop_seen_records(
+                session, source_id=a.source.id, source_generation=a.source.generation,
+                provider=a.source.provider, records=parsed)
+            if not parsed and cursor_after != cursor_before:
+                # The no-change path carries no batch cursor, so hand it the cursor this walk earned.
+                update = replace(update or CollectionStateUpdate(), cursor_after=cursor_after)
+        if not parsed:
             await ingestion.accept_collection_no_changes(
                 session, source_id=a.source.id, source_generation=a.source.generation,
                 connector_revision=a.connector_revision, request_ref=a.ref, scope=a.scope,
@@ -364,7 +373,7 @@ async def _accept_generic(
         batch = ReceiveBatch(
             source_id=a.source.id, source_generation=a.source.generation, connector_revision=a.connector_revision,
             batch_key=f"connector-request:{a.ref.request_id}", cursor_before=cursor_before, cursor_after=cursor_after,
-            records=_records(records))
+            records=parsed)
         await ingestion.receive_connector_batch(
             session, batch, None, scope=a.scope, multi_workspace_enabled=a.multi, request_ref=a.ref,
             state_update=update)
@@ -797,7 +806,8 @@ async def _run_feed(run: Run) -> None:
     ) if state.validators_revision == a.connector_revision else None
     lease = await _lease(run)
     fetched = await _get_body(run, news.feed_request(provider, stored, revision, url), max_bytes=news.MAX_FEED_BYTES)
-    result = _payload(news.map_feed_response, provider, 200 if fetched.body is not None else 304, fetched.body or b"", collected_at)
+    # feedparser-style XML parse of up to MAX_FEED_BYTES is CPU-bound: keep it off the event loop.
+    result = await asyncio.to_thread(_payload, news.map_feed_response, provider, 200 if fetched.body is not None else 304, fetched.body or b"", collected_at)
     if result.not_modified:
         await _accept_native(run, lease, (), "returned_snapshot", collected_at)
         return

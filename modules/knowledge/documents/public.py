@@ -4,7 +4,7 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
@@ -1908,6 +1908,19 @@ async def add_content_chunks(session: AsyncSession, version: DocumentVersion) ->
     return len(drafts)
 
 
+_superseded_version_hooks: list[Callable[[AsyncSession, UUID], Awaitable[None]]] = []
+
+
+def register_version_superseded_hook(hook: Callable[[AsyncSession, UUID], Awaitable[None]]) -> None:
+    """Register a callback run in the caller's transaction when a document version stops being current.
+
+    Search depends on Documents, so Documents cannot import it; derived-data owners register here
+    (idempotently) at import time instead. Hooks must only delete derived rows for that version.
+    """
+    if hook not in _superseded_version_hooks:
+        _superseded_version_hooks.append(hook)
+
+
 async def backfill_current_chunks(session: AsyncSession, limit: int = 2, *, multi_workspace_enabled: bool) -> int:
     """Fill legacy manual revisions created before chunking was enabled.
 
@@ -1916,8 +1929,9 @@ async def backfill_current_chunks(session: AsyncSession, limit: int = 2, *, mult
     transaction per version, so no two workspaces' locks are ever held together. A version
     whose lineage is denied or stale is skipped; nothing is rebased onto another actor.
     """
-    candidates = [(row.id, row.document_id, row.version_number) for row in (await session.scalars(
-        select(DocumentVersion)
+    # Only the three identity columns are needed; selecting entities would load every version body.
+    candidates = [(row.id, row.document_id, row.version_number) for row in (await session.execute(
+        select(DocumentVersion.id, DocumentVersion.document_id, DocumentVersion.version_number)
         .join(Document, Document.id == DocumentVersion.document_id)
         .join(Source, Source.id == Document.source_id)
         .where(
@@ -3260,6 +3274,10 @@ async def _apply_normalized_document(
     except (ValueError, TypeError) as exc:
         raise RuntimeError("normalized_preparation_chunk_write_conflict") from exc
     if selected:
+        previous_version_id = await session.scalar(select(DocumentVersion.id).where(
+            DocumentVersion.document_id == document.id,
+            DocumentVersion.version_number == document.current_version,
+        ))
         document.current_version = version.version_number
         document.content_hash = version.content_hash
         document.title = payload.title
@@ -3269,6 +3287,10 @@ async def _apply_normalized_document(
         document.observed_at = payload.observed_at
         document.language = _provenance_language(payload.provenance)
         document.extraction_status = "ready"
+        if previous_version_id is not None:
+            # Same transaction: superseded chunks are never searchable, so drop derived embeddings.
+            for hook in _superseded_version_hooks:
+                await hook(session, previous_version_id)
     await session.flush()
     if (document.workspace_id != workspace_id or identity.workspace_id != workspace_id
             or document.source_id != payload.source_id or identity.source_id != payload.source_id

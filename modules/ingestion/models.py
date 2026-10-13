@@ -15,6 +15,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -106,6 +107,7 @@ class SourceObservation(Base):
             name="uq_source_observations_batch_record_observed",
         ),
         Index("ix_source_observations_source_observed", "source_id", "observed_at"),
+        Index("ix_source_observations_source_provider_record", "source_id", "provider_id", "record_hash"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -129,6 +131,8 @@ class ObservationNormalization(Base):
         UniqueConstraint("observation_id", "normalization_version", name="uq_observation_normalizations_identity"),
         CheckConstraint("disposition IN ('pending', 'normalized', 'duplicate', 'skipped', 'failed')", name="ck_observation_normalizations_disposition"),
         Index("ix_observation_normalizations_stage", "stage_id", "disposition"),
+        Index("ix_observation_normalizations_document_version_id", "document_version_id"),
+        Index("ix_observation_normalizations_document_id", "document_id"),
         ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_observation_normalizations_workspace", ondelete="RESTRICT"),
         ForeignKeyConstraint(["workspace_id", "source_id"], ["sources.workspace_id", "sources.id"], name="fk_w2_observation_normalizations_source_id", ondelete="CASCADE"),
         ForeignKeyConstraint(["workspace_id", "run_id"], ["ingestion_runs.workspace_id", "ingestion_runs.id"], name="fk_w2_observation_normalizations_run_id", ondelete="CASCADE"),
@@ -244,6 +248,11 @@ class EventOutbox(Base):
         CheckConstraint("status IN ('pending', 'queued', 'delivered', 'failed')", name="ck_event_outbox_status"),
         CheckConstraint("membership_revision > 0", name="ck_w2_event_outbox_membership_revision_positive"),
         Index("ix_event_outbox_dispatch", "status", "dispatched_at"),
+        Index("ix_event_outbox_delivered_created", "created_at", postgresql_where=text("status = 'delivered'")),
+        Index(
+            "ix_event_outbox_dispatch_created", "created_at", "id",
+            postgresql_where=text("status IN ('pending', 'queued')"),
+        ),
         ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_event_outbox_workspace", ondelete="RESTRICT"),
         ForeignKeyConstraint(["workspace_id", "actor_user_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_event_outbox_principal", ondelete="RESTRICT"),
         Index("ix_w2_event_outbox_scope", 'workspace_id', 'id'),

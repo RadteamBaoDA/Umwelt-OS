@@ -31,6 +31,7 @@ class Observation(Base):
         UniqueConstraint("source_id", "external_id", "ingestion_observation_id", name="uq_observations_ingestion_acceptance"),
         Index("ix_observations_owner_series_current", "source_id", "provider", "metric", "symbol", "region", "is_current", "observed_at", "id"),
         Index("ix_observations_document_version", "document_version_id"),
+        Index("ix_observations_ingestion_observation_id", "ingestion_observation_id"),
         ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_observations_workspace", ondelete="RESTRICT"),
         ForeignKeyConstraint(["workspace_id", "source_id"], ["sources.workspace_id", "sources.id"], name="fk_w2_observations_source_id", ondelete="CASCADE"),
         ForeignKeyConstraint(["workspace_id", "document_id"], ["documents.workspace_id", "documents.id"], name="fk_w2_observations_document_id", ondelete="CASCADE"),

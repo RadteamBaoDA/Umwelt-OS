@@ -90,6 +90,7 @@ class NewsObservation(Base):
         UniqueConstraint("document_version_id", "source_generation", "algorithm_version", name="uq_news_observations_version_generation_algorithm"),
         Index("ix_news_observations_story_time", "story_id", "observed_at"),
         Index("ix_news_observations_source_time", "source_id", "observed_at"),
+        Index("ix_news_observations_chunk_id", "chunk_id"),
         CheckConstraint("source_generation >= 0 AND version_number >= 1", name="ck_news_observations_generation_version"),
         CheckConstraint("match_method IN ('url', 'hash', 'embedding_entity_time')", name="ck_news_observations_match_method"),
         ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_news_observations_workspace", ondelete="RESTRICT"),

@@ -165,6 +165,12 @@ class _Factory:
         return None
 
 
+@pytest.fixture(autouse=True)
+def _no_automation_purge(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The automation run purge has its own tests; keep these pass-level counts about traces/evidence.
+    monkeypatch.setattr(maintenance.automations, "purge_finished_runs", AsyncMock(return_value=0))
+
+
 @pytest.mark.asyncio
 async def test_maintenance_redacts_per_workspace_with_owner_scope(monkeypatch: pytest.MonkeyPatch) -> None:
     other = uuid4()

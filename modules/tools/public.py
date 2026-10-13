@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import UUID
@@ -65,44 +66,45 @@ async def unresolved_backup_effects(session: AsyncSession) -> dict[str, int]:
 from modules.tools.mcp_server import McpServerBundle, create_inbound_mcp_bundle
 
 
-async def revalidate_native_output_fences(
-    session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
-    sink: object,
-    principal: ToolExecutionPrincipal,
-    *,
-    destination_kind: str,
-    multi_workspace_enabled: bool,
-) -> bool:
-    """Recheck bounded server-captured source and result identities before native output delivery.
+@dataclass(frozen=True, slots=True)
+class _PreparedFences:
+    """In-memory validated form of one captured output fence sink."""
 
-    The caller supplies only server-composed context. Current source projections and owner module
-    contracts are queried in short sessions; malformed or stale state denies the complete result.
-    No transaction or row lock is kept across network transmission.
-    """
+    destination: ToolDestination
+    source_generations: dict[UUID, int]
+    principal_source_ids: frozenset[UUID]
+    search_fences: tuple[ToolOutputFence, ...]
+    document_fences: tuple[ToolOutputFence, ...]
+
+
+def _prepare_native_fences(
+    sink: object, principal: ToolExecutionPrincipal, destination_kind: str, multi_workspace_enabled: bool,
+) -> _PreparedFences | None:
+    """Validate one sink and principal without I/O; None means the complete result must be denied."""
     if type(multi_workspace_enabled) is not bool or not isinstance(principal, ToolExecutionPrincipal):
-        return False
+        return None
     try:
         destination = ToolDestination(destination_kind)
     except (TypeError, ValueError):
-        return False
+        return None
     if not isinstance(sink, dict) or set(sink) != {"records", "source_generations"}:
-        return False
+        return None
     records = sink.get("records")
     captured_generations = sink.get("source_generations")
     if (
         not isinstance(records, list) or len(records) > 100
         or not isinstance(captured_generations, dict) or len(captured_generations) > 100
     ):
-        return False
+        return None
     source_generations: dict[UUID, int] = {}
     for source_id, generation in captured_generations.items():
         if not isinstance(source_id, UUID) or type(generation) is not int or generation < 1:
-            return False
+            return None
         source_generations[source_id] = generation
     try:
         principal_source_ids = frozenset(UUID(value) for value in principal.source_ids)
     except (TypeError, ValueError, AttributeError):
-        return False
+        return None
     if (
         (principal.owner_all_sources and not principal.is_owner)
         or (not principal.is_owner and not principal_source_ids)
@@ -110,7 +112,7 @@ async def revalidate_native_output_fences(
             source_id not in principal_source_ids for source_id in source_generations
         ))
     ):
-        return False
+        return None
 
     search_fences: list[ToolOutputFence] = []
     document_fences: list[ToolOutputFence] = []
@@ -126,12 +128,40 @@ async def revalidate_native_output_fences(
             or source_generations.get(fence.source_id) != fence.source_generation
             or (not principal.owner_all_sources and fence.source_id not in principal_source_ids)
         ):
-            return False
+            return None
         identity = (fence.document_id, fence.chunk_id)
         if identity in seen:
-            return False
+            return None
         seen.add(identity)
         (search_fences if fence.chunk_id is not None else document_fences).append(fence)
+
+    return _PreparedFences(
+        destination, source_generations, principal_source_ids, tuple(search_fences), tuple(document_fences),
+    )
+
+
+async def revalidate_native_output_fences(
+    session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
+    sink: object,
+    principal: ToolExecutionPrincipal,
+    *,
+    destination_kind: str,
+    multi_workspace_enabled: bool,
+) -> bool:
+    """Recheck bounded server-captured source and result identities before native output delivery.
+
+    The caller supplies only server-composed context. Current source projections and owner module
+    contracts are queried in short sessions; malformed or stale state denies the complete result.
+    No transaction or row lock is kept across network transmission.
+    """
+    prepared = _prepare_native_fences(sink, principal, destination_kind, multi_workspace_enabled)
+    if prepared is None:
+        return False
+    destination = prepared.destination
+    source_generations = prepared.source_generations
+    principal_source_ids = prepared.principal_source_ids
+    search_fences = list(prepared.search_fences)
+    document_fences = list(prepared.document_fences)
 
     try:
         from modules.sources import public as sources
@@ -172,6 +202,109 @@ async def revalidate_native_output_fences(
         # Admission/database/validation failures suppress output; TypeError/AttributeError are bugs and propagate.
         return False
     return True
+
+
+async def revalidate_native_output_fences_many(
+    session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
+    items: list[tuple[object, ToolExecutionPrincipal | None]],
+    *,
+    destination_kind: str,
+    multi_workspace_enabled: bool,
+) -> list[bool]:
+    """Recheck many captured sinks with one source read and one fence check per owner module.
+
+    Returns one verdict per item, identical to calling ``revalidate_native_output_fences`` on each.
+    Rows are grouped by (scope, grant) so authorization stays per-row-exact; each row's source
+    generations are compared in memory against one combined Source projection. The owner fence
+    checks answer a single yes/no for a whole set, so when the combined set fails (or raises) the
+    affected rows fall back to the per-row function, which attributes the failure exactly.
+    """
+    verdicts = [False] * len(items)
+    groups: dict[Any, list[tuple[int, _PreparedFences]]] = {}
+    for index, (sink, principal) in enumerate(items):
+        if principal is None:
+            continue
+        prepared = _prepare_native_fences(sink, principal, destination_kind, multi_workspace_enabled)
+        if prepared is None:
+            continue
+        key = (principal.scope, principal.owner_all_sources, prepared.principal_source_ids)
+        groups.setdefault(key, []).append((index, prepared))
+
+    async def per_row(index: int) -> bool:
+        """Exact per-row verdict used whenever a combined check cannot attribute a failure."""
+        sink, principal = items[index]
+        assert principal is not None
+        return await revalidate_native_output_fences(
+            session_factory, sink, principal, destination_kind=destination_kind,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+
+    for (scope, owner_all, allowed_ids), members in groups.items():
+        destination = members[0][1].destination
+        try:
+            from modules.sources import public as sources
+
+            all_ids = sorted({sid for _, p in members for sid in p.source_generations}, key=str)
+            current: dict[UUID, int] = {}
+            overflow = False
+            async with session_factory() as session:
+                for offset in range(0, len(all_ids), 100):
+                    page = await sources.list_tool_sources(
+                        session, limit=100, cursor=None, source_ids=frozenset(all_ids[offset:offset + 100]),
+                        owner_all=False, destination=destination, scope=scope,
+                        multi_workspace_enabled=multi_workspace_enabled,
+                    )
+                    overflow = overflow or page.next_cursor is not None
+                    current.update({item.id: item.generation for item in page.items})
+            if overflow:
+                raise ValueError("combined source read overflowed")
+            # A row is current only if every captured source is still visible at the same generation.
+            live = [
+                (index, p) for index, p in members
+                if all(current.get(sid) == gen for sid, gen in p.source_generations.items())
+            ]
+            search_fences = {
+                (f.document_id, f.document_version_id, f.source_id, f.source_generation, f.chunk_id): f
+                for _, p in live for f in p.search_fences
+            }
+            document_fences = {
+                (f.document_id, f.document_version_id, f.source_id, f.source_generation, f.chunk_id): f
+                for _, p in live for f in p.document_fences
+            }
+            combined_ok = True
+            if search_fences:
+                from modules.search import public as search
+
+                unique = list(search_fences.values())
+                async with session_factory() as session:
+                    for offset in range(0, len(unique), 100):
+                        combined_ok = combined_ok and await search.revalidate_tool_search_fences(
+                            session, unique[offset:offset + 100], source_ids=allowed_ids, owner_all=owner_all,
+                            destination=destination, scope=scope,
+                            multi_workspace_enabled=multi_workspace_enabled,
+                        )
+            if document_fences and combined_ok:
+                from modules.knowledge.documents import public as documents
+
+                unique = list(document_fences.values())
+                async with session_factory() as session:
+                    for offset in range(0, len(unique), 100):
+                        combined_ok = combined_ok and await documents.revalidate_tool_document_fences(
+                            session, unique[offset:offset + 100], source_ids=allowed_ids, owner_all=owner_all,
+                            destination=destination, scope=scope,
+                            multi_workspace_enabled=multi_workspace_enabled,
+                        )
+            if combined_ok:
+                for index, _ in live:
+                    verdicts[index] = True
+            else:
+                for index, _ in live:
+                    verdicts[index] = await per_row(index)
+        except (HTTPException, SQLAlchemyError, ValueError, OSError, TimeoutError):
+            # Suppress nothing on a combined failure: let each row decide on its own.
+            for index, _ in members:
+                verdicts[index] = await per_row(index)
+    return verdicts
 
 
 # Non-null placeholders written over purged job links (the columns cannot be NULL).

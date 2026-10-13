@@ -15,6 +15,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -161,6 +162,10 @@ class AutomationRun(Base):
         Index("ix_automation_runs_dispatch", "status", "next_attempt_at"),
         Index("ix_automation_runs_rule", "automation_id", "created_at"),
         Index("ix_automation_runs_document", "document_id", "id"),
+        Index(
+            "ix_automation_runs_terminal_finished", "finished_at",
+            postgresql_where=text("status IN ('succeeded', 'failed', 'skipped', 'dropped')"),
+        ),
         ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_automation_runs_workspace", ondelete="RESTRICT"),
         ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_automation_runs_principal", ondelete="RESTRICT"),
         ForeignKeyConstraint(["workspace_id", "automation_id"], ["automations.workspace_id", "automations.id"], name="fk_w2_automation_runs_automation_id", ondelete="RESTRICT"),

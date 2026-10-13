@@ -14,6 +14,7 @@ from core.config import Settings
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import InternalJobScope
 from modules.agents import public as agents
+from modules.automations import public as automations
 from modules.observability.models import MaintenanceSummary
 from modules.settings import public as settings_public
 from modules.tools.public import purge_expired_browser_evidence
@@ -105,6 +106,8 @@ async def run_retention_maintenance(ctx: dict[str, object]) -> int:
     await worker_cursors.write_cursor(ctx, TRACE_CURSOR_KEY, None if exhausted else last, _CURSOR_KEYS)
     async with factory() as session:
         evidence = await purge_expired_browser_evidence(session, limit=200)
+        # Terminal automation runs (+ cascading actions) past 30 days; owned and bounded by Automations.
+        evidence += await automations.purge_finished_runs(session, limit=1000)
         summary = await session.scalar(
             select(MaintenanceSummary).where(MaintenanceSummary.id == 1).with_for_update()
         )

@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -107,15 +108,26 @@ def _highlight_identity(kind: str, dedupe_key: str, params: Mapping[str, object]
     return definition_id, revision, rule_id, version_id
 
 
+@dataclass(frozen=True, slots=True)
+class _LockedReadSources:
+    """Version fences and held Source locks resolved once for a notification page."""
+
+    version_fences: dict[UUID, Any]
+    source_fences: dict[UUID, Any]
+
+
 async def _visible_read(
     session: AsyncSession, row: Notification, *, scope: Scope, multi_workspace_enabled: bool,
-    access_fence: AccessFence,
+    access_fence: AccessFence, locked: _LockedReadSources | None = None,
 ) -> NotificationRead:
     """Build a detached DTO, holding a Source eligibility lock through copied-highlight publication.
 
     The first locator lookup discovers Source identity only. The authoritative locator is repeated
     after the Source lock, which serializes this read with source/document purge admission. Paused
     and connector-only archived Sources remain browseable; unfinished with-data purges fail closed.
+    When ``locked`` is supplied the page-level prelock (`_lock_notification_read_sources`) already
+    resolved the version fences and holds every Source lock in this transaction, so the per-row
+    locator/lock/fence queries are replaced by lookups with the same fail-closed outcomes.
     """
     read = NotificationRead.model_validate(row)
     if row.kind != "dashboard_highlight":
@@ -133,6 +145,16 @@ async def _visible_read(
         or (document_id is not None and row.document_version_id != version_id)
     ):
         return read.model_copy(update={"title": None, "link": None})
+    if locked is not None:
+        # Held-lock path: absent version or an unlockable Source hides the copied fields.
+        version_fence = locked.version_fences.get(version_id)
+        source_fence = locked.source_fences.get(version_fence.source_id) if version_fence is not None else None
+        if (version_fence is None or source_fence is None
+                or (document_id is not None and version_fence.document_id != document_id)
+                or version_fence.source_id != source_fence.id
+                or version_fence.current_source_generation != source_fence.generation):
+            return read.model_copy(update={"title": None, "link": None})
+        return read
     from modules.knowledge.documents import public as documents
 
     owner = await documents.review_version_locator(
@@ -161,12 +183,13 @@ async def _visible_read(
 async def _lock_notification_read_sources(
     session: AsyncSession, rows: list[Notification], *, scope: Scope, multi_workspace_enabled: bool,
     access_fence: AccessFence,
-) -> None:
+) -> _LockedReadSources:
     """Acquire candidate Source read locks in stable UUID order before projecting a page.
 
     A notification page can refer to multiple sources. Prelocking the bounded source set avoids
     lock-order inversions with producers that already lock several selected sources in UUID order.
-    `_visible_read` still rechecks each source and version after these locks are held.
+    Returns the fences and lock results so `_visible_read` evaluates each row against the held
+    locks without repeating the locator, lock and fence queries.
     """
     version_ids: set[UUID] = set()
     for row in rows:
@@ -180,18 +203,20 @@ async def _lock_notification_read_sources(
             continue
         version_ids.add(version_id)
     if not version_ids:
-        return
+        return _LockedReadSources({}, {})
     from modules.knowledge.documents import public as documents
     from modules.sources import public as sources
 
     fences = await documents.review_version_fences(
         session, sorted(version_ids, key=str), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
+    source_fences: dict[UUID, Any] = {}
     for source_id in sorted({fence.source_id for fence in fences.values()}, key=str):
-        await sources.lock_retained_evidence_source(
+        source_fences[source_id] = await sources.lock_retained_evidence_source(
             session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             expected_access_fence=access_fence,
         )
+    return _LockedReadSources(dict(fences), source_fences)
 
 
 async def emit(
@@ -257,7 +282,7 @@ async def list_notifications(
     rows = (await session.scalars(
         statement.order_by(Notification.created_at.desc(), Notification.id.desc()).limit(min(max(limit, 1), 100))
     )).all()
-    await _lock_notification_read_sources(
+    locked = await _lock_notification_read_sources(
         session, list(rows), scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
     )
     unread_count = int(await session.scalar(
@@ -267,6 +292,7 @@ async def list_notifications(
         items=[
             await _visible_read(
                 session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+                locked=locked,
             ) for row in rows
         ],
         unread_count=unread_count,

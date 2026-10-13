@@ -536,6 +536,10 @@ class ConnectorCollectionRequest(Base):
         ),
         Index("ix_connector_collection_requests_workspace", "workspace_id", "source_id", "created_at"),
         Index(
+            "ix_connector_collection_requests_terminal_updated", "updated_at",
+            postgresql_where=text("status IN ('succeeded', 'no_changes', 'failed', 'cancelled')"),
+        ),
+        Index(
             "uq_connector_collection_requests_receipt", "accepted_receipt_id", unique=True,
             postgresql_where=text("accepted_receipt_id IS NOT NULL"),
         ),
@@ -746,6 +750,10 @@ class ConnectorQuotaDebit(Base):
             name="fk_connector_quota_debits_window", ondelete="RESTRICT",
         ),
         CheckConstraint("units > 0", name="ck_connector_quota_debits_units"),
+        Index(
+            "ix_connector_quota_debits_window",
+            "provider_id", "budget_kind", "subject_hash", "policy_key", "window_start",
+        ),
     )
 
     send_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)

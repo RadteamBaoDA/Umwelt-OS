@@ -35,6 +35,7 @@ from core.storage import cleanup_orphaned_files, storage_path
 from core.telemetry import count, set_trace, timed
 from core.workspaces.public import read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope
+from modules.connectors import public as connectors
 from modules.connectors.public import CollectionFence, ConnectorRecord
 from modules.ingestion import public as ingestion_api
 from modules.ingestion.dispatcher import valid_event_envelope
@@ -1581,9 +1582,20 @@ async def purge_collection_receipts(ctx: dict[str, object]) -> int:
     """Delete one bounded slice (500) of expired, no-longer-recoverable acceptance receipts.
 
     Runs in its own session and commits itself; the remaining expired rows are taken by later runs.
+
+    Also purges old connector request/send/quota history and delivered ingestion stage outbox rows.
     """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     async with factory() as session:
         deleted = await ingestion_api.purge_expired_collection_receipts(session, limit=500)
         await session.commit()
-        return deleted
+    # Same hourly cron also trims other append-only bookkeeping, each in its own short transaction so
+    # one failing table cannot block the receipts above. The receipt count stays the return value.
+    for purge in (connectors.purge_collection_history, ingestion_api.purge_delivered_outbox):
+        try:
+            async with factory() as session:
+                await purge(session, limit=1000)
+                await session.commit()
+        except Exception:
+            logger.warning("collection retention step %s failed", purge.__name__, exc_info=True)
+    return deleted

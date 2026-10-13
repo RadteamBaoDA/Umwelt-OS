@@ -107,7 +107,7 @@ def _parse_time(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent  # noqa: FURB162  # keeps exact parsing of the 'Z' suffix
     except ValueError:
         try:
             parsed = parsedate_to_datetime(value)
@@ -451,7 +451,7 @@ async def collect_provider_feed(
     if source.provider != "arxiv":
         raise ValueError("provider_scope_invalid")
     async with asyncio.timeout(60):
-        async with session_factory() as session:  # style-only rewrite skipped to avoid touching control flow
+        async with session_factory() as session:  # style-only rewrite skipped to avoid touching control flow  # noqa: SIM117  # merging would keep the DB session open across the CPU-bound parse that follows
             async with session.begin():
                 locked = await session.scalar(
                     text("SELECT pg_try_advisory_xact_lock(:provider_key)"),

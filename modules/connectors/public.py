@@ -2826,10 +2826,11 @@ async def validate_public_url(value: str) -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
         raise ValueError("Only credential-free HTTP(S) URLs are allowed")
     try:
-        addresses = await asyncio.to_thread(
+        # wait_for bounds request latency only: a cancelled to_thread keeps running in the pool until the resolver returns.
+        addresses = await asyncio.wait_for(asyncio.to_thread(
             getaddrinfo, parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80), 0, 0, 0
-        )
-    except OSError as exc:
+        ), 5)
+    except (OSError, TimeoutError) as exc:
         raise ValueError("URL host could not be resolved") from exc
     if not addresses or any(not ip_address(item[4][0]).is_global for item in addresses):
         raise ValueError("URL resolves to a non-public address")
@@ -2954,6 +2955,13 @@ async def recoverable_collection_request_ids(session: AsyncSession, request_ids:
     from modules.connectors import scheduler
 
     return await scheduler.recoverable_request_ids(session, request_ids)
+
+
+async def purge_collection_history(session: AsyncSession, *, now: datetime | None = None, limit: int = 1000) -> int:
+    """Delete a bounded slice of old terminal requests, provider sends and spent quota windows; caller commits."""
+    from modules.connectors import scheduler
+
+    return await scheduler.purge_collection_history(session, now=now, limit=limit)
 
 
 async def collection_timing(

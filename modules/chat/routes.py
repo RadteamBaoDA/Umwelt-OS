@@ -367,7 +367,7 @@ async def list_conversations(
             # Per-rule automation threads stay reachable from automation run detail, not the Chat list.
             .where(or_(Conversation.context_kind.is_(None), Conversation.context_kind != "automation"))
             .where(or_(Conversation.ephemeral.is_(False), Conversation.expires_at > now))
-            .order_by(desc(Conversation.pinned), desc(Conversation.updated_at))
+            .order_by(desc(Conversation.pinned), desc(Conversation.updated_at), desc(Conversation.id))  # id breaks timestamp ties so OFFSET pages are stable
             .offset(offset)
             .limit(limit)
         )
@@ -537,6 +537,8 @@ async def get_conversation(
     if messages_rows:
         response_rows = await session.execute(
             select(ResponseRun.user_message_id, ResponseRun.id).where(
+                # conversation_id lets the planner use ix_chat_response_runs_conversation_id.
+                ResponseRun.conversation_id == conversation_id,
                 ResponseRun.user_message_id.in_([message.id for message in messages_rows])
             )
         )
@@ -1149,7 +1151,7 @@ async def get_response_events(
                     delay = STREAM_POLL_INTERVAL
                     if batch_full:
                         continue  # more is queued: poll again without sleeping
-                    # A partial batch drained the backlog; the worker flushes at most every 100 ms.
+                    # A partial batch drained the backlog; the worker flushes at most every STREAM_FLUSH_SECONDS (0.4 s).
                     await asyncio.sleep(delay)
                     continue
                 if terminal_without_event:

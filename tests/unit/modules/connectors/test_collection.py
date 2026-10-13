@@ -265,6 +265,12 @@ async def test_generic_accept_uses_request_ref_and_a_request_scoped_batch_key(mo
     monkeypatch.setattr(collection, "lock_access_fence", lock)
     monkeypatch.setattr(collection.ingestion, "receive_connector_batch", receive)
     monkeypatch.setattr(collection.ingestion, "accept_collection_no_changes", no_changes)
+    seen: set[str] = set()
+
+    async def drop_seen(session, *, records, **_kwargs):
+        return [r for r in records if r.provider_id not in seen]
+
+    monkeypatch.setattr(collection.ingestion, "drop_seen_records", drop_seen)
     run = SimpleNamespace(attempt=attempt(), factory=factory([]))
     record = {"provider_id": "1", "content": "c", "observed_at": datetime.now(UTC).isoformat(), "version": None, "metadata": {}}
     await collection._accept_generic(run, [record], None, "2026-01-01T00:00:00+00:00")
@@ -273,6 +279,11 @@ async def test_generic_accept_uses_request_ref_and_a_request_scoped_batch_key(mo
     assert batch.batch_key == f"connector-request:{REF.request_id}" and batch.connector_revision == 2
     await collection._accept_generic(run, [], None, None)
     assert calls["none"]["request_ref"] == REF  # empty: no batch, no cursor, no fake data
+    # All-seen poll: no batch; the earned cursor rides the no-change settlement.
+    calls.clear()
+    seen.add("1")
+    await collection._accept_generic(run, [record], "old", "new")
+    assert "receive" not in calls and calls["none"]["state_update"].cursor_after == "new"
 
 
 @pytest.mark.asyncio

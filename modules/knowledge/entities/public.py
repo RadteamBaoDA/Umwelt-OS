@@ -784,9 +784,14 @@ async def list_entities(
     if entity_type:
         statement = statement.where(Entity.type == entity_type)
     if query:
-        statement = statement.where(
-            or_(Entity.name.ilike(f"%{query}%"), Entity.canonical_name.ilike(f"%{canonicalize_name(query)}%"))
-        )
+        # Escape LIKE metacharacters so a literal % or _ in the query is not a wildcard.
+        def _like_escape(value: str) -> str:
+            return value.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+
+        statement = statement.where(or_(
+            Entity.name.ilike(f"%{_like_escape(query)}%", escape="\\"),
+            Entity.canonical_name.ilike(f"%{_like_escape(canonicalize_name(query))}%", escape="\\"),
+        ))
     if cursor:
         created_at, identifier = decode_cursor(cursor)
         statement = statement.where(tuple_(Entity.created_at, Entity.id) < (created_at, identifier))
@@ -2097,27 +2102,30 @@ async def record_extraction_membership(
     ).with_for_update())
     if entity is None:
         raise LookupError("Extraction entity is missing")
-    await session.execute(pg_insert(EntityEvidenceMembership).values(
+    inserted = (await session.execute(pg_insert(EntityEvidenceMembership).values(
         workspace_id=scope.workspace_id,
         entity_id=entity_id, document_id=evidence_ref.document_id, source_id=evidence_ref.source_id,
         document_version_id=evidence_ref.document_version_id, chunk_id=evidence_ref.chunk_id,
         extraction_identity=extraction_identity, candidate_key=candidate_key,
         match_fingerprint=match_fingerprint,
         observed_at=observed_at, confidence=confidence,
-    ).on_conflict_do_nothing(constraint="uq_entity_evidence_retry"))
-    membership_id = await session.scalar(select(EntityEvidenceMembership.id).where(
-        EntityEvidenceMembership.workspace_id == scope.workspace_id,
-        EntityEvidenceMembership.extraction_identity == extraction_identity,
-        EntityEvidenceMembership.candidate_key == candidate_key,
-        EntityEvidenceMembership.chunk_id == evidence_ref.chunk_id,
-    ))
-    if membership_id is None:
+    ).on_conflict_do_nothing(constraint="uq_entity_evidence_retry").returning(
+        EntityEvidenceMembership.id, EntityEvidenceMembership.entity_id,
+    ))).first()
+    if inserted is None:
+        # Retry: the row already exists (nothing returned), so read back its id and owning entity.
+        inserted = (await session.execute(select(
+            EntityEvidenceMembership.id, EntityEvidenceMembership.entity_id,
+        ).where(
+            EntityEvidenceMembership.workspace_id == scope.workspace_id,
+            EntityEvidenceMembership.extraction_identity == extraction_identity,
+            EntityEvidenceMembership.candidate_key == candidate_key,
+            EntityEvidenceMembership.chunk_id == evidence_ref.chunk_id,
+        ))).first()
+    if inserted is None:
         raise RuntimeError("Entity evidence membership could not be recorded")
-    member = await session.scalar(select(EntityEvidenceMembership).where(
-        EntityEvidenceMembership.id == membership_id,
-        EntityEvidenceMembership.workspace_id == scope.workspace_id,
-    ))
-    if member is None or member.entity_id != entity_id:
+    membership_id, member_entity_id = inserted
+    if member_entity_id != entity_id:
         raise ValueError("Extraction retry identity resolved to a different entity")
     return membership_id
 

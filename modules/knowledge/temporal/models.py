@@ -17,8 +17,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
-from sqlalchemy.types import Uuid
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.types import Uuid
 
 from core.database import Base, CreatedAtMixin
 
@@ -82,6 +82,10 @@ class GraphMapping(Base, CreatedAtMixin):
     __tablename__ = "temporal_mappings"
     __table_args__ = (
         UniqueConstraint("document_version_id", "source_generation"),
+        Index(
+            "ix_temporal_mappings_canonical_state", "canonical_state",
+            postgresql_using="gin", postgresql_ops={"canonical_state": "jsonb_path_ops"},
+        ),
         ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_temporal_mappings_workspace", ondelete="RESTRICT"),
         Index("ix_w2_temporal_mappings_scope", 'workspace_id', 'id'),
         Index("ix_w2_temporal_mappings_work", "workspace_id", "created_at", "id"),

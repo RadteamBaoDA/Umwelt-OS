@@ -1507,18 +1507,27 @@ async def publish_extracted_events(session: AsyncSession, *, work_id: UUID, leas
                 event.updated_at = datetime.now(UTC)
         published.append((event, proposal))
         if "evidence" not in event.owner_fields:
+            # One executemany per event instead of a round trip per chunk; the unique constraint
+            # keeps retries idempotent exactly as the per-row insert did.
+            extracted_at = datetime.now(UTC)
+            evidence_values = []
             for chunk_id in proposal.evidence_chunk_ids:
                 ref = evidence_by_chunk[chunk_id]
-                await session.execute(insert(EventEvidence).values(
-                    workspace_id=scope.workspace_id, event_id=event.id, source_id=ref.source_id, document_id=ref.document_id,
-                    document_version_id=ref.document_version_id, chunk_id=ref.chunk_id,
-                    version_number=ref.version_number, source_generation=ready.source_generation,
-                    extraction_identity=identity, candidate_hash=candidate_hash,
-                    confidence=proposal.confidence, extracted_at=datetime.now(UTC),
-                    observed_at=ref.observed_at, title_snapshot=ref.title, url_snapshot=ref.canonical_url,
-                    evidence_metadata={}, excerpt=ref.excerpt,
-                    metadata_is_version_snapshot=ref.metadata_is_version_snapshot,
-                ).on_conflict_do_nothing(constraint="uq_timeline_event_evidence"))
+                evidence_values.append({
+                    "workspace_id": scope.workspace_id, "event_id": event.id, "source_id": ref.source_id, "document_id": ref.document_id,
+                    "document_version_id": ref.document_version_id, "chunk_id": ref.chunk_id,
+                    "version_number": ref.version_number, "source_generation": ready.source_generation,
+                    "extraction_identity": identity, "candidate_hash": candidate_hash,
+                    "confidence": proposal.confidence, "extracted_at": extracted_at,
+                    "observed_at": ref.observed_at, "title_snapshot": ref.title, "url_snapshot": ref.canonical_url,
+                    "evidence_metadata": {}, "excerpt": ref.excerpt,
+                    "metadata_is_version_snapshot": ref.metadata_is_version_snapshot,
+                })
+            if evidence_values:
+                await session.execute(
+                    insert(EventEvidence).on_conflict_do_nothing(constraint="uq_timeline_event_evidence"),
+                    evidence_values,
+                )
         if "participants" not in event.owner_fields and "evidence" not in event.owner_fields:
             for (entity_id, _role), participant in participants.items():
                 row = await session.scalar(select(EventParticipant).where(
@@ -1536,10 +1545,12 @@ async def publish_extracted_events(session: AsyncSession, *, work_id: UUID, leas
                     EventEvidence.workspace_id == scope.workspace_id, EventEvidence.event_id == event.id,
                     EventEvidence.chunk_id.in_(participant.chunk_ids)
                 ))).all()
-                for evidence_row in rows:
-                    await session.execute(insert(ParticipantEvidence).values(
-                        participant_id=row.id, event_evidence_id=evidence_row.id
-                    ).on_conflict_do_nothing(constraint="uq_timeline_participant_evidence"))
+                if rows:
+                    await session.execute(
+                        insert(ParticipantEvidence).on_conflict_do_nothing(
+                            constraint="uq_timeline_participant_evidence"),
+                        [{"participant_id": row.id, "event_evidence_id": evidence_row.id} for evidence_row in rows],
+                    )
     await session.flush()
     proposals_json = [{
         "event_id": str(event.id), "candidate_hash": event.candidate_hash,

@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import json
 from collections.abc import Awaitable, Callable
@@ -201,7 +202,7 @@ class N8nApi:
             payload = response.json()
             workflows = payload.get("data", [])
             if not isinstance(workflows, list):
-                raise ValueError("n8n workflow lookup returned an invalid list")  # ValueError is part of the contract; TypeError would change behavior
+                raise ValueError("n8n workflow lookup returned an invalid list")  # ValueError is part of the contract; TypeError would change behavior  # noqa: TRY004  # ValueError is part of the contract
             matches.extend(
                 workflow for workflow in workflows
                 if isinstance(workflow, dict) and workflow.get("name") == name
@@ -223,7 +224,7 @@ class N8nApi:
             response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict):
-            raise ValueError("n8n workflow response is invalid")  # ValueError is part of the contract; TypeError would change behavior
+            raise ValueError("n8n workflow response is invalid")  # ValueError is part of the contract; TypeError would change behavior  # noqa: TRY004  # ValueError is part of the contract
         return payload
 
     async def create_workflow(self, workflow: dict[str, Any]) -> str:
@@ -348,7 +349,8 @@ async def read_rss(
                     if total_bytes > 25 * 1024 * 1024:
                         raise ValueError("RSS pagination exceeded the 25 MiB limit")
                     body.extend(chunk)
-            root = safe_xml_root(bytes(body), max_bytes=25 * 1024 * 1024)  # DOCTYPE/ENTITY refused
+            # DOCTYPE/ENTITY refused; parse of up to 25 MiB runs in a thread so the loop is not blocked.
+            root = await asyncio.to_thread(safe_xml_root, bytes(body), max_bytes=25 * 1024 * 1024)
             def text(element: ElementTree.Element, names: set[str]) -> str:
                 """Return descendant text for the first matching local XML tag name."""
                 for child in element.iter():
@@ -369,7 +371,7 @@ async def read_rss(
                     if not raw_value:
                         return None
                     try:
-                        parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
+                        parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent  # noqa: FURB162  # keeps exact parsing of the 'Z' suffix
                     except ValueError:
                         try:
                             parsed = parsedate_to_datetime(raw_value)

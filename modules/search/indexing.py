@@ -1,6 +1,7 @@
 import json
 import logging
 import math
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -35,6 +36,14 @@ AUTO_INDEX_CURSOR_KEY = "search:auto:generation-cursor"
 ACTIVE_INDEX_CURSOR_KEY = "search:index:generation-cursor"
 QUEUED_INDEX_CURSOR_KEY = "search:index:queued-cursor"
 _CURSOR_KEYS = frozenset({AUTO_INDEX_CURSOR_KEY, ACTIVE_INDEX_CURSOR_KEY, QUEUED_INDEX_CURSOR_KEY})
+# Per-invocation work bound: the body runs inside the heavy_job_slot (120s deadline, job_timeout
+# 180s); the time limit only gates *starting* another item, so one in-flight embed still fits.
+INDEX_RUN_ITEMS = 50
+INDEX_RUN_SECONDS = 45
+# Per-chunk progress events are coalesced: clients only invalidate queries / poll, and status
+# changes (claim of a queued generation, finalize, failure) are always published.
+INDEX_EVENT_ITEMS = 100
+INDEX_EVENT_SECONDS = 5.0
 SCAN_PAGE = 20  # identities scanned per status class per invocation; bounds skip cost
 AUTO_INDEX_RETRY_DELAY = timedelta(minutes=15)
 logger = logging.getLogger(__name__)
@@ -106,14 +115,16 @@ async def _commit_index_change(
     scope: Scope,
     multi_workspace_enabled: bool,
     access_fence: AccessFence,
+    publish: bool = True,
 ) -> None:
     """Commit index state and publish an event only when its projection changed.
 
     The transaction commits even when no event draft is needed; callers must not
-    assume an unchanged projection leaves their session uncommitted.
+    assume an unchanged projection leaves their session uncommitted. ``publish=False``
+    skips the projection read and event entirely (coalesced progress commits).
     """
     await session.flush()
-    after = await _index_projection(session, generation_id, scope=scope)
+    after = await _index_projection(session, generation_id, scope=scope) if publish else None
     drafts = []
     if after is not None and after != before:
         drafts.append(make_index_change(
@@ -547,7 +558,11 @@ async def _index_generation(
     factory: async_sessionmaker[AsyncSession], redis: Redis, settings: Settings,
     generation_id: UUID, workspace_id: UUID,
 ) -> int | None:
-    """Index up to two chunks of one generation; return None when the subject is skipped.
+    """Index a bounded batch of chunks (items and time) of one generation; None when skipped.
+
+    Chunks are claimed in ascending id order via a keyset (``id > last_chunk``) so an item that
+    stays pending (e.g. dropped under admission failure) is not re-claimed within the run.
+    Progress events are coalesced; claim of a queued generation, finalize and failures publish.
 
     One original AccessFence/config snapshot is captured per invocation. No DB transaction or
     lock is open during ``embed``: preparation and the gateway ``before_send`` hook use short
@@ -617,7 +632,12 @@ async def _index_generation(
 
     completed = 0
     idle = False
-    for _ in range(2):
+    deadline = time.monotonic() + INDEX_RUN_SECONDS
+    last_chunk: UUID | None = None
+    last_emit, unemitted = float("-inf"), 0
+    for _ in range(INDEX_RUN_ITEMS):
+        if time.monotonic() >= deadline:
+            break
         async with factory() as session:
             try:
                 access_fence = await _admit(
@@ -641,16 +661,25 @@ async def _index_generation(
             if generation is None or generation.status not in {"queued", "running", "active"}:
                 await session.rollback()
                 break
-            before = await _index_projection(session, generation_id, scope=scope)
-            if generation.status == "queued":
+            claim_was_queued = generation.status == "queued"
+            # Projection is needed to publish the queued->running claim or a first-probe finalize.
+            before = (await _index_projection(session, generation_id, scope=scope)
+                      if claim_was_queued or last_chunk is None else None)
+            if claim_was_queued:
                 generation.status = "running"
-            row = (await session.execute(
-                eligible_chunks(workspace_id=workspace_id).outerjoin(
-                    SearchIndexItem,
-                    (SearchIndexItem.chunk_id == DocumentChunk.id) & (SearchIndexItem.generation_id == generation_id),
-                ).where((SearchIndexItem.id.is_(None)) | (SearchIndexItem.status == "pending"))
-                .order_by(DocumentChunk.id).limit(1)
-            )).first()
+            claim = eligible_chunks(workspace_id=workspace_id).outerjoin(
+                SearchIndexItem,
+                (SearchIndexItem.chunk_id == DocumentChunk.id) & (SearchIndexItem.generation_id == generation_id),
+            ).where((SearchIndexItem.id.is_(None)) | (SearchIndexItem.status == "pending"))
+            if last_chunk is not None:
+                claim = claim.where(DocumentChunk.id > last_chunk)
+            row = (await session.execute(claim.order_by(DocumentChunk.id).limit(1))).first()
+            if row is None and last_chunk is not None:
+                # Chunk ids are random UUIDs and items may remain pending, so "nothing above the
+                # keyset" does not mean "nothing pending": never finalize here; the next
+                # invocation's first (unfiltered) probe decides finalize/idle.
+                await session.rollback()
+                break
             if row is None and generation.status != "running":
                 await session.rollback()
                 idle = True  # nothing pending: let the page scan move on
@@ -687,6 +716,7 @@ async def _index_generation(
                 break
             assert row is not None
             chunk_id, content, source_id = row
+            last_chunk = chunk_id
             item = await session.scalar(select(SearchIndexItem).where(
                 SearchIndexItem.generation_id == generation_id, SearchIndexItem.chunk_id == chunk_id,
             ))
@@ -699,6 +729,7 @@ async def _index_generation(
             await _commit_index_change(
                 session, before, generation_id=generation_id, scope=scope,
                 multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=access_fence,
+                publish=claim_was_queued,
             )
         try:
             # Short preparation transaction: access -> Source -> chunk, then release every lock.
@@ -763,7 +794,10 @@ async def _index_generation(
                     else:
                         await session.rollback()
                     continue
-                before = await _index_projection(session, generation_id, scope=scope)
+                now = time.monotonic()
+                publish = unemitted + 1 >= INDEX_EVENT_ITEMS or now - last_emit >= INDEX_EVENT_SECONDS
+                before = (await _index_projection(session, generation_id, scope=scope)
+                          if publish else None)
                 if generation.dimensions is None:
                     generation.response_model_id = returned_model
                     generation.dimensions = len(values)
@@ -772,6 +806,7 @@ async def _index_generation(
                     generation.error_code = "model_identity_changed"
                     item.status = "failed"
                     item.error_code = "model_identity_changed"
+                    # Status change: always published (before=None differs from any projection).
                     await _commit_index_change(
                         session, before, generation_id=generation_id, scope=scope,
                         multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=fence,
@@ -786,8 +821,13 @@ async def _index_generation(
                 await _commit_index_change(
                     session, before, generation_id=generation_id, scope=scope,
                     multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=fence,
+                    publish=publish,
                 )
                 completed += 1
+                if publish:
+                    unemitted, last_emit = 0, now
+                else:
+                    unemitted += 1
         except _AuthorityChanged:
             break  # stale output discarded; the item stays pending for a fresh invocation
         except HTTPException as exc:
@@ -899,3 +939,19 @@ async def activate_generation(
         await session.flush()
     generation.status = "active"
     generation.error_code = None
+
+
+async def purge_version_embeddings(session: AsyncSession, document_version_id: UUID) -> None:
+    """Delete every generation's index items for the chunks of one (superseded) document version.
+
+    Runs in the caller's transaction and takes no locks beyond the deletes. Scope is exactly the
+    chunks of ``document_version_id`` (served by the ``search_index_items(chunk_id)`` index), so
+    other versions, documents and workspaces are untouched; the version id is workspace-owned.
+    """
+    await session.execute(text(
+        "DELETE FROM search_index_items WHERE chunk_id IN "
+        "(SELECT id FROM document_chunks WHERE document_version_id = :v)"
+    ), {"v": document_version_id})
+
+
+documents.register_version_superseded_hook(purge_version_embeddings)

@@ -1665,7 +1665,13 @@ async def purge_document_copied_evidence_page(
             found = list((await session.execute(
                 _select(StreamEvent.id, StreamEvent.response_id, ResponseRun.conversation_id)
                 .join(ResponseRun, ResponseRun.id == StreamEvent.response_id)
-                .where(*own_run, *([StreamEvent.id > after] if after else []))
+                .where(
+                    *own_run, *([StreamEvent.id > after] if after else []),
+                    # Deltas of terminal runs are purged on a schedule and the final message/citations
+                    # events are still scrubbed; scanning ~1M delta rows made a document delete take hours.
+                    # Active runs keep the scan so an in-flight delta can still trigger privacy cancel.
+                    _or(StreamEvent.event_type != "message.delta", ResponseRun.status.in_(("pending", "streaming"))),
+                )
                 .order_by(StreamEvent.id).limit(remaining + 1)
             )).all())
         has_more = len(found) > remaining

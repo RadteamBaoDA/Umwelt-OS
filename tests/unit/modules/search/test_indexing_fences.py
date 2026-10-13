@@ -190,6 +190,7 @@ class _Factory:
 
     def __init__(self, scripts: list[list[Any]], rows: list[Any]) -> None:
         self.scripts, self.rows, self.open, self.created = scripts, rows, 0, 0
+        self.stmts: list[Any] = []
 
     def __call__(self) -> Any:
         factory = self
@@ -211,6 +212,7 @@ class _Factory:
                 return self.results.pop(0)
 
             async def execute(self, _stmt: Any, *_params: Any) -> Any:
+                factory.stmts.append(_stmt)
                 rows = factory.rows
                 return SimpleNamespace(first=lambda: rows.pop(0) if rows else None)
 

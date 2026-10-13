@@ -14,7 +14,7 @@ from typing import Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_, select, text, update
+from sqlalchemy import delete, exists, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -34,7 +34,10 @@ from modules.connectors.collection_schemas import (
 from modules.connectors.models import (
     ConnectorAdmissionSlot,
     ConnectorCollectionRequest,
+    ConnectorProviderSend,
     ConnectorProvisioning,
+    ConnectorQuotaDebit,
+    ConnectorQuotaWindow,
     ConnectorSchedule,
     ConnectorWorkspaceDispatch,
 )
@@ -517,6 +520,58 @@ async def recoverable_request_ids(session: AsyncSession, request_ids: list[UUID]
             ConnectorCollectionRequest.id.in_(request_ids),
             ConnectorCollectionRequest.status.in_(("queued", "running"))))
     return set(rows)
+
+
+REQUEST_RETENTION = timedelta(days=30)
+SEND_RETENTION = timedelta(days=7)
+QUOTA_WINDOW_RETENTION = timedelta(days=1)
+
+
+async def purge_collection_history(session: AsyncSession, *, now: datetime | None = None, limit: int = 1000) -> int:
+    """Delete one bounded slice of finished collection bookkeeping; the caller commits.
+
+    Every poll leaves one request plus one to three provider sends and debits, so these grow forever.
+    Deletes at most ``limit`` rows per table (``id IN (subselect)`` keeps each statement short):
+    terminal requests untouched for 30 days (queued/running ones are the live work queue and never
+    match); provider sends older than 7 days (their debits cascade); and quota windows that ended over
+    a day ago with no debit left (the RESTRICT debit FK would otherwise reject the delete, and the
+    NOT EXISTS keeps a window that a retained send still debited). Sends go first so a window freed by
+    this pass can go in the same pass. Returns the total rows deleted, debits excluded.
+    """
+    now = now or datetime.now(UTC)
+    req = select(ConnectorCollectionRequest.id).where(
+        ConnectorCollectionRequest.status.in_(("succeeded", "no_changes", "failed", "cancelled")),
+        ConnectorCollectionRequest.updated_at < now - REQUEST_RETENTION,
+    ).limit(limit)
+    sends = select(ConnectorProviderSend.send_id).where(
+        ConnectorProviderSend.created_at < now - SEND_RETENTION).limit(limit)
+    deleted = 0
+    for statement in (
+        delete(ConnectorCollectionRequest).where(ConnectorCollectionRequest.id.in_(req)),
+        delete(ConnectorProviderSend).where(ConnectorProviderSend.send_id.in_(sends)),
+    ):
+        deleted += int(getattr(await session.execute(statement), "rowcount", 0) or 0)
+    debited = exists().where(
+        ConnectorQuotaDebit.provider_id == ConnectorQuotaWindow.provider_id,
+        ConnectorQuotaDebit.budget_kind == ConnectorQuotaWindow.budget_kind,
+        ConnectorQuotaDebit.subject_hash == ConnectorQuotaWindow.subject_hash,
+        ConnectorQuotaDebit.policy_key == ConnectorQuotaWindow.policy_key,
+        ConnectorQuotaDebit.window_start == ConnectorQuotaWindow.window_start,
+    )
+    keys = select(
+        ConnectorQuotaWindow.provider_id, ConnectorQuotaWindow.budget_kind, ConnectorQuotaWindow.subject_hash,
+        ConnectorQuotaWindow.policy_key, ConnectorQuotaWindow.window_start,
+    ).where(ConnectorQuotaWindow.window_end < now - QUOTA_WINDOW_RETENTION, ~debited).limit(limit)
+    doomed = (await session.execute(keys)).all()
+    for row in doomed:  # composite PK: delete by key tuples, at most ``limit`` of them
+        await session.execute(delete(ConnectorQuotaWindow).where(
+            ConnectorQuotaWindow.provider_id == row.provider_id,
+            ConnectorQuotaWindow.budget_kind == row.budget_kind,
+            ConnectorQuotaWindow.subject_hash == row.subject_hash,
+            ConnectorQuotaWindow.policy_key == row.policy_key,
+            ConnectorQuotaWindow.window_start == row.window_start,
+        ))
+    return deleted + len(doomed)
 
 
 async def settle_admission(session: AsyncSession, request_id: UUID, admission_token: UUID, **kwargs: object) -> bool:

@@ -11,7 +11,7 @@ import secrets
 from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 from typing import cast as typing_cast
 from uuid import UUID, uuid4, uuid5
@@ -1495,6 +1495,29 @@ async def purge_expired_collection_receipts(session: AsyncSession, *, now: datet
     return len(doomed)
 
 
+# Fan-out stage events nobody reads after delivery; other types stay (automations read
+# document.version.ready by cursor and cleanup receipts check fixed event ids).
+_PURGEABLE_OUTBOX_TYPES = ("ingestion.stage.requested", "ingestion.normalize.requested")
+OUTBOX_RETENTION = timedelta(days=7)
+
+
+async def purge_delivered_outbox(session: AsyncSession, *, now: datetime | None = None, limit: int = 1000) -> int:
+    """Delete one bounded slice of long-delivered ingestion stage events; the caller commits.
+
+    Only ``delivered`` rows of the two ingestion stage types older than 7 days qualify, so pending,
+    queued and failed rows (still retryable or diagnostic) and every other event type are untouched.
+    ``id IN (subselect LIMIT n)`` bounds each pass; the hourly cron drains a backlog. Returns rows deleted.
+    """
+    now = now or datetime.now(UTC)
+    doomed = select(EventOutbox.id).where(
+        EventOutbox.status == "delivered",
+        EventOutbox.type.in_(_PURGEABLE_OUTBOX_TYPES),
+        EventOutbox.created_at < now - OUTBOX_RETENTION,
+    ).limit(limit)
+    result = await session.execute(delete(EventOutbox).where(EventOutbox.id.in_(doomed)))
+    return int(getattr(result, "rowcount", 0) or 0)
+
+
 async def validate_connector_collection_in_uow(
     session: AsyncSession, lease: ConnectorCollectionLease, *, collector_token: str | None,
     scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
@@ -1824,6 +1847,53 @@ def validate_telegram_record_delivery(
         raise ValueError("Telegram mapped record does not match its raw delivery")
 
 
+async def seen_record_keys(
+    session: AsyncSession, *, source_id: UUID, source_generation: int, provider: str | None,
+    keys: Iterable[tuple[str, str]],
+) -> set[tuple[str, str]]:
+    """Return the ``(provider_id, record_hash)`` pairs this source already observed in its current generation.
+
+    Re-polled feeds (RSS re-reads a 24h window every poll) otherwise append identical observations
+    that the document layer then drops by ``record_hash`` anyway. Measurement providers are never
+    deduplicated: an identical reading at a new ``observed_at`` is a new world measurement and
+    ``upsert_from_ingestion_in_uow`` needs its observation row. Scoping to the current generation lets a
+    source reset re-ingest everything. Read-only; bounded by the caller's record cap.
+    """
+    from modules.knowledge.documents.schemas import MEASUREMENT_PROVIDER_IDS
+
+    wanted = list(set(keys))
+    if not wanted or provider in MEASUREMENT_PROVIDER_IDS:
+        return set()
+    found: set[tuple[str, str]] = set()
+    for start in range(0, len(wanted), 500):  # keep the IN list well under the bind-parameter limit
+        rows = await session.execute(
+            select(SourceObservation.provider_id, SourceObservation.record_hash)
+            .join(IngestionBatch, IngestionBatch.id == SourceObservation.batch_id)
+            .where(
+                SourceObservation.source_id == source_id,
+                IngestionBatch.source_generation == source_generation,
+                tuple_(SourceObservation.provider_id, SourceObservation.record_hash).in_(wanted[start:start + 500]),
+            ))
+        found.update((row.provider_id, row.record_hash) for row in rows)
+    return found
+
+
+def record_key(record: IngestionRecord) -> tuple[str, str]:
+    """Return the ``(provider_id, record_hash)`` identity stored for a generic-path record."""
+    return record.provider_id, _digest({"version": record.version, "content": record.content, "metadata": record.metadata})
+
+
+async def drop_seen_records(
+    session: AsyncSession, *, source_id: UUID, source_generation: int, provider: str | None,
+    records: list[IngestionRecord],
+) -> list[IngestionRecord]:
+    """Filter out generic-path records whose observation was already stored (see ``seen_record_keys``)."""
+    seen = await seen_record_keys(
+        session, source_id=source_id, source_generation=source_generation, provider=provider,
+        keys=[record_key(record) for record in records])
+    return [record for record in records if record_key(record) not in seen] if seen else records
+
+
 async def accept_native_collection(
     session: AsyncSession,
     payload: NativeCollectionBatch,
@@ -2138,6 +2208,20 @@ async def accept_native_collection(
                 raise HTTPException(status_code=413, detail="Telegram observation exceeds normalization size limit")
         provider_records.append((record, record_data, telegram_envelope))
 
+    if provider_records:
+        # Already-stored observations add nothing (documents dedupe by record_hash); an all-seen poll
+        # therefore takes the empty succeeded path below instead of queueing normalization.
+        seen_keys = await seen_record_keys(
+            session, source_id=source.id, source_generation=source.generation, provider=source.provider,
+            keys=[(rec.provider_id, _digest({
+                "version": rec.version, "content": rec.content, "metadata": data["metadata"],
+            })) for rec, data, _ in provider_records])
+        if seen_keys:
+            provider_records = [
+                item for item in provider_records
+                if (item[0].provider_id, _digest({
+                    "version": item[0].version, "content": item[0].content, "metadata": item[1]["metadata"],
+                })) not in seen_keys]
     batch = IngestionBatch(
         source_id=source.id, batch_key=batch_key, payload_hash=payload_hash,
         source_generation=source.generation,
@@ -3190,7 +3274,11 @@ async def list_run_meta(session: AsyncSession, limit: int, *, instance_operator:
         raise HTTPException(status_code=403, detail="Instance operator required")
     if limit < 1:
         raise ValueError("Run metadata page size must be positive")
-    rows = await session.scalars(select(IngestionRun).order_by(IngestionRun.created_at.desc()).limit(min(limit, 100)))
+    # Column projection: run payload/progress columns are never loaded for this metadata page.
+    rows = await session.execute(select(
+        IngestionRun.id, IngestionRun.status, IngestionRun.error_code, IngestionRun.created_at,
+        IngestionRun.updated_at,
+    ).order_by(IngestionRun.created_at.desc()).limit(min(limit, 100)))
     return [_RunMeta(kind="ingestion", id=str(r.id), status=r.status, error_code=r.error_code,
                      created_at=r.created_at, updated_at=r.updated_at,
                      finished_at=r.updated_at if r.status in {"succeeded", "failed", "needs_ocr"} else None)

@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
+from core.heavy_work import to_thread_joined
 from core.rate_limit import require_budget
 from core.storage import save_upload, storage_path
 from core.workspaces.dependencies import (
@@ -208,8 +209,10 @@ async def _intake_upload(
     if upload.size is not None and upload.size > settings.upload_max_bytes:
         raise HTTPException(status_code=413, detail="Upload exceeds the configured size limit")
     try:
-        suffix, mime_type, original_name = validate_upload(
-            upload.filename, upload.content_type, upload.file
+        # Reads up to the size cap from the spooled file: keep it off the event loop, and join the
+        # thread on cancellation so the request cannot close the temp file while it is still read.
+        suffix, mime_type, original_name = await to_thread_joined(
+            validate_upload, upload.filename, upload.content_type, upload.file
         )
         from modules.settings.public import admit_write
 

@@ -55,6 +55,12 @@ class AgentReadCancel(BaseModel):
     job_token: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
+def _parse_html(body: bytes) -> tuple[Any, str]:
+    """Parse HTML and extract its text; CPU-bound, so callers run it via ``asyncio.to_thread``."""
+    soup = BeautifulSoup(body, "html.parser")
+    return soup, soup.get_text("\n", strip=True)
+
+
 async def _dns_safe(url: str) -> None:
     """Reject URLs whose current DNS resolution includes non-public addresses.
 
@@ -147,8 +153,9 @@ async def crawl(payload: CrawlRequest) -> list[dict[str, Any]]:
                                     raise HTTPException(status_code=413, detail="Browser download limit exceeded")
                                 body.extend(chunk)
                         final_url = str(response.url)
-                        soup = BeautifulSoup(bytes(body), "html.parser")
-                        await append(final_url, soup.get_text("\n", strip=True), 0)
+                        # HTML parse of up to MAX_BYTES is CPU-bound: run it in a thread.
+                        soup, page_text = await asyncio.to_thread(_parse_html, bytes(body))
+                        await append(final_url, page_text, 0)
                         if depth < payload.max_depth:
                             for anchor in soup.find_all("a", href=True):
                                 candidate = urljoin(final_url, str(anchor["href"]))
@@ -371,7 +378,6 @@ async def _execute_static_agent_read(
     import json
     import time
 
-    from bs4 import BeautifulSoup
     from httpx2 import AsyncClient
 
     from modules.tools.mcp_transport import McpOperationNetworkBudget, McpPinnedHttpTransport
@@ -449,11 +455,11 @@ async def _execute_static_agent_read(
                 "text/html", "application/xhtml+xml",
             }:
                 raise ValueError("Browser source did not return a static HTML page")
-            soup = BeautifulSoup(body, "html.parser")
+            soup, page_text = await asyncio.to_thread(_parse_html, body)
             # Bound by UTF-8 bytes to match the worker and the DB octet_length check.
-            extracted = soup.get_text("\n", strip=True).encode("utf-8")[:20_000].decode("utf-8", "ignore")
+            extracted = page_text.encode("utf-8")[:20_000].decode("utf-8", "ignore")
             page_bytes += len(body)
-            page = {
+            page: dict[str, object] = {
                 "requested_url": requested,
                 "final_url": final_url,
                 "observed_at": datetime.now(UTC).isoformat(),

@@ -108,6 +108,7 @@ class DocumentInteraction(Base):
             name="ck_document_interactions_nonempty",
         ),
         Index("ix_document_interactions_owner_read", "owner_id", "read_at"),
+        Index("ix_document_interactions_document_version_id", "document_version_id"),
     )
 
     owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), primary_key=True)

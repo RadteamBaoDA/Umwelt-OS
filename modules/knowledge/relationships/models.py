@@ -99,6 +99,7 @@ class RelationshipEvidence(Base):
         CheckConstraint("confidence >= 0 AND confidence <= 1", name="ck_relationship_evidence_confidence"),
         Index("ix_relationship_evidence_version", "document_version_id"),
         Index("ix_relationship_evidence_chunk", "chunk_id"),
+        Index("ix_relationship_evidence_document_id", "document_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)

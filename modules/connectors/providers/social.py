@@ -10,7 +10,12 @@ from urllib.parse import parse_qs, quote, unquote, urljoin, urlsplit
 
 import httpx
 
-from modules.connectors.providers.feed_catalog import _plain_text, _retry_deadline, _selected_hash, send_fence_trace
+from modules.connectors.providers.feed_catalog import (
+    _plain_text,
+    _retry_deadline,
+    _selected_hash,
+    send_fence_trace,
+)
 from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
 from modules.ingestion.schemas import IngestionRecord
 from modules.knowledge.documents.public import ProviderRecordMetadata
@@ -82,7 +87,7 @@ async def _get_page(
     """
     try:
         async with asyncio.timeout(timeout_seconds):
-            async with httpx.AsyncClient(  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
+            async with httpx.AsyncClient(  # style-only rewrite skipped to avoid touching control flow
                 timeout=httpx.Timeout(timeout_seconds), trust_env=False, follow_redirects=False, verify=True
             ) as client:
                 await before_request()

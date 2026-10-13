@@ -9,9 +9,10 @@ from pathlib import Path
 import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from core.auth.public import provision_bootstrap_account_in_uow
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
+
+from core.auth.public import provision_bootstrap_account_in_uow
 
 pytestmark = pytest.mark.skipif(
     os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"

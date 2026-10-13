@@ -66,6 +66,7 @@ class SearchIndexItem(Base):
         CheckConstraint("status IN ('pending', 'succeeded', 'failed')", name="ck_search_index_items_status"),
         UniqueConstraint("generation_id", "chunk_id", name="uq_search_index_items_generation_chunk"),
         Index("ix_search_index_items_status", "generation_id", "status"),
+        Index("ix_search_index_items_chunk_id", "chunk_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)

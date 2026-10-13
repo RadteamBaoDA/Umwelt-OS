@@ -112,6 +112,11 @@ async def finish_activity(
     ``interrupted`` is for a request lifetime that ended without a delivered response. It
     does not stand in for external-effect uncertainty; those owners keep separate activity
     receipts and mark them uncertain until their own durable reconciliation completes.
+
+    A clean (non-uncertain) finish deletes the row: only ``active`` and ``uncertain`` rows
+    gate snapshots, so retaining finished/interrupted history would only grow the table.
+    ``interrupted`` therefore differs from a normal finish only in being validated here.
+    Returns False when no matching active row exists.
     """
     if uncertain and interrupted:
         raise ValueError("An activity cannot be both interrupted and uncertain")
@@ -123,8 +128,11 @@ async def finish_activity(
     ).with_for_update())
     if row is None:
         return False
-    row.state = "uncertain" if uncertain else ("interrupted" if interrupted else "finished")
-    row.finished_at = datetime.now(UTC)
+    if uncertain:
+        row.state = "uncertain"
+        row.finished_at = datetime.now(UTC)
+    else:
+        await session.delete(row)
     await session.flush()
     return True
 

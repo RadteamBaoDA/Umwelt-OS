@@ -25,7 +25,12 @@ from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
 from modules.goals.schemas import GoalFilter, GoalPage
 from modules.knowledge.documents.models import Document, DocumentChunk, DocumentVersion
-from modules.search.indexing import configured_embedding, embedding_values, gateway
+from modules.search.indexing import (
+    configured_embedding,
+    embedding_values,
+    gateway,
+    purge_version_embeddings,  # noqa: F401  # public re-export (Search owner contract)
+)
 from modules.search.models import IndexGeneration, SearchIndexItem
 from modules.search.schemas import (
     Citation,
@@ -293,8 +298,12 @@ async def _vector_ids(
     dimensions = generation.dimensions
     if dimensions is None:
         return []
+    # The generation UUID is inlined (validated through UUID) so the WHERE carries the literal
+    # predicate of the partial HNSW index ``ix_search_vector_<hex>``; a bind parameter would stop
+    # the planner from proving the index predicate and force a sequential scan.
+    generation_literal = str(UUID(str(generation.id)))
     clauses = [
-        "i.generation_id = :generation_id", "i.status = 'succeeded'", "i.embedding IS NOT NULL",
+        f"i.generation_id = '{generation_literal}'", "i.status = 'succeeded'", "i.embedding IS NOT NULL",
         "v.version_number = d.current_version", "d.extraction_status IN ('ready', 'succeeded')",
         "s.status = 'active'", "g.workspace_id = CAST(:workspace_id AS uuid)",
         "d.workspace_id = CAST(:workspace_id AS uuid)",
@@ -302,7 +311,7 @@ async def _vector_ids(
     if destination != ToolDestination.LOCAL:
         clauses.append("s.local_only = false")
     params: dict[str, object] = {
-        "generation_id": generation.id, "workspace_id": str(workspace_id),
+        "workspace_id": str(workspace_id),
         "embedding": json.dumps(values), "limit": MAX_CANDIDATES,
     }
     if source_generation_fences is not None:
@@ -332,17 +341,25 @@ async def _vector_ids(
     if request.filters.date_to is not None:
         clauses.append("coalesce(d.published_at, d.observed_at, v.observed_at) <= :date_to")
         params["date_to"] = request.filters.date_to
+    distance = f"i.embedding::vector({dimensions}) <=> CAST(:embedding AS vector({dimensions}))"
+    # The inner ORDER BY is the bare distance expression so the HNSW index can serve it (an extra
+    # chunk_id sort key disables index ordering); all filters stay before the LIMIT. The outer sort
+    # restores deterministic tie-breaking and order under relaxed iterative scans.
     statement = text(
-        "SELECT i.chunk_id FROM search_index_items i "
+        "SELECT t.chunk_id FROM ("
+        f"SELECT i.chunk_id AS chunk_id, {distance} AS dist FROM search_index_items i "
         "JOIN search_index_generations g ON g.id = i.generation_id "
         "JOIN document_chunks c ON c.id = i.chunk_id "
         "JOIN document_versions v ON v.id = c.document_version_id "
         "JOIN documents d ON d.id = v.document_id "
         "JOIN sources s ON s.id = d.source_id "
         f"WHERE {' AND '.join(clauses)} "
-        f"ORDER BY i.embedding::vector({dimensions}) <=> CAST(:embedding AS vector({dimensions})), i.chunk_id "
-        "LIMIT :limit"
+        f"ORDER BY {distance} LIMIT :limit"
+        ") t ORDER BY t.dist, t.chunk_id"
     )
+    # Transaction-local: filtered HNSW scans keep scanning until LIMIT rows survive the filters.
+    await session.execute(text("SET LOCAL hnsw.iterative_scan = relaxed_order"))
+    await session.execute(text("SET LOCAL hnsw.ef_search = 100"))
     return list((await session.scalars(statement, params)).all())
 
 

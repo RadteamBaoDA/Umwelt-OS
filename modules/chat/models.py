@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -58,11 +59,15 @@ class Conversation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
+    # passive_deletes: chat_messages/chat_response_runs FKs are ON DELETE CASCADE (models + p06/p14
+    # migrations), so deleting a Conversation lets Postgres remove children instead of the ORM
+    # loading and deleting them row by row. delete-orphan is kept for in-session removals.
     messages: Mapped[list["Message"]] = relationship(
-        "Message", back_populates="conversation", cascade="all, delete-orphan", order_by="Message.created_at"
+        "Message", back_populates="conversation", cascade="all, delete-orphan", passive_deletes=True,
+        order_by="Message.created_at",
     )
     response_runs: Mapped[list["ResponseRun"]] = relationship(
-        "ResponseRun", back_populates="conversation", cascade="all, delete-orphan"
+        "ResponseRun", back_populates="conversation", cascade="all, delete-orphan", passive_deletes=True,
     )
 
 
@@ -112,6 +117,12 @@ class ResponseRun(Base):
         Index("ix_chat_response_runs_client_request_id", "client_request_id"),
         Index("ix_chat_response_runs_status", "status"),
         Index("ix_chat_response_runs_created_at", "created_at"),
+        Index("ix_chat_response_runs_user_message_id", "user_message_id"),
+        Index("ix_chat_response_runs_assistant_message_id", "assistant_message_id"),
+        Index(
+            "ix_chat_response_runs_terminal_completed", "completed_at",
+            postgresql_where=text("status IN ('completed', 'cancelled', 'failed')"),
+        ),
         CheckConstraint(
             "status IN ('pending', 'streaming', 'completed', 'cancelled', 'failed')",
             name="ck_chat_response_runs_status",
@@ -155,7 +166,8 @@ class ResponseRun(Base):
 
     conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="response_runs")
     stream_events: Mapped[list["StreamEvent"]] = relationship(
-        "StreamEvent", back_populates="response_run", cascade="all, delete-orphan", order_by="StreamEvent.seq"
+        "StreamEvent", back_populates="response_run", cascade="all, delete-orphan", passive_deletes=True,
+        order_by="StreamEvent.seq",  # chat_stream_events.response_id is ON DELETE CASCADE
     )
 
 
@@ -169,6 +181,8 @@ class MessageMutationReceipt(Base):
         CheckConstraint("action IN ('edit', 'regenerate')", name="ck_chat_message_mutation_action"),
         CheckConstraint("length(request_digest) = 64", name="ck_chat_message_mutation_digest"),
         Index("ix_chat_message_mutation_receipts_response_id", "response_id"),
+        Index("ix_chat_message_mutation_receipts_target_message_id", "target_message_id"),
+        Index("ix_chat_message_mutation_receipts_result_user_message_id", "result_user_message_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -195,8 +209,6 @@ class StreamEvent(Base):
 
     __tablename__ = "chat_stream_events"
     __table_args__ = (
-        Index("ix_chat_stream_events_response_id", "response_id"),
-        Index("ix_chat_stream_events_seq", "response_id", "seq"),
         UniqueConstraint("response_id", "seq", name="uq_chat_stream_events_seq"),
         UniqueConstraint("event_id", name="uq_chat_stream_events_event_id"),
         CheckConstraint("seq >= 1", name="ck_chat_stream_events_seq_positive"),

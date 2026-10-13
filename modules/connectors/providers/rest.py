@@ -73,8 +73,9 @@ class Fetched:
 async def resolve_public(host: str, port: int) -> list[str]:
     """Resolve once and require every returned address to be globally routable."""
     try:
-        infos = await asyncio.to_thread(getaddrinfo, host, port, 0, 0, 0)
-    except OSError as exc:
+        # wait_for bounds request latency only: a cancelled to_thread keeps running in the pool until the resolver returns.
+        infos = await asyncio.wait_for(asyncio.to_thread(getaddrinfo, host, port, 0, 0, 0), 5)
+    except (OSError, TimeoutError) as exc:
         raise UnsafeDestination("host_unresolvable") from exc
     addresses = [str(item[4][0]) for item in infos]
     if not addresses or any(not ip_address(address).is_global for address in addresses):

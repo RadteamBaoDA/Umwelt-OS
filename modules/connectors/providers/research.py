@@ -8,7 +8,12 @@ from urllib.parse import quote
 
 import httpx
 
-from modules.connectors.providers.feed_catalog import _parse_time, _retry_deadline, _selected_hash, send_fence_trace
+from modules.connectors.providers.feed_catalog import (
+    _parse_time,
+    _retry_deadline,
+    _selected_hash,
+    send_fence_trace,
+)
 from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
 from modules.ingestion.schemas import IngestionRecord
 from modules.knowledge.documents.public import ProviderRecordMetadata
@@ -27,7 +32,7 @@ async def _fetch_models(author: str, before_request: Callable[[], Awaitable[None
     )
     try:
         async with asyncio.timeout(30):
-            async with httpx.AsyncClient(  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
+            async with httpx.AsyncClient(  # style-only rewrite skipped to avoid touching control flow
                 timeout=httpx.Timeout(30), trust_env=False, follow_redirects=False, verify=True
             ) as client:
                 await before_request()

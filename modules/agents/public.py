@@ -43,7 +43,11 @@ from modules.agents.schemas import (
 )
 from modules.agents.specialists import resolve_profile_snapshot
 from modules.knowledge.documents.public import DocumentCleanupEvidenceScope
-from modules.tools.public import purge_browser_results_in_uow, revalidate_native_output_fences
+from modules.tools.public import (
+    purge_browser_results_in_uow,
+    revalidate_native_output_fences,
+    revalidate_native_output_fences_many,
+)
 
 WORKFLOW_VERSION = "assistant-readonly-v1"
 APPROVAL_WORKFLOW_VERSION = "assistant-approved-v1"
@@ -507,6 +511,10 @@ async def list_runs(
         )
         if profile_id is not None:
             statement = statement.where(AgentRun.agent_id == profile_id)
+        if conversation_id is not None:
+            # Unlinked runs are never visible in a conversation view; filtering in SQL avoids
+            # loading whole rows (prompt/answer/activities) only to drop them in Python.
+            statement = statement.where(AgentRun.chat_link_required.is_(True))
         if scan_anchor is not None:
             statement = statement.where(tuple_(AgentRun.created_at, AgentRun.id) < scan_anchor)
         batch = list((await session.scalars(statement.order_by(
@@ -544,10 +552,7 @@ async def list_runs(
     else:
         next_cursor = None
     return AgentRunPage(
-        items=[
-            await _read_current_result(row, session_factory, multi_workspace_enabled=multi_workspace_enabled)
-            for row in page
-        ],
+        items=await _read_current_results(page, session_factory, multi_workspace_enabled=multi_workspace_enabled),
         next_cursor=next_cursor,
     )
 
@@ -663,6 +668,45 @@ async def get_run_for_owner(
     return await get_run(
         session, run_id, session_factory, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
+
+
+async def _read_current_results(
+    rows: list[AgentRun],
+    session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]] | None,
+    *, multi_workspace_enabled: bool,
+) -> list[AgentRunRead]:
+    """Project a page of results with one batched evidence-fence check instead of one per row.
+
+    Produces exactly what ``_read_current_result`` yields per row: a row with a malformed or stale
+    fence (or no usable session factory) keeps its status but has its answer suppressed.
+    """
+    results = [_read(row) for row in rows]
+    pending: list[int] = []
+    items: list[tuple[object, ToolExecutionPrincipal | None]] = []
+    for index, (row, result) in enumerate(zip(rows, results, strict=True)):
+        if not row.source_fences or result.answer is None:
+            continue
+        if session_factory is None:
+            results[index] = result.model_copy(update={"answer": None})
+            continue
+        principal = _result_principal(row)
+        try:
+            sink: dict[str, Any] | None = _restore_fences(row.source_fences)
+        except (TypeError, ValueError, KeyError):
+            sink = None
+        if sink is None or principal is None:
+            results[index] = result.model_copy(update={"answer": None})
+            continue
+        pending.append(index)
+        items.append((sink, principal))
+    if pending and session_factory is not None:
+        verdicts = await revalidate_native_output_fences_many(
+            session_factory, items, destination_kind="remote", multi_workspace_enabled=multi_workspace_enabled,
+        )
+        for index, current in zip(pending, verdicts, strict=True):
+            if not current:
+                results[index] = results[index].model_copy(update={"answer": None})
+    return results
 
 
 async def _read_current_result(
@@ -1423,21 +1467,30 @@ async def list_conversation_approvals(
         AgentEffect.workspace_id == scope.workspace_id,
     ))).all()} if rows else {}
     reads: list[ApprovalRead] = []
+    # The account session was revalidated above; one batched link check replaces a per-row query
+    # (it also re-checks the Chat session and the link's retention window in Chat's own contract).
+    from modules.chat.public import filter_live_agent_run_ids
+
+    live_run_ids = await filter_live_agent_run_ids(
+        session, sorted({item.run_id for item in rows}, key=str), owner_id, auth_session_hash,
+        conversation_id=conversation_id,
+    )
+    revoked_by_run: dict[UUID, bool] = {}
     for item in rows:
-        run_revoked = await _approval_run_is_revoked(session_factory, item.run_id, scope.workspace_id)
+        if item.run_id not in live_run_ids:
+            continue
+        # Several approvals usually share one run; its revocation state is checked once per page.
+        if item.run_id not in revoked_by_run:
+            revoked_by_run[item.run_id] = await _approval_run_is_revoked(
+                session_factory, item.run_id, scope.workspace_id,
+            )
+        run_revoked = revoked_by_run[item.run_id]
         fences_current = (
             not run_revoked and item.auth_session_hash == auth_session_hash
             and await _approval_fences_current(
                 session_factory, item, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
         )
-        from modules.chat.public import has_live_agent_run_link
-        session_current = await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled)
-        link_current = session_current and await has_live_agent_run_link(
-            session, item.run_id, owner_id, auth_session_hash,
-        )
-        if not link_current:
-            continue
         if not fences_current and not run_revoked:
             await _invalidate_stale_approval(session, item)
             current_effect = await session.execute(select(
@@ -1853,7 +1906,11 @@ __all__ = [
 
 async def list_run_meta(session: AsyncSession, limit: int) -> list[_RunMeta]:
     """Return at most ``limit`` (<=100) newest agent runs as metadata only; unknown token usage is None, never 0."""
-    rows = await session.scalars(select(AgentRun).order_by(AgentRun.created_at.desc()).limit(min(limit, 100)))
+    # Column projection: prompt/answer/activities/payload are never loaded for this metadata page.
+    rows = await session.execute(select(
+        AgentRun.id, AgentRun.status, AgentRun.error_code, AgentRun.created_at, AgentRun.updated_at,
+        AgentRun.completed_at, AgentRun.token_usage_unknown, AgentRun.token_usage,
+    ).order_by(AgentRun.created_at.desc()).limit(min(limit, 100)))
     return [_RunMeta(kind="agent", id=str(r.id), status=r.status, error_code=r.error_code,
                      created_at=r.created_at, updated_at=r.updated_at, finished_at=r.completed_at,
                      token_usage=None if r.token_usage_unknown else r.token_usage)
