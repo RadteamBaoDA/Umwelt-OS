@@ -18,6 +18,7 @@ from core.model_gateway.client import (
 )
 from core.model_gateway.schemas import AIExecutionConfig, RequestPolicy
 from core.telemetry import count
+from modules.settings.prompts import resolve_prompt
 from modules.translations.protection import (
     join_markdown,
     protect_text,
@@ -25,7 +26,6 @@ from modules.translations.protection import (
     restore_text,
     split_markdown,
 )
-from modules.settings.prompts import resolve_prompt
 from modules.translations.schemas import TranslationInput
 
 ALIAS = "reasoning-small"

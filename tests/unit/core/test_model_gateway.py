@@ -31,6 +31,7 @@ from core.model_gateway.client import (
     CapabilityUnsupported,
     ModelGateway,
     ModelGatewayError,
+    ModelGatewayUnavailable,
     PrivacyPolicyDenied,
 )
 from core.model_gateway.policy import may_send
@@ -330,12 +331,30 @@ class _LeaseRedis:
         self.refreshes = 0
         self.acquires = 0
         self.eval_errors: list[Exception] = []
+        self.fails: dict[str, int] = {}
+        self.open: dict[str, int] = {}
+
+    async def exists(self, key: str) -> int:
+        return int(key in self.open)
+
+    async def pttl(self, key: str) -> int:
+        return self.open.get(key, -2)
+
+    async def delete(self, key: str) -> int:
+        return int(self.fails.pop(key, None) is not None)
 
     async def eval(self, script: str, n: int, *args: object) -> int:
         await asyncio.sleep(0)  # real interleaving between callers
         if self.eval_errors:
             raise self.eval_errors.pop(0)
         keys, token = [str(k) for k in args[:n]], str(args[n])
+        if "INCR" in script:  # breaker record: window is ignored, open flag stores its PX ms for pttl
+            _window, threshold, forced, default = (int(x) for x in args[n:n + 4])
+            self.fails[keys[0]] = count = self.fails.get(keys[0], 0) + 1
+            ms = forced if forced > 0 else default if count >= threshold else 0
+            if ms > 0:
+                self.open[keys[1]] = ms
+            return count
         if "'NX'" in script:
             self.acquires += 1
             for i, k in enumerate(keys):
@@ -1051,3 +1070,127 @@ class TestLocalProviderPolicyAndUrls:
         with pytest.raises(ModelGatewayError) as exc:
             await _gateway(AsyncMock(), api_key="", destination_id="local:abc", base_url="http://127.0.0.1:9").discover_models()
         assert "not configured" not in str(exc.value)
+
+
+def _status_error(status: int, headers: dict[str, str] | None = None) -> APIStatusError:
+    """SDK status error carrying an optional Retry-After style header."""
+    request = httpx.Request("POST", "https://x/v1/chat/completions")
+    return APIStatusError("boom", response=httpx.Response(status, request=request, headers=headers), body=None)
+
+
+def _breaker_gateway() -> tuple[ModelGateway, _LeaseRedis]:
+    """Gateway with supported capabilities over the in-memory breaker-aware Redis."""
+    redis = _LeaseRedis()
+    redis.get = _cap_get()  # type: ignore[method-assign]
+    return _lease_gateway(redis), redis
+
+
+async def _chat(gw: ModelGateway, create: Any, probe: bool = False, fast_sleep: bool = True) -> Any:
+    """One chat call through a fake SDK client with retry sleeps made instant."""
+    with patch("core.model_gateway.client.AsyncOpenAI", side_effect=_fake_openai_with(create)), \
+         patch.object(ModelGateway, "_http_client", return_value=MagicMock()), \
+         patch("core.model_gateway.client.asyncio.sleep", AsyncMock() if fast_sleep else asyncio.sleep):
+        return await gw.chat("fast", _MAPPING, _POLICY, [], probe=probe, before_send=AsyncMock())
+
+
+class TestCircuitBreaker:
+    """Per-upstream Redis breaker: counted failures open it, probes bypass it, Redis faults fail open."""
+
+    @pytest.mark.asyncio
+    async def test_five_failures_open_then_sixth_call_skips_sdk(self) -> None:
+        gw, redis = _breaker_gateway()
+        create = AsyncMock(side_effect=_status_error(503))
+        for _ in range(5):
+            with pytest.raises(ModelGatewayError):
+                await _chat(gw, create)
+        assert redis.open
+        create.reset_mock()
+        with pytest.raises(ModelGatewayUnavailable) as exc:
+            await _chat(gw, create)
+        assert create.await_count == 0
+        assert exc.value.retry_after > 0 and str(exc.value) != "Model capability is not supported"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [400, 422])
+    async def test_client_errors_are_not_counted(self, status: int) -> None:
+        gw, redis = _breaker_gateway()
+        with pytest.raises(CapabilityUnsupported):
+            await _chat(gw, AsyncMock(side_effect=_status_error(status)))
+        assert not redis.fails
+
+    @pytest.mark.asyncio
+    async def test_capacity_error_is_not_counted(self) -> None:
+        gw, redis = _breaker_gateway()
+        with patch("core.model_gateway.client._LEASE_WAIT_SECONDS", 0.05), \
+             patch("core.model_gateway.client._SLOTS", 1):
+            async with gw._slot():
+                with pytest.raises(ModelGatewayError, match="capacity"):
+                    await _chat(gw, AsyncMock(return_value={"ok": 1}), fast_sleep=False)
+        assert not redis.fails
+
+    @pytest.mark.asyncio
+    async def test_success_clears_counter(self) -> None:
+        gw, redis = _breaker_gateway()
+        with pytest.raises(ModelGatewayError):
+            await _chat(gw, AsyncMock(side_effect=_status_error(503)))
+        assert redis.fails
+        await _chat(gw, AsyncMock(return_value={"ok": 1}))
+        assert not redis.fails
+
+    @pytest.mark.asyncio
+    async def test_probe_bypasses_open_breaker_and_success_closes_counter(self) -> None:
+        gw, redis = _breaker_gateway()
+        fail_key, open_key = gw._breaker_keys()
+        redis.open[open_key] = 30_000
+        redis.fails[fail_key] = 4
+        with pytest.raises(ModelGatewayUnavailable):
+            await _chat(gw, AsyncMock(return_value={"ok": 1}))
+        assert await _chat(gw, AsyncMock(return_value={"ok": 1}), probe=True) == {"ok": 1}
+        assert not redis.fails
+
+    @pytest.mark.asyncio
+    async def test_long_retry_after_opens_breaker_without_retrying(self) -> None:
+        gw, redis = _breaker_gateway()
+        create = AsyncMock(side_effect=_status_error(429, {"retry-after": "120"}))
+        with pytest.raises(ModelGatewayUnavailable) as exc:
+            await _chat(gw, create)
+        assert create.await_count == 1 and exc.value.retry_after == 120
+        assert redis.open[gw._breaker_keys()[1]] == 120_000
+
+    @pytest.mark.asyncio
+    async def test_short_or_garbage_retry_after_retries_once(self) -> None:
+        gw, _ = _breaker_gateway()
+        for header in ("1", "garbage"):
+            create = AsyncMock(side_effect=[_status_error(429, {"retry-after": header}), {"ok": 1}])
+            assert await _chat(gw, create) == {"ok": 1}
+            assert create.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_redis_error_in_breaker_passes_through(self) -> None:
+        gw, redis = _breaker_gateway()
+        redis.exists = AsyncMock(side_effect=RedisConnectionError("down"))  # type: ignore[method-assign]
+        redis.delete = AsyncMock(side_effect=RedisConnectionError("down"))  # type: ignore[method-assign]
+        assert await _chat(gw, AsyncMock(return_value={"ok": 1})) == {"ok": 1}
+
+    @pytest.mark.asyncio
+    async def test_stream_failure_before_first_token_is_counted_after_is_not(self) -> None:
+        async def run(gw: ModelGateway, create: Any) -> None:
+            with patch("core.model_gateway.client.AsyncOpenAI", side_effect=_fake_openai_with(create)), \
+                 patch.object(ModelGateway, "_http_client", return_value=MagicMock()), \
+                 patch("core.model_gateway.client.asyncio.sleep", AsyncMock()), \
+                 pytest.raises(ModelGatewayError):
+                [x async for x in gw.stream("fast", _MAPPING, _POLICY, [])]
+
+        gw, redis = _breaker_gateway()
+        await run(gw, AsyncMock(side_effect=_status_error(503)))
+        assert redis.fails[gw._breaker_keys()[0]] == 1
+
+        async def broken() -> Any:
+            chunk = MagicMock()
+            chunk.model_dump.return_value = {"x": 1}
+            yield chunk
+            raise APIConnectionError(request=httpx.Request("POST", "https://x"))
+
+        gw2, redis2 = _breaker_gateway()
+        await run(gw2, AsyncMock(side_effect=lambda **_: broken()))
+        assert not redis2.fails

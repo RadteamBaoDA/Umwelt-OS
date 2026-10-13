@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core import publication
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
+from core.rate_limit import require_budget
 from core.workspaces import public as workspaces
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.schemas import PublicationFence, WorkspaceContext
@@ -374,7 +375,8 @@ async def _gate_member(
     ))
 
 
-@router.post("/briefs/generate", response_model=BriefRead, status_code=201)
+@router.post("/briefs/generate", response_model=BriefRead, status_code=201,
+             dependencies=[Depends(require_budget("brief_generate", 10, 60))])
 async def generate_brief(
     payload: BriefGenerateRequest, request: Request, session: Session, scope: WorkspaceWrite, response: Response,
 ) -> BriefRead:

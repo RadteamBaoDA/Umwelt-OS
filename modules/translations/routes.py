@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.auth.dependencies import require_account_write
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
+from core.rate_limit import require_budget
 from core.workspaces.dependencies import require_workspace_read
 from core.workspaces.schemas import WorkspaceContext
 from modules.translations import (
@@ -29,7 +30,8 @@ Member = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WriteAdmission = Annotated[object, Depends(require_account_write)]
 
 
-@router.post("/batches", response_model=TranslationBatchAccepted, status_code=202)
+@router.post("/batches", response_model=TranslationBatchAccepted, status_code=202,
+             dependencies=[Depends(require_budget("translation_queue", 20, 60))])
 async def create_batch(
     value: TranslationBatchRequest, request: Request, session: Session,
     member: Member, _admission: WriteAdmission,

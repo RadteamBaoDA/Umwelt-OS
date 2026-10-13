@@ -1,6 +1,8 @@
 import hashlib
 import json
-from typing import Annotated
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
+from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
 from redis.asyncio import Redis
@@ -18,6 +20,7 @@ from core.model_gateway.client import (
 )
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import DraftProbeRequest, ModelMapping, ProbeRequest, RequestPolicy
+from core.rate_limit import require_budget
 from core.workspaces.dependencies import require_workspace_write
 from core.workspaces.schemas import WorkspaceContext
 from modules.settings import public as ai_settings
@@ -56,7 +59,7 @@ def _capability_proved(capability: str, response: object) -> bool:
 
 
 
-@router.post("/{alias}/draft-test")
+@router.post("/{alias}/draft-test", dependencies=[Depends(require_budget("model_probe", 10, 60))])
 async def probe_draft(
     request: Request, session: Session, _owner: OwnerWrite,
     alias: Annotated[str, Path(pattern=r"^(reasoning-large|reasoning-small|fast|embedding|reranker|vision|local-private)$")],
@@ -116,23 +119,25 @@ async def probe_draft(
             response = await client.rerank(alias, mapping, policy, "synthetic probe", ["synthetic probe document"], probe=True)
         elif body.capability == "streaming":
             chunks, total = "", 0
-            async for line in client.stream(alias, mapping, policy, message, probe=True):
-                total += len(line)
-                if line.startswith("data:"):
-                    data = line.removeprefix("data:").strip()
-                    if data == "[DONE]":
+            # aclosing (stream() is an async generator at runtime, typed AsyncIterator): a `break` must close the generator now, or the model slot lease is held until GC.
+            async with aclosing(cast("AsyncGenerator[str, None]", client.stream(alias, mapping, policy, message, probe=True))) as lines:
+                async for line in lines:
+                    total += len(line)
+                    if line.startswith("data:"):
+                        data = line.removeprefix("data:").strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            item = json.loads(data)
+                            choices = item.get("choices", []) if isinstance(item, dict) else []
+                            if choices and isinstance(choices[0], dict):
+                                delta = choices[0].get("delta", {})
+                                if isinstance(delta, dict) and isinstance(delta.get("content"), str):
+                                    chunks += delta["content"]
+                        except (TypeError, json.JSONDecodeError):
+                            pass
+                    if total >= 16384:
                         break
-                    try:
-                        item = json.loads(data)
-                        choices = item.get("choices", []) if isinstance(item, dict) else []
-                        if choices and isinstance(choices[0], dict):
-                            delta = choices[0].get("delta", {})
-                            if isinstance(delta, dict) and isinstance(delta.get("content"), str):
-                                chunks += delta["content"]
-                    except (TypeError, json.JSONDecodeError):
-                        pass
-                if total >= 16384:
-                    break
             response = {"streamed": chunks}
         elif body.capability == "structured":
             response = await client.structured(alias, mapping, policy, message, {"name": "probe", "schema": {"type": "object"}}, probe=True)
@@ -156,7 +161,7 @@ async def probe_draft(
     return out
 
 
-@router.post("/{alias}/test")
+@router.post("/{alias}/test", dependencies=[Depends(require_budget("model_probe", 10, 60))])
 async def probe_model(
     request: Request, session: Session, _owner: OwnerWrite,
     alias: Annotated[str, Path(pattern=r"^(reasoning-large|reasoning-small|fast|embedding|reranker|vision|local-private)$")],
@@ -215,23 +220,24 @@ async def probe_model(
             response = await client.rerank(alias, mapping, policy, "synthetic probe", ["synthetic probe document"], probe=True)
         elif body.capability == "streaming":
             text, total = "", 0
-            async for line in client.stream(alias, mapping, policy, message, probe=True):
-                total += len(line)
-                if line.startswith("data:"):
-                    data = line.removeprefix("data:").strip()
-                    if data == "[DONE]":
+            async with aclosing(cast("AsyncGenerator[str, None]", client.stream(alias, mapping, policy, message, probe=True))) as lines:
+                async for line in lines:
+                    total += len(line)
+                    if line.startswith("data:"):
+                        data = line.removeprefix("data:").strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data)
+                            choices = chunk.get("choices", []) if isinstance(chunk, dict) else []
+                            if choices and isinstance(choices[0], dict):
+                                delta = choices[0].get("delta", {})
+                                if isinstance(delta, dict) and isinstance(delta.get("content"), str):
+                                    text += delta["content"]
+                        except (TypeError, json.JSONDecodeError):
+                            pass
+                    if total >= 16384:
                         break
-                    try:
-                        chunk = json.loads(data)
-                        choices = chunk.get("choices", []) if isinstance(chunk, dict) else []
-                        if choices and isinstance(choices[0], dict):
-                            delta = choices[0].get("delta", {})
-                            if isinstance(delta, dict) and isinstance(delta.get("content"), str):
-                                text += delta["content"]
-                    except (TypeError, json.JSONDecodeError):
-                        pass
-                if total >= 16384:
-                    break
             response = {"streamed": text}
         elif body.capability == "structured":
             response = await client.structured(alias, mapping, policy, message, {"name": "probe", "schema": {"type": "object"}}, probe=True)

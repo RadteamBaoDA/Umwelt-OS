@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import math
 import random
 import re
 import secrets
@@ -9,6 +10,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, aclosing, asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any, cast
 from urllib.parse import urlsplit
 
@@ -40,6 +42,27 @@ _REFRESH = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pex
 _ACQUIRE = "for i, k in ipairs(KEYS) do if redis.call('set', k, ARGV[1], 'NX', 'PX', ARGV[2]) then return i - 1 end end return -1"
 # Token-checked; one key (normal release) or all slots (sweep after an acquire cut short mid-flight).
 _RELEASE = "local n = 0 for _, k in ipairs(KEYS) do if redis.call('get', k) == ARGV[1] then n = n + redis.call('del', k) end end return n"
+# Per-upstream circuit breaker (keyed by gateway identity, which tracks provider URL + key): after
+# _BREAKER_THRESHOLD counted failures inside _BREAKER_WINDOW_MS the open flag blocks calls for
+# _BREAKER_OPEN_MS, so a dead upstream is not hammered by every worker. Fixed window from first failure.
+_BREAKER_PREFIX = "bbd:model-gateway:breaker:"
+_BREAKER_THRESHOLD = 5
+_BREAKER_WINDOW_MS = 60_000
+_BREAKER_OPEN_MS = 30_000
+_BREAKER_MAX_OPEN_MS = 300_000
+# A 429 Retry-After at or above this opens the breaker instead of sleeping inside a held lease.
+_RETRY_AFTER_INLINE_SECONDS = 2.0
+# KEYS: fail counter, open flag. ARGV: window ms, threshold, forced open ms (0 = none), default open ms.
+_BREAKER_RECORD = (
+    "local n = redis.call('INCR', KEYS[1]) "
+    "if n == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end "
+    "local ms = tonumber(ARGV[3]) "
+    "if ms <= 0 and n >= tonumber(ARGV[2]) then ms = tonumber(ARGV[4]) end "
+    "if ms > 0 then redis.call('SET', KEYS[2], '1', 'PX', ms) end "
+    "return n"
+)
+
+_LOG = logging.getLogger(__name__)
 
 
 def _api_base(url: str) -> str:
@@ -53,8 +76,56 @@ def _raise_if_policy_denied(exc: BaseException) -> None:
         raise ModelGatewayError("Model gateway network policy denied the destination") from exc
 
 
+def _retry_delay() -> float:
+    """Jittered pause before the single retry so concurrent workers do not retry in lockstep."""
+    return random.uniform(0.25, 1.0)
+
+
+def _retry_after_seconds(exc: APIStatusError) -> float | None:
+    """Parse a Retry-After header (delta-seconds or HTTP-date) from a provider response; None when absent or garbage."""
+    try:
+        raw = exc.response.headers.get("retry-after")
+    except AttributeError:
+        return None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    raw = raw.strip()
+    try:
+        seconds = float(raw)
+    except ValueError:
+        try:
+            seconds = (parsedate_to_datetime(raw) - datetime.now(UTC)).total_seconds()
+        except (TypeError, ValueError, IndexError, OverflowError):
+            return None
+    # NaN/inf are not a usable hint; negative (past date) means "retry now".
+    if math.isnan(seconds) or math.isinf(seconds):
+        return None
+    return max(seconds, 0.0)
+
+
+def _retryable_status(status: int) -> bool:
+    """Statuses that signal a transient upstream problem: retried once and counted toward the breaker."""
+    return status in {408, 425, 429} or status >= 500
+
+
 class ModelGatewayError(RuntimeError):
     """Base exception for unavailable, rejected, or invalid model gateway operations."""
+
+
+class ModelGatewayUnavailable(ModelGatewayError):
+    """Raised without contacting the upstream while its circuit breaker is open (or a long 429 Retry-After applies).
+
+    The message must differ from "Model capability is not supported", which the entity worker matches verbatim.
+    """
+
+    def __init__(self, retry_after: float) -> None:
+        """Record the seconds until the upstream may be tried again."""
+        super().__init__("Model gateway is temporarily unavailable")
+        self.retry_after = retry_after
+
+
+class _GatewayTimeout(ModelGatewayError):
+    """Whole-call deadline exceeded (counts toward the breaker, unlike lease or Redis failures)."""
 
 
 class PrivacyPolicyDenied(ModelGatewayError):
@@ -91,7 +162,7 @@ class ModelGateway:
         # and indexed source text out of logs even when OPENAI_LOG=debug is set.
         logging.getLogger("openai").setLevel(logging.WARNING)
         if not isinstance(self.scope, (WorkspaceContext, InternalJobScope)) or not callable(self.before_send):
-            raise ValueError("Explicit scope and fresh before_send callback are required")
+            raise ValueError("Explicit scope and fresh before_send callback are required")  # noqa: TRY004  # constructor contract raises ValueError for bad wiring
         if isinstance(self.scope, WorkspaceContext) and self.scope.role != "owner":
             raise PrivacyPolicyDenied("Workspace owner required for model execution")
         if len(self.gateway_identity) != 64 or any(char not in "0123456789abcdef" for char in self.gateway_identity):
@@ -199,9 +270,75 @@ class ModelGateway:
                 async with asyncio.timeout(self.timeout_seconds):
                     return await call()
             except TimeoutError as exc:
-                raise ModelGatewayError("Model gateway request timed out") from exc
+                raise _GatewayTimeout("Model gateway request timed out") from exc
             except RedisError as exc:
                 raise ModelGatewayError("Model gateway request failed") from exc
+
+    def _breaker_keys(self) -> tuple[str, str]:
+        """Return (fail counter, open flag) Redis keys for this upstream; identity is a nonsecret digest."""
+        base = f"{_BREAKER_PREFIX}{self.gateway_identity}"
+        return f"{base}:fail", f"{base}:open"
+
+    async def _breaker_check(self) -> None:
+        """Raise ModelGatewayUnavailable while this upstream's open flag exists.
+
+        Fails open: any Redis error, or a non-integer reply (mocked clients), lets the call proceed.
+        """
+        try:
+            _, open_key = self._breaker_keys()
+            exists = await self.redis.exists(open_key)
+            # Only a real positive int means open; test doubles return truthy mocks.
+            if not isinstance(exists, int) or isinstance(exists, bool) or exists <= 0:
+                return
+            pttl = await self.redis.pttl(open_key)
+        except RedisError:
+            _LOG.debug("model gateway breaker check failed; proceeding", exc_info=True)
+            return
+        remaining = pttl if isinstance(pttl, int) and pttl > 0 else _BREAKER_OPEN_MS
+        raise ModelGatewayUnavailable(remaining / 1000)
+
+    async def _breaker_fail(self, open_ms: int = 0) -> None:
+        """Count one upstream failure; open the breaker at the threshold or for open_ms (provider Retry-After).
+
+        Redis errors are swallowed: the breaker is advisory and must never mask the real failure.
+        """
+        fail_key, open_key = self._breaker_keys()
+        try:
+            await cast("Awaitable[Any]", self.redis.eval(
+                _BREAKER_RECORD, 2, fail_key, open_key,
+                str(_BREAKER_WINDOW_MS), str(_BREAKER_THRESHOLD), str(open_ms), str(_BREAKER_OPEN_MS)))
+        except RedisError:
+            _LOG.warning("model gateway breaker record failed", exc_info=True)
+
+    async def _breaker_ok(self) -> None:
+        """Reset the failure counter after a successful call (plain delete); Redis errors are ignored."""
+        try:
+            await self.redis.delete(self._breaker_keys()[0])
+        except RedisError:
+            _LOG.debug("model gateway breaker reset failed", exc_info=True)
+
+    async def _on_retryable_status(self, exc: APIStatusError, attempt: int) -> bool:
+        """Decide what a transient HTTP status means; True means the caller should retry now (already slept).
+
+        Raises ModelGatewayUnavailable for a 429 whose Retry-After is too long to sleep inside a held
+        lease (the breaker is opened for that duration, capped). On the final attempt the failure is
+        counted and False is returned so the caller maps the error.
+        """
+        if exc.status_code == 429:
+            wait = _retry_after_seconds(exc)
+            if wait is not None and wait >= _RETRY_AFTER_INLINE_SECONDS:
+                # The provider told us when to come back: honour it for every worker via the breaker.
+                capped = min(wait, _BREAKER_MAX_OPEN_MS / 1000)
+                await self._breaker_fail(open_ms=int(capped * 1000))
+                raise ModelGatewayUnavailable(capped) from exc
+            if attempt == 0:
+                await asyncio.sleep(wait if wait is not None else _retry_delay())
+                return True
+        elif attempt == 0:
+            await asyncio.sleep(_retry_delay())
+            return True
+        await self._breaker_fail()
+        return False
 
     async def _request(
         self,
@@ -224,6 +361,9 @@ class ModelGateway:
             raise ModelGatewayError("Model gateway is not configured")
         if not probe and not await self._capability_supported(alias, mapping, policy, capability):
             raise ModelGatewayError("Model capability is not supported")
+        if not probe:
+            # Probes must be able to reach a tripped upstream, otherwise it could never be re-verified.
+            await self._breaker_check()
         body = {**payload, "model": mapping.model}
         base_url = _api_base(self.base_url)
 
@@ -264,15 +404,15 @@ class ModelGateway:
                             if after_send is not None:
                                 await after_send()
                     except (APITimeoutError, APIConnectionError) as exc:
-                        _raise_if_policy_denied(exc)
+                        _raise_if_policy_denied(exc)  # a policy denial is not an upstream fault: no retry, no count
                         if attempt == 0:
+                            await asyncio.sleep(_retry_delay())
                             continue
+                        await self._breaker_fail()
                         raise ModelGatewayError("Model gateway request failed") from exc
                     except APIStatusError as exc:
-                        if exc.status_code in {408, 425, 429} or exc.status_code >= 500:  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
-                            if attempt == 0:
-                                await asyncio.sleep(0.1)
-                                continue
+                        if _retryable_status(exc.status_code) and await self._on_retryable_status(exc, attempt):
+                            continue
                         if exc.status_code in {400, 404, 405, 422}:
                             raise CapabilityUnsupported("The configured gateway rejected this capability") from exc
                         raise ModelGatewayError(f"Model gateway returned HTTP {exc.status_code}") from exc
@@ -287,9 +427,14 @@ class ModelGateway:
         started = time.perf_counter()
         try:
             response = await self._with_slot(send)
+        except _GatewayTimeout:
+            await self._breaker_fail()
+            record_model_call(capability, alias, started, False)
+            raise
         except BaseException:
             record_model_call(capability, alias, started, False)
             raise
+        await self._breaker_ok()
         record_model_call(capability, alias, started, True, response, mapping.model)
         return response
 
@@ -313,7 +458,10 @@ class ModelGateway:
                 model_ids: list[str] = [item.id for item in page.data if isinstance(item.id, str) and item.id]
                 return model_ids
 
-        return await self._with_slot(send)
+        models = await self._with_slot(send)
+        # Discovery skips the open check (it is how a tripped upstream is re-verified) but success closes it.
+        await self._breaker_ok()
+        return models
 
     async def chat(
         self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy,
@@ -386,6 +534,8 @@ class ModelGateway:
             raise PrivacyPolicyDenied("Model request denied by privacy policy")
         if not probe and not await self._capability_supported(alias, mapping, policy, "streaming"):
             raise ModelGatewayError("Streaming capability has not been verified")
+        if not probe:
+            await self._breaker_check()
         async with self._lease(_STREAM_LEASE_WAIT_SECONDS):
             base_url = _api_base(self.base_url)
             async with AsyncOpenAI(
@@ -424,18 +574,22 @@ class ModelGateway:
                             emitted = True
                             yield f"data: {json.dumps(chunk.model_dump(mode='json', exclude_none=True))}"
                         yield "data: [DONE]"
+                        await self._breaker_ok()
                         return
                     except (APITimeoutError, APIConnectionError, TimeoutError) as exc:
                         _raise_if_policy_denied(exc)
                         if attempt == 1 or emitted:
+                            # Mid-stream failures say little about upstream health; count only pre-first-token ones.
+                            if not emitted:
+                                await self._breaker_fail()
                             raise ModelGatewayError("Model gateway stream failed") from exc
+                        await asyncio.sleep(_retry_delay())
                     except RedisError as exc:
                         raise ModelGatewayError("Model gateway request failed") from exc
                     except APIStatusError as exc:
-                        if exc.status_code in {408, 425, 429} or exc.status_code >= 500:  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
-                            if attempt == 0:
-                                await asyncio.sleep(0.1)
-                                continue
+                        # A status error after chunks were emitted is never retried or counted.
+                        if not emitted and _retryable_status(exc.status_code) and await self._on_retryable_status(exc, attempt):
+                            continue
                         if exc.status_code in {400, 404, 405, 422}:
                             raise CapabilityUnsupported("The configured gateway rejected streaming") from exc
                         raise ModelGatewayError(f"Model gateway returned HTTP {exc.status_code}") from exc
