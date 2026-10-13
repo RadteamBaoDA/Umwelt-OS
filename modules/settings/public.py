@@ -45,15 +45,11 @@ from core.workspaces.public import (
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.backup.schemas import ActivityReceipt, AdmissionReceipt
 from modules.settings.models import AISettingsRecord, OwnerPreferencesRecord, legacy_aliases
-from modules.settings.models import (
-    list_capabilities as list_capabilities,
-)
-from modules.settings.models import (
-    new_capability_result as new_capability_result,
-)
-from modules.settings.models import (
-    save_capability as save_capability,
-)
+
+# Re-exported for the model_gateway routes (strict mypy forbids implicit re-export, hence the aliases).
+from modules.settings.models import list_capabilities as list_capabilities  # noqa: PLC0414
+from modules.settings.models import new_capability_result as new_capability_result  # noqa: PLC0414
+from modules.settings.models import save_capability as save_capability  # noqa: PLC0414
 from modules.settings.prompts import DEFAULT_SYSTEM_PROMPTS, MAX_PROMPT_CHARS
 from modules.settings.schemas import (
     ModuleLifecycleRead,
@@ -511,7 +507,8 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
 
     Locks admitted auth/workspace then matching owner settings, encrypts replacement credentials, and clears
     destination-bound privacy consent when its endpoint changes; the caller owns
-    transaction commit/rollback.
+    transaction commit/rollback. Chosen models must be discovered on their provider and type-match the alias; the
+    embedding alias must carry the probed vector dimensions and no other alias may.
     """
     await require_settings_scope(session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
                                  locked=True, auth_sessions=auth_sessions)
@@ -559,13 +556,18 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
             next(iter(providers.values()), None) if mapping.provider_id is None else None)
         if alias == "local-private" and mapping.provider_id is not None and providers[mapping.provider_id]["kind"] not in LOCAL_PROVIDER_KINDS:
             raise HTTPException(status_code=422, detail="Local-private models require a local provider")
-        # A listed model must be of the type the alias needs; once a provider has a model list, unlisted ids are
-        # rejected (an empty list means not yet discovered, so anything is accepted).
+        # A chosen model must come from the provider's discovered list and match the alias's model type.
         listed = {m.id: m.type for m in _models(provider)} if provider else {}
-        if listed and mapping.model not in listed:
+        if mapping.model and not listed:
+            raise HTTPException(status_code=422, detail="Discover models for this provider first")
+        if mapping.model and mapping.model not in listed:
             raise HTTPException(status_code=422, detail=f"Model {mapping.model} is not in the provider's model list")
         if mapping.model in listed and listed[mapping.model] != ALIAS_MODEL_TYPE.get(alias, "llm"):
             raise HTTPException(status_code=422, detail=f"Alias {alias} needs a {ALIAS_MODEL_TYPE.get(alias, 'llm')} model")
+        if mapping.dimensions is not None and alias != "embedding":
+            raise HTTPException(status_code=422, detail="Dimensions apply only to the embedding alias")
+        if alias == "embedding" and mapping.model and mapping.dimensions is None:
+            raise HTTPException(status_code=422, detail="Embedding dimensions required; run the embeddings probe")
     next_web_endpoint = _endpoint(str(update.web_search_endpoint) if update.web_search_endpoint else None, settings)
     current_web_destination = f"web-search:{_fingerprint(row.web_search_endpoint or '')[:32]}" if row.web_search_endpoint else None
     next_web_destination = f"web-search:{_fingerprint(next_web_endpoint or '')[:32]}" if next_web_endpoint else None

@@ -8,8 +8,6 @@ from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.public import authenticated_session_ref
-from core.workspaces.dependencies import require_workspace_write
-from core.workspaces.schemas import WorkspaceContext
 from core.config import Settings
 from core.database import get_session
 from core.model_gateway.client import (
@@ -20,6 +18,8 @@ from core.model_gateway.client import (
 )
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import DraftProbeRequest, ModelMapping, ProbeRequest, RequestPolicy
+from core.workspaces.dependencies import require_workspace_write
+from core.workspaces.schemas import WorkspaceContext
 from modules.settings import public as ai_settings
 
 router = APIRouter(prefix="/api/v1/settings/models", tags=["models"])
@@ -62,7 +62,10 @@ async def probe_draft(
     alias: Annotated[str, Path(pattern=r"^(reasoning-large|reasoning-small|fast|embedding|reranker|vision|local-private)$")],
     body: DraftProbeRequest,
 ) -> dict[str, object]:
-    """Probe an unsaved remote draft with synthetic input and transient authorization."""
+    """Probe an unsaved remote draft with synthetic input and transient authorization.
+
+    A supported ``embeddings`` probe also returns ``dimensions``, the length of the returned vector.
+    """
     settings: Settings = request.app.state.settings
     redis: Redis = request.app.state.redis
     endpoint = ai_settings.validate_endpoint(str(body.base_url), settings)
@@ -145,9 +148,12 @@ async def probe_draft(
     except (ModelGatewayError, ValueError):  # unparseable gateway reply: truthful failure, not a 500
         result = "failed"
     await recheck_send()
-    return {"alias": alias, "model": mapping.model, "version": mapping.version,
-            "gateway_identity": identity, "configuration_revision": 0,
-            "capability": body.capability, "result": result}
+    out: dict[str, object] = {"alias": alias, "model": mapping.model, "version": mapping.version,
+                              "gateway_identity": identity, "configuration_revision": 0,
+                              "capability": body.capability, "result": result}
+    if body.capability == "embeddings" and result == "supported":
+        out["dimensions"] = len(response["data"][0]["embedding"])  # _capability_proved guarantees this shape
+    return out
 
 
 @router.post("/{alias}/test")

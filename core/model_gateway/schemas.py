@@ -44,6 +44,7 @@ class ModelMapping(BaseModel):
     version: str | None = Field(default=None, max_length=200)
     destination: Literal["unknown", "remote"] = "unknown"
     provider_id: ProviderId | None = None  # None resolves to the "default" provider
+    dimensions: int | None = Field(default=None, ge=1, le=4096)  # embedding slot only; set from the embeddings probe
 
 
 class PrivacySettings(BaseModel):

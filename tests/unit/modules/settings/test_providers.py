@@ -192,7 +192,8 @@ async def test_save_rejects_invalid_provider_sets(update) -> None:
 @pytest.mark.asyncio
 async def test_save_encrypts_keys_and_allows_local_private_only_on_local() -> None:
     row = await _save(_row(), _update(
-        providers=[_provider("cloud", api_key="sk-secret", credential_action="replaced"), _provider("ol", "ollama", OLLAMA)],
+        providers=[_provider("cloud", api_key="sk-secret", credential_action="replaced"),
+                   _provider("ol", "ollama", OLLAMA, models=[{"id": "llama3", "type": "llm"}])],  # type: ignore[arg-type]
         aliases={"local-private": ModelMapping(model="llama3", provider_id="ol")}))
     assert "sk-secret" not in str(row.providers)
     assert Fernet(KEY.encode()).decrypt(row.providers["cloud"]["key_ciphertext"].encode()).decode() == "sk-secret"
@@ -237,7 +238,8 @@ def _typed(pid: str = "a", **models: str) -> ProviderUpdate:
     ("fast", "llm", True), ("reasoning-large", "embedding", False), ("reasoning-small", "tts", False),
 ])
 async def test_alias_requires_matching_model_type(alias: str, mtype: str, ok: bool) -> None:
-    update = _update(providers=[_typed("a", m1=mtype)], aliases={alias: ModelMapping(model="m1", provider_id="a")})
+    dims = 8 if alias == "embedding" else None
+    update = _update(providers=[_typed("a", m1=mtype)], aliases={alias: ModelMapping(model="m1", provider_id="a", dimensions=dims)})
     if ok:
         row = await _save(_row(), update)
         assert row.providers["a"]["models"] == [{"id": "m1", "type": mtype}]
@@ -252,10 +254,24 @@ async def test_unlisted_model_is_rejected_when_listed_and_duplicate_model_ids_re
     with pytest.raises(HTTPException) as exc:  # provider has a model list -> unlisted id is 422
         await _save(_row(), _update(providers=[_typed("a", m1="llm")], aliases={"embedding": ModelMapping(model="other", provider_id="a")}))
     assert exc.value.status_code == 422
-    # empty model list = not yet discovered -> anything accepted
-    await _save(_row(), _update(providers=[_provider("a")], aliases={"embedding": ModelMapping(model="other", provider_id="a")}))
+    # empty model list = not yet discovered -> a chosen model is rejected until discovery runs
+    with pytest.raises(HTTPException) as exc:
+        await _save(_row(), _update(providers=[_provider("a")], aliases={"embedding": ModelMapping(model="other", provider_id="a", dimensions=8)}))
+    assert exc.value.status_code == 422 and "Discover" in exc.value.detail
     with pytest.raises(HTTPException):
         await _save(_row(), _update(providers=[_provider("a", models=[{"id": "m", "type": "llm"}, {"id": "m", "type": "tts"}])]))  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_embedding_dimensions_required_rejected_elsewhere_and_round_trip() -> None:
+    providers = [_typed("a", e="embedding", c="llm")]
+    for aliases in ({"embedding": ModelMapping(model="e", provider_id="a")},  # missing dimensions
+                    {"fast": ModelMapping(model="c", provider_id="a", dimensions=8)}):  # dimensions on non-embedding
+        with pytest.raises(HTTPException) as exc:
+            await _save(_row(), _update(providers=providers, aliases=aliases))
+        assert exc.value.status_code == 422
+    row = await _save(_row(), _update(providers=providers, aliases={"embedding": ModelMapping(model="e", provider_id="a", dimensions=768)}))
+    assert row.aliases["embedding"]["dimensions"] == 768
 
 
 # ---- consent ----------------------------------------------------------------------------------------------------

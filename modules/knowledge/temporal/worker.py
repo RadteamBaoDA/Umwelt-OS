@@ -596,9 +596,11 @@ async def _context(factory: async_sessionmaker[AsyncSession], adm: _Admission, s
         await settings_public.get_ai_execution_config(session, settings, redis, scope=adm.scope), "reasoning-large")
     embedding = config.aliases.get("embedding")
     if not cleanup:
-        if embedding is None or settings.graph_embedding_dimensions is None:
+        # Slot dimensions (from the embeddings probe) win; the env var is a legacy fallback.
+        dims = embedding.dimensions or settings.graph_embedding_dimensions if embedding else None
+        if embedding is None or dims is None:
             raise GraphOperationError("graph_embedding_identity_unconfigured")
-        identity = {"model": embedding.model, "version": embedding.version, "dimensions": settings.graph_embedding_dimensions}
+        identity = {"model": embedding.model, "version": embedding.version, "dimensions": dims}
         if any(row.external_state != "absent" and row.embedding_identity and row.embedding_identity != identity for row in rows):
             raise GraphOperationError("graph_embedding_identity_changed_requires_rebuild")
         async with factory() as identity_session:
@@ -914,7 +916,7 @@ async def _context(factory: async_sessionmaker[AsyncSession], adm: _Admission, s
                 dimensions = mapping.embedding_identity.get("dimensions") if alias == "embedding" else None
                 return GraphModelPolicy(alias, ModelMapping(), RequestPolicy(**bound), dimensions=dimensions)
             raise GraphOperationError("graph_model_alias_unconfigured")
-        dimensions = (mapping.embedding_identity.get("dimensions") or settings.graph_embedding_dimensions) if alias == "embedding" else None
+        dimensions = (mapping.embedding_identity.get("dimensions") or selected.dimensions or settings.graph_embedding_dimensions) if alias == "embedding" else None
         return GraphModelPolicy(alias, selected, policy, dimensions=dimensions)
 
     graph_episode_ids = tuple(str(row.episode_id) for row in rows

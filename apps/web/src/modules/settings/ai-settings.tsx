@@ -17,11 +17,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { AutomationSettings } from '@/modules/automations/rule-list';
 import { aliasProviderId, mergeDiscovered, modelIdsForAlias, parseDraftSnapshot, ProviderEditor, type ProviderRead, type ProviderSecret } from './provider-editor';
 
-type Mapping = { model: string; version: string | null; destination: 'unknown' | 'remote'; provider_id?: string | null };
+type Mapping = { model: string; version: string | null; destination: 'unknown' | 'remote'; provider_id?: string | null; dimensions?: number | null };
 type Privacy = { allow_remote_reasoning: boolean; allow_remote_embeddings: boolean; allow_remote_web_search: boolean; reasoning_destinations: string[]; embedding_destinations: string[]; web_search_destinations: string[] };
-type Capability = { alias: string; capability: string; result: string; expires_at: string };
+type Capability = { alias: string; capability: string; result: string; expires_at: string; dimensions?: number };
 type AISettings = { configuration_revision: number; providers: ProviderRead[]; web_search_provider: 'none' | 'tavily' | 'brave' | 'searxng'; web_search_endpoint: string | null; web_search_credential_configured: boolean; chat_alias: string; brief_alias: string; aliases: Record<string, Mapping>; capabilities: Capability[]; privacy: Privacy; request_timeout_seconds: number };
-const aliases = ['reasoning-large', 'reasoning-small', 'fast', 'embedding', 'reranker', 'vision', 'local-private'];
+// vision and local-private have no runtime consumer yet; the API keeps them so stored mappings round-trip unchanged.
+const aliases = ['reasoning-large', 'reasoning-small', 'fast', 'embedding', 'reranker'];
 const chatAliases = ['reasoning-large', 'reasoning-small', 'fast'];
 const capabilityTypes = ['chat', 'streaming', 'embeddings', 'structured', 'tools', 'reranking'];
 const draftStorageKey = 'bbd:settings:ai:draft:v2';
@@ -141,7 +142,9 @@ export function AISettingsWorkspace() {
     onError: (error, provider) => setDiscoverError({ id: provider.id, text: describeError(error, t, 'discoveryFailed') }),
     onSettled: () => setDiscoveringId(null),
   });
-  const draftProbe = useMutation({ mutationFn: ({ alias, mapping, capability, provider }: { alias: string; mapping: Mapping; capability: string; provider: ProviderRead | undefined }) => apiRequest<Capability>(`/api/v1/settings/models/${alias}/draft-test`, { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ provider_id: provider && savedIds.includes(provider.id) ? provider.id : undefined, base_url: provider?.base_url, kind: provider?.kind, api_key: provider ? secrets[provider.id]?.key ?? '' : '', model: mapping.model, version: mapping.version, capability }) }) });
+  const draftProbe = useMutation({ mutationFn: ({ alias, mapping, capability, provider }: { alias: string; mapping: Mapping; capability: string; provider: ProviderRead | undefined }) => apiRequest<Capability>(`/api/v1/settings/models/${alias}/draft-test`, { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ provider_id: provider && savedIds.includes(provider.id) ? provider.id : undefined, base_url: provider?.base_url, kind: provider?.kind, api_key: provider ? secrets[provider.id]?.key ?? '' : '', model: mapping.model, version: mapping.version, capability }) }),
+    // A supported embeddings probe records the vector size on the embedding slot draft.
+    onSuccess: (data, { alias, mapping }) => { if (data.capability === 'embeddings' && data.result === 'supported' && typeof data.dimensions === 'number') setDraft((current) => { const from = current ?? query.data; return from ? { ...from, aliases: { ...from.aliases, [alias]: { ...(from.aliases[alias] ?? mapping), dimensions: data.dimensions } } } : current; }); } });
   const probe = useMutation({ mutationFn: ({ alias, capability }: { alias: string; capability: string }) => apiRequest<Capability>(`/api/v1/settings/models/${alias}/test`, { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ capability }) }), onSuccess: () => client.invalidateQueries({ queryKey: ['ai-settings'] }) });
   if (query.isPending) return <section className="rounded-xl border bg-card p-6 skeleton" aria-label={t('loading')} />;
   if (query.isError || !saved) return <section className="rounded-xl border bg-card p-6"><h1>{t('unavailable')}</h1><p className="error">{describeError(query.error, t, 'loadFailed')}</p><Button variant="outline" onClick={() => query.refetch()}>{t('retry')}</Button></section>;
@@ -168,18 +171,21 @@ export function AISettingsWorkspace() {
   const probeRow = (alias: string, value: Mapping) => {
     const providerId = aliasProviderId(value.provider_id, saved.providers);
     const provider = saved.providers.find((item) => item.id === providerId);
-    const hints = modelIdsForAlias(alias, saved.providers);
-    const listId = `ai-models-${alias}`;
+    const hints = modelIdsForAlias(alias, provider ? [provider] : []);
+    const savedDimensions = query.data?.aliases[alias]?.dimensions ?? null;
     return <div className="rounded-lg border border-border p-4" key={alias}>
     <h3 className="m-0 mb-3 text-base font-bold">{alias}</h3>
     <FieldGrid>
-      <label className="field"><span className="label">{t('aliasProvider')}</span><Select disabled={save.isPending || saved.providers.length === 0} value={providerId} onValueChange={(next) => set({ aliases: { ...saved.aliases, [alias]: { ...value, provider_id: next } } })}><SelectTrigger aria-label={t('aliasProvider')}><SelectValue placeholder={t('noProviders')} /></SelectTrigger><SelectContent>{saved.providers.map((item) => <SelectItem key={item.id} value={item.id}>{item.label || item.id}</SelectItem>)}</SelectContent></Select></label>
-      <label className="field"><span className="label">{t('modelId')}</span><Input list={listId} value={value.model} maxLength={200} onChange={(event) => set({ aliases: { ...saved.aliases, [alias]: { ...value, model: event.target.value } } })} /></label>
-      <datalist id={listId}>{hints.map((id) => <option key={id} value={id} />)}</datalist>
+      <label className="field"><span className="label">{t('aliasProvider')}</span><Select disabled={save.isPending || saved.providers.length === 0} value={providerId} onValueChange={(next) => set({ aliases: { ...saved.aliases, [alias]: { ...value, provider_id: next, model: '', dimensions: null } } })}><SelectTrigger aria-label={t('aliasProvider')}><SelectValue placeholder={t('noProviders')} /></SelectTrigger><SelectContent>{saved.providers.map((item) => <SelectItem key={item.id} value={item.id}>{item.label || item.id}</SelectItem>)}</SelectContent></Select></label>
+      <label className="field"><span className="label">{t('modelId')}</span><Select disabled={save.isPending || hints.length === 0} value={value.model} onValueChange={(next) => set({ aliases: { ...saved.aliases, [alias]: { ...value, model: next, dimensions: null } } })}><SelectTrigger aria-label={t('modelId')}><SelectValue placeholder={hints.length === 0 ? t('discoverFirst') : t('selectModel')} /></SelectTrigger><SelectContent>{hints.map((id) => <SelectItem key={id} value={id}>{id}</SelectItem>)}</SelectContent></Select>{hints.length === 0 && <span className="text-muted-foreground text-xs">{t('discoverFirst')}</span>}</label>
       <label className="field"><span className="label">{t('modelVersion')}</span><Input value={value.version ?? ''} maxLength={200} onChange={(event) => set({ aliases: { ...saved.aliases, [alias]: { ...value, version: event.target.value || null } } })} /></label>
       <label className="field"><span className="label">{t('destination')}</span><Select value={value.destination} onValueChange={(destination) => set({ aliases: { ...saved.aliases, [alias]: { ...value, destination: destination as Mapping['destination'] } } })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="unknown">{t('unknownDenied')}</SelectItem><SelectItem value="remote">{t('remote')}</SelectItem></SelectContent></Select></label>
       <label className="field"><span className="label">{t('probeCapability', { alias })}</span><Select value={probeTypes[alias] ?? 'chat'} onValueChange={(next) => setProbeTypes({ ...probeTypes, [alias]: next })}><SelectTrigger aria-label={t('probeCapability', { alias })}><SelectValue /></SelectTrigger><SelectContent>{capabilityTypes.map((kind) => <SelectItem key={kind} value={kind}>{capabilityLabel(kind)}</SelectItem>)}</SelectContent></Select></label>
     </FieldGrid>
+    {alias === 'embedding' && <div className="mt-3 text-sm">
+      <p className="m-0"><span className="label">{t('embeddingDimensions')}</span>: {value.dimensions ?? t('dimensionsProbeRequired')}</p>
+      {value.dimensions != null && savedDimensions != null && value.dimensions !== savedDimensions && <p className="error m-0" role="status">{t('dimensionsChangedWarning')}</p>}
+    </div>}
     <div className="mt-3 flex flex-wrap gap-2"><Button type="button" variant="outline" disabled={!value.model || (value.destination !== 'remote' && !provider?.local) || probe.isPending || JSON.stringify(value) !== JSON.stringify(query.data?.aliases[alias])} onClick={() => probe.mutate({ alias, capability: probeTypes[alias] ?? 'chat' })}>{t('probeSaved')}</Button><Button type="button" variant="outline" disabled={!provider?.base_url || !value.model || (value.destination !== 'remote' && !provider.local) || draftProbe.isPending} onClick={() => draftProbe.mutate({ alias, mapping: value, capability: probeTypes[alias] ?? 'chat', provider })}>{t('probeDraft')}</Button></div>
   </div>;
   };

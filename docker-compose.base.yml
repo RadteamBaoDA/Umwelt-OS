@@ -88,10 +88,12 @@ services:
     volumes:
       - graph-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "cypher-shell -u \"$$GRAPH_USERNAME\" -p \"$$GRAPH_PASSWORD\" 'RETURN 1' || exit 1"]
-      interval: 10s
+      # HTTP discovery probe: cypher-shell spawned a JVM every interval and pinned the 1-CPU limit.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:7474/ || exit 1"]
+      interval: 15s
       timeout: 5s
       retries: 10
+      start_period: 30s
     cpus: 1.0
     mem_limit: 1792m
     restart: unless-stopped
