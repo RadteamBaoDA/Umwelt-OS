@@ -77,6 +77,35 @@ export const formPayloadSchema = z
   })
   .passthrough();
 
+/** One input field of the generic form widget; limits mirror `FormFieldSpec` in `tools/form.py`. */
+export const inputFieldSchema = z.object({
+  id: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,39}$/),
+  label: z.string().min(1).max(120),
+  type: z.enum(['text', 'textarea', 'number', 'select', 'checkbox', 'date']).default('text'),
+  required: z.boolean().default(false),
+  placeholder: z.string().max(120).default(''),
+  options: z.array(z.string().min(1).max(80)).max(20).default([]),
+  min: z.number().finite().nullable().optional(),
+  max: z.number().finite().nullable().optional(),
+  maxlength: z.number().int().min(1).max(4000).nullable().optional(),
+});
+
+/** Generic input form payload (`FormPayload`): 1..12 uniquely-id'd fields. */
+export const inputFormPayloadSchema = z
+  .object({
+    title: z.string().min(1).max(255),
+    description: z.string().max(500).default(''),
+    fields: z.array(inputFieldSchema).min(1).max(12),
+    submit_label: z.string().max(40).default(''),
+  })
+  .refine((f) => new Set(f.fields.map((x) => x.id)).size === f.fields.length, { message: 'duplicate field ids' });
+
+/** Parsed generic form field. */
+export type InputFormField = z.infer<typeof inputFieldSchema>;
+
+/** Parsed generic form payload. */
+export type InputFormPayload = z.infer<typeof inputFormPayloadSchema>;
+
 /** Sandbox payload (partial while streaming): only string-typed fields are enforced. */
 export const sandboxPayloadSchema = z
   .object({

@@ -18,6 +18,7 @@ from modules.chat.generative_ui.skill_backend import load_skill
 from modules.chat.generative_ui.tool_specs import (
     TERMINAL_UI_TOOLS,
     TOOL_CHART,
+    TOOL_FORM,
     TOOL_PLAN,
     TOOL_SANDBOXED_UI,
     TOOL_TABLE,
@@ -32,10 +33,12 @@ from modules.chat.generative_ui.tool_specs import (
 from modules.chat.generative_ui.tools import (
     ChartPayload,
     CitationRef,
+    FormPayload,
     PlanPayload,
     PlanStep,
     TablePayload,
     build_chart_payload,
+    build_form_payload,
     build_meeting_time_picker_payload,
     build_plan_payload,
     build_table_payload,
@@ -57,6 +60,7 @@ _SLOT = {
     TOOL_CHART: ("chart", "open_generative_ui"),
     TOOL_PLAN: ("plan", "a2ui"),
     TOOL_TIME_PICKER: ("form", "a2ui"),
+    TOOL_FORM: ("form", "a2ui"),
 }
 
 
@@ -149,7 +153,7 @@ def streaming_snapshot(name: str, raw_args: str) -> dict[str, Any] | None:
     else:
         body = {k: v for k, v in obj.items() if k != "citations"}
         kind = {
-            TOOL_TABLE: "table", TOOL_PLAN: "plan", TOOL_TIME_PICKER: "meeting_time_picker",
+            TOOL_TABLE: "table", TOOL_PLAN: "plan", TOOL_TIME_PICKER: "meeting_time_picker", TOOL_FORM: "form",
         }.get(name) or _chart_kind(obj.get("chart_type"))
         if name == TOOL_PLAN and isinstance(body.get("steps"), list):
             body["steps"] = [
@@ -266,6 +270,8 @@ def finalize_generative_ui(
                         "status": "completed" if s.status == "completed" else "pending"} for s in steps],
             )
             return _envelope("plan", "plan", "a2ui", args.title, local_only, "plan", plan.model_dump(mode="json"))
+        if isinstance(args, FormPayload):
+            return _envelope("form", "form", "a2ui", args.title, local_only, "form", build_form_payload(args))
         if isinstance(args, TimePickerToolArgs):
             picker = build_meeting_time_picker_payload(
                 args.title, slots=args.slots, duration_minutes=args.duration_minutes,

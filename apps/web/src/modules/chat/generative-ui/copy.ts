@@ -94,3 +94,23 @@ export const TABLE_COPY = perLocale((c) => ({
 export type StringCopyKey = {
   [K in keyof (typeof chatMessages)['en-us']]: (typeof chatMessages)['en-us'][K] extends string ? K : never;
 }[keyof (typeof chatMessages)['en-us']];
+
+/** Adapter exposing generic Form widget copy from the shared catalog. */
+export const FORM_COPY = perLocale((c) => ({
+    defaultSubmit: c.genUiFormDefaultSubmit,
+    required: (label: string) => fmt(c.genUiFormRequired, { label }),
+    maxLength: (label: string, max: number) => fmt(c.genUiFormMaxLength, { label, max }),
+    numberInvalid: (label: string) => fmt(c.genUiFormNumberInvalid, { label }),
+    min: (label: string, min: number) => fmt(c.genUiFormMin, { label, min }),
+    max: (label: string, max: number) => fmt(c.genUiFormMax, { label, max }),
+    tooLong: c.genUiFormTooLong,
+    selectPlaceholder: c.genUiFormSelectPlaceholder,
+    sending: c.genUiFormSending,
+    submitted: c.genUiFormSubmitted,
+    sendFailed: c.genUiFormSendFailed,
+    promptHeader: (title: string) => fmt(c.genUiFormPromptHeader, { title }),
+    yes: c.genUiFormYes,
+    no: c.genUiFormNo,
+    empty: c.genUiFormEmpty,
+    optional: c.genUiFormOptional,
+}));

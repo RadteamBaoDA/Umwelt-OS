@@ -321,8 +321,15 @@ class TimePickerUIPayload(_GenerativeUIBase):
     form: dict[str, Any]
 
 
+class FormUIPayload(_GenerativeUIBase):
+    """Generic input form widget (`render_form`); `form` is required."""
+
+    kind: Literal["form"]
+    form: dict[str, Any]
+
+
 GenerativeUIPayload = Annotated[
-    SandboxedUIPayload | TableUIPayload | ChartUIPayload | PlanUIPayload | TimePickerUIPayload,
+    SandboxedUIPayload | TableUIPayload | ChartUIPayload | PlanUIPayload | TimePickerUIPayload | FormUIPayload,
     Field(discriminator="kind"),
 ]
 _GENERATIVE_UI_ADAPTER: TypeAdapter[GenerativeUIPayload] = TypeAdapter(GenerativeUIPayload)

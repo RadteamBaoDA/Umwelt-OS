@@ -7,12 +7,14 @@ import { OpenGenerativeUIRenderer } from '../sandbox';
 import type { GenerativeUIPayload } from '../sandbox/schema';
 import { GenerativeBarChart, type GenerativeBarDatum } from './charts/bar-chart';
 import { GenerativePieChart, type GenerativePieDatum } from './charts/pie-chart';
+import { InputForm } from './input-form';
 import { MeetingTimePicker, type MeetingTimeSlot } from './meeting-time-picker';
 import { genUiCopy, resolveWidgetLocale } from '../copy';
 import { PlanCard, type PlanStep } from './plan-card';
 import {
   chartPayloadSchema,
   formPayloadSchema,
+  inputFormPayloadSchema,
   planPayloadSchema,
   sandboxPayloadSchema,
   tablePayloadSchema,
@@ -25,7 +27,7 @@ export interface ToolRenderingProps {
   /** Validated or streaming GenerativeUIPayload attached to a chat message or SSE stream. */
   payload: GenerativeUIPayload;
   /** Callback invoked when an interactive widget dispatches a follow-up prompt. */
-  onSendPrompt?: (prompt: string) => void;
+  onSendPrompt?: (prompt: string) => void | Promise<unknown>;
   /** Application locale ('en-us' | 'vi-vi'). */
   locale?: AppLocaleId;
 }
@@ -296,6 +298,27 @@ export function ToolRendering({
           meetingDuration={meetingDuration}
           selected_slot_id={selectedSlotId}
           timezone={timezone}
+          locale={resolvedLocale}
+          onSendPrompt={onSendPrompt}
+        />
+      );
+    }
+
+    case 'form': {
+      const formObj = payload.form ?? rawRecord;
+      const parsed = inputFormPayloadSchema.safeParse(formObj);
+      if (!parsed.success) {
+        // Partial arguments are expected while streaming; only a completed payload is an error.
+        return payload.status === 'streaming' ? null : invalid;
+      }
+      return (
+        <InputForm
+          key={parsed.data.fields.map((f) => f.id).join('|')}
+          title={parsed.data.title}
+          description={parsed.data.description}
+          fields={parsed.data.fields}
+          submitLabel={parsed.data.submit_label}
+          disabled={payload.status === 'streaming'}
           locale={resolvedLocale}
           onSendPrompt={onSendPrompt}
         />
