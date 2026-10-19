@@ -17,6 +17,7 @@ import {
   sandboxPayloadSchema,
   tablePayloadSchema,
 } from './payload-schemas';
+import { ToolReasoning } from './tool-reasoning';
 import { TableCatalog, type TableColumn, type TableRowData } from './table-catalog';
 
 /** Props accepted by the unified ToolRendering dispatcher component. */
@@ -302,7 +303,8 @@ export function ToolRendering({
     }
 
     default:
-      return null;
+      // No dedicated widget for this kind: show a collapsed, inspectable tool-call summary.
+      return <ToolReasoning name={String((payload as { kind?: unknown }).kind ?? 'tool')} data={rawRecord} locale={resolvedLocale} />;
   }
 }
 
