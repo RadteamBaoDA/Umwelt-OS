@@ -10,6 +10,8 @@ ENV NEXT_TELEMETRY_DISABLED=1 API_INTERNAL_URL=http://api:8000
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
 COPY apps/web ./apps/web
+COPY docs/legal ./docs/legal
+COPY docs/third-party-services.md ./docs/third-party-services.md
 # npm nests workspace-only packages (e.g. @vitejs/plugin-react, type-checked via vitest.config.ts) under
 # apps/web/node_modules; the root copy above does not include them.
 COPY --from=dependencies /app/apps/web/node_modules ./apps/web/node_modules

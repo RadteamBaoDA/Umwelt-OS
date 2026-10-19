@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 import modules  # Domain model packages are imported here as they are added.
 import modules.translations.models  # noqa: F401
 from core.auth.models import AuthSession, GoogleIdentity, Owner
+from core.auth.deletion_models import AccountDeletionOperation
 from core.database import Base
 from core.demo_seed import DemoSeedReceipt
 from core.realtime import ReplayHead, ReplayRecord
@@ -134,7 +135,7 @@ from modules.timeline.models import (
 )
 from modules.tools.models import BrowserPageEvidence, BrowserReadJob
 
-_auth_models = (AuthSession, GoogleIdentity, Owner)
+_auth_models = (AuthSession, GoogleIdentity, Owner, AccountDeletionOperation)
 _workspace_models = (Workspace, WorkspaceMembership, WorkspaceInvitation, WorkspaceShare)
 _demo_seed_models = (DemoSeedReceipt,)
 _core_remote_heavy_models = (RemoteHeavyGuard,)

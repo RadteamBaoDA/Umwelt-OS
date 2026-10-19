@@ -654,3 +654,31 @@ async def revoke_resource_shares_in_uow(
     )
     await _purge_translations(session, workspace_id, resource_type, resource_ids)
     return int(getattr(result, "rowcount", 0) or 0)
+
+
+async def account_deletion_blockers(
+    session: AsyncSession, account_id: int, *, lock: bool = False,
+) -> tuple[UUID, list[Literal["workspace_has_members", "workspace_has_live_invitations"]]]:
+    """Inspect owned workspace lifecycle after Auth admission/account lock; optionally fence writes.
+
+    Auth owns commit. Workspace lock serializes invitation/member mutation; no identifiers from
+    other accounts leave this owner contract. Missing ownership fails closed.
+    """
+    query = select(Workspace).where(Workspace.owner_user_id == account_id)
+    if lock:
+        query = query.with_for_update()
+    workspace = await session.scalar(query)
+    if workspace is None:
+        raise HTTPException(status_code=409, detail={"code": "workspace_unavailable"})
+    blockers: list[Literal["workspace_has_members", "workspace_has_live_invitations"]] = []
+    if await session.scalar(select(WorkspaceMembership.user_id).where(
+        WorkspaceMembership.workspace_id == workspace.id, WorkspaceMembership.user_id != account_id,
+    ).limit(1)) is not None:
+        blockers.append("workspace_has_members")
+    if await session.scalar(select(WorkspaceInvitation.id).where(
+        WorkspaceInvitation.workspace_id == workspace.id,
+        WorkspaceInvitation.accepted_at.is_(None), WorkspaceInvitation.revoked_at.is_(None),
+        WorkspaceInvitation.expires_at > datetime.now(UTC),
+    ).limit(1)) is not None:
+        blockers.append("workspace_has_live_invitations")
+    return workspace.id, blockers

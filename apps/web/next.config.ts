@@ -35,6 +35,8 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  outputFileTracingRoot: require('node:path').join(__dirname, '../..'),
+  outputFileTracingIncludes: { '/*': ['../../docs/legal/**/*.md', '../../docs/third-party-services.md'] },
   // Default proxy timeout is 30 s; brief generate (lease wait + up to 180 s model time) goes through the /api rewrite.
   experimental: { proxyTimeout: 210_000 },
   /** Applies the security headers to every route, including API rewrites' HTML error pages. */

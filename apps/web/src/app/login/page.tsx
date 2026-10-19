@@ -15,6 +15,7 @@ import { UmweltLogo } from '@/components/brand/umwelt-mark';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { LegalLinks } from '@/modules/legal/legal-links';
 import { AppearanceControl } from '@/modules/account/appearance-control';
 
 const loginSchema = z.object({ password: z.string().min(1).max(128), identifier: z.string().max(320).optional() });
@@ -136,6 +137,7 @@ export default function LoginPage() {
     <footer className="flex flex-wrap items-center gap-4 border-t border-border bg-background px-4 py-2.5 text-xs text-muted-foreground sm:px-6">
       <span role="status" className="inline-flex items-center gap-1.5"><span aria-hidden="true" className={`size-2 rounded-full ${unavailable ? 'bg-destructive' : 'bg-primary'}`} />{apiText}</span>
       <span>{t('noDataBeforeSignIn')}</span>
+      <LegalLinks />
     </footer>
   </div>;
 }

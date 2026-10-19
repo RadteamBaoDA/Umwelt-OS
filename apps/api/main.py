@@ -9,6 +9,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from core.auth.dependencies import session_middleware_secret
 from core.auth.routes import router as auth_router
+from core.auth.deletion_routes import router as account_deletion_router
 from core.body_limit import BodyLimitMiddleware
 from core.config import Settings
 from core.database import make_session_factory
@@ -163,6 +164,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         upload_limit=app_settings.upload_max_bytes + 1024 * 1024,
     )
     app.include_router(auth_router)
+    app.include_router(account_deletion_router)
     app.include_router(workspaces_router)
     app.include_router(export_router)
     app.include_router(system_router)

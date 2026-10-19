@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
+from core.auth.deletion_worker import recover_account_deletions
 from core.auth.models import AuthSession
 from core.config import Settings
 from core.database import make_session_factory
@@ -251,6 +252,7 @@ class WorkerSettings:
                  else function for function in functions]
     cron_jobs: ClassVar[list[object]] = [
         cron(purge_expired_sessions, minute=0),
+        cron(recover_account_deletions, second={0, 30}, run_at_startup=True),
         cron(purge_collection_receipts, minute=7),
         cron(run_retention_maintenance, minute=0),
         cron(cleanup_storage_orphans, minute=set(range(0, 60, 5))),
