@@ -3,11 +3,16 @@ import { NextIntlClientProvider } from 'next-intl';
 import type { ReactNode } from 'react';
 import { messages } from '@/core/messages';
 import { QueryProvider } from '@/core/query-provider';
+import { SHARE_TAGLINE, SHARE_TITLE } from '@/core/share-card';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Umwelt-OS',
-  description: 'Private personal intelligence workspace',
+  // PUBLIC_ORIGIN is the existing public-origin setting (.env.example); the fallback matches its local default.
+  metadataBase: new URL(process.env.PUBLIC_ORIGIN ?? 'http://localhost:3000'),
+  title: SHARE_TITLE,
+  description: SHARE_TAGLINE,
+  openGraph: { title: SHARE_TITLE, description: SHARE_TAGLINE, siteName: SHARE_TITLE, type: 'website' },
+  twitter: { card: 'summary_large_image', title: SHARE_TITLE, description: SHARE_TAGLINE },
 };
 
 /** Renders the root document and mounts shared providers around route content. */

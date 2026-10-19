@@ -12,6 +12,10 @@ describe('needsLoginRedirect', () => {
     expect(needsLoginRedirect('/app', true)).toBe(false);
     expect(needsLoginRedirect('/loginx', false)).toBe(true);
   });
+  it('treats only the exact share-image paths as public', () => {
+    for (const p of ['/opengraph-image', '/twitter-image']) expect(needsLoginRedirect(p, false)).toBe(false);
+    for (const p of ['/opengraph-image-x', '/opengraph-image/x', '/opengraph', '/twitter-images']) expect(needsLoginRedirect(p, false)).toBe(true);
+  });
 });
 
 describe('assignAuthorizationUrl', () => {
