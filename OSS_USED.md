@@ -28,6 +28,7 @@ Inventory reconciliation is in progress. The "Direct application runtime depende
 | [HTTPX](https://github.com/encode/httpx) | 0.28.1 | BSD-3-Clause | OpenAI SDK HTTP transport with DNS result CIDR approval, numeric-IP pinning, and proxy/redirect denial at the model gateway boundary. |
 | [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) | 2.3.0 | MIT | Maintained Model Context Protocol client/server SDK used for the remote MCP transport and typed protocol operations. |
 | [MCP Types](https://github.com/modelcontextprotocol/python-sdk/tree/main/src/mcp-types) | 2.3.0 | MIT | Typed protocol models required by the MCP Python SDK. |
+| [OpenIntelligentUI apps/mcp](https://github.com/CopilotKit/OpenIntelligentUI/tree/8391a94/apps/mcp) | 8391a94 | MIT | Design ported to `modules/mcp_widgets` (resources, prompts, assemble_document); no code dependency. |
 | [LangGraph](https://github.com/langchain-ai/langgraph/tree/1.2.12/libs/langgraph) | 1.2.12 | MIT | Runs bounded checkpointed Agent workflows, specialist handoffs and approved effects through the existing ModelGateway and ToolRegistry. |
 | [LangGraph Checkpoint](https://github.com/langchain-ai/langgraph/tree/1.2.12/libs/checkpoint) | 4.1.0 | MIT | Defines the pinned checkpoint saver serialization contract. |
 | [LangGraph Checkpoint Postgres](https://github.com/langchain-ai/langgraph/tree/1.2.12/libs/checkpoint-postgres) | 3.1.2 | MIT | Persists graph checkpoints through AsyncPostgresSaver; its exact schema is installed by Alembic, not startup setup. |

@@ -43,6 +43,7 @@ from modules.knowledge.entities.routes import router as entities_router
 from modules.knowledge.observations.routes import router as observations_router
 from modules.knowledge.relationships.routes import router as relationships_router
 from modules.knowledge.temporal.routes import router as temporal_router
+from modules.mcp_widgets.server import create_http_app as create_widgets_mcp_app
 from modules.memory.routes import router as memory_router
 from modules.model_gateway.routes import router as model_gateway_router
 from modules.news.routes import router as news_router
@@ -120,6 +121,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             async with AsyncExitStack() as stack:
                 try:
+                    widgets = getattr(_app.state, "mcp_widgets_server", None)
+                    if widgets is not None:
+                        await stack.enter_async_context(widgets.session_manager.run())
                     bundle = getattr(_app.state, "mcp_bundle", None)
                     if bundle is not None:
                         await stack.enter_async_context(bundle.server.session_manager.run())
@@ -245,6 +249,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.mcp_bundle = bundle
         app.mount("/api/v1/mcp", bundle.guarded_asgi_app)
 
+    if app_settings.mcp_widgets_enabled:
+        # Raises when the bearer token is unset, so a misconfigured deployment fails at startup.
+        widgets_server, widgets_app = create_widgets_mcp_app(app_settings)
+        app.state.mcp_widgets_server = widgets_server
+        app.mount("/mcp", widgets_app)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
