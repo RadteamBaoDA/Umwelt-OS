@@ -49,7 +49,11 @@ from modules.chat.generative_ui import (
     streaming_snapshot,
 )
 from modules.chat.generative_ui import external_router as viz
-from modules.chat.generative_ui.tool_specs import TODO_TOOLS, TOOL_REQUEST_USER_INPUT, RequestUserInputArgs
+from modules.chat.generative_ui.tool_specs import (
+    TODO_TOOLS,
+    TOOL_REQUEST_USER_INPUT,
+    RequestUserInputArgs,
+)
 from modules.chat.history import load_effective_history
 from modules.chat.models import (
     AgentActivityLink,
@@ -79,7 +83,12 @@ from modules.chat.scope import (
 )
 from modules.chat.stream import make_event_id
 from modules.chat.todos import run_todo_tool
-from modules.chat.user_input import InputOutcome, await_user_input, create_input_request, resolve_ttl
+from modules.chat.user_input import (
+    InputOutcome,
+    await_user_input,
+    create_input_request,
+    resolve_ttl,
+)
 from modules.memory.public import lock_export_privacy, read_export_privacy
 from modules.settings import public as settings_public
 from modules.settings.prompts import resolve_prompt
