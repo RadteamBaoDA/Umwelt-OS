@@ -9,9 +9,9 @@ from fastapi import FastAPI
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.routing import Route
 
+from core.auth.deletion_routes import router as account_deletion_router
 from core.auth.dependencies import session_middleware_secret
 from core.auth.routes import router as auth_router
-from core.auth.deletion_routes import router as account_deletion_router
 from core.body_limit import BodyLimitMiddleware
 from core.config import Settings
 from core.database import make_session_factory

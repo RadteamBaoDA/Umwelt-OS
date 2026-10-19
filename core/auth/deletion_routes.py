@@ -13,7 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.auth.deletion_models import AccountDeletionOperation
 from core.auth.deletion_schemas import DeletionPreview, DeletionRequest, DeletionStatus
 from core.auth.deletion_service import deletion_status, receipt_operation
-from core.auth.dependencies import CSRF_COOKIE, SESSION_COOKIE, _hash, require_account, require_account_write
+from core.auth.dependencies import (
+    CSRF_COOKIE,
+    SESSION_COOKIE,
+    _hash,
+    require_account,
+    require_account_write,
+)
 from core.auth.models import AuthSession
 from core.auth.routes import _allow_attempt, _lock_owner_session, get_auth_redis
 from core.auth.service import verify_password

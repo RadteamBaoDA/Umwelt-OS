@@ -4,8 +4,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "r22_account_deletion"
-down_revision: str | Sequence[str] | None = "r21_drop_backup_control"
+revision: str = "r27_account_deletion"
+down_revision: str | Sequence[str] | None = "r26_chat_provenance"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

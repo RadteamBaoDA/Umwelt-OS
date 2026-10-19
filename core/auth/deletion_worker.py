@@ -90,7 +90,7 @@ async def process_account_deletion(ctx: dict[str, Any], operation_id: UUID) -> b
                     operation.next_attempt_at = datetime.now(UTC)
                 await session.commit()
             return True
-        except Exception:
+        except Exception:  # noqa: BLE001 - any failure is recorded on the operation and retried
             async with factory() as session:
                 operation = await session.get(AccountDeletionOperation, operation_id)
                 if operation is not None and operation.status != "succeeded":
