@@ -3,6 +3,7 @@ from typing import Annotated
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
+from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import require_account, require_account_write
@@ -16,11 +17,14 @@ from core.model_gateway.schemas import (
     ModelMapping,
     ModelSettingsRead,
     PrivacySettings,
+    RequestPolicy,
 )
 from core.model_gateway.transport import EndpointNetworkPolicyError, approved_web_search_transport
+from core.rate_limit import require_budget
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat import web_search as web
+from modules.chat.generative_ui import external_router as viz
 from modules.settings import lifecycle, models, public
 from modules.settings.schemas import (
     ConnectionTestResult,
@@ -37,6 +41,9 @@ from modules.settings.schemas import (
     SystemPromptsUpdate,
     TranslationSettingsRead,
     TranslationSettingsUpdate,
+    VizRouterRead,
+    VizRouterTestResult,
+    VizRouterUpdate,
     WebSearchRead,
     WebSearchTest,
     WebSearchUpdate,
@@ -310,3 +317,101 @@ async def test_n8n(body: N8nTest, session: Session, request: Request, _owner: Ow
         return ConnectionTestResult(ok=True, detail=response.status_code)
     return ConnectionTestResult(ok=False, error="unauthorized" if response.status_code in (401, 403) else "http_error",
                                 detail=response.status_code)
+
+
+@router.get("/viz-router", response_model=VizRouterRead)
+async def read_viz_router(session: Session, request: Request, _owner: OwnerRead) -> VizRouterRead:
+    """Return the visualization router selection (internal by default); the TypeSafe key is never returned."""
+    return await public.read_viz_router(session, request.app.state.settings, scope=_owner)
+
+
+@router.put("/viz-router", response_model=VizRouterRead)
+async def save_viz_router(value: VizRouterUpdate, session: Session, request: Request, _owner: OwnerWrite) -> VizRouterRead:
+    """Save the router kind, provider/model/mode or encrypted TypeSafe key under its own revision check."""
+    saved = await public.save_viz_router(session, value, request.app.state.settings, scope=_owner,
+                                         auth_sessions=(authenticated_session_ref(request),))
+    await session.commit()
+    return saved
+
+
+@router.post("/viz-router/test", response_model=VizRouterTestResult,
+             dependencies=[Depends(require_budget("model_probe", 10, 60))])
+async def test_viz_router(session: Session, request: Request, _owner: OwnerWrite) -> VizRouterTestResult:
+    """Send one fixed synthetic prompt through the saved external router and validate the enum answer.
+
+    Requires saved consent (or a local provider). For the LLM classifier the configured mode is tried first, then
+    the other one; the mode that works is returned and recorded as a supported gateway capability so real turns can
+    use it. No user data is sent. The result carries a short error code, never a URL, body or key.
+    """
+    settings = request.app.state.settings
+    redis = request.app.state.redis
+    resolved = await public.resolve_viz_router(session, settings, scope=_owner)
+    if resolved.kind == "internal":
+        return VizRouterTestResult(ok=False, error="internal_router")
+    if not resolved.allow_remote:
+        return VizRouterTestResult(ok=False, error="consent_required")
+    window = [{"role": "user", "content": "Plot our monthly revenue for 2024 as a trend over time."}]
+    if resolved.kind == "typesafe":
+        await session.rollback()  # no SQL held across egress
+        if not resolved.typesafe_key:
+            return VizRouterTestResult(ok=False, error="credential_required")
+        try:
+            transport = approved_web_search_transport(
+                viz.TYPESAFE_URL, settings.ai_allowed_endpoint_hosts, settings.web_search_allowed_cidrs)
+            category, _ = await viz.classify_typesafe(resolved.typesafe_key, window, transport)
+        except EndpointNetworkPolicyError:
+            return VizRouterTestResult(ok=False, error="network_denied")
+        except viz.VisualizationRouterError as exc:
+            return VizRouterTestResult(ok=False, error=exc.code)
+        return VizRouterTestResult(ok=True, category=category)
+
+    base = await public.get_ai_execution_config(session, settings, redis, scope=_owner)
+    config, mapping = public.viz_router_gateway_config(base, resolved)
+    destination = config.endpoint_destination_id or "remote"
+    policy = RequestPolicy(
+        workspace_id=config.workspace_id, actor_user_id=config.actor_user_id, membership_revision=config.membership_revision,
+        gateway_identity=config.gateway_identity, reasoning_allowed=True,  # consent verified by resolve_viz_router
+        permitted_destinations=frozenset({destination}), reasoning_destinations=frozenset({destination}),
+        configuration_revision=config.configuration_revision)
+    session_ref = authenticated_session_ref(request)
+
+    async def recheck_send() -> None:
+        """Recheck session, workspace and settings identity each attempt; roll back before provider network."""
+        try:
+            await public.check_ai_execution_config(session, settings, redis, scope=_owner, expected=base,
+                                                   auth_sessions=(session_ref,))
+        finally:
+            await session.rollback()
+
+    await session.rollback()
+    gateway = ModelGateway(redis, config.gateway_base_url, config.gateway_api_key, destination, timeout_seconds=15,
+                           scope=_owner, configuration_revision=config.configuration_revision,
+                           gateway_identity=config.gateway_identity, before_send=recheck_send,
+                           approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
+                           allow_public_endpoints=config.allow_public_providers)
+    modes = [resolved.mode, "forced_tool" if resolved.mode == "json_schema" else "json_schema"]
+    error = "provider_error"
+    for mode in modes:
+        try:
+            category = await viz.classify_llm(gateway, mapping, policy, window, mode=mode, base_url=config.gateway_base_url,
+                                              probe=True, before_send=recheck_send)
+        except viz.VisualizationRouterError as exc:
+            error = exc.code
+            if exc.code in {"mode_unsupported", "invalid_category"}:
+                continue  # this endpoint may support the other constrained-output mode
+            return VizRouterTestResult(ok=False, error=exc.code)
+        capability = "structured" if mode == "json_schema" else "tools"
+        result = public.new_capability_result(
+            public.VIZ_ROUTER_ALIAS, mapping, capability, "supported", config=base, scope=_owner,
+            multi_workspace_enabled=settings.multi_workspace_enabled)
+        try:
+            await public.check_ai_execution_config(session, settings, redis, scope=_owner, expected=base,
+                                                   auth_sessions=(session_ref,))
+            await public.save_capability(redis, result, config=base, scope=_owner,
+                                         multi_workspace_enabled=settings.multi_workspace_enabled)
+        except RedisError as exc:
+            raise HTTPException(status_code=503, detail="Model capability storage is unavailable") from exc
+        finally:
+            await session.rollback()
+        return VizRouterTestResult(ok=True, category=category, mode=mode)
+    return VizRouterTestResult(ok=False, error=error)

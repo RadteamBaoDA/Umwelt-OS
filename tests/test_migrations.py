@@ -147,5 +147,15 @@ def test_r21_drop_backup_control_migration() -> None:
     for table in ("p12_backup_activity", "p12_backup_control", "p12_backup_operations"):
         assert f"DROP TABLE IF EXISTS {table}" in up.stdout
     assert up.stdout.index("DROP TABLE IF EXISTS p12_backup_control") < up.stdout.index("DROP TABLE IF EXISTS p12_backup_operations")
-    assert HEAD == "r21_drop_backup_control"
     assert _alembic("downgrade", "r21_drop_backup_control:r20_search_tsv_and_trgm_indexes", "--sql").returncode != 0
+
+
+def test_r24_viz_router_settings_migration() -> None:
+    """Verify r24 adds and drops the viz_router JSONB column and is the head."""
+    up = _alembic("upgrade", "r21_drop_backup_control:r24_viz_router_settings", "--sql")
+    assert up.returncode == 0, up.stderr
+    assert "ALTER TABLE ai_settings ADD COLUMN viz_router JSONB" in up.stdout
+    down = _alembic("downgrade", "r24_viz_router_settings:r21_drop_backup_control", "--sql")
+    assert down.returncode == 0, down.stderr
+    assert "DROP COLUMN viz_router" in down.stdout
+    assert HEAD == "r24_viz_router_settings"

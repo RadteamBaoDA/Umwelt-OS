@@ -21,6 +21,7 @@ import { memoryPrivacyMessages } from './messages/memory-privacy';
 import { aiSettingsMessages } from './messages/ai-settings';
 import { systemPromptsMessages } from './messages/system-prompts';
 import { webSearchMessages } from './messages/web-search';
+import { vizRouterMessages } from './messages/viz-router';
 import { n8nMessages } from './messages/n8n';
 import { dashboardMessages } from './messages/dashboard';
 import { gadgetSettingsMessages } from './messages/gadget-settings';
@@ -57,6 +58,7 @@ export const messages = {
     aiSettings: aiSettingsMessages['en-us'],
     systemPrompts: systemPromptsMessages['en-us'],
     webSearch: webSearchMessages['en-us'],
+    vizRouter: vizRouterMessages['en-us'],
     n8n: n8nMessages['en-us'],
     dashboard: dashboardMessages['en-us'],
     gadgetSettings: gadgetSettingsMessages['en-us'],
@@ -96,6 +98,7 @@ export const messages = {
     aiSettings: aiSettingsMessages['vi-vi'],
     systemPrompts: systemPromptsMessages['vi-vi'],
     webSearch: webSearchMessages['vi-vi'],
+    vizRouter: vizRouterMessages['vi-vi'],
     n8n: n8nMessages['vi-vi'],
     dashboard: dashboardMessages['vi-vi'],
     gadgetSettings: gadgetSettingsMessages['vi-vi'],

@@ -634,8 +634,12 @@ class ModelGateway:
         messages: list[dict[str, Any]], schema: dict[str, Any], probe: bool = False, *,
         max_tokens: int | None = None, temperature: float | None = None,
         before_send: Callable[[], Awaitable[None]] | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> Any:
-        """Request schema-constrained output with bounded completion options and per-attempt authorization."""
+        """Request schema-constrained output with bounded completion options and per-attempt authorization.
+
+        ``extra_body`` carries provider-specific request keys (e.g. OpenRouter ``provider``) verbatim.
+        """
         if max_tokens is not None and not 1 <= max_tokens <= 8192:
             raise ValueError("max_tokens must be between 1 and 8192")
         if temperature is not None and not 0 <= temperature <= 2:
@@ -648,6 +652,8 @@ class ModelGateway:
             payload["max_tokens"] = max_tokens
         if temperature is not None:
             payload["temperature"] = temperature
+        if extra_body:
+            payload["extra_body"] = extra_body
         return await self._request(
             alias, mapping, policy, "structured", "chat/completions", payload, probe, before_send
         )
@@ -663,8 +669,12 @@ class ModelGateway:
         *,
         max_tokens: int | None = None,
         before_send: Callable[[], Awaitable[None]] | None = None,
+        tool_choice: Any = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> Any:
         """Request bounded tool-capable chat through the gateway's policy and retry fences.
+
+        Optional ``tool_choice`` (e.g. a forced function) and ``extra_body`` are forwarded only when set.
 
         The optional completion cap shares chat's 1–8192 validation. ``before_send`` runs on
         every gateway attempt, so callers can revalidate current authorization and source
@@ -675,6 +685,10 @@ class ModelGateway:
         payload: dict[str, Any] = {"messages": messages, "tools": tools}
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        if extra_body:
+            payload["extra_body"] = extra_body
         return await self._request(
             alias, mapping, policy, "tools", "chat/completions", payload, probe, before_send
         )
