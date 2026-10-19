@@ -2,10 +2,12 @@ import asyncio
 import os
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
+from typing import Any, cast
 
 from arq.connections import ArqRedis
 from fastapi import FastAPI
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.routing import Route
 
 from core.auth.dependencies import session_middleware_secret
 from core.auth.routes import router as auth_router
@@ -46,6 +48,7 @@ from modules.knowledge.entities.routes import router as entities_router
 from modules.knowledge.observations.routes import router as observations_router
 from modules.knowledge.relationships.routes import router as relationships_router
 from modules.knowledge.temporal.routes import router as temporal_router
+from modules.mcp_widgets.server import RootPath
 from modules.mcp_widgets.server import create_http_app as create_widgets_mcp_app
 from modules.memory.routes import router as memory_router
 from modules.model_gateway.routes import router as model_gateway_router
@@ -261,6 +264,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Raises when the bearer token is unset, so a misconfigured deployment fails at startup.
         widgets_server, widgets_app = create_widgets_mcp_app(app_settings)
         app.state.mcp_widgets_server = widgets_server
+        # Exact `/mcp` first so clients need no trailing slash (a Mount would 307-redirect it).
+        app.router.routes.append(Route("/mcp", cast(Any, RootPath(widgets_app)), include_in_schema=False))
         app.mount("/mcp", widgets_app)
 
     @app.get("/health")

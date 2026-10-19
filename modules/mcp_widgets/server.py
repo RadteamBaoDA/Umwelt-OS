@@ -5,16 +5,23 @@ import json
 
 from mcp.server import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
+from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import PlainTextResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from core.config import Settings
 from modules.chat.public import load_generative_ui_skill
 from modules.mcp_widgets.assemble import assemble_document
 
-# Public skill name -> bundled chat skill folder. Only these names are ever resolved (allowlist).
+# Public skill name (upstream OpenIntelligentUI names) -> bundled chat skill folder. Allowlist only.
 SKILLS: dict[str, str] = {
+    "master-agent-playbook": "master-agent-playbook",
+    "svg-diagram-skill": "svg-diagram-skill",
+    "agent-skills-vol2": "agent-skills-vol2",
+}
+# Earlier Umwelt-OS names stay resolvable but are not advertised by skills://list.
+SKILL_ALIASES: dict[str, str] = {
     "master-playbook": "master-agent-playbook",
     "svg-diagrams": "svg-diagram-skill",
     "advanced-visualization": "agent-skills-vol2",
@@ -22,14 +29,15 @@ SKILLS: dict[str, str] = {
 
 
 def load_skill(name: str) -> str:
-    """Return the text of an allowlisted skill.
+    """Return the text of an allowlisted skill (upstream name or alias).
 
     Raises:
-        ValueError: If name is not one of SKILLS (this also rejects path traversal attempts).
+        ValueError: If name is not in SKILLS or SKILL_ALIASES (this also rejects path traversal attempts).
     """
-    if name not in SKILLS:
+    canonical = SKILL_ALIASES.get(name, name)
+    if canonical not in SKILLS:
         raise ValueError(f"Unknown skill: {name!r}")
-    return load_generative_ui_skill(SKILLS[name])
+    return load_generative_ui_skill(SKILLS[canonical])
 
 
 def parent_origin_for(settings: Settings) -> str:
@@ -59,19 +67,19 @@ def create_widget_server(settings: Settings) -> MCPServer:
     )
     def create_widget() -> str:
         """Master playbook text."""
-        return load_skill("master-playbook")
+        return load_skill("master-agent-playbook")
 
     @server.prompt(
         name="create_svg_diagram", description="Instructions for creating inline SVG diagrams"
     )
     def create_svg_diagram() -> str:
         """SVG diagram skill text."""
-        return load_skill("svg-diagrams")
+        return load_skill("svg-diagram-skill")
 
     @server.prompt(name="create_visualization", description="Advanced visualization instructions")
     def create_visualization() -> str:
         """Advanced visualization skill text."""
-        return load_skill("advanced-visualization")
+        return load_skill("agent-skills-vol2")
 
     @server.tool(
         name="assemble_document",
@@ -97,6 +105,13 @@ class BearerGuard:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Forward authorized HTTP requests; answer 401 otherwise."""
         if scope["type"] == "http":
+            if (
+                scope["method"] == "GET"
+                and scope["path"].removeprefix(scope.get("root_path", "")) == "/health"
+            ):
+                # Liveness only: reveals nothing but status, so no token is needed.
+                await JSONResponse({"status": "ok"})(scope, receive, send)
+                return
             header = Request(scope).headers.get("authorization", "")
             scheme, _, supplied = header.partition(" ")
             if scheme.lower() != "bearer" or not hmac.compare_digest(
@@ -127,7 +142,43 @@ def create_http_app(settings: Settings) -> tuple[MCPServer, ASGIApp]:
         max_request_body_size=512_000,
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     )
-    return server, BearerGuard(child, token)
+    guarded: ASGIApp = BearerGuard(child, token)
+    origins = allowed_origins_for(settings)
+    if origins:
+        # Outermost, so preflights (which carry no Authorization header) are answered before the bearer check.
+        guarded = CORSMiddleware(
+            guarded,
+            allow_origins=origins,
+            allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+            allow_headers=[
+                "authorization",
+                "content-type",
+                "accept",
+                "mcp-session-id",
+                "mcp-protocol-version",
+            ],
+            expose_headers=["mcp-session-id"],
+        )
+    return server, guarded
+
+
+def allowed_origins_for(settings: Settings) -> list[str]:
+    """Return the exact CORS origins from MCP_WIDGETS_ALLOWED_ORIGINS (comma separated; empty = no CORS)."""
+    return [
+        o.strip().rstrip("/") for o in settings.mcp_widgets_allowed_origins.split(",") if o.strip()
+    ]
+
+
+class RootPath:
+    """ASGI wrapper serving the guarded app for the exact path `/mcp` (no trailing slash, no redirect)."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        """Wrap the guarded app that expects requests at `/`."""
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Rewrite the path to `/` and forward."""
+        await self._app({**scope, "path": "/", "raw_path": b"/"}, receive, send)
 
 
 def main() -> None:
