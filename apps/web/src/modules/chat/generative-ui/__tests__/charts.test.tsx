@@ -66,6 +66,44 @@ describe('Generative UI Charts & Config', () => {
     expect(colorDot?.getAttribute('data-color')).toBe('var(--chart-1)');
   });
 
+  it('pie honors x_key and series[0].key from backend payloads', () => {
+    render(
+      <GenerativePieChart
+        title="Spend"
+        categoryKey="category"
+        series={[{ key: 'amount' }]}
+        data={[
+          { category: 'Alpha', amount: 60 },
+          { category: 'Beta', amount: 40 },
+        ]}
+      />,
+    );
+    expect(screen.getByTestId('pie-slice-item-0')).toHaveTextContent('Alpha');
+    expect(screen.getByTestId('pie-slice-item-0')).toHaveTextContent('60');
+    expect(screen.getByTestId('pie-slice-item-1')).toHaveTextContent('Beta');
+    expect(screen.getByTestId('pie-slice-item-1')).toHaveTextContent('40');
+    expect(screen.queryByText('#1')).not.toBeInTheDocument();
+  });
+
+  it('bar and pie show the sample badge and source only when flagged', () => {
+    const { rerender } = render(
+      <>
+        <GenerativeBarChart title="B" data={[{ label: 'a', value: 1 }]} isSample source="Demo set" locale="en-us" />
+        <GenerativePieChart title="P" data={[{ label: 'a', value: 1 }]} isSample source="Demo set" locale="en-us" />
+      </>,
+    );
+    expect(screen.getAllByTestId('sample-data-badge')).toHaveLength(2);
+    expect(screen.getByTestId('bar-chart-source')).toHaveTextContent('Demo set');
+    expect(screen.getByTestId('pie-chart-source')).toHaveTextContent('Demo set');
+    rerender(
+      <>
+        <GenerativeBarChart title="B" data={[{ label: 'a', value: 1 }]} isSample={false} locale="en-us" />
+        <GenerativePieChart title="P" data={[{ label: 'a', value: 1 }]} isSample={false} locale="en-us" />
+      </>,
+    );
+    expect(screen.queryByTestId('sample-data-badge')).not.toBeInTheDocument();
+  });
+
   it('renders clean empty states when bar or pie chart data is empty', () => {
     render(
       <>

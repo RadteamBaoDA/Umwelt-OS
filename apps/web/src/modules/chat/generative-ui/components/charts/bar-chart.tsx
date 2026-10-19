@@ -21,6 +21,7 @@ import {
   Card,
   CardContent,
   CardDescription,
+  CardFooter,
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
@@ -32,6 +33,7 @@ import {
 } from '@/core/charts/recharts-wrapper';
 import { normalizeFormattingLocale, type AppLocaleId } from '@/core/i18n';
 import { messages } from '@/core/messages';
+import { SampleDataBadge } from '../sample-data-badge';
 import { genUiCopy, resolveWidgetLocale } from '../../copy';
 import { GENERATIVE_CHART_TOKENS, resolveSeriesColor } from './config';
 
@@ -94,6 +96,8 @@ export interface GenerativeBarChartProps {
   unit?: string;
   /** Optional provenance source label. */
   source?: string;
+  /** True when data is illustrative sample data (renders a "Sample data" badge). */
+  isSample?: boolean;
   /** Application locale ('en-us' | 'vi-vi') for number/currency formatting. */
   locale?: AppLocaleId;
   /** Chart viewport height in pixels (defaults to 240). */
@@ -110,7 +114,7 @@ export interface GenerativeBarChartProps {
  * @param categoryKey - Optional property name holding the category label.
  * @returns Normalized ChartDataPoint array.
  */
-function normalizeBarData(data: GenerativeBarDatum[], categoryKey?: string): ChartDataPoint[] {
+export function normalizeBarData(data: GenerativeBarDatum[], categoryKey?: string): ChartDataPoint[] {
   return (data ?? []).map((item, idx) => {
     const customCategory = categoryKey ? item[categoryKey] : undefined;
     const label = customCategory ?? item.label ?? item.name ?? item.timestamp ?? `#${idx + 1}`;
@@ -121,6 +125,37 @@ function normalizeBarData(data: GenerativeBarDatum[], categoryKey?: string): Cha
       value: Number.isNaN(numericValue) ? 0 : numericValue,
     };
   });
+}
+
+/**
+ * Normalizes frontend (`dataKey`/`name`) and backend (`key`/`label`/`color_token`) series descriptors
+ * into canonical ChartSeries, defaulting to a single `value` series. Shared by bar and pie widgets.
+ *
+ * @param series - Raw series descriptors (may be empty or undefined).
+ * @param title - Fallback series display name.
+ * @param currency - Default ISO currency applied to each series.
+ * @param unit - Default unit applied to each series.
+ * @returns Non-empty canonical series list.
+ */
+export function normalizeBarSeries(
+  series: Array<ChartSeries | GenerativeChartSeriesInput> | undefined,
+  title: string,
+  currency?: string,
+  unit?: string,
+): ChartSeries[] {
+  if (series && series.length > 0) {
+    return series.map((s, idx) => {
+      const raw = s as GenerativeChartSeriesInput;
+      return {
+        dataKey: raw.dataKey || raw.key || 'value',
+        name: raw.name || raw.label || title || 'Value',
+        color: resolveSeriesColor(idx, raw.color ?? raw.color_token),
+        currency: raw.currency ?? currency,
+        unit: raw.unit ?? unit,
+      };
+    });
+  }
+  return [{ dataKey: 'value', name: title || 'Value', color: resolveSeriesColor(0), currency, unit }];
 }
 
 /**
@@ -157,13 +192,18 @@ export function GenerativeBarChart({
   series,
   currency,
   unit,
+  source,
+  isSample,
   locale,
   height = 240,
   chartType = 'bar',
 }: GenerativeBarChartProps) {
   const resolvedLocale = resolveWidgetLocale(locale);
   const canonicalLocale = normalizeFormattingLocale(resolvedLocale);
-  const copy = { emptyText: genUiCopy(resolvedLocale).genUiBarEmpty };
+  const copy = {
+    emptyText: genUiCopy(resolvedLocale).genUiBarEmpty,
+    sourceLabel: genUiCopy(resolvedLocale).genUiTableSource,
+  };
   const resolvedDescription = description ?? subtitle;
   const resolvedCategoryKey = categoryKey ?? x_key;
 
@@ -171,32 +211,10 @@ export function GenerativeBarChart({
     () => normalizeBarData(data, resolvedCategoryKey),
     [data, resolvedCategoryKey],
   );
-  const resolvedSeries = React.useMemo<ChartSeries[]>(() => {
-    if (series && series.length > 0) {
-      return series.map((s, idx) => {
-        const raw = s as GenerativeChartSeriesInput;
-        const dataKey = raw.dataKey || raw.key || 'value';
-        const name = raw.name || raw.label || title || 'Value';
-        const customColor = raw.color ?? raw.color_token;
-        return {
-          dataKey,
-          name,
-          color: resolveSeriesColor(idx, customColor),
-          currency: raw.currency ?? currency,
-          unit: raw.unit ?? unit,
-        };
-      });
-    }
-    return [
-      {
-        dataKey: 'value',
-        name: title || 'Value',
-        color: resolveSeriesColor(0),
-        currency,
-        unit,
-      },
-    ];
-  }, [currency, series, title, unit]);
+  const resolvedSeries = React.useMemo(
+    () => normalizeBarSeries(series, title, currency, unit),
+    [currency, series, title, unit],
+  );
 
   return (
     <Card
@@ -218,11 +236,14 @@ export function GenerativeBarChart({
               )}
             </div>
           </div>
-          {(currency || unit) && (
-            <Badge variant="outline" className="font-mono text-xs">
-              {currency ?? unit}
-            </Badge>
-          )}
+          <div className="flex items-center gap-1.5">
+            {isSample && <SampleDataBadge locale={resolvedLocale} />}
+            {(currency || unit) && (
+              <Badge variant="outline" className="font-mono text-xs">
+                {currency ?? unit}
+              </Badge>
+            )}
+          </div>
         </div>
       </CardHeader>
 
@@ -462,6 +483,13 @@ export function GenerativeBarChart({
           </NextIntlClientProvider>
         )}
       </CardContent>
+      {source && (
+        <CardFooter className="border-t border-border py-2.5 text-[11px] text-muted-foreground">
+          <span data-testid="bar-chart-source">
+            <strong className="font-medium text-foreground">{copy.sourceLabel}:</strong> {source}
+          </span>
+        </CardFooter>
+      )}
     </Card>
   );
 }
