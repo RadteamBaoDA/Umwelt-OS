@@ -232,6 +232,7 @@ def _privacy(raw: dict[str, object] | None, destinations: list[str], web_destina
     return PrivacySettings(
         allow_remote_reasoning=bool(reasoning), allow_remote_embeddings=bool(embeddings),
         allow_remote_web_search=web_search,
+        allow_widget_remote_media=bool(raw.get("allow_widget_remote_media")),  # plain consent: no provider destination to bind
         reasoning_destinations=reasoning, embedding_destinations=embeddings,
         web_search_destinations=[web_destination] if web_search and web_destination else [],
     )

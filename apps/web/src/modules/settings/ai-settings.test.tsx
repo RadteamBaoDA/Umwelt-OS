@@ -12,7 +12,7 @@ vi.mock('@/modules/automations/rule-list', () => ({ AutomationSettings: () => nu
 
 const provider = { id: 'ol', kind: 'ollama', label: 'Ollama', base_url: 'http://localhost:11434/v1', destination_id: 'local:x', credential_configured: false, local: true, policy_denied: false, models: [{ id: 'llama3', type: 'llm' }, { id: 'nomic', type: 'embedding' }] };
 const mapping = { model: '', version: null, destination: 'unknown' };
-const read = { configuration_revision: 1, providers: [provider], web_search_provider: 'none', web_search_endpoint: null, web_search_credential_configured: false, chat_alias: 'reasoning-large', brief_alias: 'reasoning-small', aliases: { embedding: { ...mapping, model: 'nomic', provider_id: 'ol' } }, capabilities: [], privacy: { allow_remote_reasoning: false, allow_remote_embeddings: false, allow_remote_web_search: false, reasoning_destinations: [], embedding_destinations: [], web_search_destinations: [] }, request_timeout_seconds: 20 };
+const read = { configuration_revision: 1, providers: [provider], web_search_provider: 'none', web_search_endpoint: null, web_search_credential_configured: false, chat_alias: 'reasoning-large', brief_alias: 'reasoning-small', aliases: { embedding: { ...mapping, model: 'nomic', provider_id: 'ol' } }, capabilities: [], privacy: { allow_remote_reasoning: false, allow_remote_embeddings: false, allow_remote_web_search: false, allow_widget_remote_media: false, reasoning_destinations: [], embedding_destinations: [], web_search_destinations: [] }, request_timeout_seconds: 20 };
 const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
 
 describe('AI settings models', () => {

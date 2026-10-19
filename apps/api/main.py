@@ -26,6 +26,7 @@ from modules.agents.routes import router as agents_router
 from modules.automations.routes import router as automations_router
 from modules.automations.routes import webhook_router as automation_webhook_router
 from modules.automations.tools import register_automation_tools
+from modules.chat.media_routes import router as chat_media_router
 from modules.chat.routes import MAX_CHAT_STREAMS_PER_API_PROCESS
 from modules.chat.routes import router as chat_router
 from modules.connectors.github.routes import router as github_oauth_router
@@ -195,6 +196,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(automations_router)
     app.include_router(automation_webhook_router)
     app.include_router(chat_router)
+    app.include_router(chat_media_router)
     app.include_router(memory_router)
     app.include_router(agents_router)
     app.include_router(observability_router)
