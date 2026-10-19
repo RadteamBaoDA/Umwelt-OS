@@ -1,7 +1,6 @@
 """Worker loop wiring for the local-data tools: template tools and ``set_theme`` run inside the tool loop."""
 
 import json
-
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 

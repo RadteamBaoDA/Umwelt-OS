@@ -72,10 +72,12 @@ CRITERIA: dict[str, str] = {
 
 # Presentation tool the decision allows, per category. Everything not listed here is removed (text allows none).
 _CHART_CATEGORIES = frozenset({"bar_chart", "line_chart", "scatter_plot", "distribution", "part_to_whole"})
-_PRESENTATION_TOOLS = frozenset({TOOL_SANDBOXED_UI, TOOL_TABLE, TOOL_CHART, TOOL_PLAN})
-# Interaction tools collect input from the user rather than present an answer, so routing never removes them
-# (documented deviation: upstream only removes render tools; forms are kept for the same reason).
-_INTERACTION_TOOLS = frozenset({TOOL_FORM, TOOL_TIME_PICKER})
+_PRESENTATION_TOOLS = frozenset({TOOL_SANDBOXED_UI, TOOL_TABLE, TOOL_CHART})
+# Routing never removes these. Interaction tools collect input from the user rather than present an answer
+# (documented deviation: upstream only removes render tools; forms are kept for the same reason). The plan
+# card stays too because upstream's filter list does not include ``plan_visualization`` either, and no router
+# category maps to it, so removing it would make every plan request unanswerable as a plan.
+_INTERACTION_TOOLS = frozenset({TOOL_FORM, TOOL_TIME_PICKER, TOOL_PLAN})
 
 
 class VisualizationRouterError(Exception):

@@ -634,7 +634,8 @@ async def test_external_router_classifies_before_request_filters_tools_and_is_re
     for request in gen.requests:  # decision reused on every round of the turn
         names = _tool_names(request)
         assert "render_table" in names
-        assert names.isdisjoint({"render_chart", "render_sandboxed_ui", "render_plan"})
+        assert names.isdisjoint({"render_chart", "render_sandboxed_ui"})
+        assert "render_plan" in names  # the plan card is never filtered (upstream keeps plan_visualization)
         assert {"render_form", "read_skill", "request_user_input", "get_todos"} <= names
         system = request["messages"][0]["content"]
         assert "CRITICAL: Presentation decision" in system and "visualization=table" in system
@@ -651,7 +652,8 @@ async def test_external_router_text_decision_removes_presentation_tools_and_pers
     await gen.run()
     gen.failed.assert_not_awaited()
     names = _tool_names(gen.requests[0])
-    assert names.isdisjoint({"render_table", "render_chart", "render_sandboxed_ui", "render_plan"})
+    assert names.isdisjoint({"render_table", "render_chart", "render_sandboxed_ui"})
+    assert "render_plan" in names
     assert "render_form" in names and "request_user_input" in names
     message = next(m for m in gen.added if isinstance(m, Message))
     assert message.metadata_json == {"viz_decision": {"visualization": "text", "renderer": "text"}}
