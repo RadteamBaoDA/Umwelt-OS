@@ -17,6 +17,7 @@ from core.workspaces.schemas import InternalJobScope
 from modules.chat import routes, worker
 from modules.chat.models import Message, StreamEvent
 from modules.chat.schemas import AnswerContext
+from modules.settings.public import VizRouterResolved
 from tests.unit.test_b1c_regressions import _config, _evidence, _factory
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -115,6 +116,8 @@ class _Gen:
                             AsyncMock(return_value=_config(aliases={})))
         monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=self.stream))
         monkeypatch.setattr(worker, "_mark_failed", self.failed)
+        # Internal router by default: the pre-request classification step must not consume the scripted session reads.
+        monkeypatch.setattr(worker.settings_public, "resolve_viz_router", AsyncMock(return_value=VizRouterResolved()))
 
     async def stream(self, **_kwargs: Any) -> AsyncIterator[str]:
         for token in self.tokens:

@@ -1057,7 +1057,18 @@ async def run_response_generation(
                 )
 
             messages_payload = _base_messages(True)
-            stream_iter = _open_stream(messages_payload, ui_tools)
+
+        # 3b. Opt-in external visualization routing: classify ONCE per turn before the first model request (tool
+        # continuation rounds reuse `route_decision`), outside the locked block so no lock spans provider egress.
+        # Errors propagate as a failed turn; None (no external router) leaves the request byte-identical.
+        route_decision = await _external_route_decision(
+            session_factory, settings, redis, job_scope, user_prompt, prior_messages, local_only=local_only_turn,
+        )
+        if route_decision is not None:
+            ui_tools = viz.filter_tool_specs(ui_tools or [], route_decision)
+            ui_system_text += viz.decision_note(route_decision, remote_media=trip_images_on)
+            messages_payload = _base_messages(True)
+        stream_iter = _open_stream(messages_payload, ui_tools)
 
         # 4. Stream tokens through ModelGateway. Deltas are buffered in worker memory (never published)
         # and flushed at most every STREAM_FLUSH_SECONDS or STREAM_FLUSH_CHARS; each flush is one locked,
@@ -1466,9 +1477,7 @@ async def run_response_generation(
                 if part is not None:  # an invalid call drops only its own widget
                     generative_uis.append({**part, "part_id": part_id})
         elif not tools_active:
-            route_decision = await _external_route_decision(
-                session_factory, settings, redis, job_scope, user_prompt, prior_messages, local_only=local_only_turn,
-            )
+            # Providers without tool support: reuse the decision classified before the first request (no 2nd call).
             fallback = fallback_generative_ui(
                 user_prompt, final_answer, answer_context.evidence, local_only=local_only_turn,
                 decision=route_decision,
@@ -1507,8 +1516,15 @@ async def run_response_generation(
                 response_id=response_id,
                 revision_of_message_id=revision_of_message_id,
                 **(
-                    {"metadata_json": {"generative_ui": generative_ui, "generative_ui_parts": generative_uis}}
-                    if generative_ui is not None
+                    {"metadata_json": {
+                        **({"generative_ui": generative_ui, "generative_ui_parts": generative_uis}
+                           if generative_ui is not None else {}),
+                        # Audit trail of the external router's choice (category + renderer only, no content).
+                        **({"viz_decision": {"visualization": route_decision["visualization"],
+                                             "renderer": route_decision["renderer"]}}
+                           if route_decision is not None else {}),
+                    }}
+                    if generative_ui is not None or route_decision is not None
                     else {}
                 ),
             )
