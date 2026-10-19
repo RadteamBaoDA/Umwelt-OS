@@ -927,6 +927,7 @@ export function ChatSession({
           onEditMessage={mode === 'full' ? handleEditMessage : undefined}
           onRegenerateMessage={mode === 'full' ? handleRegenerateMessage : undefined}
           onSendPrompt={handleTranscriptSendPrompt}
+          onWidgetSendPrompt={handleWidgetSendPrompt}
           onRetry={() => {
             const retryDraft = pendingProfileRun?.prompt ?? chatCtrl.draft;
             if (retryDraft) {

@@ -130,6 +130,11 @@ export interface ChatTranscriptProps {
   onSelectCitation?: (citation: Citation) => void;
   /** Optional callback invoked when an interactive widget or starter template dispatches a prompt. */
   onSendPrompt?: (prompt: string) => void;
+  /**
+   * Promise-returning prompt handler for widgets that can retry (form). It rejects when the host is busy or the
+   * send failed, which unlocks the form with a retryable error; other widgets keep the fire-and-forget handler.
+   */
+  onWidgetSendPrompt?: (prompt: string) => void | Promise<unknown>;
 }
 
 /**
@@ -155,8 +160,12 @@ export function ChatTranscript({
   onEditMessage,
   onRegenerateMessage,
   onSendPrompt,
+  onWidgetSendPrompt,
 }: ChatTranscriptProps) {
   const t = useTranslations('chat');
+  /** Form widgets get the rejecting handler (retryable errors); every other widget keeps the plain one. */
+  const widgetPromptHandler = (part: unknown) =>
+    (part as { kind?: string }).kind === 'form' && onWidgetSendPrompt ? onWidgetSendPrompt : onSendPrompt;
   const display = useDisplayPreferences();
   const timezone = display.confirmedPreferences?.timezone || 'UTC';
   const locale = display.confirmedPreferences?.locale || 'en-us';
@@ -255,7 +264,7 @@ export function ChatTranscript({
               <div className="w-full" data-testid="generative-ui-widget" key={uiPartKey(part, index)}>
                 <ToolRendering
                   payload={part as unknown as GenerativeUIPayload}
-                  onSendPrompt={onSendPrompt}
+                  onSendPrompt={widgetPromptHandler(part)}
                   locale={locale}
                 />
                 {mode === 'full' && (part as { kind?: string }).kind === 'sandboxed_ui'
@@ -352,7 +361,7 @@ export function ChatTranscript({
               <div className="w-full" data-testid="streaming-generative-ui-widget" key={uiPartKey(part, index)}>
                 <ToolRendering
                   payload={part as unknown as GenerativeUIPayload}
-                  onSendPrompt={onSendPrompt}
+                  onSendPrompt={widgetPromptHandler(part)}
                   locale={locale}
                 />
               </div>
