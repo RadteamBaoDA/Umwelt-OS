@@ -24,6 +24,7 @@ import {
 import { ChatComposer } from './chat-composer';
 import { PickQrButton } from '@/modules/pick/pick-qr-modal';
 import { upsertUiPart, type UiPart } from './generative-ui-parts';
+import { AssistantThemeBanner } from './assistant-theme-banner';
 import { ChatTranscript } from './chat-transcript';
 import { TodosPanel } from './todos/todos-panel';
 import { ChatContextBar, MAX_ITEMS, stripItemTitles } from './chat-context-bar';
@@ -126,6 +127,7 @@ export function ChatSession({
   const [streamingWebSearch, setStreamingWebSearch] = React.useState<WebSearchOutcome | null>(null);
   const [streamingUi, setStreamingUi] = React.useState<UiPart[]>([]);
   // Human-in-the-loop: the pending `request_user_input` of the active run (null when none).
+  const [themeRequest, setThemeRequest] = React.useState<'light' | 'dark' | 'system' | null>(null);
   const [inputRequest, setInputRequest] = React.useState<{ request: InputRequest; state: InputRequestState; label?: string } | null>(null);
   const [webSearchOn, setWebSearchOn] = React.useState(false);
   const [isStreaming, setIsStreaming] = React.useState<boolean>(false);
@@ -304,6 +306,9 @@ export function ChatSession({
       },
       onUiDone: (ui) => {
         if (isCurrentView()) setStreamingUi((prev) => upsertUiPart(prev, ui));
+      },
+      onThemeRequest: (mode) => {
+        if (isCurrentView()) setThemeRequest(mode);
       },
       onInputRequest: (request) => {
         if (isCurrentView()) setInputRequest({ request, state: 'pending' });
@@ -912,9 +917,14 @@ export function ChatSession({
           </div>
         )}
 
+        {themeRequest && (
+          <AssistantThemeBanner mode={themeRequest} csrfToken={session.csrfToken} onResolved={() => setThemeRequest(null)} />
+        )}
+
         {/* Transcript area */}
         <ChatTranscript
           conversationId={conversationId}
+          csrfToken={session.csrfToken}
           mode={mode}
           messages={messages}
           streamingText={streamingText}

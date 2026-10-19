@@ -216,6 +216,8 @@ export interface StreamEventsOptions {
   onInputRequest?: (request: InputRequest) => void;
   /** The request was answered, declined or expired. */
   onInputResolved?: (resolved: InputResolved) => void;
+  /** The assistant asked for a theme through `set_theme` (`ui.theme` event); applied transiently by the UI. */
+  onThemeRequest?: (mode: 'light' | 'dark' | 'system') => void;
   onDone?: (result: {
     text: string;
     citations: Citation[];
@@ -578,6 +580,14 @@ export async function streamResponseEvents(
             }
           } catch (err) {
             console.warn('Failed to parse message.input.request SSE payload', err);
+          }
+        } else if (eventType === 'ui.theme') {
+          try {
+            const parsed = JSON.parse(eventData);
+            // Only the three known modes are ever applied; anything else (including redacted {}) is ignored.
+            if (parsed?.mode === 'light' || parsed?.mode === 'dark' || parsed?.mode === 'system') options.onThemeRequest?.(parsed.mode);
+          } catch (err) {
+            console.warn('Failed to parse ui.theme SSE payload', err);
           }
         } else if (eventType === 'message.input.resolved') {
           try {

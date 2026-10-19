@@ -102,6 +102,8 @@ function CitationChips({ citations }: { citations: Citation[] }) {
 export interface ChatTranscriptProps {
   /** Currently selected conversation, used to reset the reading position between threads. */
   conversationId?: string | null;
+  /** Session CSRF token enabling server-side widget templates (omit for browser-only). */
+  csrfToken?: string;
   /** Surface mode; advanced mutation actions are available only on the full Chat page. */
   mode?: 'drawer' | 'full';
   /** Ordered list of persistent messages in the conversation. */
@@ -147,6 +149,7 @@ export interface ChatTranscriptProps {
  */
 export function ChatTranscript({
   conversationId,
+  csrfToken,
   mode = 'drawer',
   messages,
   streamingText,
@@ -194,7 +197,7 @@ export function ChatTranscript({
       aria-live="polite"
       aria-label={t('title')}
     >
-      {mode === 'full' && onSendPrompt && <ChatShellTools onSendPrompt={onSendPrompt} locale={locale} />}
+      {mode === 'full' && onSendPrompt && <ChatShellTools onSendPrompt={onSendPrompt} locale={locale} csrfToken={csrfToken} conversationId={conversationId} />}
 
       {messages.length === 0 && !streamingText && streamingUi.length === 0 && !isPending && (
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground my-auto gap-6">
@@ -273,6 +276,7 @@ export function ChatTranscript({
                     sandbox={(part as { sandbox: Record<string, unknown> }).sandbox}
                     title={(part as { title?: string }).title}
                     locale={locale}
+                    csrfToken={csrfToken}
                   />
                 )}
               </div>

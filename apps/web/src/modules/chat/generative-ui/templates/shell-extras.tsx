@@ -93,13 +93,18 @@ export function StarterSuggestions({ onSendPrompt, locale }: { onSendPrompt: (pr
  * Toolbar for the full Chat page: template library and demo gallery drawers plus the
  * small-screen desktop tip.
  *
- * @param props - Send callback and optional locale.
+ * @param props - Send callback, optional locale, CSRF token and conversation id.
  * @returns Toolbar row.
  */
-export function ChatShellTools({ onSendPrompt, locale }: { onSendPrompt: (prompt: string) => void; locale?: AppLocaleId }) {
+export function ChatShellTools({ onSendPrompt, locale, csrfToken, conversationId }: {
+  onSendPrompt: (prompt: string) => void;
+  locale?: AppLocaleId;
+  csrfToken?: string;
+  conversationId?: string | null;
+}) {
   return (
     <div className="flex items-center justify-end gap-2" data-testid="chat-shell-tools">
-      <TemplateLibrary onSendPrompt={onSendPrompt} locale={locale} />
+      <TemplateLibrary onSendPrompt={onSendPrompt} locale={locale} csrfToken={csrfToken} conversationId={conversationId} />
       <DemoGallery onSendPrompt={onSendPrompt} locale={locale} />
       <DesktopTipModal locale={locale} />
     </div>
