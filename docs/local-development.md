@@ -101,6 +101,8 @@ AUTH_CLIENT_IP_HEADER=CF-Connecting-IP   # or X-Real-IP set by your proxy
 
 The domain makes `auto` resolve to production, so the API then also rejects placeholder secrets and default database credentials. Run `make setup` first so every secret is real.
 
+The unauthenticated Pick phone routes are rate limited per client IP only (cookies and `Authorization` are ignored, since callers choose them). Behind the Next.js rewrite or any proxy, set `AUTH_CLIENT_IP_HEADER` (or `AUTH_TRUST_FORWARDED_FOR=true` with a proxy that appends the real address); otherwise every phone shares the proxy's address and one budget.
+
 ## 7. Safety notes for development mode
 
 - Development mode only relaxes transport and secret-format checks. Authentication, CSRF, rate limits, SSRF guards and workspace scoping stay on.

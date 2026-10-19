@@ -19,7 +19,7 @@ from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.workspaces.schemas import WorkspaceContext
@@ -108,16 +108,25 @@ class PendingBody(BaseModel):
     template_id: str = Field(min_length=1, max_length=64)
 
 
-class DeleteTemplateArgs(BaseModel):
-    """Arguments of the ``delete_template`` tool."""
+class ModelSaveTemplateArgs(BaseModel):
+    """Model-facing arguments of ``save_template``: create-only, so a model can never overwrite an existing template.
 
-    template_id: str = Field(min_length=1, max_length=64)
+    There is deliberately no ``id`` field; any ``id`` the model sends is ignored. Owner routes use ``TemplateIn``.
+    """
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=500)
+    html: str = Field(min_length=1, max_length=MAX_HTML_CHARS)
+    data_description: str = Field(default="", max_length=500)
 
 
 class ApplyTemplateArgs(BaseModel):
-    """Arguments of ``apply_template``; omit ``template_id`` to consume the conversation's pending template."""
+    """Arguments of ``apply_template``: a ``template_id``, or a ``name`` (most recent match); neither uses pending."""
 
     template_id: str | None = Field(default=None, max_length=64)
+    name: str | None = Field(default=None, max_length=120, description="Template name; the most recent match wins.")
 
 
 def to_read(row: ChatTemplate) -> TemplateRead:
@@ -161,14 +170,36 @@ async def get_template(session: AsyncSession, scope: WorkspaceContext, template_
     return row
 
 
-async def save_template(session: AsyncSession, scope: WorkspaceContext, payload: TemplateIn) -> ChatTemplate:
+async def get_template_by_name(session: AsyncSession, scope: WorkspaceContext, name: str) -> ChatTemplate | dict[str, Any]:
+    """Return the owner's most recently created template called ``name`` (case-insensitive), else a seed with that name.
+
+    Raises:
+        TemplateError: ``not_found`` when nothing matches.
+    """
+    wanted = name.strip().casefold()
+    for row in await list_templates(session, scope):  # newest first
+        if row.name.casefold() == wanted:
+            return row
+    for seed in SEED_TEMPLATES:
+        if seed["name"].casefold() == wanted:
+            return seed
+    raise TemplateError("not_found", "Template not found")
+
+
+async def save_template(session: AsyncSession, scope: WorkspaceContext, payload: TemplateIn,
+                        *, source_response_id: UUID | None = None) -> ChatTemplate:
     """Create a template, or update one in place (bumping ``version``) when ``payload.id`` names the owner's row.
 
-    The owner's rows are locked first so concurrent saves cannot overshoot the 30-template cap. The caller commits.
+    A per-owner advisory transaction lock is taken first (row locks alone lock nothing for an owner with zero rows),
+    then the rows are locked, so concurrent saves cannot overshoot the 30-template cap. ``source_response_id`` marks a
+    template created by a model tool call so evidence cleanup can delete it; owner-UI saves leave it NULL.
+    The caller commits.
 
     Raises:
         TemplateError: ``not_found`` for an unknown ``id``; ``limit`` when 30 templates already exist.
     """
+    await session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                          {"key": f"chat.templates:{scope.workspace_id}:{scope.user_id}"})
     existing = list(await session.scalars(select(ChatTemplate).where(*_owned(scope)).with_for_update()))
     if payload.id:
         row = next((r for r in existing if str(r.id) == payload.id), None)
@@ -181,7 +212,8 @@ async def save_template(session: AsyncSession, scope: WorkspaceContext, payload:
             raise TemplateError("limit", f"At most {MAX_TEMPLATES} templates are allowed")
         row = ChatTemplate(workspace_id=scope.workspace_id, actor_user_id=scope.user_id, name=payload.name,
                            description=payload.description, html=payload.html,
-                           data_description=payload.data_description, version=1)
+                           data_description=payload.data_description, version=1,
+                           source_response_id=source_response_id)
         session.add(row)
     await session.flush()
     return row
@@ -249,12 +281,15 @@ def _record(item: ChatTemplate | dict[str, Any], *, with_html: bool) -> dict[str
     return out
 
 
-async def run_template_tool(name: str, raw_args: str, session: AsyncSession, conversation_id: UUID) -> str:
+async def run_template_tool(name: str, raw_args: str, session: AsyncSession, conversation_id: UUID,
+                            response_id: UUID | None = None) -> str:
     """Execute a template tool and return the tool-message JSON; never raises.
 
-    Tools: ``save_template``, ``list_templates`` (owned plus read-only seeds, no html), ``apply_template``
-    (returns the html of ``template_id`` or, when omitted, of the conversation's pending template, then clears
-    pending), ``delete_template``, ``clear_pending_template``. As with todos, the conversation is loaded by id to
+    Tools: ``save_template`` (create-only; stamps ``response_id`` as provenance), ``list_templates`` (owned plus
+    read-only seeds, no html), ``apply_template`` (returns the html of ``template_id``, or of the most recent
+    template called ``name``, or when both are omitted of the conversation's pending template, then clears
+    pending), ``clear_pending_template``. There is no model-callable delete or overwrite: a prompt-injected
+    model must not destroy or replace the owner's templates (owner routes do that). As with todos, the conversation is loaded by id to
     derive the run's own owner scope, so a call can only touch that owner's data. Failures roll back and
     return ``{"error": ...}``.
     """
@@ -275,23 +310,27 @@ async def run_template_tool(name: str, raw_args: str, session: AsyncSession, con
             return json.dumps({"templates": [*(_record(s, with_html=False) for s in SEED_TEMPLATES), *mine],
                                "pending_template": conversation.pending_template})
         if name == "save_template":
-            row = await save_template(session, scope, TemplateIn.model_validate(args))
+            created = ModelSaveTemplateArgs.model_validate(args)
+            row = await save_template(session, scope, TemplateIn(**created.model_dump()),
+                                      source_response_id=response_id)
             await session.commit()
             return json.dumps({"saved": _record(row, with_html=False)})
         if name == "apply_template":
-            wanted = ApplyTemplateArgs.model_validate(args).template_id or conversation.pending_template
-            if not wanted:
-                raise TemplateError("invalid", "No template_id given and no pending template")
-            item = await get_template(session, scope, wanted)
-            if conversation.pending_template == wanted:
+            apply_args = ApplyTemplateArgs.model_validate(args)
+            if apply_args.template_id:
+                item = await get_template(session, scope, apply_args.template_id)
+            elif apply_args.name:
+                item = await get_template_by_name(session, scope, apply_args.name)
+            elif conversation.pending_template:
+                item = await get_template(session, scope, conversation.pending_template)
+            else:
+                raise TemplateError("invalid", "No template_id or name given and no pending template")
+            item_id = item["id"] if isinstance(item, dict) else str(item.id)
+            if conversation.pending_template == item_id:
                 conversation.pending_template = None
             await session.commit()
             return json.dumps({"template": _record(item, with_html=True),
                                "instruction": "Render this template with render_sandboxed_ui, replacing its data."})
-        if name == "delete_template":
-            await delete_template(session, scope, DeleteTemplateArgs.model_validate(args).template_id)
-            await session.commit()
-            return json.dumps({"deleted": True})
         if name == "clear_pending_template":
             conversation.pending_template = None
             await session.commit()

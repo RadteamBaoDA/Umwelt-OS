@@ -70,3 +70,22 @@ def test_override_and_disable():
 @pytest.mark.parametrize(("open_", "status"), [(False, 503), (True, 200)])
 def test_redis_down(open_, status):
     assert _client(fail=True, request_budget_fail_open=open_).post("/x").status_code == status
+
+
+def test_anonymous_budget_ignores_cookie_and_authorization_and_keys_on_ip():
+    """Rotating attacker-chosen credentials must not mint a fresh bucket on anonymous routes."""
+    store: dict = {}
+    app = FastAPI()
+    install_error_handling(app)
+    app.state.settings = SimpleNamespace()
+    app.state.redis = SimpleNamespace(pipeline=lambda transaction=True: _Pipe(store, False))
+
+    @app.post("/p", dependencies=[Depends(require_budget("anon", 2, 60, anonymous=True))])
+    async def p() -> dict:
+        return {}
+
+    c = TestClient(app)
+    codes = [c.post("/p", cookies={"bbd_session": str(i)}, headers={"Authorization": f"Bearer {i}"}).status_code
+             for i in range(3)]
+    assert codes == [200, 200, 429]
+    assert len(store) == 1  # one IP bucket regardless of cookie/Authorization

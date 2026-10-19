@@ -17,6 +17,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy import ColumnElement
+from sqlalchemy import delete as _delete
 from sqlalchemy import func as _func
 from sqlalchemy import or_ as _or
 from sqlalchemy import select as _select
@@ -37,6 +38,7 @@ from modules.chat.citations import (
 from modules.chat.generative_ui.skill_backend import load_skill as load_generative_ui_skill
 from modules.chat.models import (
     AgentActivityLink,
+    ChatTemplate,
     Conversation,
     Message,
     ResponseRun,
@@ -92,6 +94,7 @@ from modules.chat.worker import (
     neutralize_ui_events,
     process_chat_response,
     purge_expired_chat_runs,
+    purge_run_model_copies,
     run_response_generation,
 )
 from modules.knowledge.documents.public import DocumentCleanupEvidenceScope, EvidenceReferenceRead
@@ -195,7 +198,8 @@ async def delete_conversation(
     """Delete one conversation inside the caller's transaction.
 
     Lock order is Memory privacy fence, Chat conversation parent, then Agent run/action rows.
-    Owner and any requested pin filter are checked after the parent lock is acquired. This function
+    Owner and any requested pin filter are checked after the parent lock is acquired. Model-saved
+    templates whose provenance run belongs to this conversation are deleted with it. This function
     never commits; the route or owning service commits after its unit of work.
     """
     from fastapi import HTTPException
@@ -221,6 +225,9 @@ async def delete_conversation(
     await purge_conversation_actions(
         session, conversation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled(),
     )
+    # Todos cascade with the conversation; templates are owner-scoped, so delete the ones the model saved in it.
+    await session.execute(_delete(ChatTemplate).where(ChatTemplate.source_response_id.in_(
+        _select(ResponseRun.id).where(ResponseRun.conversation_id == conversation_id))))
     await session.delete(conversation)
     return True
 
@@ -1707,6 +1714,9 @@ async def purge_document_copied_evidence_page(
                     # Streaming deltas carry no document ids, so blank all widget events of the answer's run.
                     if had_widget and message.response_id is not None:
                         await neutralize_ui_events(session, message.response_id)
+                    # Input requests, todos and model-saved templates of that run were derived from the same evidence.
+                    if message.response_id is not None:
+                        await purge_run_model_copies(session, message.response_id)
             elif kind == "runs":
                 row_id, conversation_id = candidate
                 parent = await session.scalar(_select(Conversation).where(
@@ -1725,6 +1735,7 @@ async def purge_document_copied_evidence_page(
                     run.citations = citations
                     run.retrieval_context = context if isinstance(context, dict) else {}
                     changed += 1
+                    await purge_run_model_copies(session, run.id)  # completed runs too: input request, todos, templates
                     if run.status in {"pending", "streaming", "awaiting_input"}:
                         await _privacy_cancel_locked(session, run)
             else:
@@ -1757,6 +1768,7 @@ async def purge_document_copied_evidence_page(
                     # message.ui.delta rows hold partial widget data without identifiers (so they never match
                     # the scope): neutralize every widget event of this run once any copy of it matched.
                     await neutralize_ui_events(session, response_id)
+                    await purge_run_model_copies(session, response_id)
                     if run.status in {"pending", "streaming", "awaiting_input"}:
                         await _privacy_cancel_locked(session, run, event.seq)
         if has_more:

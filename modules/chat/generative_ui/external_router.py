@@ -207,21 +207,31 @@ async def classify_typesafe(
         "questions": {"visualization": {"type": "choice", "instructions": INSTRUCTIONS, "criteria": CRITERIA}},
     }
     try:
-        async with httpx.AsyncClient(transport=transport, timeout=TYPESAFE_TIMEOUT_SECONDS, follow_redirects=False,
-                                     trust_env=False) as client:
-            response = await client.post(TYPESAFE_URL, json=body, headers={"Authorization": f"Bearer {api_key}"})
+        # Stream so an oversized body is aborted as soon as it passes the cap instead of being read whole.
+        async with httpx.AsyncClient(
+            transport=transport, timeout=TYPESAFE_TIMEOUT_SECONDS, follow_redirects=False, trust_env=False,
+        ) as client, client.stream(
+            "POST", TYPESAFE_URL, json=body, headers={"Authorization": f"Bearer {api_key}"},
+        ) as response:
+            status_code, is_success = response.status_code, response.is_success
+            content = b""
+            if status_code not in {401, 403} and is_success:
+                async for chunk in response.aiter_bytes():
+                    content += chunk
+                    if len(content) > MAX_RESPONSE_BYTES:
+                        raise VisualizationRouterError("provider_error")
     except httpx.TimeoutException as exc:
         raise VisualizationRouterError("timeout") from exc
     except EndpointNetworkPolicyError as exc:
         raise VisualizationRouterError("network_denied", retryable=False) from exc
     except httpx.HTTPError as exc:
         raise VisualizationRouterError("provider_error") from exc
-    if response.status_code in {401, 403}:
+    if status_code in {401, 403}:
         raise VisualizationRouterError("auth_error", retryable=False)
-    if not response.is_success or len(response.content) > MAX_RESPONSE_BYTES:
+    if not is_success:
         raise VisualizationRouterError("provider_error")
     try:
-        answer = response.json()["answers"]["visualization"]
+        answer = json.loads(content)["answers"]["visualization"]
         if answer["type"] != "choice":
             raise VisualizationRouterError("invalid_category")
         category = _valid(answer["choice"])

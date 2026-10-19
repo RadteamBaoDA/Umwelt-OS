@@ -187,3 +187,12 @@ async def test_conversation_lookup_is_owner_scoped() -> None:
     # Only the WHERE clause counts: the SELECT list names every column, which proves nothing.
     where = captured[0].split("WHERE", 1)[1]
     assert "actor_user_id" in where and "workspace_id" in where
+
+
+def test_replace_stamps_source_response_id_only_when_given() -> None:
+    run = uuid4()
+    session = FakeSession()
+    rows = asyncio.run(todos.replace_todos(session, SCOPE, CONV, [todos.TodoItem(title="a")], source_response_id=run))
+    assert rows[0].source_response_id == run
+    owner_rows = asyncio.run(todos.replace_todos(FakeSession(), SCOPE, CONV, [todos.TodoItem(title="b")]))
+    assert owner_rows[0].source_response_id is None

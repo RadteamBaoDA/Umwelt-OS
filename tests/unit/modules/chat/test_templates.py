@@ -32,6 +32,7 @@ class FakeSession:
         self.scalar_value = scalar
         self.added: list[Any] = []
         self.deleted: list[Any] = []
+        self.executed: list[tuple[str, Any]] = []
         self.commits = self.rollbacks = 0
 
     def add(self, row: Any) -> None:
@@ -42,6 +43,9 @@ class FakeSession:
 
     async def flush(self) -> None:
         return None
+
+    async def execute(self, stmt: Any, params: Any = None) -> None:
+        self.executed.append((str(stmt), params))
 
     async def scalars(self, _stmt: Any) -> list[Any]:
         return list(self.rows)
@@ -194,11 +198,59 @@ def test_tool_apply_without_id_or_pending_is_error(monkeypatch: pytest.MonkeyPat
     assert out["error"] == "Template not found"  # unknown/foreign id
 
 
-def test_tool_delete_and_clear(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert "error" in _run_tool("delete_template", {"template_id": "seed-weather-ny"}, _conv(), [], monkeypatch)[0]
+def test_model_cannot_delete_templates(monkeypatch: pytest.MonkeyPatch) -> None:
     mine = _row()
     out, sess = _run_tool("delete_template", {"template_id": str(mine.id)}, _conv(), [], monkeypatch, item=mine)
-    assert out == {"deleted": True} and sess.deleted == [mine]
+    assert "Unknown template tool" in out["error"] and sess.deleted == []
+    assert "delete_template" not in TEMPLATE_TOOLS
+    names = {s["function"]["name"] for s in build_chat_tool_specs(include_read_skill=False, include_templates=True)}
+    assert "delete_template" not in names
+
+
+def test_model_save_is_create_only_and_stamps_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    mine = _row(version=3)
+    run = uuid4()
+
+    async def scope(_s: Any, _o: int) -> WorkspaceContext:
+        return SCOPE
+
+    class Sess(FakeSession):
+        async def scalar(self, stmt: Any) -> Any:
+            return _conv() if "chat_conversations" in str(stmt) else None
+
+    sess = Sess([mine])
+    monkeypatch.setattr("modules.chat.scope.owner_default_scope", scope)
+    raw = json.dumps({"id": str(mine.id), "name": "evil", "html": "<script>sendPrompt()</script>"})
+    out = json.loads(asyncio.run(templates.run_template_tool("save_template", raw, sess, CONV, run)))
+    assert out["saved"]["name"] == "evil"
+    assert mine.name == "t" and mine.version == 3  # the existing template is untouched
+    (created,) = sess.added
+    assert created is not mine and created.source_response_id == run and created.version == 1
+    assert "id" not in templates.ModelSaveTemplateArgs.model_json_schema()["properties"]
+
+
+def test_owner_save_has_no_provenance() -> None:
+    assert _save(FakeSession()).source_response_id is None
+
+
+def test_save_takes_the_per_owner_advisory_lock_before_counting() -> None:
+    session = FakeSession()
+    _save(session)
+    (sql, params), = session.executed
+    assert "pg_advisory_xact_lock" in sql and params == {"key": f"chat.templates:{WS}:1"}
+
+
+def test_apply_by_name_picks_most_recent_match_then_seed(monkeypatch: pytest.MonkeyPatch) -> None:
+    newest, older = _row("Plan"), _row("plan")
+    out, _ = _run_tool("apply_template", {"name": "PLAN"}, _conv(), [newest, older], monkeypatch)  # list is newest first
+    assert out["template"]["id"] == str(newest.id)
+    out, _ = _run_tool("apply_template", {"name": "q1 kpi dashboard"}, _conv(), [], monkeypatch)
+    assert out["template"]["id"] == "seed-kpi-q1"
+    out, _ = _run_tool("apply_template", {"name": "nothing"}, _conv(), [], monkeypatch)
+    assert out["error"] == "Template not found"
+
+
+def test_tool_clear(monkeypatch: pytest.MonkeyPatch) -> None:
     conv = _conv("x")
     assert _run_tool("clear_pending_template", {}, conv, [], monkeypatch)[0] == {"cleared": True}
     assert conv.pending_template is None

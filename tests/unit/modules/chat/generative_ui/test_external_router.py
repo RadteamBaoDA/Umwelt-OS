@@ -193,3 +193,25 @@ async def test_typesafe_redirect_is_not_followed() -> None:
     with pytest.raises(viz.VisualizationRouterError) as err:
         await viz.classify_typesafe("k", WINDOW, redirect)
     assert err.value.code == "provider_error"
+
+
+class _CountingStream(httpx.AsyncByteStream):
+    """Endless 16 KiB chunks that record how many were pulled."""
+
+    def __init__(self) -> None:
+        self.pulled = 0
+
+    async def __aiter__(self) -> Any:
+        while True:
+            self.pulled += 1
+            yield b"x" * 16384
+
+
+@pytest.mark.asyncio
+async def test_typesafe_oversized_response_is_aborted_while_streaming() -> None:
+    stream = _CountingStream()
+    transport = _transport(lambda r: httpx.Response(200, stream=stream))
+    with pytest.raises(viz.VisualizationRouterError) as err:
+        await viz.classify_typesafe("k", WINDOW, transport)
+    assert err.value.code == "provider_error"
+    assert stream.pulled <= viz.MAX_RESPONSE_BYTES // 16384 + 2  # stopped just past the cap, never read whole

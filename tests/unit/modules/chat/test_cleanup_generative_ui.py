@@ -19,7 +19,7 @@ class ScriptedSession(Recorder):
         """Keep the rows the scripted statements resolve to (event rows are keyed by their id)."""
         super().__init__()
         self.message = message
-        self.run = SimpleNamespace(status="completed", citations=[], retrieval_context={})
+        self.run = SimpleNamespace(id=RUN_ID, status="completed", citations=[], retrieval_context={})
         self.events = events
         self._queue = iter(events.values())
 
@@ -94,6 +94,12 @@ async def test_cleanup_drops_generative_ui_from_messages_and_ui_events() -> None
     assert "secret-value" not in json.dumps(events[ids["delta"]].data)
     assert "generative_ui" not in events[ids["final"]].data
     assert events[ids["final"]].data["text"] == "answer"
+    # The matched run's model-derived copies go too: input request/events, todos and model-saved templates.
+    assert any(q.startswith("DELETE FROM chat_todos") for q in session.sql)
+    assert any(q.startswith("DELETE FROM chat_templates") for q in session.sql)
+    assert any(q.startswith("UPDATE chat_response_runs SET input_request") for q in session.sql)
+    assert any(q.startswith("UPDATE chat_stream_events") and "message.input.request" in str(p)
+               for q, p in zip(session.sql, session.params, strict=True) for p in [list(p.values())])
 
 
 async def test_unrelated_generative_ui_is_left_untouched() -> None:
@@ -137,3 +143,16 @@ async def test_cleanup_drops_every_generative_ui_part_and_neutralizes_part_event
     assert message.metadata_json == {"keep": 1}
     assert events[ids["delta_b"]].data == {} and events[ids["done_b"]].data == {}  # run-wide, including clean parts
     assert "generative_ui_parts" not in events[ids["final"]].data and "generative_ui" not in events[ids["final"]].data
+
+
+async def test_completed_run_matching_scope_loses_input_request_todos_and_templates() -> None:
+    scope = evidence()
+    session = ScriptedSession(SimpleNamespace(citations=[], metadata_json={}), {})
+    session.run.retrieval_context = {"evidence": [_copied(scope.document_id)]}
+    with admitted(), patch("modules.memory.public.lock_export_privacy", AsyncMock()),             patch("modules.memory.public.bound_cleanup_lock_waits", AsyncMock()):
+        progress = await chat.purge_document_copied_evidence_page(session, scope, **CTX)  # type: ignore[arg-type]
+    assert progress.rows_changed >= 1 and session.run.status == "completed"
+    for table in ("chat_todos", "chat_templates"):
+        (idx,) = [i for i, q in enumerate(session.sql) if q.startswith(f"DELETE FROM {table}")]
+        assert RUN_ID in session.params[idx].values()  # keyed by the matched run's source_response_id
+    assert any(q.startswith("UPDATE chat_response_runs SET input_request") for q in session.sql)

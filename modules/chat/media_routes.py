@@ -6,13 +6,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_session
+from core.rate_limit import require_budget
 from core.workspaces.dependencies import require_workspace_read
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat import media
 from modules.settings import public as settings_public
 from modules.settings.public import module_dependency
 
-router = APIRouter(prefix="/api/v1/media", tags=["chat"], dependencies=[Depends(module_dependency("chat"))])
+router = APIRouter(
+    prefix="/api/v1/media", tags=["chat"],
+    # Authenticated mode: the per-account budget bounds upstream fetches a logged-in client can trigger.
+    dependencies=[Depends(module_dependency("chat")), Depends(require_budget("media_proxy", 300, 60))],
+)
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 _HEADERS = {
@@ -49,7 +54,7 @@ async def proxy_media(
     """Serve one image bound to a signed, unexpired token; allowlisted host, image/* only, 5 MB cap, no redirects."""
     secret = request.app.state.settings.csrf_signing_secret.get_secret_value()
     try:
-        url = media.verify_media_token(secret, token)
+        url = media.verify_media_token(secret, token, subject=f"{owner.workspace_id}:{owner.user_id}")
     except media.MediaError as exc:
         raise HTTPException(status_code=_ERRORS.get(exc.code, 403), detail="Invalid media token") from None
     return await _serve(url, request=request, session=session, scope=owner)

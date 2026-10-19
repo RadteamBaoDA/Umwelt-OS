@@ -157,3 +157,32 @@ def test_tool_spec_and_prompt_gated() -> None:
     assert TOOL_TRIP_IMAGES not in build_generative_ui_system_prompt(locale="en-US")
     assert TOOL_TRIP_IMAGES in build_generative_ui_system_prompt(locale="en-US", remote_media=True)
     assert TOOL_TRIP_IMAGES not in build_generative_ui_system_prompt(locale="en-US", remote_media=True, local_only=True)
+
+
+def test_token_is_bound_to_its_subject() -> None:
+    token = media.sign_media_url(SECRET, THUMB, now=1000, subject="ws1:7")
+    assert media.verify_media_token(SECRET, token, now=1001, subject="ws1:7") == THUMB
+    for other in ("ws1:8", "ws2:7", ""):
+        with pytest.raises(media.MediaError) as err:
+            media.verify_media_token(SECRET, token, now=1001, subject=other)
+        assert err.value.code == "bad_token"
+    unbound = media.sign_media_url(SECRET, THUMB, now=1000)
+    with pytest.raises(media.MediaError):
+        media.verify_media_token(SECRET, unbound, now=1001, subject="ws1:7")
+
+
+def test_tool_signs_with_the_actor_subject() -> None:
+    out = asyncio.run(media.run_trip_images_tool(json.dumps({"titles": ["Eiffel Tower"]}), config=_config(),
+                                                 local_only=False, secret=SECRET, factory=_factory(_wiki()),
+                                                 subject="ws1:7"))
+    token = json.loads(out)["stops"][0]["image_url"].split("token=")[1]
+    assert media.verify_media_token(SECRET, token, subject="ws1:7") == THUMB
+    with pytest.raises(media.MediaError):
+        media.verify_media_token(SECRET, token, subject="ws1:8")
+
+
+def test_media_routes_carry_the_budget_dependency() -> None:
+    from modules.chat import media_routes
+
+    calls = {d.dependency.__qualname__ for d in media_routes.router.dependencies}
+    assert any("require_budget" in c for c in calls)
