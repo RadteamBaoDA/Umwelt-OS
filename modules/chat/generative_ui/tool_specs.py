@@ -20,6 +20,7 @@ TOOL_CHART = "render_chart"
 TOOL_PLAN = "render_plan"
 TOOL_TIME_PICKER = "render_time_picker"
 TOOL_READ_SKILL = "read_skill"
+TOOL_REQUEST_USER_INPUT = "request_user_input"  # non-terminal HITL tool: parks the run until the user answers
 TOOL_TRIP_IMAGES = "get_trip_stop_images"  # non-terminal data tool; offered only with allow_widget_remote_media
 
 TERMINAL_UI_TOOLS: frozenset[str] = frozenset(
@@ -127,6 +128,50 @@ class ReadSkillArgs(BaseModel):
     name: str = Field(min_length=1, max_length=64, description="Skill name from the skill index.")
 
 
+# Reserved answer meaning "none of these"; never a valid option/slot id.
+INPUT_DECLINE = "__decline__"
+
+
+class InputOption(BaseModel):
+    """One selectable answer of a `choice` input request."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=64)
+    label: str = Field(min_length=1, max_length=120)
+
+
+class RequestUserInputArgs(BaseModel):
+    """Arguments of the non-terminal `request_user_input` tool (pause the turn and ask the user).
+
+    `time_slots` needs `slots`, `choice` needs 2+ `options`, `text` needs neither. Bounds keep the persisted
+    request and the SSE payload small; ids must be unique and may not equal `INPUT_DECLINE`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["time_slots", "choice", "text"]
+    prompt: str = Field(min_length=1, max_length=500, description="Question shown to the user.")
+    options: list[InputOption] = Field(default_factory=list, max_length=12)
+    slots: list[TimeSlot] = Field(default_factory=list, max_length=24)
+
+    @model_validator(mode="after")
+    def _shape_matches_kind(self) -> "RequestUserInputArgs":
+        """Enforce the per-kind payload shape and unique, non-reserved ids."""
+        if self.kind == "time_slots" and not self.slots:
+            raise ValueError("time_slots requires slots")
+        if self.kind == "choice" and len(self.options) < 2:
+            raise ValueError("choice requires at least two options")
+        if self.kind != "time_slots" and self.slots:
+            raise ValueError("slots are only valid for time_slots")
+        if self.kind != "choice" and self.options:
+            raise ValueError("options are only valid for choice")
+        ids = [o.id for o in self.options] + [s.id for s in self.slots]
+        if len(set(ids)) != len(ids) or INPUT_DECLINE in ids:
+            raise ValueError("ids must be unique and not reserved")
+        return self
+
+
 class TripStopImagesToolArgs(BaseModel):
     """Arguments of the non-terminal `get_trip_stop_images` tool."""
 
@@ -164,12 +209,15 @@ def _sandbox_schema() -> dict[str, Any]:
     return schema
 
 
-def build_chat_tool_specs(*, include_read_skill: bool, include_trip_images: bool = False) -> list[dict[str, Any]]:
+def build_chat_tool_specs(
+    *, include_read_skill: bool, include_trip_images: bool = False, include_user_input: bool = False,
+) -> list[dict[str, Any]]:
     """Build the OpenAI-format `tools` list for a generative-UI chat turn.
 
     Args:
         include_read_skill: Whether to expose the non-terminal `read_skill` tool.
         include_trip_images: Whether to expose `get_trip_stop_images` (only when remote widget media is allowed).
+        include_user_input: Whether to expose the non-terminal `request_user_input` (pause for a user answer).
 
     Returns:
         Fresh (caller-mutable) list of function specs whose parameters come from the pydantic models.
@@ -183,6 +231,15 @@ def build_chat_tool_specs(*, include_read_skill: bool, include_trip_images: bool
             "name": TOOL_READ_SKILL,
             "description": "Load a bundled guidance document by name before building a widget. Not terminal.",
             "parameters": ReadSkillArgs.model_json_schema(),
+        }})
+    if include_user_input:
+        specs.append({"type": "function", "function": {
+            "name": TOOL_REQUEST_USER_INPUT,
+            "description": (
+                "Pause and ask the user to pick a time slot, choose an option, or type a short answer; the "
+                "result is their answer (or expired/cancelled). Use for a decision only the user can make. Not terminal."
+            ),
+            "parameters": RequestUserInputArgs.model_json_schema(),
         }})
     if include_trip_images:
         specs.append({"type": "function", "function": {

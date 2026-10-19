@@ -31,6 +31,7 @@ from modules.agents.worker import (
     reconcile_agent_dispatch,
 )
 from modules.automations.worker import process_automation_run, reconcile_automation_runs
+from modules.chat.user_input import recover_parked_input_runs
 from modules.chat.worker import (
     CHAT_JOB_TIMEOUT,
     CHAT_QUEUE,
@@ -302,7 +303,10 @@ class ChatWorkerSettings:
     functions: ClassVar[list[Any]] = [
         _arq_func(_gate_module_job(instrument_job(process_chat_response)), keep_result=0),
     ]
-    cron_jobs: ClassVar[list[object]] = [cron(recover_chat_runs, second={0, 15, 30, 45})]
+    cron_jobs: ClassVar[list[object]] = [
+        cron(recover_chat_runs, second={0, 15, 30, 45}),
+        cron(recover_parked_input_runs, second={7, 37}),
+    ]
     redis_settings = RedisSettings.from_dsn(Settings().redis_url)
     queue_name = CHAT_QUEUE
     max_jobs = 15  # keeps 5 of the shared 10+10 DB pool free for cron/rerank sessions (pool_timeout 5 s)

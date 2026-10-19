@@ -151,11 +151,23 @@ def test_r21_drop_backup_control_migration() -> None:
 
 
 def test_r24_viz_router_settings_migration() -> None:
-    """Verify r24 adds and drops the viz_router JSONB column and is the head."""
+    """Verify r24 adds and drops the viz_router JSONB column."""
     up = _alembic("upgrade", "r21_drop_backup_control:r24_viz_router_settings", "--sql")
     assert up.returncode == 0, up.stderr
     assert "ALTER TABLE ai_settings ADD COLUMN viz_router JSONB" in up.stdout
     down = _alembic("downgrade", "r24_viz_router_settings:r21_drop_backup_control", "--sql")
     assert down.returncode == 0, down.stderr
     assert "DROP COLUMN viz_router" in down.stdout
-    assert HEAD == "r24_viz_router_settings"
+
+
+def test_r23_chat_run_awaiting_input_migration() -> None:
+    """Verify r23 widens the run status CHECK, adds input_request, and downgrade fails parked runs first."""
+    up = _alembic("upgrade", "r24_viz_router_settings:r23_chat_run_awaiting_input", "--sql")
+    assert up.returncode == 0, up.stderr
+    assert "ALTER TABLE chat_response_runs ADD COLUMN input_request JSONB" in up.stdout
+    assert "awaiting_input" in up.stdout
+    assert "ck_chat_response_runs_status" in up.stdout
+    down = _alembic("downgrade", "r23_chat_run_awaiting_input:r24_viz_router_settings", "--sql")
+    assert down.returncode == 0, down.stderr
+    assert down.stdout.index("SET status = 'failed'") < down.stdout.index("DROP COLUMN input_request")
+    assert HEAD == "r23_chat_run_awaiting_input"

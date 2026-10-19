@@ -75,6 +75,17 @@ export const MEETING_COPY = perLocale((c) => ({
     declinePrompt: (title: string) => fmt(c.genUiMeetingDeclinePrompt, { title }),
 }));
 
+/** Adapter exposing the user-input request card copy (HITL `request_user_input`). */
+export const INPUT_COPY = perLocale((c) => ({
+    submit: c.genUiInputSubmit,
+    textPlaceholder: c.genUiInputTextPlaceholder,
+    answered: (label: string) => fmt(c.genUiInputAnswered, { label }),
+    declined: c.genUiInputDeclined,
+    expired: c.genUiInputExpired,
+    cancelled: c.genUiInputCancelled,
+    failed: c.genUiInputFailed,
+}));
+
 /** Adapter exposing TableCatalog copy from the shared catalog. */
 export const TABLE_COPY = perLocale((c) => ({
     emptyTitle: c.genUiTableEmpty,

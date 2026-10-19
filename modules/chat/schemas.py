@@ -618,6 +618,25 @@ class AgentActivityRead(BaseModel):
     updated_at: datetime
 
 
+class SubmitInputRequest(BaseModel):
+    """Body of ``POST /api/v1/responses/{id}/input``: the user's answer to one pending input request."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    request_id: str = Field(min_length=1, max_length=64)
+    answer: str = Field(min_length=1, max_length=2000)
+
+
+class SubmitInputResponse(BaseModel):
+    """Acknowledgement that the parked run was resumed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    response_id: UUID
+    request_id: str
+    status: Literal["streaming"] = "streaming"
+
+
 class CancelResponse(BaseModel):
     """Outcome of a response run cancellation request."""
 

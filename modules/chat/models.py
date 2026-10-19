@@ -124,7 +124,7 @@ class ResponseRun(Base):
             postgresql_where=text("status IN ('completed', 'cancelled', 'failed')"),
         ),
         CheckConstraint(
-            "status IN ('pending', 'streaming', 'completed', 'cancelled', 'failed')",
+            "status IN ('pending', 'streaming', 'awaiting_input', 'completed', 'cancelled', 'failed')",
             name="ck_chat_response_runs_status",
         ),
         ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_chat_response_runs_workspace", ondelete="RESTRICT"),
@@ -160,6 +160,8 @@ class ResponseRun(Base):
     retrieval_context: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     ephemeral: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # The single open `request_user_input` request while status is awaiting_input (see modules/chat/user_input.py).
+    input_request: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -175,6 +175,32 @@ export interface CancelResponse {
 /**
  * Streaming event callback options for Server-Sent Events (SSE) response consumption.
  */
+/** Pending `request_user_input` published as the `message.input.request` SSE event (no answer/secret fields). */
+export interface InputRequest {
+  request_id: string;
+  kind: 'time_slots' | 'choice' | 'text';
+  prompt: string;
+  options: Array<{ id: string; label: string }>;
+  slots: Array<{
+    id: string;
+    label: string;
+    date: string;
+    start_time: string;
+    end_time: string;
+    timezone?: string;
+    available?: boolean;
+    recommended?: boolean;
+  }>;
+  expires_at: string;
+}
+
+/** Payload of the `message.input.resolved` SSE event. */
+export interface InputResolved {
+  request_id: string;
+  outcome: 'answered' | 'declined' | 'expired';
+  label?: string;
+}
+
 export interface StreamEventsOptions {
   lastEventId?: string;
   signal?: AbortSignal;
@@ -184,6 +210,10 @@ export interface StreamEventsOptions {
   onUiDelta?: (ui: Record<string, unknown>) => void;
   onUiDone?: (ui: Record<string, unknown>) => void;
   onStatus?: (status: string, payload?: unknown) => void;
+  /** A run parked on `request_user_input`; also replayed on reconnect. */
+  onInputRequest?: (request: InputRequest) => void;
+  /** The request was answered, declined or expired. */
+  onInputResolved?: (resolved: InputResolved) => void;
   onDone?: (result: {
     text: string;
     citations: Citation[];
@@ -380,6 +410,31 @@ export async function cancelResponse(
 }
 
 /**
+ * Answers the pending user-input request of a parked run so the SAME run resumes (no new message/run).
+ *
+ * @param responseId - Parked response run.
+ * @param requestId - Id from the `message.input.request` event.
+ * @param answer - Slot id, option id, `__decline__` or text, as validated by the server.
+ * @param csrfToken - Session CSRF token for write authorization.
+ * @throws ApiError 404 (stale request), 409 (already answered/expired/cancelled), 422 (invalid answer).
+ */
+export async function submitResponseInput(
+  responseId: string,
+  requestId: string,
+  answer: string,
+  csrfToken: string,
+): Promise<{ response_id: string; request_id: string; status: string }> {
+  return apiRequest(`/api/v1/responses/${responseId}/input`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ request_id: requestId, answer }),
+  });
+}
+
+/** Reserved answer meaning "none of the offered options" (mirrors `INPUT_DECLINE` in tool_specs.py). */
+export const INPUT_DECLINE = '__decline__';
+
+/**
  * Consumes the SSE stream for a specific response run (/api/v1/responses/{id}/events).
  * Parses stream events ('message.delta', 'message.citations', 'message.done', 'status')
  * and dispatches typed callbacks. Supports reconnection using lastEventId.
@@ -506,6 +561,27 @@ export async function streamResponseEvents(
             }
           } catch (err) {
             console.warn('Failed to parse message.ui.done SSE payload', err);
+          }
+        } else if (eventType === 'message.input.request') {
+          try {
+            const parsed = JSON.parse(eventData);
+            // Privacy redaction rewrites old events to `{}`; ignore anything without an id.
+            if (parsed && typeof parsed.request_id === 'string') {
+              options.onInputRequest?.({
+                ...parsed,
+                options: Array.isArray(parsed.options) ? parsed.options : [],
+                slots: Array.isArray(parsed.slots) ? parsed.slots : [],
+              } as InputRequest);
+            }
+          } catch (err) {
+            console.warn('Failed to parse message.input.request SSE payload', err);
+          }
+        } else if (eventType === 'message.input.resolved') {
+          try {
+            const parsed = JSON.parse(eventData);
+            if (parsed && typeof parsed.request_id === 'string') options.onInputResolved?.(parsed as InputResolved);
+          } catch (err) {
+            console.warn('Failed to parse message.input.resolved SSE payload', err);
           }
         } else if (eventType === 'message.done') {
           try {

@@ -1673,7 +1673,7 @@ async def purge_document_copied_evidence_page(
                     # Deltas of terminal runs are purged on a schedule and the final message/citations
                     # events are still scrubbed; scanning ~1M delta rows made a document delete take hours.
                     # Active runs keep the scan so an in-flight delta can still trigger privacy cancel.
-                    _or(StreamEvent.event_type != "message.delta", ResponseRun.status.in_(("pending", "streaming"))),
+                    _or(StreamEvent.event_type != "message.delta", ResponseRun.status.in_(("pending", "streaming", "awaiting_input"))),
                 )
                 .order_by(StreamEvent.id).limit(remaining + 1)
             )).all())
@@ -1722,7 +1722,7 @@ async def purge_document_copied_evidence_page(
                     run.citations = citations
                     run.retrieval_context = context if isinstance(context, dict) else {}
                     changed += 1
-                    if run.status in {"pending", "streaming"}:
+                    if run.status in {"pending", "streaming", "awaiting_input"}:
                         await _privacy_cancel_locked(session, run)
             else:
                 row_id, response_id, conversation_id = candidate
@@ -1753,7 +1753,7 @@ async def purge_document_copied_evidence_page(
                     # message.ui.delta rows hold partial widget data without identifiers (so they never match
                     # the scope): neutralize every widget event of this run once any copy of it matched.
                     await neutralize_ui_events(session, response_id)
-                    if run.status in {"pending", "streaming"}:
+                    if run.status in {"pending", "streaming", "awaiting_input"}:
                         await _privacy_cancel_locked(session, run, event.seq)
         if has_more:
             last_id = rows[-1][0]
