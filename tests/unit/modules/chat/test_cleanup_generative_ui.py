@@ -1,10 +1,12 @@
 """Copied-evidence cleanup must drop Generative UI payloads that embed deleted-document evidence (no DB)."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from modules.chat import public as chat
+from modules.chat.generative_ui.streaming import streaming_snapshot
 from tests.unit.modules._cleanup_scope import CTX, Recorder, admitted, evidence
 
 MESSAGE_ID, RUN_ID, CONVERSATION_ID = uuid4(), uuid4(), uuid4()
@@ -24,6 +26,12 @@ class ScriptedSession(Recorder):
     async def execute(self, statement: object, *_a: object, **_k: object) -> SimpleNamespace:
         """Return the page of candidate ids for whichever of the three tables is scanned."""
         text = self._record(statement)
+        if type(statement).__name__ == "Update":
+            # neutralize_ui_events: blank widget events of the run (all scripted events share RUN_ID).
+            for event in self.events.values():
+                if event.event_type in {"message.ui.delta", "message.ui.done"}:
+                    event.data = {}
+            return SimpleNamespace(all=list)
         if "chat_stream_events" in text:
             rows = [(eid, RUN_ID, CONVERSATION_ID) for eid in self.events]
         elif "chat_response_runs" in text:
@@ -54,14 +62,17 @@ async def test_cleanup_drops_generative_ui_from_messages_and_ui_events() -> None
     scope = evidence()
     doc = scope.document_id
     message = SimpleNamespace(
-        citations=[],
+        citations=[], response_id=RUN_ID,
         metadata_json={"keep": 1, "generative_ui": {"kind": "table", "citations": [_copied(doc)]}},
     )
     ids = {name: uuid4() for name in ("delta", "done", "final")}
     events = {
+        # Real streaming output: it has no citations key and no document identifiers at all.
         ids["delta"]: SimpleNamespace(
             event_type="message.ui.delta", seq=1,
-            data={"kind": "table", "table": {"rows": [["x"]]}, "citations": [_copied(doc)]},
+            data=streaming_snapshot("render_table", json.dumps({
+                "title": "Secret", "columns": ["A"], "rows": [["secret-value"]], "citations": [1],
+            })),
         ),
         ids["done"]: SimpleNamespace(
             event_type="message.ui.done", seq=2,
@@ -77,9 +88,10 @@ async def test_cleanup_drops_generative_ui_from_messages_and_ui_events() -> None
             patch("modules.memory.public.bound_cleanup_lock_waits", AsyncMock()):
         progress = await chat.purge_document_copied_evidence_page(session, scope, **CTX)  # type: ignore[arg-type]
 
-    assert progress.complete and progress.rows_changed == 4
+    assert progress.complete and progress.rows_changed >= 2  # done may be pre-blanked by the run-wide neutralize
     assert message.metadata_json == {"keep": 1}  # widget dropped whole; unrelated metadata kept
     assert events[ids["delta"]].data == {} and events[ids["done"]].data == {}
+    assert "secret-value" not in json.dumps(events[ids["delta"]].data)
     assert "generative_ui" not in events[ids["final"]].data
     assert events[ids["final"]].data["text"] == "answer"
 

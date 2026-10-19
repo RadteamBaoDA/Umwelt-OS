@@ -88,6 +88,7 @@ from modules.chat.stream import (
 from modules.chat.worker import (
     _privacy_cancel_locked,
     is_history_storage_enabled,
+    neutralize_ui_events,
     process_chat_response,
     purge_expired_chat_runs,
     run_response_generation,
@@ -1696,8 +1697,11 @@ async def purge_document_copied_evidence_page(
                     message.citations = citations
                     message.metadata_json = metadata if isinstance(metadata, dict) else {}
                     # The widget copies evidence-derived rows/data that scrubbing cannot attribute: drop it whole.
-                    message.metadata_json.pop("generative_ui", None)
+                    had_widget = message.metadata_json.pop("generative_ui", None) is not None
                     changed += 1
+                    # Streaming deltas carry no document ids, so blank all widget events of the answer's run.
+                    if had_widget and message.response_id is not None:
+                        await neutralize_ui_events(session, message.response_id)
             elif kind == "runs":
                 row_id, conversation_id = candidate
                 parent = await session.scalar(_select(Conversation).where(
@@ -1744,6 +1748,9 @@ async def purge_document_copied_evidence_page(
                     else:
                         event.data.pop("generative_ui", None)
                     changed += 1
+                    # message.ui.delta rows hold partial widget data without identifiers (so they never match
+                    # the scope): neutralize every widget event of this run once any copy of it matched.
+                    await neutralize_ui_events(session, response_id)
                     if run.status in {"pending", "streaming"}:
                         await _privacy_cancel_locked(session, run, event.seq)
         if has_more:

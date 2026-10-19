@@ -670,7 +670,7 @@ async def purge_expired_chat_runs(ctx: dict[str, object]) -> int:
 async def purge_terminal_message_deltas(
     factory: async_sessionmaker[AsyncSession], *, now: datetime | None = None,
 ) -> int:
-    """Delete one bounded slice of ``message.delta`` events of old terminal runs; returns rows deleted.
+    """Delete one bounded slice of ``message.delta`` and ``message.ui.delta`` events of old terminal runs; returns rows deleted.
 
     Replay reads ``seq > current_seq`` and tolerates gaps, and ``message.done`` (completed runs) already
     carries the full answer, so deltas of runs that finished more than ``DELTA_RETENTION`` ago only
@@ -684,7 +684,9 @@ async def purge_terminal_message_deltas(
         select(StreamEvent.id)
         .join(ResponseRun, ResponseRun.id == StreamEvent.response_id)
         .where(
-            StreamEvent.event_type == "message.delta",
+            # message.ui.delta partial widget snapshots are as disposable as text deltas: message.ui.done
+            # keeps the final widget.
+            StreamEvent.event_type.in_(("message.delta", "message.ui.delta")),
             ResponseRun.status.in_(("completed", "cancelled", "failed")),
             ResponseRun.completed_at.is_not(None),
             ResponseRun.completed_at < cutoff,
@@ -1216,8 +1218,12 @@ async def run_response_generation(
             item = answer_context.evidence[n - 1]
             return item.document_version_id, item.chunk_id
 
+        # The widget tool call may cite evidence the prose never marks (render_table(citations=[1])):
+        # those numbers are candidates too, and go through the same evidence checks below.
+        ui_numbers = _tool_citation_numbers(ui_call, evidence_count)
+        candidate_numbers = list(dict.fromkeys([*doc_numbers, *ui_numbers]))
         first_by_key: dict[tuple[UUID, UUID], int] = {}
-        for n in doc_numbers:
+        for n in candidate_numbers:
             first_by_key.setdefault(_evidence_key(n), n)
         unique_numbers = list(first_by_key.values())
         candidate_citations: list[Citation | dict[str, Any]] = [
@@ -1244,10 +1250,10 @@ async def run_response_generation(
         )
         kept = {(c.documentVersionId, c.chunkId): i for i, c in enumerate(validated.citations, 1)}
         number_map = {
-            n: kept[key] for n in doc_numbers
+            n: kept[key] for n in candidate_numbers
             if (key := _evidence_key(n)) in kept
         }
-        if not doc_numbers and validated.citations:
+        if not doc_numbers and not number_map and validated.citations:
             # Preserve the [1] marker attached by post-hoc lexical attribution during renumbering.
             number_map[1] = 1
         answer_text = validated.answer
@@ -1464,6 +1470,36 @@ async def _release_on_shutdown(
     await _mark_failed(response_id, session_factory, seq, expected_fence, TimeoutError("generation timed out" if timed_out else "chat worker shutting down"), scope=scope)
 
 
+def _tool_citation_numbers(ui_call: dict[str, str] | None, evidence_count: int) -> list[int]:
+    """Return the in-range evidence numbers a presentation tool call cites in ``args.citations``.
+
+    Malformed JSON, non-list values, bools, non-ints and out-of-range numbers are dropped; the caller
+    still validates every returned number against the retrieved evidence like a text marker.
+    """
+    if ui_call is None:
+        return []
+    try:
+        args = json.loads(ui_call.get("arguments") or "{}")
+    except ValueError:
+        return []
+    raw = args.get("citations") if isinstance(args, dict) else None
+    if not isinstance(raw, list):
+        return []
+    return [n for n in raw if type(n) is int and 1 <= n <= evidence_count]
+
+
+async def neutralize_ui_events(session: AsyncSession, response_id: UUID) -> None:
+    """Blank every persisted ``message.ui.*`` event payload of one run.
+
+    Streaming deltas carry no document identifiers, so privacy cleanup and cancellation neutralize
+    all widget events of a run together. Event rows and seqs stay so replay keeps its identities.
+    """
+    await session.execute(update(StreamEvent).where(
+        StreamEvent.response_id == response_id,
+        StreamEvent.event_type.in_(("message.ui.delta", "message.ui.done")),
+    ).values(data={}))
+
+
 async def _privacy_cancel_locked(session: AsyncSession, run: ResponseRun, current_seq: int = 0) -> int:
     """Redact an active run while the caller holds Memory, parent, then run locks.
 
@@ -1481,10 +1517,7 @@ async def _privacy_cancel_locked(session: AsyncSession, run: ResponseRun, curren
         StreamEvent.event_type == "message.citations",
     ).values(data={"citations": []}))
     # Widgets carry model output derived from the withdrawn evidence (tables, sandbox code): neutralize them too.
-    await session.execute(update(StreamEvent).where(
-        StreamEvent.response_id == run.id,
-        StreamEvent.event_type.in_(("message.ui.delta", "message.ui.done")),
-    ).values(data={}))
+    await neutralize_ui_events(session, run.id)
     was_cancelled = run.status == "cancelled"
     run.status = "cancelled"
     run.ephemeral = True

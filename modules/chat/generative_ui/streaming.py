@@ -148,6 +148,11 @@ def streaming_snapshot(name: str, raw_args: str) -> dict[str, Any] | None:
     }
 
 
+def _cite_field(c: Mapping[str, Any], camel: str, snake: str) -> Any:
+    """Return a citation field under either spelling (wire camelCase or the worker's snake_case aliases)."""
+    return c.get(camel) or c.get(snake)
+
+
 def _resolve_citations(numbers: Sequence[int], citations: Mapping[int, Mapping[str, Any]]) -> list[CitationRef]:
     """Resolve model-written citation numbers to server-validated document citations.
 
@@ -158,15 +163,19 @@ def _resolve_citations(numbers: Sequence[int], citations: Mapping[int, Mapping[s
     seen: set[str] = set()
     for n in numbers:
         c = citations.get(n)
-        if not c or not (c.get("sourceId") and c.get("documentId") and c.get("chunkId")):
+        if not c:
             continue
-        if str(c["chunkId"]) in seen:
+        # The worker passes `Citation.model_dump(by_alias=True)`, whose aliases are snake_case; camelCase
+        # is the wire/schema spelling. Accept both so a validated citation is never silently dropped.
+        source_id, document_id, chunk_id = _cite_field(c, "sourceId", "source_id"), _cite_field(c, "documentId", "document_id"), _cite_field(c, "chunkId", "chunk_id")
+        version_id, title = _cite_field(c, "documentVersionId", "document_version_id"), _cite_field(c, "title", "title")
+        if not (source_id and document_id and chunk_id) or str(chunk_id) in seen:
             continue
-        seen.add(str(c["chunkId"]))
+        seen.add(str(chunk_id))
         refs.append(CitationRef(
-            source_id=str(c["sourceId"]), document_id=str(c["documentId"]), chunk_id=str(c["chunkId"]),
-            document_version_id=str(c["documentVersionId"]) if c.get("documentVersionId") else None,
-            title=str(c["title"]) if c.get("title") else None,
+            source_id=str(source_id), document_id=str(document_id), chunk_id=str(chunk_id),
+            document_version_id=str(version_id) if version_id else None,
+            title=str(title) if title else None,
         ))
     return refs
 

@@ -8,7 +8,7 @@ identifiers (UUIDs) ever reach persisted payloads.
 import copy
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from modules.chat.generative_ui.prompt import SandboxedUiArgs
 from modules.chat.generative_ui.tools.form import TimeSlot
@@ -25,6 +25,9 @@ TERMINAL_UI_TOOLS: frozenset[str] = frozenset(
     {TOOL_SANDBOXED_UI, TOOL_TABLE, TOOL_CHART, TOOL_PLAN, TOOL_TIME_PICKER}
 )
 
+
+
+SAMPLE_SOURCE = "Illustrative sample dataset"  # same label tools/query.py uses for is_sample data
 
 
 def _citation_numbers() -> Any:
@@ -47,6 +50,13 @@ class TableToolArgs(BaseModel):
     source: str = Field(default="Grounded evidence", max_length=255)
     is_sample: bool = False
 
+    @model_validator(mode="after")
+    def _sample_source(self) -> "TableToolArgs":
+        """Default `source` to the sample-data label when `is_sample` is set and no source was given."""
+        if self.is_sample and "source" not in self.model_fields_set:
+            self.source = SAMPLE_SOURCE
+        return self
+
 
 class ChartToolArgs(BaseModel):
     """Model-facing chart arguments; evidence is cited by number, never by identifier."""
@@ -63,6 +73,13 @@ class ChartToolArgs(BaseModel):
     source: str = Field(default="Grounded evidence", max_length=255)
     unit: str | None = Field(default=None, max_length=32)
     is_sample: bool = False
+
+    @model_validator(mode="after")
+    def _sample_source(self) -> "ChartToolArgs":
+        """Default `source` to the sample-data label when `is_sample` is set and no source was given."""
+        if self.is_sample and "source" not in self.model_fields_set:
+            self.source = SAMPLE_SOURCE
+        return self
 
 
 class PlanStepToolArgs(BaseModel):

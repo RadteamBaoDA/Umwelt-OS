@@ -232,3 +232,20 @@ def test_finalize_sandbox_fallback_title_is_localized() -> None:
     }
     assert titles["en-US"] == "Interactive view" == titles["fr-FR"]
     assert titles["vi-VN"] == "Chế độ xem tương tác"
+
+
+async def test_tool_citations_survive_when_prose_has_no_marker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """render_table(citations=[1]) keeps citation 1 although the answer text never writes [1]."""
+    table = json.dumps({"title": "T", "columns": [{"key": "a", "label": "A"}], "rows": [["1"]], "citations": [1]})
+    gen = _UIGen(monkeypatch, [[_text("Plain prose with no marker."), _call(0, name="render_table", args=table, call_id="c")]])
+    await gen.run()
+    gen.failed.assert_not_awaited()
+    (done,) = gen.events("message.ui.done")
+    assert done.data["table"]["citations"] and done.data["table"]["citations"][0]["chunk_id"]
+    message = next(m for m in gen.added if isinstance(m, Message))
+    assert len(message.citations) == 1
+
+
+async def test_tool_citation_numbers_out_of_range_are_ignored() -> None:
+    assert worker._tool_citation_numbers({"arguments": json.dumps({"citations": [0, 1, 2, True, "1", 1]})}, 1) == [1, 1]
+    assert worker._tool_citation_numbers({"arguments": "{"}, 3) == [] and worker._tool_citation_numbers(None, 3) == []
