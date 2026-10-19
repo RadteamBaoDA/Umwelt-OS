@@ -15,8 +15,7 @@ from modules.chat.generative_ui.tools.form import FormPayload, TimeSlot
 from modules.chat.generative_ui.tools.query import ChartSeriesConfig, TableColumn
 from modules.chat.templates import (
     ApplyTemplateArgs,
-    DeleteTemplateArgs,
-    TemplateIn,
+    ModelSaveTemplateArgs,
     run_template_tool,
 )
 from modules.chat.todos import TodoReplace, run_todo_tool
@@ -37,10 +36,9 @@ TODO_TOOLS: frozenset[str] = frozenset({TOOL_MANAGE_TODOS, TOOL_GET_TODOS})
 TOOL_SAVE_TEMPLATE = "save_template"  # non-terminal; owner-saved widget templates, offered only when the worker opts in
 TOOL_LIST_TEMPLATES = "list_templates"
 TOOL_APPLY_TEMPLATE = "apply_template"
-TOOL_DELETE_TEMPLATE = "delete_template"
 TOOL_CLEAR_PENDING_TEMPLATE = "clear_pending_template"
 TEMPLATE_TOOLS: frozenset[str] = frozenset({
-    TOOL_SAVE_TEMPLATE, TOOL_LIST_TEMPLATES, TOOL_APPLY_TEMPLATE, TOOL_DELETE_TEMPLATE, TOOL_CLEAR_PENDING_TEMPLATE,
+    TOOL_SAVE_TEMPLATE, TOOL_LIST_TEMPLATES, TOOL_APPLY_TEMPLATE, TOOL_CLEAR_PENDING_TEMPLATE,
 })
 TOOL_SET_THEME = "set_theme"  # non-terminal; emits a transient `ui.theme` event, offered only when the worker opts in
 LOCAL_DATA_TOOLS: frozenset[str] = TODO_TOOLS | TEMPLATE_TOOLS | {TOOL_SET_THEME}  # run under the worker's live-run fence
@@ -248,7 +246,7 @@ def build_chat_tool_specs(
         include_trip_images: Whether to expose `get_trip_stop_images` (only when remote widget media is allowed).
         include_todos: Whether to expose the non-terminal `manage_todos` and `get_todos` tools.
         include_user_input: Whether to expose the non-terminal `request_user_input` (pause for a user answer).
-        include_templates: Whether to expose the five non-terminal template tools.
+        include_templates: Whether to expose the four non-terminal template tools.
         include_theme: Whether to expose the non-terminal `set_theme` tool.
 
     Returns:
@@ -301,16 +299,13 @@ def build_chat_tool_specs(
         for tool, description, params in (
             (TOOL_SAVE_TEMPLATE, (
                 "Save a reusable widget template (HTML for render_sandboxed_ui, max 60000 chars). "
-                "Pass `id` to update one of the user's templates. At most 30. Not terminal."
-            ), TemplateIn.model_json_schema()),
+                "Always creates a new template (existing ones cannot be changed by you). At most 30. Not terminal."
+            ), ModelSaveTemplateArgs.model_json_schema()),
             (TOOL_LIST_TEMPLATES, "List built-in and saved templates (no html) and the pending one. Not terminal.", no_args),
             (TOOL_APPLY_TEMPLATE, (
-                "Get a template's html to adapt and render. Omit template_id to use the template "
-                "the user selected (pending); it is cleared afterwards. Not terminal."
+                "Get a template's html to adapt and render, by template_id or by name (most recent match). Omit both "
+                "to use the template the user selected (pending); it is cleared afterwards. Not terminal."
             ), ApplyTemplateArgs.model_json_schema()),
-            (TOOL_DELETE_TEMPLATE, (
-                "Delete one of the user's saved templates (built-ins are read-only). Not terminal."
-            ), DeleteTemplateArgs.model_json_schema()),
             (TOOL_CLEAR_PENDING_TEMPLATE, "Discard the user's pending template selection. Not terminal.", no_args),
         ):
             specs.append({"type": "function", "function": {"name": tool, "description": description, "parameters": params}})
