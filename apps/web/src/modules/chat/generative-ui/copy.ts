@@ -89,3 +89,8 @@ export const TABLE_COPY = perLocale((c) => ({
     sortByLabel: (label: string) => fmt(c.genUiTableSortBy, { label }),
     rowPrompt: (title: string, summary: string) => fmt(c.genUiTableRowPrompt, { title, summary }),
 }));
+
+/** Keys of the `chat` catalog whose value is a plain string (excludes nested objects). */
+export type StringCopyKey = {
+  [K in keyof (typeof chatMessages)['en-us']]: (typeof chatMessages)['en-us'][K] extends string ? K : never;
+}[keyof (typeof chatMessages)['en-us']];

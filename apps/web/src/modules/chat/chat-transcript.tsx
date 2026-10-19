@@ -15,9 +15,24 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
 import { ToolRendering } from './generative-ui/components/tool-rendering';
 import { GenerativeUIStarterGallery } from './generative-ui/templates';
+import { SaveTemplateButton } from './generative-ui/templates/template-library';
+import { ChatShellTools, StarterSuggestions } from './generative-ui/templates/shell-extras';
+import { useRevealBlocks } from './reveal-blocks';
 import type { GenerativeUIPayload } from './generative-ui/sandbox/schema';
 
 const KNOWN_REASONS = ['not_configured', 'query_too_long', 'empty_query', 'local_only_context', 'daily_limit', 'timeout', 'provider_error', 'network_denied', 'run_inactive'];
+
+/**
+ * Markdown for a settled assistant answer whose top-level blocks fade in once on first view.
+ *
+ * @param props - Markdown content, citations and locale (forwarded to ChatMarkdown).
+ * @returns Wrapper element containing the rendered answer.
+ */
+function RevealMarkdown(props: React.ComponentProps<typeof ChatMarkdown>) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  useRevealBlocks(ref, true, props.content);
+  return <div ref={ref}><ChatMarkdown {...props} /></div>;
+}
 
 /** Announced notice for a requested web search that was skipped or unavailable; renders nothing otherwise. */
 function WebSearchNotice({ outcome }: { outcome?: WebSearchOutcome | null }) {
@@ -150,6 +165,8 @@ export function ChatTranscript({
     lastMessageId: messages[messages.length - 1]?.id,
     lastMessageRole: messages[messages.length - 1]?.role,
     isStreaming: isStreaming || isPending,
+    // Reader mode on the full page: the new question is parked at the top, never chased while streaming.
+    reader: mode === 'full',
   });
   const { copyMessage, copiedMessageId, failedMessageId } = useCopyMessage(conversationId);
   const messageById = React.useMemo(() => new Map(messages.map((message) => [message.id, message])), [messages]);
@@ -167,6 +184,8 @@ export function ChatTranscript({
       aria-live="polite"
       aria-label={t('title')}
     >
+      {mode === 'full' && onSendPrompt && <ChatShellTools onSendPrompt={onSendPrompt} locale={locale} />}
+
       {messages.length === 0 && !streamingText && !streamingUi && !isPending && (
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground my-auto gap-6">
           <div className="flex flex-col items-center">
@@ -185,6 +204,7 @@ export function ChatTranscript({
               <GenerativeUIStarterGallery onSelectPrompt={onSendPrompt} locale={locale} />
             </div>
           )}
+          {mode === 'full' && onSendPrompt && <StarterSuggestions onSendPrompt={onSendPrompt} locale={locale} />}
         </div>
       )}
 
@@ -210,6 +230,7 @@ export function ChatTranscript({
           <div
             key={msg.id}
             data-role={msg.role}
+            data-message-id={msg.id}
             className={`flex flex-col gap-2.5 ${isUser ? 'ml-auto max-w-[80%] items-end' : 'mr-auto max-w-[88%]'}`}
           >
             <div
@@ -223,7 +244,9 @@ export function ChatTranscript({
                 </p>
               )}
 
-              <ChatMarkdown content={msg.content} citations={isUser ? undefined : msg.citations} locale={locale} />
+              {isUser
+                ? <ChatMarkdown content={msg.content} locale={locale} />
+                : <RevealMarkdown content={msg.content} citations={msg.citations} locale={locale} />}
             </div>
 
             {!isUser && msg.generative_ui && (
@@ -233,6 +256,14 @@ export function ChatTranscript({
                   onSendPrompt={onSendPrompt}
                   locale={locale}
                 />
+                {mode === 'full' && (msg.generative_ui as { kind?: string; sandbox?: Record<string, unknown>; title?: string }).kind === 'sandboxed_ui'
+                  && (msg.generative_ui as { sandbox?: Record<string, unknown> }).sandbox && (
+                  <SaveTemplateButton
+                    sandbox={(msg.generative_ui as { sandbox: Record<string, unknown> }).sandbox}
+                    title={(msg.generative_ui as { title?: string }).title}
+                    locale={locale}
+                  />
+                )}
               </div>
             )}
 

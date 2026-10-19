@@ -16,12 +16,15 @@ export function useChatScroll({
   lastMessageId,
   lastMessageRole,
   isStreaming,
+  reader = false,
 }: {
   conversationId: string | null | undefined;
   messageCount: number;
   lastMessageId: string | undefined;
   lastMessageRole: 'user' | 'assistant' | 'system' | undefined;
   isStreaming: boolean;
+  /** Reader mode: submitting scrolls the new question to the top and streaming never auto-scrolls. */
+  reader?: boolean;
 }) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const followRef = React.useRef(true);
@@ -91,15 +94,23 @@ export function useChatScroll({
       pinToBottom();
       return;
     }
+    if (reader) {
+      // Reader mode: park the newest user question at the top so the answer streams below it.
+      if (lastMessageRole === 'user' && lastMessageId) {
+        const target = containerRef.current?.querySelector(`[data-message-id="${lastMessageId}"]`);
+        (target as HTMLElement | null)?.scrollIntoView?.({ block: 'start', behavior: prefersReducedMotion ? 'auto' : 'smooth' });
+      }
+      return;
+    }
     if (lastMessageRole === 'user') followRef.current = true;
     if (lastMessageId && followRef.current) {
       scrollToBottom();
       pinToBottom();
     }
-  }, [conversationId, messageCount, lastMessageId, scrollToBottom, pinToBottom]);
+  }, [conversationId, messageCount, lastMessageId, scrollToBottom, pinToBottom, reader]);
 
   React.useEffect(() => {
-    if (!isStreaming) return;
+    if (!isStreaming || reader) return;
     let lastScrollHeight = -1;
     /** Pins transcript to bottom on animation frames only when streaming deltas change scrollHeight. */
     const tick = () => {
@@ -118,7 +129,7 @@ export function useChatScroll({
       if (streamFrameRef.current !== null) cancelAnimationFrame(streamFrameRef.current);
       streamFrameRef.current = null;
     };
-  }, [isStreaming, conversationId]);
+  }, [isStreaming, conversationId, reader]);
 
   React.useEffect(() => () => {
     if (pinFrameRef.current !== null) cancelAnimationFrame(pinFrameRef.current);
