@@ -134,14 +134,16 @@ def _valid_uuid(value: str | None) -> UUID | None:
 
 
 async def replace_todos(session: AsyncSession, scope: WorkspaceContext, conversation_id: UUID,
-                        items: Sequence[TodoItem]) -> list[ChatTodo]:
+                        items: Sequence[TodoItem], *, source_response_id: UUID | None = None) -> list[ChatTodo]:
     """Atomically replace the conversation's whole list (upstream ``manage_todos`` semantics).
 
     The parent conversation is locked first so concurrent replacements serialize. Valid UUID ids that
     already belong to this conversation are kept (rows updated in place, ``created_at`` preserved);
     ids that are malformed, duplicated in the payload, or owned by another conversation get a fresh
     UUID so one conversation can never overwrite or probe another's rows. Order is the input order.
-    Rows absent from the payload are deleted. The caller commits.
+    Rows absent from the payload are deleted. ``source_response_id`` (the model run making the call) is stamped on
+    every written row as provenance for evidence cleanup; owner-panel replacements leave it unchanged/NULL.
+    The caller commits.
 
     Raises:
         TodoError: ``not_found`` for a missing or foreign conversation; ``invalid`` above 50 todos.
@@ -166,6 +168,8 @@ async def replace_todos(session: AsyncSession, scope: WorkspaceContext, conversa
             session.add(row)
         row.title, row.description, row.emoji = item.title, item.description, item.emoji
         row.status, row.position = item.status, position
+        if source_response_id is not None:
+            row.source_response_id = source_response_id
         kept[uid] = row
     for uid, row in existing.items():
         if uid not in kept:
@@ -200,12 +204,13 @@ def _tool_payload(rows: Sequence[ChatTodo]) -> dict[str, Any]:
     return {"todos": [to_read(r).model_dump(mode="json", exclude={"position"}) for r in rows]}
 
 
-async def run_todo_tool(name: str, raw_args: str, session: AsyncSession, conversation_id: UUID) -> str:
+async def run_todo_tool(name: str, raw_args: str, session: AsyncSession, conversation_id: UUID,
+                        response_id: UUID | None = None) -> str:
     """Execute ``manage_todos`` or ``get_todos`` and return the tool-message JSON; never raises.
 
     The model is trusted only for the arguments: the conversation is loaded by id (the worker already
     holds the run's authority) to derive its workspace scope, so a tool call can only touch the
-    conversation of its own run. Writes commit here; failures roll back and return ``{"error": ...}``.
+    conversation of its own run. ``response_id`` is recorded as write provenance. Writes commit here; failures roll back and return ``{"error": ...}``.
     """
     from modules.chat.scope import owner_default_scope
 
@@ -221,7 +226,7 @@ async def run_todo_tool(name: str, raw_args: str, session: AsyncSession, convers
         if name == "manage_todos":
             args = json.loads(raw_args or "{}")
             payload = TodoReplace.model_validate({"todos": args.get("todos") if isinstance(args, dict) else None})
-            rows = await replace_todos(session, scope, conversation_id, payload.todos)
+            rows = await replace_todos(session, scope, conversation_id, payload.todos, source_response_id=response_id)
             await session.commit()
             return json.dumps(_tool_payload(rows))
         return json.dumps({"error": f"Unknown todo tool: {name[:64]}"})

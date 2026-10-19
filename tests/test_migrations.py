@@ -196,4 +196,15 @@ def test_r25_chat_templates_migration() -> None:
     down = _alembic("downgrade", "r25_chat_templates:r24_viz_router_settings", "--sql")
     assert down.returncode == 0, down.stderr
     assert "DROP TABLE chat_templates" in down.stdout
-    assert HEAD == "r25_chat_templates"
+
+
+def test_r26_chat_provenance_migration() -> None:
+    """Verify r26 adds nullable source_response_id to todos and templates, reverses cleanly and is the single head."""
+    up = _alembic("upgrade", "r25_chat_templates:r26_chat_provenance", "--sql")
+    assert up.returncode == 0, up.stderr
+    assert "ALTER TABLE chat_todos ADD COLUMN source_response_id UUID" in up.stdout
+    assert "ALTER TABLE chat_templates ADD COLUMN source_response_id UUID" in up.stdout
+    down = _alembic("downgrade", "r26_chat_provenance:r25_chat_templates", "--sql")
+    assert down.returncode == 0, down.stderr
+    assert "DROP COLUMN source_response_id" in down.stdout
+    assert HEAD == "r26_chat_provenance"

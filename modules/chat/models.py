@@ -297,6 +297,9 @@ class ChatTodo(Base):
     emoji: Mapped[str] = mapped_column(String(8), nullable=False, server_default="")
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
     position: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Run whose model tool call last wrote this row; deleted when that run's evidence is cleaned up.
+    # No FK: run retention must not null the provenance, and cleanup deletes by this id directly.
+    source_response_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
@@ -328,6 +331,8 @@ class ChatTemplate(Base):
     html: Mapped[str] = mapped_column(Text, nullable=False)
     data_description: Mapped[str] = mapped_column(String(500), nullable=False, server_default="")
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    # Set only for templates created through the model tool (owner-UI templates stay NULL and are never purged).
+    source_response_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
