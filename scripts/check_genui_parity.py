@@ -1,4 +1,4 @@
-"""Validate docs/GENUI_PARITY.md: complete rows, allowed statuses, real evidence paths, no gaps.
+"""Validate docs/GENUI_PARITY.md: complete rows, allowed statuses, real evidence paths/lines/symbols, no gaps.
 
 Usage: python scripts/check_genui_parity.py [--doc PATH] [--root DIR] [--allow-not-ported]
 Exit 0 when the matrix is valid, 1 with one readable line per problem otherwise.
@@ -14,7 +14,8 @@ from pathlib import Path
 STATUSES = {"ported", "equivalent", "excluded-by-owner", "not-ported"}
 _ROW_ID = re.compile(r"^[A-Z]\d+$")
 _TICKS = re.compile(r"`([^`]+)`")
-_PATHLIKE = re.compile(r"^[\w.\-/]+(?::(\d+))?$")
+_PATHLIKE = re.compile(r"^[\w.\-/]+(?::(\d+)(?:#([^\s`|]+))?)?$")
+_SYMBOL_WINDOW = 6  # a `#Symbol` must occur within this many lines of the cited line
 # Column layouts by cell count: the main table has an upstream-path column, the Extras table does not.
 _LAYOUTS = {
     6: ("id", "feature", "upstream", "status", "evidence", "proof"),
@@ -28,7 +29,11 @@ def _cells(line: str) -> list[str]:
 
 
 def _path_problems(text: str, root: Path) -> list[str]:
-    """Return problems for backticked path-like tokens in `text` that do not exist (or exceed file length)."""
+    """Return problems for backticked `path`, `path:line` or `path:line#Symbol` tokens in `text`.
+
+    A path must exist, a line must not exceed the file length, and a `#Symbol` must occur within
+    +-_SYMBOL_WINDOW lines of the cited line, so drifted line numbers fail instead of passing silently.
+    """
     problems = []
     for token in _TICKS.findall(text):
         match = _PATHLIKE.match(token)
@@ -38,8 +43,13 @@ def _path_problems(text: str, root: Path) -> list[str]:
         target = root / rel
         if not target.is_file():
             problems.append(f"path not found: {rel}")
-        elif match.group(1) and int(match.group(1)) > len(target.read_text("utf-8", "replace").splitlines()):
-            problems.append(f"line out of range: {token}")
+        elif match.group(1):
+            lines = target.read_text("utf-8", "replace").splitlines()
+            line, symbol = int(match.group(1)), match.group(2)
+            if not 1 <= line <= len(lines):
+                problems.append(f"line out of range: {token} (file has {len(lines)} lines)")
+            elif symbol and not any(symbol in ln for ln in lines[max(0, line - 1 - _SYMBOL_WINDOW):line + _SYMBOL_WINDOW]):
+                problems.append(f"symbol not near line: {token}")
     return problems
 
 

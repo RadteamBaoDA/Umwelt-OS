@@ -15,7 +15,7 @@ HEAD = "| id | f | up | status | ev | proof |\n|---|---|---|---|---|---|\n"
 
 
 def _run(tmp_path: Path, rows: str, *flags: str) -> int:
-    """Write a fixture doc with one existing file `a.py` (2 lines) and run the checker on it."""
+    """Write a fixture doc with one existing file `a.py` (2 lines: x, y) and run the checker on it."""
     (tmp_path / "a.py").write_text("x\ny\n")
     doc = tmp_path / "doc.md"
     doc.write_text(HEAD + rows)
@@ -41,3 +41,18 @@ def test_not_ported_fails_unless_allowed(tmp_path: Path) -> None:
     row = "| T01 | feat | u | not-ported | none | none |\n"
     assert _run(tmp_path, row) == 1
     assert _run(tmp_path, row, "--allow-not-ported") == 0
+
+
+def test_symbol_near_line_passes(tmp_path: Path) -> None:
+    assert _run(tmp_path, "| T01 | feat | u | ported | `a.py:2#y` | pytest |\n") == 0
+
+
+def test_line_out_of_range_fails(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    assert _run(tmp_path, "| T01 | feat | u | ported | `a.py:9` | pytest |\n") == 1
+    assert "line out of range: a.py:9" in capsys.readouterr().out
+
+
+def test_symbol_not_near_line_fails(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    (tmp_path / "b.py").write_text("\n".join(["pad"] * 20 + ["def target():"]) + "\n")
+    assert _run(tmp_path, "| T01 | feat | u | ported | `b.py:1#target` | pytest |\n") == 1
+    assert "symbol not near line: b.py:1#target" in capsys.readouterr().out
