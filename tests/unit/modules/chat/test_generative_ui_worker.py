@@ -603,3 +603,100 @@ async def test_user_input_is_limited_to_two_per_turn(monkeypatch: pytest.MonkeyP
     await gen.run()
     assert create.await_count == worker.MAX_USER_INPUT_REQUESTS_PER_TURN == 2
     assert len(gen.requests) == 3 and gen.events("message.done")
+
+
+# ------------------------------------------- external router classifies before the model request
+
+
+def _tool_names(request: dict[str, Any]) -> set[str]:
+    """Function names of the tool specs actually sent in one gateway request."""
+    return {t["function"]["name"] for t in request["tools"]}
+
+
+async def test_external_router_classifies_before_request_filters_tools_and_is_reused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skill = [_call(0, name="read_skill", args='{"name": "master-agent-playbook"}', call_id="s")]
+    gen = _UIGen(monkeypatch, [skill, _table_round(), END], prompt="Compare A and B")
+    classify = _router(monkeypatch)  # category: table
+    order: list[str] = []
+    classify.side_effect = lambda *a, **k: order.append("classify") or "table"
+    original_stream = gen.stream
+
+    def recording_stream(**kwargs: Any) -> AsyncIterator[str]:
+        order.append("request")
+        return original_stream(**kwargs)
+
+    gen.stream = recording_stream  # type: ignore[method-assign]
+    await gen.run()
+    gen.failed.assert_not_awaited()
+    assert order[0] == "classify" and order.count("classify") == 1 and order.count("request") == 3
+    for request in gen.requests:  # decision reused on every round of the turn
+        names = _tool_names(request)
+        assert "render_table" in names
+        assert names.isdisjoint({"render_chart", "render_sandboxed_ui", "render_plan"})
+        assert {"render_form", "read_skill", "request_user_input", "get_todos"} <= names
+        system = request["messages"][0]["content"]
+        assert "CRITICAL: Presentation decision" in system and "visualization=table" in system
+    message = next(m for m in gen.added if isinstance(m, Message))
+    assert message.metadata_json["viz_decision"] == {"visualization": "table", "renderer": "a2ui"}
+    assert gen.events("message.ui.done")[0].data["kind"] == "table"
+
+
+async def test_external_router_text_decision_removes_presentation_tools_and_persists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gen = _UIGen(monkeypatch, [[_text("Just prose.")]], prompt="hi")
+    _router(monkeypatch).return_value = "text"
+    await gen.run()
+    gen.failed.assert_not_awaited()
+    names = _tool_names(gen.requests[0])
+    assert names.isdisjoint({"render_table", "render_chart", "render_sandboxed_ui", "render_plan"})
+    assert "render_form" in names and "request_user_input" in names
+    message = next(m for m in gen.added if isinstance(m, Message))
+    assert message.metadata_json == {"viz_decision": {"visualization": "text", "renderer": "text"}}
+
+
+async def test_external_router_map_decision_only_allows_sandbox_and_gates_tiles_on_media(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gen = _UIGen(monkeypatch, [END], prompt="Map the stops")
+    _router(monkeypatch).return_value = "animated_route"
+    await gen.run()
+    names = _tool_names(gen.requests[0])
+    assert "render_sandboxed_ui" in names and names.isdisjoint({"render_table", "render_chart"})
+    system = gen.requests[0]["messages"][0]["content"]
+    assert "createTripAnimator" in system and "Remote tiles are not permitted" in system
+
+
+async def test_unconfigured_router_sends_the_full_unchanged_tool_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _UIGen(monkeypatch, [END])
+    classify = AsyncMock()
+    monkeypatch.setattr(worker.viz, "classify_llm", classify)
+    await gen.run()
+    classify.assert_not_awaited()
+    names = _tool_names(gen.requests[0])
+    assert {"render_table", "render_chart", "render_sandboxed_ui", "render_plan", "render_form"} <= names
+    assert "CRITICAL: Presentation decision" not in gen.requests[0]["messages"][0]["content"]
+    message = next(m for m in gen.added if isinstance(m, Message))
+    assert not message.metadata_json or "viz_decision" not in message.metadata_json
+
+
+async def test_external_router_error_fails_the_turn_before_any_model_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _UIGen(monkeypatch, [_table_round()])
+    _router(monkeypatch).side_effect = VisualizationRouterError("timeout")
+    await gen.run()
+    assert gen.requests == []
+    error = gen.failed.await_args.args[4]
+    assert isinstance(error, VisualizationRouterError) and error.retryable
+
+
+async def test_external_router_refused_for_local_only_before_any_model_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _UIGen(monkeypatch, [_table_round()])
+    classify = _router(monkeypatch)
+    monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config(
+        aliases={}, privacy=PrivacySettings(allow_remote_reasoning=False),
+    )))
+    await gen.run()
+    classify.assert_not_awaited()
+    assert gen.requests == [] and gen.failed.await_args.args[4].code == "local_only_turn"
