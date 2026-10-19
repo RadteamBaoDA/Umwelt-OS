@@ -1,9 +1,74 @@
-"""Interactive meeting time picker and A2UI demonstration form schemas and builders."""
+"""Interactive meeting time picker and generic input-form schemas and builders."""
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+MAX_FORM_FIELDS = 12
+MAX_SELECT_OPTIONS = 20
+FIELD_ID_PATTERN = r"^[A-Za-z][A-Za-z0-9_-]{0,39}$"
+
+
+class FormFieldSpec(BaseModel):
+    """One input field of a generic form widget; limits are mirrored by the frontend zod schema."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=FIELD_ID_PATTERN, description="Unique field id: letter first, then letters/digits/_/-.")
+    label: str = Field(min_length=1, max_length=120)
+    type: Literal["text", "textarea", "number", "select", "checkbox", "date"] = "text"
+    required: bool = False
+    placeholder: str = Field(default="", max_length=120)
+    options: list[str] = Field(default_factory=list, max_length=MAX_SELECT_OPTIONS, description="Select choices.")
+    min: float | None = Field(default=None, description="Lower bound (number fields).")
+    max: float | None = Field(default=None, description="Upper bound (number fields).")
+    maxlength: int | None = Field(default=None, ge=1, le=4000, description="Character limit (text/textarea).")
+
+    @model_validator(mode="after")
+    def _check_type_rules(self) -> "FormFieldSpec":
+        """Require 1..20 distinct, bounded options for `select`, forbid them elsewhere, order min/max."""
+        if self.type == "select":
+            if not self.options:
+                raise ValueError("select fields need options")
+            if len(set(self.options)) != len(self.options) or any(not o.strip() or len(o) > 80 for o in self.options):
+                raise ValueError("select options must be unique, non-empty and at most 80 characters")
+        elif self.options:
+            raise ValueError("options are only allowed on select fields")
+        if self.min is not None and self.max is not None and self.min > self.max:
+            raise ValueError("min must not exceed max")
+        return self
+
+
+class FormPayload(BaseModel):
+    """Generic input form; also the model-facing `render_form` arguments. Submit becomes a follow-up prompt."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=255)
+    description: str = Field(default="", max_length=500)
+    fields: list[FormFieldSpec] = Field(min_length=1, max_length=MAX_FORM_FIELDS)
+    submit_label: str = Field(default="", max_length=40, description="Submit button text; empty uses the default.")
+
+    @model_validator(mode="after")
+    def _unique_ids(self) -> "FormPayload":
+        """Reject duplicate field ids (they key the submitted values)."""
+        ids = [f.id for f in self.fields]
+        if len(set(ids)) != len(ids):
+            raise ValueError("field ids must be unique")
+        return self
+
+
+def build_form_payload(args: FormPayload) -> dict[str, Any]:
+    """Serialize validated `render_form` arguments into the persisted `form` slot body.
+
+    Args:
+        args: Validated model arguments (limits already enforced by pydantic).
+
+    Returns:
+        JSON-serializable dict stored in the envelope's `form` slot (envelope kind `form`).
+    """
+    return args.model_dump(mode="json")
 
 
 class TimeSlot(BaseModel):

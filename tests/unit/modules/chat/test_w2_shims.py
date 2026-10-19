@@ -40,8 +40,11 @@ async def test_purge_conversation_actions_gets_scope_and_gate(monkeypatch):
     session = MagicMock()
     session.scalar = AsyncMock(side_effect=[conv, 1])
     session.delete = AsyncMock()
+    session.execute = AsyncMock()
     cid = uuid4()
     assert await chat_public.delete_conversation(session, cid, owner_id=1) is True
+    # Model-saved templates of this conversation's runs are deleted (todos cascade with the conversation).
+    assert "DELETE FROM chat_templates" in str(session.execute.await_args.args[0])
     callee.assert_awaited_once_with(session, cid, scope=ctx, multi_workspace_enabled=False)
 
 

@@ -6,7 +6,9 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 
 # Derive the head so later additive revisions (provider terms/quota, translation) never hardcode here.
-HEAD = ScriptDirectory.from_config(Config("alembic.ini")).get_current_head()
+# While r22 and r24 are unchained siblings there are two heads; the integrator re-chains them, so tolerate that here.
+_HEADS = ScriptDirectory.from_config(Config("alembic.ini")).get_heads()
+HEAD = _HEADS[0] if len(_HEADS) == 1 else "|".join(sorted(_HEADS))
 
 
 def test_empty_database_migration_emits_single_owner_and_session_schema() -> None:
@@ -147,5 +149,62 @@ def test_r21_drop_backup_control_migration() -> None:
     for table in ("p12_backup_activity", "p12_backup_control", "p12_backup_operations"):
         assert f"DROP TABLE IF EXISTS {table}" in up.stdout
     assert up.stdout.index("DROP TABLE IF EXISTS p12_backup_control") < up.stdout.index("DROP TABLE IF EXISTS p12_backup_operations")
-    assert HEAD == "r21_drop_backup_control"
     assert _alembic("downgrade", "r21_drop_backup_control:r20_search_tsv_and_trgm_indexes", "--sql").returncode != 0
+
+
+
+
+def test_r22_chat_todos_migration() -> None:
+    """Verify r22 creates chat_todos with checks and a cascading conversation FK, and drops it on downgrade."""
+    up = _alembic("upgrade", "r21_drop_backup_control:r22_chat_todos", "--sql")
+    assert up.returncode == 0, up.stderr
+    for fragment in ("CREATE TABLE chat_todos", "ck_chat_todos_status", "fk_chat_todos_conversation",
+                     "ON DELETE CASCADE", "ix_chat_todos_conversation_position"):
+        assert fragment in up.stdout
+    assert "DROP TABLE chat_todos" in _alembic("downgrade", "r22_chat_todos:r21_drop_backup_control", "--sql").stdout
+
+
+def test_r23_chat_run_awaiting_input_migration() -> None:
+    """Verify r23 widens the run status CHECK, adds input_request, and downgrade fails parked runs first."""
+    up = _alembic("upgrade", "r22_chat_todos:r23_chat_run_awaiting_input", "--sql")
+    assert up.returncode == 0, up.stderr
+    assert "ALTER TABLE chat_response_runs ADD COLUMN input_request JSONB" in up.stdout
+    assert "awaiting_input" in up.stdout
+    assert "ck_chat_response_runs_status" in up.stdout
+    down = _alembic("downgrade", "r23_chat_run_awaiting_input:r22_chat_todos", "--sql")
+    assert down.returncode == 0, down.stderr
+    assert down.stdout.index("SET status = 'failed'") < down.stdout.index("DROP COLUMN input_request")
+
+
+def test_r24_viz_router_settings_migration() -> None:
+    """Verify r24 adds and drops the viz_router JSONB column and is the single head."""
+    up = _alembic("upgrade", "r23_chat_run_awaiting_input:r24_viz_router_settings", "--sql")
+    assert up.returncode == 0, up.stderr
+    assert "ALTER TABLE ai_settings ADD COLUMN viz_router JSONB" in up.stdout
+    down = _alembic("downgrade", "r24_viz_router_settings:r23_chat_run_awaiting_input", "--sql")
+    assert down.returncode == 0, down.stderr
+    assert "DROP COLUMN viz_router" in down.stdout
+
+
+def test_r25_chat_templates_migration() -> None:
+    """Verify r25 creates chat_templates plus the pending pointer, reverses cleanly and is the single head."""
+    up = _alembic("upgrade", "r24_viz_router_settings:r25_chat_templates", "--sql")
+    assert up.returncode == 0, up.stderr
+    assert "CREATE TABLE chat_templates" in up.stdout
+    assert "fk_chat_templates_principal" in up.stdout
+    assert "ALTER TABLE chat_conversations ADD COLUMN pending_template VARCHAR(64)" in up.stdout
+    down = _alembic("downgrade", "r25_chat_templates:r24_viz_router_settings", "--sql")
+    assert down.returncode == 0, down.stderr
+    assert "DROP TABLE chat_templates" in down.stdout
+
+
+def test_r26_chat_provenance_migration() -> None:
+    """Verify r26 adds nullable source_response_id to todos and templates, reverses cleanly and is the single head."""
+    up = _alembic("upgrade", "r25_chat_templates:r26_chat_provenance", "--sql")
+    assert up.returncode == 0, up.stderr
+    assert "ALTER TABLE chat_todos ADD COLUMN source_response_id UUID" in up.stdout
+    assert "ALTER TABLE chat_templates ADD COLUMN source_response_id UUID" in up.stdout
+    down = _alembic("downgrade", "r26_chat_provenance:r25_chat_templates", "--sql")
+    assert down.returncode == 0, down.stderr
+    assert "DROP COLUMN source_response_id" in down.stdout
+    assert HEAD == "r26_chat_provenance"

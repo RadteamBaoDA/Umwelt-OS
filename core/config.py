@@ -47,9 +47,15 @@ class Settings(BaseSettings):
     db_statement_timeout_ms: int = Field(default=60_000, ge=0, validation_alias="DB_STATEMENT_TIMEOUT_MS")
     db_idle_tx_timeout_ms: int = Field(default=240_000, ge=0, validation_alias="DB_IDLE_TX_TIMEOUT_MS")
     max_request_body_bytes: int = Field(default=5 * 1024 * 1024, gt=0, validation_alias="MAX_REQUEST_BODY_BYTES")
+    # Most presentation widgets (parts) one assistant turn may carry; extra tool calls are ignored.
+    generative_ui_max_parts: int = Field(default=4, ge=1, le=8, validation_alias="GENERATIVE_UI_MAX_PARTS")
+    # Most model rounds of one turn that may add widgets (a round after widgets lets the model write text or add more).
+    generative_ui_max_rounds: int = Field(default=3, ge=1, le=5, validation_alias="GENERATIVE_UI_MAX_ROUNDS")
     data_dir: Path = Path("/data")
     upload_max_bytes: int = Field(default=25 * 1024 * 1024, gt=0, le=1024 * 1024 * 1024)
     parser_timeout_seconds: int = Field(default=120, gt=0, le=3600)
+    # How long a chat run parks on `request_user_input`; modules/chat/user_input.py clamps it to the worker job budget.
+    chat_input_request_ttl_seconds: int = Field(default=900, ge=30, le=3600)
     docx_expanded_max_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
     pdf_page_max: int = Field(default=500, gt=0)
     # 10 MiB of text chunks in ~1 s and ~0.3 GiB; the 100 MiB docx bound would need ~3 GiB on an 8 GiB host.
@@ -87,6 +93,8 @@ class Settings(BaseSettings):
     # --- end auth hardening ---
     # Enable only after W4 scope review and V1 security validation; legacy/operator access stays bootstrap-only.
     multi_workspace_enabled: bool = Field(default=False, validation_alias="MULTI_WORKSPACE_ENABLED")
+    # Phone prompt picker (QR). Off by default: the anonymous /pick phone routes are LAN-reachable.
+    pick_enabled: bool = Field(default=False, validation_alias="PICK_ENABLED")
     google_client_id: str = ""
     google_client_secret: SecretStr = SecretStr("")
     github_app_client_id: str = ""
@@ -115,6 +123,13 @@ class Settings(BaseSettings):
     mcp_allowed_endpoint_cidrs: dict[tuple[str, str, int], tuple[str, ...]] = Field(
         default_factory=dict, validation_alias="MCP_ALLOWED_ENDPOINT_CIDRS", repr=False
     )
+    # Widget MCP server (modules/mcp_widgets): off by default; when enabled a bearer token is mandatory.
+    mcp_widgets_enabled: bool = Field(default=False, validation_alias="MCP_WIDGETS_ENABLED")
+    mcp_widgets_token: SecretStr = Field(default=SecretStr(""), validation_alias="MCP_WIDGETS_TOKEN", repr=False)
+    # Exact origin of the host page embedding assembled documents (bridge postMessage target); empty uses public_origin.
+    mcp_widgets_parent_origin: str = Field(default="", validation_alias="MCP_WIDGETS_PARENT_ORIGIN")
+    # Comma-separated exact browser origins allowed to call /mcp cross-origin (CORS); empty = no CORS. Never "*".
+    mcp_widgets_allowed_origins: str = Field(default="", validation_alias="MCP_WIDGETS_ALLOWED_ORIGINS")
     mcp_stdio_profile_manifest: str = Field(
         default="", validation_alias="MCP_STDIO_PROFILE_MANIFEST", repr=False
     )
@@ -242,6 +257,27 @@ class Settings(BaseSettings):
         """Require the public origin to contain only scheme and host, without credentials, path, query, or fragment."""
         if value.path not in ("", "/") or value.query or value.fragment or value.username:
             raise ValueError("public_origin must contain only scheme and host")
+        return value
+
+    @field_validator("mcp_widgets_parent_origin")
+    @classmethod
+    def validate_widgets_parent_origin(cls, value: str) -> str:
+        """Accept empty or one exact http(s) origin; wildcards, paths and credentials would weaken the bridge target."""
+        value = value.strip().rstrip("/")
+        if value:
+            parts = urlsplit(value)
+            if parts.scheme not in ("http", "https") or not parts.hostname or "*" in value or parts.path or parts.query or parts.fragment or parts.username:
+                raise ValueError("MCP_WIDGETS_PARENT_ORIGIN must be one exact http(s) origin")
+        return value
+
+    @field_validator("mcp_widgets_allowed_origins")
+    @classmethod
+    def validate_widgets_allowed_origins(cls, value: str) -> str:
+        """Accept empty or comma-separated exact http(s) origins; wildcards would expose a bearer-protected endpoint."""
+        for item in (v.strip().rstrip("/") for v in value.split(",") if v.strip()):
+            parts = urlsplit(item)
+            if parts.scheme not in ("http", "https") or not parts.hostname or "*" in item or parts.path or parts.query or parts.fragment or parts.username:
+                raise ValueError("MCP_WIDGETS_ALLOWED_ORIGINS must list exact http(s) origins")
         return value
 
     @field_validator("github_app_id")

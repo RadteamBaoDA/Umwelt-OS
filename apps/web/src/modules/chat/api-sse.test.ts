@@ -45,4 +45,34 @@ describe('streamResponseEvents generative UI events', () => {
       expect.objectContaining({ text: 'ok', generative_ui: done, status: 'completed' }),
     );
   });
+
+  it('forwards part_id on ui events and done.generative_ui_parts', async () => {
+    const a = { kind: 'table', part_id: 'a', status: 'completed', table: { rows: [] } };
+    const b = { kind: 'plan', part_id: 'b', status: 'streaming', plan: { steps: [] } };
+    mockSse(
+      [
+        `event: message.ui.delta
+data: ${JSON.stringify(b)}
+
+`,
+        `event: message.ui.done
+data: ${JSON.stringify(a)}
+
+`,
+        `event: message.done
+data: ${JSON.stringify({ text: 'ok', generative_ui: a, generative_ui_parts: [a, b] })}
+
+`,
+      ].join(''),
+    );
+    const onUiDelta = vi.fn();
+    const onUiDone = vi.fn();
+    const onDone = vi.fn();
+
+    await streamResponseEvents('r2', { onUiDelta, onUiDone, onDone });
+
+    expect(onUiDelta).toHaveBeenCalledWith(b);
+    expect(onUiDone).toHaveBeenCalledWith(a);
+    expect(onDone).toHaveBeenCalledWith(expect.objectContaining({ generative_ui_parts: [a, b] }));
+  });
 });

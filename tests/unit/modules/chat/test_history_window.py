@@ -147,3 +147,47 @@ async def test_loader_scopes_queries_and_formats(monkeypatch: pytest.MonkeyPatch
     assert [m["content"] for m in out] == ["q0", "a0", "q1", "a1", "q2", "a2"]
     assert [m["role"] for m in out[:2]] == ["user", "assistant"]
     assert "workspace_id" in stmts[0] and "workspace_id" in stmts[1]
+
+
+def test_widget_summary_drops_records_and_is_bounded() -> None:
+    rows = [[f"row{i}", "x" * 40] for i in range(400)]
+    raw = {"kind": "table", "title": "Sales", "table": {
+        "columns": [{"key": "a", "label": "A"}], "rows": rows, "records": [{"a": r[0]} for r in rows],
+        "citations": [{"documentId": "secret-doc"}]}}
+    out = history.widget_summary(raw)
+    assert out.startswith("\n\n[Widget shown to the user: table") and "Sales" in out
+    assert len(out) <= history.WIDGET_SUMMARY_MAX_CHARS
+    assert "records" not in out and "secret-doc" not in out and "[truncated]" in out and "row0" in out
+
+
+def test_widget_summary_truncates_markup_and_skips_invalid_or_streaming() -> None:
+    sandbox = {"kind": "sandboxed_ui", "sandbox": {"html": "<p>" + "z" * 5000 + "</p>"}}
+    out = history.widget_summary(sandbox)
+    assert "[truncated]" in out and len(out) <= history.WIDGET_SUMMARY_MAX_CHARS
+    assert history.widget_summary({"kind": "table", "status": "streaming", "table": {"rows": []}}) == ""
+    assert history.widget_summary({"kind": "nope"}) == "" and history.widget_summary(None) == ""
+
+
+async def test_loader_appends_widget_summary_but_not_for_revoked_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    kept, dropped = _turn(0), _turn(1)
+    widget = {"kind": "table", "title": "T", "table": {"rows": [["1"]]}}
+    kept[1].metadata_json = {"generative_ui": widget}
+    dropped[1].metadata_json = {"generative_ui": widget}
+    msgs, runs = _flat(kept, dropped)
+    monkeypatch.setattr(history, "revoked_assistant_ids", AsyncMock(return_value={dropped[1].id}))
+    calls = iter([msgs, runs])
+    session = SimpleNamespace(scalars=AsyncMock(side_effect=lambda *_a: SimpleNamespace(all=lambda: next(calls))))
+    out = await history.load_effective_history(session, uuid4(), T0 + timedelta(days=1), SCOPE)  # type: ignore[arg-type]
+    assert [m["role"] for m in out] == ["user", "assistant"]
+    assert out[1]["content"].startswith("a0\n\n[Widget shown to the user: table")
+
+
+def test_widget_summaries_cover_every_part_within_one_shared_budget() -> None:
+    big = {"kind": "table", "title": "Big", "table": {"columns": [], "rows": [[f"r{i}", "x" * 40] for i in range(300)]}}
+    small = {"kind": "plan", "title": "Roadmap", "plan": {"steps": [{"title": "s"}]}}
+    out = history.widget_summaries({"generative_ui": big, "generative_ui_parts": [big, small]})
+    assert out.count("[Widget shown to the user:") == 2 and "Roadmap" in out
+    assert len(out) <= history.WIDGET_SUMMARY_MAX_CHARS
+    # legacy rows (single widget only) and rows without widgets still work
+    assert history.widget_summaries({"generative_ui": small}).count("[Widget shown") == 1
+    assert history.widget_summaries({}) == "" and history.widget_summaries(None) == ""

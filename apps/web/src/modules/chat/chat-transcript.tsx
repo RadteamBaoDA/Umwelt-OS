@@ -1,5 +1,6 @@
 'use client';
 
+import { messageUiParts, uiPartKey, type UiPart } from './generative-ui-parts';
 import * as React from 'react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
@@ -15,9 +16,24 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
 import { ToolRendering } from './generative-ui/components/tool-rendering';
 import { GenerativeUIStarterGallery } from './generative-ui/templates';
+import { SaveTemplateButton } from './generative-ui/templates/template-library';
+import { ChatShellTools, StarterSuggestions } from './generative-ui/templates/shell-extras';
+import { useRevealBlocks } from './reveal-blocks';
 import type { GenerativeUIPayload } from './generative-ui/sandbox/schema';
 
 const KNOWN_REASONS = ['not_configured', 'query_too_long', 'empty_query', 'local_only_context', 'daily_limit', 'timeout', 'provider_error', 'network_denied', 'run_inactive'];
+
+/**
+ * Markdown for a settled assistant answer whose top-level blocks fade in once on first view.
+ *
+ * @param props - Markdown content, citations and locale (forwarded to ChatMarkdown).
+ * @returns Wrapper element containing the rendered answer.
+ */
+function RevealMarkdown(props: React.ComponentProps<typeof ChatMarkdown>) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  useRevealBlocks(ref, true, props.content);
+  return <div ref={ref}><ChatMarkdown {...props} /></div>;
+}
 
 /** Announced notice for a requested web search that was skipped or unavailable; renders nothing otherwise. */
 function WebSearchNotice({ outcome }: { outcome?: WebSearchOutcome | null }) {
@@ -86,6 +102,8 @@ function CitationChips({ citations }: { citations: Citation[] }) {
 export interface ChatTranscriptProps {
   /** Currently selected conversation, used to reset the reading position between threads. */
   conversationId?: string | null;
+  /** Session CSRF token enabling server-side widget templates (omit for browser-only). */
+  csrfToken?: string;
   /** Surface mode; advanced mutation actions are available only on the full Chat page. */
   mode?: 'drawer' | 'full';
   /** Ordered list of persistent messages in the conversation. */
@@ -96,8 +114,8 @@ export interface ChatTranscriptProps {
   streamingCitations?: Citation[];
   /** Web search outcome streamed for the active run. */
   streamingWebSearch?: WebSearchOutcome | null;
-  /** Active streaming Generative UI widget payload, if any. */
-  streamingUi?: Record<string, unknown> | null;
+  /** Active streaming Generative UI widget parts in arrival order (one per `part_id`). */
+  streamingUi?: UiPart[];
   /** Whether response generation is actively streaming tokens. */
   isStreaming?: boolean;
   /** Whether a response run has been dispatched and is awaiting initial tokens. */
@@ -114,6 +132,11 @@ export interface ChatTranscriptProps {
   onSelectCitation?: (citation: Citation) => void;
   /** Optional callback invoked when an interactive widget or starter template dispatches a prompt. */
   onSendPrompt?: (prompt: string) => void;
+  /**
+   * Promise-returning prompt handler for widgets that can retry (form). It rejects when the host is busy or the
+   * send failed, which unlocks the form with a retryable error; other widgets keep the fire-and-forget handler.
+   */
+  onWidgetSendPrompt?: (prompt: string) => void | Promise<unknown>;
 }
 
 /**
@@ -126,12 +149,13 @@ export interface ChatTranscriptProps {
  */
 export function ChatTranscript({
   conversationId,
+  csrfToken,
   mode = 'drawer',
   messages,
   streamingText,
   streamingCitations,
   streamingWebSearch,
-  streamingUi = null,
+  streamingUi = [],
   isStreaming = false,
   isPending = false,
   error = null,
@@ -139,8 +163,12 @@ export function ChatTranscript({
   onEditMessage,
   onRegenerateMessage,
   onSendPrompt,
+  onWidgetSendPrompt,
 }: ChatTranscriptProps) {
   const t = useTranslations('chat');
+  /** Form widgets get the rejecting handler (retryable errors); every other widget keeps the plain one. */
+  const widgetPromptHandler = (part: unknown) =>
+    (part as { kind?: string }).kind === 'form' && onWidgetSendPrompt ? onWidgetSendPrompt : onSendPrompt;
   const display = useDisplayPreferences();
   const timezone = display.confirmedPreferences?.timezone || 'UTC';
   const locale = display.confirmedPreferences?.locale || 'en-us';
@@ -150,6 +178,8 @@ export function ChatTranscript({
     lastMessageId: messages[messages.length - 1]?.id,
     lastMessageRole: messages[messages.length - 1]?.role,
     isStreaming: isStreaming || isPending,
+    // Reader mode on the full page: the new question is parked at the top, never chased while streaming.
+    reader: mode === 'full',
   });
   const { copyMessage, copiedMessageId, failedMessageId } = useCopyMessage(conversationId);
   const messageById = React.useMemo(() => new Map(messages.map((message) => [message.id, message])), [messages]);
@@ -167,7 +197,9 @@ export function ChatTranscript({
       aria-live="polite"
       aria-label={t('title')}
     >
-      {messages.length === 0 && !streamingText && !streamingUi && !isPending && (
+      {mode === 'full' && onSendPrompt && <ChatShellTools onSendPrompt={onSendPrompt} locale={locale} csrfToken={csrfToken} conversationId={conversationId} />}
+
+      {messages.length === 0 && !streamingText && streamingUi.length === 0 && !isPending && (
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground my-auto gap-6">
           <div className="flex flex-col items-center">
             <div className="size-12 rounded-full bg-primary/10 text-primary flex items-center justify-center mb-3">
@@ -185,6 +217,7 @@ export function ChatTranscript({
               <GenerativeUIStarterGallery onSelectPrompt={onSendPrompt} locale={locale} />
             </div>
           )}
+          {mode === 'full' && onSendPrompt && <StarterSuggestions onSendPrompt={onSendPrompt} locale={locale} />}
         </div>
       )}
 
@@ -210,6 +243,7 @@ export function ChatTranscript({
           <div
             key={msg.id}
             data-role={msg.role}
+            data-message-id={msg.id}
             className={`flex flex-col gap-2.5 ${isUser ? 'ml-auto max-w-[80%] items-end' : 'mr-auto max-w-[88%]'}`}
           >
             <div
@@ -223,18 +257,30 @@ export function ChatTranscript({
                 </p>
               )}
 
-              <ChatMarkdown content={msg.content} citations={isUser ? undefined : msg.citations} locale={locale} />
+              {isUser
+                ? <ChatMarkdown content={msg.content} locale={locale} />
+                : <RevealMarkdown content={msg.content} citations={msg.citations} locale={locale} />}
             </div>
 
-            {!isUser && msg.generative_ui && (
-              <div className="w-full" data-testid="generative-ui-widget">
+            {/* Widget parts render in order after the text; older rows carry only `generative_ui`. */}
+            {!isUser && messageUiParts(msg).map((part, index) => (
+              <div className="w-full" data-testid="generative-ui-widget" key={uiPartKey(part, index)}>
                 <ToolRendering
-                  payload={msg.generative_ui as unknown as GenerativeUIPayload}
-                  onSendPrompt={onSendPrompt}
+                  payload={part as unknown as GenerativeUIPayload}
+                  onSendPrompt={widgetPromptHandler(part)}
                   locale={locale}
                 />
+                {mode === 'full' && (part as { kind?: string }).kind === 'sandboxed_ui'
+                  && (part as { sandbox?: Record<string, unknown> }).sandbox && (
+                  <SaveTemplateButton
+                    sandbox={(part as { sandbox: Record<string, unknown> }).sandbox}
+                    title={(part as { title?: string }).title}
+                    locale={locale}
+                    csrfToken={csrfToken}
+                  />
+                )}
               </div>
-            )}
+            ))}
 
             <div className="flex flex-wrap items-center gap-2">
               {formattedDate && <span className="text-xs text-muted-foreground">{formattedDate}</span>}
@@ -292,7 +338,7 @@ export function ChatTranscript({
       })}
 
       {/* Pending status indicator */}
-      {isPending && !streamingText && !streamingUi && (
+      {isPending && !streamingText && streamingUi.length === 0 && (
         <div className="mr-auto flex max-w-[88%] items-center gap-2 text-xs text-muted-foreground">
           <Loader2Icon className="size-4 animate-spin text-primary" />
           <span>{t('thinking')}</span>
@@ -300,7 +346,7 @@ export function ChatTranscript({
       )}
 
       {/* Active streaming assistant bubble */}
-      {(streamingText || streamingUi || isStreaming) && (
+      {(streamingText || streamingUi.length > 0 || isStreaming) && (
         <div className="mr-auto flex max-w-[88%] flex-col gap-2.5">
           <div className="text-sm text-foreground">
             <div className="flex items-center gap-2 text-xs text-muted-foreground mb-0.5">
@@ -315,15 +361,15 @@ export function ChatTranscript({
             {/* Always-mounted live region so the notice text change is announced. */}
             <div role="status">{mode === 'full' && <WebSearchNotice outcome={streamingWebSearch} />}</div>
           </div>
-            {streamingUi && (
-              <div className="w-full" data-testid="streaming-generative-ui-widget">
+            {streamingUi.map((part, index) => (
+              <div className="w-full" data-testid="streaming-generative-ui-widget" key={uiPartKey(part, index)}>
                 <ToolRendering
-                  payload={streamingUi as unknown as GenerativeUIPayload}
-                  onSendPrompt={onSendPrompt}
+                  payload={part as unknown as GenerativeUIPayload}
+                  onSendPrompt={widgetPromptHandler(part)}
                   locale={locale}
                 />
               </div>
-            )}
+            ))}
             {mode === 'full' && streamingCitations && streamingCitations.length > 0 && (
               <CitationPanel citations={streamingCitations} variant="inline" />
             )}

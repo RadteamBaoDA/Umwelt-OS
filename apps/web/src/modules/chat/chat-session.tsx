@@ -14,13 +14,20 @@ import {
   mutateMessage,
   sendMessage,
   streamResponseEvents,
+  submitResponseInput,
   type ChatMessage,
+  type InputRequest,
   type Citation,
   type WebSearchOutcome,
   WEB_SEARCH_SEND_ENABLED,
 } from '@/modules/chat/api';
 import { ChatComposer } from './chat-composer';
+import { ProviderGateAlert, useChatProviderReady } from './provider-gate';
+import { PickQrButton } from '@/modules/pick/pick-qr-modal';
+import { upsertUiPart, type UiPart } from './generative-ui-parts';
+import { AssistantThemeBanner } from './assistant-theme-banner';
 import { ChatTranscript } from './chat-transcript';
+import { TodosPanel } from './todos/todos-panel';
 import { ChatContextBar, MAX_ITEMS, stripItemTitles } from './chat-context-bar';
 import { ATTACHMENT_STATUS_ID, ChatAttachmentBar, useChatAttachments, withAttachments } from './chat-attachments';
 import { ConversationAgentActivity } from '@/modules/agents/conversation-agent-activity';
@@ -35,6 +42,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { cancelAgentRun, getAgentProfiles, getAgentRun, listAgentRuns, startAgentRun } from '@/modules/agents/api';
 import { AgentRunDetail } from '@/modules/agents/run-detail';
 import { PromptBridgeProvider } from './generative-ui/bridge';
+import { UserInputRequest, type InputRequestState } from './generative-ui/components/user-input-request';
+import { settleWidgetPrompt } from './generative-ui/bridge/widget-prompt';
 
 const profileTitleKeys: Record<string, 'agentProfileSupervisor' | 'agentProfileKnowledge' | 'agentProfileResearch' | 'agentProfilePersonal' | 'agentProfileProject' | 'agentProfileNews' | 'agentProfilePlanning' | 'agentProfileAutomation'> = {
   supervisor: 'agentProfileSupervisor', knowledge: 'agentProfileKnowledge', research: 'agentProfileResearch',
@@ -117,12 +126,17 @@ export function ChatSession({
   const [streamingText, setStreamingText] = React.useState<string>('');
   const [streamingCitations, setStreamingCitations] = React.useState<Citation[]>([]);
   const [streamingWebSearch, setStreamingWebSearch] = React.useState<WebSearchOutcome | null>(null);
-  const [streamingUi, setStreamingUi] = React.useState<Record<string, unknown> | null>(null);
+  const [streamingUi, setStreamingUi] = React.useState<UiPart[]>([]);
+  // Human-in-the-loop: the pending `request_user_input` of the active run (null when none).
+  const [themeRequest, setThemeRequest] = React.useState<'light' | 'dark' | 'system' | null>(null);
+  const [inputRequest, setInputRequest] = React.useState<{ request: InputRequest; state: InputRequestState; label?: string } | null>(null);
   const [webSearchOn, setWebSearchOn] = React.useState(false);
   const [isStreaming, setIsStreaming] = React.useState<boolean>(false);
   const [isPending, setIsPending] = React.useState<boolean>(false);
   const [activeResponseId, setActiveResponseId] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const providerReady = useChatProviderReady(mode === 'full');
+  const [providerGateOpen, setProviderGateOpen] = React.useState(false);
   const [editingMessageId, setEditingMessageId] = React.useState<string | null>(null);
   const [selectedProfileId, setSelectedProfileId] = React.useState('assistant');
   const [activeAgentRunId, setActiveAgentRunId] = React.useState<string | null>(null);
@@ -235,7 +249,7 @@ export function ChatSession({
     setStreamingText('');
     setStreamingCitations([]);
     setStreamingWebSearch(null);
-    setStreamingUi(null);
+    setStreamingUi([]);
     setActiveResponseId(null);
     setEditingMessageId(null);
     const promoted = promotedSelectionRef.current;
@@ -289,11 +303,25 @@ export function ChatSession({
       onCitations: (cites) => {
         if (isCurrentView()) setStreamingCitations(cites);
       },
+      // One entry per widget part, merged by part_id so parts stream and complete independently.
       onUiDelta: (ui) => {
-        if (isCurrentView()) setStreamingUi(ui);
+        if (isCurrentView()) setStreamingUi((prev) => upsertUiPart(prev, ui));
       },
       onUiDone: (ui) => {
-        if (isCurrentView()) setStreamingUi(ui);
+        if (isCurrentView()) setStreamingUi((prev) => upsertUiPart(prev, ui));
+      },
+      onThemeRequest: (mode) => {
+        if (isCurrentView()) setThemeRequest(mode);
+      },
+      onInputRequest: (request) => {
+        if (isCurrentView()) setInputRequest({ request, state: 'pending' });
+      },
+      onInputResolved: (resolved) => {
+        if (!isCurrentView()) return;
+        setInputRequest((prev) => {
+          if (!prev || prev.request.request_id !== resolved.request_id) return prev;
+          return { ...prev, state: resolved.outcome === 'expired' ? 'expired' : 'answered', label: resolved.label };
+        });
       },
       onDone: () => {
         if (isCurrentView()) {
@@ -301,7 +329,8 @@ export function ChatSession({
           setStreamingText('');
           setStreamingCitations([]);
           setStreamingWebSearch(null);
-          setStreamingUi(null);
+          setStreamingUi([]);
+          setInputRequest(null);
           setActiveResponseId(null);
         }
         void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(responseConversationId) });
@@ -315,7 +344,9 @@ export function ChatSession({
             setStreamingText('');
             setStreamingCitations([]);
             setStreamingWebSearch(null);
-            setStreamingUi(null);
+            setStreamingUi([]);
+            // A still-pending request is shown as cancelled (an expired one keeps its own state).
+            setInputRequest((prev) => (prev && prev.state === 'pending' ? { ...prev, state: 'cancelled' } : prev));
             setActiveResponseId(null);
             setError(t('cancelled'));
           }
@@ -334,7 +365,7 @@ export function ChatSession({
             setError(null);
             setStreamingText('');
             setStreamingCitations([]);
-            setStreamingUi(null);
+            setStreamingUi([]);
             setActiveResponseId(responseId);
             setIsStreaming(true);
             await streamRunRef.current?.(responseId, responseConversationId, isCurrentView);
@@ -400,7 +431,7 @@ export function ChatSession({
     setStreamingText('');
     setStreamingCitations([]);
     setStreamingWebSearch(null);
-    setStreamingUi(null);
+    setStreamingUi([]);
     setError(null);
     void streamResponseRun(responseId, conversationId, isCurrentView).catch(() => {
       // streamResponseRun reports visible failures through its guarded error path.
@@ -470,7 +501,7 @@ export function ChatSession({
       setStreamingText('');
       setStreamingCitations([]);
       setStreamingWebSearch(null);
-      setStreamingUi(null);
+      setStreamingUi([]);
       await streamResponseRun(run.response_id, targetConversationId, isCurrentView);
     } catch (mutationError: unknown) {
       if (isCurrentView()) {
@@ -499,12 +530,23 @@ export function ChatSession({
   /**
    * Dispatches a message to an existing or newly initialized conversation, retaining an unresolved
    * specialist's immutable retry envelope in shared memory before awaiting the durable start response.
+   *
+   * @param content - Message text to send.
+   * @returns True only when the server accepted the message (a later stream failure still counts as
+   * accepted); false on early returns and caught errors, which surface through the session error banner.
    */
   const handleSend = React.useCallback(
-    async (content: string) => {
+    async (content: string): Promise<boolean> => {
+      // Key gate: with no usable chat model keep the text as the composer draft and explain, instead of sending.
+      if (!providerReady) {
+        chatCtrl.setDraft(content);
+        setProviderGateOpen(true);
+        return false;
+      }
       if (mode === 'full' && effectiveEditingMessageId) {
         await handleMessageMutation('edit', effectiveEditingMessageId, content);
-        return;
+        // Edit is an append-only mutation, not a widget send; its outcome is not reported here.
+        return false;
       }
       const sendGeneration = ++sendGenerationRef.current;
       let viewGeneration = selectionRef.current.generation;
@@ -526,7 +568,7 @@ export function ChatSession({
         chatCtrl.setDraft(unresolved.prompt);
         setIsPending(false);
         setError(tAgents('agentRetryPending'));
-        return;
+        return false;
       }
 
       const retryEnvelope = pendingProfileRun?.prompt === content ? pendingProfileRun : null;
@@ -540,6 +582,7 @@ export function ChatSession({
       // Ready Chat attachments join the U3 selection mechanism; the composer blocks Send while any are not ready.
       const sendContext = stripItemTitles(mode === 'full' ? withAttachments(chatCtrl.context, attachments.items) : chatCtrl.context);
       const selItems = sendContext?.kind === 'selection' ? sendContext.items ?? [] : [];
+      let accepted = false; // set once the server has accepted the message/run
       let selectionStage = false; // true only while the selection precheck / sendMessage can fail
       try {
         // Pre-validate the server's 1..32 distinct-document limit before the draft is cleared.
@@ -612,7 +655,7 @@ export function ChatSession({
             setActiveAgentRunId(run.id);
             setIsPending(false);
           }
-          return;
+          return true;
         }
 
         // Optimistically clear draft
@@ -635,6 +678,7 @@ export function ChatSession({
           },
           session.csrfToken,
         );
+        accepted = true;
         setWebSearchOn(false);
         if (attachments.items.length && canUpdateCurrentView()) attachments.clear();
 
@@ -642,7 +686,7 @@ export function ChatSession({
         if (!canUpdateCurrentView()) {
           void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(responseConversationId) });
           void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
-          return;
+          return true;
         }
 
         setActiveResponseId(responseRun.response_id);
@@ -651,7 +695,8 @@ export function ChatSession({
         setStreamingText('');
         setStreamingCitations([]);
         setStreamingWebSearch(null);
-        setStreamingUi(null);
+        setStreamingUi([]);
+        setInputRequest(null);
 
         await streamResponseRun(responseRun.response_id, responseConversationId, canUpdateCurrentView);
       } catch (err: unknown) {
@@ -671,7 +716,9 @@ export function ChatSession({
                 : t(chatFailureKey(err, 'errorSending'));
           setError(errMsg);
         }
+        return accepted;
       }
+      return true;
     },
     [
       conversationId,
@@ -691,6 +738,7 @@ export function ChatSession({
       webSearchOn,
       attachments,
       pendingProfileRun,
+      providerReady,
     ],
   );
 
@@ -729,7 +777,8 @@ export function ChatSession({
     setStreamingText('');
     setStreamingCitations([]);
     setStreamingWebSearch(null);
-    setStreamingUi(null);
+    setStreamingUi([]);
+    setInputRequest(null);
     setWebSearchOn(false);
     setIsStreaming(false);
     setIsPending(false);
@@ -741,17 +790,32 @@ export function ChatSession({
    * dropping) so the prompt bridge can report a retryable failure back to the widget.
    *
    * @param prompt - Validated widget prompt text.
-   * @returns Promise resolving once the send is started; rejects when the session is busy.
+   * @returns Promise resolving once the server accepted the send; rejects when busy or the send failed.
    */
   const handleWidgetSendPrompt = React.useCallback(
-    (prompt: string): Promise<void> => {
-      if (isPending || isStreaming) {
-        return Promise.reject(new Error(t('genUiPromptBusy')));
-      }
-      void handleSend(prompt);
-      return Promise.resolve();
-    },
+    (prompt: string): Promise<void> =>
+      settleWidgetPrompt(
+        isPending || isStreaming,
+        () => handleSend(prompt),
+        t('genUiPromptBusy'),
+        t('genUiPromptFailed'),
+      ),
     [handleSend, isPending, isStreaming, t],
+  );
+
+  /**
+   * Answers the pending user-input request so the paused run resumes (no new message or run).
+   *
+   * @param requestId - Id of the request being answered.
+   * @param answer - Slot id, option id, decline marker or text.
+   * @returns Resolves once the server accepted the answer; rejects so the card can unlock and retry.
+   */
+  const handleSubmitInput = React.useCallback(
+    async (requestId: string, answer: string): Promise<void> => {
+      if (!activeResponseId) throw new Error('No active response');
+      await submitResponseInput(activeResponseId, requestId, answer, session.csrfToken);
+    },
+    [activeResponseId, session.csrfToken],
   );
 
   /**
@@ -779,6 +843,7 @@ export function ChatSession({
           ) : null}
 
           <div className={`flex items-center gap-2 shrink-0 ${mode === 'drawer' ? 'order-first' : ''}`}>
+            {mode === 'full' && <PickQrButton csrfToken={session.csrfToken} onPrompt={handleTranscriptSendPrompt} />}
             {mode === 'full' && headerActions}
             {mode === 'full' && (
               <Select value={pendingProfileRun?.profileId ?? selectedProfileId} onValueChange={setSelectedProfileId}>
@@ -862,9 +927,14 @@ export function ChatSession({
           </div>
         )}
 
+        {themeRequest && (
+          <AssistantThemeBanner mode={themeRequest} csrfToken={session.csrfToken} onResolved={() => setThemeRequest(null)} />
+        )}
+
         {/* Transcript area */}
         <ChatTranscript
           conversationId={conversationId}
+          csrfToken={session.csrfToken}
           mode={mode}
           messages={messages}
           streamingText={streamingText}
@@ -877,6 +947,7 @@ export function ChatSession({
           onEditMessage={mode === 'full' ? handleEditMessage : undefined}
           onRegenerateMessage={mode === 'full' ? handleRegenerateMessage : undefined}
           onSendPrompt={handleTranscriptSendPrompt}
+          onWidgetSendPrompt={handleWidgetSendPrompt}
           onRetry={() => {
             const retryDraft = pendingProfileRun?.prompt ?? chatCtrl.draft;
             if (retryDraft) {
@@ -884,6 +955,20 @@ export function ChatSession({
             }
           }}
         />
+
+        {mode === 'full' && <TodosPanel conversationId={conversationId} isStreaming={isStreaming} />}
+        {inputRequest && (
+          <div className="shrink-0 px-4">
+            <UserInputRequest
+              request={inputRequest.request}
+              state={inputRequest.state}
+              answeredLabel={inputRequest.label}
+              onSubmitInput={handleSubmitInput}
+            />
+          </div>
+        )}
+
+        {providerGateOpen && !providerReady && <ProviderGateAlert onDismiss={() => setProviderGateOpen(false)} />}
 
         {/* Bottom composer */}
         <ChatComposer

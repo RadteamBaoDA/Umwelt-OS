@@ -46,11 +46,14 @@ from modules.chat.schemas import (
     MessageRead,
     SendMessageRequest,
     SendMessageResponse,
+    SubmitInputRequest,
+    SubmitInputResponse,
     WebSearchOutcomeRead,
-    parse_generative_ui,
+    parse_generative_ui_parts,
 )
 from modules.chat.scope import multi_workspace_enabled, owner_default_scope
 from modules.chat.stream import format_sse_event, parse_event_id
+from modules.chat.user_input import InputRequestError, submit_input
 from modules.chat.worker import (
     CANCEL_KEY_PREFIX,
     CHAT_QUEUE,
@@ -63,6 +66,10 @@ from modules.memory.public import lock_export_privacy, read_export_privacy
 from modules.settings.public import module_dependency
 
 logger = logging.getLogger(__name__)
+
+# Runs that count as active: they block a second turn (409), keep the SSE stream open and need the privacy fence.
+# `awaiting_input` is a run parked on `request_user_input` (modules/chat/user_input.py).
+ACTIVE_RUN_STATUSES = ("pending", "streaming", "awaiting_input")
 
 router = APIRouter(tags=["chat"], dependencies=[Depends(module_dependency("chat"))])
 
@@ -144,7 +151,7 @@ async def _reject_active_response(session: AsyncSession, conversation_id: UUID) 
         select(ResponseRun.id)
         .where(
             ResponseRun.conversation_id == conversation_id,
-            ResponseRun.status.in_(("pending", "streaming")),
+            ResponseRun.status.in_(ACTIVE_RUN_STATUSES),
         )
         .limit(1)
     )
@@ -289,7 +296,7 @@ async def _poll_needs_lock(
     after this probe is seen by the next poll, as before.
     """
     run = await session.scalar(select(ResponseRun).where(ResponseRun.id == response_id))
-    if run is None or run.status not in ("pending", "streaming"):
+    if run is None or run.status not in ACTIVE_RUN_STATUSES:
         return True
     newer = await session.scalar(select(StreamEvent.seq).where(
         StreamEvent.response_id == response_id, StreamEvent.seq > current_seq,
@@ -506,7 +513,7 @@ async def get_conversation(
         select(ResponseRun.id)
         .where(
             ResponseRun.conversation_id == conversation_id,
-            ResponseRun.status.in_(("pending", "streaming")),
+            ResponseRun.status.in_(ACTIVE_RUN_STATUSES),
             ResponseRun.assistant_message_id.is_(None),
         )
         .order_by(desc(ResponseRun.created_at), desc(ResponseRun.id))
@@ -579,9 +586,13 @@ async def get_conversation(
             revision_of_message_id=m.revision_of_message_id,
             created_at=m.created_at,
             web_search=web_search_by_assistant.get(m.id),
-            generative_ui=parse_generative_ui((getattr(m, "metadata_json", None) or {}).get("generative_ui")),
+            generative_ui=parts[0] if parts else None,  # first part, for older clients
+            generative_ui_parts=parts,
         )
-        for m, citations in zip(messages_rows, current_citations, strict=True)
+        for m, citations, parts in zip(
+            messages_rows, current_citations,
+            (parse_generative_ui_parts(getattr(m, "metadata_json", None)) for m in messages_rows), strict=True,
+        )
     ]
     return ConversationDetailRead(
         id=conv.id,
@@ -1082,7 +1093,7 @@ async def get_response_events(
                             ).with_for_update().execution_options(populate_existing=True))
                             if current_run is None:
                                 return
-                            if current_run.status in ("pending", "streaming"):
+                            if current_run.status in ACTIVE_RUN_STATUSES:
                                 stamp = (current_run.retrieval_context or {}).get("_chat_privacy_fence")
                                 try:
                                     await _require_privacy_fence(
@@ -1271,3 +1282,41 @@ async def cancel_response(
         await _cancel_response_locked(session, run)
         await session.commit()
     return CancelResponse(response_id=run.id, status="cancelled")
+
+
+@router.post("/api/v1/responses/{response_id}/input", response_model=SubmitInputResponse)
+async def submit_response_input(
+    response_id: UUID,
+    body: SubmitInputRequest,
+    session: Session,
+    _owner: OwnerWrite,
+) -> SubmitInputResponse:
+    """Answer the pending `request_user_input` of a parked run and resume that same run.
+
+    Owner-only and CSRF-checked (OwnerWrite). A foreign run or a request id that is not the open one is a
+    404 (no existence oracle); a second answer or an answer after cancel is 409; an invalid slot/option/text
+    is 422. An expired request cancels the run (committed) and returns 409 `expired`.
+
+    Args:
+        response_id: Parked ResponseRun.
+        body: Request id and the answer string (slot id, option id, `__decline__` or text).
+        session: Database session.
+        _owner: Authenticated write session.
+
+    Returns:
+        The run id and request id; the waiting worker picks the answer up from the database.
+    """
+    scope = await owner_default_scope(session, _owner.owner_id)
+    try:
+        await submit_input(
+            session, response_id=response_id, request_id=body.request_id, answer=body.answer,
+            workspace_id=scope.workspace_id, actor_user_id=_owner.owner_id,
+        )
+    except InputRequestError as exc:
+        if exc.code == "expired":
+            await session.commit()  # persist the expiry/cancel the check performed
+        else:
+            await session.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+    await session.commit()
+    return SubmitInputResponse(response_id=response_id, request_id=body.request_id)

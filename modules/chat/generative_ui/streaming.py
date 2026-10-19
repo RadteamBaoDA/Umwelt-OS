@@ -18,6 +18,7 @@ from modules.chat.generative_ui.skill_backend import load_skill
 from modules.chat.generative_ui.tool_specs import (
     TERMINAL_UI_TOOLS,
     TOOL_CHART,
+    TOOL_FORM,
     TOOL_PLAN,
     TOOL_SANDBOXED_UI,
     TOOL_TABLE,
@@ -32,10 +33,12 @@ from modules.chat.generative_ui.tool_specs import (
 from modules.chat.generative_ui.tools import (
     ChartPayload,
     CitationRef,
+    FormPayload,
     PlanPayload,
     PlanStep,
     TablePayload,
     build_chart_payload,
+    build_form_payload,
     build_meeting_time_picker_payload,
     build_plan_payload,
     build_table_payload,
@@ -57,6 +60,7 @@ _SLOT = {
     TOOL_CHART: ("chart", "open_generative_ui"),
     TOOL_PLAN: ("plan", "a2ui"),
     TOOL_TIME_PICKER: ("form", "a2ui"),
+    TOOL_FORM: ("form", "a2ui"),
 }
 
 
@@ -96,9 +100,24 @@ class ToolCallAccumulator:
         """Return calls ordered by stream index, each with `id`, `name`, `arguments`."""
         return [self._calls[i] for i in sorted(self._calls)]
 
-    def terminal(self) -> dict[str, str] | None:
-        """Return the first terminal UI call (first wins), or None."""
-        return next((c for c in self.calls() if c["name"] in TERMINAL_UI_TOOLS), None)
+    def terminals(self, limit: int) -> list[tuple[str, dict[str, str]]]:
+        """Return up to ``limit`` presentation calls in stream order as ``(part_id, call)`` pairs.
+
+        The part id is the provider tool-call id (cut to 64 chars) so it is stable while arguments stream and
+        identical in snapshots and the final payload; a missing or repeated id falls back to ``part-<n>``.
+        Calls beyond ``limit`` are dropped (turn cap).
+        """
+        out: list[tuple[str, dict[str, str]]] = []
+        used: set[str] = set()
+        for call in (c for c in self.calls() if c["name"] in TERMINAL_UI_TOOLS):
+            if len(out) >= limit:
+                break
+            pid = call["id"][:64] or f"part-{len(out) + 1}"
+            if pid in used:
+                pid = f"part-{len(out) + 1}"
+            used.add(pid)
+            out.append((pid, call))
+        return out
 
 
 def _chart_kind(chart_type: Any) -> str:
@@ -134,7 +153,7 @@ def streaming_snapshot(name: str, raw_args: str) -> dict[str, Any] | None:
     else:
         body = {k: v for k, v in obj.items() if k != "citations"}
         kind = {
-            TOOL_TABLE: "table", TOOL_PLAN: "plan", TOOL_TIME_PICKER: "meeting_time_picker",
+            TOOL_TABLE: "table", TOOL_PLAN: "plan", TOOL_TIME_PICKER: "meeting_time_picker", TOOL_FORM: "form",
         }.get(name) or _chart_kind(obj.get("chart_type"))
         if name == TOOL_PLAN and isinstance(body.get("steps"), list):
             body["steps"] = [
@@ -148,6 +167,11 @@ def streaming_snapshot(name: str, raw_args: str) -> dict[str, Any] | None:
     }
 
 
+def _cite_field(c: Mapping[str, Any], camel: str, snake: str) -> Any:
+    """Return a citation field under either spelling (wire camelCase or the worker's snake_case aliases)."""
+    return c.get(camel) or c.get(snake)
+
+
 def _resolve_citations(numbers: Sequence[int], citations: Mapping[int, Mapping[str, Any]]) -> list[CitationRef]:
     """Resolve model-written citation numbers to server-validated document citations.
 
@@ -158,15 +182,19 @@ def _resolve_citations(numbers: Sequence[int], citations: Mapping[int, Mapping[s
     seen: set[str] = set()
     for n in numbers:
         c = citations.get(n)
-        if not c or not (c.get("sourceId") and c.get("documentId") and c.get("chunkId")):
+        if not c:
             continue
-        if str(c["chunkId"]) in seen:
+        # The worker passes `Citation.model_dump(by_alias=True)`, whose aliases are snake_case; camelCase
+        # is the wire/schema spelling. Accept both so a validated citation is never silently dropped.
+        source_id, document_id, chunk_id = _cite_field(c, "sourceId", "source_id"), _cite_field(c, "documentId", "document_id"), _cite_field(c, "chunkId", "chunk_id")
+        version_id, title = _cite_field(c, "documentVersionId", "document_version_id"), _cite_field(c, "title", "title")
+        if not (source_id and document_id and chunk_id) or str(chunk_id) in seen:
             continue
-        seen.add(str(c["chunkId"]))
+        seen.add(str(chunk_id))
         refs.append(CitationRef(
-            source_id=str(c["sourceId"]), document_id=str(c["documentId"]), chunk_id=str(c["chunkId"]),
-            document_version_id=str(c["documentVersionId"]) if c.get("documentVersionId") else None,
-            title=str(c["title"]) if c.get("title") else None,
+            source_id=str(source_id), document_id=str(document_id), chunk_id=str(chunk_id),
+            document_version_id=str(version_id) if version_id else None,
+            title=str(title) if title else None,
         ))
     return refs
 
@@ -204,8 +232,8 @@ def finalize_generative_ui(
         locale: Owner locale (`en-US` / `vi-VN`) for the fallback sandbox title when `title_hint` is empty.
 
     Returns:
-        JSON-serializable payload, or None (logged) when the arguments are invalid; the answer text
-        then stands without a widget. Never raises for model-controlled input.
+        JSON-serializable payload (the caller adds ``part_id``), or None (logged) when the arguments are
+        invalid; the answer text then stands without that widget. Never raises for model-controlled input.
     """
     try:
         args: BaseModel = parse_ui_tool_args(tool_name, raw_args)
@@ -242,6 +270,8 @@ def finalize_generative_ui(
                         "status": "completed" if s.status == "completed" else "pending"} for s in steps],
             )
             return _envelope("plan", "plan", "a2ui", args.title, local_only, "plan", plan.model_dump(mode="json"))
+        if isinstance(args, FormPayload):
+            return _envelope("form", "form", "a2ui", args.title, local_only, "form", build_form_payload(args))
         if isinstance(args, TimePickerToolArgs):
             picker = build_meeting_time_picker_payload(
                 args.title, slots=args.slots, duration_minutes=args.duration_minutes,
@@ -274,6 +304,7 @@ def skill_tool_result(raw_args: str) -> str:
 
 def fallback_generative_ui(
     prompt: str, answer: str, evidence: Sequence[Any], *, local_only: bool,
+    decision: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Build an evidence-derived native widget for models without tool calling.
 
@@ -285,11 +316,12 @@ def fallback_generative_ui(
         answer: Final answer text.
         evidence: Grounded evidence items.
         local_only: Whether the turn referenced local-only evidence.
+        decision: Pre-computed router decision (external router); None uses the internal local rules.
 
     Returns:
         Persisted payload dict or None.
     """
-    decision = route_visualization(prompt, evidence_count=len(evidence), local_only=local_only)
+    decision = decision or route_visualization(prompt, evidence_count=len(evidence), local_only=local_only)
     kind = decision.get("kind")
     title = " ".join(prompt.split())[:72] or "Visualization"
     if kind == "plan":

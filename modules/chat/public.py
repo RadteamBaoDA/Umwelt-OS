@@ -17,6 +17,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy import ColumnElement
+from sqlalchemy import delete as _delete
 from sqlalchemy import func as _func
 from sqlalchemy import or_ as _or
 from sqlalchemy import select as _select
@@ -34,8 +35,10 @@ from modules.chat.citations import (
     validate_answer_citations,
     validate_citations,
 )
+from modules.chat.generative_ui.skill_backend import load_skill as load_generative_ui_skill
 from modules.chat.models import (
     AgentActivityLink,
+    ChatTemplate,
     Conversation,
     Message,
     ResponseRun,
@@ -88,8 +91,10 @@ from modules.chat.stream import (
 from modules.chat.worker import (
     _privacy_cancel_locked,
     is_history_storage_enabled,
+    neutralize_ui_events,
     process_chat_response,
     purge_expired_chat_runs,
+    purge_run_model_copies,
     run_response_generation,
 )
 from modules.knowledge.documents.public import DocumentCleanupEvidenceScope, EvidenceReferenceRead
@@ -169,6 +174,7 @@ __all__ = [
     "list_agent_run_ids_for_delete",
     "list_agent_run_ids_for_owner",
     "live_agent_conversation_id",
+    "load_generative_ui_skill",
     "make_event_id",
     "parse_event_id",
     "process_chat_response",
@@ -192,7 +198,8 @@ async def delete_conversation(
     """Delete one conversation inside the caller's transaction.
 
     Lock order is Memory privacy fence, Chat conversation parent, then Agent run/action rows.
-    Owner and any requested pin filter are checked after the parent lock is acquired. This function
+    Owner and any requested pin filter are checked after the parent lock is acquired. Model-saved
+    templates whose provenance run belongs to this conversation are deleted with it. This function
     never commits; the route or owning service commits after its unit of work.
     """
     from fastapi import HTTPException
@@ -218,6 +225,9 @@ async def delete_conversation(
     await purge_conversation_actions(
         session, conversation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled(),
     )
+    # Todos cascade with the conversation; templates are owner-scoped, so delete the ones the model saved in it.
+    await session.execute(_delete(ChatTemplate).where(ChatTemplate.source_response_id.in_(
+        _select(ResponseRun.id).where(ResponseRun.conversation_id == conversation_id))))
     await session.delete(conversation)
     return True
 
@@ -1670,7 +1680,7 @@ async def purge_document_copied_evidence_page(
                     # Deltas of terminal runs are purged on a schedule and the final message/citations
                     # events are still scrubbed; scanning ~1M delta rows made a document delete take hours.
                     # Active runs keep the scan so an in-flight delta can still trigger privacy cancel.
-                    _or(StreamEvent.event_type != "message.delta", ResponseRun.status.in_(("pending", "streaming"))),
+                    _or(StreamEvent.event_type != "message.delta", ResponseRun.status.in_(("pending", "streaming", "awaiting_input"))),
                 )
                 .order_by(StreamEvent.id).limit(remaining + 1)
             )).all())
@@ -1696,8 +1706,17 @@ async def purge_document_copied_evidence_page(
                     message.citations = citations
                     message.metadata_json = metadata if isinstance(metadata, dict) else {}
                     # The widget copies evidence-derived rows/data that scrubbing cannot attribute: drop it whole.
-                    message.metadata_json.pop("generative_ui", None)
+                    # Every part (and the first-part compatibility copy) is dropped together.
+                    # Both keys are popped unconditionally (any() would stop at the first hit).
+                    popped = [message.metadata_json.pop(key, None) for key in ("generative_ui", "generative_ui_parts")]
+                    had_widget = any(value is not None for value in popped)
                     changed += 1
+                    # Streaming deltas carry no document ids, so blank all widget events of the answer's run.
+                    if had_widget and message.response_id is not None:
+                        await neutralize_ui_events(session, message.response_id)
+                    # Input requests, todos and model-saved templates of that run were derived from the same evidence.
+                    if message.response_id is not None:
+                        await purge_run_model_copies(session, message.response_id)
             elif kind == "runs":
                 row_id, conversation_id = candidate
                 parent = await session.scalar(_select(Conversation).where(
@@ -1716,7 +1735,8 @@ async def purge_document_copied_evidence_page(
                     run.citations = citations
                     run.retrieval_context = context if isinstance(context, dict) else {}
                     changed += 1
-                    if run.status in {"pending", "streaming"}:
+                    await purge_run_model_copies(session, run.id)  # completed runs too: input request, todos, templates
+                    if run.status in {"pending", "streaming", "awaiting_input"}:
                         await _privacy_cancel_locked(session, run)
             else:
                 row_id, response_id, conversation_id = candidate
@@ -1743,8 +1763,13 @@ async def purge_document_copied_evidence_page(
                         event.data = {}
                     else:
                         event.data.pop("generative_ui", None)
+                        event.data.pop("generative_ui_parts", None)
                     changed += 1
-                    if run.status in {"pending", "streaming"}:
+                    # message.ui.delta rows hold partial widget data without identifiers (so they never match
+                    # the scope): neutralize every widget event of this run once any copy of it matched.
+                    await neutralize_ui_events(session, response_id)
+                    await purge_run_model_copies(session, response_id)
+                    if run.status in {"pending", "streaming", "awaiting_input"}:
                         await _privacy_cancel_locked(session, run, event.seq)
         if has_more:
             last_id = rows[-1][0]

@@ -27,6 +27,7 @@ from core.model_gateway.transport import (
 )
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
+from modules.chat import media
 from modules.chat import web_search as web
 from modules.chat.citations import (
     extract_supporting_quote,
@@ -37,6 +38,7 @@ from modules.chat.citations import (
 from modules.chat.generative_ui import (
     TERMINAL_UI_TOOLS,
     TOOL_READ_SKILL,
+    TOOL_TRIP_IMAGES,
     ToolCallAccumulator,
     build_chat_tool_specs,
     build_generative_ui_system_prompt,
@@ -46,9 +48,19 @@ from modules.chat.generative_ui import (
     skill_tool_result,
     streaming_snapshot,
 )
+from modules.chat.generative_ui import external_router as viz
+from modules.chat.generative_ui.tool_specs import (
+    LOCAL_DATA_TOOLS,
+    TEMPLATE_TOOLS,
+    TOOL_REQUEST_USER_INPUT,
+    TOOL_SET_THEME,
+    RequestUserInputArgs,
+)
 from modules.chat.history import load_effective_history
 from modules.chat.models import (
     AgentActivityLink,
+    ChatTemplate,
+    ChatTodo,
     Conversation,
     Message,
     MessageMutationReceipt,
@@ -74,6 +86,15 @@ from modules.chat.scope import (
     owner_default_scope,
 )
 from modules.chat.stream import make_event_id
+from modules.chat.templates import run_template_tool
+from modules.chat.todos import run_todo_tool
+from modules.chat.ui_theme import publish_theme
+from modules.chat.user_input import (
+    InputOutcome,
+    await_user_input,
+    create_input_request,
+    resolve_ttl,
+)
 from modules.memory.public import lock_export_privacy, read_export_privacy
 from modules.settings import public as settings_public
 from modules.settings.prompts import resolve_prompt
@@ -108,6 +129,8 @@ _WEB_UNAVAILABLE_CODES = frozenset({"timeout", "provider_error", "network_denied
 # read_skill is non-terminal: bound the extra model rounds and calls it may cost one turn.
 MAX_SKILL_ROUNDS = 2
 MAX_SKILL_CALLS_PER_ROUND = 2
+MAX_TRIP_IMAGE_CALLS_PER_ROUND = 1  # get_trip_stop_images fans out to 8 lookups; one call per round
+MAX_USER_INPUT_REQUESTS_PER_TURN = 2  # request_user_input parks the run; bound how often one turn may ask
 # A sandbox widget's parameter keys; the first appearance of each is a streaming milestone (css done, html begun, ...).
 _UI_MILESTONE_KEYS = ('"css"', '"html"', '"jsFunctions"', '"jsExpressions"')
 
@@ -670,7 +693,7 @@ async def purge_expired_chat_runs(ctx: dict[str, object]) -> int:
 async def purge_terminal_message_deltas(
     factory: async_sessionmaker[AsyncSession], *, now: datetime | None = None,
 ) -> int:
-    """Delete one bounded slice of ``message.delta`` events of old terminal runs; returns rows deleted.
+    """Delete one bounded slice of ``message.delta`` and ``message.ui.delta`` events of old terminal runs; returns rows deleted.
 
     Replay reads ``seq > current_seq`` and tolerates gaps, and ``message.done`` (completed runs) already
     carries the full answer, so deltas of runs that finished more than ``DELTA_RETENTION`` ago only
@@ -684,7 +707,9 @@ async def purge_terminal_message_deltas(
         select(StreamEvent.id)
         .join(ResponseRun, ResponseRun.id == StreamEvent.response_id)
         .where(
-            StreamEvent.event_type == "message.delta",
+            # message.ui.delta partial widget snapshots are as disposable as text deltas: message.ui.done
+            # keeps the final widget.
+            StreamEvent.event_type.in_(("message.delta", "message.ui.delta")),
             ResponseRun.status.in_(("completed", "cancelled", "failed")),
             ResponseRun.completed_at.is_not(None),
             ResponseRun.completed_at < cutoff,
@@ -1000,10 +1025,16 @@ async def run_response_generation(
                 getattr(item, "local_only", False) for item in answer_context.evidence
             )
             skill_names = list_skills()
-            ui_tools: list[dict[str, Any]] | None = build_chat_tool_specs(include_read_skill=bool(skill_names))
+            # Trip images are offered only when the owner allowed remote widget media and the turn is not local-only.
+            trip_images_on = media.media_permitted(ai_config, local_only=local_only_turn)
+            ui_tools: list[dict[str, Any]] | None = build_chat_tool_specs(
+                include_read_skill=bool(skill_names), include_trip_images=trip_images_on,
+                include_todos=True, include_user_input=True, include_templates=True, include_theme=True,
+            )
             ui_locale = await _owner_locale(session, job_scope)
             ui_system_text = system_text + "\n\n" + build_generative_ui_system_prompt(
-                locale=ui_locale, local_only=local_only_turn, skills=skill_names,
+                locale=ui_locale, local_only=local_only_turn, skills=skill_names, remote_media=trip_images_on,
+                todos=True, templates=True, theme=True,
             )
 
             def _base_messages(with_ui_prompt: bool) -> list[dict[str, Any]]:
@@ -1028,14 +1059,26 @@ async def run_response_generation(
                 )
 
             messages_payload = _base_messages(True)
-            stream_iter = _open_stream(messages_payload, ui_tools)
+
+        # 3b. Opt-in external visualization routing: classify ONCE per turn before the first model request (tool
+        # continuation rounds reuse `route_decision`), outside the locked block so no lock spans provider egress.
+        # Errors propagate as a failed turn; None (no external router) leaves the request byte-identical.
+        route_decision = await _external_route_decision(
+            session_factory, settings, redis, job_scope, user_prompt, prior_messages, local_only=local_only_turn,
+        )
+        if route_decision is not None:
+            ui_tools = viz.filter_tool_specs(ui_tools or [], route_decision)
+            ui_system_text += viz.decision_note(route_decision, remote_media=trip_images_on)
+            messages_payload = _base_messages(True)
+        stream_iter = _open_stream(messages_payload, ui_tools)
 
         # 4. Stream tokens through ModelGateway. Deltas are buffered in worker memory (never published)
         # and flushed at most every STREAM_FLUSH_SECONDS or STREAM_FLUSH_CHARS; each flush is one locked,
         # revalidated transaction in the same lock order as before (privacy -> conversation -> run -> evidence).
         loop = asyncio.get_running_loop()
         pending = ""
-        pending_ui: dict[str, Any] | None = None  # newest unpublished cumulative UI snapshot (older ones are superseded)
+        # Newest unpublished cumulative UI snapshot per part id (older ones are superseded).
+        pending_ui: dict[str, dict[str, Any]] = {}
         last_flush = float("-inf")
 
         async def _flush_pending() -> bool | None:
@@ -1045,7 +1088,7 @@ async def run_response_generation(
             run was cancelled/redacted and both buffers were dropped.
             """
             nonlocal pending, pending_ui, accumulated_text, seq, last_flush
-            if not pending and pending_ui is None:
+            if not pending and not pending_ui:
                 return True
             async with session_factory() as session:
                 _, live_run = await _lock_live_response(
@@ -1054,7 +1097,7 @@ async def run_response_generation(
                 )
                 if await is_run_cancelled(response_id, redis):
                     pending = ""
-                    pending_ui = None
+                    pending_ui = {}
                     await _cancel_response_locked(session, live_run, seq)
                     await session.commit()
                     return None
@@ -1066,7 +1109,7 @@ async def run_response_generation(
                     )
                     if not fences_ok:
                         pending = ""
-                        pending_ui = None
+                        pending_ui = {}
                         await _privacy_cancel_locked(session, live_run, seq)
                         await session.commit()
                         return None
@@ -1081,7 +1124,8 @@ async def run_response_generation(
                             data={"text": pending},
                         )
                     )
-                if pending_ui is not None:
+                for part_snapshot in pending_ui.values():
+                    # One event per part; every snapshot carries its `part_id` so the client can merge by part.
                     seq = await _next_event_seq(session, response_id, seq)
                     session.add(
                         StreamEvent(
@@ -1089,26 +1133,103 @@ async def run_response_generation(
                             seq=seq,
                             event_type="message.ui.delta",
                             event_id=make_event_id(response_id, seq),
-                            data=pending_ui,
+                            data=part_snapshot,
                         )
                     )
                 await session.commit()
             accumulated_text += pending
             pending = ""
-            pending_ui = None
+            pending_ui = {}
             last_flush = loop.time()
             return True
 
         last_cancel_check = loop.time()
         tools_active = ui_tools is not None
         skill_rounds = 0
-        ui_call: dict[str, str] | None = None  # the single terminal UI call of this turn (first wins)
+        max_parts = max(1, int(getattr(settings, "generative_ui_max_parts", 4)))
+        max_ui_rounds = max(1, int(getattr(settings, "generative_ui_max_rounds", 3)))
+        input_ttl_seconds = int(getattr(settings, "chat_input_request_ttl_seconds", 900))
+        ui_parts: list[tuple[str, dict[str, str]]] = []  # (part_id, tool call) of this turn's widgets, in stream order
+        ui_rounds = 0  # model rounds that produced at least one widget
+        input_requests = 0  # request_user_input calls answered or rejected so far this turn
+
+        def _round_terminals(round_acc: ToolCallAccumulator) -> list[tuple[str, dict[str, str]]]:
+            """Presentation calls of the current round with part ids unique across the whole turn.
+
+            The remaining part budget (turn cap minus parts of earlier rounds) bounds the round. Providers may
+            reuse a tool-call id (or the ``part-<n>`` fallback) in a later round, so a colliding id gets a
+            round prefix; the result is deterministic for one round, hence identical in streamed snapshots and
+            the final payload.
+            """
+            used = {pid for pid, _ in ui_parts}
+            out: list[tuple[str, dict[str, str]]] = []
+            for pid, call in round_acc.terminals(max(0, max_parts - len(ui_parts))):
+                base, n = f"r{ui_rounds + 1}-{pid}"[:58], 2
+                while pid in used:
+                    pid = base if base not in used else f"{base}-{n}"
+                    n += 1
+                used.add(pid)
+                out.append((pid, call))
+            return out
+
+        async def _park_for_input(args: RequestUserInputArgs) -> InputOutcome | None:
+            """Park the run on a user-input request and wait for the answer with no lock or transaction held.
+
+            Publication happens inside the standard lock order (privacy -> conversation -> run, status must be
+            ``streaming``) and the commit releases every lock before the wait. Returns the answered/declined
+            outcome, or None when the run was cancelled or the request expired (nothing more is published,
+            exactly like a Stop). Raises PrivacyFenceChanged / ResponseNoLongerActive like other publish sites.
+            """
+            nonlocal seq
+            async with session_factory() as park_session:
+                _, parked_run = await _lock_live_response(
+                    park_session, response_id, conversation_id, privacy_fence,
+                    scope=job_scope, access_fence=access_fence,
+                )
+                if await is_run_cancelled(response_id, redis):
+                    await _cancel_response_locked(park_session, parked_run, seq)
+                    await park_session.commit()
+                    return None
+                payload = await create_input_request(
+                    park_session, parked_run, args, ttl=resolve_ttl(input_ttl_seconds),
+                )
+                # create_input_request appended its own event; re-read the high-water mark so later local
+                # events (and a concurrent submit's event) keep strictly increasing seqs.
+                seq = await _next_event_seq(park_session, response_id, seq) - 1
+                await park_session.commit()
+            outcome = await await_user_input(session_factory, response_id, payload["request_id"])
+            return outcome if outcome.outcome in ("answered", "declined") else None
+
+        async def _run_todos(name: str, raw_args: str) -> str | None:
+            """Run one todo/template/theme tool under the live-run fence; None when the run was cancelled meanwhile.
+
+            ``run_todo_tool``/``run_template_tool`` commit their own writes, which also releases the fence locks
+            taken here. ``set_theme`` appends its ``ui.theme`` event under the run lock and commits here.
+            """
+            nonlocal seq
+            async with session_factory() as todo_session:
+                _, todo_run = await _lock_live_response(
+                    todo_session, response_id, conversation_id, privacy_fence,
+                    scope=job_scope, access_fence=access_fence,
+                )
+                if await is_run_cancelled(response_id, redis):
+                    await _cancel_response_locked(todo_session, todo_run, seq)
+                    await todo_session.commit()
+                    return None
+                if name == TOOL_SET_THEME:
+                    theme_result = await publish_theme(todo_session, response_id, raw_args or "{}")
+                    # The helper allocated its own seq; resync the local high-water mark (as _park_for_input does).
+                    seq = await _next_event_seq(todo_session, response_id, seq) - 1
+                    await todo_session.commit()
+                    return theme_result
+                if name in TEMPLATE_TOOLS:
+                    return await run_template_tool(
+                        name, raw_args or "{}", todo_session, conversation_id, response_id)
+                return await run_todo_tool(name, raw_args or "{}", todo_session, conversation_id, response_id)
         while True:
             acc = ToolCallAccumulator()
             round_started = False  # any chunk received; a capability fallback is only safe before this
-            last_ui_parse = float("-inf")
-            last_ui_snapshot: dict[str, Any] | None = None
-            seen_milestones: set[str] = set()
+            ui_state: dict[str, dict[str, Any]] = {}  # per part id: streamed length, milestones, parse clock, last snapshot
             round_text_start = len(accumulated_text) + len(pending)
             try:
                 async with contextlib.aclosing(cast("AsyncGenerator[str, None]", stream_iter)) as lines:
@@ -1141,21 +1262,25 @@ async def run_response_generation(
                                     fragments = delta.get("tool_calls")
                                     if fragments:
                                         acc.feed(fragments)
-                                        term = acc.terminal()
-                                        if term is not None:
-                                            # Milestones are detected on the tail only: re-scanning a 256 KB
+                                        for part_id, term in _round_terminals(acc):
+                                            st = ui_state.setdefault(part_id, {
+                                                "len": 0, "seen": set(), "parse": float("-inf"), "snap": None,
+                                            })
+                                            args_so_far = term["arguments"]
+                                            if len(args_so_far) == st["len"]:
+                                                continue  # this chunk belonged to another call
+                                            # Milestones are detected on the new tail only: re-scanning a 256 KB
                                             # sandbox per chunk would make streaming quadratic.
-                                            tail = term["arguments"][-(sum(
-                                                len(str(f.get("function", {}).get("arguments", "")))
-                                                for f in fragments if isinstance(f, dict)
-                                            ) + 24):]
-                                            fresh = {k for k in _UI_MILESTONE_KEYS if k in tail} - seen_milestones
-                                            seen_milestones |= fresh
-                                            if fresh or loop.time() - last_ui_parse >= STREAM_FLUSH_SECONDS:
-                                                last_ui_parse = loop.time()
-                                                snap = streaming_snapshot(term["name"], term["arguments"])
-                                                if snap is not None and snap != last_ui_snapshot:
-                                                    last_ui_snapshot = pending_ui = snap
+                                            tail = args_so_far[max(0, st["len"] - 24):]
+                                            st["len"] = len(args_so_far)
+                                            fresh = {k for k in _UI_MILESTONE_KEYS if k in tail} - st["seen"]
+                                            st["seen"] |= fresh
+                                            if fresh or loop.time() - st["parse"] >= STREAM_FLUSH_SECONDS:
+                                                st["parse"] = loop.time()
+                                                snap = streaming_snapshot(term["name"], args_so_far)
+                                                if snap is not None and snap != st["snap"]:
+                                                    st["snap"] = snap
+                                                    pending_ui[part_id] = {**snap, "part_id": part_id}
                                                     if await _flush_pending() is None:
                                                         return
                             except (json.JSONDecodeError, AttributeError):
@@ -1172,32 +1297,94 @@ async def run_response_generation(
 
             if await _flush_pending() is None:
                 return
-            pending_ui = None  # the completed payload supersedes any trailing partial snapshot
+            pending_ui = {}  # the completed payloads supersede any trailing partial snapshots
 
             calls = acc.calls()
+            known_data = {TOOL_READ_SKILL, TOOL_REQUEST_USER_INPUT, *LOCAL_DATA_TOOLS}
+            if trip_images_on:
+                known_data.add(TOOL_TRIP_IMAGES)
             for extra in calls:
-                if extra["name"] not in TERMINAL_UI_TOOLS and extra["name"] != TOOL_READ_SKILL:
+                if extra["name"] not in TERMINAL_UI_TOOLS and extra["name"] not in known_data:
                     logger.warning("Ignoring unknown tool call %r for run %s", extra["name"][:64], response_id)
-            ui_call = acc.terminal()
-            reads = [c for c in calls if c["name"] == TOOL_READ_SKILL][:MAX_SKILL_CALLS_PER_ROUND]
-            if ui_call is not None or not reads:
-                break
-            if skill_rounds >= MAX_SKILL_ROUNDS:
-                logger.warning("read_skill round limit reached for run %s; no widget", response_id)
-                break
-            skill_rounds += 1
+            # Presentation tools never end the turn: every call this response made (within the remaining part
+            # budget) is a part, and the model gets another round to write text or add widgets.
+            round_parts = _round_terminals(acc)
+            part_of = {id(c): pid for pid, c in round_parts}
+            if sum(c["name"] in TERMINAL_UI_TOOLS for c in calls) > len(round_parts):
+                logger.warning("Generative UI part cap (%d) reached for run %s; extra widgets ignored", max_parts, response_id)
+            # Calls we answer, in model order: widgets, bounded data tools, bounded input requests.
+            handled: list[dict[str, str]] = []
+            reads = trips = todo_calls = asks = 0
+            for c in calls:
+                name = c["name"]
+                if id(c) in part_of:
+                    handled.append(c)
+                elif name == TOOL_READ_SKILL and reads < MAX_SKILL_CALLS_PER_ROUND:
+                    reads += 1
+                    handled.append(c)
+                elif name == TOOL_TRIP_IMAGES and trip_images_on and trips < MAX_TRIP_IMAGE_CALLS_PER_ROUND:
+                    trips += 1
+                    handled.append(c)
+                elif name in LOCAL_DATA_TOOLS and todo_calls < MAX_SKILL_CALLS_PER_ROUND:
+                    todo_calls += 1
+                    handled.append(c)
+                elif name == TOOL_REQUEST_USER_INPUT and input_requests + asks < MAX_USER_INPUT_REQUESTS_PER_TURN:
+                    asks += 1
+                    handled.append(c)
+            if not handled:
+                break  # a plain text round (or nothing we may act on): the answer is complete
+            data_calls = [c for c in handled if id(c) not in part_of and c["name"] != TOOL_REQUEST_USER_INPUT]
+            if round_parts:
+                ui_parts.extend(round_parts)
+                ui_rounds += 1
+                if len(ui_parts) >= max_parts or ui_rounds >= max_ui_rounds:
+                    break  # caps reached: stop without another model round
+            elif data_calls:
+                # Data tools (skills, images, todos) share one extra-round bound; input requests have their own.
+                if skill_rounds >= MAX_SKILL_ROUNDS:
+                    logger.warning("Data-tool round limit reached for run %s; no widget", response_id)
+                    break
+                skill_rounds += 1
             tool_calls = [
                 {"id": c["id"] or f"call_{i}", "type": "function",
-                 "function": {"name": TOOL_READ_SKILL, "arguments": c["arguments"] or "{}"}}
-                for i, c in enumerate(reads)
+                 "function": {"name": c["name"], "arguments": c["arguments"] or "{}"}}
+                for i, c in enumerate(handled)
             ]
             messages_payload.append({
                 "role": "assistant", "content": accumulated_text[round_text_start:] or None, "tool_calls": tool_calls,
             })
-            messages_payload.extend(
-                {"role": "tool", "tool_call_id": tc["id"], "content": skill_tool_result(c["arguments"])}
-                for tc, c in zip(tool_calls, reads, strict=True)
-            )
+            for tc, c in zip(tool_calls, handled, strict=True):
+                name = c["name"]
+                if id(c) in part_of:
+                    # The payload is already on screen; echoing it back would only cost tokens.
+                    content = json.dumps({"status": "rendered", "part_id": part_of[id(c)]})
+                elif name == TOOL_TRIP_IMAGES:
+                    # Egress is gated again inside the tool (owner flag + local-only); never raises for model input.
+                    content = await media.run_trip_images_tool(
+                        c["arguments"], config=ai_config, local_only=local_only_turn,
+                        secret=settings.csrf_signing_secret.get_secret_value(),
+                        subject=f"{run_workspace_id}:{run_actor_id}",
+                    )
+                elif name in LOCAL_DATA_TOOLS:
+                    todo_result = await _run_todos(name, c["arguments"])
+                    if todo_result is None:
+                        return  # cancelled while the tool was about to run
+                    content = todo_result
+                elif name == TOOL_REQUEST_USER_INPUT:
+                    input_requests += 1
+                    try:
+                        input_args = RequestUserInputArgs.model_validate_json(c["arguments"] or "{}")
+                    except ValueError as exc:
+                        # Invalid arguments never park the run; the model sees the error and continues.
+                        content = json.dumps({"error": f"invalid request_user_input arguments: {str(exc)[:300]}"})
+                    else:
+                        outcome = await _park_for_input(input_args)
+                        if outcome is None:
+                            return  # expired or cancelled while parked: terminal state already persisted
+                        content = outcome.tool_result
+                else:
+                    content = skill_tool_result(c["arguments"])
+                messages_payload.append({"role": "tool", "tool_call_id": tc["id"], "content": content})
             stream_iter = _open_stream(messages_payload, ui_tools)
 
         # 5. Complete generation and citation validation
@@ -1216,8 +1403,12 @@ async def run_response_generation(
             item = answer_context.evidence[n - 1]
             return item.document_version_id, item.chunk_id
 
+        # The widget tool call may cite evidence the prose never marks (render_table(citations=[1])):
+        # those numbers are candidates too, and go through the same evidence checks below.
+        ui_numbers = [n for _, call in ui_parts for n in _tool_citation_numbers(call, evidence_count)]
+        candidate_numbers = list(dict.fromkeys([*doc_numbers, *ui_numbers]))
         first_by_key: dict[tuple[UUID, UUID], int] = {}
-        for n in doc_numbers:
+        for n in candidate_numbers:
             first_by_key.setdefault(_evidence_key(n), n)
         unique_numbers = list(first_by_key.values())
         candidate_citations: list[Citation | dict[str, Any]] = [
@@ -1244,10 +1435,10 @@ async def run_response_generation(
         )
         kept = {(c.documentVersionId, c.chunkId): i for i, c in enumerate(validated.citations, 1)}
         number_map = {
-            n: kept[key] for n in doc_numbers
+            n: kept[key] for n in candidate_numbers
             if (key := _evidence_key(n)) in kept
         }
-        if not doc_numbers and validated.citations:
+        if not doc_numbers and not number_map and validated.citations:
             # Preserve the [1] marker attached by post-hoc lexical attribution during renumbering.
             number_map[1] = 1
         answer_text = validated.answer
@@ -1275,23 +1466,30 @@ async def run_response_generation(
                     ).model_dump(mode="json"))
         final_answer = renumber_citation_markers(answer_text, number_map, max(total_count, 1 if number_map else 0))
         valid_citations = [c.model_dump(mode="json", by_alias=True) for c in validated.citations] + web_citations
-        generative_ui: dict[str, Any] | None
-        if ui_call is not None:
+        generative_uis: list[dict[str, Any]] = []
+        if ui_parts:
             # The model wrote widget evidence as context numbers; map them through the answer's renumbering
             # to validated citations so an unvalidated number can never become an evidence reference.
             widget_citations = {
                 n: valid_citations[m - 1] for n, m in number_map.items() if 0 < m <= len(valid_citations)
             }
-            generative_ui = finalize_generative_ui(
-                ui_call["name"], ui_call["arguments"], widget_citations, local_only_turn,
-                title_hint=" ".join(user_prompt.split()), locale=ui_locale,
-            )
+            for part_id, call in ui_parts:
+                part = finalize_generative_ui(
+                    call["name"], call["arguments"], widget_citations, local_only_turn,
+                    title_hint=" ".join(user_prompt.split()), locale=ui_locale,
+                )
+                if part is not None:  # an invalid call drops only its own widget
+                    generative_uis.append({**part, "part_id": part_id})
         elif not tools_active:
-            generative_ui = fallback_generative_ui(
+            # Providers without tool support: reuse the decision classified before the first request (no 2nd call).
+            fallback = fallback_generative_ui(
                 user_prompt, final_answer, answer_context.evidence, local_only=local_only_turn,
+                decision=route_decision,
             )
-        else:
-            generative_ui = None  # tools were offered and the model chose a plain-text answer
+            if fallback is not None:
+                generative_uis.append({**fallback, "part_id": "part-1"})
+        # tools offered and the model chose a plain-text answer: no widgets
+        generative_ui = generative_uis[0] if generative_uis else None  # first part, kept for older clients
 
         async with session_factory() as session:
             _, live_run = await _lock_live_response(
@@ -1322,8 +1520,15 @@ async def run_response_generation(
                 response_id=response_id,
                 revision_of_message_id=revision_of_message_id,
                 **(
-                    {"metadata_json": {"generative_ui": generative_ui}}
-                    if generative_ui is not None
+                    {"metadata_json": {
+                        **({"generative_ui": generative_ui, "generative_ui_parts": generative_uis}
+                           if generative_ui is not None else {}),
+                        # Audit trail of the external router's choice (category + renderer only, no content).
+                        **({"viz_decision": {"visualization": route_decision["visualization"],
+                                             "renderer": route_decision["renderer"]}}
+                           if route_decision is not None else {}),
+                    }}
+                    if generative_ui is not None or route_decision is not None
                     else {}
                 ),
             )
@@ -1359,7 +1564,7 @@ async def run_response_generation(
                         data={"citations": valid_citations},
                     )
                 )
-            if generative_ui is not None:
+            for part in generative_uis:
                 seq = await _next_event_seq(session, response_id, seq)
                 session.add(
                     StreamEvent(
@@ -1367,7 +1572,7 @@ async def run_response_generation(
                         seq=seq,
                         event_type="message.ui.done",
                         event_id=make_event_id(response_id, seq),
-                        data=generative_ui,
+                        data=part,
                     )
                 )
             done_payload: dict[str, Any] = {
@@ -1378,6 +1583,7 @@ async def run_response_generation(
             }
             if generative_ui is not None:
                 done_payload["generative_ui"] = generative_ui
+                done_payload["generative_ui_parts"] = generative_uis
             seq = await _next_event_seq(session, response_id, seq)
             session.add(
                 StreamEvent(
@@ -1464,13 +1670,127 @@ async def _release_on_shutdown(
     await _mark_failed(response_id, session_factory, seq, expected_fence, TimeoutError("generation timed out" if timed_out else "chat worker shutting down"), scope=scope)
 
 
+def _tool_citation_numbers(ui_call: dict[str, str] | None, evidence_count: int) -> list[int]:
+    """Return the in-range evidence numbers a presentation tool call cites in ``args.citations``.
+
+    Malformed JSON, non-list values, bools, non-ints and out-of-range numbers are dropped; the caller
+    still validates every returned number against the retrieved evidence like a text marker.
+    """
+    if ui_call is None:
+        return []
+    try:
+        args = json.loads(ui_call.get("arguments") or "{}")
+    except ValueError:
+        return []
+    raw = args.get("citations") if isinstance(args, dict) else None
+    if not isinstance(raw, list):
+        return []
+    return [n for n in raw if type(n) is int and 1 <= n <= evidence_count]
+
+
+async def _external_route_decision(
+    session_factory: async_sessionmaker[AsyncSession], settings: Settings, redis: Redis, scope: InternalJobScope,
+    user_prompt: str, prior_messages: list[dict[str, str]], *, local_only: bool,
+) -> dict[str, Any] | None:
+    """Ask the owner's opt-in external visualization router for this turn's decision.
+
+    Returns None when no external router is configured (the caller keeps the internal local rules, unchanged).
+    Otherwise consent and the local-only fence are enforced first, the input is the bounded window (last 4
+    user/assistant messages, 6000 chars each) and exactly one adapter call is made. Any failure is raised as
+    ``VisualizationRouterError`` (a retryable turn failure upstream): there is deliberately no fallback to the
+    internal router once an external one is configured. Session locks are released before any egress.
+    """
+    async with session_factory() as session:
+        resolved = await settings_public.resolve_viz_router(session, settings, scope=scope)
+        if resolved.kind == "internal":
+            return None
+        viz.ensure_allowed(allow_remote=resolved.allow_remote, local_only=local_only)
+        window = viz.bounded_window([*prior_messages, {"role": "user", "content": user_prompt}])
+        base = await settings_public.get_ai_execution_config(session, settings, redis, scope=scope)
+        await session.rollback()  # no SQL transaction held across provider egress
+    if resolved.kind == "typesafe":
+        if not resolved.typesafe_key:
+            raise viz.VisualizationRouterError("credential_required", retryable=False)
+        try:
+            transport = approved_web_search_transport(
+                viz.TYPESAFE_URL, settings.ai_allowed_endpoint_hosts, settings.web_search_allowed_cidrs,
+            )
+        except EndpointNetworkPolicyError as exc:
+            raise viz.VisualizationRouterError("network_denied", retryable=False) from exc
+        category, _ = await viz.classify_typesafe(resolved.typesafe_key, window, transport)
+        return viz.decision_for(category, "typesafe")
+    config, mapping = settings_public.viz_router_gateway_config(base, resolved)
+    destination = config.endpoint_destination_id or "remote"
+    policy = RequestPolicy(
+        workspace_id=config.workspace_id, actor_user_id=config.actor_user_id,
+        membership_revision=config.membership_revision, gateway_identity=config.gateway_identity,
+        reasoning_allowed=True,  # consent was verified by resolve_viz_router / ensure_allowed
+        permitted_destinations=frozenset({destination}), reasoning_destinations=frozenset({destination}),
+        configuration_revision=config.configuration_revision,
+    )
+
+    async def recheck_send() -> None:
+        """Fail the attempt when settings, access or the router selection drifted since it was resolved."""
+        async with session_factory() as check:
+            current = await settings_public.get_ai_execution_config(check, settings, redis, scope=scope)
+            current_router = await settings_public.resolve_viz_router(check, settings, scope=scope)
+        if (
+            current.configuration_revision != base.configuration_revision
+            or current.gateway_identity != base.gateway_identity
+            or current_router.revision != resolved.revision
+        ):
+            raise PrivacyPolicyDenied("Visualization router configuration changed before send")
+
+    gateway = ModelGateway(
+        redis=redis, base_url=config.gateway_base_url, api_key=config.gateway_api_key, destination_id=destination,
+        timeout_seconds=15.0, scope=scope, gateway_identity=config.gateway_identity,
+        configuration_revision=config.configuration_revision, before_send=recheck_send,
+        approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers,
+    )
+    category = await viz.classify_llm(
+        gateway, mapping, policy, window, mode=resolved.mode, base_url=config.gateway_base_url,
+        before_send=recheck_send,
+    )
+    return viz.decision_for(category, "llm")
+
+
+async def neutralize_ui_events(session: AsyncSession, response_id: UUID) -> None:
+    """Blank every persisted ``message.ui.*`` event payload of one run.
+
+    Streaming deltas carry no document identifiers, so privacy cleanup and cancellation neutralize
+    all widget events of a run together. Event rows and seqs stay so replay keeps its identities.
+    """
+    await session.execute(update(StreamEvent).where(
+        StreamEvent.response_id == response_id,
+        StreamEvent.event_type.in_(("message.ui.delta", "message.ui.done")),
+    ).values(data={}))
+
+
+async def purge_run_model_copies(session: AsyncSession, response_id: UUID) -> None:
+    """Drop every model-derived copy of one run outside its widgets: input request, input events, todos, templates.
+
+    Clears the run's ``input_request`` (prompt, options, free-text answer), blanks the run's ``message.input.*`` event
+    payloads (rows and seqs stay for replay identity), and deletes ``chat_todos`` and model-created
+    ``chat_templates`` whose ``source_response_id`` is this run. Owner-created templates have no provenance and stay.
+    Works for any run status; the caller holds the run lock and commits.
+    """
+    await session.execute(update(ResponseRun).where(ResponseRun.id == response_id).values(input_request=None)
+                          .execution_options(synchronize_session="fetch"))
+    await session.execute(update(StreamEvent).where(
+        StreamEvent.response_id == response_id,
+        StreamEvent.event_type.in_(("message.input.request", "message.input.resolved")),
+    ).values(data={}))
+    await session.execute(delete(ChatTodo).where(ChatTodo.source_response_id == response_id))
+    await session.execute(delete(ChatTemplate).where(ChatTemplate.source_response_id == response_id))
+
+
 async def _privacy_cancel_locked(session: AsyncSession, run: ResponseRun, current_seq: int = 0) -> int:
     """Redact an active run while the caller holds Memory, parent, then run locks.
 
     Existing event identities stay stable. A previously cancelled Stop is upgraded in place
     without allocating a colliding second terminal event; completed runs are never redacted.
     """
-    if run.status not in ("pending", "streaming", "cancelled"):
+    if run.status not in ("pending", "streaming", "awaiting_input", "cancelled"):
         return current_seq
     await session.execute(update(StreamEvent).where(
         StreamEvent.response_id == run.id,
@@ -1481,10 +1801,9 @@ async def _privacy_cancel_locked(session: AsyncSession, run: ResponseRun, curren
         StreamEvent.event_type == "message.citations",
     ).values(data={"citations": []}))
     # Widgets carry model output derived from the withdrawn evidence (tables, sandbox code): neutralize them too.
-    await session.execute(update(StreamEvent).where(
-        StreamEvent.response_id == run.id,
-        StreamEvent.event_type.in_(("message.ui.delta", "message.ui.done")),
-    ).values(data={}))
+    await neutralize_ui_events(session, run.id)
+    # Parked input request, its events and todos/templates the model wrote from the evidence.
+    await purge_run_model_copies(session, run.id)
     was_cancelled = run.status == "cancelled"
     run.status = "cancelled"
     run.ephemeral = True
@@ -1509,7 +1828,7 @@ async def _privacy_cancel_locked(session: AsyncSession, run: ResponseRun, curren
 
 async def _cancel_response_locked(session: AsyncSession, run: ResponseRun, current_seq: int = 0) -> int:
     """Persist ordinary Stop after consent verification with a run-locked terminal sequence."""
-    if run.status not in ("pending", "streaming"):
+    if run.status not in ("pending", "streaming", "awaiting_input"):
         return current_seq
     run.status = "cancelled"
     run.completed_at = func.now()
@@ -1554,7 +1873,7 @@ async def _mark_cancelled(
         run = await session.scalar(select(ResponseRun).where(
             ResponseRun.id == response_id,
         ).with_for_update().execution_options(populate_existing=True))
-        if run is None or run.status not in ("pending", "streaming"):
+        if run is None or run.status not in ("pending", "streaming", "awaiting_input"):
             return
         try:
             await _require_privacy_fence(session, expected_fence, scope=scope)

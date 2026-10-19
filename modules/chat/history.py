@@ -6,6 +6,7 @@ chronological order, bounded by ``HISTORY_MAX_CHARS``, minus any turn whose assi
 that is no longer present, active or remote-eligible.
 """
 
+import json
 from collections.abc import Iterable, Sequence
 from datetime import datetime
 from typing import Any, NamedTuple
@@ -16,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.workspaces.schemas import Scope
 from modules.chat.models import Conversation, Message, ResponseRun
-from modules.chat.schemas import Citation
+from modules.chat.schemas import Citation, parse_generative_ui, parse_generative_ui_parts
 from modules.chat.scope import multi_workspace_enabled
 
 HISTORY_MAX_TURNS = 20
@@ -26,6 +27,10 @@ HISTORY_MAX_CHARS = 16_000
 # only loses turns older than it. ponytail: fixed scan window, keyset-page if conversations need deeper history.
 HISTORY_SCAN_MESSAGES = 400
 _EVIDENCE_BATCH = 100
+# Cap of the widget summary appended to one assistant turn, and of any single markup string inside it.
+WIDGET_SUMMARY_MAX_CHARS = 4096
+_WIDGET_TEXT_MAX_CHARS = 600
+_TRUNCATED = "[truncated]"
 
 
 class Turn(NamedTuple):
@@ -72,6 +77,59 @@ def cap_turns(turns: Sequence[Turn], max_chars: int = HISTORY_MAX_CHARS) -> list
         kept.append(turn)
     kept.reverse()
     return kept
+
+
+def widget_summary(raw: Any, *, max_chars: int = WIDGET_SUMMARY_MAX_CHARS) -> str:
+    """Bounded text describing a stored assistant widget so later turns can refer to it ("") when none).
+
+    Only completed, schema-valid widgets count. The summary is the kind, title and compact JSON of the
+    widget payload without evidence ids (``citations``) or the ``records`` duplicate of table rows;
+    long markup strings and row/data/step lists are cut with an explicit ``[truncated]`` marker so the
+    whole summary never exceeds ``max_chars`` (default ``WIDGET_SUMMARY_MAX_CHARS``).
+    """
+    widget = parse_generative_ui(raw)
+    if widget is None or widget.status != "completed":
+        return ""
+    slot = next((v for v in (widget.table, widget.chart, widget.plan, widget.form, widget.sandbox) if v), None)
+    if slot is None:
+        return ""
+    body = {k: v for k, v in slot.items() if k not in ("records", "citations")}
+    for key, value in body.items():
+        if isinstance(value, str) and len(value) > _WIDGET_TEXT_MAX_CHARS:
+            body[key] = value[:_WIDGET_TEXT_MAX_CHARS] + _TRUNCATED
+    head = f"\n\n[Widget shown to the user: {widget.kind}, title {json.dumps(widget.title, ensure_ascii=False)}]\n"
+    budget = max_chars - len(head)
+
+    def dump() -> str:
+        """Compact JSON of the current (possibly shortened) body."""
+        return json.dumps(body, ensure_ascii=False, separators=(",", ":"), default=str)
+
+    text = dump()
+    # Halve the longest list until it fits (keeps the leading rows, which carry the headline values).
+    while len(text) > budget:
+        lists = [k for k, v in body.items() if isinstance(v, list) and len(v) > 1]
+        if not lists:
+            break
+        longest = max(lists, key=lambda k: len(body[k]))
+        body[longest] = body[longest][: len(body[longest]) // 2]
+        body["note"] = _TRUNCATED
+        text = dump()
+    if len(text) > budget:
+        text = text[: budget - len(_TRUNCATED)] + _TRUNCATED
+    return head + text
+
+
+def widget_summaries(metadata: Any) -> str:
+    """Concatenated bounded summaries of every completed widget part of an assistant message ("" when none).
+
+    The total stays within ``WIDGET_SUMMARY_MAX_CHARS``: the budget is split evenly across the parts, so a
+    turn with several widgets costs the same history space as one.
+    """
+    parts = parse_generative_ui_parts(metadata)
+    if not parts:
+        return ""
+    share = WIDGET_SUMMARY_MAX_CHARS // len(parts)
+    return "".join(widget_summary(part.model_dump(mode="json"), max_chars=share) for part in parts)
 
 
 def _citation_refs(citations: Any) -> list[tuple[UUID, UUID, UUID, UUID]] | None:
@@ -151,5 +209,7 @@ async def load_effective_history(
     out: list[dict[str, str]] = []
     for turn in cap_turns(turns):
         out.append({"role": "user", "content": turn.user.content})
-        out.append({"role": "assistant", "content": turn.assistant.content})
+        # Revoked turns were already removed above, and cleanup drops a wiped widget from metadata.
+        widget = widget_summaries(getattr(turn.assistant, "metadata_json", None))
+        out.append({"role": "assistant", "content": turn.assistant.content + widget})
     return out

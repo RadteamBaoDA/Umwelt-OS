@@ -53,6 +53,7 @@ class PrivacySettings(BaseModel):
     allow_remote_reasoning: bool = False
     allow_remote_embeddings: bool = False
     allow_remote_web_search: bool = False
+    allow_widget_remote_media: bool = False  # owner opt-in: widget images/map tiles via the same-origin media proxy
     reasoning_destinations: list[str] = Field(default_factory=list, max_length=8)
     embedding_destinations: list[str] = Field(default_factory=list, max_length=8)
     web_search_destinations: list[str] = Field(default_factory=list, max_length=8)

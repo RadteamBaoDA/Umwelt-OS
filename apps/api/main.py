@@ -2,10 +2,12 @@ import asyncio
 import os
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
+from typing import Any, cast
 
 from arq.connections import ArqRedis
 from fastapi import FastAPI
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.routing import Route
 
 from core.auth.dependencies import session_middleware_secret
 from core.auth.routes import router as auth_router
@@ -27,8 +29,11 @@ from modules.agents.routes import router as agents_router
 from modules.automations.routes import router as automations_router
 from modules.automations.routes import webhook_router as automation_webhook_router
 from modules.automations.tools import register_automation_tools
+from modules.chat.media_routes import router as chat_media_router
 from modules.chat.routes import MAX_CHAT_STREAMS_PER_API_PROCESS
 from modules.chat.routes import router as chat_router
+from modules.chat.templates_routes import router as chat_templates_router
+from modules.chat.todos_routes import router as chat_todos_router
 from modules.connectors.github.routes import router as github_oauth_router
 from modules.connectors.provisioning_routes import router as connector_provisioning_router
 from modules.connectors.routes import operator_router as connectors_operator_router
@@ -44,6 +49,8 @@ from modules.knowledge.entities.routes import router as entities_router
 from modules.knowledge.observations.routes import router as observations_router
 from modules.knowledge.relationships.routes import router as relationships_router
 from modules.knowledge.temporal.routes import router as temporal_router
+from modules.mcp_widgets.server import RootPath
+from modules.mcp_widgets.server import create_http_app as create_widgets_mcp_app
 from modules.memory.routes import router as memory_router
 from modules.model_gateway.routes import router as model_gateway_router
 from modules.news.routes import router as news_router
@@ -51,6 +58,7 @@ from modules.news.topics import router as topics_router
 from modules.notifications.routes import router as notifications_router
 from modules.observability.operations_routes import router as operations_router
 from modules.observability.routes import router as observability_router
+from modules.pick.routes import router as pick_router
 from modules.search.routes import router as search_router
 from modules.settings.onboarding_routes import router as onboarding_router
 from modules.settings.routes import router as settings_router
@@ -121,6 +129,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             async with AsyncExitStack() as stack:
                 try:
+                    widgets = getattr(_app.state, "mcp_widgets_server", None)
+                    if widgets is not None:
+                        await stack.enter_async_context(widgets.session_manager.run())
                     bundle = getattr(_app.state, "mcp_bundle", None)
                     if bundle is not None:
                         await stack.enter_async_context(bundle.server.session_manager.run())
@@ -194,9 +205,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(topics_router)
     app.include_router(news_router)
     app.include_router(notifications_router)
+    app.include_router(pick_router)
     app.include_router(automations_router)
     app.include_router(automation_webhook_router)
     app.include_router(chat_router)
+    app.include_router(chat_media_router)
+    app.include_router(chat_todos_router)
+    app.include_router(chat_templates_router)
     app.include_router(memory_router)
     app.include_router(agents_router)
     app.include_router(observability_router)
@@ -247,6 +262,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.mcp_bundle = bundle
         app.mount("/api/v1/mcp", bundle.guarded_asgi_app)
 
+    if app_settings.mcp_widgets_enabled:
+        # Raises when the bearer token is unset, so a misconfigured deployment fails at startup.
+        widgets_server, widgets_app = create_widgets_mcp_app(app_settings)
+        app.state.mcp_widgets_server = widgets_server
+        # Exact `/mcp` first so clients need no trailing slash (a Mount would 307-redirect it).
+        app.router.routes.append(Route("/mcp", cast(Any, RootPath(widgets_app)), include_in_schema=False))
+        app.mount("/mcp", widgets_app)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

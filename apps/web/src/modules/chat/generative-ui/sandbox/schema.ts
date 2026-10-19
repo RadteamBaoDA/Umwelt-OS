@@ -39,7 +39,8 @@ export type GenerativeUIKind =
   | 'table'
   | 'bar_chart'
   | 'pie_chart'
-  | 'meeting_time_picker';
+  | 'meeting_time_picker'
+  | 'form';
 
 /**
  * Unified generative UI payload attached to streaming SSE events and persisted chat messages.
@@ -72,6 +73,7 @@ export interface GenerativeUIPayload {
     description?: string;
     subtitle?: string;
     source?: string;
+    is_sample?: boolean;
     columns: Array<{
       key: string;
       label: string;
@@ -102,6 +104,8 @@ export interface GenerativeUIPayload {
     }>;
     unit?: string;
     currency?: string;
+    source?: string;
+    is_sample?: boolean;
   };
   form?: {
     title?: string;
@@ -121,6 +125,12 @@ export interface GenerativeUIPayload {
       available?: boolean;
       recommended?: boolean;
     }>;
+  } | {
+    /** Generic input form (`render_form`); validated by `inputFormPayloadSchema`. */
+    title?: string;
+    description?: string;
+    submit_label?: string;
+    fields: Array<Record<string, unknown>>;
   };
 }
 

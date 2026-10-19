@@ -1,6 +1,8 @@
 services:
   postgres:
-    ports:
+    # !override: the base file publishes 127.0.0.1:${POSTGRES_PORT:-5432}; merging would make the disposable
+    # stack also claim 5432 and collide with a running development stack.
+    ports: !override
       - "127.0.0.1:${TEST_POSTGRES_PORT:-35432}:5432"
     environment:
       POSTGRES_DB: bbd_test
@@ -17,6 +19,8 @@ services:
   redis:
     # Disposable stack: no password, never the developer's real .env.
     env_file: !reset []
+    # Containers reach redis over the compose network; publishing 6379 would collide with a running dev stack.
+    ports: !reset []
     environment:
       REDISCLI_AUTH: ""
     volumes:

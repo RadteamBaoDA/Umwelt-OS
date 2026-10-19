@@ -16,3 +16,14 @@
     vertical-align: 1px;
   }
 }
+
+/* Answer block reveal: blocks fade in once as they scroll into view; skipped for reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .chat-markdown > .reveal-pending {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  .chat-markdown > .reveal-block {
+    transition: opacity 240ms ease-out, transform 240ms ease-out;
+  }
+}

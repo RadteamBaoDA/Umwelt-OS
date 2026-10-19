@@ -17,6 +17,16 @@ const SAMPLE_ROWS = [
 ];
 
 describe('TableCatalog', () => {
+  it('shows the sample badge and source only when is_sample is true', () => {
+    const { rerender } = render(
+      <TableCatalog title="T" columns={SAMPLE_COLUMNS} rows={SAMPLE_ROWS} source="Demo set" isSample locale="en-us" />,
+    );
+    expect(screen.getByTestId('sample-data-badge')).toHaveTextContent('Sample data');
+    expect(screen.getByText('Demo set')).toBeInTheDocument();
+    rerender(<TableCatalog title="T" columns={SAMPLE_COLUMNS} rows={SAMPLE_ROWS} isSample={false} locale="en-us" />);
+    expect(screen.queryByTestId('sample-data-badge')).not.toBeInTheDocument();
+  });
+
   it('renders columns, formatted currency/percent cells, and status badges', () => {
     render(
       <TableCatalog

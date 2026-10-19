@@ -7,16 +7,19 @@ import { OpenGenerativeUIRenderer } from '../sandbox';
 import type { GenerativeUIPayload } from '../sandbox/schema';
 import { GenerativeBarChart, type GenerativeBarDatum } from './charts/bar-chart';
 import { GenerativePieChart, type GenerativePieDatum } from './charts/pie-chart';
+import { InputForm } from './input-form';
 import { MeetingTimePicker, type MeetingTimeSlot } from './meeting-time-picker';
 import { genUiCopy, resolveWidgetLocale } from '../copy';
 import { PlanCard, type PlanStep } from './plan-card';
 import {
   chartPayloadSchema,
   formPayloadSchema,
+  inputFormPayloadSchema,
   planPayloadSchema,
   sandboxPayloadSchema,
   tablePayloadSchema,
 } from './payload-schemas';
+import { ToolReasoning } from './tool-reasoning';
 import { TableCatalog, type TableColumn, type TableRowData } from './table-catalog';
 
 /** Props accepted by the unified ToolRendering dispatcher component. */
@@ -24,7 +27,7 @@ export interface ToolRenderingProps {
   /** Validated or streaming GenerativeUIPayload attached to a chat message or SSE stream. */
   payload: GenerativeUIPayload;
   /** Callback invoked when an interactive widget dispatches a follow-up prompt. */
-  onSendPrompt?: (prompt: string) => void;
+  onSendPrompt?: (prompt: string) => void | Promise<unknown>;
   /** Application locale ('en-us' | 'vi-vi'). */
   locale?: AppLocaleId;
 }
@@ -161,6 +164,7 @@ export function ToolRendering({
           rows={rows}
           records={records}
           source={source}
+          isSample={tableObj.is_sample === true}
           locale={resolvedLocale}
           onSendPrompt={onSendPrompt}
         />
@@ -204,8 +208,8 @@ export function ToolRendering({
           currency={currency}
           unit={unit}
           source={source}
+          isSample={chartObj.is_sample === true}
           locale={resolvedLocale}
-
           chartType={
             chartObj.chart_type === 'line' ||
             chartObj.chart_type === 'scatter' ||
@@ -231,6 +235,15 @@ export function ToolRendering({
             ? chartObj.subtitle
             : undefined;
       const data = Array.isArray(chartObj.data) ? (chartObj.data as GenerativePieDatum[]) : [];
+      const categoryKey =
+        typeof chartObj.categoryKey === 'string'
+          ? chartObj.categoryKey
+          : typeof chartObj.x_key === 'string'
+            ? chartObj.x_key
+            : undefined;
+      const series = Array.isArray(chartObj.series)
+        ? (chartObj.series as ChartSeries[])
+        : undefined;
       const currency = typeof chartObj.currency === 'string' ? chartObj.currency : undefined;
       const unit = typeof chartObj.unit === 'string' ? chartObj.unit : undefined;
       const source = typeof chartObj.source === 'string' ? chartObj.source : undefined;
@@ -240,9 +253,12 @@ export function ToolRendering({
           title={title}
           description={description}
           data={data}
+          categoryKey={categoryKey}
+          series={series}
           currency={currency}
           unit={unit}
           source={source}
+          isSample={chartObj.is_sample === true}
           locale={resolvedLocale}
         />
       );
@@ -288,8 +304,30 @@ export function ToolRendering({
       );
     }
 
+    case 'form': {
+      const formObj = payload.form ?? rawRecord;
+      const parsed = inputFormPayloadSchema.safeParse(formObj);
+      if (!parsed.success) {
+        // Partial arguments are expected while streaming; only a completed payload is an error.
+        return payload.status === 'streaming' ? null : invalid;
+      }
+      return (
+        <InputForm
+          key={parsed.data.fields.map((f) => f.id).join('|')}
+          title={parsed.data.title}
+          description={parsed.data.description}
+          fields={parsed.data.fields}
+          submitLabel={parsed.data.submit_label}
+          disabled={payload.status === 'streaming'}
+          locale={resolvedLocale}
+          onSendPrompt={onSendPrompt}
+        />
+      );
+    }
+
     default:
-      return null;
+      // No dedicated widget for this kind: show a collapsed, inspectable tool-call summary.
+      return <ToolReasoning name={String((payload as { kind?: unknown }).kind ?? 'tool')} data={rawRecord} locale={resolvedLocale} />;
   }
 }
 

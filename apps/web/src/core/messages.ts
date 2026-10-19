@@ -1,6 +1,7 @@
 import mcpCatalog from '@/modules/sources/mcp-messages.json';
 import { storyMessages } from '@/modules/news/story-messages';
 import { dailyMessages, notificationMessages } from '@/modules/dashboard/daily-messages';
+import { pickMessages } from '@/modules/pick/messages';
 import { githubMessages } from '@/modules/dashboard/github-messages';
 import { automationMessages } from '@/modules/automations/messages';
 import { observabilityMessages } from '@/modules/observability/messages';
@@ -21,6 +22,8 @@ import { memoryPrivacyMessages } from './messages/memory-privacy';
 import { aiSettingsMessages } from './messages/ai-settings';
 import { systemPromptsMessages } from './messages/system-prompts';
 import { webSearchMessages } from './messages/web-search';
+import { vizRouterMessages } from './messages/viz-router';
+import { todosMessages } from './messages/todos';
 import { n8nMessages } from './messages/n8n';
 import { dashboardMessages } from './messages/dashboard';
 import { gadgetSettingsMessages } from './messages/gadget-settings';
@@ -57,6 +60,8 @@ export const messages = {
     aiSettings: aiSettingsMessages['en-us'],
     systemPrompts: systemPromptsMessages['en-us'],
     webSearch: webSearchMessages['en-us'],
+    vizRouter: vizRouterMessages['en-us'],
+    todos: todosMessages['en-us'],
     n8n: n8nMessages['en-us'],
     dashboard: dashboardMessages['en-us'],
     gadgetSettings: gadgetSettingsMessages['en-us'],
@@ -72,6 +77,7 @@ export const messages = {
     github: githubMessages['en-us'],
     automations: automationMessages['en-us'],
     notifications: notificationMessages['en-us'],
+    pick: pickMessages['en-us'],
     workspaces: workspacesMessages['en-us'],
     workspaceMembers: workspaceMembersMessages['en-us'],
     sharing: sharingMessages['en-us'],
@@ -96,6 +102,8 @@ export const messages = {
     aiSettings: aiSettingsMessages['vi-vi'],
     systemPrompts: systemPromptsMessages['vi-vi'],
     webSearch: webSearchMessages['vi-vi'],
+    vizRouter: vizRouterMessages['vi-vi'],
+    todos: todosMessages['vi-vi'],
     n8n: n8nMessages['vi-vi'],
     dashboard: dashboardMessages['vi-vi'],
     gadgetSettings: gadgetSettingsMessages['vi-vi'],
@@ -111,6 +119,7 @@ export const messages = {
     github: githubMessages['vi-vi'],
     automations: automationMessages['vi-vi'],
     notifications: notificationMessages['vi-vi'],
+    pick: pickMessages['vi-vi'],
     workspaces: workspacesMessages['vi-vi'],
     workspaceMembers: workspaceMembersMessages['vi-vi'],
     sharing: sharingMessages['vi-vi'],

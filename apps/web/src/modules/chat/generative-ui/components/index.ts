@@ -46,6 +46,8 @@ export {
   type MeetingTimeSlot,
 } from './meeting-time-picker';
 
+export { InputForm, type InputFormProps } from './input-form';
+
 export {
   ToolRendering,
   type ToolRenderingProps,

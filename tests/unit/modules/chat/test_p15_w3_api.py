@@ -286,6 +286,7 @@ async def test_delete_conversation_deletes_only_the_cascading_parent(monkeypatch
     import modules.memory.public as memory_public
 
     deleted: list[Any] = []
+    executed: list[str] = []
     convo = SimpleNamespace(id=uuid4(), pinned=False)
 
     class _Session:
@@ -294,6 +295,9 @@ async def test_delete_conversation_deletes_only_the_cascading_parent(monkeypatch
 
         async def delete(self, obj: Any) -> None:
             deleted.append(obj)
+
+        async def execute(self, stmt: Any) -> None:
+            executed.append(str(stmt))  # model-saved template purge
 
     async def noop(*_a: Any, **_k: Any) -> None:
         return None

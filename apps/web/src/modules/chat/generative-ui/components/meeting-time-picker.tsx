@@ -13,7 +13,8 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import type { AppLocaleId } from '@/core/i18n';
-import { genUiCopy, MEETING_COPY, resolveWidgetLocale } from '../copy';
+import { INPUT_DECLINE } from '../../api';
+import { genUiCopy, INPUT_COPY, MEETING_COPY, resolveWidgetLocale } from '../copy';
 
 /** Candidate meeting time slot descriptor. */
 export interface MeetingTimeSlot {
@@ -71,6 +72,15 @@ export interface MeetingTimePickerProps {
   locale?: AppLocaleId;
   /** Callback invoked when the user confirms a time slot or requests alternative times. */
   onSendPrompt?: (prompt: string) => void;
+  /**
+   * Id of a pending `request_user_input` (human-in-the-loop). When present together with `onSubmitInput`
+   * the choice resumes the paused run through this path instead of `onSendPrompt` (a new message/run).
+   */
+  requestId?: string;
+  /** Answers the pending request; the slot id (or `__decline__`) is the answer. Rejection re-enables the card. */
+  onSubmitInput?: (requestId: string, answer: string) => Promise<void> | void;
+  /** Lifecycle of the request; anything but 'pending' locks the card and shows the matching banner. */
+  inputState?: 'pending' | 'expired' | 'cancelled';
 }
 
 /**
@@ -128,10 +138,15 @@ export function MeetingTimePicker({
   timezone,
   locale,
   onSendPrompt,
+  requestId,
+  onSubmitInput,
+  inputState = 'pending',
 }: MeetingTimePickerProps) {
   const resolvedLocale = resolveWidgetLocale(locale);
   const copy = MEETING_COPY[resolvedLocale];
   const catalog = genUiCopy(resolvedLocale);
+  const inputCopy = INPUT_COPY[resolvedLocale];
+  const viaRequest = Boolean(requestId && onSubmitInput);
 
   const resolvedDuration = meetingDuration ?? duration_minutes;
   const displayTitle = title || reasonForScheduling || copy.defaultTitle;
@@ -146,6 +161,30 @@ export function MeetingTimePicker({
   const [selectedSlotId, setSelectedSlotId] = React.useState<string | null>(null);
   const [confirmedSlot, setConfirmedSlot] = React.useState<NormalizedMeetingTimeSlot | null>(null);
   const [isDeclined, setIsDeclined] = React.useState(false);
+  // Request path only: locked from click until the server rejects (then retry is allowed) and after acceptance.
+  const [submitState, setSubmitState] = React.useState<'idle' | 'sending' | 'sent'>('idle');
+  const [submitFailed, setSubmitFailed] = React.useState(false);
+  const locked = viaRequest && (submitState !== 'idle' || inputState !== 'pending');
+
+  /**
+   * Sends the answer through the request path; on failure the card unlocks so the user can retry.
+   */
+  const submitAnswer = React.useCallback(
+    async (answer: string, onAccepted: () => void) => {
+      if (!requestId || !onSubmitInput) return;
+      setSubmitState('sending');
+      setSubmitFailed(false);
+      try {
+        await onSubmitInput(requestId, answer);
+        setSubmitState('sent');
+        onAccepted();
+      } catch {
+        setSubmitState('idle');
+        setSubmitFailed(true);
+      }
+    },
+    [onSubmitInput, requestId],
+  );
 
   const selectedSlot = React.useMemo(
     () => normalizedSlots.find((slot) => slot.id === selectedSlotId) ?? null,
@@ -167,21 +206,32 @@ export function MeetingTimePicker({
    */
   const handleConfirm = React.useCallback(() => {
     if (!selectedSlot || selectedSlot.available === false) return;
+    if (viaRequest) {
+      void submitAnswer(selectedSlot.id, () => setConfirmedSlot(selectedSlot));
+      return;
+    }
     setConfirmedSlot(selectedSlot);
     setIsDeclined(false);
     onSendPrompt?.(
       copy.confirmPrompt(displayTitle, selectedSlot.date, selectedSlot.time, selectedSlot.label),
     );
-  }, [copy, displayTitle, onSendPrompt, selectedSlot]);
+  }, [copy, displayTitle, onSendPrompt, selectedSlot, submitAnswer, viaRequest]);
 
   /**
    * Declines the proposed slots and asks the assistant for alternative times.
    */
   const handleDecline = React.useCallback(() => {
+    if (viaRequest) {
+      void submitAnswer(INPUT_DECLINE, () => {
+        setIsDeclined(true);
+        setConfirmedSlot(null);
+      });
+      return;
+    }
     setIsDeclined(true);
     setConfirmedSlot(null);
     onSendPrompt?.(copy.declinePrompt(displayTitle));
-  }, [copy, displayTitle, onSendPrompt]);
+  }, [copy, displayTitle, onSendPrompt, submitAnswer, viaRequest]);
 
   return (
     <Card
@@ -225,7 +275,7 @@ export function MeetingTimePicker({
               <button
                 key={slot.id}
                 type="button"
-                disabled={!isAvailable}
+                disabled={!isAvailable || locked}
                 aria-pressed={isSelected}
                 data-testid={`meeting-slot-${slot.id}`}
                 onClick={() => handleSelectSlot(slot)}
@@ -279,6 +329,22 @@ export function MeetingTimePicker({
           </p>
         )}
 
+        {viaRequest && inputState !== 'pending' && submitState !== 'sent' && (
+          <p
+            role="status"
+            data-testid="meeting-input-state-banner"
+            className="rounded-lg border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground"
+          >
+            {inputState === 'expired' ? inputCopy.expired : inputCopy.cancelled}
+          </p>
+        )}
+
+        {submitFailed && (
+          <p role="alert" data-testid="meeting-input-failed" className="text-xs text-danger">
+            {inputCopy.failed}
+          </p>
+        )}
+
         {isDeclined && (
           <p
             role="status"
@@ -296,6 +362,7 @@ export function MeetingTimePicker({
           variant="outline"
           size="sm"
           onClick={handleDecline}
+          disabled={locked}
           data-testid="meeting-decline-button"
         >
           {copy.suggestAlternative}
@@ -304,7 +371,7 @@ export function MeetingTimePicker({
           type="button"
           variant="default"
           size="sm"
-          disabled={!selectedSlot || selectedSlot.available === false}
+          disabled={!selectedSlot || selectedSlot.available === false || locked}
           onClick={handleConfirm}
           data-testid="meeting-confirm-button"
         >

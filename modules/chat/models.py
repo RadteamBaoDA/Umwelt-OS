@@ -56,6 +56,8 @@ class Conversation(Base):
     ephemeral: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
+    # Id (user template UUID or built-in seed id) the owner picked in the library for `apply_template` to consume.
+    pending_template: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
@@ -124,7 +126,7 @@ class ResponseRun(Base):
             postgresql_where=text("status IN ('completed', 'cancelled', 'failed')"),
         ),
         CheckConstraint(
-            "status IN ('pending', 'streaming', 'completed', 'cancelled', 'failed')",
+            "status IN ('pending', 'streaming', 'awaiting_input', 'completed', 'cancelled', 'failed')",
             name="ck_chat_response_runs_status",
         ),
         ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_chat_response_runs_workspace", ondelete="RESTRICT"),
@@ -160,6 +162,8 @@ class ResponseRun(Base):
     retrieval_context: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     ephemeral: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # The single open `request_user_input` request while status is awaiting_input (see modules/chat/user_input.py).
+    input_request: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -262,3 +266,73 @@ class AgentActivityLink(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
+
+
+class ChatTodo(Base):
+    """Store one conversation-scoped to-do item managed by the model tools or the owner's panel.
+
+    Rows hold only owner/model-authored task text, never document or evidence content. The composite
+    foreign key cascades from ``chat_conversations`` so conversation deletion and retention purges remove
+    todos with the transcript; there is no separate soft-delete state to leak past a purge.
+    """
+
+    __tablename__ = "chat_todos"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending', 'completed')", name="ck_chat_todos_status"),
+        CheckConstraint("position >= 0", name="ck_chat_todos_position"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_chat_todos_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["workspace_id", "conversation_id"], ["chat_conversations.workspace_id", "chat_conversations.id"],
+            name="fk_chat_todos_conversation", ondelete="CASCADE",
+        ),
+        Index("ix_chat_todos_conversation_position", "conversation_id", "position"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    conversation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(String(1000), nullable=False, server_default="")
+    emoji: Mapped[str] = mapped_column(String(8), nullable=False, server_default="")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Run whose model tool call last wrote this row; deleted when that run's evidence is cleaned up.
+    # No FK: run retention must not null the provenance, and cleanup deletes by this id directly.
+    source_response_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class ChatTemplate(Base):
+    """Store one owner-saved widget template (markup rendered only inside the sandbox iframe).
+
+    Scoped by workspace and owner like ``ChatTodo`` but not by conversation. ``html`` is user/model authored and
+    is never interpreted server-side; it leaves the service only through the owner's API or ``apply_template``.
+    The principal FK blocks workspace removal while templates exist (RESTRICT), matching conversations.
+    """
+
+    __tablename__ = "chat_templates"
+    __table_args__ = (
+        CheckConstraint("version >= 1", name="ck_chat_templates_version"),
+        ForeignKeyConstraint(
+            ["workspace_id", "actor_user_id"], ["workspaces.id", "workspaces.owner_user_id"],
+            name="fk_chat_templates_principal", ondelete="RESTRICT",
+        ),
+        Index("ix_chat_templates_owner_created", "workspace_id", "actor_user_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str] = mapped_column(String(500), nullable=False, server_default="")
+    html: Mapped[str] = mapped_column(Text, nullable=False)
+    data_description: Mapped[str] = mapped_column(String(500), nullable=False, server_default="")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    # Set only for templates created through the model tool (owner-UI templates stay NULL and are never purged).
+    source_response_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
