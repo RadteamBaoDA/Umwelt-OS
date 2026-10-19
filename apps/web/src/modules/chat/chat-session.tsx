@@ -20,6 +20,7 @@ import {
   WEB_SEARCH_SEND_ENABLED,
 } from '@/modules/chat/api';
 import { ChatComposer } from './chat-composer';
+import { PickQrButton } from '@/modules/pick/pick-qr-modal';
 import { ChatTranscript } from './chat-transcript';
 import { ChatContextBar, MAX_ITEMS, stripItemTitles } from './chat-context-bar';
 import { ATTACHMENT_STATUS_ID, ChatAttachmentBar, useChatAttachments, withAttachments } from './chat-attachments';
@@ -779,6 +780,7 @@ export function ChatSession({
           ) : null}
 
           <div className={`flex items-center gap-2 shrink-0 ${mode === 'drawer' ? 'order-first' : ''}`}>
+            {mode === 'full' && <PickQrButton csrfToken={session.csrfToken} onPrompt={handleTranscriptSendPrompt} />}
             {mode === 'full' && headerActions}
             {mode === 'full' && (
               <Select value={pendingProfileRun?.profileId ?? selectedProfileId} onValueChange={setSelectedProfileId}>

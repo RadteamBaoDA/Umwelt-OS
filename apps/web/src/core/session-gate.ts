@@ -2,7 +2,7 @@
 export const SESSION_COOKIE = 'bbd_session';
 
 // Public entry points: the home page decides setup vs sign-in itself, and invite/setup flows run unauthenticated.
-const PUBLIC_PREFIXES = ['/login', '/setup', '/invite', '/invitations', '/_next', '/api', '/health'];
+const PUBLIC_PREFIXES = ['/login', '/setup', '/invite', '/invitations', '/pick', '/_next', '/api', '/health'];
 
 /**
  * Decides whether a page request should be redirected to /login.

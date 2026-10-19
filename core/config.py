@@ -87,6 +87,8 @@ class Settings(BaseSettings):
     # --- end auth hardening ---
     # Enable only after W4 scope review and V1 security validation; legacy/operator access stays bootstrap-only.
     multi_workspace_enabled: bool = Field(default=False, validation_alias="MULTI_WORKSPACE_ENABLED")
+    # Phone prompt picker (QR). Off by default: the anonymous /pick phone routes are LAN-reachable.
+    pick_enabled: bool = Field(default=False, validation_alias="PICK_ENABLED")
     google_client_id: str = ""
     google_client_secret: SecretStr = SecretStr("")
     github_app_client_id: str = ""

@@ -3774,3 +3774,25 @@ No notice text is reproduced here for the following; each remains pending until 
 - Runtime and base images (no digest pinned): `pgvector/pgvector:0.8.6-pg16-bookworm`, `redis:7.4.11-alpine`, `python:3.12.14-slim-bookworm`, `node:24.20.0-alpine3.23`, `alpine:3.22` firewall build stage.
 - Build tooling: Tailwind CSS and `@tailwindcss/postcss` 4.3.3 (MIT per package metadata; notice text not reproduced), uv 0.12.11 installer, hatchling (unresolved version).
 - Remaining transitive dependencies not listed above and the operator-installed age host binary (not distributed).
+
+## qrcode.react 4.2.0 (phone prompt picker QR code)
+
+### `qrcode.react` 4.2.0 — ISC
+
+ISC License
+
+Copyright (c) 2015, Paul O’Shannessy
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+
+qrcode.react bundles the Nayuki QR Code generator library (`src/third-party/qrcodegen`), which is available under the MIT license; its copyright notice ships inside the npm package.
