@@ -194,7 +194,9 @@ def build_generative_ui_system_prompt(
         prompt_parts.append(
             "\n\nREMOTE MEDIA: For trip or place widgets you may call `get_trip_stop_images` (English Wikipedia "
             "titles, 1-8) before rendering. Use only the returned same-origin `image_url`, show each `credit` and "
-            "`license`, and skip stops marked unavailable. Never use any other remote image URL."
+            "`license`, and skip stops marked unavailable. Never use any other remote image URL. The frame cannot load "
+            "it directly: call `await loadImage(image_url)` (also for individual map tiles) and set the returned "
+            "`blob:` URL as the <img> src; hide the image if it rejects."
         )
     if todos:
         prompt_parts.append(

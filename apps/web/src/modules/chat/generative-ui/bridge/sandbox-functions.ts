@@ -43,6 +43,13 @@ export type ValidatedBridgeMessage =
       type: 'open-link';
       url: string;
       rawType: 'umwelt:open-link' | 'openLink';
+    }
+  | {
+      type: 'load-image';
+      /** Untrusted URL; the host re-validates it with `resolveMediaUrl` before fetching. */
+      url: string;
+      id: string;
+      rawType: 'umwelt:load-image';
     };
 
 export interface ValidateBridgeMessageOptions {
@@ -180,6 +187,14 @@ export function validateBridgeMessage(
       url: rawUrl,
       rawType,
     };
+  }
+
+  if (rawType === 'umwelt:load-image') {
+    const { url, id } = record;
+    if (typeof url !== 'string' || typeof id !== 'string' || !id || id.length > 64) {
+      return null;
+    }
+    return { type: 'load-image', url, id, rawType };
   }
 
   return null;

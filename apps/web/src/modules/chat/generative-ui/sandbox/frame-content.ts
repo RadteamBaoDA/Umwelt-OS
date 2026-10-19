@@ -169,11 +169,34 @@ export const SANDBOX_BRIDGE_JS = `
     });
   };
 
+  // loadImage(url) -> Promise<blobUrl>: the host fetches a same-origin media-proxy URL
+  // (/api/v1/media/proxy?token=... or /api/v1/media/tile/z/x/y) and returns a blob: URL usable as <img src>.
+  // The frame CSP stays img-src data: blob:; the host refuses anything else or when remote media is off.
+  var imagePending = {};
+  var LOAD_IMAGE_TIMEOUT_MS = 20000;
+  window.loadImage = function(input) {
+    var url = input && typeof input === 'object' ? input.url : input;
+    if (typeof url !== 'string' || !url) return Promise.reject(new Error('loadImage needs a url'));
+    if (!window.parent || window.parent === window) return Promise.reject(new Error('loadImage unavailable'));
+    return new Promise(function(resolve, reject) {
+      var id = 'i' + (++nextId);
+      var timer = setTimeout(function() {
+        delete imagePending[id];
+        reject(new Error('loadImage timed out'));
+      }, LOAD_IMAGE_TIMEOUT_MS);
+      imagePending[id] = { resolve: resolve, reject: reject, timer: timer };
+      postToHost({ type: 'umwelt:load-image', id: id, url: url });
+    });
+  };
+
   window.Websandbox = {
     connection: {
       remote: {
         sendPrompt: function(args) {
           return window.sendPrompt(args);
+        },
+        loadImage: function(args) {
+          return window.loadImage(args);
         },
         openLink: function(args) {
           var url = args && typeof args === 'object' ? args.url : args;
@@ -193,6 +216,18 @@ export const SANDBOX_BRIDGE_JS = `
     var data = event.data;
     if (!data || typeof data !== 'object' || !NONCE || data.nonce !== NONCE) return;
 
+    if (data.type === 'umwelt:load-image-result' || data.type === 'umwelt:load-image-error') {
+      var img = imagePending[data.id];
+      if (!img) return;
+      delete imagePending[data.id];
+      clearTimeout(img.timer);
+      if (data.type === 'umwelt:load-image-result' && typeof data.blobUrl === 'string' && data.blobUrl.indexOf('blob:') === 0) {
+        img.resolve(data.blobUrl);
+      } else {
+        img.reject(new Error(typeof data.message === 'string' ? data.message : 'loadImage failed'));
+      }
+      return;
+    }
     if (data.type === 'umwelt:send-prompt-ack') {
       var acked = pending[data.id];
       if (acked) clearTimeout(acked.timer);
