@@ -262,3 +262,37 @@ class AgentActivityLink(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
+
+
+class ChatTodo(Base):
+    """Store one conversation-scoped to-do item managed by the model tools or the owner's panel.
+
+    Rows hold only owner/model-authored task text, never document or evidence content. The composite
+    foreign key cascades from ``chat_conversations`` so conversation deletion and retention purges remove
+    todos with the transcript; there is no separate soft-delete state to leak past a purge.
+    """
+
+    __tablename__ = "chat_todos"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending', 'completed')", name="ck_chat_todos_status"),
+        CheckConstraint("position >= 0", name="ck_chat_todos_position"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_chat_todos_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["workspace_id", "conversation_id"], ["chat_conversations.workspace_id", "chat_conversations.id"],
+            name="fk_chat_todos_conversation", ondelete="CASCADE",
+        ),
+        Index("ix_chat_todos_conversation_position", "conversation_id", "position"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    conversation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(String(1000), nullable=False, server_default="")
+    emoji: Mapped[str] = mapped_column(String(8), nullable=False, server_default="")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())

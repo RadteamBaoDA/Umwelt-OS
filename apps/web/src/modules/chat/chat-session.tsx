@@ -23,6 +23,7 @@ import { ChatComposer } from './chat-composer';
 import { PickQrButton } from '@/modules/pick/pick-qr-modal';
 import { upsertUiPart, type UiPart } from './generative-ui-parts';
 import { ChatTranscript } from './chat-transcript';
+import { TodosPanel } from './todos/todos-panel';
 import { ChatContextBar, MAX_ITEMS, stripItemTitles } from './chat-context-bar';
 import { ATTACHMENT_STATUS_ID, ChatAttachmentBar, useChatAttachments, withAttachments } from './chat-attachments';
 import { ConversationAgentActivity } from '@/modules/agents/conversation-agent-activity';
@@ -898,6 +899,8 @@ export function ChatSession({
             }
           }}
         />
+
+        {mode === 'full' && <TodosPanel conversationId={conversationId} isStreaming={isStreaming} />}
 
         {/* Bottom composer */}
         <ChatComposer

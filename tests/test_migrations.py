@@ -6,7 +6,9 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 
 # Derive the head so later additive revisions (provider terms/quota, translation) never hardcode here.
-HEAD = ScriptDirectory.from_config(Config("alembic.ini")).get_current_head()
+# While r22 and r24 are unchained siblings there are two heads; the integrator re-chains them, so tolerate that here.
+_HEADS = ScriptDirectory.from_config(Config("alembic.ini")).get_heads()
+HEAD = _HEADS[0] if len(_HEADS) == 1 else "|".join(sorted(_HEADS))
 
 
 def test_empty_database_migration_emits_single_owner_and_session_schema() -> None:
@@ -159,3 +161,13 @@ def test_r24_viz_router_settings_migration() -> None:
     assert down.returncode == 0, down.stderr
     assert "DROP COLUMN viz_router" in down.stdout
     assert HEAD == "r24_viz_router_settings"
+
+
+def test_r22_chat_todos_migration() -> None:
+    """Verify r22 creates chat_todos with checks and a cascading conversation FK, and drops it on downgrade."""
+    up = _alembic("upgrade", "r21_drop_backup_control:r22_chat_todos", "--sql")
+    assert up.returncode == 0, up.stderr
+    for fragment in ("CREATE TABLE chat_todos", "ck_chat_todos_status", "fk_chat_todos_conversation",
+                     "ON DELETE CASCADE", "ix_chat_todos_conversation_position"):
+        assert fragment in up.stdout
+    assert "DROP TABLE chat_todos" in _alembic("downgrade", "r22_chat_todos:r21_drop_backup_control", "--sql").stdout

@@ -169,6 +169,7 @@ def build_generative_ui_system_prompt(
     local_only: bool = False,
     skills: Sequence[str] = (),
     remote_media: bool = False,
+    todos: bool = False,
 ) -> str:
     """Compose the Generative UI system prompt with locale, skill index and privacy fence.
 
@@ -177,6 +178,7 @@ def build_generative_ui_system_prompt(
         local_only: Whether this turn references local-only evidence (adds the privacy fence).
         skills: Names loadable through the `read_skill` tool, listed so the model can pick one.
         remote_media: Owner allowed remote widget media on a non-local-only turn (adds trip-image guidance).
+        todos: Whether `manage_todos`/`get_todos` are offered this turn (adds todo guidance).
 
     Returns:
         Complete system prompt text.
@@ -193,6 +195,12 @@ def build_generative_ui_system_prompt(
             "\n\nREMOTE MEDIA: For trip or place widgets you may call `get_trip_stop_images` (English Wikipedia "
             "titles, 1-8) before rendering. Use only the returned same-origin `image_url`, show each `credit` and "
             "`license`, and skip stops marked unavailable. Never use any other remote image URL."
+        )
+    if todos:
+        prompt_parts.append(
+            "\n\nTODOS: For multi-step work you may keep a task list with `manage_todos` (send the complete list "
+            "each time; each item has title, optional description and emoji, status pending|completed; reuse ids "
+            "from `get_todos`). Mark items completed as you finish them. Do not store document content in todos."
         )
     if local_only:
         prompt_parts.append(

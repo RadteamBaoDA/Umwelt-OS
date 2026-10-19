@@ -13,6 +13,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from modules.chat.generative_ui.prompt import SandboxedUiArgs
 from modules.chat.generative_ui.tools.form import FormPayload, TimeSlot
 from modules.chat.generative_ui.tools.query import ChartSeriesConfig, TableColumn
+from modules.chat.todos import TodoReplace, run_todo_tool
+
+__all__ = ["run_todo_tool"]  # re-exported so the worker imports every tool runner from here
 
 TOOL_SANDBOXED_UI = "render_sandboxed_ui"
 TOOL_TABLE = "render_table"
@@ -21,6 +24,9 @@ TOOL_PLAN = "render_plan"
 TOOL_TIME_PICKER = "render_time_picker"
 TOOL_FORM = "render_form"
 TOOL_READ_SKILL = "read_skill"
+TOOL_MANAGE_TODOS = "manage_todos"  # non-terminal; conversation todos, offered only when the worker opts in
+TOOL_GET_TODOS = "get_todos"
+TODO_TOOLS: frozenset[str] = frozenset({TOOL_MANAGE_TODOS, TOOL_GET_TODOS})
 TOOL_TRIP_IMAGES = "get_trip_stop_images"  # non-terminal data tool; offered only with allow_widget_remote_media
 
 TERMINAL_UI_TOOLS: frozenset[str] = frozenset(
@@ -169,12 +175,15 @@ def _sandbox_schema() -> dict[str, Any]:
     return schema
 
 
-def build_chat_tool_specs(*, include_read_skill: bool, include_trip_images: bool = False) -> list[dict[str, Any]]:
+def build_chat_tool_specs(
+    *, include_read_skill: bool, include_trip_images: bool = False, include_todos: bool = False,
+) -> list[dict[str, Any]]:
     """Build the OpenAI-format `tools` list for a generative-UI chat turn.
 
     Args:
         include_read_skill: Whether to expose the non-terminal `read_skill` tool.
         include_trip_images: Whether to expose `get_trip_stop_images` (only when remote widget media is allowed).
+        include_todos: Whether to expose the non-terminal `manage_todos` and `get_todos` tools.
 
     Returns:
         Fresh (caller-mutable) list of function specs whose parameters come from the pydantic models.
@@ -197,6 +206,20 @@ def build_chat_tool_specs(*, include_read_skill: bool, include_trip_images: bool
                 "credit, license and article_url per stop, or status 'unavailable'. Not terminal."
             ),
             "parameters": TripStopImagesToolArgs.model_json_schema(),
+        }})
+    if include_todos:
+        specs.append({"type": "function", "function": {
+            "name": TOOL_MANAGE_TODOS,
+            "description": (
+                "Replace the conversation's whole todo list. Send the full list every time; omit ids for new items "
+                "(existing ids are kept). Not terminal."
+            ),
+            "parameters": TodoReplace.model_json_schema(),
+        }})
+        specs.append({"type": "function", "function": {
+            "name": TOOL_GET_TODOS,
+            "description": "Read the conversation's current todo list. Not terminal.",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
         }})
     return copy.deepcopy(specs)
 
