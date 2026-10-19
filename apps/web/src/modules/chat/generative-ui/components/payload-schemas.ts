@@ -34,6 +34,7 @@ export const tablePayloadSchema = z
     description: optionalText,
     subtitle: optionalText,
     source: optionalText,
+    is_sample: z.boolean().optional(),
     columns: z.array(
       z.union([z.string(), z.object({ key: z.string().min(1), label: z.string() }).passthrough()]),
     ),
@@ -49,6 +50,7 @@ export const chartPayloadSchema = z
     description: optionalText,
     subtitle: optionalText,
     source: optionalText,
+    is_sample: z.boolean().optional(),
     unit: optionalText,
     currency: optionalText,
     categoryKey: optionalText,

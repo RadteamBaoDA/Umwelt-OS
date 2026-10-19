@@ -35,6 +35,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { cancelAgentRun, getAgentProfiles, getAgentRun, listAgentRuns, startAgentRun } from '@/modules/agents/api';
 import { AgentRunDetail } from '@/modules/agents/run-detail';
 import { PromptBridgeProvider } from './generative-ui/bridge';
+import { settleWidgetPrompt } from './generative-ui/bridge/widget-prompt';
 
 const profileTitleKeys: Record<string, 'agentProfileSupervisor' | 'agentProfileKnowledge' | 'agentProfileResearch' | 'agentProfilePersonal' | 'agentProfileProject' | 'agentProfileNews' | 'agentProfilePlanning' | 'agentProfileAutomation'> = {
   supervisor: 'agentProfileSupervisor', knowledge: 'agentProfileKnowledge', research: 'agentProfileResearch',
@@ -499,12 +500,17 @@ export function ChatSession({
   /**
    * Dispatches a message to an existing or newly initialized conversation, retaining an unresolved
    * specialist's immutable retry envelope in shared memory before awaiting the durable start response.
+   *
+   * @param content - Message text to send.
+   * @returns True only when the server accepted the message (a later stream failure still counts as
+   * accepted); false on early returns and caught errors, which surface through the session error banner.
    */
   const handleSend = React.useCallback(
-    async (content: string) => {
+    async (content: string): Promise<boolean> => {
       if (mode === 'full' && effectiveEditingMessageId) {
         await handleMessageMutation('edit', effectiveEditingMessageId, content);
-        return;
+        // Edit is an append-only mutation, not a widget send; its outcome is not reported here.
+        return false;
       }
       const sendGeneration = ++sendGenerationRef.current;
       let viewGeneration = selectionRef.current.generation;
@@ -526,7 +532,7 @@ export function ChatSession({
         chatCtrl.setDraft(unresolved.prompt);
         setIsPending(false);
         setError(tAgents('agentRetryPending'));
-        return;
+        return false;
       }
 
       const retryEnvelope = pendingProfileRun?.prompt === content ? pendingProfileRun : null;
@@ -540,6 +546,7 @@ export function ChatSession({
       // Ready Chat attachments join the U3 selection mechanism; the composer blocks Send while any are not ready.
       const sendContext = stripItemTitles(mode === 'full' ? withAttachments(chatCtrl.context, attachments.items) : chatCtrl.context);
       const selItems = sendContext?.kind === 'selection' ? sendContext.items ?? [] : [];
+      let accepted = false; // set once the server has accepted the message/run
       let selectionStage = false; // true only while the selection precheck / sendMessage can fail
       try {
         // Pre-validate the server's 1..32 distinct-document limit before the draft is cleared.
@@ -612,7 +619,7 @@ export function ChatSession({
             setActiveAgentRunId(run.id);
             setIsPending(false);
           }
-          return;
+          return true;
         }
 
         // Optimistically clear draft
@@ -635,6 +642,7 @@ export function ChatSession({
           },
           session.csrfToken,
         );
+        accepted = true;
         setWebSearchOn(false);
         if (attachments.items.length && canUpdateCurrentView()) attachments.clear();
 
@@ -642,7 +650,7 @@ export function ChatSession({
         if (!canUpdateCurrentView()) {
           void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(responseConversationId) });
           void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
-          return;
+          return true;
         }
 
         setActiveResponseId(responseRun.response_id);
@@ -671,7 +679,9 @@ export function ChatSession({
                 : t(chatFailureKey(err, 'errorSending'));
           setError(errMsg);
         }
+        return accepted;
       }
+      return true;
     },
     [
       conversationId,
@@ -741,16 +751,16 @@ export function ChatSession({
    * dropping) so the prompt bridge can report a retryable failure back to the widget.
    *
    * @param prompt - Validated widget prompt text.
-   * @returns Promise resolving once the send is started; rejects when the session is busy.
+   * @returns Promise resolving once the server accepted the send; rejects when busy or the send failed.
    */
   const handleWidgetSendPrompt = React.useCallback(
-    (prompt: string): Promise<void> => {
-      if (isPending || isStreaming) {
-        return Promise.reject(new Error(t('genUiPromptBusy')));
-      }
-      void handleSend(prompt);
-      return Promise.resolve();
-    },
+    (prompt: string): Promise<void> =>
+      settleWidgetPrompt(
+        isPending || isStreaming,
+        () => handleSend(prompt),
+        t('genUiPromptBusy'),
+        t('genUiPromptFailed'),
+      ),
     [handleSend, isPending, isStreaming, t],
   );
 

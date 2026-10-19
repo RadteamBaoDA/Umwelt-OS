@@ -161,6 +161,7 @@ export function ToolRendering({
           rows={rows}
           records={records}
           source={source}
+          isSample={tableObj.is_sample === true}
           locale={resolvedLocale}
           onSendPrompt={onSendPrompt}
         />
@@ -204,8 +205,8 @@ export function ToolRendering({
           currency={currency}
           unit={unit}
           source={source}
+          isSample={chartObj.is_sample === true}
           locale={resolvedLocale}
-
           chartType={
             chartObj.chart_type === 'line' ||
             chartObj.chart_type === 'scatter' ||
@@ -231,6 +232,15 @@ export function ToolRendering({
             ? chartObj.subtitle
             : undefined;
       const data = Array.isArray(chartObj.data) ? (chartObj.data as GenerativePieDatum[]) : [];
+      const categoryKey =
+        typeof chartObj.categoryKey === 'string'
+          ? chartObj.categoryKey
+          : typeof chartObj.x_key === 'string'
+            ? chartObj.x_key
+            : undefined;
+      const series = Array.isArray(chartObj.series)
+        ? (chartObj.series as ChartSeries[])
+        : undefined;
       const currency = typeof chartObj.currency === 'string' ? chartObj.currency : undefined;
       const unit = typeof chartObj.unit === 'string' ? chartObj.unit : undefined;
       const source = typeof chartObj.source === 'string' ? chartObj.source : undefined;
@@ -240,9 +250,12 @@ export function ToolRendering({
           title={title}
           description={description}
           data={data}
+          categoryKey={categoryKey}
+          series={series}
           currency={currency}
           unit={unit}
           source={source}
+          isSample={chartObj.is_sample === true}
           locale={resolvedLocale}
         />
       );

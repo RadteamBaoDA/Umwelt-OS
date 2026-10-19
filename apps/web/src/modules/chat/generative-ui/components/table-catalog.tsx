@@ -10,6 +10,7 @@ import {
   TableIcon,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { SampleDataBadge } from './sample-data-badge';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -86,6 +87,8 @@ export interface TableCatalogProps {
   records?: Array<Record<string, unknown>>;
   /** Optional data provenance or source attribution note. */
   source?: string;
+  /** True when rows are illustrative sample data (renders a "Sample data" badge). */
+  isSample?: boolean;
   /** Optional custom label for the per-row follow-up action button. */
   rowActionLabel?: string;
   /** Application locale ('en-us' | 'vi-vi') used for number/currency/percent formatting and UI labels. */
@@ -237,6 +240,7 @@ export function TableCatalog({
   rows,
   records,
   source,
+  isSample,
   rowActionLabel,
   locale,
   onSendPrompt,
@@ -366,9 +370,12 @@ export function TableCatalog({
               )}
             </div>
           </div>
-          <Badge variant="outline" className="font-mono text-xs">
+          <div className="flex items-center gap-1.5">
+            {isSample && <SampleDataBadge locale={resolvedLocale} />}
+            <Badge variant="outline" className="font-mono text-xs">
             {copy.rowCountLabel(filteredAndSortedRows.length, resolvedRows.length)}
-          </Badge>
+            </Badge>
+          </div>
         </div>
 
         <div className="relative flex items-center">

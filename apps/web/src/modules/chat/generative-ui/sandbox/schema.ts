@@ -72,6 +72,7 @@ export interface GenerativeUIPayload {
     description?: string;
     subtitle?: string;
     source?: string;
+    is_sample?: boolean;
     columns: Array<{
       key: string;
       label: string;
@@ -102,6 +103,8 @@ export interface GenerativeUIPayload {
     }>;
     unit?: string;
     currency?: string;
+    source?: string;
+    is_sample?: boolean;
   };
   form?: {
     title?: string;
