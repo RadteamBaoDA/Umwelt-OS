@@ -20,6 +20,7 @@ TOOL_CHART = "render_chart"
 TOOL_PLAN = "render_plan"
 TOOL_TIME_PICKER = "render_time_picker"
 TOOL_READ_SKILL = "read_skill"
+TOOL_TRIP_IMAGES = "get_trip_stop_images"  # non-terminal data tool; offered only with allow_widget_remote_media
 
 TERMINAL_UI_TOOLS: frozenset[str] = frozenset(
     {TOOL_SANDBOXED_UI, TOOL_TABLE, TOOL_CHART, TOOL_PLAN, TOOL_TIME_PICKER}
@@ -126,6 +127,17 @@ class ReadSkillArgs(BaseModel):
     name: str = Field(min_length=1, max_length=64, description="Skill name from the skill index.")
 
 
+class TripStopImagesToolArgs(BaseModel):
+    """Arguments of the non-terminal `get_trip_stop_images` tool."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    titles: list[str] = Field(
+        min_length=1, max_length=8,
+        description="English Wikipedia article titles of the trip stops (landmarks, cities), 1-8.",
+    )
+
+
 _UI_MODELS: dict[str, tuple[type[BaseModel], str]] = {
     TOOL_SANDBOXED_UI: (
         SandboxedUiArgs,
@@ -152,11 +164,12 @@ def _sandbox_schema() -> dict[str, Any]:
     return schema
 
 
-def build_chat_tool_specs(*, include_read_skill: bool) -> list[dict[str, Any]]:
+def build_chat_tool_specs(*, include_read_skill: bool, include_trip_images: bool = False) -> list[dict[str, Any]]:
     """Build the OpenAI-format `tools` list for a generative-UI chat turn.
 
     Args:
         include_read_skill: Whether to expose the non-terminal `read_skill` tool.
+        include_trip_images: Whether to expose `get_trip_stop_images` (only when remote widget media is allowed).
 
     Returns:
         Fresh (caller-mutable) list of function specs whose parameters come from the pydantic models.
@@ -170,6 +183,15 @@ def build_chat_tool_specs(*, include_read_skill: bool) -> list[dict[str, Any]]:
             "name": TOOL_READ_SKILL,
             "description": "Load a bundled guidance document by name before building a widget. Not terminal.",
             "parameters": ReadSkillArgs.model_json_schema(),
+        }})
+    if include_trip_images:
+        specs.append({"type": "function", "function": {
+            "name": TOOL_TRIP_IMAGES,
+            "description": (
+                "Fetch licensed Wikipedia/Commons photos with credit for trip stops; returns same-origin image_url, "
+                "credit, license and article_url per stop, or status 'unavailable'. Not terminal."
+            ),
+            "parameters": TripStopImagesToolArgs.model_json_schema(),
         }})
     return copy.deepcopy(specs)
 

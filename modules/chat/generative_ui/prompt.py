@@ -164,6 +164,7 @@ def build_generative_ui_system_prompt(
     locale: str,
     local_only: bool = False,
     skills: Sequence[str] = (),
+    remote_media: bool = False,
 ) -> str:
     """Compose the Generative UI system prompt with locale, skill index and privacy fence.
 
@@ -171,6 +172,7 @@ def build_generative_ui_system_prompt(
         locale: User locale (`en-US` or `vi-VN`); widget text must be written in it.
         local_only: Whether this turn references local-only evidence (adds the privacy fence).
         skills: Names loadable through the `read_skill` tool, listed so the model can pick one.
+        remote_media: Owner allowed remote widget media on a non-local-only turn (adds trip-image guidance).
 
     Returns:
         Complete system prompt text.
@@ -182,6 +184,12 @@ def build_generative_ui_system_prompt(
     )
     if skills:
         prompt_parts.append("\n\nAvailable skills for read_skill: " + ", ".join(skills) + ".")
+    if remote_media and not local_only:
+        prompt_parts.append(
+            "\n\nREMOTE MEDIA: For trip or place widgets you may call `get_trip_stop_images` (English Wikipedia "
+            "titles, 1-8) before rendering. Use only the returned same-origin `image_url`, show each `credit` and "
+            "`license`, and skip stops marked unavailable. Never use any other remote image URL."
+        )
     if local_only:
         prompt_parts.append(
             "\n\nPRIVACY FENCE (local_only=True): This turn references local-only evidence. "

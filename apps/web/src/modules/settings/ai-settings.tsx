@@ -18,7 +18,7 @@ import { AutomationSettings } from '@/modules/automations/rule-list';
 import { aliasProviderId, mergeDiscovered, modelIdsForAlias, parseDraftSnapshot, ProviderEditor, type ProviderRead, type ProviderSecret } from './provider-editor';
 
 type Mapping = { model: string; version: string | null; destination: 'unknown' | 'remote'; provider_id?: string | null; dimensions?: number | null };
-type Privacy = { allow_remote_reasoning: boolean; allow_remote_embeddings: boolean; allow_remote_web_search: boolean; reasoning_destinations: string[]; embedding_destinations: string[]; web_search_destinations: string[] };
+type Privacy = { allow_remote_reasoning: boolean; allow_remote_embeddings: boolean; allow_remote_web_search: boolean; allow_widget_remote_media: boolean; reasoning_destinations: string[]; embedding_destinations: string[]; web_search_destinations: string[] };
 type Capability = { alias: string; capability: string; result: string; expires_at: string; dimensions?: number };
 type AISettings = { configuration_revision: number; providers: ProviderRead[]; web_search_provider: 'none' | 'tavily' | 'brave' | 'searxng'; web_search_endpoint: string | null; web_search_credential_configured: boolean; chat_alias: string; brief_alias: string; aliases: Record<string, Mapping>; capabilities: Capability[]; privacy: Privacy; request_timeout_seconds: number };
 // vision and local-private have no runtime consumer yet; the API keeps them so stored mappings round-trip unchanged.
@@ -26,7 +26,7 @@ const aliases = ['reasoning-large', 'reasoning-small', 'fast', 'embedding', 'rer
 const chatAliases = ['reasoning-large', 'reasoning-small', 'fast'];
 const capabilityTypes = ['chat', 'streaming', 'embeddings', 'structured', 'tools', 'reranking'];
 const draftStorageKey = 'bbd:settings:ai:draft:v2';
-const defaultPrivacy: Privacy = { allow_remote_reasoning: false, allow_remote_embeddings: false, allow_remote_web_search: false, reasoning_destinations: [], embedding_destinations: [], web_search_destinations: [] };
+const defaultPrivacy: Privacy = { allow_remote_reasoning: false, allow_remote_embeddings: false, allow_remote_web_search: false, allow_widget_remote_media: false, reasoning_destinations: [], embedding_destinations: [], web_search_destinations: [] };
 
 /** Loads AI, provider, privacy and specialist settings while guarding unsaved gateway drafts. */
 export function AISettingsWorkspace() {
@@ -230,6 +230,7 @@ export function AISettingsWorkspace() {
           <p className="text-muted-foreground m-0">{t('localProvidersNote')}</p>
           <CheckboxField><Checkbox id="ai-remote-reasoning" disabled={save.isPending} checked={saved.privacy.allow_remote_reasoning} onCheckedChange={(checked) => setPrivacy({ allow_remote_reasoning: checked === true })} /><label htmlFor="ai-remote-reasoning">{t('allowRemoteReasoning')}</label></CheckboxField>
           <CheckboxField><Checkbox id="ai-remote-embeddings" disabled={save.isPending} checked={saved.privacy.allow_remote_embeddings} onCheckedChange={(checked) => setPrivacy({ allow_remote_embeddings: checked === true })} /><label htmlFor="ai-remote-embeddings">{t('allowRemoteEmbeddings')}</label></CheckboxField>
+          <CheckboxField><Checkbox id="ai-widget-media" disabled={save.isPending} checked={saved.privacy.allow_widget_remote_media} onCheckedChange={(checked) => setPrivacy({ allow_widget_remote_media: checked === true })} /><label htmlFor="ai-widget-media">{t('allowWidgetRemoteMedia')}</label></CheckboxField>
           <p className="text-muted-foreground m-0">{t('historyStorage')} <a href="/settings/memory">{t('memoryPrivacyLink')}</a></p>
         </div>
       </details>
