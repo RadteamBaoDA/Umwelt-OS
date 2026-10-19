@@ -189,7 +189,7 @@ THE SOFTWARE.
 
 ### OpenIntelligentUI (CopilotKit) — revision `8391a94c1c3939c679e40ddd7bfc08a9ef690e70` — MIT
 
-Source: https://github.com/CopilotKit/OpenIntelligentUI. Ported and adapted areas in `apps/web/src/modules/chat/generative-ui` and `modules/chat/generative_ui`: sandbox renderer, table catalog, plan card, meeting time picker, trip animator, idiomorph helper, design system CSS, and skills. No upstream backend, runtime or telemetry is included.
+Source: https://github.com/CopilotKit/OpenIntelligentUI. Ported and adapted areas in `apps/web/src/modules/chat/generative-ui` and `modules/chat/generative_ui`: sandbox renderer, table catalog, plan card, meeting time picker, trip animator, idiomorph helper, design system CSS, skills, and the template library (seed and user templates) with its template tools. No upstream backend, runtime or telemetry is included.
 
 The MIT License
 
