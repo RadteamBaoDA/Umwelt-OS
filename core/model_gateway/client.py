@@ -493,6 +493,9 @@ class ModelGateway:
         messages: list[dict[str, Any]], probe: bool = False, *,
         after_send: Callable[[], Awaitable[None]] | None = None,
         before_send: Callable[[], Awaitable[None]] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any = None,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[str]:
         """Stream with telemetry and fresh authorization before each request opening.
 
@@ -500,6 +503,8 @@ class ModelGateway:
         (idempotent) runs as soon as the request body is handed to the transport and again when
         request creation succeeds or fails; it performs optional operation cleanup or send-fence release.
         Telemetry is observational; errors and cancellation propagate, and missing usage stays null.
+        Optional ``tools``/``tool_choice``/``max_tokens`` are forwarded only when provided; passing
+        ``tools`` additionally requires the verified ``tools`` capability (CapabilityUnsupported otherwise).
         """
         started = time.perf_counter()
         first_ms: float | None = None
@@ -508,6 +513,7 @@ class ModelGateway:
         try:
             async with aclosing(self._stream_inner(
                 alias, mapping, policy, messages, probe, after_send=after_send, before_send=before_send,
+                tools=tools, tool_choice=tool_choice, max_tokens=max_tokens,
             )) as inner:
                 async for line in inner:
                     if first_ms is None:
@@ -528,12 +534,30 @@ class ModelGateway:
         messages: list[dict[str, Any]], probe: bool = False, *,
         after_send: Callable[[], Awaitable[None]] | None = None,
         before_send: Callable[[], Awaitable[None]] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any = None,
+        max_tokens: int | None = None,
     ) -> AsyncGenerator[str, None]:
-        """Open each fenced request attempt, then stream without retrying emitted chunks."""
-        if not self._policy_matches(policy) or not may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), "streaming") or self.base_url is None or mapping is None:
+        """Open each fenced request attempt, then stream without retrying emitted chunks.
+
+        ``tools`` (OpenAI function specs) require both ``streaming`` and ``tools`` capabilities to
+        pass ``may_send``; an unverified ``tools`` capability raises CapabilityUnsupported before any I/O.
+        ``tool_choice`` and ``max_tokens`` are forwarded only when not None.
+        """
+        capabilities = ("streaming", "tools") if tools else ("streaming",)
+        if not self._policy_matches(policy) or not all(may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), c) for c in capabilities) or self.base_url is None or mapping is None:
             raise PrivacyPolicyDenied("Model request denied by privacy policy")
         if not probe and not await self._capability_supported(alias, mapping, policy, "streaming"):
             raise ModelGatewayError("Streaming capability has not been verified")
+        if tools and not probe and not await self._capability_supported(alias, mapping, policy, "tools"):
+            raise CapabilityUnsupported("Tool calling capability has not been verified")
+        extra: dict[str, Any] = {}
+        if tools:
+            extra["tools"] = tools
+        if tool_choice is not None:
+            extra["tool_choice"] = tool_choice
+        if max_tokens is not None:
+            extra["max_tokens"] = max_tokens
         if not probe:
             await self._breaker_check()
         async with self._lease(_STREAM_LEASE_WAIT_SECONDS):
@@ -551,7 +575,7 @@ class ModelGateway:
                         await self.before_send()
                         if before_send is not None and before_send is not self.before_send:
                             await before_send()
-                        if not self._policy_matches(policy) or not may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), "streaming"):
+                        if not self._policy_matches(policy) or not all(may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), c) for c in capabilities):
                             raise PrivacyPolicyDenied("Model request denied by privacy policy")
                         # I6/T7: the transport releases the send fence once the body is handed to
                         # transport.write; publication is re-fenced per flush (T3). Gated (P2-3).
@@ -564,6 +588,7 @@ class ModelGateway:
                                     model=mapping.model,
                                     messages=cast("Any", messages),  # OpenAI param TypedDicts; built by prompt layer
                                     stream=True,
+                                    **extra,
                                 )
                         finally:
                             if hook is not None:
