@@ -66,3 +66,17 @@ def test_prompt_has_locale_libraries_and_no_retired_tools() -> None:
         assert lib in text
     for retired in ("Jev", "query_data", "A2UI", "plan_visualization", "esm.sh"):
         assert retired not in text
+
+
+@pytest.mark.parametrize("name", ["render_table", "render_chart"])
+def test_sample_data_defaults_source_unless_model_sets_one(name: str) -> None:
+    """is_sample without a source is labelled as a sample; an explicit source or real data is untouched."""
+    base = (
+        {"title": "t", "columns": [{"key": "a", "label": "A"}]} if name == "render_table"
+        else {"title": "t", "series": [{"key": "a", "label": "A"}]}
+    )
+    parse = lambda **extra: parse_ui_tool_args(name, json.dumps({**base, **extra}))
+    assert parse(is_sample=True).source == "Illustrative sample dataset"
+    assert parse(is_sample=True, source="Grounded evidence").source == "Grounded evidence"
+    assert parse(is_sample=True, source="Acme").source == "Acme"
+    assert parse().source == "Grounded evidence"
