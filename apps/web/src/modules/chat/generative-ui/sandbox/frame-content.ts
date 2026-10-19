@@ -169,9 +169,9 @@ export const SANDBOX_BRIDGE_JS = `
     });
   };
 
-  // loadImage(url) -> Promise<blobUrl>: the host fetches a same-origin media-proxy URL
-  // (/api/v1/media/proxy?token=... or /api/v1/media/tile/z/x/y) and returns a blob: URL usable as <img src>.
-  // The frame CSP stays img-src data: blob:; the host refuses anything else or when remote media is off.
+  // loadImage(url) -> Promise<dataUrl>: the host fetches a same-origin media-proxy URL
+  // (/api/v1/media/proxy?token=... or /api/v1/media/tile/z/x/y) and returns a data:image/* URL usable as <img src>.
+  // The frame CSP allows img-src data:; the host refuses anything else or when remote media is off.
   var imagePending = {};
   var LOAD_IMAGE_TIMEOUT_MS = 20000;
   window.loadImage = function(input) {
@@ -221,8 +221,8 @@ export const SANDBOX_BRIDGE_JS = `
       if (!img) return;
       delete imagePending[data.id];
       clearTimeout(img.timer);
-      if (data.type === 'umwelt:load-image-result' && typeof data.blobUrl === 'string' && data.blobUrl.indexOf('blob:') === 0) {
-        img.resolve(data.blobUrl);
+      if (data.type === 'umwelt:load-image-result' && typeof data.dataUrl === 'string' && /^data:image\\/(?!svg)/i.test(data.dataUrl)) {
+        img.resolve(data.dataUrl);
       } else {
         img.reject(new Error(typeof data.message === 'string' ? data.message : 'loadImage failed'));
       }

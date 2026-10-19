@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { messages } from '@/core/messages';
 import { needsLoginRedirect } from '@/core/session-gate';
@@ -109,5 +110,20 @@ describe('PickPhone', () => {
     spy.mockImplementation(() => json({ detail: 'x' }, 429));
     wrap(<PickPhone />);
     expect(await screen.findByText(messages['en-us'].pick.phoneTooMany)).toBeTruthy();
+  });
+
+  it('scans once under StrictMode double effects so the burned scan is not seen as invalid', async () => {
+    window.history.replaceState(null, '', `/pick?session=${SID}`);
+    let scans = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_input, init) => {
+      if (init?.method !== 'PUT') return Promise.resolve(new Response(null, { status: 204 }));
+      scans += 1;
+      // The server burns the session on the first scan (GETDEL); any repeat is a 404.
+      return scans === 1 ? json({ options: [{ index: 1, label: 'DNA Helix' }] }) : json({ detail: 'x' }, 404);
+    });
+    wrap(<StrictMode><PickPhone /></StrictMode>);
+    expect(await screen.findByRole('button', { name: 'DNA Helix' })).toBeTruthy();
+    expect(scans).toBe(1);
+    expect(screen.queryByText(messages['en-us'].pick.phoneInvalid)).toBeNull();
   });
 });

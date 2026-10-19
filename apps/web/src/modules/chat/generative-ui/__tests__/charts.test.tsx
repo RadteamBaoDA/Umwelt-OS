@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { GenerativeBarChart } from '../components/charts/bar-chart';
 import { CHART_PALETTE, resolveSeriesColor } from '../components/charts/config';
 import { GenerativePieChart } from '../components/charts/pie-chart';
@@ -160,3 +160,46 @@ describe('Generative UI Charts & Config', () => {
   });
 });
 
+
+describe('Chart export', () => {
+  const evil = '<img src=x onerror=alert(1)>';
+  const data = [
+    { label: evil, value: 30 },
+    { label: 'B', value: 70 },
+  ];
+
+  /** Captures the HTML passed to clipboard.writeText after clicking copy. */
+  async function copied(): Promise<string> {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    fireEvent.click(screen.getAllByTestId('generative-ui-copy-btn')[0]);
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    return writeText.mock.calls[0][0] as string;
+  }
+
+  it.each(['bar', 'line', 'scatter', 'distribution'] as const)('exports %s chart as standalone html', async (chartType) => {
+    render(<GenerativeBarChart title="Sales & Co" chartType={chartType} data={data} locale="en-us" source="Ledger" />);
+    const html = await copied();
+    expect(html).toContain('<title>Sales &amp; Co</title>');
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+    expect(html).not.toContain(evil);
+    expect(html).toContain('<svg');
+    expect(html).toContain('Ledger');
+    expect(html).not.toMatch(/https?:\/\/|<script|<img/i);
+  });
+
+  it('exports pie chart and downloads an .html file', async () => {
+    render(<GenerativePieChart title="Mix" data={data} locale="vi-vi" />);
+    const create = vi.fn(() => 'blob:x');
+    URL.createObjectURL = create;
+    URL.revokeObjectURL = vi.fn();
+    fireEvent.click(screen.getAllByTestId('generative-ui-export-btn')[0]);
+    expect(create).toHaveBeenCalledTimes(1);
+    const blob = (create.mock.calls[0] as unknown as [Blob])[0];
+    expect(blob.type).toContain('text/html');
+    const html = await copied();
+    expect(html).toContain('<path');
+    expect(html).toContain('lang="vi"');
+    expect(html).not.toMatch(/https?:\/\//i);
+  });
+});

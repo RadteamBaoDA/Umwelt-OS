@@ -23,6 +23,8 @@ import { normalizeFormattingLocale, type AppLocaleId } from '@/core/i18n';
 import { messages } from '@/core/messages';
 import { SampleDataBadge } from '../sample-data-badge';
 import { genUiCopy, resolveWidgetLocale } from '../../copy';
+import { ExportOverlay } from '../../sandbox/export-overlay';
+import { chartToStandaloneHtml } from '../../sandbox/chart-export';
 import { normalizeBarSeries, type GenerativeChartSeriesInput } from './bar-chart';
 import { GENERATIVE_CHART_TOKENS, resolveSeriesColor } from './config';
 
@@ -142,7 +144,25 @@ export function GenerativePieChart({
     [currency, title, unit],
   );
 
+  /** Standalone export (inline SVG + data table, no remote origins) for copy/download. */
+  const exportHtml = React.useMemo(
+    () =>
+      chartToStandaloneHtml({
+        title,
+        description: resolvedDescription,
+        source,
+        sourceLabel: copy.sourceLabel,
+        lang: resolvedLocale === 'vi-vi' ? 'vi' : 'en',
+        kind: 'pie',
+        series: [{ name: title || 'Share', color: normalizedSlices[0]?.color ?? '' }],
+        rows: normalizedSlices.map((slice) => ({ label: slice.name, values: [slice.value] })),
+        format: (v) => formatChartValue(v, { currency, unit, locale: resolvedLocale }),
+      }),
+    [title, resolvedDescription, source, copy.sourceLabel, resolvedLocale, normalizedSlices, currency, unit],
+  );
+
   return (
+    <ExportOverlay title={title} html={exportHtml} ready={normalizedSlices.length > 0}>
     <Card
       data-testid="generative-pie-chart"
       className="my-2 w-full max-w-2xl border-border bg-surface text-foreground shadow-sm"
@@ -287,6 +307,7 @@ export function GenerativePieChart({
         </CardFooter>
       )}
     </Card>
+    </ExportOverlay>
   );
 }
 

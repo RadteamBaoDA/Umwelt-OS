@@ -1,8 +1,8 @@
 /**
  * Parent-side image loader for sandboxed widgets (`bridge/image-loader.ts`).
- * The sandbox CSP only allows `img-src data: blob:` and a null-origin frame cannot carry the session
+ * The sandbox CSP only allows `img-src data: blob:` (we only use `data:`) and a null-origin frame cannot carry the session
  * cookie, so the host fetches same-origin media-proxy URLs on the widget's behalf and hands back a
- * `blob:` URL. Everything here is fail-closed: any violation throws and the widget gets an error.
+ * `data:` URL (a host-origin `blob:` URL is not reliably loadable from an opaque-origin frame). Everything here is fail-closed: any violation throws and the widget gets an error.
  */
 
 /** Maximum accepted image body in bytes (matches the proxy cap). */
@@ -76,4 +76,30 @@ export async function fetchImageBlob(url: string, fetchImpl: typeof fetch = fetc
     throw new Error('Image too large');
   }
   return blob.type === type ? blob : new Blob([blob], { type });
+}
+
+/**
+ * Encodes a raster image blob as a `data:` URL. Bytes are read once and base64-encoded in chunks so large
+ * (up to `MAX_IMAGE_BYTES`) images do not overflow the argument limit of `String.fromCharCode`.
+ * The cap is re-checked on the actual bytes here, independent of any declared length.
+ *
+ * @param blob - Image blob already validated by `fetchImageBlob` (raster `image/*`).
+ * @returns `data:image/<type>;base64,...` string (never SVG).
+ * @throws Error when the bytes exceed `MAX_IMAGE_BYTES` or the type is not a raster image.
+ */
+export async function blobToDataUrl(blob: Blob): Promise<string> {
+  const type = blob.type.toLowerCase();
+  if (!/^image\/[a-z0-9.+-]+$/.test(type) || type === 'image/svg+xml') {
+    throw new Error('Response is not an image');
+  }
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  if (bytes.length > MAX_IMAGE_BYTES) {
+    throw new Error('Image too large');
+  }
+  let binary = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return `data:${type};base64,${btoa(binary)}`;
 }

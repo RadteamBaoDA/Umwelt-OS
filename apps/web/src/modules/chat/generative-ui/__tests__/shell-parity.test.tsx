@@ -12,11 +12,19 @@ import { GALLERY_DEMOS, STARTER_DEMO_IDS } from '../templates/gallery-demos';
 import { SEED_HTML_TEMPLATES } from '../templates/seed-html-templates';
 import { DesktopTipModal, StarterSuggestions } from '../templates/shell-extras';
 import { SaveTemplateButton, TemplateLibrary } from '../templates/template-library';
-import { listUserTemplates, saveUserTemplate } from '../templates/template-store';
+import { listUserTemplates, saveUserTemplate, setTemplateAccount } from '../templates/template-store';
+
+// Components bind the template mirror to the default workspace owner; supply a fixed account.
+vi.mock('@/core/workspace-context', () => ({
+  useWorkspace: () => ({ workspaces: [{ id: 'w1', owner_user_id: 1, is_default: true }] }),
+}));
 
 const SHELL_KEYS = (l: 'en-us' | 'vi-vi') => Object.keys(chatMessages[l]).filter((k) => k.startsWith('shell')).sort();
 
-beforeEach(() => window.localStorage.clear());
+beforeEach(() => {
+  window.localStorage.clear();
+  setTemplateAccount('1');
+});
 afterEach(() => vi.unstubAllGlobals());
 
 describe('shell message catalog', () => {
@@ -61,7 +69,7 @@ describe('TemplateLibrary', () => {
   });
 
   it('reports failure when storage throws and tolerates corrupt stored data', async () => {
-    window.localStorage.setItem('umwelt.genui.templates.v1', '{not json');
+    window.localStorage.setItem('umwelt.genui.templates.v2:1', '{not json');
     expect(listUserTemplates()).toEqual([]);
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
     expect(saveUserTemplate('t', '{}')).toBe(false);

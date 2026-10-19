@@ -1,7 +1,7 @@
 'use client';
 
 import { useTranslations } from 'next-intl';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { ApiError } from '@/core/api';
 import { scanPickSession, submitPick, type PickOption } from './api';
@@ -27,11 +27,18 @@ export function PickPhone() {
   const [options, setOptions] = useState<PickOption[]>([]);
   const [sessionId, setSessionId] = useState('');
 
+  // The scan burns the session server-side (GETDEL), so it must run once per id: StrictMode re-runs the
+  // effect, and the ref (kept across that simulated remount) lets run 2 reuse run 1's request.
+  const scanRef = useRef<{ id: string; request: ReturnType<typeof scanPickSession> } | null>(null);
+
   useEffect(() => {
     const id = new URLSearchParams(window.location.search).get('session') ?? '';
     let cancelled = false;
     // A missing id is treated like an unknown session; no request is sent for it.
-    (id ? scanPickSession(id) : Promise.reject(new ApiError(404, 'missing'))).then((result) => {
+    if (!scanRef.current || scanRef.current.id !== id) {
+      scanRef.current = { id, request: id ? scanPickSession(id) : Promise.reject(new ApiError(404, 'missing')) };
+    }
+    scanRef.current.request.then((result) => {
       if (cancelled) return;
       setSessionId(id);
       setOptions(result.options);

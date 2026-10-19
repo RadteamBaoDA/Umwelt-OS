@@ -35,6 +35,8 @@ import { normalizeFormattingLocale, type AppLocaleId } from '@/core/i18n';
 import { messages } from '@/core/messages';
 import { SampleDataBadge } from '../sample-data-badge';
 import { genUiCopy, resolveWidgetLocale } from '../../copy';
+import { ExportOverlay } from '../../sandbox/export-overlay';
+import { chartToStandaloneHtml } from '../../sandbox/chart-export';
 import { GENERATIVE_CHART_TOKENS, resolveSeriesColor } from './config';
 
 /** Flexible input datum accepted by GenerativeBarChart. */
@@ -216,7 +218,31 @@ export function GenerativeBarChart({
     [currency, series, title, unit],
   );
 
+  /** Standalone export (inline SVG + data table, no remote origins) for copy/download. */
+  const exportHtml = React.useMemo(
+    () =>
+      chartToStandaloneHtml({
+        title,
+        description: resolvedDescription,
+        source,
+        sourceLabel: copy.sourceLabel,
+        lang: resolvedLocale === 'vi-vi' ? 'vi' : 'en',
+        kind: chartType === 'bar' ? 'bar' : chartType,
+        series: resolvedSeries.map((s) => ({ name: s.name, color: s.color ?? '' })),
+        rows: normalizedData.map((row) => ({
+          label: String(row.timestamp),
+          values: resolvedSeries.map((s) => {
+            const v = Number(row[s.dataKey] ?? row.value ?? 0);
+            return Number.isFinite(v) ? v : 0;
+          }),
+        })),
+        format: (v) => formatChartValue(v, { currency, unit, locale: resolvedLocale }),
+      }),
+    [title, resolvedDescription, source, copy.sourceLabel, resolvedLocale, chartType, resolvedSeries, normalizedData, currency, unit],
+  );
+
   return (
+    <ExportOverlay title={title} html={exportHtml} ready={normalizedData.length > 0}>
     <Card
       data-testid="generative-bar-chart"
       className="my-2 w-full max-w-2xl border-border bg-surface text-foreground shadow-sm"
@@ -491,5 +517,6 @@ export function GenerativeBarChart({
         </CardFooter>
       )}
     </Card>
+    </ExportOverlay>
   );
 }

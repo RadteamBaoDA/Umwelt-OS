@@ -14,7 +14,7 @@ import {
 import type { AppLocaleId } from '@/core/i18n';
 import { fmt, genUiCopy, resolveWidgetLocale } from '../copy';
 import { SEED_HTML_TEMPLATES } from './seed-html-templates';
-import { deleteUserTemplate, saveUserTemplate, setPendingTemplate, useUserTemplates } from './template-store';
+import { deleteUserTemplate, saveUserTemplate, setPendingTemplate, useTemplateAccount, useUserTemplates } from './template-store';
 
 /** Props for {@link TemplateLibrary}. */
 export interface TemplateLibraryProps {
@@ -132,6 +132,7 @@ export interface SaveTemplateButtonProps {
 export function SaveTemplateButton({ sandbox, title, locale, csrfToken }: SaveTemplateButtonProps) {
   const copy = genUiCopy(resolveWidgetLocale(locale));
   const [status, setStatus] = React.useState<'idle' | 'saved' | 'failed'>('idle');
+  useTemplateAccount();
   return (
     <div className="flex items-center gap-2">
       <Button

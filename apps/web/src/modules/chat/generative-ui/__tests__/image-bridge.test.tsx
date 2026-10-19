@@ -45,9 +45,7 @@ beforeEach(() => {
   frame.postMessage.mockReset();
   apiRequest.mockReset().mockResolvedValue({ privacy: { allow_widget_remote_media: true } });
   vi.stubGlobal('fetch', vi.fn(async () => imageResponse()));
-  let n = 0;
-  URL.createObjectURL = vi.fn(() => `blob:test/${++n}`);
-  URL.revokeObjectURL = vi.fn();
+  URL.createObjectURL = vi.fn(() => 'blob:never');
   render(
     <PromptBridgeProvider onSendPrompt={() => undefined}>
       <Registrar />
@@ -63,10 +61,12 @@ afterEach(() => {
 const lastReply = () => frame.postMessage.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined;
 
 describe('sandbox image loader bridge', () => {
-  it('replies with a blob url for a same-origin proxy url and fetches with credentials', async () => {
+  it('replies with a data url (no blob) for a same-origin proxy url and fetches with credentials', async () => {
     ask(PROXY);
     await waitFor(() => expect(lastReply()?.type).toBe('umwelt:load-image-result'));
-    expect(lastReply()).toMatchObject({ id: 'i1', blobUrl: 'blob:test/1', nonce: NONCE });
+    expect(lastReply()).toMatchObject({ id: 'i1', dataUrl: 'data:image/png;base64,AAAAAAAAAAAAAA==', nonce: NONCE });
+    expect(lastReply()).not.toHaveProperty('blobUrl');
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
     expect(fetch).toHaveBeenCalledWith(PROXY, expect.objectContaining({ credentials: 'same-origin' }));
   });
 
@@ -122,11 +122,17 @@ describe('sandbox image loader bridge', () => {
     expect(URL.createObjectURL).not.toHaveBeenCalled();
   });
 
-  it('revokes blob urls when the frame unregisters', async () => {
-    ask(PROXY);
-    await waitFor(() => expect(lastReply()?.type).toBe('umwelt:load-image-result'));
-    unregister?.();
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:test/1');
+  it('caches the privacy flag for 30s across requests, then re-reads it', async () => {
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValue(1_000_000);
+    for (let i = 0; i < 3; i++) ask(PROXY, {}, `c${i}`);
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+    now.mockReturnValue(1_000_000 + 31_000);
+    ask(PROXY, {}, 'late');
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(4));
+    expect(apiRequest).toHaveBeenCalledTimes(2);
+    now.mockRestore();
   });
 
   it('rate limits per frame', async () => {
@@ -145,6 +151,10 @@ describe('frame content', () => {
     expect(CSP_META_TAG).toContain("connect-src 'none'");
     expect(CSP_META_TAG).toContain("default-src 'none'");
     expect(SANDBOX_BRIDGE_JS).toContain('window.loadImage');
-    expect(SANDBOX_BRIDGE_JS).toContain("indexOf('blob:') === 0");
+    expect(SANDBOX_BRIDGE_JS).toContain('data.dataUrl');
+    expect(SANDBOX_BRIDGE_JS).not.toContain("indexOf('blob:')");
+    // The in-frame guard accepts raster data:image/* replies only (never svg).
+    expect(SANDBOX_BRIDGE_JS).toContain('data:image');
+    expect(SANDBOX_BRIDGE_JS).toContain('(?!svg)');
   });
 });
