@@ -96,9 +96,24 @@ class ToolCallAccumulator:
         """Return calls ordered by stream index, each with `id`, `name`, `arguments`."""
         return [self._calls[i] for i in sorted(self._calls)]
 
-    def terminal(self) -> dict[str, str] | None:
-        """Return the first terminal UI call (first wins), or None."""
-        return next((c for c in self.calls() if c["name"] in TERMINAL_UI_TOOLS), None)
+    def terminals(self, limit: int) -> list[tuple[str, dict[str, str]]]:
+        """Return up to ``limit`` presentation calls in stream order as ``(part_id, call)`` pairs.
+
+        The part id is the provider tool-call id (cut to 64 chars) so it is stable while arguments stream and
+        identical in snapshots and the final payload; a missing or repeated id falls back to ``part-<n>``.
+        Calls beyond ``limit`` are dropped (turn cap).
+        """
+        out: list[tuple[str, dict[str, str]]] = []
+        used: set[str] = set()
+        for call in (c for c in self.calls() if c["name"] in TERMINAL_UI_TOOLS):
+            if len(out) >= limit:
+                break
+            pid = call["id"][:64] or f"part-{len(out) + 1}"
+            if pid in used:
+                pid = f"part-{len(out) + 1}"
+            used.add(pid)
+            out.append((pid, call))
+        return out
 
 
 def _chart_kind(chart_type: Any) -> str:
@@ -213,8 +228,8 @@ def finalize_generative_ui(
         locale: Owner locale (`en-US` / `vi-VN`) for the fallback sandbox title when `title_hint` is empty.
 
     Returns:
-        JSON-serializable payload, or None (logged) when the arguments are invalid; the answer text
-        then stands without a widget. Never raises for model-controlled input.
+        JSON-serializable payload (the caller adds ``part_id``), or None (logged) when the arguments are
+        invalid; the answer text then stands without that widget. Never raises for model-controlled input.
     """
     try:
         args: BaseModel = parse_ui_tool_args(tool_name, raw_args)
@@ -283,6 +298,7 @@ def skill_tool_result(raw_args: str) -> str:
 
 def fallback_generative_ui(
     prompt: str, answer: str, evidence: Sequence[Any], *, local_only: bool,
+    decision: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Build an evidence-derived native widget for models without tool calling.
 
@@ -294,11 +310,12 @@ def fallback_generative_ui(
         answer: Final answer text.
         evidence: Grounded evidence items.
         local_only: Whether the turn referenced local-only evidence.
+        decision: Pre-computed router decision (external router); None uses the internal local rules.
 
     Returns:
         Persisted payload dict or None.
     """
-    decision = route_visualization(prompt, evidence_count=len(evidence), local_only=local_only)
+    decision = decision or route_visualization(prompt, evidence_count=len(evidence), local_only=local_only)
     kind = decision.get("kind")
     title = " ".join(prompt.split())[:72] or "Visualization"
     if kind == "plan":

@@ -1699,7 +1699,10 @@ async def purge_document_copied_evidence_page(
                     message.citations = citations
                     message.metadata_json = metadata if isinstance(metadata, dict) else {}
                     # The widget copies evidence-derived rows/data that scrubbing cannot attribute: drop it whole.
-                    had_widget = message.metadata_json.pop("generative_ui", None) is not None
+                    # Every part (and the first-part compatibility copy) is dropped together.
+                    # Both keys are popped unconditionally (any() would stop at the first hit).
+                    popped = [message.metadata_json.pop(key, None) for key in ("generative_ui", "generative_ui_parts")]
+                    had_widget = any(value is not None for value in popped)
                     changed += 1
                     # Streaming deltas carry no document ids, so blank all widget events of the answer's run.
                     if had_widget and message.response_id is not None:
@@ -1749,6 +1752,7 @@ async def purge_document_copied_evidence_page(
                         event.data = {}
                     else:
                         event.data.pop("generative_ui", None)
+                        event.data.pop("generative_ui_parts", None)
                     changed += 1
                     # message.ui.delta rows hold partial widget data without identifiers (so they never match
                     # the scope): neutralize every widget event of this run once any copy of it matched.

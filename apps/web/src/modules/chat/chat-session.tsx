@@ -21,6 +21,7 @@ import {
 } from '@/modules/chat/api';
 import { ChatComposer } from './chat-composer';
 import { PickQrButton } from '@/modules/pick/pick-qr-modal';
+import { upsertUiPart, type UiPart } from './generative-ui-parts';
 import { ChatTranscript } from './chat-transcript';
 import { ChatContextBar, MAX_ITEMS, stripItemTitles } from './chat-context-bar';
 import { ATTACHMENT_STATUS_ID, ChatAttachmentBar, useChatAttachments, withAttachments } from './chat-attachments';
@@ -119,7 +120,7 @@ export function ChatSession({
   const [streamingText, setStreamingText] = React.useState<string>('');
   const [streamingCitations, setStreamingCitations] = React.useState<Citation[]>([]);
   const [streamingWebSearch, setStreamingWebSearch] = React.useState<WebSearchOutcome | null>(null);
-  const [streamingUi, setStreamingUi] = React.useState<Record<string, unknown> | null>(null);
+  const [streamingUi, setStreamingUi] = React.useState<UiPart[]>([]);
   const [webSearchOn, setWebSearchOn] = React.useState(false);
   const [isStreaming, setIsStreaming] = React.useState<boolean>(false);
   const [isPending, setIsPending] = React.useState<boolean>(false);
@@ -237,7 +238,7 @@ export function ChatSession({
     setStreamingText('');
     setStreamingCitations([]);
     setStreamingWebSearch(null);
-    setStreamingUi(null);
+    setStreamingUi([]);
     setActiveResponseId(null);
     setEditingMessageId(null);
     const promoted = promotedSelectionRef.current;
@@ -291,11 +292,12 @@ export function ChatSession({
       onCitations: (cites) => {
         if (isCurrentView()) setStreamingCitations(cites);
       },
+      // One entry per widget part, merged by part_id so parts stream and complete independently.
       onUiDelta: (ui) => {
-        if (isCurrentView()) setStreamingUi(ui);
+        if (isCurrentView()) setStreamingUi((prev) => upsertUiPart(prev, ui));
       },
       onUiDone: (ui) => {
-        if (isCurrentView()) setStreamingUi(ui);
+        if (isCurrentView()) setStreamingUi((prev) => upsertUiPart(prev, ui));
       },
       onDone: () => {
         if (isCurrentView()) {
@@ -303,7 +305,7 @@ export function ChatSession({
           setStreamingText('');
           setStreamingCitations([]);
           setStreamingWebSearch(null);
-          setStreamingUi(null);
+          setStreamingUi([]);
           setActiveResponseId(null);
         }
         void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(responseConversationId) });
@@ -317,7 +319,7 @@ export function ChatSession({
             setStreamingText('');
             setStreamingCitations([]);
             setStreamingWebSearch(null);
-            setStreamingUi(null);
+            setStreamingUi([]);
             setActiveResponseId(null);
             setError(t('cancelled'));
           }
@@ -336,7 +338,7 @@ export function ChatSession({
             setError(null);
             setStreamingText('');
             setStreamingCitations([]);
-            setStreamingUi(null);
+            setStreamingUi([]);
             setActiveResponseId(responseId);
             setIsStreaming(true);
             await streamRunRef.current?.(responseId, responseConversationId, isCurrentView);
@@ -402,7 +404,7 @@ export function ChatSession({
     setStreamingText('');
     setStreamingCitations([]);
     setStreamingWebSearch(null);
-    setStreamingUi(null);
+    setStreamingUi([]);
     setError(null);
     void streamResponseRun(responseId, conversationId, isCurrentView).catch(() => {
       // streamResponseRun reports visible failures through its guarded error path.
@@ -472,7 +474,7 @@ export function ChatSession({
       setStreamingText('');
       setStreamingCitations([]);
       setStreamingWebSearch(null);
-      setStreamingUi(null);
+      setStreamingUi([]);
       await streamResponseRun(run.response_id, targetConversationId, isCurrentView);
     } catch (mutationError: unknown) {
       if (isCurrentView()) {
@@ -660,7 +662,7 @@ export function ChatSession({
         setStreamingText('');
         setStreamingCitations([]);
         setStreamingWebSearch(null);
-        setStreamingUi(null);
+        setStreamingUi([]);
 
         await streamResponseRun(responseRun.response_id, responseConversationId, canUpdateCurrentView);
       } catch (err: unknown) {
@@ -740,7 +742,7 @@ export function ChatSession({
     setStreamingText('');
     setStreamingCitations([]);
     setStreamingWebSearch(null);
-    setStreamingUi(null);
+    setStreamingUi([]);
     setWebSearchOn(false);
     setIsStreaming(false);
     setIsPending(false);

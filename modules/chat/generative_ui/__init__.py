@@ -17,6 +17,7 @@ from modules.chat.generative_ui.streaming import (
 from modules.chat.generative_ui.tool_specs import (
     TERMINAL_UI_TOOLS,
     TOOL_READ_SKILL,
+    TOOL_TRIP_IMAGES,
     build_chat_tool_specs,
     parse_ui_tool_args,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "SYSTEM_PROMPT",
     "TERMINAL_UI_TOOLS",
     "TOOL_READ_SKILL",
+    "TOOL_TRIP_IMAGES",
     "SandboxedUiArgs",
     "ToolCallAccumulator",
     "build_chat_tool_specs",

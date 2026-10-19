@@ -126,3 +126,11 @@ without blocking. The final gate (end of the port) drops that flag so any remain
 | id | extra | status | Umwelt-OS evidence | proof |
 |---|---|---|---|---|
 | E01 | Fullscreen preview of widgets | ported | `apps/web/src/modules/chat/generative-ui/sandbox/export-overlay.tsx:58` | `apps/web/src/modules/chat/generative-ui/__tests__/export-utils.test.ts` |
+
+## API and SSE contract: multiple widgets per turn
+
+- Persisted: assistant `Message.metadata_json` carries `generative_ui_parts: [{part_id, kind, status, ...slot}]` in render order; `generative_ui` is a copy of the first part (older clients). No schema migration (JSON). Cap: `GENERATIVE_UI_MAX_PARTS` (default 4, 1-8); extra presentation calls are ignored, an invalid call drops only its own part.
+- `part_id`: the provider tool-call id (at most 64 chars); empty or repeated ids become `part-<n>`. It is identical in streaming snapshots and the final part.
+- `GET /api/v1/conversations/{id}`: each message has `generative_ui` (first part or null) and `generative_ui_parts` (all valid parts; rows without the field fall back to the single `generative_ui`).
+- SSE: `message.ui.delta` (one cumulative `status="streaming"` snapshot per part, with `part_id`; the client replaces by `part_id`), `message.ui.done` (one per completed part, with `part_id`), and `message.done` with `generative_ui` (first part) plus `generative_ui_parts`. Privacy cleanup drops both metadata keys and blanks every `message.ui.*` event of the run.
+- History: later turns see a bounded summary of every completed part within one shared 4 KB budget.

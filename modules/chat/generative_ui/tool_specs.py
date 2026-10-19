@@ -1,6 +1,6 @@
 """OpenAI-format tool specs and argument parsing for model-driven Generative UI.
 
-Presentation tools are terminal: the model emits at most one per turn. Evidence is referenced by
+Presentation tools are terminal: the model requests them together in one response (up to the turn cap). Evidence is referenced by
 citation number only; the server resolves numbers to validated citations, so no model-supplied
 identifiers (UUIDs) ever reach persisted payloads.
 """
@@ -143,10 +143,10 @@ _UI_MODELS: dict[str, tuple[type[BaseModel], str]] = {
         SandboxedUiArgs,
         (
             "Render a custom sandboxed HTML/CSS/JS view (diagram, 3D, map, animation, calculator). "
-            "Emit parameters in the documented order. Terminal: the turn ends after this call."
+            "Emit parameters in the documented order. Terminal: the turn ends after the widget calls."
         ),
     ),
-    TOOL_TABLE: (TableToolArgs, "Render a table of exact values. Terminal: the turn ends after this call."),
+    TOOL_TABLE: (TableToolArgs, "Render a table of exact values. Terminal: the turn ends after the widget calls."),
     TOOL_CHART: (ChartToolArgs, "Render a bar/pie/line/scatter/distribution chart. Terminal."),
     TOOL_PLAN: (PlanToolArgs, "Render a step-by-step plan or checklist. Terminal."),
     TOOL_TIME_PICKER: (TimePickerToolArgs, "Render selectable time slots. Terminal."),

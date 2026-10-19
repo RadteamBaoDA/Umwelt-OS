@@ -265,6 +265,7 @@ class _GenerativeUIBase(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    part_id: str | None = Field(default=None, max_length=64)  # stable id of this widget within its assistant turn
     status: Literal["streaming", "completed"] = "completed"
     visualization: str | None = None
     renderer: str | None = None
@@ -344,6 +345,20 @@ def parse_generative_ui(raw: Any) -> GenerativeUIPayload | None:
         return None
 
 
+def parse_generative_ui_parts(metadata: Any) -> list[GenerativeUIPayload]:
+    """Return every valid widget part of a message's ``metadata_json`` in order.
+
+    Reads ``generative_ui_parts`` and falls back to the legacy single ``generative_ui`` slot for rows written
+    before multi-widget turns. Invalid entries are skipped individually so one corrupt part never hides the rest.
+    """
+    if not isinstance(metadata, dict):
+        return []
+    raw = metadata.get("generative_ui_parts")
+    if not isinstance(raw, list):
+        raw = [metadata.get("generative_ui")]
+    return [part for part in (parse_generative_ui(item) for item in raw) if part is not None]
+
+
 class MessageRead(BaseModel):
     """Public representation of a chat message within a conversation."""
 
@@ -360,7 +375,8 @@ class MessageRead(BaseModel):
     revision_of_message_id: UUID | None = None
     created_at: datetime
     web_search: WebSearchOutcomeRead | None = None
-    generative_ui: GenerativeUIPayload | None = None
+    generative_ui: GenerativeUIPayload | None = None  # first part, kept for older clients
+    generative_ui_parts: list[GenerativeUIPayload] = Field(default_factory=list)
 
 
 class ChatExportCitation(BaseModel):

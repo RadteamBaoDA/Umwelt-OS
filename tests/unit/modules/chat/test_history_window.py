@@ -180,3 +180,14 @@ async def test_loader_appends_widget_summary_but_not_for_revoked_turn(monkeypatc
     out = await history.load_effective_history(session, uuid4(), T0 + timedelta(days=1), SCOPE)  # type: ignore[arg-type]
     assert [m["role"] for m in out] == ["user", "assistant"]
     assert out[1]["content"].startswith("a0\n\n[Widget shown to the user: table")
+
+
+def test_widget_summaries_cover_every_part_within_one_shared_budget() -> None:
+    big = {"kind": "table", "title": "Big", "table": {"columns": [], "rows": [[f"r{i}", "x" * 40] for i in range(300)]}}
+    small = {"kind": "plan", "title": "Roadmap", "plan": {"steps": [{"title": "s"}]}}
+    out = history.widget_summaries({"generative_ui": big, "generative_ui_parts": [big, small]})
+    assert out.count("[Widget shown to the user:") == 2 and "Roadmap" in out
+    assert len(out) <= history.WIDGET_SUMMARY_MAX_CHARS
+    # legacy rows (single widget only) and rows without widgets still work
+    assert history.widget_summaries({"generative_ui": small}).count("[Widget shown") == 1
+    assert history.widget_summaries({}) == "" and history.widget_summaries(None) == ""
