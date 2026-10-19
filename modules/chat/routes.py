@@ -47,7 +47,7 @@ from modules.chat.schemas import (
     SendMessageRequest,
     SendMessageResponse,
     WebSearchOutcomeRead,
-    parse_generative_ui,
+    parse_generative_ui_parts,
 )
 from modules.chat.scope import multi_workspace_enabled, owner_default_scope
 from modules.chat.stream import format_sse_event, parse_event_id
@@ -579,9 +579,13 @@ async def get_conversation(
             revision_of_message_id=m.revision_of_message_id,
             created_at=m.created_at,
             web_search=web_search_by_assistant.get(m.id),
-            generative_ui=parse_generative_ui((getattr(m, "metadata_json", None) or {}).get("generative_ui")),
+            generative_ui=parts[0] if parts else None,  # first part, for older clients
+            generative_ui_parts=parts,
         )
-        for m, citations in zip(messages_rows, current_citations, strict=True)
+        for m, citations, parts in zip(
+            messages_rows, current_citations,
+            (parse_generative_ui_parts(getattr(m, "metadata_json", None)) for m in messages_rows), strict=True,
+        )
     ]
     return ConversationDetailRead(
         id=conv.id,

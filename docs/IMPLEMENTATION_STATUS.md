@@ -13,6 +13,7 @@
 - Deliberately not ported: BYOK provider-keys UI, PostHog telemetry, `/pick`, QR/desktop modals, CopilotKit runtime and LangGraph agent, `apps/mcp`, `query_data` sample CSV, todo tools, `generate_form`, Wikipedia trip images.
 - Known limits: line/scatter/distribution chart types are rendered by the FE; the fallback sandbox title is locale-aware via the `finalize_generative_ui` locale. Status: integrated; parity tracked in docs/GENUI_PARITY.md (in progress).
 - NOT verified: no live provider run, no real-browser postMessage round trip with vendored libs, no Playwright/e2e or Docker harness. Only unit/typecheck/lint/build results exist (see the handoff report).
+- Wave B/F/G wiring (branch genui/b-multi, not merged, not accepted): up to `GENERATIVE_UI_MAX_PARTS` (default 4) widgets per assistant turn as `metadata_json["generative_ui_parts"]` (each with `part_id`; `generative_ui` stays the first part). Parallel presentation tool calls in one model response become parts; no extra model round is spent after widgets. `get_trip_stop_images` is offered and run as a bounded non-terminal data tool when `allow_widget_remote_media` is on and the turn is not local-only. The opt-in external visualization router decides the no-tools fallback; its failure fails the turn (retryable), with no fallback to the internal router. Verified by mocked unit tests only; live provider, Docker and browser acceptance are pending.
 <!-- generative-ui-status:end -->
 
 <!-- production-readiness-status:start -->

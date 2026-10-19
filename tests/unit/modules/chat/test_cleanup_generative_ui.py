@@ -106,3 +106,34 @@ async def test_unrelated_generative_ui_is_left_untouched() -> None:
         progress = await chat.purge_document_copied_evidence_page(session, scope, **CTX)  # type: ignore[arg-type]
     assert progress.rows_changed == 0 and message.metadata_json == {"generative_ui": widget}
 
+
+
+async def test_cleanup_drops_every_generative_ui_part_and_neutralizes_part_events() -> None:
+    scope = evidence()
+    doc = scope.document_id
+    parts = [
+        {"kind": "table", "part_id": "a", "citations": [_copied(doc)]},
+        {"kind": "plan", "part_id": "b", "plan": {"steps": []}},  # carries no copy itself; goes with its siblings
+    ]
+    message = SimpleNamespace(
+        citations=[], response_id=RUN_ID,
+        metadata_json={"keep": 1, "generative_ui": parts[0], "generative_ui_parts": parts},
+    )
+    ids = {name: uuid4() for name in ("delta_b", "done_b", "final")}
+    events = {
+        ids["delta_b"]: SimpleNamespace(event_type="message.ui.delta", seq=1, data={"part_id": "b", "kind": "plan", "plan": {"steps": ["secret-step"]}}),
+        ids["done_b"]: SimpleNamespace(event_type="message.ui.done", seq=2, data={"part_id": "b", "kind": "plan", "plan": {"steps": ["secret-step"]}}),
+        ids["final"]: SimpleNamespace(
+            event_type="message.done", seq=3,
+            data={"text": "answer", "generative_ui": parts[0], "generative_ui_parts": parts, "citations": [_copied(doc)]},
+        ),
+    }
+    session = ScriptedSession(message, events)
+    with admitted(), patch("modules.memory.public.lock_export_privacy", AsyncMock()), \
+            patch("modules.memory.public.bound_cleanup_lock_waits", AsyncMock()):
+        progress = await chat.purge_document_copied_evidence_page(session, scope, **CTX)  # type: ignore[arg-type]
+
+    assert progress.complete
+    assert message.metadata_json == {"keep": 1}
+    assert events[ids["delta_b"]].data == {} and events[ids["done_b"]].data == {}  # run-wide, including clean parts
+    assert "generative_ui_parts" not in events[ids["final"]].data and "generative_ui" not in events[ids["final"]].data

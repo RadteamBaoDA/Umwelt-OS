@@ -1,5 +1,6 @@
 'use client';
 
+import { messageUiParts, uiPartKey, type UiPart } from './generative-ui-parts';
 import * as React from 'react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
@@ -111,8 +112,8 @@ export interface ChatTranscriptProps {
   streamingCitations?: Citation[];
   /** Web search outcome streamed for the active run. */
   streamingWebSearch?: WebSearchOutcome | null;
-  /** Active streaming Generative UI widget payload, if any. */
-  streamingUi?: Record<string, unknown> | null;
+  /** Active streaming Generative UI widget parts in arrival order (one per `part_id`). */
+  streamingUi?: UiPart[];
   /** Whether response generation is actively streaming tokens. */
   isStreaming?: boolean;
   /** Whether a response run has been dispatched and is awaiting initial tokens. */
@@ -146,7 +147,7 @@ export function ChatTranscript({
   streamingText,
   streamingCitations,
   streamingWebSearch,
-  streamingUi = null,
+  streamingUi = [],
   isStreaming = false,
   isPending = false,
   error = null,
@@ -186,7 +187,7 @@ export function ChatTranscript({
     >
       {mode === 'full' && onSendPrompt && <ChatShellTools onSendPrompt={onSendPrompt} locale={locale} />}
 
-      {messages.length === 0 && !streamingText && !streamingUi && !isPending && (
+      {messages.length === 0 && !streamingText && streamingUi.length === 0 && !isPending && (
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground my-auto gap-6">
           <div className="flex flex-col items-center">
             <div className="size-12 rounded-full bg-primary/10 text-primary flex items-center justify-center mb-3">
@@ -249,23 +250,24 @@ export function ChatTranscript({
                 : <RevealMarkdown content={msg.content} citations={msg.citations} locale={locale} />}
             </div>
 
-            {!isUser && msg.generative_ui && (
-              <div className="w-full" data-testid="generative-ui-widget">
+            {/* Widget parts render in order after the text; older rows carry only `generative_ui`. */}
+            {!isUser && messageUiParts(msg).map((part, index) => (
+              <div className="w-full" data-testid="generative-ui-widget" key={uiPartKey(part, index)}>
                 <ToolRendering
-                  payload={msg.generative_ui as unknown as GenerativeUIPayload}
+                  payload={part as unknown as GenerativeUIPayload}
                   onSendPrompt={onSendPrompt}
                   locale={locale}
                 />
-                {mode === 'full' && (msg.generative_ui as { kind?: string; sandbox?: Record<string, unknown>; title?: string }).kind === 'sandboxed_ui'
-                  && (msg.generative_ui as { sandbox?: Record<string, unknown> }).sandbox && (
+                {mode === 'full' && (part as { kind?: string }).kind === 'sandboxed_ui'
+                  && (part as { sandbox?: Record<string, unknown> }).sandbox && (
                   <SaveTemplateButton
-                    sandbox={(msg.generative_ui as { sandbox: Record<string, unknown> }).sandbox}
-                    title={(msg.generative_ui as { title?: string }).title}
+                    sandbox={(part as { sandbox: Record<string, unknown> }).sandbox}
+                    title={(part as { title?: string }).title}
                     locale={locale}
                   />
                 )}
               </div>
-            )}
+            ))}
 
             <div className="flex flex-wrap items-center gap-2">
               {formattedDate && <span className="text-xs text-muted-foreground">{formattedDate}</span>}
@@ -323,7 +325,7 @@ export function ChatTranscript({
       })}
 
       {/* Pending status indicator */}
-      {isPending && !streamingText && !streamingUi && (
+      {isPending && !streamingText && streamingUi.length === 0 && (
         <div className="mr-auto flex max-w-[88%] items-center gap-2 text-xs text-muted-foreground">
           <Loader2Icon className="size-4 animate-spin text-primary" />
           <span>{t('thinking')}</span>
@@ -331,7 +333,7 @@ export function ChatTranscript({
       )}
 
       {/* Active streaming assistant bubble */}
-      {(streamingText || streamingUi || isStreaming) && (
+      {(streamingText || streamingUi.length > 0 || isStreaming) && (
         <div className="mr-auto flex max-w-[88%] flex-col gap-2.5">
           <div className="text-sm text-foreground">
             <div className="flex items-center gap-2 text-xs text-muted-foreground mb-0.5">
@@ -346,15 +348,15 @@ export function ChatTranscript({
             {/* Always-mounted live region so the notice text change is announced. */}
             <div role="status">{mode === 'full' && <WebSearchNotice outcome={streamingWebSearch} />}</div>
           </div>
-            {streamingUi && (
-              <div className="w-full" data-testid="streaming-generative-ui-widget">
+            {streamingUi.map((part, index) => (
+              <div className="w-full" data-testid="streaming-generative-ui-widget" key={uiPartKey(part, index)}>
                 <ToolRendering
-                  payload={streamingUi as unknown as GenerativeUIPayload}
+                  payload={part as unknown as GenerativeUIPayload}
                   onSendPrompt={onSendPrompt}
                   locale={locale}
                 />
               </div>
-            )}
+            ))}
             {mode === 'full' && streamingCitations && streamingCitations.length > 0 && (
               <CitationPanel citations={streamingCitations} variant="inline" />
             )}

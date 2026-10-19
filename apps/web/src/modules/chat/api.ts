@@ -99,6 +99,8 @@ export interface ChatMessage {
   web_search?: WebSearchOutcome | null;
   /** Structured or sandboxed Generative UI payload attached to this assistant message. */
   generative_ui?: Record<string, unknown> | null;
+  /** Every Generative UI widget of this message in render order; `generative_ui` is the first one. */
+  generative_ui_parts?: Record<string, unknown>[];
   response_id: string | null;
   /** Message whose prompt or assistant response this append-only revision follows. */
   revision_of_message_id: string | null;
@@ -190,6 +192,7 @@ export interface StreamEventsOptions {
     model?: string;
     status: string;
     generative_ui?: Record<string, unknown> | null;
+    generative_ui_parts?: Record<string, unknown>[];
   }) => void;
   onError?: (error: Error) => void;
 }
@@ -518,6 +521,9 @@ export async function streamResponseEvents(
               generative_ui: parsed?.generative_ui && typeof parsed.generative_ui === 'object'
                 ? (parsed.generative_ui as Record<string, unknown>)
                 : null,
+              generative_ui_parts: Array.isArray(parsed?.generative_ui_parts)
+                ? (parsed.generative_ui_parts as Record<string, unknown>[])
+                : undefined,
             });
           } catch {
             options.onDone?.({
