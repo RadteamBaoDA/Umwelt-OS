@@ -38,7 +38,7 @@ from modules.settings.schemas import (
 MODULES = register_modules()
 # Instance controls use bootstrap operator admission and static build capabilities;
 # they cannot be disabled by one workspace's persisted settings.
-_INSTANCE_MODULES = frozenset({"backup", "observability"})
+_INSTANCE_MODULES = frozenset({"observability"})
 
 _ALWAYS_AVAILABLE_ROUTES = frozenset({
     ("DELETE", "/api/v1/sources/{source_id}"),
@@ -200,7 +200,7 @@ async def _require_owner_for_module(request: Request, session: AsyncSession, *, 
     """Prepare explicit domain identity; retain operator authentication for instance modules.
 
     Historical name is retained without bootstrap authority for ordinary domains. Member
-    reads still need domain grants. Writes retain actual account CSRF/backup admission.
+    reads still need domain grants. Writes retain actual account CSRF admission.
     """
     if module_id in _INSTANCE_MODULES:
         if request.method in {"GET", "HEAD", "OPTIONS"}:
@@ -222,7 +222,7 @@ async def _require_owner_for_module(request: Request, session: AsyncSession, *, 
 def module_dependency(module_id: str) -> Callable[..., Awaitable[None]]:
     """Build a scoped request availability gate; domain owner still authorizes content/grants.
 
-    Instance Backup/Observability retain operator auth and static build availability.
+    Instance Observability retains operator auth and static build availability.
     Legacy workspace disables for them are ignored before dependency closure. No current-workspace registry or
     process tools mutation occurs. Cleanup/cancel/revoke routes bypass disable only after
     normal scope/authentication/CSRF admission.

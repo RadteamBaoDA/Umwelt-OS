@@ -26,7 +26,6 @@ from core.auth.dependencies import (
     _hash,
     _origin_allowed,
     _valid_csrf,
-    admit_identity_write,
     require_account,
     require_account_write,
 )
@@ -312,7 +311,6 @@ async def _login_verify(
     hashing from blocking concurrent ``FOR SHARE`` admission reads or causing 409 lock conflicts.
     Returns the CSRF state and the authenticated account id (for audit).
     """
-    await admit_identity_write(request, session, "auth_password_login")
     account_id: int | None
     unlocked_hash: str | None = None
     if body.identifier is None:
@@ -723,7 +721,7 @@ async def google_callback(
     Link requires same active session and recent password reauth after locks. Invitation
     branch creates only a 5-minute, one-use, CSRF-cookie/invitation/email-bound Redis proof;
     password acceptance later atomically provisions account/default/membership. No SQL lock
-    spans provider network. Callback writes receive backup admission before lifecycle locks.
+    spans provider network.
     """
     settings: Settings = request.app.state.settings
     state = request.query_params.get("state", "")
@@ -794,7 +792,6 @@ async def google_callback(
         response.headers["location"] = "/invitations/accept?google=enrollment"
         return response
 
-    await admit_identity_write(request, session, "auth_google_callback")
     try:
         if purpose == "login":
             # Resolve linked account IDs without locks, then account -> identity reload.
@@ -899,7 +896,7 @@ async def auth_session(
     response: Response,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> AuthState:
-    """Return current account CSRF; rotate only after admission and locked active/gate revalidation."""
+    """Return current account CSRF; rotate only after locked active/gate revalidation."""
     row = await _account_session(request, session, request.cookies.get(SESSION_COOKIE))
     settings: Settings = request.app.state.settings
     existing_cookie = request.cookies.get(CSRF_COOKIE)
@@ -909,20 +906,6 @@ async def auth_session(
         and _valid_csrf(existing_cookie, existing_token, settings)
         and hmac.compare_digest(row.csrf_hash, _hash(existing_token))
     )
-    if not csrf_is_current:
-        from modules.backup.public import BackupAdmissionDenied
-        from modules.settings.public import register_activity
-
-        try:
-            receipt = await register_activity(session, "auth_csrf_rotation", "auth/session")
-        except BackupAdmissionDenied as exc:
-            raise HTTPException(
-                status_code=503, detail="Authentication writes are paused for a consistent backup",
-                headers={"Retry-After": "30"},
-            ) from exc
-        request.state.backup_activity = receipt
-        # Persist admission before locking the owner/session rows for rotation.
-        await session.commit()
     if csrf_is_current:
         # Read-only: _current_session already validated existence and expiry, and nothing is written,
         # so no NOWAIT owner/session lock is needed (concurrent tabs must not 409 on a plain read).

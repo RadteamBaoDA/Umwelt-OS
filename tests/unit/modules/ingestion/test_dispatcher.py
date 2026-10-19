@@ -89,7 +89,6 @@ class TestDispatcherWork:
         scope = MagicMock(workspace_id=uuid4(), actor_user_id=7, membership_revision=3, source_id=None)
 
         with (
-            patch.object(dispatcher, "admit_write", AsyncMock()),
             patch.object(dispatcher.public, "resolve_ingestion_event_scope", AsyncMock(return_value=scope)),
             patch.object(dispatcher, "read_access_fence", AsyncMock()),
             patch.object(dispatcher, "valid_event_envelope", return_value=True),

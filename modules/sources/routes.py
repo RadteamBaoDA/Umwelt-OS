@@ -74,7 +74,7 @@ async def list_sources(
 async def create_source(
     payload: SourceCreate, session: Session, request: Request, scope: WorkspaceWrite,
 ) -> SourceRead:
-    """Create in the selected owner workspace after CSRF/backup/module write admission."""
+    """Create in the selected owner workspace after CSRF/module write admission."""
     _require_source_owner(scope)
     source = await public.create_source(
         session, payload, scope=scope,

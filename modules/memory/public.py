@@ -1732,9 +1732,6 @@ class MemoryService:
         if rec is None:
             # Some read routes create these defaults, so fence the insert just like
             # a user write before it becomes part of the snapshot boundary.
-            from modules.settings.public import admit_write
-
-            await admit_write(self.session, "memory_privacy_default")
             fence = await _admit(
                 self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
             )
@@ -1787,7 +1784,7 @@ class MemoryService:
             _privacy_select(scope).with_for_update().execution_options(populate_existing=True)
         )
         if rec is None:
-            # Do not acquire the backup admission barrier after the privacy owner lock.
+            # Release the privacy owner lock before recreating the default under fresh fences.
             await self.session.rollback()
             await self.get_privacy_config(scope=scope, multi_workspace_enabled=multi_workspace_enabled)
             fence = await _admit(

@@ -30,9 +30,6 @@ Each row is an explicit migration and mandatory base query predicate. A child in
 | `automation_run_actions` | `modules/automations/models.py::AutomationRunAction` | R | T | run_id -> scoped run; action destination/approval/evidence remain restricted. |
 | `automation_cursors` | `modules/automations/models.py::AutomationCursor` | W | T | Replace name-only key with workspace_id+name. |
 | `automation_webhook_credentials` | `modules/automations/models.py::AutomationWebhookCredential` | A+W | T | Add workspace_id; token resolves owner/default; alias alone never authenticates. |
-| `p12_backup_control` | `modules/backup/models.py::BackupControl` | I | O | Retain deliberate id1 global admission/control singleton; operator-only. |
-| `p12_backup_operations` | `modules/backup/models.py::BackupOperation` | I | O | Instance archive/restore operations, paths/details operator-only. |
-| `p12_backup_activity` | `modules/backup/models.py::BackupActivity` | I | O | Global drain/admission journal; work identity is diagnostic, not grant. |
 | `chat_conversations` | `modules/chat/models.py::Conversation` | A+W | P | Add actor_user_id+workspace_id; actor owned default only. |
 | `chat_messages` | `modules/chat/models.py::Message` | R | P | conversation_id -> actor-default root; revision_of_message_id same conversation. |
 | `chat_response_runs` | `modules/chat/models.py::ResponseRun` | A+W+R | P | Add actor_user_id+workspace_id for dispatch; conversation/messages same scope. |
@@ -202,9 +199,6 @@ Each actual router prefix is resolved independently; includes14 dynamic MCP mana
 | 40 | `DELETE /api/v1/automations/webhook-credentials/{alias}` | `modules/automations/routes.py::revoke_webhook_credential` | T | W owner+R | Owner-only reads require explicit owner check after workspace read; writes workspace-write+CSRF; every UUID/query/enrichment scoped. |
 | 41 | `POST /api/v1/automations/{automation_id}/run` | `modules/automations/routes.py::run_automation` | T | W owner+R | Owner-only reads require explicit owner check after workspace read; writes workspace-write+CSRF; every UUID/query/enrichment scoped. |
 | 42 | `PATCH /api/v1/automations/{automation_id}` | `modules/automations/routes.py::update_automation` | T | W owner+R | Owner-only reads require explicit owner check after workspace read; writes workspace-write+CSRF; every UUID/query/enrichment scoped. |
-| 43 | `GET /api/v1/backups/control` | `modules/backup/routes.py::read_backup_control` | O | I operator | Bootstrap operator only; preserve existing bounded public readiness if applicable, never private metrics/detail. |
-| 44 | `GET /api/v1/backups/operations/{operation_id}` | `modules/backup/routes.py::read_backup_operation` | O | I operator | Bootstrap operator only; preserve existing bounded public readiness if applicable, never private metrics/detail. |
-| 45 | `POST /api/v1/backups/operations` | `modules/backup/routes.py::request_backup_operation` | O | I operator | Bootstrap operator only; preserve existing bounded public readiness if applicable, never private metrics/detail. |
 | 46 | `POST /api/v1/responses/{response_id}/cancel` | `modules/chat/routes.py::cancel_response` | P | A+W default+R | Actor own default workspace only; private resource lineage; actual-send/revoke fence. |
 | 47 | `POST /api/v1/conversations` | `modules/chat/routes.py::create_conversation` | P | A+W default+R | Actor own default workspace only; private resource lineage; actual-send/revoke fence. |
 | 48 | `DELETE /api/v1/conversations/{conversation_id}` | `modules/chat/routes.py::delete_conversation` | P | A+W default+R | Actor own default workspace only; private resource lineage; actual-send/revoke fence. |
@@ -503,7 +497,7 @@ Includes ARQ/cron targets and public worker/index/maintenance helpers. Internal 
 | `modules/timeline/worker.py::process_timeline_extraction_work` | K | A/W/S/R | Reload durable row/outbox; compare actor/workspace/Source/resource/generation; authorize_internal_job then claim; before_send and publication recheck; cleanup uses retained scope. |
 | `modules/timeline/worker.py::recover_timeline_extraction_work` | K | I scan -> A/W/S/R | Bounded fair workspace identities; durable subject+policy admission before lease/content; preserve claims; terminal permission loss. |
 
-`apps/worker/main.py::_gate_module_job` reads module availability for the admitted job workspace; scanner workspace policy is checked per candidate. `_gate_backup_job` remains instance admission before domain locks. `modules/ingestion/dispatcher.py::WORKER_BY_EVENT` remains a closed typed allowlist with scoped payloads. Future C2 collector jobs must append their actual declarations when integrated.
+`apps/worker/main.py::_gate_module_job` reads module availability for the admitted job workspace; scanner workspace policy is checked per candidate. `modules/ingestion/dispatcher.py::WORKER_BY_EVENT` remains a closed typed allowlist with scoped payloads. Future C2 collector jobs must append their actual declarations when integrated.
 
 ## Cache, cursor, graph, storage and process entrypoints
 
@@ -545,7 +539,6 @@ Includes ARQ/cron targets and public worker/index/maintenance helpers. Internal 
 | `core/storage.py::cleanup_orphaned_files`; Documents `raw_uris`, `raw_uri_is_referenced`, `lock_raw_uri_identity` | I maintenance -> W+R | Both legacy/new layouts; exact public reference proof plus grace/live-upload/admission locks; no client prefix enumeration. |
 | Document raw/citation-target/provider snapshot routes | W+R | Same Document grant before file/URL creation; source secret URLs stripped; actual streamed-body fence. |
 | Export owner `export_page` / `validate_export_fences` seams | A+W | Each module page/cursor/evidence scoped through owner public API; own workspace only; bounded send gate. |
-| `modules/backup/host.py` archive/restore/manifest | I operator | Whole-instance encrypted archive remains operator-only; no singleton reinterpretation of multiworkspace dump. |
 | Connector n8n workflow names/credential aliases/callbacks | W+S | Existing globally unique Source ID can stay identity; exact saved Source/backend/config/admission fence authorizes callback. |
 
 ## Completeness and validation boundary

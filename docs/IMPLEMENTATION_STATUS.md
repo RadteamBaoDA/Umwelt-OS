@@ -1,3 +1,10 @@
+<!-- backup-removal-status:start -->
+## Backup removed; delegated to cloud service - 2026-10-19, branch feature/fix-ui, uncommitted
+
+- Removed `modules/backup`, the write-admission wrappers in `modules/settings/public.py`, `BackupActivityMiddleware`, `_gate_backup_job`, backup steps in auth/workspace write dependencies, `scripts/backup.py`/`restore.py`, backup Make/PowerShell targets, `BACKUP_AGE_*` config, `docs/backup-recovery.md` and the Settings backup status panel (data export panel kept as `data-export.tsx`). Migration `r21_drop_backup_control` (irreversible) drops `p12_backup_activity`, `p12_backup_control`, `p12_backup_operations`.
+- Operators snapshot Postgres, `app-data`, `n8n-data` and graph-data volumes with the cloud provider. Verified offline only: unit tests, migration SQL render, ruff, mypy, web tsc/eslint/vitest/build. Not run: Docker harness, live Postgres migration, integration/e2e.
+<!-- backup-removal-status:end -->
+
 <!-- generative-ui-status:start -->
 ## Generative UI port (OpenIntelligentUI) - 2026-10-19, branch feature/fix-ui, uncommitted
 

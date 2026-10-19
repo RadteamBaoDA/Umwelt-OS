@@ -16,7 +16,7 @@ Keep module internals private; integrate through public contracts or events. Cre
 
 ## Build, Test, and Development Commands
 
-Use `make setup`, `make dev`, `make stop`, `make migrate`, `make seed`, `make lint`, `make typecheck`, `make test`, and `make build` on macOS/Linux. Windows PowerShell equivalents are `./scripts/dev.ps1 <task>`. `test` creates a uniquely named disposable Compose project and removes only its own volumes. `seed` explicitly creates fictional Phase 1/8/10/12 demo data under privacy and stable-owner receipt controls. Named development workspace reset and backup/isolated restore/recovery commands are implemented; their operational acceptance is separate. Follow `docs/development.md` and `docs/backup-recovery.md`; do not run state-changing commands (seed, reset, backup/restore) without owner approval.
+Use `make setup`, `make dev`, `make stop`, `make migrate`, `make seed`, `make lint`, `make typecheck`, `make test`, and `make build` on macOS/Linux. Windows PowerShell equivalents are `./scripts/dev.ps1 <task>`. `test` creates a uniquely named disposable Compose project and removes only its own volumes. `seed` explicitly creates fictional Phase 1/8/10/12 demo data under privacy and stable-owner receipt controls. Named development workspace reset commands are implemented; their operational acceptance is separate. Backup and restore are delegated to the cloud provider and have no application commands. Follow `docs/development.md`; do not run state-changing commands (seed, reset) without owner approval.
 
 ## Coding Style & Naming Conventions
 
@@ -52,7 +52,7 @@ Never commit secrets or personal data. Provide placeholder configuration in `.en
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **Umwelt-OS** (18936 symbols, 49430 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **Umwelt-OS** (19389 symbols, 50700 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

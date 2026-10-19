@@ -243,14 +243,11 @@ async def _lock_normalization_retry_event(
     is reachable; the sole caller may only consume the durable failure budget and replay.
     Empty owner snapshots cannot be used to continue content materialization.
     """
-    from modules.settings.public import admit_write
-
     if type(multi_workspace_enabled) is not bool:
         raise TypeError("Actual workspace rollout flag required")
     if (identifier != expected.event_id or expected.event_type != "ingestion.normalize.requested"
             or expected.producer != "modules.ingestion" or expected.scope.source_id is None):
         return None
-    await admit_write(session, "ingestion_normalization_retry", str(identifier))
     scope = await ingestion_api.resolve_ingestion_event_scope(
         session, identifier, multi_workspace_enabled=multi_workspace_enabled,
     )
@@ -326,9 +323,6 @@ async def _lock_worker_event(
     run/batch/Source generation lineage. A successor claim or lost original access returns
     no work; it never borrows another actor/default or upgrades an epoch.
     """
-    from modules.settings.public import admit_write
-
-    await admit_write(session, "ingestion_worker", str(identifier))
     scope = await ingestion_api.resolve_ingestion_event_scope(
         session, identifier, multi_workspace_enabled=multi_workspace_enabled,
     )
@@ -1545,13 +1539,12 @@ def _failure_code(exc: Exception) -> str:
 async def cleanup_storage_orphans(ctx: dict[str, object]) -> int:
     """Sweep global legacy/scoped storage under deliberate bootstrap maintenance admission.
 
-    An active bootstrap account and backup activity receipt admit this internal operation;
+    An active bootstrap account admits this internal operation;
     no selected workspace/member endpoint or per-job fallback is introduced. Documents
     supplies complete global reference proof before the dual-prefix grace-period sweep.
-    SQL is closed before filesystem work; the activity survives it and closes on exit.
+    SQL is closed before filesystem work.
     """
     from core.auth.public import get_active_account
-    from modules.settings.public import finish_activity, register_activity
 
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     settings = cast(Settings, ctx["settings"])
@@ -1562,20 +1555,13 @@ async def cleanup_storage_orphans(ctx: dict[str, object]) -> int:
     async with factory() as session:
         if await get_active_account(session, 1, multi_workspace_enabled=enabled) is None:
             return 0
-        activity = await register_activity(session, "cleanup_storage_orphans")
-        await session.commit()
-    try:
-        async with factory() as session:
-            referenced = await documents.raw_uris(
-                session, instance_operator=True, multi_workspace_enabled=enabled,
-            )
-        return await asyncio.to_thread(
-            cleanup_orphaned_files, settings.data_dir, referenced, settings.storage_orphan_grace_seconds,
+    async with factory() as session:
+        referenced = await documents.raw_uris(
+            session, instance_operator=True, multi_workspace_enabled=enabled,
         )
-    finally:
-        async with factory() as session:
-            await finish_activity(session, activity)
-            await session.commit()
+    return await asyncio.to_thread(
+        cleanup_orphaned_files, settings.data_dir, referenced, settings.storage_orphan_grace_seconds,
+    )
 
 
 async def purge_collection_receipts(ctx: dict[str, object]) -> int:

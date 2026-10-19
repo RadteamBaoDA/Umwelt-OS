@@ -66,7 +66,7 @@ OwnerWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 async def _owner_access(session: AsyncSession, request: Request, scope: WorkspaceContext, *, expected: AccessFence | None = None) -> AccessFence:
     """Reject members and lock original account/session/workspace before domain access.
 
-    Existing write dependencies retain CSRF/backup admission. Capture this fence once;
+    Existing write dependencies retain CSRF admission. Capture this fence once;
     later publication and provider callbacks compare it rather than renewing an epoch.
     Caller releases SQL before network and owns final commit/rollback.
     """
@@ -267,7 +267,7 @@ async def get_configuration(
     """Read a managed connector configuration for an authorized owner.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
-    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF/backup checks and original session/access lineage.
+    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
     """
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
@@ -329,7 +329,7 @@ async def validate_draft_configuration(
     reacquired to ensure the result still describes the requested active draft.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
-    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF/backup checks and original session/access lineage.
+    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
     """
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
@@ -455,7 +455,7 @@ async def get_catalog(session: Session, request: Request, _owner: OwnerRead) -> 
     """Return connector catalog entries to an authorized owner.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
-    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF/backup checks and original session/access lineage.
+    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
     """
     scope = _owner
     await _owner_access(session, request, scope)
@@ -532,7 +532,7 @@ async def put_configuration(
     Owner-write authorization is enforced by the route dependency.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
-    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF/backup checks and original session/access lineage.
+    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
     """
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
@@ -596,7 +596,7 @@ async def validate_configuration(
     """Validate saved connector settings against configuration and URL policy.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
-    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF/backup checks and original session/access lineage.
+    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
     """
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
@@ -622,7 +622,7 @@ async def get_activation(
     """Read activation status for an authorized source owner.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
-    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF/backup checks and original session/access lineage.
+    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
     """
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
@@ -657,7 +657,7 @@ async def activate_source(
     dispatch does not prove no external side effect occurred.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
-    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF/backup checks and original session/access lineage.
+    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
     """
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
@@ -929,7 +929,7 @@ async def deactivate_source(
     """Pause connector collection and persist the resulting activation state.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
-    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF/backup checks and original session/access lineage.
+    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
     """
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
@@ -960,7 +960,7 @@ async def remove_provider_credential(
     n8n credential remains until the later delete acknowledgement clears it.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
-    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF/backup checks and original session/access lineage.
+    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
     """
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled

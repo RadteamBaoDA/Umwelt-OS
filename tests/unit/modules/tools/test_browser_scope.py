@@ -227,8 +227,7 @@ async def test_control_register_with_revoked_authority_marks_job_and_returns_403
 
     job = _control_job()
     request, session, token = _control_request(job)
-    with patch("modules.settings.public.register_request_activity", AsyncMock()), \
-            patch.object(browser_control, "_browser_network_verified", return_value=True), \
+    with patch.object(browser_control, "_browser_network_verified", return_value=True), \
             patch.object(browser_control, "_current_authority", AsyncMock(return_value=(False, None, None, None))), \
             pytest.raises(HTTPException) as exc:
         await browser_control.browser_control_event(
@@ -247,8 +246,7 @@ async def test_control_register_commits_with_replay_under_the_original_fence() -
     request, session, token = _control_request(job)
     scope = SimpleNamespace_scope()
     replay = AsyncMock()
-    with patch("modules.settings.public.register_request_activity", AsyncMock()), \
-            patch.object(browser_control, "_browser_network_verified", return_value=True), \
+    with patch.object(browser_control, "_browser_network_verified", return_value=True), \
             patch.object(browser_control, "_current_authority", AsyncMock(return_value=(True, MagicMock(), scope, FENCE))), \
             patch.object(browser_control, "register_remote_heavy_in_uow", AsyncMock()), \
             patch.object(browser_control, "commit_with_replay", replay):

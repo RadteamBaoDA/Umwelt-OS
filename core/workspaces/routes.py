@@ -19,7 +19,6 @@ from core.auth.dependencies import (
     _hash,
     _origin_allowed,
     _valid_csrf,
-    admit_identity_write,
     require_account,
     require_account_write,
 )
@@ -309,7 +308,6 @@ async def invitation_accept(
         # Anonymous CSRF bootstrap already exists for login; bind Google proof to the same cookie.
         if not _valid_csrf(request.cookies.get(CSRF_COOKIE), csrf_token, settings):
             raise HTTPException(status_code=403, detail="CSRF token is invalid")
-        await admit_identity_write(request, session, "invitation_accept")
     target = await invitation_target(session, digest)
     existing = await account_id_for_email(session, target.email)
     if signed_in and body.google_enrollment:

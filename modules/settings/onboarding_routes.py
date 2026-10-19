@@ -28,7 +28,7 @@ async def read_progress(request: Request, session: Session, _owner: OwnerRead) -
 async def save_progress(
     value: OnboardingStateUpdate, request: Request, session: Session, _owner: OwnerWrite,
 ) -> OnboardingStateRead:
-    """Save account step with exact session/CSRF/backup admission, auth-before-state lock and CAS."""
+    """Save account step with exact session/CSRF admission, auth-before-state lock and CAS."""
     result = await save_onboarding_state(session, value, actor_user_id=request.state.account.id,
                                          multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
                                          auth_sessions=(authenticated_session_ref(request),))

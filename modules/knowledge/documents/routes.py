@@ -89,7 +89,7 @@ def as_member_document_read(document: Document) -> MemberDocumentRead:
 async def _lock_document_write_request(request: Request, session: AsyncSession, scope: WorkspaceContext) -> None:
     """Admit the exact request session before public Source/Document locks through commit.
 
-    Workspace-write dependency retains CSRF/backup/module admission. Auth owns session
+    Workspace-write dependency retains CSRF/module admission. Auth owns session
     persistence and share locks against logout/disable; no bearer or foreign ORM is read
     here. No external I/O/commit occurs; W4 separately fences the final response send.
     """
@@ -233,7 +233,7 @@ async def create_document(
 ) -> DocumentRead:
     """Create an owner root/version with exact request-session locks before Source/key writes.
 
-    Retain CSRF/backup/module admission and conflict mapping; no external I/O. Public writer
+    Retain CSRF/module admission and conflict mapping; no external I/O. Public writer
     commits scoped ready/replay atomically. W4 separately owns final response-send admission.
     """
     await _lock_document_write_request(request, session, scope)
@@ -306,7 +306,7 @@ async def update_document(
     """Patch by exact ID under request-session→Source→fresh Document locks, without ORM trust.
 
     Require non-null metadata fields, retain scoped replay and 404 for unavailable roots.
-    CSRF/backup/module admission precedes writes; W4 final response-send remains separate.
+    CSRF/module admission precedes writes; W4 final response-send remains separate.
     """
     await _lock_document_write_request(request, session, scope)
     if not payload.model_fields_set or any(
@@ -419,7 +419,7 @@ async def update_content(
     """Append under exact request-session admission before Source/Document locks and commit.
 
     Preserve same-content retry no-op before stale-version CAS, 409 conflict and unavailable
-    404. CSRF/backup/module checks remain; W4 final response-send proof is separately owned.
+    404. CSRF/module checks remain; W4 final response-send proof is separately owned.
     """
     await _lock_document_write_request(request, session, scope)
     try:

@@ -1,6 +1,6 @@
 # Umwelt-OS target performance report
 
-Status: measurement pending. Target: 2 CPU cores, 8 GiB RAM, remote inference. No target-host benchmark, workload, OOM, restore or deployment operation was executed during code implementation. Development build success is not capacity evidence.
+Status: measurement pending. Target: 2 CPU cores, 8 GiB RAM, remote inference. No target-host benchmark, workload, OOM or deployment operation was executed during code implementation. Development build success is not capacity evidence.
 
 ## Measurement record
 

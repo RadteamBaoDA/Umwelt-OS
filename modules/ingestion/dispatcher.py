@@ -18,7 +18,6 @@ from modules.ingestion import public
 from modules.ingestion.models import EventOutbox, IngestionRun, IngestionStage
 from modules.ingestion.schemas import EventDelivery
 from modules.knowledge.documents import public as documents
-from modules.settings.public import admit_write
 from modules.sources import public as sources
 
 DISPATCH_STALE_AFTER = timedelta(seconds=30)
@@ -123,7 +122,6 @@ async def _quarantine_event_identity(
     This internal dispatcher repair grants no read/domain authority and cannot overwrite
     an intervening claim. A malformed retained principal never becomes owner1.
     """
-    await admit_write(session, "ingestion_dispatch_quarantine", str(event_id))
     await session.execute(update(EventOutbox).where(
         EventOutbox.id == event_id, EventOutbox.status == status,
         EventOutbox.dispatched_at == dispatched_at,
@@ -212,7 +210,6 @@ async def dispatch_pending_work(ctx: dict[str, object]) -> int:
         claimed_at = None
         try:
             async with factory() as session:
-                await admit_write(session, "ingestion_dispatch", str(identifier))
                 scope = await public.resolve_ingestion_event_scope(session, identifier, multi_workspace_enabled=enabled)
                 if scope is None:
                     await session.rollback()
@@ -281,12 +278,11 @@ async def dispatch_pending_work(ctx: dict[str, object]) -> int:
             continue
         except Exception:
             # The queued row remains durable after a lost enqueue reply; the stale scan recovers it.
-            # Only a successfully admitted exact original attempt can return to pending now.
+            # Only an exact original attempt can return to pending now.
             if claimed_at is None:
                 raise
             try:
                 async with factory() as session:
-                    await admit_write(session, "ingestion_dispatch_recovery", str(identifier))
                     current_scope = await public.resolve_ingestion_event_scope(session, identifier,
                                                                              multi_workspace_enabled=enabled)
                     if current_scope != scope:

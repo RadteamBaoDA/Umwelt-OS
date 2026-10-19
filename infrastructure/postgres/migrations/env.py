@@ -32,7 +32,6 @@ from modules.automations.models import (
     AutomationSchedule,
     AutomationTrigger,
 )
-from modules.backup.models import BackupActivity, BackupControl, BackupOperation
 from modules.chat.models import AgentActivityLink, Conversation, Message, ResponseRun, StreamEvent
 from modules.connectors.models import (
     AgentBrowserGrant,
@@ -147,7 +146,6 @@ _automation_models = (
     Automation, AutomationRevision, AutomationTrigger, AutomationSchedule, AutomationRun, AutomationRunAction,
     AutomationCursor,
 )
-_backup_models = (BackupControl, BackupOperation, BackupActivity)
 _library_models = (
 
     Source, SourcePurgeOperation, Document, DocumentVersion, DocumentChunk,

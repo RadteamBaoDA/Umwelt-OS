@@ -30,7 +30,6 @@ Service and adapter bounds:
 - Single database: Community edition has one user database (`neo4j`); partitions are isolated by the `group_id` property, not by database. There is no RBAC.
 - Each query runs in an explicit Bolt transaction with a 5-second transaction timeout and a 100-row result cap. The adapter performs no retries; Bolt transaction metadata carries the dispatch token used to prove cessation of a prior dispatch.
 - The service persists into its own `graph-data` volume, runs as uid 7474, publishes Bolt on loopback only, and has `stop_grace_period: 60s` so it checkpoints cleanly on stop. The default compose startup does not enable the profile.
-- Backup: Community edition has no online backup or `STOP DATABASE`, so the backup stops the `graph` container and archives the data volume (`neo4j-5.26-data-volume-v1`). Older graph archives are rejected as `incompatible_format`.
 - Password rotation: `NEO4J_AUTH` only applies to an empty `/data`; later changes to `GRAPH_PASSWORD` require `ALTER USER` inside the running database and a matching `.env` update.
 
 ## Reviewed source contracts
@@ -67,7 +66,6 @@ The prescribed `./scripts/dev.ps1 build` result is recorded in the bounded sourc
 ## Deferred gates
 
 - Verify live Neo4j 5.26.2 Community connection and authentication, index behavior, query/filter semantics, episode upsert/search/delete, kill-mid-dispatch cessation, read-mode rejection, and restart.
-- Verify backup (container stop plus volume archive) and isolated restore of the Neo4j volume.
 - Verify configured connector structured output, embeddings, reranking and embedding dimension; keep telemetry disabled and enforce privacy/revocation on every retry.
 - Verify exact support mappings, episode reprocessing, partial writes, shared-edge deletion, tombstones, reconciliation and stale replay prevention.
 - Runtime activation remains blocked until T3 persists every ordered phase receipt, owner-proved node seeds and mapping fingerprints, cleanup history, and live-lease recovery authorization. `inspect_write_receipt` reports bounded exact-ID state and links; it does not grant permission to publish or replay graph content.

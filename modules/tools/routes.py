@@ -34,7 +34,7 @@ from modules.tools.models import BrowserReadJob
 router = APIRouter(prefix="/api/v1/tools", tags=["tools"], dependencies=[Depends(module_dependency("tools"))])
 browser_jobs_router = APIRouter(prefix="/api/v1/agent-browser-jobs", tags=["agent-browser-jobs"])
 Session = Annotated[AsyncSession, Depends(get_session)]
-# Account-level auth (the workspace dependencies below add scope); only backup/system routes stay operator-only.
+# Account-level auth (the workspace dependencies below add scope); only system routes stay operator-only.
 OwnerRead = Annotated[AuthSession, Depends(require_account)]
 OwnerWrite = Annotated[AuthSession, Depends(require_account_write)]
 WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]

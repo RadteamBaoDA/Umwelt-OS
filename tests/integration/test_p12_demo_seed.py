@@ -23,7 +23,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 # Tables the running worker/API legitimately mutate on their own; the seed does not own them.
 WORKER_OWNED = {
     "event_outbox", "ingestion_runs", "ingestion_stages", "ingestion_batches", "realtime_replay_records",
-    "realtime_replay_head", "realtime_replay_events", "auth_session", "backup_activity", "p12_backup_activity", "index_generations", "search_index_items",
+    "realtime_replay_head", "realtime_replay_events", "auth_session", "index_generations", "search_index_items",
     "entity_extraction_work", "timeline_extraction_work", "temporal_changes", "temporal_operations",
     "temporal_dispatches", "temporal_receipts", "news_recovery_checkpoints",
     # brief_schedules: the worker's brief cron lazily inserts a default row for every workspace it visits

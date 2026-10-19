@@ -21,7 +21,6 @@ Reset: a successful Test connection in Settings (probe) bypasses the open flag a
 ## Alerts and signals to watch
 
 - Repeated `ModelGatewayUnavailable` in API or worker logs: breaker open; check the provider, then Test connection.
-- `p12_backup_activity` row count: should stay small (only `active`/`uncertain` rows). Growth means `finish_activity` is not running.
 - Sizes of `event_outbox`, `chat_stream_events`, `source_observations`, `realtime_replay_events` and `connector_*` tables (queries in [observability](observability.md#database)); steady growth means a retention job below is failing.
 - Long `idle in transaction` sessions or `log_lock_waits` entries: a lock held across external I/O is a regression against the no-lock-across-I/O rule.
 
@@ -35,7 +34,6 @@ Reset: a successful Test connection in Settings (probe) bypasses the open flag a
 | `event_outbox` | delivered `ingestion.stage.requested`/`ingestion.normalize.requested` older than 7 days; other event types kept | same job | 1000 per call |
 | `automation_runs` | terminal runs finished more than 30 days ago, newest hour kept for rate caps | `run_retention_maintenance`, hourly | 1000 per call |
 | `search_index_items` of superseded document versions | removed when the version is superseded (hook registered by search) | event-driven | per document |
-| `p12_backup_activity` | row deleted when the activity finishes; migration `r19` removed old rows | per activity | only in-flight rows kept |
 | Agent traces, browser evidence | see Retention and module lifecycle above | hourly | as above |
 
 Schedules and bounds are read from `apps/worker/main.py` and the cited modules; none has been observed running against a live database.

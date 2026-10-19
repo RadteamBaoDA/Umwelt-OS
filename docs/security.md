@@ -23,7 +23,7 @@ Source canonical cleanup now captures exact per-Document child receipts before c
 
 Conversation deletion preserves independent action-effect tombstones and uncertainty. Memory bulk history cleanup now uses the accepted Chat public deletion contract under the Memory privacy lock (`94c7c1b`). Expired Chat worker cleanup is integrated at `32a6ccc`: bounded candidate batches, fresh expiration and identity checks, Memory → Chat → Agent lock order, pinned ephemeral TTL, and persistent-parent retention for run-only expiry. The returned cleanup count includes cascaded stream and mutation-receipt rows. Its prescribed production build and independent source reviews passed; runtime expiry/concurrency acceptance remains deferred. Privacy consent fences are integrated, but consent fencing alone does not close the deletion task.
 
-Already delivered provider/client bytes cannot be recalled. Live deletion does not erase independently encrypted historical backups; archive retention and protected-key handling are separate controls.
+Already delivered provider/client bytes cannot be recalled. Live deletion does not erase provider-held volume snapshots; snapshot retention and key handling are separate controls owned by the cloud provider.
 
 ## Recovery evidence matrix
 
@@ -38,8 +38,6 @@ The following are required deferred checks, not passed checks. Use disposable da
 | Redis is lost | PostgreSQL intent/event/run and effect receipts | Recreate execution from durable identities, without replaying uncertain remote effects | Runtime pending |
 | Agent/automation dies around remote effect | Attempt/result/uncertainty receipt and approval identity | Reconcile requires-review effects; never assume absent response means no effect | Runtime pending |
 | SSE reconnects after consent/deletion change | Current consent/evidence fence and terminal event identity | Redact/cancel stale copied payloads; client refetches authorized state | Privacy fences integrated; full deletion redaction pending |
-| n8n becomes unavailable during backup recovery | Original workflow states and attempt/result journal | Keep recovery visibly incomplete until required reconciliation finishes | Backup/recovery source integrated at 5212def; runtime pending |
-| Restore fails checksum/key/schema/component readiness | Manifest and explicit failed component evidence | Preserve isolated restore state; do not claim production restoration | Isolated restore identity/archive/readiness source integrated at 5212def; runtime pending |
 
 ## Release evidence
 

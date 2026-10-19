@@ -159,15 +159,11 @@ async def receive_github_webhook(request: Request, session: Session) -> JSONResp
         raise HTTPException(status_code=400, detail="GitHub webhook payload is invalid") from exc
     from core.modules import register_modules
     from modules.connectors import public as connectors
-    from modules.settings.public import register_request_activity
-
     # The signed receiver is a source-less instance ingress: only build availability can be checked
     # here. Workspace enablement is checked per binding after that binding's own admission (worker).
     if not register_modules()["connectors"].enabled:
         raise HTTPException(status_code=404, detail="Webhook unavailable")
 
-    # Admission commits before the unique delivery/outbox transaction begins.
-    await register_request_activity(request, session, "github_webhook_ingress", delivery_id)
     receipt = await connectors.persist_verified_github_delivery(session, delivery)
     code = 202 if receipt.disposition == "received" else 200
     return JSONResponse(status_code=code, content=receipt.model_dump(mode="json"))
@@ -664,11 +660,6 @@ async def complete_github_authorization(
     state = request.query_params.get("state", "")
     if not isinstance(browser, dict) or not state or browser.get("state_hash") != oauth.digest(state) or not isinstance(browser.get("browser_nonce"), str):
         raise HTTPException(status_code=400, detail="GitHub authorization state is invalid")
-    # This callback writes state and performs remote token exchange, so it must be durably admitted
-    # before locking the one-time attempt; no advisory lock survives the subsequent network calls.
-    from modules.settings.public import register_request_activity
-
-    await register_request_activity(request, session, "github_oauth_callback")
     fence = await _admit(session, request, scope)
     attempt = await session.scalar(select(GithubOAuthAttempt).where(GithubOAuthAttempt.state_hash == oauth.digest(state)).with_for_update())
     now = datetime.now(UTC)

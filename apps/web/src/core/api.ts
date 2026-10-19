@@ -34,7 +34,7 @@ export function workspaceGeneration(): number { return workspaceSource?.generati
 // Default-workspace routes accept a missing header for every account; sending another workspace would 409.
 const NO_WORKSPACE_PREFIXES = [
   '/api/v1/auth', '/api/v1/workspaces', '/api/v1/chat', '/api/v1/memory', '/api/v1/agents',
-  '/api/v1/agent-runs', '/api/v1/approvals', '/api/v1/exports', '/api/v1/system', '/api/v1/backup',
+  '/api/v1/agent-runs', '/api/v1/approvals', '/api/v1/exports', '/api/v1/system',
 ];
 
 /** Classifies an API path as workspace-scoped ('selected') or default-workspace ('none'). */

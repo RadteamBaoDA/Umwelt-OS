@@ -31,7 +31,7 @@ async def _request_account(request: Request, session: AsyncSession) -> AccountRe
     """Recheck the authenticated detached account with this app's explicit rollout gate.
 
     Never read Auth/Session ORM or infer activation from role/ID. Auth dependencies retain
-    their exact session, CSRF and backup admission behavior; this recheck grants no resource
+    their exact session and CSRF behavior; this recheck grants no resource
     authority and must be repeated under auth-owned session locks for W4 publication.
     """
     authenticated = getattr(request.state, "account", None)
@@ -145,7 +145,7 @@ async def require_workspace_write(
     session: Annotated[AsyncSession, Depends(get_session)],
     workspace_id: Annotated[str | None, Header(alias="X-Workspace-ID")] = None,
 ) -> WorkspaceContext:
-    """Require existing CSRF/backup-admitted account write and selected owner membership.
+    """Require existing CSRF-checked account write and selected owner membership.
 
     No write or lifecycle lock occurs here. Owner handlers retain their auth lifecycle order,
     CAS, domain authorization and caller-owned transaction before mutations/publication.
@@ -179,7 +179,7 @@ async def require_default_workspace_write(
     session: Annotated[AsyncSession, Depends(get_session)],
     workspace_id: Annotated[str | None, Header(alias="X-Workspace-ID")] = None,
 ) -> WorkspaceContext:
-    """Retain CSRF/backup admission and require actor-owned default for private mutations.
+    """Retain CSRF admission and require actor-owned default for private mutations.
 
     Auth dependency commits its existing admission before endpoint locks. This preparation
     commits nothing; caller applies locked fence, domain checks and any required CAS.

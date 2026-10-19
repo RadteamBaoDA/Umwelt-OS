@@ -5,7 +5,7 @@ import { SettingsPageHeader } from './settings-layout';
 import { SourceList } from '@/modules/sources/source-list';
 import { OperationsPage } from '@/modules/observability/operations-page';
 import { LifecycleSettings } from '@/modules/settings/lifecycle-settings';
-import { BackupExportSettings } from '@/modules/settings/backup-export';
+import { DataExportSettings } from '@/modules/settings/data-export';
 
 /** Renders source management and owner interests in the authenticated workspace. */
 export function SettingsWorkspace() {
@@ -20,6 +20,6 @@ export function SettingsWorkspace() {
       <div className="mt-5"><OperationsPage /></div>
       <div className="mt-5"><LifecycleSettings /></div>
     </details>
-    <BackupExportSettings />
+    <DataExportSettings />
   </div>;
 }

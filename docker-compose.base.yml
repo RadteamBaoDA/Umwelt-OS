@@ -65,7 +65,7 @@ services:
     image: redis:7.4.11-alpine
     environment:
       REDISCLI_AUTH: ${REDISCLI_AUTH:-}
-    # Password comes from REDISCLI_AUTH in .env; redis-cli (healthcheck, backup exec) reads the same variable.
+    # Password comes from REDISCLI_AUTH in .env; redis-cli (healthcheck) reads the same variable.
     command: ["sh", "-c", "exec redis-server --appendonly yes --save 60 1000 --maxmemory 256mb --maxmemory-policy noeviction --requirepass \"$$REDISCLI_AUTH\""]
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"

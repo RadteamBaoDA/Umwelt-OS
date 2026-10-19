@@ -42,12 +42,11 @@ User `request_collection` receives WorkspaceContext and verifies owner role, sou
 
 Use this order for every request admission, renewal, pre-send, acceptance and recovery transaction:
 
-1. Register existing backup admission in its separate short transaction, before domain locks.
-2. W2 auth accounts/session -> workspace -> membership/grants, using owner public helpers. No later lock can call an earlier helper. Discover all IDs without locks, then reread under locks.
-3. Source public lifecycle lock -> ConnectorProvisioning -> relevant connector/native credential/binding rows in their existing deterministic order -> SourceIngestionState. Preserve stricter GitHub grant/hint and Telegram proof local ordering rather than opening a second reverse path.
-4. Connector schedule/request rows, then ingestion receipt/batch/run/owner journal rows. Same-workspace paths serialize through workspace; request lookup before this phase is nonlocking identity discovery only.
-5. Quota windows in lexicographic complete-key order when sending, then quota send/debit rows; global slot rows ascending slot_id, acquired with NOWAIT/SKIP LOCKED during admission. A busy earlier capacity row defers promptly, without holding a transaction while waiting on remote work.
-6. Owner outboxes and scoped replay head last, followed by one commit. Existing owner helpers must be made flush-only for composition and must not secretly commit or acquire earlier locks.
+1. W2 auth accounts/session -> workspace -> membership/grants, using owner public helpers. No later lock can call an earlier helper. Discover all IDs without locks, then reread under locks.
+2. Source public lifecycle lock -> ConnectorProvisioning -> relevant connector/native credential/binding rows in their existing deterministic order -> SourceIngestionState. Preserve stricter GitHub grant/hint and Telegram proof local ordering rather than opening a second reverse path.
+3. Connector schedule/request rows, then ingestion receipt/batch/run/owner journal rows. Same-workspace paths serialize through workspace; request lookup before this phase is nonlocking identity discovery only.
+4. Quota windows in lexicographic complete-key order when sending, then quota send/debit rows; global slot rows ascending slot_id, acquired with NOWAIT/SKIP LOCKED during admission. A busy earlier capacity row defers promptly, without holding a transaction while waiting on remote work.
+5. Owner outboxes and scoped replay head last, followed by one commit. Existing owner helpers must be made flush-only for composition and must not secretly commit or acquire earlier locks.
 
 No operation holding a slot/quota lock may acquire another workspace/source lock. Expired-slot scans read identities first; each old occupant is recovered in its own workspace transaction. A new workspace never recovers an old occupant inline while holding its own locks. Fairness selection updates consideration metadata in a separate short scheduler-only transaction and releases those locks before scope/domain work. Such selection is not admission and conveys no source content permission.
 

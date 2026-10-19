@@ -172,7 +172,6 @@ async def test_auth_hashing_runs_off_loop(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(auth_routes, "_allow_attempt", allow)
     monkeypatch.setattr(auth_routes, "_login_precheck", allow)
     monkeypatch.setattr(auth_routes, "_login_record", allow)
-    monkeypatch.setattr(auth_routes, "admit_identity_write", allow)
     monkeypatch.setattr(auth_routes, "provision_bootstrap_account_in_uow", provision)
     monkeypatch.setattr(auth_routes, "_lock_owner", lock)
     settings = SimpleNamespace(setup_token=SecretStr("tok"))
@@ -237,13 +236,8 @@ async def test_cleanup_orphans_run_off_loop(monkeypatch: pytest.MonkeyPatch) -> 
     async def active(*_a: Any, **_k: Any) -> Any:
         return object()
 
-    async def activity(*_a: Any, **_k: Any) -> Any:
-        return object()
-
     monkeypatch.setattr(worker.documents, "raw_uris", raw_uris)
     monkeypatch.setattr("core.auth.public.get_active_account", active)
-    monkeypatch.setattr("modules.settings.public.register_activity", activity)
-    monkeypatch.setattr("modules.settings.public.finish_activity", activity)
     ctx = {"session_factory": Factory(), "settings": Settings(data_dir=Path("."))}
     assert await _lag_while(worker.cleanup_storage_orphans(ctx)) < 0.1  # type: ignore[arg-type]
     assert idents and threading.get_ident() not in idents

@@ -770,7 +770,7 @@ async def export_observation_evidence(
 
     Documents validates the exact current document revision, source identity, provider record identity,
     accepted generation and non-secret scope digest. The separate current source generation is returned
-    for final backup fencing; paused or archived lifecycle changes do not rewrite historical acceptance.
+    for final fencing; paused or archived lifecycle changes do not rewrite historical acceptance.
     Pending data purge and changed scope fail closed.
     """
     from modules.connectors.public import ProviderScopeSnapshot
@@ -4999,7 +4999,7 @@ async def _read_evidence_ref_rows(
     """Build fresh ordered evidence DTOs with version provenance and exact reference validation.
 
     populate_existing prevents a caller's stale identity-map objects from authorizing a deleted,
-    replaced, or edited source citation during backup finalization or other evidence-bound reads.
+    replaced, or edited source citation during finalization or other evidence-bound reads.
     """
     rows = (await session.execute(
         select(Document, DocumentVersion, DocumentChunk, Source.id)

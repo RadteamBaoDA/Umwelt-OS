@@ -79,7 +79,7 @@ async def _account_write(
     auth: Annotated[AuthSession, Depends(require_account_write)],
     _default: Annotated[WorkspaceContext, Depends(require_default_workspace_write)],
 ) -> AuthSession:
-    """CSRF/backup-admitted write by any active account under its own default workspace."""
+    """CSRF-checked write by any active account under its own default workspace."""
     return auth
 
 

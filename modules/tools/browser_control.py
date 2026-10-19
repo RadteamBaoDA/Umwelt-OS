@@ -155,11 +155,8 @@ async def browser_control_event(
         raise HTTPException(status_code=401, detail="Browser job authentication required")
     factory = request.app.state.session_factory
     async with factory() as session:
-        from modules.settings.public import register_request_activity
-
-        # The isolated browser service callback updates durable owner job state; admission is
-        # committed before its Sources -> Agents -> Tools row-lock sequence begins.
-        await register_request_activity(request, session, "browser_control_callback", str(job_id))
+        # The isolated browser service callback updates durable owner job state under its
+        # Sources -> Agents -> Tools row-lock sequence.
         candidate = await session.scalar(select(BrowserReadJob).where(
             BrowserReadJob.id == job_id,
         ))

@@ -28,11 +28,11 @@ class TestRegisterModules:
         """Calling register_modules without arguments registers all production modules cleanly."""
         registry = register_modules()
         assert isinstance(registry, dict)
-        assert len(registry) == 23
+        assert len(registry) == 22
 
         # Verify all canonical module IDs are present
         expected_modules = {
-            "agents", "automations", "backup", "chat", "connectors", "dashboard", "export",
+            "agents", "automations", "chat", "connectors", "dashboard", "export",
             "goals", "ingestion", "knowledge.documents", "knowledge.entities",
             "knowledge.observations", "knowledge.relationships", "knowledge.temporal",
             "knowledge.timeline", "memory", "news", "notifications", "observability",

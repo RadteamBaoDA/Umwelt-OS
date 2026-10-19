@@ -68,20 +68,6 @@ TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 logger = logging.getLogger(__name__)
 
 
-async def unresolved_backup_effects(session: AsyncSession) -> dict[str, int]:
-    """Project agent journal states whose remote action outcome remains unknown.
-
-    The owner journal, rather than the generic worker activity receipt, is authoritative for
-    whether a remote action may still have taken effect. Keep unresolved payloads private.
-    """
-    rows = (await session.execute(
-        select(AgentEffect.state, func.count()).where(
-            AgentEffect.state.in_({"in_flight", "requires_review"}),
-        ).group_by(AgentEffect.state)
-    )).all()
-    return {str(state): int(count) for state, count in rows}
-
-
 @dataclass(frozen=True)
 class BrowserRunAuthorization:
     """Detached current run/profile/session claim and bounded browser budget identity."""

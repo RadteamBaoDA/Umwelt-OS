@@ -26,7 +26,7 @@ from modules.translations.schemas import (
 router = APIRouter(prefix="/api/v1/translations", tags=["translations"])
 Session = Annotated[AsyncSession, Depends(get_session)]
 Member = Annotated[WorkspaceContext, Depends(require_workspace_read)]
-# CSRF + backup admission without the owner-role requirement of require_workspace_write.
+# CSRF without the owner-role requirement of require_workspace_write.
 WriteAdmission = Annotated[object, Depends(require_account_write)]
 
 

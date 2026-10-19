@@ -355,7 +355,7 @@ async def _phase2(accepted: bool, prior: object = None) -> tuple[AsyncMock, Asyn
     session.scalars = AsyncMock(return_value=MagicMock(all=lambda: [cred]))
     session.scalar = AsyncMock(side_effect=[cred, prior])
     enqueue = AsyncMock(return_value=accepted)
-    with patch("modules.automations.routes.workspaces.resolve_workspace_owner_context", AsyncMock(return_value=_owner_ctx())),          patch.object(routes, "module_is_enabled", AsyncMock(return_value=True)),          patch.object(routes, "register_request_activity", AsyncMock()),          patch.object(routes, "_admit", AsyncMock()), patch.object(routes, "enqueue_trigger", enqueue),          patch.object(routes, "commit_with_replay", AsyncMock()):
+    with patch("modules.automations.routes.workspaces.resolve_workspace_owner_context", AsyncMock(return_value=_owner_ctx())),          patch.object(routes, "module_is_enabled", AsyncMock(return_value=True)),          patch.object(routes, "_admit", AsyncMock()), patch.object(routes, "enqueue_trigger", enqueue),          patch.object(routes, "commit_with_replay", AsyncMock()):
         result = await routes.receive_inbound_webhook(
             "hook", _stream_request(), session, MagicMock(headers={}), token="secret", event_key="evt-1")
     return session, enqueue, result

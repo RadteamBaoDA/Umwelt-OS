@@ -50,7 +50,7 @@ from modules.automations.schemas import (
     RunRead,
 )
 from modules.automations.scope import _actor, _admit, _require_owner
-from modules.settings.public import module_dependency, module_is_enabled, register_request_activity
+from modules.settings.public import module_dependency, module_is_enabled
 
 router = APIRouter(prefix="/api/v1/automations", tags=["automations"], dependencies=[Depends(module_dependency("automations"))])
 webhook_router = APIRouter(prefix="/api/v1/automations", tags=["automation-webhooks"])
@@ -294,8 +294,6 @@ async def receive_inbound_webhook(
         payload = InboundEvent.model_validate(json.loads(body))
     except (json.JSONDecodeError, UnicodeDecodeError, ValidationError) as exc:
         raise HTTPException(status_code=422, detail="Webhook event payload is invalid") from exc
-    # Commit the global admission before taking the credential row lock used for the durable inbox write.
-    await register_request_activity(request, session, "automation_webhook_ingress", alias)
     fence = await _admit(session, scope=scope, multi_workspace_enabled=flag, lock=True)
     credential = await session.scalar(_credential_stmt(alias, digest).where(
         AutomationWebhookCredential.workspace_id == scope.workspace_id,

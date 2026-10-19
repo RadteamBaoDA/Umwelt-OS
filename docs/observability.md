@@ -79,8 +79,7 @@ FROM pg_stat_activity WHERE state = 'idle in transaction' ORDER BY xact_start LI
 SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;
 
 -- Row counts of tables that must stay bounded
-SELECT 'p12_backup_activity' AS t, count(*) FROM p12_backup_activity
-UNION ALL SELECT 'event_outbox', count(*) FROM event_outbox
+SELECT 'event_outbox' AS t, count(*) FROM event_outbox
 UNION ALL SELECT 'chat_stream_events', count(*) FROM chat_stream_events;
 ```
 

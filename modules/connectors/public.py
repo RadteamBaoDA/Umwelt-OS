@@ -43,9 +43,7 @@ from modules.connectors.models import (
     ConnectorProvisioning,
     ConnectorRestCredential,
     ConnectorWorldCredential,
-    GithubOAuthCoordinator,
     GithubOAuthGrant,
-    GithubOAuthOperation,
     GithubSourceHint,
     GithubWebhookCapacity,
     GithubWebhookDelivery,
@@ -136,49 +134,6 @@ async def observability_queue_summary(session: AsyncSession, *, instance_operato
     )).all())
     return {"connector_provisioning": counts}
 
-
-async def unresolved_backup_effects(session: AsyncSession, *, instance_operator: bool) -> dict[str, int]:
-    """Project operator-only instance journals requiring external-effect reconciliation.
-
-    Workflow steps in ``dispatched``, credential dispatch receipts, and GitHub OAuth operations
-    in progress are committed at or after their owners' no-replay boundary. Prepared/queued
-    intents do not block. The projection never exposes credential or provider payloads.
-    """
-    if instance_operator is not True:
-        raise PermissionError("Instance operator admission required")
-    statements = (
-        ("provisioning_reconciliation_required", select(func.count()).select_from(ConnectorProvisioning).where(
-            ConnectorProvisioning.state == "reconciliation_required",
-        )),
-        ("workflow_step_dispatch_outcome_unproven", select(func.count()).select_from(ConnectorProvisioning).where(
-            ConnectorProvisioning.workflow_operation["step"]["state"].astext == "dispatched",
-        )),
-        ("credential_reconciliation_required", select(func.count()).select_from(ConnectorManagedCredential).where(
-            ConnectorManagedCredential.state == "reconciliation_required",
-        )),
-        ("credential_dispatch_outcome_unproven", select(func.count()).select_from(ConnectorManagedCredential).where(
-            ConnectorManagedCredential.state == "dispatching",
-        )),
-        ("credential_delete_dispatch_outcome_unproven", select(func.count()).select_from(ConnectorManagedCredential).where(
-            ConnectorManagedCredential.state == "delete_pending",
-            ConnectorManagedCredential.operation_envelope["state"].astext == "dispatched",
-        )),
-        ("github_oauth_reconciliation_required", select(func.count()).select_from(GithubOAuthOperation).where(
-            GithubOAuthOperation.state.in_({"in_progress", "reconciliation_required"}),
-        )),
-        ("github_oauth_review_required", select(func.count()).select_from(GithubOAuthOperation).where(
-            GithubOAuthOperation.state == "review_required",
-        )),
-        ("github_oauth_coordinator_reconciliation_required", select(func.count()).select_from(GithubOAuthCoordinator).where(
-            GithubOAuthCoordinator.state == "reconciliation_required",
-        )),
-    )
-    result: dict[str, int] = {}
-    for reason, statement in statements:
-        count = int(await session.scalar(statement) or 0)
-        if count:
-            result[reason] = count
-    return result
 
 DEFAULT_TIMEZONE = "Asia/Ho_Chi_Minh"
 DEFAULT_OVERLAP = timedelta(days=1)
@@ -481,7 +436,7 @@ async def export_provider_scope(
     session: AsyncSession, source_id: UUID, expected_source_generation: int,
     *, scope: Scope, multi_workspace_enabled: bool,
 ) -> ProviderScopeSnapshot | None:
-    """Project retained non-secret provider scope for backup exports across inactive states.
+    """Project retained non-secret provider scope for owner exports across inactive states.
 
     This does not authorize collection or reuse historical observation fields: it validates the
     current retained source generation/configuration and rejects pending data purge. A lifecycle

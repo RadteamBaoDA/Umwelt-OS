@@ -60,7 +60,7 @@ def test_offline_upgrade_removes_empty_replay_head_and_guards_populated_database
 
 
 def test_offline_downgrade_refuses_cleanly() -> None:
-    result = _alembic("downgrade", f"{HEAD}:base", "--sql")
+    result = _alembic("downgrade", "r20_search_tsv_and_trgm_indexes:base", "--sql")
     assert result.returncode != 0
     assert "run it online" in result.stderr
     assert "get_bind" not in result.stderr
@@ -138,3 +138,14 @@ def test_r20_search_tsv_and_trgm_indexes_migration() -> None:
     assert "DROP INDEX CONCURRENTLY IF EXISTS ix_entities_canonical_name_trgm" in down.stdout
     assert "DROP INDEX CONCURRENTLY IF EXISTS ix_document_chunks_content_tsv" in down.stdout
 
+
+
+def test_r21_drop_backup_control_migration() -> None:
+    """Verify r21 drops the removed backup tables in FK order and refuses downgrade."""
+    up = _alembic("upgrade", "r20_search_tsv_and_trgm_indexes:r21_drop_backup_control", "--sql")
+    assert up.returncode == 0, up.stderr
+    for table in ("p12_backup_activity", "p12_backup_control", "p12_backup_operations"):
+        assert f"DROP TABLE IF EXISTS {table}" in up.stdout
+    assert up.stdout.index("DROP TABLE IF EXISTS p12_backup_control") < up.stdout.index("DROP TABLE IF EXISTS p12_backup_operations")
+    assert HEAD == "r21_drop_backup_control"
+    assert _alembic("downgrade", "r21_drop_backup_control:r20_search_tsv_and_trgm_indexes", "--sql").returncode != 0

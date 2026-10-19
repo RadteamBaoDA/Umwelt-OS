@@ -41,10 +41,8 @@ class MemorySession:
 
     async def scalar(self, statement):
         str_stmt = str(statement)
-        if "backup_control" in str_stmt.lower():
-            return SimpleNamespace(phase="idle", epoch=1)
-        if "backup_activity" in str_stmt.lower():
-            return None
+        if str_stmt.lower().startswith("select owner.password_hash"):
+            return self.store.owner.password_hash
         if "auth_session" in str_stmt.lower():
             return next(iter(self.store.sessions.values()), None)
         return self.store.owner
@@ -143,7 +141,7 @@ async def test_login_requires_csrf_and_rotates_session_tokens() -> None:
 
     app.dependency_overrides[get_session] = session_override
     app.dependency_overrides[get_auth_redis] = lambda: MemoryRedis()
-    app.state.session_factory = lambda: MemorySession(store)  # backup middleware finalizes outside DI
+    app.state.session_factory = lambda: MemorySession(store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://localhost:3000"
     ) as client:
@@ -248,7 +246,7 @@ async def test_login_rate_limit_rejects_the_sixth_attempt() -> None:
 
     app.dependency_overrides[get_session] = session_override
     app.dependency_overrides[get_auth_redis] = lambda: redis
-    app.state.session_factory = lambda: MemorySession(store)  # backup middleware finalizes outside DI
+    app.state.session_factory = lambda: MemorySession(store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://localhost:3000"
     ) as client:

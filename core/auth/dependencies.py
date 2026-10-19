@@ -150,11 +150,10 @@ async def require_account_write(
     origin: Annotated[str | None, Header()] = None,
     csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
 ) -> AuthSession:
-    """Require account-bound CSRF and durable backup admission before scoped write locks.
+    """Require account-bound CSRF before scoped write locks.
 
-    This carries no instance privilege. Preserve the existing owner admission/finalizer
-    protocol and commit admission before endpoint work. Anonymous invitation redemption
-    needs a separately bounded origin/token/admission path in W1b.
+    This carries no instance privilege. Anonymous invitation redemption needs a separately
+    bounded origin/token path in W1b.
     """
     settings: Settings = request.app.state.settings
     if not _origin_allowed(origin, settings):
@@ -164,18 +163,6 @@ async def require_account_write(
         auth_session.csrf_hash, _hash(csrf_token or "")
     ):
         raise HTTPException(status_code=403, detail="CSRF token is invalid", headers={"X-CSRF-Error": "invalid"})
-    if getattr(request.state, "backup_activity", None) is None:
-        from modules.backup.public import BackupAdmissionDenied
-        from modules.settings.public import register_activity
-
-        try:
-            receipt = await register_activity(session, "api_account_write", request.url.path)
-        except BackupAdmissionDenied as exc:
-            raise HTTPException(
-                status_code=503, detail="Writes are paused for a consistent backup", headers={"Retry-After": "30"},
-            ) from exc
-        request.state.backup_activity = receipt
-        await session.commit()
     return auth_session
 
 
@@ -185,37 +172,7 @@ async def require_owner_write(
     origin: Annotated[str | None, Header()] = None,
     csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
 ) -> AuthSession:
-    """Authenticate and record a durable backup-admitted owner request before domain locks.
-
-    The activity row is committed before endpoint work so the backup coordinator can
-    drain a request across any internal commits without holding an advisory lock over
-    network waits. Its ASGI response finalizer publishes the terminal receipt.
-    """
-    auth_session = await _authorize_owner_write(request, session, origin, csrf_token)
-    if getattr(request.state, "backup_activity", None) is None:
-        from modules.backup.public import BackupAdmissionDenied
-        from modules.settings.public import register_activity
-
-        try:
-            receipt = await register_activity(session, "api_owner_write", request.url.path)
-        except BackupAdmissionDenied as exc:
-            raise HTTPException(
-                status_code=503, detail="Writes are paused for a consistent backup",
-                headers={"Retry-After": "30"},
-            ) from exc
-        request.state.backup_activity = receipt
-        # Persist admission before the handler can acquire an owner/source row lock.
-        await session.commit()
-    return auth_session
-
-
-async def require_backup_owner_write(
-    request: Request,
-    session: Annotated[AsyncSession, Depends(get_session)],
-    origin: Annotated[str | None, Header()] = None,
-    csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
-) -> AuthSession:
-    """Authorize backup control writes without applying the ordinary maintenance gate."""
+    """Authenticate the bootstrap owner and validate origin and CSRF before domain locks."""
     return await _authorize_owner_write(request, session, origin, csrf_token)
 
 
@@ -239,24 +196,3 @@ async def _authorize_owner_write(
             headers={"X-CSRF-Error": "invalid"},
         )
     return auth_session
-
-
-async def admit_identity_write(request: Request, session: AsyncSession, kind: str) -> None:
-    """Register durable backup admission for anonymous/auth lifecycle writes before row locks.
-
-    This never grants account, workspace or operator permission. Receipt finalization uses
-    the existing response middleware; admission commits before identity transaction starts.
-    Backup denial is a redacted retryable 503. Call only after origin/CSRF/bearer checks.
-    """
-    if getattr(request.state, "backup_activity", None) is not None:
-        return
-    from modules.backup.public import BackupAdmissionDenied
-    from modules.settings.public import register_activity
-
-    try:
-        receipt = await register_activity(session, kind, request.url.path)
-    except BackupAdmissionDenied:
-        raise HTTPException(status_code=503, detail="Authentication writes are paused for a consistent backup",
-                            headers={"Retry-After": "30"}) from None
-    request.state.backup_activity = receipt
-    await session.commit()

@@ -70,7 +70,7 @@ async def issue_collector_credential(
     _owner: OwnerWrite,
     request: Request,
 ) -> CollectorCredentialRead:
-    """Issue one scoped Source token under real owner/CSRF/backup/module admission.
+    """Issue one scoped Source token under real owner/CSRF/module admission.
 
     Members are denied before connector metadata. Literal capability is unchanged;
     managed activation denies409 and missing Source404. This HTTP caller owns commit.
@@ -172,7 +172,7 @@ async def list_source_runs(
 @router.post("/runs/{run_id}/retry", response_model=Receipt, status_code=202,
              dependencies=[Depends(module_dependency("ingestion"))])
 async def retry_run(run_id: UUID, payload: RetryRunRequest, session: Session, _owner: OwnerWrite, request: Request) -> Receipt:
-    """Retry the selected failed stage under workspace owner/CSRF/backup/module admission.
+    """Retry the selected failed stage under workspace owner/CSRF/module admission.
 
     The scoped owner wrapper proves original run/Source lineage and owns replay commit;
     absent/foreign runs404 and no new actor/membership replaces retained work identity.
@@ -214,9 +214,6 @@ async def _intake_upload(
         suffix, mime_type, original_name = await to_thread_joined(
             validate_upload, upload.filename, upload.content_type, upload.file
         )
-        from modules.settings.public import admit_write
-
-        await admit_write(session, "raw_file_publication", str(source_id))
         await session.rollback()
         document_id = uuid4()
         raw_uri, size, digest = await save_upload(
@@ -320,7 +317,7 @@ async def upload_chat_attachment(
 
     ``share_with_model`` (default false) only picks between the private, local-only "Chat
     attachments" source and "Chat attachments (shared)"; the client can never name a source.
-    Both are plain manual sources, so purge, export, backup and deletion treat the file exactly
+    Both are plain manual sources, so purge, export and deletion treat the file exactly
     like any other uploaded Document. Bound to the default workspace.
     """
     scope = _owner_scope(_owner)

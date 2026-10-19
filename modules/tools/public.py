@@ -8,7 +8,7 @@ from typing import Any, cast
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import Select, delete, func, select, update
+from sqlalchemy import Select, delete, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,20 +49,6 @@ from modules.tools.mcp_schemas import (
     McpRisk,
     McpTransport,
 )
-
-
-async def unresolved_backup_effects(session: AsyncSession) -> dict[str, int]:
-    """Project browser owner-journal jobs explicitly marked as uncertain after dispatch.
-
-    Queued jobs are unsent durable work; running jobs remain covered by activity drain. Only
-    the browser owner’s ``uncertain`` terminal state means the external read outcome is unknown.
-    """
-    from modules.tools.models import BrowserReadJob
-
-    count = int(await session.scalar(select(func.count()).select_from(BrowserReadJob).where(
-        BrowserReadJob.status == "uncertain",
-    )) or 0)
-    return {"browser_job_uncertain": count} if count else {}
 from modules.tools.mcp_server import McpServerBundle, create_inbound_mcp_bundle
 
 

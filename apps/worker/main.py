@@ -106,52 +106,9 @@ def _gate_module_job(function: Callable[..., Any]) -> Callable[..., Any]:
     return guarded
 
 
-def _gate_backup_job(function: Callable[..., Any]) -> Callable[..., Any]:
-    """Durably register worker execution before owner claims or external effects, then close it."""
-    @wraps(function)
-    async def guarded(ctx: dict[str, object], *args: Any, **kwargs: Any) -> Any:
-        """Leave denied durable jobs for their owner recovery poll instead of executing them."""
-        factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
-        from modules.backup.public import BackupAdmissionDenied
-        from modules.settings.public import finish_activity, register_activity
-
-        work_id = str(args[0]) if args and isinstance(args[0], (str, int)) else None
-        try:
-            async with factory() as session:
-                receipt = await register_activity(session, function.__name__, work_id)
-                await session.commit()
-        except BackupAdmissionDenied:
-            # Owner durable rows remain the source of truth; dispatch/recovery polls will retry.
-            return None
-
-        try:
-            result = await function(ctx, *args, **kwargs)
-        except BaseException:
-            import anyio
-
-            # Shield cleanup from task cancellation so an ARQ timeout or worker shutdown
-            # cannot abort finish_activity mid-flight and leave a dangling backup lease.
-            with anyio.CancelScope(shield=True), anyio.fail_after(5):
-                async with factory() as session:
-                    # Handler exit only closes this admission lease. Any unresolved external effect
-                    # must remain visible in its owner's durable journal and block snapshot there.
-                    await finish_activity(session, receipt)
-                    await session.commit()
-            raise
-        import anyio
-
-        with anyio.CancelScope(shield=True), anyio.fail_after(5):
-            async with factory() as session:
-                await finish_activity(session, receipt)
-                await session.commit()
-        return result
-
-    return guarded
-
-
 def cron(function: Callable[..., Any], *args: Any, **kwargs: Any) -> object:
-    """Attach both fresh owner-module and global backup admission checks to worker schedules."""
-    return _cron(_gate_backup_job(_gate_module_job(function)), *args, **kwargs)
+    """Attach the fresh owner-module availability check to worker schedules."""
+    return _cron(_gate_module_job(function), *args, **kwargs)
 
 HEAVY_SLOT_JOBS = frozenset({
     "process_uploaded_file", "process_entity_extraction_work", "process_timeline_extraction_work",
@@ -285,7 +242,6 @@ class WorkerSettings:
         instrument_job(translate_content),
     ]
     functions = [_gate_module_job(function) for function in functions]
-    functions = [_gate_backup_job(function) for function in functions]
     # Outbox consumers are re-enqueued under the fixed id `ingestion:{event.id}` per continuation; a
     # kept arq result (default 3600 s) would turn those enqueues into no-ops. Nothing reads arq
     # results, and the in-progress job key still dedupes concurrently queued jobs.
@@ -344,7 +300,7 @@ class ChatWorkerSettings:
     # gated return nor an interrupted/failed job may block the fixed job id, or recovery could not re-enqueue.
     keep_result = 0
     functions: ClassVar[list[Any]] = [
-        _arq_func(_gate_backup_job(_gate_module_job(instrument_job(process_chat_response))), keep_result=0),
+        _arq_func(_gate_module_job(instrument_job(process_chat_response)), keep_result=0),
     ]
     cron_jobs: ClassVar[list[object]] = [cron(recover_chat_runs, second={0, 15, 30, 45})]
     redis_settings = RedisSettings.from_dsn(Settings().redis_url)

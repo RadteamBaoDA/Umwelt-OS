@@ -139,7 +139,6 @@ async def test_intake_dedupe_returns_existing_document_id_and_unlinks_bytes(monk
     monkeypatch.setattr(routes, "save_upload", AsyncMock(return_value=("raw/x", 2, "abc")))
     unlink = MagicMock()
     monkeypatch.setattr(routes, "storage_path", MagicMock(return_value=SimpleNamespace(unlink=unlink)))
-    monkeypatch.setattr("modules.settings.public.admit_write", AsyncMock())
     run = SimpleNamespace(id=uuid4())
     monkeypatch.setattr(routes.public, "receive_file", AsyncMock(return_value=(run, False)))
     existing = uuid4()

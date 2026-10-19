@@ -65,7 +65,7 @@ async def save_owner_preferences(
     _owner: AccountWrite,
     request: Request,
 ) -> OwnerPreferencesRead:
-    """Commit active account preferences under exact-session auth/CSRF/backup admission and CAS."""
+    """Commit active account preferences under exact-session auth/CSRF admission and CAS."""
     saved = await public.save_owner_preferences(session, value, actor_user_id=request.state.account.id,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled, auth_sessions=(authenticated_session_ref(request),))
     await session.commit()

@@ -64,8 +64,6 @@ class Settings(BaseSettings):
     n8n_api_key: SecretStr = Field(default=SecretStr(""), validation_alias="N8N_API_KEY")
     n8n_webhook_token: SecretStr = Field(default=SecretStr(""), validation_alias="N8N_WEBHOOK_TOKEN")
     n8n_encryption_key: SecretStr = Field(default=SecretStr(""), validation_alias="N8N_ENCRYPTION_KEY", repr=False)
-    backup_age_recipient: str = Field(default="", validation_alias="BACKUP_AGE_RECIPIENT")
-    backup_age_identity_path: Path | None = Field(default=None, validation_alias="BACKUP_AGE_IDENTITY_PATH", repr=False)
     connector_credential_encryption_key: SecretStr = Field(
         default=SecretStr(""), validation_alias="CONNECTOR_CREDENTIAL_ENCRYPTION_KEY", repr=False
     )

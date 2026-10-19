@@ -263,7 +263,7 @@ async def test_export_emits_web_citations_with_query_stripped(monkeypatch: pytes
 
 
 def test_web_citations_ride_existing_jsonb_columns_that_cascade_on_delete() -> None:
-    """Deletion and pg_dump backup need no new code: web citations live only in JSONB on cascading rows."""
+    """Deletion needs no new code: web citations live only in JSONB on cascading rows."""
     from sqlalchemy.dialects.postgresql import JSONB
 
     from core.database import Base

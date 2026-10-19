@@ -26,8 +26,6 @@ from modules.agents.routes import router as agents_router
 from modules.automations.routes import router as automations_router
 from modules.automations.routes import webhook_router as automation_webhook_router
 from modules.automations.tools import register_automation_tools
-from modules.backup.middleware import BackupActivityMiddleware
-from modules.backup.routes import router as backup_router
 from modules.chat.routes import MAX_CHAT_STREAMS_PER_API_PROCESS
 from modules.chat.routes import router as chat_router
 from modules.connectors.github.routes import router as github_oauth_router
@@ -159,7 +157,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     install_log_redaction()
     install_error_handling(app)
     app.add_middleware(PublicationGateMiddleware)
-    app.add_middleware(BackupActivityMiddleware)
     app.add_middleware(
         BodyLimitMiddleware,
         default_limit=app_settings.max_request_body_bytes,
@@ -167,7 +164,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(auth_router)
     app.include_router(workspaces_router)
-    app.include_router(backup_router)
     app.include_router(export_router)
     app.include_router(system_router)
     app.include_router(sources_router)
