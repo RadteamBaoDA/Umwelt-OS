@@ -14,7 +14,9 @@ import {
   mutateMessage,
   sendMessage,
   streamResponseEvents,
+  submitResponseInput,
   type ChatMessage,
+  type InputRequest,
   type Citation,
   type WebSearchOutcome,
   WEB_SEARCH_SEND_ENABLED,
@@ -38,6 +40,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { cancelAgentRun, getAgentProfiles, getAgentRun, listAgentRuns, startAgentRun } from '@/modules/agents/api';
 import { AgentRunDetail } from '@/modules/agents/run-detail';
 import { PromptBridgeProvider } from './generative-ui/bridge';
+import { UserInputRequest, type InputRequestState } from './generative-ui/components/user-input-request';
 import { settleWidgetPrompt } from './generative-ui/bridge/widget-prompt';
 
 const profileTitleKeys: Record<string, 'agentProfileSupervisor' | 'agentProfileKnowledge' | 'agentProfileResearch' | 'agentProfilePersonal' | 'agentProfileProject' | 'agentProfileNews' | 'agentProfilePlanning' | 'agentProfileAutomation'> = {
@@ -122,6 +125,8 @@ export function ChatSession({
   const [streamingCitations, setStreamingCitations] = React.useState<Citation[]>([]);
   const [streamingWebSearch, setStreamingWebSearch] = React.useState<WebSearchOutcome | null>(null);
   const [streamingUi, setStreamingUi] = React.useState<UiPart[]>([]);
+  // Human-in-the-loop: the pending `request_user_input` of the active run (null when none).
+  const [inputRequest, setInputRequest] = React.useState<{ request: InputRequest; state: InputRequestState; label?: string } | null>(null);
   const [webSearchOn, setWebSearchOn] = React.useState(false);
   const [isStreaming, setIsStreaming] = React.useState<boolean>(false);
   const [isPending, setIsPending] = React.useState<boolean>(false);
@@ -300,6 +305,16 @@ export function ChatSession({
       onUiDone: (ui) => {
         if (isCurrentView()) setStreamingUi((prev) => upsertUiPart(prev, ui));
       },
+      onInputRequest: (request) => {
+        if (isCurrentView()) setInputRequest({ request, state: 'pending' });
+      },
+      onInputResolved: (resolved) => {
+        if (!isCurrentView()) return;
+        setInputRequest((prev) => {
+          if (!prev || prev.request.request_id !== resolved.request_id) return prev;
+          return { ...prev, state: resolved.outcome === 'expired' ? 'expired' : 'answered', label: resolved.label };
+        });
+      },
       onDone: () => {
         if (isCurrentView()) {
           setIsStreaming(false);
@@ -307,6 +322,7 @@ export function ChatSession({
           setStreamingCitations([]);
           setStreamingWebSearch(null);
           setStreamingUi([]);
+          setInputRequest(null);
           setActiveResponseId(null);
         }
         void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(responseConversationId) });
@@ -321,6 +337,8 @@ export function ChatSession({
             setStreamingCitations([]);
             setStreamingWebSearch(null);
             setStreamingUi([]);
+            // A still-pending request is shown as cancelled (an expired one keeps its own state).
+            setInputRequest((prev) => (prev && prev.state === 'pending' ? { ...prev, state: 'cancelled' } : prev));
             setActiveResponseId(null);
             setError(t('cancelled'));
           }
@@ -664,6 +682,7 @@ export function ChatSession({
         setStreamingCitations([]);
         setStreamingWebSearch(null);
         setStreamingUi([]);
+        setInputRequest(null);
 
         await streamResponseRun(responseRun.response_id, responseConversationId, canUpdateCurrentView);
       } catch (err: unknown) {
@@ -744,6 +763,7 @@ export function ChatSession({
     setStreamingCitations([]);
     setStreamingWebSearch(null);
     setStreamingUi([]);
+    setInputRequest(null);
     setWebSearchOn(false);
     setIsStreaming(false);
     setIsPending(false);
@@ -766,6 +786,21 @@ export function ChatSession({
         t('genUiPromptFailed'),
       ),
     [handleSend, isPending, isStreaming, t],
+  );
+
+  /**
+   * Answers the pending user-input request so the paused run resumes (no new message or run).
+   *
+   * @param requestId - Id of the request being answered.
+   * @param answer - Slot id, option id, decline marker or text.
+   * @returns Resolves once the server accepted the answer; rejects so the card can unlock and retry.
+   */
+  const handleSubmitInput = React.useCallback(
+    async (requestId: string, answer: string): Promise<void> => {
+      if (!activeResponseId) throw new Error('No active response');
+      await submitResponseInput(activeResponseId, requestId, answer, session.csrfToken);
+    },
+    [activeResponseId, session.csrfToken],
   );
 
   /**
@@ -901,6 +936,16 @@ export function ChatSession({
         />
 
         {mode === 'full' && <TodosPanel conversationId={conversationId} isStreaming={isStreaming} />}
+        {inputRequest && (
+          <div className="shrink-0 px-4">
+            <UserInputRequest
+              request={inputRequest.request}
+              state={inputRequest.state}
+              answeredLabel={inputRequest.label}
+              onSubmitInput={handleSubmitInput}
+            />
+          </div>
+        )}
 
         {/* Bottom composer */}
         <ChatComposer

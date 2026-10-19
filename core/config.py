@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     data_dir: Path = Path("/data")
     upload_max_bytes: int = Field(default=25 * 1024 * 1024, gt=0, le=1024 * 1024 * 1024)
     parser_timeout_seconds: int = Field(default=120, gt=0, le=3600)
+    # How long a chat run parks on `request_user_input`; modules/chat/user_input.py clamps it to the worker job budget.
+    chat_input_request_ttl_seconds: int = Field(default=900, ge=30, le=3600)
     docx_expanded_max_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
     pdf_page_max: int = Field(default=500, gt=0)
     # 10 MiB of text chunks in ~1 s and ~0.3 GiB; the 100 MiB docx bound would need ~3 GiB on an 8 GiB host.

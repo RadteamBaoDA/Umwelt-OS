@@ -1609,7 +1609,7 @@ async def _privacy_cancel_locked(session: AsyncSession, run: ResponseRun, curren
     Existing event identities stay stable. A previously cancelled Stop is upgraded in place
     without allocating a colliding second terminal event; completed runs are never redacted.
     """
-    if run.status not in ("pending", "streaming", "cancelled"):
+    if run.status not in ("pending", "streaming", "awaiting_input", "cancelled"):
         return current_seq
     await session.execute(update(StreamEvent).where(
         StreamEvent.response_id == run.id,
@@ -1621,6 +1621,12 @@ async def _privacy_cancel_locked(session: AsyncSession, run: ResponseRun, curren
     ).values(data={"citations": []}))
     # Widgets carry model output derived from the withdrawn evidence (tables, sandbox code): neutralize them too.
     await neutralize_ui_events(session, run.id)
+    # A parked user-input request (prompt/options/answer) is model output too: drop it and its request event.
+    run.input_request = None
+    await session.execute(update(StreamEvent).where(
+        StreamEvent.response_id == run.id,
+        StreamEvent.event_type.in_(("message.input.request", "message.input.resolved")),
+    ).values(data={}))
     was_cancelled = run.status == "cancelled"
     run.status = "cancelled"
     run.ephemeral = True
@@ -1645,7 +1651,7 @@ async def _privacy_cancel_locked(session: AsyncSession, run: ResponseRun, curren
 
 async def _cancel_response_locked(session: AsyncSession, run: ResponseRun, current_seq: int = 0) -> int:
     """Persist ordinary Stop after consent verification with a run-locked terminal sequence."""
-    if run.status not in ("pending", "streaming"):
+    if run.status not in ("pending", "streaming", "awaiting_input"):
         return current_seq
     run.status = "cancelled"
     run.completed_at = func.now()
@@ -1690,7 +1696,7 @@ async def _mark_cancelled(
         run = await session.scalar(select(ResponseRun).where(
             ResponseRun.id == response_id,
         ).with_for_update().execution_options(populate_existing=True))
-        if run is None or run.status not in ("pending", "streaming"):
+        if run is None or run.status not in ("pending", "streaming", "awaiting_input"):
             return
         try:
             await _require_privacy_fence(session, expected_fence, scope=scope)
