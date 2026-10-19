@@ -10,7 +10,7 @@
 
 import * as React from 'react';
 import { apiRequest } from '@/core/api';
-import { fetchImageBlob, resolveMediaUrl } from './image-loader';
+import { blobToDataUrl, fetchImageBlob, resolveMediaUrl } from './image-loader';
 import {
   DEFAULT_PROMPT_COOLDOWN_MS,
   MAX_PROMPT_LENGTH,
@@ -43,8 +43,8 @@ export const IMAGE_RATE_WINDOW_MS = 10_000;
 /** Maximum image requests per frame inside `IMAGE_RATE_WINDOW_MS`. */
 export const IMAGE_RATE_MAX = 60;
 
-/** Maximum live blob URLs held per frame (bounds parent memory). */
-export const MAX_FRAME_BLOBS = 100;
+/** How long the owner's remote-media privacy flag is reused before re-reading settings. */
+export const PRIVACY_CACHE_MS = 30_000;
 
 export {
   DEFAULT_PROMPT_COOLDOWN_MS,
@@ -123,8 +123,8 @@ export function PromptBridgeProvider({
   const disabledRef = React.useRef(disabled);
   const lastAcceptedAtRef = React.useRef<number | null>(null);
   const registeredFramesRef = React.useRef<Map<unknown, string>>(new Map());
-  // Per-frame blob URLs (revoked on unregister) and request timestamps (rate limit).
-  const frameBlobsRef = React.useRef<Map<unknown, Set<string>>>(new Map());
+  // Per-frame request timestamps (rate limit) and a short-lived cache of the privacy flag.
+  const privacyCacheRef = React.useRef<{ allowed: Promise<boolean>; at: number } | null>(null);
   const frameRequestsRef = React.useRef<Map<unknown, number[]>>(new Map());
 
   React.useEffect(() => {
@@ -147,11 +147,6 @@ export function PromptBridgeProvider({
     return () => {
       registeredFramesRef.current.delete(frameWindow);
       frameRequestsRef.current.delete(frameWindow);
-      // Widget unmounted: free every image blob it caused the host to create.
-      for (const blobUrl of frameBlobsRef.current.get(frameWindow) ?? []) {
-        URL.revokeObjectURL(blobUrl);
-      }
-      frameBlobsRef.current.delete(frameWindow);
     };
   }, []);
 
@@ -214,7 +209,7 @@ export function PromptBridgeProvider({
   /**
    * Serves a widget `loadImage` request: URL-allowlisted, rate limited, gated by the owner's
    * `allow_widget_remote_media` privacy flag, fetched with credentials and size/type capped, then answered
-   * with a `blob:` URL. All failures reply with an error message and never throw.
+   * with a `data:` URL (opaque-origin frames cannot reliably load host-origin `blob:` URLs; no blob lifetime to manage). All failures reply with an error message and never throw.
    */
   const handleLoadImage = React.useCallback(
     async (source: unknown, id: string, rawUrl: string) => {
@@ -237,24 +232,30 @@ export function PromptBridgeProvider({
       recent.push(now);
       frameRequestsRef.current.set(source, recent);
       try {
-        const settings = await apiRequest<{ privacy?: { allow_widget_remote_media?: boolean } }>(
-          '/api/v1/settings/ai',
-        );
-        if (settings.privacy?.allow_widget_remote_media !== true) {
+        // Tile-heavy maps fire bursts of concurrent requests; share one in-flight/recent settings read
+        // for PRIVACY_CACHE_MS. A failed read is evicted so the next request retries.
+        let cached = privacyCacheRef.current;
+        if (!cached || Date.now() - cached.at > PRIVACY_CACHE_MS) {
+          const allowed = apiRequest<{ privacy?: { allow_widget_remote_media?: boolean } }>(
+            '/api/v1/settings/ai',
+          ).then((settings) => settings.privacy?.allow_widget_remote_media === true);
+          cached = { allowed, at: Date.now() };
+          privacyCacheRef.current = cached;
+          allowed.catch(() => {
+            if (privacyCacheRef.current === cached) privacyCacheRef.current = null;
+          });
+        }
+        if (!(await cached.allowed)) {
           fail('Remote widget media is disabled');
           return;
         }
-        const blob = await fetchImageBlob(url);
-        const blobs = frameBlobsRef.current.get(source);
-        // Frame unregistered while fetching, or over the blob cap: do not create an orphan URL.
-        if (!registeredFramesRef.current.has(source) || (blobs?.size ?? 0) >= MAX_FRAME_BLOBS) {
+        const dataUrl = await blobToDataUrl(await fetchImageBlob(url));
+        // Frame unregistered while fetching: nobody is left to receive the reply.
+        if (!registeredFramesRef.current.has(source)) {
           fail('Image not available');
           return;
         }
-        const blobUrl = URL.createObjectURL(blob);
-        if (blobs) blobs.add(blobUrl);
-        else frameBlobsRef.current.set(source, new Set([blobUrl]));
-        replyToFrame(source, { type: LOAD_IMAGE_RESULT_TYPE, id, blobUrl });
+        replyToFrame(source, { type: LOAD_IMAGE_RESULT_TYPE, id, dataUrl });
       } catch (err) {
         fail(err instanceof Error ? err.message : 'Image request failed');
       }
