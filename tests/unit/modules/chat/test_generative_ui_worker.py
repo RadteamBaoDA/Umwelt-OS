@@ -17,6 +17,7 @@ from modules.chat.generative_ui import finalize_generative_ui
 from modules.chat.generative_ui.external_router import VisualizationRouterError
 from modules.chat.models import Message, StreamEvent
 from modules.chat.schemas import parse_generative_ui
+from modules.chat.user_input import InputOutcome
 from modules.settings.public import VizRouterResolved
 from tests.unit.modules.chat.test_p14_generation_worker import _Gen
 from tests.unit.test_b1c_regressions import _config, _factory
@@ -29,6 +30,7 @@ SANDBOX_ARGS = {
 
 TABLE_ARGS = json.dumps({"title": "T", "columns": [{"key": "a", "label": "A"}], "rows": [["1"]]})
 PLAN_ARGS = json.dumps({"title": "P", "approach": "x", "steps": [{"title": "s"}]})
+END: list[str] = []  # a model round that only finishes: no text, no tool calls (ends a widget turn)
 
 
 def _text(token: str) -> str:
@@ -87,7 +89,7 @@ class _UIGen(_Gen):
 
 
 async def test_tool_stream_publishes_ordered_ui_deltas_then_done_and_persists(monkeypatch: pytest.MonkeyPatch) -> None:
-    gen = _UIGen(monkeypatch, [[_text("Here you go."), *_sandbox_chunks()]])
+    gen = _UIGen(monkeypatch, [[_text("Here you go."), *_sandbox_chunks()], END])
     await gen.run()
     gen.failed.assert_not_awaited()
     assert gen.requests[0]["tools"] and gen.requests[0]["tool_choice"] == "auto"
@@ -127,11 +129,11 @@ async def test_unknown_tools_are_ignored_and_every_presentation_call_becomes_a_p
         _call(0, name="delete_everything", args="{}", call_id="x"),
         _call(1, name="render_table", args=TABLE_ARGS, call_id="y"),
         _call(2, name="render_plan", args=PLAN_ARGS, call_id="z"),
-    ]])
+    ], END])
     await gen.run()
     done = gen.events("message.ui.done")
     assert [(d.data["part_id"], d.data["kind"]) for d in done] == [("y", "table"), ("z", "plan")]
-    assert len(gen.requests) == 1  # parallel calls cost no extra model round
+    assert len(gen.requests) == 2  # parallel calls cost one widget round plus the closing round
 
 
 async def test_cancel_mid_tool_stream_publishes_no_widget(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -186,9 +188,9 @@ async def test_read_skill_loop_is_bounded(monkeypatch: pytest.MonkeyPatch) -> No
 
 async def test_read_skill_then_terminal_tool_renders(monkeypatch: pytest.MonkeyPatch) -> None:
     skill = [_call(0, name="read_skill", args='{"name": "master-agent-playbook"}', call_id="s")]
-    gen = _UIGen(monkeypatch, [skill, _sandbox_chunks()])
+    gen = _UIGen(monkeypatch, [skill, _sandbox_chunks(), END])
     await gen.run()
-    assert len(gen.requests) == 2
+    assert len(gen.requests) == 3
     assert gen.events("message.ui.done")[0].data["kind"] == "sandboxed_ui"
 
 
@@ -257,7 +259,7 @@ def test_finalize_sandbox_fallback_title_is_localized() -> None:
 async def test_tool_citations_survive_when_prose_has_no_marker(monkeypatch: pytest.MonkeyPatch) -> None:
     """render_table(citations=[1]) keeps citation 1 although the answer text never writes [1]."""
     table = json.dumps({"title": "T", "columns": [{"key": "a", "label": "A"}], "rows": [["1"]], "citations": [1]})
-    gen = _UIGen(monkeypatch, [[_text("Plain prose with no marker."), _call(0, name="render_table", args=table, call_id="c")]])
+    gen = _UIGen(monkeypatch, [[_text("Plain prose with no marker."), _call(0, name="render_table", args=table, call_id="c")], END])
     await gen.run()
     gen.failed.assert_not_awaited()
     (done,) = gen.events("message.ui.done")
@@ -281,7 +283,7 @@ async def test_two_parts_stream_persist_and_complete_with_part_ids(monkeypatch: 
         *_sandbox_chunks(),
         _call(1, name="render_table", args=TABLE_ARGS[:20], call_id="c2"),
         _call(1, args=TABLE_ARGS[20:]),
-    ]])
+    ], END])
     await gen.run()
     gen.failed.assert_not_awaited()
     deltas = gen.events("message.ui.delta")
@@ -303,7 +305,7 @@ async def test_invalid_part_is_dropped_but_siblings_survive(monkeypatch: pytest.
     gen = _UIGen(monkeypatch, [[
         _call(0, name="render_table", args='{"title": "T"}', call_id="bad"),
         _call(1, name="render_plan", args=PLAN_ARGS, call_id="ok"),
-    ]])
+    ], END])
     await gen.run()
     assert [d.data["part_id"] for d in gen.events("message.ui.done")] == ["ok"]
 
@@ -323,7 +325,7 @@ async def test_missing_or_duplicate_call_ids_get_stable_part_ids(monkeypatch: py
         _call(0, name="render_table", args=TABLE_ARGS),
         _call(1, name="render_table", args=TABLE_ARGS, call_id="same"),
         _call(2, name="render_table", args=TABLE_ARGS, call_id="same"),
-    ]])
+    ], END])
     await gen.run()
     ids = [d.data["part_id"] for d in gen.events("message.ui.done")]
     assert len(set(ids)) == 3 and ids[0] == "part-1" and ids[1] == "same"
@@ -355,6 +357,7 @@ async def test_trip_images_tool_runs_in_loop_then_widget_renders(monkeypatch: py
         [_call(0, name="get_trip_stop_images", args=trip_args, call_id="t1"),
          _call(1, name="get_trip_stop_images", args=trip_args, call_id="t2")],  # 2nd call in a round is dropped
         [_call(0, name="render_table", args=TABLE_ARGS, call_id="w")],
+        END,
     ])
     monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=_media_config(True)))
     tool = AsyncMock(return_value='{"stops": []}')
@@ -365,10 +368,12 @@ async def test_trip_images_tool_runs_in_loop_then_widget_renders(monkeypatch: py
     assert "get_trip_stop_images" in names and "REMOTE MEDIA" in gen.requests[0]["messages"][0]["content"]
     tool.assert_awaited_once()
     assert tool.await_args.kwargs["local_only"] is False and tool.await_args.kwargs["secret"] == "sig"
+    # The request list is shared and keeps growing: [-4:-2] is the image round, [-2:] the widget round.
     followup = gen.requests[1]["messages"]
-    assert [m["role"] for m in followup[-2:]] == ["assistant", "tool"]
-    assert followup[-2]["tool_calls"][0]["function"]["name"] == "get_trip_stop_images"
-    assert followup[-1]["tool_call_id"] == "t1" and followup[-1]["content"] == '{"stops": []}'
+    assert [m["role"] for m in followup[-4:-2]] == ["assistant", "tool"]
+    assert followup[-4]["tool_calls"][0]["function"]["name"] == "get_trip_stop_images"
+    assert followup[-3]["tool_call_id"] == "t1" and followup[-3]["content"] == '{"stops": []}'
+    assert json.loads(followup[-1]["content"]) == {"status": "rendered", "part_id": "w"}
     assert [d.data["kind"] for d in gen.events("message.ui.done")] == ["table"]
 
 
@@ -456,3 +461,145 @@ async def test_typesafe_router_uses_pinned_transport(monkeypatch: pytest.MonkeyP
     pinned.assert_called_once()
     assert classify.await_args.args[0] == "k" and classify.await_args.args[2] == "transport"
     assert gen.events("message.ui.done")[0].data["kind"] == "bar_chart"
+
+
+# ------------------------------------------------- widgets across rounds, todos, user input
+
+
+def _table_round(call_id: str = "t", prefix: str = "") -> list[str]:
+    """One model round: optional prose plus a single table widget call."""
+    return [*([_text(prefix)] if prefix else []), _call(0, name="render_table", args=TABLE_ARGS, call_id=call_id)]
+
+
+async def test_widget_text_widget_across_two_rounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A widget, prose about it, then another widget: unique part ids, text joined, rendered results fed back."""
+    gen = _UIGen(monkeypatch, [
+        _table_round("t", "First. "),
+        [_text("Second. "), _call(0, name="render_plan", args=PLAN_ARGS, call_id="t")],  # provider reused the id
+        END,
+    ])
+    await gen.run()
+    gen.failed.assert_not_awaited()
+    assert len(gen.requests) == 3
+    done = gen.events("message.ui.done")
+    ids = [d.data["part_id"] for d in done]
+    assert [d.data["kind"] for d in done] == ["table", "plan"] and ids[0] == "t" and len(set(ids)) == 2
+    assert {d.data["part_id"] for d in gen.events("message.ui.delta")} <= set(ids)
+    message = next(m for m in gen.added if isinstance(m, Message))
+    assert "First. Second." in message.content
+    assert [p["part_id"] for p in message.metadata_json["generative_ui_parts"]] == ids
+    msgs = gen.requests[-1]["messages"]
+    tool_msgs = [m for m in msgs if m["role"] == "tool"]
+    assert [json.loads(m["content"]) for m in tool_msgs] == [{"status": "rendered", "part_id": i} for i in ids]
+    assert [m["role"] for m in msgs[-4:]] == ["assistant", "tool", "assistant", "tool"]
+    assert gen.events("message.done")[0].data["generative_ui_parts"] == message.metadata_json["generative_ui_parts"]
+
+
+async def test_part_cap_counts_parts_across_rounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _UIGen(monkeypatch, [_table_round("a"), _table_round("b"), _table_round("c"), END])
+    await gen.run(generative_ui_max_parts=2)
+    assert [d.data["part_id"] for d in gen.events("message.ui.done")] == ["a", "b"]
+    assert len(gen.requests) == 2  # the cap stops the loop without another model round
+
+
+async def test_round_cap_limits_widget_rounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    capped = _UIGen(monkeypatch, [_table_round("t")])  # the model keeps adding a widget every round
+    await capped.run(generative_ui_max_rounds=2, generative_ui_max_parts=8)
+    assert len(capped.requests) == 2 and len(capped.events("message.ui.done")) == 2
+    default = _UIGen(monkeypatch, [_table_round("t")])
+    await default.run(generative_ui_max_parts=8)  # default 3 rounds
+    assert len(default.requests) == 3 and len(default.events("message.ui.done")) == 3
+    single = _UIGen(monkeypatch, [_table_round("t")])
+    await single.run(generative_ui_max_rounds=1)  # 1 keeps the old one-response behaviour
+    assert len(single.requests) == 1
+
+
+async def test_form_part_flows_alongside_other_parts(monkeypatch: pytest.MonkeyPatch) -> None:
+    form = json.dumps({"title": "F", "fields": [{"id": "city", "label": "City", "type": "text"}]})
+    gen = _UIGen(monkeypatch, [[
+        _call(0, name="render_form", args=form, call_id="f"), _call(1, name="render_table", args=TABLE_ARGS, call_id="t"),
+    ], END])
+    await gen.run()
+    assert [(d.data["part_id"], d.data["kind"]) for d in gen.events("message.ui.done")] == [("f", "form"), ("t", "table")]
+
+
+async def test_local_only_turn_still_fails_the_external_router(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _UIGen(monkeypatch, [["RAISE_CAPABILITY"], [_text("Alpha: 40 Beta: 60")]], prompt="Show a pie chart")
+    classify = _router(monkeypatch)
+    monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config(
+        aliases={}, privacy=PrivacySettings(allow_remote_reasoning=False),
+    )))
+    await gen.run()
+    classify.assert_not_awaited()
+    assert gen.failed.await_args.args[4].code == "local_only_turn"
+
+
+async def test_todo_tools_are_offered_and_run_inside_the_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _UIGen(monkeypatch, [
+        [_call(0, name="manage_todos", args='{"todos": []}', call_id="td")], _table_round("w"), END,
+    ])
+    tool = AsyncMock(return_value='{"todos": []}')
+    monkeypatch.setattr(worker, "run_todo_tool", tool)
+    await gen.run()
+    gen.failed.assert_not_awaited()
+    assert {"manage_todos", "get_todos", "request_user_input"} <= {t["function"]["name"] for t in gen.requests[0]["tools"]}
+    assert "TODOS" in gen.requests[0]["messages"][0]["content"]
+    tool.assert_awaited_once()
+    assert tool.await_args.args[0] == "manage_todos" and tool.await_args.args[1] == '{"todos": []}'
+    assert [d.data["kind"] for d in gen.events("message.ui.done")] == ["table"]
+
+
+def _ask(args: dict[str, Any] | str, call_id: str = "q") -> list[str]:
+    """One model round that calls request_user_input."""
+    return [_call(0, name="request_user_input", args=args if isinstance(args, str) else json.dumps(args), call_id=call_id)]
+
+
+async def test_user_input_parks_then_continues_with_the_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _UIGen(monkeypatch, [[_text("Need one thing. "), *_ask({"kind": "text", "prompt": "Your name?"})], [_text("Thanks.")]])
+    create = AsyncMock(return_value={"request_id": "rid"})
+    wait = AsyncMock(return_value=InputOutcome("answered", '{"status": "answered", "answer": "Ada"}'))
+    monkeypatch.setattr(worker, "create_input_request", create)
+    monkeypatch.setattr(worker, "await_user_input", wait)
+    await gen.run(chat_input_request_ttl_seconds=60)
+    gen.failed.assert_not_awaited()
+    create.assert_awaited_once()
+    assert create.await_args.kwargs["ttl"].total_seconds() == 60
+    assert wait.await_args.args[2] == "rid"
+    tool_msg = gen.requests[1]["messages"][-1]
+    assert tool_msg["role"] == "tool" and tool_msg["tool_call_id"] == "q" and "Ada" in tool_msg["content"]
+    message = next(m for m in gen.added if isinstance(m, Message))
+    assert message.content.endswith("Thanks.") and gen.events("message.done")
+
+
+@pytest.mark.parametrize("outcome", ["expired", "cancelled"])
+async def test_user_input_expiry_or_cancel_stops_without_terminal_output(
+    monkeypatch: pytest.MonkeyPatch, outcome: str,
+) -> None:
+    gen = _UIGen(monkeypatch, [[_text("Partial. "), *_ask({"kind": "text", "prompt": "Name?"})], [_text("never")]])
+    monkeypatch.setattr(worker, "create_input_request", AsyncMock(return_value={"request_id": "rid"}))
+    monkeypatch.setattr(worker, "await_user_input", AsyncMock(return_value=InputOutcome(outcome, "{}")))  # type: ignore[arg-type]
+    await gen.run()
+    gen.failed.assert_not_awaited()
+    assert len(gen.requests) == 1
+    assert not any(isinstance(m, Message) for m in gen.added)
+    assert gen.events("message.done") == [] and gen.events("message.citations") == []
+
+
+async def test_invalid_user_input_args_return_an_error_and_never_park(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _UIGen(monkeypatch, [_ask({"kind": "choice", "prompt": "Pick"}), [_text("Ok.")]])
+    create = AsyncMock()
+    monkeypatch.setattr(worker, "create_input_request", create)
+    await gen.run()
+    gen.failed.assert_not_awaited()
+    create.assert_not_awaited()
+    assert "error" in json.loads(gen.requests[1]["messages"][-1]["content"])
+
+
+async def test_user_input_is_limited_to_two_per_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _UIGen(monkeypatch, [_ask({"kind": "text", "prompt": "Again?"})])  # the model keeps asking
+    create = AsyncMock(return_value={"request_id": "rid"})
+    monkeypatch.setattr(worker, "create_input_request", create)
+    monkeypatch.setattr(worker, "await_user_input", AsyncMock(return_value=InputOutcome("answered", "{}")))
+    await gen.run()
+    assert create.await_count == worker.MAX_USER_INPUT_REQUESTS_PER_TURN == 2
+    assert len(gen.requests) == 3 and gen.events("message.done")

@@ -49,6 +49,7 @@ from modules.chat.generative_ui import (
     streaming_snapshot,
 )
 from modules.chat.generative_ui import external_router as viz
+from modules.chat.generative_ui.tool_specs import TODO_TOOLS, TOOL_REQUEST_USER_INPUT, RequestUserInputArgs
 from modules.chat.history import load_effective_history
 from modules.chat.models import (
     AgentActivityLink,
@@ -77,6 +78,8 @@ from modules.chat.scope import (
     owner_default_scope,
 )
 from modules.chat.stream import make_event_id
+from modules.chat.todos import run_todo_tool
+from modules.chat.user_input import InputOutcome, await_user_input, create_input_request, resolve_ttl
 from modules.memory.public import lock_export_privacy, read_export_privacy
 from modules.settings import public as settings_public
 from modules.settings.prompts import resolve_prompt
@@ -112,6 +115,7 @@ _WEB_UNAVAILABLE_CODES = frozenset({"timeout", "provider_error", "network_denied
 MAX_SKILL_ROUNDS = 2
 MAX_SKILL_CALLS_PER_ROUND = 2
 MAX_TRIP_IMAGE_CALLS_PER_ROUND = 1  # get_trip_stop_images fans out to 8 lookups; one call per round
+MAX_USER_INPUT_REQUESTS_PER_TURN = 2  # request_user_input parks the run; bound how often one turn may ask
 # A sandbox widget's parameter keys; the first appearance of each is a streaming milestone (css done, html begun, ...).
 _UI_MILESTONE_KEYS = ('"css"', '"html"', '"jsFunctions"', '"jsExpressions"')
 
@@ -1010,10 +1014,12 @@ async def run_response_generation(
             trip_images_on = media.media_permitted(ai_config, local_only=local_only_turn)
             ui_tools: list[dict[str, Any]] | None = build_chat_tool_specs(
                 include_read_skill=bool(skill_names), include_trip_images=trip_images_on,
+                include_todos=True, include_user_input=True,
             )
             ui_locale = await _owner_locale(session, job_scope)
             ui_system_text = system_text + "\n\n" + build_generative_ui_system_prompt(
                 locale=ui_locale, local_only=local_only_turn, skills=skill_names, remote_media=trip_images_on,
+                todos=True,
             )
 
             def _base_messages(with_ui_prompt: bool) -> list[dict[str, Any]]:
@@ -1115,7 +1121,74 @@ async def run_response_generation(
         tools_active = ui_tools is not None
         skill_rounds = 0
         max_parts = max(1, int(getattr(settings, "generative_ui_max_parts", 4)))
+        max_ui_rounds = max(1, int(getattr(settings, "generative_ui_max_rounds", 3)))
+        input_ttl_seconds = int(getattr(settings, "chat_input_request_ttl_seconds", 900))
         ui_parts: list[tuple[str, dict[str, str]]] = []  # (part_id, tool call) of this turn's widgets, in stream order
+        ui_rounds = 0  # model rounds that produced at least one widget
+        input_requests = 0  # request_user_input calls answered or rejected so far this turn
+
+        def _round_terminals(round_acc: ToolCallAccumulator) -> list[tuple[str, dict[str, str]]]:
+            """Presentation calls of the current round with part ids unique across the whole turn.
+
+            The remaining part budget (turn cap minus parts of earlier rounds) bounds the round. Providers may
+            reuse a tool-call id (or the ``part-<n>`` fallback) in a later round, so a colliding id gets a
+            round prefix; the result is deterministic for one round, hence identical in streamed snapshots and
+            the final payload.
+            """
+            used = {pid for pid, _ in ui_parts}
+            out: list[tuple[str, dict[str, str]]] = []
+            for pid, call in round_acc.terminals(max(0, max_parts - len(ui_parts))):
+                base, n = f"r{ui_rounds + 1}-{pid}"[:58], 2
+                while pid in used:
+                    pid = base if base not in used else f"{base}-{n}"
+                    n += 1
+                used.add(pid)
+                out.append((pid, call))
+            return out
+
+        async def _park_for_input(args: RequestUserInputArgs) -> InputOutcome | None:
+            """Park the run on a user-input request and wait for the answer with no lock or transaction held.
+
+            Publication happens inside the standard lock order (privacy -> conversation -> run, status must be
+            ``streaming``) and the commit releases every lock before the wait. Returns the answered/declined
+            outcome, or None when the run was cancelled or the request expired (nothing more is published,
+            exactly like a Stop). Raises PrivacyFenceChanged / ResponseNoLongerActive like other publish sites.
+            """
+            nonlocal seq
+            async with session_factory() as park_session:
+                _, parked_run = await _lock_live_response(
+                    park_session, response_id, conversation_id, privacy_fence,
+                    scope=job_scope, access_fence=access_fence,
+                )
+                if await is_run_cancelled(response_id, redis):
+                    await _cancel_response_locked(park_session, parked_run, seq)
+                    await park_session.commit()
+                    return None
+                payload = await create_input_request(
+                    park_session, parked_run, args, ttl=resolve_ttl(input_ttl_seconds),
+                )
+                # create_input_request appended its own event; re-read the high-water mark so later local
+                # events (and a concurrent submit's event) keep strictly increasing seqs.
+                seq = await _next_event_seq(park_session, response_id, seq) - 1
+                await park_session.commit()
+            outcome = await await_user_input(session_factory, response_id, payload["request_id"])
+            return outcome if outcome.outcome in ("answered", "declined") else None
+
+        async def _run_todos(name: str, raw_args: str) -> str | None:
+            """Run one todo tool under the live-run fence; None when the run was cancelled meanwhile.
+
+            ``run_todo_tool`` commits its own writes, which also releases the fence locks taken here.
+            """
+            async with session_factory() as todo_session:
+                _, todo_run = await _lock_live_response(
+                    todo_session, response_id, conversation_id, privacy_fence,
+                    scope=job_scope, access_fence=access_fence,
+                )
+                if await is_run_cancelled(response_id, redis):
+                    await _cancel_response_locked(todo_session, todo_run, seq)
+                    await todo_session.commit()
+                    return None
+                return await run_todo_tool(name, raw_args or "{}", todo_session, conversation_id)
         while True:
             acc = ToolCallAccumulator()
             round_started = False  # any chunk received; a capability fallback is only safe before this
@@ -1152,7 +1225,7 @@ async def run_response_generation(
                                     fragments = delta.get("tool_calls")
                                     if fragments:
                                         acc.feed(fragments)
-                                        for part_id, term in acc.terminals(max_parts):
+                                        for part_id, term in _round_terminals(acc):
                                             st = ui_state.setdefault(part_id, {
                                                 "len": 0, "seen": set(), "parse": float("-inf"), "snap": None,
                                             })
@@ -1190,40 +1263,87 @@ async def run_response_generation(
             pending_ui = {}  # the completed payloads supersede any trailing partial snapshots
 
             calls = acc.calls()
-            data_names = (TOOL_READ_SKILL, TOOL_TRIP_IMAGES) if trip_images_on else (TOOL_READ_SKILL,)
+            known_data = {TOOL_READ_SKILL, TOOL_REQUEST_USER_INPUT, *TODO_TOOLS}
+            if trip_images_on:
+                known_data.add(TOOL_TRIP_IMAGES)
             for extra in calls:
-                if extra["name"] not in TERMINAL_UI_TOOLS and extra["name"] not in data_names:
+                if extra["name"] not in TERMINAL_UI_TOOLS and extra["name"] not in known_data:
                     logger.warning("Ignoring unknown tool call %r for run %s", extra["name"][:64], response_id)
-            # Presentation tools are not terminal for the turn: every call this response made (up to the cap) is a
-            # part. One model response per widget round keeps latency flat; the model emits parallel tool calls.
-            ui_parts = acc.terminals(max_parts)
-            if sum(c["name"] in TERMINAL_UI_TOOLS for c in calls) > len(ui_parts):
+            # Presentation tools never end the turn: every call this response made (within the remaining part
+            # budget) is a part, and the model gets another round to write text or add widgets.
+            round_parts = _round_terminals(acc)
+            part_of = {id(c): pid for pid, c in round_parts}
+            if sum(c["name"] in TERMINAL_UI_TOOLS for c in calls) > len(round_parts):
                 logger.warning("Generative UI part cap (%d) reached for run %s; extra widgets ignored", max_parts, response_id)
-            # Data tools: bounded per round (read_skill 2, trip images 1) and by the shared extra-round limit below.
-            reads = [c for c in calls if c["name"] == TOOL_READ_SKILL][:MAX_SKILL_CALLS_PER_ROUND]
-            trips = [c for c in calls if c["name"] == TOOL_TRIP_IMAGES and trip_images_on][:MAX_TRIP_IMAGE_CALLS_PER_ROUND]
-            data_calls = [c for c in calls if any(c is r for r in (*reads, *trips))]
-            if ui_parts or not data_calls:
-                break
-            if skill_rounds >= MAX_SKILL_ROUNDS:
-                logger.warning("Data-tool round limit reached for run %s; no widget", response_id)
-                break
-            skill_rounds += 1
+            # Calls we answer, in model order: widgets, bounded data tools, bounded input requests.
+            handled: list[dict[str, str]] = []
+            reads = trips = todo_calls = asks = 0
+            for c in calls:
+                name = c["name"]
+                if id(c) in part_of:
+                    handled.append(c)
+                elif name == TOOL_READ_SKILL and reads < MAX_SKILL_CALLS_PER_ROUND:
+                    reads += 1
+                    handled.append(c)
+                elif name == TOOL_TRIP_IMAGES and trip_images_on and trips < MAX_TRIP_IMAGE_CALLS_PER_ROUND:
+                    trips += 1
+                    handled.append(c)
+                elif name in TODO_TOOLS and todo_calls < MAX_SKILL_CALLS_PER_ROUND:
+                    todo_calls += 1
+                    handled.append(c)
+                elif name == TOOL_REQUEST_USER_INPUT and input_requests + asks < MAX_USER_INPUT_REQUESTS_PER_TURN:
+                    asks += 1
+                    handled.append(c)
+            if not handled:
+                break  # a plain text round (or nothing we may act on): the answer is complete
+            data_calls = [c for c in handled if id(c) not in part_of and c["name"] != TOOL_REQUEST_USER_INPUT]
+            if round_parts:
+                ui_parts.extend(round_parts)
+                ui_rounds += 1
+                if len(ui_parts) >= max_parts or ui_rounds >= max_ui_rounds:
+                    break  # caps reached: stop without another model round
+            elif data_calls:
+                # Data tools (skills, images, todos) share one extra-round bound; input requests have their own.
+                if skill_rounds >= MAX_SKILL_ROUNDS:
+                    logger.warning("Data-tool round limit reached for run %s; no widget", response_id)
+                    break
+                skill_rounds += 1
             tool_calls = [
                 {"id": c["id"] or f"call_{i}", "type": "function",
                  "function": {"name": c["name"], "arguments": c["arguments"] or "{}"}}
-                for i, c in enumerate(data_calls)
+                for i, c in enumerate(handled)
             ]
             messages_payload.append({
                 "role": "assistant", "content": accumulated_text[round_text_start:] or None, "tool_calls": tool_calls,
             })
-            for tc, c in zip(tool_calls, data_calls, strict=True):
-                if c["name"] == TOOL_TRIP_IMAGES:
+            for tc, c in zip(tool_calls, handled, strict=True):
+                name = c["name"]
+                if id(c) in part_of:
+                    # The payload is already on screen; echoing it back would only cost tokens.
+                    content = json.dumps({"status": "rendered", "part_id": part_of[id(c)]})
+                elif name == TOOL_TRIP_IMAGES:
                     # Egress is gated again inside the tool (owner flag + local-only); never raises for model input.
                     content = await media.run_trip_images_tool(
                         c["arguments"], config=ai_config, local_only=local_only_turn,
                         secret=settings.csrf_signing_secret.get_secret_value(),
                     )
+                elif name in TODO_TOOLS:
+                    todo_result = await _run_todos(name, c["arguments"])
+                    if todo_result is None:
+                        return  # cancelled while the tool was about to run
+                    content = todo_result
+                elif name == TOOL_REQUEST_USER_INPUT:
+                    input_requests += 1
+                    try:
+                        input_args = RequestUserInputArgs.model_validate_json(c["arguments"] or "{}")
+                    except ValueError as exc:
+                        # Invalid arguments never park the run; the model sees the error and continues.
+                        content = json.dumps({"error": f"invalid request_user_input arguments: {str(exc)[:300]}"})
+                    else:
+                        outcome = await _park_for_input(input_args)
+                        if outcome is None:
+                            return  # expired or cancelled while parked: terminal state already persisted
+                        content = outcome.tool_result
                 else:
                     content = skill_tool_result(c["arguments"])
                 messages_payload.append({"role": "tool", "tool_call_id": tc["id"], "content": content})

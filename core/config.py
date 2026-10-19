@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     max_request_body_bytes: int = Field(default=5 * 1024 * 1024, gt=0, validation_alias="MAX_REQUEST_BODY_BYTES")
     # Most presentation widgets (parts) one assistant turn may carry; extra tool calls are ignored.
     generative_ui_max_parts: int = Field(default=4, ge=1, le=8, validation_alias="GENERATIVE_UI_MAX_PARTS")
+    # Most model rounds of one turn that may add widgets (a round after widgets lets the model write text or add more).
+    generative_ui_max_rounds: int = Field(default=3, ge=1, le=5, validation_alias="GENERATIVE_UI_MAX_ROUNDS")
     data_dir: Path = Path("/data")
     upload_max_bytes: int = Field(default=25 * 1024 * 1024, gt=0, le=1024 * 1024 * 1024)
     parser_timeout_seconds: int = Field(default=120, gt=0, le=3600)
