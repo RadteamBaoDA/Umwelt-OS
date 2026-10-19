@@ -7,6 +7,7 @@ import {
   DESIGN_SYSTEM_CSS,
   FORM_STYLES_WITH_STAGGER_CSS,
   IMPORTMAP,
+  buildImportMap,
   IMPORTMAP_SCRIPT_TAG,
   OPEN_GEN_UI_DESIGN_SKILL,
   OPEN_INTELLIGENT_UI_TOKEN_ALIASES,
@@ -18,6 +19,7 @@ import {
   verifyGlobalsCssParity,
   verifyTokensJsonParity,
 } from '../design-system';
+import { buildCspMetaTag } from '../sandbox/frame-content';
 
 const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(CURRENT_DIR, '../../../../../../..');
@@ -85,9 +87,13 @@ describe('Design System Token Parity & Stylesheet Generation', () => {
     expect(DESIGN_SYSTEM_CSS).toContain(THEME_CSS);
   });
 
-  it('exports CDN importmap and design skill prompt documentation', () => {
-    expect(IMPORTMAP.imports.three).toContain('https://esm.sh/three');
+  it('exports same-origin vendored importmap and design skill prompt documentation', () => {
+    expect(IMPORTMAP.imports.three).toBe('/vendor/genui/three.mjs');
+    expect(buildImportMap('https://app.test').imports.d3).toBe('https://app.test/vendor/genui/d3.mjs');
+    expect(JSON.stringify(IMPORTMAP)).not.toContain('esm.sh');
     expect(IMPORTMAP_SCRIPT_TAG).toContain('<script type="importmap">');
+    expect(buildCspMetaTag('https://app.test')).toContain("script-src 'unsafe-inline' https://app.test/vendor/genui/;");
+    expect(buildCspMetaTag('https://app.test')).toContain("connect-src 'none'");
     expect(OPEN_GEN_UI_DESIGN_SKILL).toContain('--color-background-primary');
     expect(OPEN_GEN_UI_DESIGN_SKILL).toContain('.c-teal');
   });

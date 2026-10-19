@@ -15,6 +15,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { usePromptBridge } from '../bridge';
+import { genUiCopy } from '../copy';
 import { downloadHtmlDocument, slugify } from './export-utils';
 
 export interface ExportOverlayProps {
@@ -24,6 +26,8 @@ export interface ExportOverlayProps {
   html?: string;
   /** Frame HTML (`srcdoc`) used for fullscreen preview if different from `html`. */
   previewHtml?: string;
+  /** Nonce embedded in `previewHtml`; the fullscreen frame is registered with the bridge under it. */
+  frameNonce?: string;
   /** Whether the widget has finished streaming and is ready for export/fullscreen. */
   ready?: boolean;
   /** Optional controlled fullscreen dialog open state. */
@@ -56,6 +60,7 @@ export function ExportOverlay({
   html,
   previewHtml,
   ready = true,
+  frameNonce,
   open: controlledOpen,
   onOpenChange,
   labels,
@@ -75,16 +80,39 @@ export function ExportOverlay({
     [controlledOpen, onOpenChange],
   );
 
-  const expandLabel = labels?.expand ?? 'Fullscreen preview';
-  const exportLabel = labels?.exportHtml ?? 'Export HTML';
-  const copyLabel = labels?.copyHtml ?? 'Copy HTML';
-  const copiedLabel = labels?.copiedHtml ?? 'Copied';
-  const closeLabel = labels?.close ?? 'Close';
-  const previewDescription =
-    labels?.previewDescription ?? 'Interactive sandboxed widget preview';
+  // Fallbacks come from the shared catalog (document lang) so no English literals live here.
+  const fallback = genUiCopy();
+  const expandLabel = labels?.expand ?? fallback.genUiFullscreenPreview;
+  const exportLabel = labels?.exportHtml ?? fallback.genUiExportHtml;
+  const copyLabel = labels?.copyHtml ?? fallback.genUiCopyHtml;
+  const copiedLabel = labels?.copiedHtml ?? fallback.genUiCopied;
+  const closeLabel = labels?.close ?? fallback.genUiClose;
+  const previewDescription = labels?.previewDescription ?? fallback.genUiPreviewDescription;
 
   const exportable = ready && Boolean(html);
   const effectivePreviewHtml = previewHtml ?? html ?? '';
+
+  const bridge = usePromptBridge();
+  const unregisterPreviewRef = React.useRef<(() => void) | null>(null);
+
+  /** Registers the fullscreen frame's window (new document per load) so its prompts/resizes validate. */
+  const handlePreviewLoad = React.useCallback(
+    (event: React.SyntheticEvent<HTMLIFrameElement>) => {
+      unregisterPreviewRef.current?.();
+      unregisterPreviewRef.current = frameNonce
+        ? bridge.registerFrame(event.currentTarget.contentWindow, frameNonce)
+        : null;
+    },
+    [bridge, frameNonce],
+  );
+
+  // Unregister when the dialog closes (iframe unmounts) or the overlay unmounts.
+  React.useEffect(() => {
+    if (isDialogOpen) return;
+    unregisterPreviewRef.current?.();
+    unregisterPreviewRef.current = null;
+  }, [isDialogOpen]);
+  React.useEffect(() => () => unregisterPreviewRef.current?.(), []);
 
   const handleDownload = React.useCallback(() => {
     if (!html) return;
@@ -210,6 +238,8 @@ export function ExportOverlay({
                 title={`${title} fullscreen preview`}
                 sandbox="allow-scripts"
                 srcDoc={effectivePreviewHtml}
+                onLoad={handlePreviewLoad}
+                data-umwelt-nonce={frameNonce}
                 className="h-full w-full border-0 bg-transparent"
                 data-testid="generative-ui-fullscreen-iframe"
               />

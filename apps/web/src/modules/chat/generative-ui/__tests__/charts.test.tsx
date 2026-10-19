@@ -105,5 +105,20 @@ describe('Generative UI Charts & Config', () => {
     const colorDot = item0.querySelector('[data-color]');
     expect(colorDot?.getAttribute('data-color')).toBe('var(--chart-3)');
   });
+
+  it.each(['bar', 'line', 'scatter', 'distribution'] as const)('renders the %s variant from chartType', (chartType) => {
+    render(
+      <GenerativeBarChart
+        title="Variant"
+        locale="en-us"
+        chartType={chartType}
+        data={[
+          { label: '1', value: 3 },
+          { label: '2', value: 5 },
+        ]}
+      />,
+    );
+    expect(screen.getByTestId('bar-chart-canvas')).toHaveAttribute('data-chart-type', chartType);
+  });
 });
 

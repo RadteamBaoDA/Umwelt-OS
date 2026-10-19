@@ -515,27 +515,39 @@ export const FORM_STYLES_CSS = FORM_STYLES_WITH_STAGGER_CSS;
 /** Combined Design System CSS string injected into sandboxed iframes and standalone HTML exports. */
 export const DESIGN_SYSTEM_CSS = `${THEME_CSS}\n\n${SVG_CLASSES_CSS}\n\n${FORM_STYLES_WITH_STAGGER_CSS}`;
 
-/** CDN import map for ES modules inside standalone exports. */
-export const IMPORTMAP = {
-  imports: {
-    three: 'https://esm.sh/three',
-    'three/': 'https://esm.sh/three/',
-    gsap: 'https://esm.sh/gsap',
-    'gsap/': 'https://esm.sh/gsap/',
-    d3: 'https://esm.sh/d3',
-    'd3/': 'https://esm.sh/d3/',
-    'chart.js': 'https://esm.sh/chart.js',
-    'chart.js/': 'https://esm.sh/chart.js/',
-  },
-} as const satisfies { imports: Record<string, string> };
+/** Vendored library files under `public/vendor/genui/` (built by `scripts/vendor-genui.mjs`). */
+const VENDORED_LIBS = ['three', 'd3', 'chart.js', 'gsap', 'leaflet'] as const;
 
-/** Pre-rendered `<script type="importmap">` tag for HTML head injection. */
-export const IMPORTMAP_SCRIPT_TAG = `<script type="importmap">
-${JSON.stringify(IMPORTMAP, null, 2)
-  .split('\n')
-  .map((line) => '  ' + line)
-  .join('\n')}
-  </script>`;
+/**
+ * Builds the import map for sandbox ES modules, pointing at same-origin vendored bundles.
+ * The sandbox iframe is an opaque-origin srcdoc, so URLs must be absolute to resolve.
+ *
+ * @param origin - Host page origin (e.g. `https://app.example`); empty yields root-relative URLs.
+ * @returns Import map object mapping bare specifiers to `<origin>/vendor/genui/<lib>.mjs`.
+ */
+export function buildImportMap(origin = ''): { imports: Record<string, string> } {
+  return {
+    imports: Object.fromEntries(VENDORED_LIBS.map((lib) => [lib, `${origin}/vendor/genui/${lib}.mjs`])),
+  };
+}
+
+/**
+ * Renders the `<script type="importmap">` tag for HTML head injection.
+ *
+ * @param origin - Host page origin; defaults to `window.location.origin` in the browser, else empty.
+ * @returns Script tag string with the vendored import map.
+ */
+export function buildImportMapScriptTag(
+  origin = typeof window !== 'undefined' ? window.location.origin : '',
+): string {
+  return `<script type="importmap">${JSON.stringify(buildImportMap(origin))}</script>`;
+}
+
+/** Root-relative import map (no origin); used by standalone exports and tests. */
+export const IMPORTMAP = buildImportMap();
+
+/** Pre-rendered root-relative importmap tag; sandbox frames should use `buildImportMapScriptTag`. */
+export const IMPORTMAP_SCRIPT_TAG = buildImportMapScriptTag('');
 
 /** Agent system prompt snippet describing the pre-loaded Umwelt-OS + OpenIntelligentUI design system. */
 export const OPEN_GEN_UI_DESIGN_SKILL = `

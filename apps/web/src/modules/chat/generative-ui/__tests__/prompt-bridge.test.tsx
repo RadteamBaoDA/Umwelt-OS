@@ -27,67 +27,70 @@ function BridgeConsumerButton({ promptText }: { promptText: string }) {
   );
 }
 
+const NONCE = 'nonce-1';
+
+/** Builds a frame registry with one trusted window. */
+function framesFor(win: unknown, nonce = NONCE) {
+  return new Map<unknown, string>([[win, nonce]]);
+}
+
 describe('validateBridgeMessage & PromptBridgeProvider', () => {
-  it('validates umwelt:send-prompt, sendPrompt, and umwelt:resize message schemas', () => {
-    const validPrompt = validateBridgeMessage({
-      data: { type: 'umwelt:send-prompt', prompt: '  Compare Q3 vs Q4 revenue  ' },
-    });
-    expect(validPrompt).toEqual({
-      type: 'send-prompt',
-      prompt: 'Compare Q3 vs Q4 revenue',
-      rawType: 'umwelt:send-prompt',
-    });
+  it('validates umwelt:send-prompt and umwelt:resize message schemas', () => {
+    const win = {} as Window;
+    const opts = { frames: framesFor(win) };
+    const base = { source: win, origin: 'null' };
 
-    const validResize = validateBridgeMessage({
-      data: { type: 'umwelt:resize', height: 482.4 },
-    });
-    expect(validResize).toEqual({
-      type: 'resize',
-      height: 483,
-      rawType: 'umwelt:resize',
-    });
+    expect(
+      validateBridgeMessage(
+        { ...base, data: { type: 'umwelt:send-prompt', prompt: '  Compare Q3 vs Q4  ', nonce: NONCE } },
+        opts,
+      ),
+    ).toEqual({ type: 'send-prompt', prompt: 'Compare Q3 vs Q4', rawType: 'umwelt:send-prompt' });
 
-    // Reject empty prompts, oversized prompts (>4000 chars), and unknown message types
     expect(
-      validateBridgeMessage({ data: { type: 'umwelt:send-prompt', prompt: '   ' } }),
-    ).toBeNull();
-    expect(
-      validateBridgeMessage({
-        data: { type: 'umwelt:send-prompt', prompt: 'x'.repeat(4001) },
-      }),
-    ).toBeNull();
-    expect(
-      validateBridgeMessage({ data: { type: 'unknown:event', prompt: 'hello' } }),
-    ).toBeNull();
+      validateBridgeMessage({ ...base, data: { type: 'umwelt:resize', height: 482.4, nonce: NONCE } }, opts),
+    ).toEqual({ type: 'resize', height: 483, rawType: 'umwelt:resize' });
+
+    for (const data of [
+      { type: 'umwelt:send-prompt', prompt: '   ' },
+      { type: 'umwelt:send-prompt', prompt: 'x'.repeat(4001) },
+      { type: 'unknown:event', prompt: 'hello' },
+    ]) {
+      expect(validateBridgeMessage({ ...base, data: { ...data, nonce: NONCE } }, opts)).toBeNull();
+    }
   });
 
-  it('rejects messages from unauthorized sources when allowedSources or requireSourceMatch is set', () => {
-    const trustedWindow = {} as Window;
-    const untrustedWindow = {} as Window;
+  it('fails closed: foreign source, wrong/missing nonce, bad origin, no frames registered', () => {
+    const trusted = {} as Window;
+    const data = { type: 'umwelt:send-prompt', prompt: 'hi', nonce: NONCE };
+    const opts = { frames: framesFor(trusted) };
 
+    expect(validateBridgeMessage({ data, source: trusted, origin: 'null' }, opts)).not.toBeNull();
+    // Foreign source window.
+    expect(validateBridgeMessage({ data, source: {} as Window, origin: 'null' }, opts)).toBeNull();
+    // Missing source.
+    expect(validateBridgeMessage({ data, origin: 'null' }, opts)).toBeNull();
+    // Nonce mismatch / missing.
     expect(
-      validateBridgeMessage(
-        {
-          data: { type: 'umwelt:send-prompt', prompt: 'From untrusted' },
-          source: untrustedWindow,
-        },
-        { allowedSources: [trustedWindow], requireSourceMatch: true },
-      ),
+      validateBridgeMessage({ data: { ...data, nonce: 'other' }, source: trusted, origin: 'null' }, opts),
     ).toBeNull();
-
     expect(
-      validateBridgeMessage(
-        {
-          data: { type: 'umwelt:send-prompt', prompt: 'From trusted' },
-          source: trustedWindow,
-        },
-        { allowedSources: [trustedWindow], requireSourceMatch: true },
-      ),
-    ).toEqual({
-      type: 'send-prompt',
-      prompt: 'From trusted',
-      rawType: 'umwelt:send-prompt',
-    });
+      validateBridgeMessage({ data: { type: data.type, prompt: 'hi' }, source: trusted, origin: 'null' }, opts),
+    ).toBeNull();
+    // Foreign / missing origin.
+    expect(
+      validateBridgeMessage({ data, source: trusted, origin: 'https://evil.example' }, opts),
+    ).toBeNull();
+    expect(validateBridgeMessage({ data, source: trusted }, opts)).toBeNull();
+    // Host origin is accepted.
+    expect(
+      validateBridgeMessage({ data, source: trusted, origin: window.location.origin }, opts),
+    ).not.toBeNull();
+    // No frames registered (or option omitted) rejects everything.
+    expect(validateBridgeMessage({ data, source: trusted, origin: 'null' })).toBeNull();
+    expect(
+      validateBridgeMessage({ data, source: trusted, origin: 'null' }, { frames: new Map() }),
+    ).toBeNull();
   });
 
   it('invokes onSendPrompt via context hook and rate-limits rapid duplicate submissions', async () => {
@@ -106,38 +109,71 @@ describe('validateBridgeMessage & PromptBridgeProvider', () => {
     expect(onSendPrompt).toHaveBeenCalledWith('Focus on renewable energy');
   });
 
-  it('processes window postMessage events from an authorized source', () => {
-    const onSendPrompt = vi.fn();
+  it('processes window messages only from a registered frame with the right nonce, and replies', async () => {
+    const onSendPrompt = vi.fn().mockResolvedValue(undefined);
     const onResize = vi.fn();
-    const fakeFrameWindow = {} as Window;
+    const frame = { postMessage: vi.fn() };
 
+    function Registrar() {
+      const { registerFrame } = usePromptBridge();
+      React.useEffect(() => registerFrame(frame, NONCE), [registerFrame]);
+      return null;
+    }
     render(
-      <PromptBridgeProvider
-        onSendPrompt={onSendPrompt}
-        onResize={onResize}
-        allowedSources={[fakeFrameWindow]}
-        cooldownMs={0}
-      >
-        <div>Host Chat</div>
+      <PromptBridgeProvider onSendPrompt={onSendPrompt} onResize={onResize} cooldownMs={0}>
+        <Registrar />
       </PromptBridgeProvider>,
     );
 
+    const post = (data: object, source: unknown = frame, origin = 'null') =>
+      act(() => {
+        window.dispatchEvent(
+          new MessageEvent('message', { data, source: source as Window, origin }),
+        );
+      });
+
+    post({ type: 'umwelt:send-prompt', prompt: 'bad nonce', nonce: 'x' });
+    post({ type: 'umwelt:send-prompt', prompt: 'foreign', nonce: NONCE }, { postMessage: vi.fn() });
+    post({ type: 'umwelt:send-prompt', prompt: 'bad origin', nonce: NONCE }, frame, 'https://evil.example');
+    expect(onSendPrompt).not.toHaveBeenCalled();
+
+    post({ type: 'umwelt:send-prompt', id: 'p1', prompt: 'Drill down', nonce: NONCE });
+    post({ type: 'umwelt:resize', height: 615, nonce: NONCE });
+
+    expect(onSendPrompt).toHaveBeenCalledTimes(1);
+    expect(onSendPrompt).toHaveBeenCalledWith('Drill down');
+    expect(onResize).toHaveBeenCalledWith(615, frame);
+    await vi.waitFor(() => expect(frame.postMessage).toHaveBeenCalled());
+    expect(frame.postMessage.mock.calls[0][0]).toEqual({
+      type: 'umwelt:send-prompt-ack',
+      id: 'p1',
+      nonce: NONCE,
+    });
+    expect(frame.postMessage.mock.calls[1][0]).toEqual({
+      type: 'umwelt:send-prompt-result',
+      id: 'p1',
+      ok: true,
+      nonce: NONCE,
+    });
+  });
+
+  it('rejects every message when no frame is registered', () => {
+    const onSendPrompt = vi.fn();
+    const frame = { postMessage: vi.fn() };
+    render(
+      <PromptBridgeProvider onSendPrompt={onSendPrompt} cooldownMs={0}>
+        <span />
+      </PromptBridgeProvider>,
+    );
     act(() => {
       window.dispatchEvent(
         new MessageEvent('message', {
-          data: { type: 'umwelt:send-prompt', prompt: 'Drill down into Asia-Pacific' },
-          source: fakeFrameWindow,
-        }),
-      );
-      window.dispatchEvent(
-        new MessageEvent('message', {
-          data: { type: 'umwelt:resize', height: 615 },
-          source: fakeFrameWindow,
+          data: { type: 'umwelt:send-prompt', prompt: 'hi', nonce: NONCE },
+          source: frame as unknown as Window,
+          origin: 'null',
         }),
       );
     });
-
-    expect(onSendPrompt).toHaveBeenCalledWith('Drill down into Asia-Pacific');
-    expect(onResize).toHaveBeenCalledWith(615, fakeFrameWindow);
+    expect(onSendPrompt).not.toHaveBeenCalled();
   });
 });

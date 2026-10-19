@@ -223,7 +223,7 @@ export function ChatTranscript({
                 </p>
               )}
 
-              <ChatMarkdown content={msg.content} citations={isUser ? undefined : msg.citations} />
+              <ChatMarkdown content={msg.content} citations={isUser ? undefined : msg.citations} locale={locale} />
             </div>
 
             {!isUser && msg.generative_ui && (
@@ -310,7 +310,7 @@ export function ChatTranscript({
               </span>
             </div>
 
-            <ChatMarkdown content={streamingText || ''} citations={streamingCitations} />
+            <ChatMarkdown content={streamingText || ''} citations={streamingCitations} locale={locale} />
 
             {/* Always-mounted live region so the notice text change is announced. */}
             <div role="status">{mode === 'full' && <WebSearchNotice outcome={streamingWebSearch} />}</div>

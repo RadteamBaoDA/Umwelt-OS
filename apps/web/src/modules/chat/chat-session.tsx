@@ -735,12 +735,36 @@ export function ChatSession({
     setIsPending(false);
   }, [chatCtrl]);
 
+  /**
+   * Submits a follow-up prompt raised by a generative UI widget or sandbox iframe.
+   * Rejects with a localized error while a response is pending/streaming (instead of silently
+   * dropping) so the prompt bridge can report a retryable failure back to the widget.
+   *
+   * @param prompt - Validated widget prompt text.
+   * @returns Promise resolving once the send is started; rejects when the session is busy.
+   */
   const handleWidgetSendPrompt = React.useCallback(
-    (prompt: string) => {
-      if (isPending || isStreaming) return;
+    (prompt: string): Promise<void> => {
+      if (isPending || isStreaming) {
+        return Promise.reject(new Error(t('genUiPromptBusy')));
+      }
       void handleSend(prompt);
+      return Promise.resolve();
     },
-    [handleSend, isPending, isStreaming],
+    [handleSend, isPending, isStreaming, t],
+  );
+
+  /**
+   * Fire-and-forget variant for in-transcript widgets/gallery: surfaces a rejected prompt as the
+   * session error banner rather than an unhandled promise rejection.
+   */
+  const handleTranscriptSendPrompt = React.useCallback(
+    (prompt: string) => {
+      handleWidgetSendPrompt(prompt).catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : t('genUiPromptBusy'));
+      });
+    },
+    [handleWidgetSendPrompt, t],
   );
 
   return (
@@ -852,7 +876,7 @@ export function ChatSession({
           error={error}
           onEditMessage={mode === 'full' ? handleEditMessage : undefined}
           onRegenerateMessage={mode === 'full' ? handleRegenerateMessage : undefined}
-          onSendPrompt={handleWidgetSendPrompt}
+          onSendPrompt={handleTranscriptSendPrompt}
           onRetry={() => {
             const retryDraft = pendingProfileRun?.prompt ?? chatCtrl.draft;
             if (retryDraft) {

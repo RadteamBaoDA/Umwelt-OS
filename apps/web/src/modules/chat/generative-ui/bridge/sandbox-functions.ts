@@ -30,6 +30,8 @@ export type ValidatedBridgeMessage =
   | {
       type: 'send-prompt';
       prompt: string;
+      /** Optional request id echoed back in the host's result/error reply. */
+      id?: string;
       rawType: 'umwelt:send-prompt' | 'sendPrompt' | 'opengenui:send-prompt';
     }
   | {
@@ -45,15 +47,12 @@ export type ValidatedBridgeMessage =
 
 export interface ValidateBridgeMessageOptions {
   /**
-   * Optional set or array of registered `iframe.contentWindow` references.
-   * When provided and non-empty (or when `requireSourceMatch` is true), messages whose
-   * `event.source` is not in `allowedSources` are rejected.
+   * Registry of authorized sandbox frames: `iframe.contentWindow` -> per-frame nonce.
+   * Fail-closed: when missing or empty every message is rejected.
    */
-  allowedSources?: ReadonlySet< unknown > | readonly unknown[];
-  /**
-   * When true, requires `event.source` to be non-null and present in `allowedSources`.
-   */
-  requireSourceMatch?: boolean;
+  frames?: ReadonlyMap<unknown, string>;
+  /** Host origin accepted besides the opaque `'null'`; defaults to `window.location.origin`. */
+  hostOrigin?: string;
 }
 
 /**
@@ -84,64 +83,41 @@ export function isAllowedLinkUrl(
 }
 
 /**
- * Checks whether a `MessageEvent.source` matches one of the registered sandbox `contentWindow` sources.
- *
- * @param source - `event.source` from a `MessageEvent`.
- * @param allowedSources - Set or array of registered `WindowProxy` sources.
- * @param requireSourceMatch - Whether to reject when `allowedSources` is empty or `source` is null.
- * @returns `true` if the source is authorized.
- */
-function isSourceAuthorized(
-  source: unknown,
-  allowedSources?: ReadonlySet<unknown> | readonly unknown[],
-  requireSourceMatch = false,
-): boolean {
-  if (!allowedSources) {
-    return !requireSourceMatch;
-  }
-  const sourceList = Array.isArray(allowedSources)
-    ? allowedSources
-    : Array.from(allowedSources);
-
-  if (sourceList.length === 0) {
-    return !requireSourceMatch;
-  }
-  if (!source) {
-    return false;
-  }
-  return sourceList.includes(source);
-}
-
-/**
  * Validates a `MessageEvent` (or message-like envelope) from a sandboxed iframe.
- * Checks `event.source` authorization, discriminates the message `type`
+ * Fail-closed: requires `event.source` to be a registered sandbox window, `event.origin` to be the
+ * opaque `'null'` (sandboxed srcdoc) or the host origin, and `data.nonce` to equal that frame's
+ * nonce. Then discriminates the message `type`
  * (`'umwelt:send-prompt' | 'sendPrompt' | 'umwelt:resize' | 'resize'`),
  * enforces prompt non-empty & max-length bounds (`1..4000`), and clamps resize heights (`50..4000`).
  *
  * @param event - Incoming `MessageEvent` or `{ data, source }` envelope.
- * @param options - Optional source validation configuration.
+ * @param options - Frame registry (`frames`) and optional `hostOrigin`; no frames means rejection.
  * @returns Normalized `ValidatedBridgeMessage` if valid, or `null` if rejected.
  */
 export function validateBridgeMessage(
-  event: { data: unknown; source?: unknown } | null | undefined,
+  event: { data: unknown; source?: unknown; origin?: string } | null | undefined,
   options: ValidateBridgeMessageOptions = {},
 ): ValidatedBridgeMessage | null {
   if (!event || typeof event !== 'object') {
     return null;
   }
 
-  if (
-    !isSourceAuthorized(
-      event.source,
-      options.allowedSources,
-      options.requireSourceMatch,
-    )
-  ) {
+  const frames = options.frames;
+  if (!frames || frames.size === 0 || !event.source || !frames.has(event.source)) {
+    return null;
+  }
+  const hostOrigin =
+    options.hostOrigin ?? (typeof window !== 'undefined' ? window.location.origin : '');
+  if (event.origin !== 'null' && (!hostOrigin || event.origin !== hostOrigin)) {
     return null;
   }
 
   const data = event.data;
   if (!data || typeof data !== 'object') {
+    return null;
+  }
+  const expectedNonce = frames.get(event.source);
+  if (!expectedNonce || (data as Record<string, unknown>).nonce !== expectedNonce) {
     return null;
   }
 
@@ -169,6 +145,7 @@ export function validateBridgeMessage(
     return {
       type: 'send-prompt',
       prompt: parsed.data.text,
+      id: typeof record.id === 'string' && record.id.length <= 64 ? record.id : undefined,
       rawType,
     };
   }

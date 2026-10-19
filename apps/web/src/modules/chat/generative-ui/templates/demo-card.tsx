@@ -13,7 +13,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import type { AppLocaleId } from '@/core/i18n';
-import { resolveWidgetLocale } from '../components/plan-card';
+import { genUiCopy, resolveWidgetLocale } from '../copy';
 import { getDemoCategoryLabel, type DemoItem } from './demo-data';
 
 /** Props accepted by the DemoCard gallery component. */
@@ -25,12 +25,6 @@ export interface DemoCardProps {
   /** Callback invoked with the localized prompt when the user clicks the demo card. */
   onSelectPrompt: (prompt: string, demo: DemoItem) => void;
 }
-
-/** Bilingual button label for DemoCard. */
-const DEMO_CARD_COPY: Record<AppLocaleId, { tryLabel: string }> = {
-  'en-us': { tryLabel: 'Try example' },
-  'vi-vi': { tryLabel: 'Thử ví dụ' },
-};
 
 /**
  * Interactive DemoCard displaying a Generative UI capability example in the starter gallery.
@@ -44,7 +38,7 @@ export function DemoCard({
   onSelectPrompt,
 }: DemoCardProps) {
   const resolvedLocale = resolveWidgetLocale(locale);
-  const copy = DEMO_CARD_COPY[resolvedLocale];
+  const copy = { tryLabel: genUiCopy(resolvedLocale).genUiDemoTry };
   const title = demo.title[resolvedLocale];
   const description = demo.description[resolvedLocale];
   const prompt = demo.prompt[resolvedLocale];

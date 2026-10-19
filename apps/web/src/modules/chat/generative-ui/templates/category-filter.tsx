@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { Button } from '@/components/ui/button';
 import type { AppLocaleId } from '@/core/i18n';
-import { resolveWidgetLocale } from '../components/plan-card';
+import { genUiCopy, resolveWidgetLocale } from '../copy';
 import {
   DEMO_CATEGORIES,
   getDemoCategoryLabel,
@@ -20,12 +20,6 @@ export interface CategoryFilterProps {
   locale?: AppLocaleId;
 }
 
-/** Bilingual aria-label for the category filter toolbar. */
-const FILTER_COPY: Record<AppLocaleId, { groupLabel: string }> = {
-  'en-us': { groupLabel: 'Filter templates by category' },
-  'vi-vi': { groupLabel: 'Lọc mẫu theo danh mục' },
-};
-
 /**
  * Filterable category pill bar for the Generative UI starter gallery.
  * Uses shadcn Button primitives and semantic tokens.
@@ -39,7 +33,7 @@ export function CategoryFilter({
   locale,
 }: CategoryFilterProps) {
   const resolvedLocale = resolveWidgetLocale(locale);
-  const copy = FILTER_COPY[resolvedLocale];
+  const copy = { groupLabel: genUiCopy(resolvedLocale).genUiFilterGroup };
   const categories: Array<DemoCategory | null> = [null, ...DEMO_CATEGORIES];
 
   return (

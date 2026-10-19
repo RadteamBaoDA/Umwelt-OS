@@ -20,7 +20,7 @@ import {
 } from '@/core/charts/recharts-wrapper';
 import { normalizeFormattingLocale, type AppLocaleId } from '@/core/i18n';
 import { messages } from '@/core/messages';
-import { resolveWidgetLocale } from '../plan-card';
+import { genUiCopy, resolveWidgetLocale } from '../../copy';
 import { GENERATIVE_CHART_TOKENS, resolveSeriesColor } from './config';
 
 /** Single slice datum accepted by GenerativePieChart. */
@@ -59,18 +59,6 @@ export interface GenerativePieChartProps {
   height?: number;
 }
 
-/** Bilingual empty state copy for GenerativePieChart. */
-const PIE_CHART_COPY: Record<AppLocaleId, { emptyText: string; totalLabel: string }> = {
-  'en-us': {
-    emptyText: 'No slice data available to display.',
-    totalLabel: 'Total',
-  },
-  'vi-vi': {
-    emptyText: 'Không có dữ liệu tỷ trọng để hiển thị.',
-    totalLabel: 'Tổng cộng',
-  },
-};
-
 /**
  * Native structured GenerativePieChart widget using Recharts (`PieChart`, `Pie`, `Cell`,
  * `Tooltip`, `Legend`) with semantic `--chart-1..5` colors and a screen-reader accessible
@@ -91,7 +79,7 @@ export function GenerativePieChart({
 }: GenerativePieChartProps) {
   const resolvedLocale = resolveWidgetLocale(locale);
   const canonicalLocale = normalizeFormattingLocale(resolvedLocale);
-  const copy = PIE_CHART_COPY[resolvedLocale];
+  const copy = { emptyText: genUiCopy(resolvedLocale).genUiPieEmpty, totalLabel: genUiCopy(resolvedLocale).genUiPieTotal };
   const resolvedDescription = description ?? subtitle;
 
   const normalizedSlices = React.useMemo(

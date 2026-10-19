@@ -12,10 +12,11 @@
 import * as React from 'react';
 import { Loader2Icon } from 'lucide-react';
 import { usePromptBridge, validateBridgeMessage } from '../bridge';
+import { genUiCopy } from '../copy';
 import type { SandboxTheme } from '../design-system';
 import { ExportOverlay } from './export-overlay';
 import { buildStandaloneHtmlDocument } from './export-utils';
-import { buildFrameDocument } from './frame-content';
+import { buildFrameDocument, createFrameNonce } from './frame-content';
 import { processPartialHtml } from './process-partial-html';
 import {
   getStreamingStage,
@@ -155,8 +156,6 @@ export interface OpenGenerativeUIRendererProps {
   status?: 'streaming' | 'completed';
   /** Explicit theme (`'light'` or `'dark'`). Automatically syncs with `html.dark` when omitted. */
   theme?: SandboxTheme;
-  /** Optional callback invoked when the widget calls `window.sendPrompt(prompt)`. */
-  onSendPrompt?: (prompt: string) => void;
   /** Interval in milliseconds for rotating `placeholderMessages` while streaming. Defaults to 1800ms. */
   placeholderIntervalMs?: number;
   /** Optional localized labels for the export/fullscreen toolbar. */
@@ -195,13 +194,17 @@ export function OpenGenerativeUIRenderer({
   title,
   status: explicitStatus,
   theme: explicitTheme,
-  onSendPrompt,
   placeholderIntervalMs = 1800,
   labels,
 }: OpenGenerativeUIRendererProps) {
   const bridge = usePromptBridge();
   const iframeRef = React.useRef<HTMLIFrameElement | null>(null);
-  const scriptsExecutedRef = React.useRef(false);
+  // Execution bookkeeping for the CURRENT iframe document. All three are reset whenever the
+  // iframe (re)loads or streaming restarts so a recreated sandbox is replayed from scratch.
+  const frameLoadedRef = React.useRef(false);
+  const functionsExecutedRef = React.useRef(false);
+  const executedIndexRef = React.useRef(0);
+  const [frameEpoch, setFrameEpoch] = React.useState(0);
 
   const mergedRawArgs = React.useMemo(() => {
     const base = args ?? sandbox ?? payload?.sandbox ?? {};
@@ -232,6 +235,16 @@ export function OpenGenerativeUIRenderer({
     title,
   ]);
 
+  // Per-expression list (array form preserved) so each expression executes exactly once.
+  const expressionList = React.useMemo(() => {
+    const base = (args ?? sandbox ?? payload?.sandbox ?? {}) as { jsExpressions?: unknown };
+    const raw = jsExpressions !== undefined ? jsExpressions : base.jsExpressions;
+    if (Array.isArray(raw)) {
+      return raw.filter((e): e is string => typeof e === 'string' && e.trim().length > 0);
+    }
+    return typeof raw === 'string' && raw.trim().length > 0 ? [raw] : [];
+  }, [args, sandbox, payload, jsExpressions]);
+
   const status: 'streaming' | 'completed' =
     explicitStatus ?? payload?.status ?? 'completed';
   const isStreaming = status === 'streaming';
@@ -255,30 +268,62 @@ export function OpenGenerativeUIRenderer({
   const [reportedHeight, setReportedHeight] = React.useState<number | null>(null);
   const effectiveHeight =
     reportedHeight ?? mergedRawArgs.initialHeight ?? DEFAULT_INITIAL_HEIGHT;
-  const resolvedTitle = mergedRawArgs.title ?? 'Interactive visualization';
+  const resolvedTitle = mergedRawArgs.title ?? genUiCopy().genUiDefaultWidgetTitle;
 
-  // Build the srcDoc for the sandboxed iframe. Scripts are only embedded when status === 'completed'.
-  const frameSrcDoc = React.useMemo(
+  // The inline iframe's srcDoc is created ONCE (empty body, no scripts). Content, theme and JS
+  // reach it via postMessage so streaming deltas never reload the frame or replay a stale preview.
+  // Per-frame nonce shared with the bridge registry, the fullscreen preview and host->frame posts.
+  const [frameNonce] = React.useState(createFrameNonce);
+  const [baseSrcDoc] = React.useState(() =>
+    buildFrameDocument({
+      nonce: frameNonce,
+      html: '',
+      css: '',
+      theme: resolvedTheme,
+      executeScripts: false,
+      title: resolvedTitle,
+    }),
+  );
+
+  // Full self-contained document for the fullscreen preview; only built once completed.
+  const previewSrcDoc = React.useMemo(
     () =>
-      buildFrameDocument({
-        html: mergedRawArgs.html ?? '',
-        css: mergedRawArgs.css ?? '',
-        jsFunctions: mergedRawArgs.jsFunctions ?? '',
-        jsExpressions: mergedRawArgs.jsExpressions ?? '',
-        theme: resolvedTheme,
-        executeScripts: isCompleted,
-        title: resolvedTitle,
-      }),
+      isCompleted
+        ? buildFrameDocument({
+            html: mergedRawArgs.html ?? '',
+            css: mergedRawArgs.css ?? '',
+            jsFunctions: mergedRawArgs.jsFunctions ?? '',
+            jsExpressions: mergedRawArgs.jsExpressions ?? '',
+            theme: resolvedTheme,
+            executeScripts: true,
+            title: resolvedTitle,
+            nonce: frameNonce,
+          })
+        : baseSrcDoc,
     [
+      frameNonce,
+      isCompleted,
+      baseSrcDoc,
       mergedRawArgs.html,
       mergedRawArgs.css,
       mergedRawArgs.jsFunctions,
       mergedRawArgs.jsExpressions,
       resolvedTheme,
-      isCompleted,
       resolvedTitle,
     ],
   );
+
+  /**
+   * Iframe `load` handler: fires on first load AND whenever the browser recreates the sandbox
+   * (e.g. the element is re-parented). Resets execution state and bumps the epoch so the
+   * morph/theme/JS effects replay everything into the fresh document.
+   */
+  const handleFrameLoad = React.useCallback(() => {
+    frameLoadedRef.current = true;
+    functionsExecutedRef.current = false;
+    executedIndexRef.current = 0;
+    setFrameEpoch((epoch) => epoch + 1);
+  }, []);
 
   // Build standalone HTML document for .html export and fullscreen preview when completed.
   const standaloneExportHtml = React.useMemo(() => {
@@ -310,72 +355,62 @@ export function OpenGenerativeUIRenderer({
     const iframe = iframeRef.current;
     if (!iframe) return;
     enforceStrictSandboxAttribute(iframe);
-    const unregister = bridge.registerFrame(iframe.contentWindow);
+    const unregister = bridge.registerFrame(iframe.contentWindow, frameNonce);
     return () => {
       unregister();
     };
-  }, [bridge, hasHtmlContent]);
+  }, [bridge, hasHtmlContent, frameNonce]);
 
   // Morph HTML and CSS deltas inside the sandboxed iframe.
   React.useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe || !hasHtmlContent) return;
     updateSandboxContent(iframe, mergedRawArgs.html ?? '', mergedRawArgs.css);
-  }, [hasHtmlContent, mergedRawArgs.html, mergedRawArgs.css]);
+  }, [hasHtmlContent, mergedRawArgs.html, mergedRawArgs.css, frameEpoch]);
 
   // Synchronize active Umwelt-OS theme with the sandboxed iframe.
   React.useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe) return;
     syncSandboxTheme(iframe, resolvedTheme);
-  }, [resolvedTheme, hasHtmlContent]);
+  }, [resolvedTheme, hasHtmlContent, frameEpoch]);
 
-  // Reset script execution guard when streaming restarts.
+  // Streaming (re)start: a partial widget must never run JS, and a later completion must re-run all of it.
   React.useEffect(() => {
     if (isStreaming) {
-      scriptsExecutedRef.current = false;
+      functionsExecutedRef.current = false;
+      executedIndexRef.current = 0;
     }
   }, [isStreaming]);
 
-  // Execute jsFunctions and jsExpressions once status transitions to 'completed'.
+  // Once completed (and the frame is loaded): run jsFunctions once, then every jsExpression not yet
+  // executed in this document. Partial streaming JS is never executed.
   React.useEffect(() => {
     const iframe = iframeRef.current;
-    if (!iframe || !isCompleted || scriptsExecutedRef.current) return;
-    if (mergedRawArgs.jsFunctions || mergedRawArgs.jsExpressions) {
-      scriptsExecutedRef.current = true;
-      executeSandboxScripts(
-        iframe,
-        mergedRawArgs.jsFunctions,
-        mergedRawArgs.jsExpressions,
-      );
+    if (!iframe || !isCompleted || !frameLoadedRef.current) return;
+    if (!functionsExecutedRef.current && mergedRawArgs.jsFunctions?.trim()) {
+      functionsExecutedRef.current = true;
+      executeSandboxScripts(iframe, mergedRawArgs.jsFunctions, undefined);
     }
-  }, [isCompleted, mergedRawArgs.jsFunctions, mergedRawArgs.jsExpressions]);
+    for (let i = executedIndexRef.current; i < expressionList.length; i += 1) {
+      executeSandboxScripts(iframe, undefined, expressionList[i]);
+    }
+    executedIndexRef.current = expressionList.length;
+  }, [isCompleted, mergedRawArgs.jsFunctions, expressionList, frameEpoch]);
 
-  // Listen for ResizeObserver height reports and direct prompt messages from this iframe.
+  // Listen for ResizeObserver height reports from this iframe only. `send-prompt` and `open-link`
+  // are owned exclusively by PromptBridgeProvider so a prompt is never dispatched twice.
   React.useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       const iframe = iframeRef.current;
-      if (!iframe) return;
-
-      const isFromThisIframe =
-        event.source === iframe.contentWindow ||
-        (iframe.contentWindow === null && event.source === window);
-      if (!isFromThisIframe) return;
-
-      const validated = validateBridgeMessage(event);
-      if (!validated) return;
-
-      if (validated.type === 'resize') {
-        const clamped = clampReportedHeight(validated.height);
-        if (clamped !== null) {
-          setReportedHeight(clamped);
-        }
-      } else if (validated.type === 'send-prompt') {
-        if (onSendPrompt) {
-          onSendPrompt(validated.prompt);
-        } else {
-          bridge.sendPrompt(validated.prompt);
-        }
+      if (!iframe?.contentWindow) return;
+      const validated = validateBridgeMessage(event, {
+        frames: new Map([[iframe.contentWindow, frameNonce]]),
+      });
+      if (validated?.type !== 'resize') return;
+      const clamped = clampReportedHeight(validated.height);
+      if (clamped !== null) {
+        setReportedHeight(clamped);
       }
     };
 
@@ -383,14 +418,15 @@ export function OpenGenerativeUIRenderer({
     return () => {
       window.removeEventListener('message', handleMessage);
     };
-  }, [bridge, onSendPrompt]);
+  }, [frameNonce]);
 
   return (
     <ExportOverlay
       title={resolvedTitle}
       html={standaloneExportHtml}
-      previewHtml={frameSrcDoc}
+      previewHtml={previewSrcDoc}
       ready={isCompleted && hasHtmlContent}
+      frameNonce={frameNonce}
       labels={labels}
     >
       <div
@@ -420,7 +456,9 @@ export function OpenGenerativeUIRenderer({
           ref={iframeRef}
           title={resolvedTitle}
           sandbox="allow-scripts"
-          srcDoc={frameSrcDoc}
+          srcDoc={baseSrcDoc}
+          data-umwelt-nonce={frameNonce}
+          onLoad={handleFrameLoad}
           className="h-full w-full border-0 bg-transparent"
           style={{
             opacity: hasHtmlContent ? 1 : 0,

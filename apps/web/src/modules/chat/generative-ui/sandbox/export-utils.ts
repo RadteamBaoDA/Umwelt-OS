@@ -2,12 +2,13 @@
  * Standalone HTML document builder and download utilities (`sandbox/export-utils.ts`).
  * Packages a generative UI widget (`css`, `html`, `jsFunctions`, `jsExpressions`) together
  * with the Umwelt-OS + OpenIntelligentUI design system, importmap, TripAnimator, and
- * graceful bridge stubs so exported `.html` files work offline in any browser.
+ * graceful bridge stubs. Exported files load the 3D/chart libraries from the running app's
+ * `/vendor/genui/` (absolute origin import map), so the app must be reachable when they are opened.
  */
 
 import {
   buildSandboxStylesheet,
-  IMPORTMAP_SCRIPT_TAG,
+  buildImportMapScriptTag,
   type SandboxTheme,
 } from '../design-system';
 import { TRIP_ANIMATOR_SCRIPT } from './trip-animator';
@@ -43,7 +44,7 @@ export function escapeStyleClose(css: string): string {
 }
 
 /**
- * Escapes special HTML characters (`&`, `<`, `>`, `"`) for safe text/title interpolation.
+ * Escapes special HTML characters (`&`, `<`, `>`, `"`, `'`) for safe text/title interpolation.
  *
  * @param text - Raw text string.
  * @returns HTML-escaped string.
@@ -53,7 +54,8 @@ export function escapeHtml(text: string): string {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /**
@@ -74,7 +76,7 @@ export function slugify(text: string): string {
  * or `StandaloneActivityContent`).
  *
  * Ordering invariants:
- * 1. `<script type="importmap">` first in `<head>` so ES module specifiers resolve
+ * 1. `<script type="importmap">` (absolute app-origin URLs; needs the app reachable) first in `<head>`
  * 2. `TRIP_ANIMATOR_SCRIPT` (`window.createTripAnimator`)
  * 3. Umwelt-OS + OpenIntelligentUI Design System CSS (`buildSandboxStylesheet(theme)`)
  * 4. Widget-specific `css` (with `</style` neutralized)
@@ -93,6 +95,8 @@ export function buildStandaloneHtmlDocument(
   title?: string,
   theme: SandboxTheme = 'light',
 ): string {
+  // Absolute origin: a root-relative import map resolves against file:// in a downloaded copy and breaks.
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const resolvedTitle = title ?? content.title ?? 'generated-widget';
   const body = Array.isArray(content.html)
     ? content.html.join('')
@@ -128,7 +132,7 @@ export function buildStandaloneHtmlDocument(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeHtml(resolvedTitle)}</title>
-  ${IMPORTMAP_SCRIPT_TAG}
+  ${buildImportMapScriptTag(origin)}
   ${TRIP_ANIMATOR_SCRIPT}
   <style>
 ${escapeStyleClose(buildSandboxStylesheet(theme))}

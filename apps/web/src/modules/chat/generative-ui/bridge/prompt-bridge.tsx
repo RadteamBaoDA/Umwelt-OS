@@ -20,6 +20,15 @@ import {
   type ValidateBridgeMessageOptions,
 } from './sandbox-functions';
 
+/** Message type posted back to a widget iframe when the host rejects its `sendPrompt` (retryable). */
+export const SEND_PROMPT_ERROR_TYPE = 'umwelt:send-prompt-error';
+
+/** Message type posted immediately once the host accepted a `sendPrompt` for processing (stops the in-frame ack timeout). */
+export const SEND_PROMPT_ACK_TYPE = 'umwelt:send-prompt-ack';
+
+/** Message type posted back to a widget iframe when the host accepted and handled its `sendPrompt`. */
+export const SEND_PROMPT_RESULT_TYPE = 'umwelt:send-prompt-result';
+
 export {
   DEFAULT_PROMPT_COOLDOWN_MS,
   MAX_PROMPT_LENGTH,
@@ -42,11 +51,14 @@ export interface PromptBridgeContextValue {
   sendPrompt: (prompt: string) => boolean;
   /**
    * Registers a sandboxed iframe's `contentWindow` as an authorized `postMessage` source.
+   * Messages are accepted only from registered windows that echo the frame's `nonce`; host
+   * replies to the frame carry the same nonce.
    *
    * @param frameWindow - `iframe.contentWindow` to authorize.
+   * @param nonce - Per-frame secret embedded in the frame's `srcdoc`.
    * @returns Cleanup callback removing the frame from the authorized set.
    */
-  registerFrame: (frameWindow: unknown) => () => void;
+  registerFrame: (frameWindow: unknown, nonce: string) => () => void;
   /** Whether the bridge is currently disabled (e.g. while a chat response is already streaming). */
   disabled: boolean;
 }
@@ -70,10 +82,6 @@ export interface PromptBridgeProviderProps {
   cooldownMs?: number;
   /** Disables prompt submission when true (e.g. while an assistant run is already active). */
   disabled?: boolean;
-  /** Optional explicit set/array of allowed `MessageEvent.source` windows. */
-  allowedSources?: ReadonlySet<unknown> | readonly unknown[];
-  /** When true, rejects `window.postMessage` events unless `event.source` matches a registered or allowed source. */
-  requireSourceMatch?: boolean;
   /** Descendant chat transcript / generative UI tree. */
   children?: React.ReactNode;
 }
@@ -91,15 +99,13 @@ export function PromptBridgeProvider({
   onResize,
   cooldownMs = DEFAULT_PROMPT_COOLDOWN_MS,
   disabled = false,
-  allowedSources,
-  requireSourceMatch = false,
   children,
 }: PromptBridgeProviderProps) {
   const onSendPromptRef = React.useRef(onSendPrompt);
   const onResizeRef = React.useRef(onResize);
   const disabledRef = React.useRef(disabled);
   const lastAcceptedAtRef = React.useRef<number | null>(null);
-  const registeredFramesRef = React.useRef<Set<unknown>>(new Set());
+  const registeredFramesRef = React.useRef<Map<unknown, string>>(new Map());
 
   React.useEffect(() => {
     onSendPromptRef.current = onSendPrompt;
@@ -113,23 +119,44 @@ export function PromptBridgeProvider({
     disabledRef.current = disabled;
   }, [disabled]);
 
-  const registerFrame = React.useCallback((frameWindow: unknown) => {
-    if (!frameWindow) {
+  const registerFrame = React.useCallback((frameWindow: unknown, nonce: string) => {
+    if (!frameWindow || !nonce) {
       return () => undefined;
     }
-    registeredFramesRef.current.add(frameWindow);
+    registeredFramesRef.current.set(frameWindow, nonce);
     return () => {
       registeredFramesRef.current.delete(frameWindow);
     };
   }, []);
 
+  /**
+   * Posts a host-to-frame reply carrying the frame's nonce so the in-frame listener accepts it.
+   * Failures (detached frame) are swallowed: there is nobody left to notify.
+   */
+  const replyToFrame = React.useCallback((target: unknown, message: Record<string, unknown>) => {
+    const frame = target as { postMessage?: (data: unknown, origin: string) => void } | null | undefined;
+    try {
+      frame?.postMessage?.({ ...message, nonce: registeredFramesRef.current.get(target) }, '*');
+    } catch {
+      // Frame already detached; nothing left to notify.
+    }
+  }, []);
+
   const dispatchValidatedPrompt = React.useCallback(
-    (rawPrompt: string): boolean => {
+    (rawPrompt: string, replyTo?: unknown, requestId?: string): boolean => {
+      // Every outcome is reported to the originating iframe (when any) so `window.sendPrompt`
+      // settles: result on success, retryable error on rejection (busy, cooldown, invalid).
+      const reportFailure = (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        replyToFrame(replyTo, { type: SEND_PROMPT_ERROR_TYPE, id: requestId, retryable: true, message });
+      };
       if (disabledRef.current) {
+        reportFailure('Prompt bridge is disabled');
         return false;
       }
       const parsed = sendPromptParameters.safeParse({ text: rawPrompt });
       if (!parsed.success) {
+        reportFailure('Invalid prompt');
         return false;
       }
       const now = Date.now();
@@ -138,38 +165,37 @@ export function PromptBridgeProvider({
         lastAcceptedAtRef.current !== null &&
         now - lastAcceptedAtRef.current < cooldownMs
       ) {
+        reportFailure('Prompt rate limited');
         return false;
       }
       lastAcceptedAtRef.current = now;
-      void onSendPromptRef.current(parsed.data.text);
+      // Ack before the (possibly long) handler runs: the frame's timeout covers delivery only.
+      replyToFrame(replyTo, { type: SEND_PROMPT_ACK_TYPE, id: requestId });
+      // A rejected/throwing handler must not be silently dropped nor leak an unhandled rejection.
+      try {
+        Promise.resolve(onSendPromptRef.current(parsed.data.text)).then(
+          () => replyToFrame(replyTo, { type: SEND_PROMPT_RESULT_TYPE, id: requestId, ok: true }),
+          reportFailure,
+        );
+      } catch (err) {
+        reportFailure(err);
+      }
       return true;
     },
-    [cooldownMs],
+    [cooldownMs, replyToFrame],
   );
 
   React.useEffect(() => {
+    /** Single owner of frame -> host messages (send-prompt, resize, open-link). */
     const handleWindowMessage = (event: MessageEvent) => {
-      const effectiveSources =
-        allowedSources ??
-        (registeredFramesRef.current.size > 0
-          ? registeredFramesRef.current
-          : undefined);
-      const effectiveRequireMatch =
-        requireSourceMatch ||
-        Boolean(allowedSources) ||
-        registeredFramesRef.current.size > 0;
-
-      const validated = validateBridgeMessage(event, {
-        allowedSources: effectiveSources,
-        requireSourceMatch: effectiveRequireMatch,
-      });
+      const validated = validateBridgeMessage(event, { frames: registeredFramesRef.current });
 
       if (!validated) {
         return;
       }
 
       if (validated.type === 'send-prompt') {
-        dispatchValidatedPrompt(validated.prompt);
+        dispatchValidatedPrompt(validated.prompt, event.source, validated.id);
       } else if (validated.type === 'resize') {
         onResizeRef.current?.(validated.height, event.source);
       } else if (validated.type === 'open-link') {
@@ -183,7 +209,7 @@ export function PromptBridgeProvider({
     return () => {
       window.removeEventListener('message', handleWindowMessage);
     };
-  }, [allowedSources, dispatchValidatedPrompt, requireSourceMatch]);
+  }, [dispatchValidatedPrompt]);
 
   const contextValue = React.useMemo<PromptBridgeContextValue>(
     () => ({

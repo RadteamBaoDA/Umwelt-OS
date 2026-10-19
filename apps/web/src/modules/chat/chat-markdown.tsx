@@ -5,6 +5,8 @@ import MarkdownIt, { type MarkdownIt as MarkdownItInstance } from 'markdown-it';
 import DOMPurify from 'dompurify';
 import type { Citation } from '@/modules/chat/api';
 import { safeHttpUrl } from '@/core/safe-url';
+import type { AppLocaleId } from '@/core/i18n';
+import { genUiCopy } from './generative-ui/copy';
 import './chat-gaps.css';
 
 // The markdown-it renderer and safe link/code boundaries adapt AnythingLLM's
@@ -110,7 +112,15 @@ function linkCitations(html: string, citations?: Citation[]): string {
  * @param props - Markdown content string and optional grounded citations.
  * @returns Sanitized markdown container element.
  */
-export function ChatMarkdown({ content, citations }: { content: string; citations?: Citation[] }) {
+export function ChatMarkdown({
+  content,
+  citations,
+  locale,
+}: {
+  content: string;
+  citations?: Citation[];
+  locale?: AppLocaleId;
+}) {
   const [safeHtml, setSafeHtml] = React.useState('');
   const containerRef = React.useRef<HTMLDivElement>(null);
 
@@ -132,6 +142,7 @@ export function ChatMarkdown({ content, citations }: { content: string; citation
     const root = containerRef.current;
     if (!root || !safeHtml) return;
     // Attach copy buttons after DOMPurify runs so the HTML sanitizer allowlist never needs <button>.
+    const labels = genUiCopy(locale);
     const preBlocks = root.querySelectorAll('pre');
     preBlocks.forEach((pre) => {
       if (pre.querySelector('[data-code-copy="true"]')) return;
@@ -139,23 +150,23 @@ export function ChatMarkdown({ content, citations }: { content: string; citation
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.setAttribute('data-code-copy', 'true');
-      btn.setAttribute('aria-label', 'Copy code');
-      btn.textContent = 'Copy';
+      btn.setAttribute('aria-label', labels.markdownCopyCode);
+      btn.textContent = labels.markdownCopy;
       btn.className =
         'absolute right-2 top-2 rounded border border-border bg-background/90 px-2 py-0.5 text-[11px] font-medium text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 hover:text-foreground';
       btn.addEventListener('click', () => {
         const codeEl = pre.querySelector('code');
         const rawCode = codeEl?.textContent ?? pre.textContent ?? '';
         void navigator.clipboard?.writeText(rawCode).then(() => {
-          btn.textContent = 'Copied';
+          btn.textContent = labels.markdownCopied;
           window.setTimeout(() => {
-            btn.textContent = 'Copy';
+            btn.textContent = labels.markdownCopy;
           }, 1500);
         });
       });
       pre.appendChild(btn);
     });
-  }, [safeHtml]);
+  }, [safeHtml, locale]);
 
   return (
     <div

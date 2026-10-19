@@ -3,13 +3,20 @@
 import * as React from 'react';
 import type { ChartSeries } from '@/core/charts/recharts-wrapper';
 import type { AppLocaleId } from '@/core/i18n';
-import { chatMessages } from '@/core/messages/chat';
 import { OpenGenerativeUIRenderer } from '../sandbox';
 import type { GenerativeUIPayload } from '../sandbox/schema';
 import { GenerativeBarChart, type GenerativeBarDatum } from './charts/bar-chart';
 import { GenerativePieChart, type GenerativePieDatum } from './charts/pie-chart';
 import { MeetingTimePicker, type MeetingTimeSlot } from './meeting-time-picker';
-import { PlanCard, resolveWidgetLocale, type PlanStep } from './plan-card';
+import { genUiCopy, resolveWidgetLocale } from '../copy';
+import { PlanCard, type PlanStep } from './plan-card';
+import {
+  chartPayloadSchema,
+  formPayloadSchema,
+  planPayloadSchema,
+  sandboxPayloadSchema,
+  tablePayloadSchema,
+} from './payload-schemas';
 import { TableCatalog, type TableColumn, type TableRowData } from './table-catalog';
 
 /** Props accepted by the unified ToolRendering dispatcher component. */
@@ -40,7 +47,7 @@ export function ToolRendering({
   locale,
 }: ToolRenderingProps) {
   const resolvedLocale = resolveWidgetLocale(locale);
-  const catalog = chatMessages[resolvedLocale];
+  const catalog = genUiCopy(resolvedLocale);
 
   if (!payload || typeof payload !== 'object') {
     return null;
@@ -48,15 +55,34 @@ export function ToolRendering({
 
   const rawRecord = payload as unknown as Record<string, unknown>;
 
+  /**
+   * Renders the localized invalid-payload alert (never throws) when a widget payload fails its
+   * kind-specific schema, prompting the owner to ask the assistant to regenerate it.
+   */
+  const invalid = (
+    <div
+      role="alert"
+      data-testid="generative-ui-invalid-payload"
+      className="rounded-xl border border-destructive bg-surface p-3 text-sm text-destructive"
+    >
+      {catalog.genUiInvalidPayload}
+    </div>
+  );
+  /** Returns true when `value` satisfies the kind schema. */
+  const isValid = (schema: { safeParse: (v: unknown) => { success: boolean } }, value: unknown) =>
+    schema.safeParse(value).success;
+
   switch (payload.kind) {
     case 'sandboxed_ui': {
+      if (payload.sandbox !== undefined && !isValid(sandboxPayloadSchema, payload.sandbox)) {
+        return invalid;
+      }
       return (
         <OpenGenerativeUIRenderer
           payload={payload}
           sandbox={payload.sandbox}
           status={payload.status}
           title={payload.title ?? payload.sandbox?.title}
-          onSendPrompt={onSendPrompt}
           labels={{
             expand: catalog.genUiExpandFullscreen,
             exportHtml: catalog.genUiExportHtml,
@@ -67,10 +93,11 @@ export function ToolRendering({
 
     case 'plan': {
       const planObj = (payload.plan ?? rawRecord) as Record<string, unknown>;
+      if (!isValid(planPayloadSchema, planObj)) return invalid;
       const title =
         (typeof planObj.title === 'string' && planObj.title) ||
         payload.title ||
-        'Execution Plan';
+        catalog.genUiTitlePlan;
       const description =
         typeof planObj.description === 'string'
           ? planObj.description
@@ -106,10 +133,11 @@ export function ToolRendering({
 
     case 'table': {
       const tableObj = (payload.table ?? rawRecord) as Record<string, unknown>;
+      if (!isValid(tablePayloadSchema, tableObj)) return invalid;
       const title =
         (typeof tableObj.title === 'string' && tableObj.title) ||
         payload.title ||
-        'Data Table';
+        catalog.genUiTitleTable;
       const description =
         typeof tableObj.description === 'string'
           ? tableObj.description
@@ -141,10 +169,11 @@ export function ToolRendering({
 
     case 'bar_chart': {
       const chartObj = (payload.chart ?? rawRecord) as Record<string, unknown>;
+      if (!isValid(chartPayloadSchema, chartObj)) return invalid;
       const title =
         (typeof chartObj.title === 'string' && chartObj.title) ||
         payload.title ||
-        'Bar Chart';
+        catalog.genUiTitleBar;
       const description =
         typeof chartObj.description === 'string'
           ? chartObj.description
@@ -176,16 +205,25 @@ export function ToolRendering({
           unit={unit}
           source={source}
           locale={resolvedLocale}
+
+          chartType={
+            chartObj.chart_type === 'line' ||
+            chartObj.chart_type === 'scatter' ||
+            chartObj.chart_type === 'distribution'
+              ? chartObj.chart_type
+              : 'bar'
+          }
         />
       );
     }
 
     case 'pie_chart': {
       const chartObj = (payload.chart ?? rawRecord) as Record<string, unknown>;
+      if (!isValid(chartPayloadSchema, chartObj)) return invalid;
       const title =
         (typeof chartObj.title === 'string' && chartObj.title) ||
         payload.title ||
-        'Pie Chart';
+        catalog.genUiTitlePie;
       const description =
         typeof chartObj.description === 'string'
           ? chartObj.description
@@ -212,6 +250,7 @@ export function ToolRendering({
 
     case 'meeting_time_picker': {
       const formObj = (payload.form ?? rawRecord) as Record<string, unknown>;
+      if (!isValid(formPayloadSchema, formObj)) return invalid;
       const title =
         (typeof formObj.title === 'string' && formObj.title) ||
         payload.title ||

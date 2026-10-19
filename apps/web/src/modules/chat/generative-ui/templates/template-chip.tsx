@@ -5,7 +5,7 @@ import { SparklesIcon, XIcon } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import type { AppLocaleId } from '@/core/i18n';
-import { resolveWidgetLocale } from '../components/plan-card';
+import { genUiCopy, resolveWidgetLocale } from '../copy';
 import { getLocalizedTemplate, type SeedTemplate } from './seed-templates';
 
 /** Props accepted by the quick-action TemplateChip component. */
@@ -26,12 +26,6 @@ export interface TemplateChipProps {
   onClear?: () => void;
 }
 
-/** Bilingual labels for TemplateChip dismissal. */
-const CHIP_COPY: Record<AppLocaleId, { clearLabel: string }> = {
-  'en-us': { clearLabel: 'Remove active template' },
-  'vi-vi': { clearLabel: 'Bỏ mẫu đang chọn' },
-};
-
 /**
  * Compact quick-action starter chip that dispatches a Generative UI prompt when clicked,
  * with optional clear button when displaying an active template in the composer area.
@@ -49,7 +43,7 @@ export function TemplateChip({
   onClear,
 }: TemplateChipProps) {
   const resolvedLocale = resolveWidgetLocale(locale);
-  const copy = CHIP_COPY[resolvedLocale];
+  const copy = { clearLabel: genUiCopy(resolvedLocale).genUiChipClear };
   const localized = template ? getLocalizedTemplate(template, resolvedLocale) : null;
 
   const displayLabel = label ?? localized?.title ?? '';

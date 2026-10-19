@@ -29,6 +29,7 @@ export {
 
 export {
   CSP_META_TAG,
+  buildCspMetaTag,
   MEASUREMENT_JS,
   PREVIEW_FRAME_CONTENT,
   RESIZE_MESSAGE_TYPE,

@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import type { AppLocaleId } from '@/core/i18n';
-import { chatMessages } from '@/core/messages/chat';
+import { genUiCopy, PLAN_COPY, resolveWidgetLocale } from '../copy';
 
 /** Execution lifecycle status for an individual plan step. */
 export type PlanStepStatus = 'pending' | 'in_progress' | 'completed';
@@ -77,63 +77,7 @@ export interface PlanCardProps {
   onStepToggle?: (stepId: string, nextStatus: PlanStepStatus) => void;
 }
 
-/** Bilingual UI copy for PlanCard statuses and metadata labels. */
-const PLAN_COPY: Record<
-  AppLocaleId,
-  {
-    progressLabel: (completed: number, total: number) => string;
-    statusCompleted: string;
-    statusInProgress: string;
-    statusPending: string;
-    approvedNotice: string;
-    approachLabel: string;
-    technologyLabel: string;
-    approvePrompt: (title: string, steps: string[]) => string;
-    refinePrompt: (title: string) => string;
-  }
-> = {
-  'en-us': {
-    progressLabel: (completed, total) => `${completed} / ${total} completed`,
-    statusCompleted: 'Completed',
-    statusInProgress: 'In progress',
-    statusPending: 'Pending',
-    approvedNotice: 'Plan approved and queued for execution.',
-    approachLabel: 'Approach',
-    technologyLabel: 'Technology',
-    approvePrompt: (title, steps) =>
-      `Approve and execute plan "${title}". Active steps: ${steps.join('; ')}`,
-    refinePrompt: (title) => `Please refine the plan "${title}" with more specific milestones.`,
-  },
-  'vi-vi': {
-    progressLabel: (completed, total) => `${completed} / ${total} hoàn thành`,
-    statusCompleted: 'Hoàn thành',
-    statusInProgress: 'Đang thực hiện',
-    statusPending: 'Chờ xử lý',
-    approvedNotice: 'Kế hoạch đã được phê duyệt và chuyển sang thực thi.',
-    approachLabel: 'Phương pháp',
-    technologyLabel: 'Công nghệ',
-    approvePrompt: (title, steps) =>
-      `Phê duyệt và thực thi kế hoạch "${title}". Các bước: ${steps.join('; ')}`,
-    refinePrompt: (title) => `Hãy điều chỉnh kế hoạch "${title}" chi tiết hơn.`,
-  },
-};
-
-/**
- * Resolves the effective application locale from an explicit prop or document lang attribute,
- * ensuring standalone unit tests work without requiring a NextIntlClientProvider wrapper.
- *
- * @param locale - Optional explicit locale identifier.
- * @returns Normalized application locale ('en-us' | 'vi-vi').
- */
-export function resolveWidgetLocale(locale?: AppLocaleId): AppLocaleId {
-  if (locale === 'vi-vi' || locale === 'en-us') {
-    return locale;
-  }
-  if (typeof document !== 'undefined' && document.documentElement.lang.toLowerCase().startsWith('vi')) {
-    return 'vi-vi';
-  }
-  return 'en-us';
-}
+export { resolveWidgetLocale };
 
 /**
  * Maps a plan step status to a semantic Badge variant and status label.
@@ -207,7 +151,7 @@ export function PlanCard({
 }: PlanCardProps) {
   const resolvedLocale = resolveWidgetLocale(locale);
   const copy = PLAN_COPY[resolvedLocale];
-  const catalog = chatMessages[resolvedLocale];
+  const catalog = genUiCopy(resolvedLocale);
   const resolvedKeyElements = keyElements ?? key_elements;
 
   const [statusOverrides, setStatusOverrides] = React.useState<Record<string, PlanStepStatus>>({});

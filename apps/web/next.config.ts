@@ -39,7 +39,18 @@ const nextConfig: NextConfig = {
   experimental: { proxyTimeout: 210_000 },
   /** Applies the security headers to every route, including API rewrites' HTML error pages. */
   async headers() {
-    return [{ source: '/:path*', headers: securityHeaders }];
+    return [
+      { source: '/:path*', headers: securityHeaders },
+      // Sandboxed (opaque-origin) generative-UI iframes load these modules cross-origin, so they need CORS + CORP.
+      {
+        source: '/vendor/genui/:path*',
+        headers: [
+          { key: 'Access-Control-Allow-Origin', value: '*' },
+          { key: 'Cross-Origin-Resource-Policy', value: 'cross-origin' },
+          { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },
+        ],
+      },
+    ];
   },
   async rewrites() {
     return [

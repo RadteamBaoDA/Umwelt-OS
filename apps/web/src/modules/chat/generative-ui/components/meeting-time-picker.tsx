@@ -13,8 +13,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import type { AppLocaleId } from '@/core/i18n';
-import { chatMessages } from '@/core/messages/chat';
-import { resolveWidgetLocale } from './plan-card';
+import { genUiCopy, MEETING_COPY, resolveWidgetLocale } from '../copy';
 
 /** Candidate meeting time slot descriptor. */
 export interface MeetingTimeSlot {
@@ -74,49 +73,6 @@ export interface MeetingTimePickerProps {
   onSendPrompt?: (prompt: string) => void;
 }
 
-/** Bilingual UI copy for MeetingTimePicker states and actions. */
-const MEETING_PICKER_COPY: Record<
-  AppLocaleId,
-  {
-    defaultTitle: string;
-    availableBadge: string;
-    unavailableBadge: string;
-    recommendedBadge: string;
-    suggestAlternative: string;
-    confirmedStatus: (date: string, time: string) => string;
-    declinedStatus: string;
-    confirmPrompt: (title: string, date: string, time: string, label?: string) => string;
-    declinePrompt: (title: string) => string;
-  }
-> = {
-  'en-us': {
-    defaultTitle: 'Schedule a Meeting',
-    availableBadge: 'Available',
-    unavailableBadge: 'Unavailable',
-    recommendedBadge: 'Recommended',
-    suggestAlternative: 'Suggest other times',
-    confirmedStatus: (date, time) => `Confirmed for ${date} at ${time}.`,
-    declinedStatus: 'Requested alternative meeting times.',
-    confirmPrompt: (title, date, time, label) =>
-      `Confirm meeting "${title}" for ${date} at ${time}${label ? ` (${label})` : ''}.`,
-    declinePrompt: (title) =>
-      `None of the proposed slots for "${title}" work. Please suggest alternative times.`,
-  },
-  'vi-vi': {
-    defaultTitle: 'Đặt lịch họp',
-    availableBadge: 'Khả dụng',
-    unavailableBadge: 'Không khả dụng',
-    recommendedBadge: 'Đề xuất',
-    suggestAlternative: 'Đề xuất khung giờ khác',
-    confirmedStatus: (date, time) => `Đã xác nhận lịch vào ${date} lúc ${time}.`,
-    declinedStatus: 'Đã yêu cầu đề xuất khung giờ khác.',
-    confirmPrompt: (title, date, time, label) =>
-      `Xác nhận lịch họp "${title}" vào ${date} lúc ${time}${label ? ` (${label})` : ''}.`,
-    declinePrompt: (title) =>
-      `Các khung giờ đề xuất cho "${title}" chưa phù hợp. Hãy gợi ý khung giờ khác.`,
-  },
-};
-
 /**
  * Normalizes `slots` or upstream `timeSlots` into canonical MeetingTimeSlot items with stable IDs
  * and formatted time windows (supporting both `time` and backend `start_time`/`end_time`).
@@ -174,8 +130,8 @@ export function MeetingTimePicker({
   onSendPrompt,
 }: MeetingTimePickerProps) {
   const resolvedLocale = resolveWidgetLocale(locale);
-  const copy = MEETING_PICKER_COPY[resolvedLocale];
-  const catalog = chatMessages[resolvedLocale];
+  const copy = MEETING_COPY[resolvedLocale];
+  const catalog = genUiCopy(resolvedLocale);
 
   const resolvedDuration = meetingDuration ?? duration_minutes;
   const displayTitle = title || reasonForScheduling || copy.defaultTitle;

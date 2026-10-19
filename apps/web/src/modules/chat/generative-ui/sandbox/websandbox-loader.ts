@@ -9,7 +9,7 @@
  */
 
 import { buildSandboxStylesheet, type SandboxTheme } from '../design-system';
-import { buildFrameDocument, type FrameDocumentOptions } from './frame-content';
+import { buildFrameDocument, createFrameNonce, type FrameDocumentOptions } from './frame-content';
 import { processPartialHtml } from './process-partial-html';
 
 export interface SandboxController {
@@ -33,6 +33,17 @@ export interface SandboxController {
  */
 export function enforceStrictSandboxAttribute(iframe: HTMLIFrameElement): void {
   iframe.setAttribute('sandbox', 'allow-scripts');
+}
+
+/**
+ * Reads the per-frame nonce stamped on the iframe (`data-umwelt-nonce`). Every host->frame
+ * message must carry it or the in-frame listener drops the message.
+ *
+ * @param iframe - Target sandbox iframe.
+ * @returns The nonce, or `undefined` when none was stamped (messages are then ignored by the frame).
+ */
+function frameNonce(iframe: HTMLIFrameElement): string | undefined {
+  return iframe.dataset.umweltNonce;
 }
 
 /**
@@ -63,6 +74,7 @@ export function updateSandboxContent(
         type: 'umwelt:morph',
         html: sanitizedHtml,
         css,
+        nonce: frameNonce(iframe),
       },
       '*',
     );
@@ -98,6 +110,7 @@ export function executeSandboxScripts(
         type: 'umwelt:exec-js',
         jsFunctions: hasFunctions ? jsFunctions : undefined,
         jsExpressions: hasExpressions ? jsExpressions : undefined,
+        nonce: frameNonce(iframe),
       },
       '*',
     );
@@ -126,6 +139,7 @@ export function syncSandboxTheme(
         type: 'umwelt:theme',
         theme,
         stylesheet: buildSandboxStylesheet(theme),
+        nonce: frameNonce(iframe),
       },
       '*',
     );
@@ -149,7 +163,9 @@ export function createSandboxController(
   enforceStrictSandboxAttribute(iframe);
 
   if (initialOptions) {
-    iframe.srcdoc = buildFrameDocument(initialOptions);
+    const nonce = initialOptions.nonce ?? createFrameNonce();
+    iframe.dataset.umweltNonce = nonce;
+    iframe.srcdoc = buildFrameDocument({ ...initialOptions, nonce });
     iframe.dataset.theme = initialOptions.theme ?? 'light';
     if (initialOptions.html) {
       iframe.dataset.latestHtml = processPartialHtml(initialOptions.html);

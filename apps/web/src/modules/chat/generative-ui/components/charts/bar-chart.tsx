@@ -7,6 +7,10 @@ import {
   BarChart,
   CartesianGrid,
   Legend,
+  Line,
+  LineChart,
+  Scatter,
+  ScatterChart,
   Tooltip,
   XAxis,
   YAxis,
@@ -28,7 +32,7 @@ import {
 } from '@/core/charts/recharts-wrapper';
 import { normalizeFormattingLocale, type AppLocaleId } from '@/core/i18n';
 import { messages } from '@/core/messages';
-import { resolveWidgetLocale } from '../plan-card';
+import { genUiCopy, resolveWidgetLocale } from '../../copy';
 import { GENERATIVE_CHART_TOKENS, resolveSeriesColor } from './config';
 
 /** Flexible input datum accepted by GenerativeBarChart. */
@@ -65,6 +69,9 @@ export interface GenerativeChartSeriesInput {
   unit?: string;
 }
 
+/** Rendering variant selected by the persisted `chart.chart_type` (pie has its own widget). */
+export type GenerativeCartesianChartType = 'bar' | 'line' | 'scatter' | 'distribution';
+
 /** Props accepted by the native structured GenerativeBarChart component. */
 export interface GenerativeBarChartProps {
   /** Chart headline title. */
@@ -91,13 +98,9 @@ export interface GenerativeBarChartProps {
   locale?: AppLocaleId;
   /** Chart viewport height in pixels (defaults to 240). */
   height?: number;
+  /** Plot variant: grouped bars (default), lines, scatter points or gapless histogram bars. */
+  chartType?: GenerativeCartesianChartType;
 }
-
-/** Bilingual empty state copy for GenerativeBarChart. */
-const BAR_CHART_COPY: Record<AppLocaleId, { emptyText: string }> = {
-  'en-us': { emptyText: 'No chart data available to display.' },
-  'vi-vi': { emptyText: 'Không có dữ liệu biểu đồ để hiển thị.' },
-};
 
 /**
  * Normalizes flexible GenerativeBarDatum items into canonical ChartDataPoint records
@@ -121,6 +124,22 @@ function normalizeBarData(data: GenerativeBarDatum[], categoryKey?: string): Cha
 }
 
 /**
+ * Projects normalized rows to `{x, y}` scatter points; x is the numeric category label when it parses
+ * as a finite number, otherwise the row index so categorical data still plots deterministically.
+ *
+ * @param rows - Normalized chart rows (`timestamp` holds the category label).
+ * @param dataKey - Series key supplying the y value.
+ * @returns Scatter points in row order.
+ */
+function scatterPoints(rows: ChartDataPoint[], dataKey: string): Array<{ x: number; y: number }> {
+  return rows.map((row, idx) => {
+    const x = Number(row.timestamp);
+    const y = Number(row[dataKey] ?? row.value ?? 0);
+    return { x: Number.isFinite(x) ? x : idx, y: Number.isFinite(y) ? y : 0 };
+  });
+}
+
+/**
  * Native structured GenerativeBarChart widget using Recharts primitives (`BarChart`, `Bar`,
  * `XAxis`, `YAxis`, `CartesianGrid`, `Tooltip`, `Legend`), semantic `--chart-1..5` tokens,
  * `formatChartValue`, and `ChartAccessibleTable` from `@/core/charts/recharts-wrapper`.
@@ -140,10 +159,11 @@ export function GenerativeBarChart({
   unit,
   locale,
   height = 240,
+  chartType = 'bar',
 }: GenerativeBarChartProps) {
   const resolvedLocale = resolveWidgetLocale(locale);
   const canonicalLocale = normalizeFormattingLocale(resolvedLocale);
-  const copy = BAR_CHART_COPY[resolvedLocale];
+  const copy = { emptyText: genUiCopy(resolvedLocale).genUiBarEmpty };
   const resolvedDescription = description ?? subtitle;
   const resolvedCategoryKey = categoryKey ?? x_key;
 
@@ -225,13 +245,15 @@ export function GenerativeBarChart({
               series={resolvedSeries}
               title={title}
             />
-            <div className="w-full overflow-x-auto" data-testid="bar-chart-canvas">
-              <BarChart
-                width={560}
-                height={height}
-                data={normalizedData}
-                margin={{ top: 10, right: 16, left: 4, bottom: 8 }}
-              >
+            <div className="w-full overflow-x-auto" data-testid="bar-chart-canvas"
+              data-chart-type={chartType}>
+              {chartType === 'line' && (
+                <LineChart
+                  width={560}
+                  height={height}
+                  data={normalizedData}
+                  margin={{ top: 10, right: 16, left: 4, bottom: 8 }}
+                >
                 <CartesianGrid
                   strokeDasharray="3 3"
                   stroke={GENERATIVE_CHART_TOKENS.gridStroke}
@@ -274,19 +296,134 @@ export function GenerativeBarChart({
                   }}
                 />
                 <Legend wrapperStyle={{ fontSize: '12px' }} />
-                {resolvedSeries.map((s, idx) => {
-                  const fill = resolveSeriesColor(idx, s.color);
-                  return (
-                    <Bar
+                  {resolvedSeries.map((s, idx) => {
+                    const stroke = resolveSeriesColor(idx, s.color);
+                    return (
+                      <Line
+                        key={s.dataKey}
+                        type="monotone"
+                        dataKey={s.dataKey}
+                        name={s.name}
+                        stroke={stroke}
+                        strokeWidth={2}
+                        dot={{ r: 3, fill: stroke }}
+                      />
+                    );
+                  })}
+                </LineChart>
+              )}
+              {chartType === 'scatter' && (
+                <ScatterChart width={560} height={height} margin={{ top: 10, right: 16, left: 4, bottom: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={GENERATIVE_CHART_TOKENS.gridStroke} />
+                  <XAxis
+                    type="number"
+                    dataKey="x"
+                    name={resolvedCategoryKey ?? 'x'}
+                    stroke={GENERATIVE_CHART_TOKENS.axisStroke}
+                    fontSize={11}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    type="number"
+                    dataKey="y"
+                    stroke={GENERATIVE_CHART_TOKENS.axisStroke}
+                    fontSize={11}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                <Tooltip
+                  formatter={(val: unknown) =>
+                    formatChartValue(Number(val), {
+                      currency,
+                      unit,
+                      locale: resolvedLocale,
+                    })
+                  }
+                  contentStyle={{
+                    backgroundColor: GENERATIVE_CHART_TOKENS.tooltipBackground,
+                    borderColor: GENERATIVE_CHART_TOKENS.tooltipBorder,
+                    color: GENERATIVE_CHART_TOKENS.tooltipText,
+                    borderRadius: '8px',
+                    fontSize: '12px',
+                  }}
+                />
+                <Legend wrapperStyle={{ fontSize: '12px' }} />
+                  {resolvedSeries.map((s, idx) => (
+                    <Scatter
                       key={s.dataKey}
-                      dataKey={s.dataKey}
                       name={s.name}
-                      fill={fill}
-                      radius={[4, 4, 0, 0]}
+                      data={scatterPoints(normalizedData, s.dataKey)}
+                      fill={resolveSeriesColor(idx, s.color)}
                     />
-                  );
-                })}
-              </BarChart>
+                  ))}
+                </ScatterChart>
+              )}
+              {(chartType === 'bar' || chartType === 'distribution') && (
+                <BarChart
+                  width={560}
+                  height={height}
+                  data={normalizedData}
+                  // Histogram bins touch each other; grouped bars keep the default category gap.
+                  barCategoryGap={chartType === 'distribution' ? 0 : undefined}
+                  margin={{ top: 10, right: 16, left: 4, bottom: 8 }}
+                >
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  stroke={GENERATIVE_CHART_TOKENS.gridStroke}
+                  vertical={false}
+                />
+                <XAxis
+                  dataKey="timestamp"
+                  stroke={GENERATIVE_CHART_TOKENS.axisStroke}
+                  fontSize={11}
+                  tickLine={false}
+                />
+                <YAxis
+                  stroke={GENERATIVE_CHART_TOKENS.axisStroke}
+                  fontSize={11}
+                  tickLine={false}
+                  axisLine={false}
+                  tickFormatter={(val: number) =>
+                    formatChartValue(Number(val), {
+                      currency,
+                      unit,
+                      locale: resolvedLocale,
+                      precision: 0,
+                    })
+                  }
+                />
+                <Tooltip
+                  formatter={(val: unknown) =>
+                    formatChartValue(Number(val), {
+                      currency,
+                      unit,
+                      locale: resolvedLocale,
+                    })
+                  }
+                  contentStyle={{
+                    backgroundColor: GENERATIVE_CHART_TOKENS.tooltipBackground,
+                    borderColor: GENERATIVE_CHART_TOKENS.tooltipBorder,
+                    color: GENERATIVE_CHART_TOKENS.tooltipText,
+                    borderRadius: '8px',
+                    fontSize: '12px',
+                  }}
+                />
+                <Legend wrapperStyle={{ fontSize: '12px' }} />
+                  {resolvedSeries.map((s, idx) => {
+                    const fill = resolveSeriesColor(idx, s.color);
+                    return (
+                      <Bar
+                        key={s.dataKey}
+                        dataKey={s.dataKey}
+                        name={s.name}
+                        fill={fill}
+                        stroke={chartType === 'distribution' ? GENERATIVE_CHART_TOKENS.tooltipBackground : undefined}
+                        radius={chartType === 'distribution' ? 0 : [4, 4, 0, 0]}
+                      />
+                    );
+                  })}
+                </BarChart>
+              )}
             </div>
 
             {/* Visible formatted summary chips for non-color-only readability */}

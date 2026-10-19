@@ -20,7 +20,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import type { AppLocaleId } from '@/core/i18n';
-import { resolveWidgetLocale } from '../components/plan-card';
+import { genUiCopy, resolveWidgetLocale } from '../copy';
 import {
   getLocalizedTemplate,
   type SeedTemplate,
@@ -36,12 +36,6 @@ export interface TemplateCardProps {
   /** Callback invoked with the localized prompt when the user selects the template. */
   onSelectPrompt: (prompt: string, template: SeedTemplate) => void;
 }
-
-/** Bilingual button labels for TemplateCard. */
-const TEMPLATE_CARD_COPY: Record<AppLocaleId, { tryPrompt: string }> = {
-  'en-us': { tryPrompt: 'Use template' },
-  'vi-vi': { tryPrompt: 'Dùng mẫu này' },
-};
 
 /**
  * Renders the appropriate semantic icon for a starter template category.
@@ -78,7 +72,7 @@ export function TemplateCard({
 }: TemplateCardProps) {
   const resolvedLocale = resolveWidgetLocale(locale);
   const localized = getLocalizedTemplate(template, resolvedLocale);
-  const copy = TEMPLATE_CARD_COPY[resolvedLocale];
+  const copy = { tryPrompt: genUiCopy(resolvedLocale).genUiTemplateUse };
 
   return (
     <Card

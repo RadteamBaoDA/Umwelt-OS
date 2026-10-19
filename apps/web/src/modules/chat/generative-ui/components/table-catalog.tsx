@@ -30,8 +30,7 @@ import {
 } from '@/components/ui/table';
 import { formatChartValue } from '@/core/charts/recharts-wrapper';
 import { normalizeFormattingLocale, type AppLocaleId } from '@/core/i18n';
-import { chatMessages } from '@/core/messages/chat';
-import { resolveWidgetLocale } from './plan-card';
+import { genUiCopy, resolveWidgetLocale, TABLE_COPY } from '../copy';
 
 /** Supported cell formatting modes in TableCatalog. */
 export type TableColumnFormat = 'text' | 'number' | 'currency' | 'percent' | 'badge';
@@ -94,44 +93,6 @@ export interface TableCatalogProps {
   /** Callback invoked when the user triggers a row-level follow-up action. */
   onSendPrompt?: (prompt: string) => void;
 }
-
-/** Bilingual UI copy for TableCatalog controls and states. */
-const TABLE_COPY: Record<
-  AppLocaleId,
-  {
-    emptyTitle: string;
-    emptyFiltered: string;
-    sourcePrefix: string;
-    actionsHeader: string;
-    defaultActionLabel: string;
-    rowCountLabel: (visible: number, total: number) => string;
-    sortByLabel: (label: string) => string;
-    rowPrompt: (title: string, summary: string) => string;
-  }
-> = {
-  'en-us': {
-    emptyTitle: 'No rows available in this table.',
-    emptyFiltered: 'No matching rows found for the current filter.',
-    sourcePrefix: 'Source',
-    actionsHeader: 'Actions',
-    defaultActionLabel: 'Analyze',
-    rowCountLabel: (visible, total) =>
-      visible === total ? `${total} rows` : `${visible} of ${total} rows`,
-    sortByLabel: (label) => `Sort by ${label}`,
-    rowPrompt: (title, summary) => `Analyze row from "${title}": ${summary}`,
-  },
-  'vi-vi': {
-    emptyTitle: 'Không có dữ liệu trong bảng này.',
-    emptyFiltered: 'Không tìm thấy dòng phù hợp với bộ lọc hiện tại.',
-    sourcePrefix: 'Nguồn',
-    actionsHeader: 'Thao tác',
-    defaultActionLabel: 'Phân tích',
-    rowCountLabel: (visible, total) =>
-      visible === total ? `${total} dòng` : `${visible} / ${total} dòng`,
-    sortByLabel: (label) => `Sắp xếp theo ${label}`,
-    rowPrompt: (title, summary) => `Phân tích dòng từ bảng "${title}": ${summary}`,
-  },
-};
 
 /**
  * Normalizes mixed string or TableColumn descriptors into canonical TableColumn objects.
@@ -283,7 +244,7 @@ export function TableCatalog({
   const resolvedLocale = resolveWidgetLocale(locale);
   const canonicalLocale = normalizeFormattingLocale(resolvedLocale);
   const copy = TABLE_COPY[resolvedLocale];
-  const catalog = chatMessages[resolvedLocale];
+  const catalog = genUiCopy(resolvedLocale);
   const resolvedDescription = description ?? subtitle;
   const resolvedRows = React.useMemo<TableRowData[]>(
     () => (rows && rows.length > 0 ? rows : (records ?? [])),
