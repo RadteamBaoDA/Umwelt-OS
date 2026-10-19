@@ -19,6 +19,7 @@ Inventory reconciliation is in progress. The "Direct application runtime depende
 | [next-intl](https://github.com/amannn/next-intl) | 4.14.8 | MIT | English and Vietnamese interface catalogs and locale context. |
 | [next-themes](https://github.com/pacocoursey/next-themes) | 0.4.6 | MIT | System-aware light/dark theme class bootstrap. |
 | [markdown-it](https://github.com/markdown-it/markdown-it) | 15.0.2 | MIT | Markdown rendering for saved and streaming Chat message content in `apps/web/src/modules/chat/chat-markdown.tsx`; package notice is reproduced in `THIRD_PARTY_NOTICES.md`. |
+| [qrcode.react](https://github.com/zpao/qrcode.react) | 4.2.0 | ISC (bundles Nayuki QR Code generator, MIT) | Client-side QR rendering for the off-by-default phone prompt picker in `apps/web/src/modules/pick`; no network calls. Chosen over hand-rolling a QR encoder (Reed-Solomon, masking). Upstream OpenIntelligentUI (MIT) uses the same package. |
 | [Recharts](https://github.com/recharts/recharts) | 3.10.1 | MIT | Renders standard financial, activity, and market series time-series charts through the recharts-wrapper. |
 | [globe.gl](https://github.com/vasturiano/globe.gl) | 2.45.0 | MIT | Client-side 3D globe renderer for local, owner-authorized observation points; no remote globe imagery or tiles are requested. |
 | [Three.js](https://github.com/mrdoob/three.js) | 0.186.1 | MIT | WebGL material/rendering dependency used by globe.gl. |

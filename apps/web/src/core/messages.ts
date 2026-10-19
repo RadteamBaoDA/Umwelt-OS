@@ -1,6 +1,7 @@
 import mcpCatalog from '@/modules/sources/mcp-messages.json';
 import { storyMessages } from '@/modules/news/story-messages';
 import { dailyMessages, notificationMessages } from '@/modules/dashboard/daily-messages';
+import { pickMessages } from '@/modules/pick/messages';
 import { githubMessages } from '@/modules/dashboard/github-messages';
 import { automationMessages } from '@/modules/automations/messages';
 import { observabilityMessages } from '@/modules/observability/messages';
@@ -72,6 +73,7 @@ export const messages = {
     github: githubMessages['en-us'],
     automations: automationMessages['en-us'],
     notifications: notificationMessages['en-us'],
+    pick: pickMessages['en-us'],
     workspaces: workspacesMessages['en-us'],
     workspaceMembers: workspaceMembersMessages['en-us'],
     sharing: sharingMessages['en-us'],
@@ -111,6 +113,7 @@ export const messages = {
     github: githubMessages['vi-vi'],
     automations: automationMessages['vi-vi'],
     notifications: notificationMessages['vi-vi'],
+    pick: pickMessages['vi-vi'],
     workspaces: workspacesMessages['vi-vi'],
     workspaceMembers: workspaceMembersMessages['vi-vi'],
     sharing: sharingMessages['vi-vi'],

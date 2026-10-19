@@ -52,6 +52,7 @@ from modules.news.topics import router as topics_router
 from modules.notifications.routes import router as notifications_router
 from modules.observability.operations_routes import router as operations_router
 from modules.observability.routes import router as observability_router
+from modules.pick.routes import router as pick_router
 from modules.search.routes import router as search_router
 from modules.settings.onboarding_routes import router as onboarding_router
 from modules.settings.routes import router as settings_router
@@ -197,6 +198,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(topics_router)
     app.include_router(news_router)
     app.include_router(notifications_router)
+    app.include_router(pick_router)
     app.include_router(automations_router)
     app.include_router(automation_webhook_router)
     app.include_router(chat_router)
