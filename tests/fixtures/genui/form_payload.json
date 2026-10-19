@@ -1,0 +1,88 @@
+{
+  "kind": "form",
+  "status": "completed",
+  "visualization": "form",
+  "renderer": "a2ui",
+  "title": "Trip details",
+  "local_only": false,
+  "sandbox": null,
+  "plan": null,
+  "table": null,
+  "chart": null,
+  "form": {
+    "title": "Trip details",
+    "description": "Tell me a few things.",
+    "fields": [
+      {
+        "id": "city",
+        "label": "City",
+        "type": "text",
+        "required": true,
+        "placeholder": "",
+        "options": [],
+        "min": null,
+        "max": null,
+        "maxlength": 40
+      },
+      {
+        "id": "days",
+        "label": "Days",
+        "type": "number",
+        "required": false,
+        "placeholder": "",
+        "options": [],
+        "min": 1.0,
+        "max": 14.0,
+        "maxlength": null
+      },
+      {
+        "id": "pace",
+        "label": "Pace",
+        "type": "select",
+        "required": false,
+        "placeholder": "",
+        "options": [
+          "Slow",
+          "Fast"
+        ],
+        "min": null,
+        "max": null,
+        "maxlength": null
+      },
+      {
+        "id": "notes",
+        "label": "Notes",
+        "type": "textarea",
+        "required": false,
+        "placeholder": "",
+        "options": [],
+        "min": null,
+        "max": null,
+        "maxlength": null
+      },
+      {
+        "id": "start",
+        "label": "Start",
+        "type": "date",
+        "required": false,
+        "placeholder": "",
+        "options": [],
+        "min": null,
+        "max": null,
+        "maxlength": null
+      },
+      {
+        "id": "pets",
+        "label": "Bringing pets",
+        "type": "checkbox",
+        "required": false,
+        "placeholder": "",
+        "options": [],
+        "min": null,
+        "max": null,
+        "maxlength": null
+      }
+    ],
+    "submit_label": "Send"
+  }
+}

@@ -11,7 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from modules.chat.generative_ui.prompt import SandboxedUiArgs
-from modules.chat.generative_ui.tools.form import TimeSlot
+from modules.chat.generative_ui.tools.form import FormPayload, TimeSlot
 from modules.chat.generative_ui.tools.query import ChartSeriesConfig, TableColumn
 
 TOOL_SANDBOXED_UI = "render_sandboxed_ui"
@@ -19,11 +19,12 @@ TOOL_TABLE = "render_table"
 TOOL_CHART = "render_chart"
 TOOL_PLAN = "render_plan"
 TOOL_TIME_PICKER = "render_time_picker"
+TOOL_FORM = "render_form"
 TOOL_READ_SKILL = "read_skill"
 TOOL_TRIP_IMAGES = "get_trip_stop_images"  # non-terminal data tool; offered only with allow_widget_remote_media
 
 TERMINAL_UI_TOOLS: frozenset[str] = frozenset(
-    {TOOL_SANDBOXED_UI, TOOL_TABLE, TOOL_CHART, TOOL_PLAN, TOOL_TIME_PICKER}
+    {TOOL_SANDBOXED_UI, TOOL_TABLE, TOOL_CHART, TOOL_PLAN, TOOL_TIME_PICKER, TOOL_FORM}
 )
 
 
@@ -150,6 +151,10 @@ _UI_MODELS: dict[str, tuple[type[BaseModel], str]] = {
     TOOL_CHART: (ChartToolArgs, "Render a bar/pie/line/scatter/distribution chart. Terminal."),
     TOOL_PLAN: (PlanToolArgs, "Render a step-by-step plan or checklist. Terminal."),
     TOOL_TIME_PICKER: (TimePickerToolArgs, "Render selectable time slots. Terminal."),
+    TOOL_FORM: (
+        FormPayload,
+        "Render an input form to collect details needed to proceed (never credentials). Terminal.",
+    ),
 }
 
 
