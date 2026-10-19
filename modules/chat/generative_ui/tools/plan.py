@@ -1,21 +1,11 @@
-"""Planning and todo list schemas, builders, and tools for Generative UI."""
+"""Plan schemas and evidence-derived plan builder for Generative UI."""
 
 import re
 import uuid
 from collections.abc import Sequence
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-
-
-class Todo(TypedDict, total=False):
-    """TypedDict representing an interactive todo item in agent state."""
-
-    id: str
-    title: str
-    description: str
-    emoji: str
-    status: Literal["pending", "completed"]
 
 
 class PlanStep(BaseModel):
@@ -46,74 +36,6 @@ class PlanPayload(BaseModel):
     todos: list[dict[str, Any]] = Field(default_factory=list, max_length=24)
     source: str = Field(default="Grounded plan", max_length=255)
 
-
-class _ToolDescriptor:
-    """Callable tool wrapper exposing `.name`, `.description`, `.func`, and `.invoke`."""
-
-    def __init__(self, func: Any) -> None:
-        """Initialize the descriptor from a function."""
-        self.func = func
-        self.name = func.__name__.lstrip("_")
-        self.description = (func.__doc__ or "").strip()
-        self.__doc__ = func.__doc__
-        self.__name__ = self.name
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        """Invoke the wrapped function directly."""
-        return self.func(*args, **kwargs)
-
-    def invoke(self, input_data: dict[str, Any] | None = None, **kwargs: Any) -> Any:
-        """Invoke the wrapped function with a dictionary of arguments."""
-        merged = {**(input_data or {}), **kwargs}
-        return self.func(**merged)
-
-
-def _plan_visualization(
-    approach: str, technology: str, key_elements: list[str]
-) -> str:
-    """Optionally explain a complex visualization approach before building it.
-
-    Use when planning helps the user understand scope; it is not required before
-    generateSandboxedUi, pieChart, or barChart.
-
-    Args:
-        approach: One sentence describing the visualization strategy.
-        technology: The primary technology (e.g. "inline SVG", "Chart.js",
-            "HTML + Canvas", "Three.js", "Mermaid", "D3.js").
-        key_elements: 2-4 concise bullet points describing what will be built.
-    """
-    elements = "\n".join(f"  - {e}" for e in key_elements)
-    return f"Plan: {approach}\nTech: {technology}\n{elements}"
-
-
-def _manage_todos(todos: list[Todo], runtime: Any = None) -> dict[str, Any]:
-    """Manage and persist the current todos list in agent state."""
-    normalized: list[Todo] = []
-    for item in todos:
-        copy_item: Todo = dict(item)  # type: ignore[assignment]
-        if not copy_item.get("id"):
-            copy_item["id"] = str(uuid.uuid4())
-        if "status" not in copy_item:
-            copy_item["status"] = "pending"
-        if "emoji" not in copy_item:
-            copy_item["emoji"] = "✅" if copy_item["status"] == "completed" else "🔹"
-        normalized.append(copy_item)
-    if runtime is not None and isinstance(getattr(runtime, "state", None), dict):
-        runtime.state["todos"] = normalized
-    return {"todos": normalized, "message": "Successfully updated todos"}
-
-
-def _get_todos(runtime: Any = None) -> list[Todo]:
-    """Get the current todos from agent state."""
-    if runtime is not None and isinstance(getattr(runtime, "state", None), dict):
-        return list(runtime.state.get("todos", []))
-    return []
-
-
-plan_visualization = _ToolDescriptor(_plan_visualization)
-manage_todos = _ToolDescriptor(_manage_todos)
-get_todos = _ToolDescriptor(_get_todos)
-todo_tools = [manage_todos, get_todos]
 
 _BULLET_LINE_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+(.+)$")
 

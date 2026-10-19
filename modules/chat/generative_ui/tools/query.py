@@ -6,52 +6,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-_BUNDLED_SAMPLE_ROWS: tuple[dict[str, str], ...] = (
-    {"month": "2026-01", "category": "Compute", "region": "US-West", "revenue": "42000", "cost": "18500"},
-    {"month": "2026-02", "category": "Storage", "region": "US-East", "revenue": "31500", "cost": "12400"},
-    {"month": "2026-03", "category": "Network", "region": "EU-Central", "revenue": "27800", "cost": "9800"},
-    {"month": "2026-04", "category": "Compute", "region": "AP-South", "revenue": "51200", "cost": "21000"},
-)
-
-
-class _ToolDescriptor:
-    """Callable tool wrapper exposing `.name`, `.description`, `.func`, and `.invoke`."""
-
-    def __init__(self, func: Any) -> None:
-        """Bind a Python function with tool metadata."""
-        self.func = func
-        self.name = func.__name__
-        self.description = (func.__doc__ or "").strip()
-        self.__doc__ = func.__doc__
-        self.__name__ = func.__name__
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        """Invoke the underlying function directly."""
-        return self.func(*args, **kwargs)
-
-    def invoke(self, input_data: dict[str, Any] | None = None, **kwargs: Any) -> Any:
-        """Invoke the underlying function using a dictionary of keyword arguments."""
-        merged = {**(input_data or {}), **kwargs}
-        return self.func(**merged)
-
-
-def _query_data(query: str = "") -> dict[str, Any]:
-    """Return the bundled sample business dataset, NOT live business data.
-
-    The query is context only; this tool returns all rows without filtering.
-    Use only when the user wants sample data. Do not call for unrelated charts.
-    """
-    _ = query
-    return {
-        "source": "Bundled db.csv sample dataset",
-        "is_sample": True,
-        "query_applied": False,
-        "rows": [dict(row) for row in _BUNDLED_SAMPLE_ROWS],
-    }
-
-
-query_data = _ToolDescriptor(_query_data)
-
 
 class CitationRef(BaseModel):
     """Grounding citation metadata attached to a table row or chart data point."""
@@ -333,15 +287,8 @@ def _extract_records_from_evidence_or_text(
                     row["chunk_id"] = citations[0].chunk_id
                 records.append(row)
 
-    is_sample = False
-    if not records:
-        is_sample = True
-        records = [
-            {"label": r["category"], "value": float(r["revenue"]), "region": r["region"]}
-            for r in _BUNDLED_SAMPLE_ROWS
-        ]
-
-    return records, citations, is_sample
+    # No canned sample fallback: an empty result stays empty so callers can decline to render.
+    return records, citations, False
 
 
 def build_table_payload(

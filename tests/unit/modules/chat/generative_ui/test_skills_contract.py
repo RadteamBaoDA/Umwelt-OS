@@ -1,4 +1,4 @@
-"""Unit tests pinning the bundled SKILL.md files to the canonical generateSandboxedUi contract."""
+"""Unit tests pinning the bundled SKILL.md files to the canonical render_sandboxed_ui contract."""
 
 import re
 from pathlib import Path
@@ -53,8 +53,8 @@ def test_no_skill_references_widget_renderer(path: Path) -> None:
 
 @pytest.mark.parametrize("path", SKILL_FILES, ids=lambda p: p.parent.name)
 def test_every_skill_names_canonical_tool(path: Path) -> None:
-    """Verify every skill names the canonical generateSandboxedUi tool."""
-    assert "generateSandboxedUi" in path.read_text(encoding="utf-8")
+    """Verify every skill names the canonical render_sandboxed_ui tool."""
+    assert "render_sandboxed_ui" in path.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("name", PROCEDURAL_SKILLS)

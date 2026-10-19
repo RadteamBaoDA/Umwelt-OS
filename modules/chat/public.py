@@ -1695,6 +1695,8 @@ async def purge_document_copied_evidence_page(
                 if citations_changed or metadata_changed:
                     message.citations = citations
                     message.metadata_json = metadata if isinstance(metadata, dict) else {}
+                    # The widget copies evidence-derived rows/data that scrubbing cannot attribute: drop it whole.
+                    message.metadata_json.pop("generative_ui", None)
                     changed += 1
             elif kind == "runs":
                 row_id, conversation_id = candidate
@@ -1736,6 +1738,11 @@ async def purge_document_copied_evidence_page(
                 payload, payload_changed = _scrub_cleanup_payload(event.data or {}, evidence)
                 if payload_changed:
                     event.data = payload if isinstance(payload, dict) else {}
+                    # Same rule for widget payloads carried by ui/done events.
+                    if event.event_type in {"message.ui.delta", "message.ui.done"}:
+                        event.data = {}
+                    else:
+                        event.data.pop("generative_ui", None)
                     changed += 1
                     if run.status in {"pending", "streaming"}:
                         await _privacy_cancel_locked(session, run, event.seq)

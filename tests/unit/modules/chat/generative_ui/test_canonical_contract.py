@@ -1,24 +1,14 @@
-"""Unit tests pinning the prompt, template, and streaming contracts to generateSandboxedUi."""
-
-import inspect
+"""Unit tests pinning the prompt and sandbox argument contracts to generateSandboxedUi."""
 
 import pytest
 
-from modules.chat.generative_ui import (
-    CANONICAL_SANDBOX_PARAM_ORDER,
-    SandboxedUiArgs,
-    build_generative_ui_for_turn,
-    iter_generative_ui_deltas,
-    templates,
-)
+from modules.chat.generative_ui import CANONICAL_SANDBOX_PARAM_ORDER, SandboxedUiArgs
 from modules.chat.generative_ui.prompt import SYSTEM_PROMPT
-from modules.chat.generative_ui.templates import apply_template
-from modules.chat.generative_ui.tools.plan import plan_visualization
 
 
 def test_prompt_uses_generate_sandboxed_ui_not_widget_renderer() -> None:
-    """Verify SYSTEM_PROMPT references generateSandboxedUi and never legacy widgetRenderer."""
-    assert "generateSandboxedUi" in SYSTEM_PROMPT
+    """Verify SYSTEM_PROMPT references render_sandboxed_ui and never legacy widgetRenderer."""
+    assert "render_sandboxed_ui" in SYSTEM_PROMPT
     assert "widgetRenderer" not in SYSTEM_PROMPT
 
 
@@ -66,46 +56,6 @@ def test_prompt_forbids_top_level_await_in_js_channels() -> None:
     assert "inside an async function" in normalized
 
 
-def test_plan_visualization_docstring_names_canonical_tool() -> None:
-    """Verify plan_visualization tool docstring references generateSandboxedUi."""
-    assert "generateSandboxedUi" in plan_visualization.description
-    assert "widgetRenderer" not in plan_visualization.description
-
-
-def test_templates_docstrings_name_canonical_tool() -> None:
-    """Verify apply_template and templates module never reference widgetRenderer."""
-    assert "generateSandboxedUi" in apply_template.description
-    assert "widgetRenderer" not in apply_template.description
-    assert "widgetRenderer" not in inspect.getsource(templates)
-
-
-def test_seed_templates_use_sandbox_bridge_not_global_send_prompt() -> None:
-    """Verify seed templates invoke Websandbox.connection.remote.sendPrompt."""
-    invoice = next(t for t in templates.SEED_TEMPLATES if t["id"] == "seed-invoice-001")
-    assert invoice["html"], "seed html must be populated"
-    assert "sendPrompt('" not in invoice["html"]
-    assert "Websandbox.connection.remote.sendPrompt" in invoice["html"]
-
-
-class _FakeRuntime:
-    """Minimal tool runtime stub for template tests."""
-
-    def __init__(self) -> None:
-        """Initialize an empty state dict."""
-        self.state: dict[str, object] = {}
-        self.tool_call_id = "test-call"
-
-
-def test_apply_template_appends_canonical_translation_note() -> None:
-    """Verify apply_template includes the canonical translation note."""
-    result = apply_template.func(runtime=_FakeRuntime(), name="Invoice Card")
-    assert "error" not in result
-    note = result.get("usage_note", "")
-    assert "css parameter" in note
-    assert "jsFunctions" in note
-    assert "Websandbox.connection.remote.sendPrompt" in note
-
-
 def test_sandboxed_ui_args_rejects_inline_style_and_preserves_canonical_order() -> None:
     """Verify SandboxedUiArgs rejects <style> in html and emits keys in CANONICAL_SANDBOX_PARAM_ORDER."""
     with pytest.raises(ValueError, match="style"):
@@ -121,21 +71,3 @@ def test_sandboxed_ui_args_rejects_inline_style_and_preserves_canonical_order() 
     )
     ordered = args.to_ordered_dict()
     assert tuple(ordered.keys()) == CANONICAL_SANDBOX_PARAM_ORDER
-
-
-def test_iter_generative_ui_deltas_streams_in_strict_canonical_order() -> None:
-    """Verify iter_generative_ui_deltas emits 6 progressive deltas in strict parameter order."""
-    payload = build_generative_ui_for_turn(
-        "Build a compound interest calculator",
-        "Use principal, rate, and periods to calculate compound returns.",
-    )
-    assert payload is not None
-    assert payload["kind"] == "sandboxed_ui"
-    deltas = iter_generative_ui_deltas(payload)
-    assert len(deltas) == len(CANONICAL_SANDBOX_PARAM_ORDER)
-    for idx, (delta, expected_param) in enumerate(
-        zip(deltas, CANONICAL_SANDBOX_PARAM_ORDER, strict=True)
-    ):
-        assert delta["status"] == "streaming"
-        assert delta["param"] == expected_param
-        assert tuple(delta["sandbox"].keys()) == CANONICAL_SANDBOX_PARAM_ORDER[: idx + 1]

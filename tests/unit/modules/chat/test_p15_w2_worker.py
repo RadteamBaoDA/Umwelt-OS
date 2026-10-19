@@ -378,7 +378,7 @@ async def test_not_requested_runs_no_search_and_no_event(monkeypatch: pytest.Mon
     await gen.run()
     gen.search.assert_not_awaited()
     assert gen.events("web_search") == []
-    assert "web" not in gen.prompts[0][0]["content"].lower()
+    assert "web search" not in gen.prompts[0][0]["content"].lower() and "<web_results>" not in gen.prompts[0][0]["content"]
 
 
 async def test_citation_numbering_and_uncited_results_dropped(monkeypatch: pytest.MonkeyPatch) -> None:

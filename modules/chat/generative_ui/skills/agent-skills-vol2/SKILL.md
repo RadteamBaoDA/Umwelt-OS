@@ -6,8 +6,8 @@ allowed-tools: []
 
 # Interactive answer implementation
 
-Use this guidance after choosing a custom UI because it helps the task. Follow
-Jev's renderer and visualization decision. A2UI handles basic tables; this sandbox
+Use this guidance after choosing a custom UI because it helps the task.
+render_table handles basic tables; this sandbox
 handles charts, diagrams and custom interaction.
 Do not turn every answer into a dashboard. Use multiple sections when needed,
 including headings, assumptions, units, sources, and instructions inside the UI.
@@ -23,7 +23,7 @@ Use the Umwelt-OS semantic CSS variables (and Open Generative UI aliases) pre-in
 
 ## Streaming and execution
 
-For generateSandboxedUi emit initialHeight, placeholderMessages, css, html,
+For render_sandboxed_ui emit initialHeight, placeholderMessages, css, html,
 jsFunctions, jsExpressions in that exact order. The placeholder remains until css is complete; put all styles in the css parameter. Keep html meaningful before
 scripts run. jsFunctions holds named declarations; jsExpressions holds small
 synchronous invocations. There is no API to append expressions to prior calls.
@@ -51,8 +51,8 @@ A jsExpression can invoke `setupScene().catch(showSetupError);`. The html must
 include an initially readable explanation and an element with id="status".
 A `<script type="module">` can use bare imports in html when needed. Do not use
 static import declarations or top-level await in either classic script channel.
-Other CDN scripts are restricted to cdnjs.cloudflare.com, esm.sh,
-cdn.jsdelivr.net, and unpkg.com; do not assume arbitrary fetch/CSS URLs work.
+Only the vendored same-origin libraries (three, d3, chart.js, gsap, leaflet) are
+available. The sandbox has no network: no CDN scripts, remote images/fonts, or fetch.
 
 ## Data and calculations
 
@@ -110,8 +110,7 @@ Never trigger a message on load or an input-change event. For external links use
 
 ## Live geographic maps and animated routes
 
-Use a real Leaflet map for places, geographic exploration, or explicit live-map
-requests when external tiles are permitted; in local_only mode, use an inline SVG
-schematic map without external tile requests. When live tiles are permitted, the
-configured provider is USGS The National Map (`https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}`).
+Use a vendored Leaflet map (no tile layer; the sandbox has no network) or an inline
+SVG schematic map for places and geographic exploration. Draw geometry yourself and
+never request remote map tiles.
 For animated routes, use `window.createTripAnimator` with `pinElements`, Pause/Resume, and Replay controls.

@@ -4,7 +4,15 @@ from datetime import date, datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from modules.chat.web_search import sanitize_url
 from modules.knowledge.documents.schemas import GadgetDocumentSelectionFence
@@ -252,6 +260,90 @@ class ConversationRead(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class _GenerativeUIBase(BaseModel):
+    """Fields shared by every persisted Generative UI widget; unknown legacy keys are ignored on read."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    status: Literal["streaming", "completed"] = "completed"
+    visualization: str | None = None
+    renderer: str | None = None
+    title: str = Field(default="", max_length=512)
+    local_only: bool = False
+    sandbox: dict[str, Any] | None = None
+    plan: dict[str, Any] | None = None
+    table: dict[str, Any] | None = None
+    chart: dict[str, Any] | None = None
+    form: dict[str, Any] | None = None
+
+
+class SandboxedUIPayload(_GenerativeUIBase):
+    """Sandboxed HTML/CSS/JS widget; `sandbox` is required and must carry non-empty `html`."""
+
+    kind: Literal["sandboxed_ui"]
+    sandbox: dict[str, Any]
+
+    @field_validator("sandbox")
+    @classmethod
+    def _html_required(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """Reject a completed sandbox without markup (the renderer cannot display it)."""
+        if not isinstance(value.get("html"), str) or not value["html"].strip():
+            raise ValueError("sandbox.html is required")
+        return value
+
+
+class TableUIPayload(_GenerativeUIBase):
+    """Native table widget; `table` is required."""
+
+    kind: Literal["table"]
+    table: dict[str, Any]
+
+
+class ChartUIPayload(_GenerativeUIBase):
+    """Native chart widget; `chart.chart_type` (bar/pie/line/scatter/distribution) selects the rendering, `kind` stays bar/pie for compatibility."""
+
+    kind: Literal["bar_chart", "pie_chart"]
+    chart: dict[str, Any]
+
+
+class PlanUIPayload(_GenerativeUIBase):
+    """Native plan/checklist widget; `plan` is required."""
+
+    kind: Literal["plan"]
+    plan: dict[str, Any]
+
+
+class TimePickerUIPayload(_GenerativeUIBase):
+    """Meeting time picker widget; `form` is required."""
+
+    kind: Literal["meeting_time_picker"]
+    form: dict[str, Any]
+
+
+GenerativeUIPayload = Annotated[
+    SandboxedUIPayload | TableUIPayload | ChartUIPayload | PlanUIPayload | TimePickerUIPayload,
+    Field(discriminator="kind"),
+]
+_GENERATIVE_UI_ADAPTER: TypeAdapter[GenerativeUIPayload] = TypeAdapter(GenerativeUIPayload)
+
+
+def parse_generative_ui(raw: Any) -> GenerativeUIPayload | None:
+    """Validate a stored `metadata_json["generative_ui"]` value; anything invalid or absent becomes None.
+
+    Args:
+        raw: The raw stored value (any JSON type).
+
+    Returns:
+        The typed payload, or None so one corrupt widget never breaks reading a conversation.
+    """
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return _GENERATIVE_UI_ADAPTER.validate_python(raw)
+    except ValidationError:
+        return None
+
+
 class MessageRead(BaseModel):
     """Public representation of a chat message within a conversation."""
 
@@ -268,7 +360,7 @@ class MessageRead(BaseModel):
     revision_of_message_id: UUID | None = None
     created_at: datetime
     web_search: WebSearchOutcomeRead | None = None
-    generative_ui: dict[str, Any] | None = None
+    generative_ui: GenerativeUIPayload | None = None
 
 
 class ChatExportCitation(BaseModel):

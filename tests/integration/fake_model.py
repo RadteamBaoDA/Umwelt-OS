@@ -13,6 +13,11 @@ header names, auth present) at `GET /_fake/search-log`; `DELETE /_fake/search-lo
 Non-stream chat honours `first_delay_ms` too (slept after the body is read, before the headers).
 `GET /_fake/received?contains=X` counts the chat bodies received whose last user message contains X
 (tests wait on it to know the body was written).
+
+Generative UI (tool calls): when the request carries `tools`, a non-stream reply answers with one `tool_calls`
+entry (the capability probe's pass condition), and a streaming reply with marker `ui=table|sandbox` emits that
+terminal tool call as `delta.tool_calls` fragments (name once, arguments in ~40-char pieces) instead of text.
+Without the marker the streamed reply is plain text, as before.
 """
 
 import asyncio
@@ -91,6 +96,26 @@ def _chunk(content: str | None, finish: str | None = None) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
+_UI_TOOLS: dict[str, tuple[str, dict]] = {
+    "table": ("render_table", {
+        "title": "Fake quarterly revenue",
+        "columns": [{"key": "quarter", "label": "Quarter"}, {"key": "revenue", "label": "Revenue"}],
+        "rows": [["Q1", "100"], ["Q2", "140"]], "source": "Fake model", "is_sample": True,
+    }),
+    "sandbox": ("render_sandboxed_ui", {
+        "initialHeight": 200,
+        "html": '<p id="msg">fake sandbox</p><button id="ask" type="button">Ask more</button>',
+        "jsExpressions": "document.getElementById('msg').textContent = 'fake js ran';",
+    }),
+}
+
+
+def _tool_chunk(delta: dict, finish: str | None = None) -> str:
+    payload = {"id": "chatcmpl-fake", "object": "chat.completion.chunk", "created": 0, "model": MODEL,
+               "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+    return f"data: {json.dumps(payload)}\n\n"
+
+
 async def received(request: Request) -> Response:
     needle = request.query_params.get("contains", "")
     return JSONResponse({"count": sum(1 for text in RECEIVED if needle in text)})
@@ -104,11 +129,35 @@ async def chat_completions(request: Request) -> Response:
     if not body.get("stream"):
         if first_delay:
             await asyncio.sleep(first_delay / 1000)
+        if body.get("tools"):
+            return JSONResponse({"id": "chatcmpl-fake", "object": "chat.completion", "created": 0, "model": MODEL,
+                "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {
+                    "role": "assistant", "content": None, "tool_calls": [{
+                        "id": "call_probe", "type": "function", "function": {"name": "probe", "arguments": "{}"}}]}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}})
         content = fake_text(tokens) + (f" [{int(cite)}]" if cite else "")
         return JSONResponse({"id": "chatcmpl-fake", "object": "chat.completion", "created": 0, "model": MODEL,
             "choices": [{"index": 0, "message": {"role": "assistant", "content": content},
                          "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 1, "completion_tokens": tokens, "total_tokens": tokens + 1}})
+
+    ui = _marker(_last_user(body)).get("ui")
+    if body.get("tools") and ui in _UI_TOOLS:
+        name, args = _UI_TOOLS[ui]
+        raw = json.dumps(args)
+
+        async def tool_events() -> AsyncIterator[str]:
+            """Stream one terminal UI tool call: name first, then the arguments in small fragments."""
+            yield _tool_chunk({"tool_calls": [{"index": 0, "id": "call_ui", "type": "function",
+                                               "function": {"name": name, "arguments": ""}}]})
+            for i in range(0, len(raw), 40):
+                yield _tool_chunk({"tool_calls": [{"index": 0, "function": {"arguments": raw[i:i + 40]}}]})
+                if delay:
+                    await asyncio.sleep(delay / 1000)
+            yield _tool_chunk({}, "tool_calls")
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(tool_events(), media_type="text/event-stream")
 
     async def events() -> AsyncIterator[str]:
         if first_delay:

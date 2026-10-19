@@ -18,7 +18,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
-from core.model_gateway.client import ModelGateway, PrivacyPolicyDenied
+from core.model_gateway.client import CapabilityUnsupported, ModelGateway, PrivacyPolicyDenied
 from core.model_gateway.schemas import RequestPolicy
 from core.model_gateway.transport import (
     EndpointNetworkPolicyError,
@@ -35,8 +35,16 @@ from modules.chat.citations import (
     validate_answer_citations,
 )
 from modules.chat.generative_ui import (
-    build_generative_ui_for_turn,
-    iter_generative_ui_deltas,
+    TERMINAL_UI_TOOLS,
+    TOOL_READ_SKILL,
+    ToolCallAccumulator,
+    build_chat_tool_specs,
+    build_generative_ui_system_prompt,
+    fallback_generative_ui,
+    finalize_generative_ui,
+    list_skills,
+    skill_tool_result,
+    streaming_snapshot,
 )
 from modules.chat.history import load_effective_history
 from modules.chat.models import (
@@ -97,6 +105,11 @@ WEB_SEARCH_UNAVAILABLE_PROMPT = (
     "Web search was requested but is unavailable for this answer; do not claim to have searched the web."
 )
 _WEB_UNAVAILABLE_CODES = frozenset({"timeout", "provider_error", "network_denied"})
+# read_skill is non-terminal: bound the extra model rounds and calls it may cost one turn.
+MAX_SKILL_ROUNDS = 2
+MAX_SKILL_CALLS_PER_ROUND = 2
+# A sandbox widget's parameter keys; the first appearance of each is a streaming milestone (css done, html begun, ...).
+_UI_MILESTONE_KEYS = ('"css"', '"html"', '"jsFunctions"', '"jsExpressions"')
 
 
 class PrivacyFenceChanged(RuntimeError):
@@ -983,31 +996,56 @@ async def run_response_generation(
                     WEB_SEARCH_NO_RESULTS_PROMPT if web_run.outcome["status"] == "used"
                     else WEB_SEARCH_UNAVAILABLE_PROMPT
                 )
-            messages_payload: list[dict[str, str]] = [
-                {"role": "system", "content": system_text},
-                *prior_messages,
-                {"role": "user", "content": user_prompt},
-            ]
-            stream_iter = gateway.stream(
-                alias=alias,
-                mapping=mapping,
-                policy=policy,
-                messages=messages_payload,
-                probe=False,
-                after_send=after_send_attempt,
+            local_only_turn = not ai_config.privacy.allow_remote_reasoning or any(
+                getattr(item, "local_only", False) for item in answer_context.evidence
             )
+            skill_names = list_skills()
+            ui_tools: list[dict[str, Any]] | None = build_chat_tool_specs(include_read_skill=bool(skill_names))
+            ui_locale = await _owner_locale(session, job_scope)
+            ui_system_text = system_text + "\n\n" + build_generative_ui_system_prompt(
+                locale=ui_locale, local_only=local_only_turn, skills=skill_names,
+            )
+
+            def _base_messages(with_ui_prompt: bool) -> list[dict[str, Any]]:
+                """Initial chat messages; the Generative UI prompt is included only while tools are offered."""
+                return [
+                    {"role": "system", "content": ui_system_text if with_ui_prompt else system_text},
+                    *prior_messages,
+                    {"role": "user", "content": user_prompt},
+                ]
+
+            def _open_stream(msgs: list[dict[str, Any]], tools: list[dict[str, Any]] | None) -> Any:
+                """Create one gateway stream; request opening is lazy and fenced per attempt by the callbacks."""
+                extra: dict[str, Any] = {"tools": tools, "tool_choice": "auto"} if tools else {}
+                return gateway.stream(
+                    alias=alias,
+                    mapping=mapping,
+                    policy=policy,
+                    messages=msgs,
+                    probe=False,
+                    after_send=after_send_attempt,
+                    **extra,
+                )
+
+            messages_payload = _base_messages(True)
+            stream_iter = _open_stream(messages_payload, ui_tools)
 
         # 4. Stream tokens through ModelGateway. Deltas are buffered in worker memory (never published)
         # and flushed at most every STREAM_FLUSH_SECONDS or STREAM_FLUSH_CHARS; each flush is one locked,
         # revalidated transaction in the same lock order as before (privacy -> conversation -> run -> evidence).
         loop = asyncio.get_running_loop()
         pending = ""
+        pending_ui: dict[str, Any] | None = None  # newest unpublished cumulative UI snapshot (older ones are superseded)
         last_flush = float("-inf")
 
         async def _flush_pending() -> bool | None:
-            """Publish the buffer; None means the run was cancelled/redacted and the buffer was dropped."""
-            nonlocal pending, accumulated_text, seq, last_flush
-            if not pending:
+            """Publish the text buffer and newest UI snapshot in one fenced transaction.
+
+            Text precedes the UI snapshot so a snapshot never outruns the prose it follows. None means the
+            run was cancelled/redacted and both buffers were dropped.
+            """
+            nonlocal pending, pending_ui, accumulated_text, seq, last_flush
+            if not pending and pending_ui is None:
                 return True
             async with session_factory() as session:
                 _, live_run = await _lock_live_response(
@@ -1016,6 +1054,7 @@ async def run_response_generation(
                 )
                 if await is_run_cancelled(response_id, redis):
                     pending = ""
+                    pending_ui = None
                     await _cancel_response_locked(session, live_run, seq)
                     await session.commit()
                     return None
@@ -1027,57 +1066,139 @@ async def run_response_generation(
                     )
                     if not fences_ok:
                         pending = ""
+                        pending_ui = None
                         await _privacy_cancel_locked(session, live_run, seq)
                         await session.commit()
                         return None
-                seq = await _next_event_seq(session, response_id, seq)
-                session.add(
-                    StreamEvent(
-                        response_id=response_id,
-                        seq=seq,
-                        event_type="message.delta",
-                        event_id=make_event_id(response_id, seq),
-                        data={"text": pending},
+                if pending:
+                    seq = await _next_event_seq(session, response_id, seq)
+                    session.add(
+                        StreamEvent(
+                            response_id=response_id,
+                            seq=seq,
+                            event_type="message.delta",
+                            event_id=make_event_id(response_id, seq),
+                            data={"text": pending},
+                        )
                     )
-                )
+                if pending_ui is not None:
+                    seq = await _next_event_seq(session, response_id, seq)
+                    session.add(
+                        StreamEvent(
+                            response_id=response_id,
+                            seq=seq,
+                            event_type="message.ui.delta",
+                            event_id=make_event_id(response_id, seq),
+                            data=pending_ui,
+                        )
+                    )
                 await session.commit()
             accumulated_text += pending
             pending = ""
+            pending_ui = None
             last_flush = loop.time()
             return True
 
         last_cancel_check = loop.time()
-        async with contextlib.aclosing(cast("AsyncGenerator[str, None]", stream_iter)) as lines:
-            async for raw_line in lines:
-                if loop.time() - last_cancel_check >= CANCEL_CHECK_INTERVAL:
-                    last_cancel_check = loop.time()
-                    if await is_run_cancelled(response_id, redis):
-                        await _mark_cancelled(response_id, session_factory, seq, privacy_fence, scope=job_scope)
-                        return
+        tools_active = ui_tools is not None
+        skill_rounds = 0
+        ui_call: dict[str, str] | None = None  # the single terminal UI call of this turn (first wins)
+        while True:
+            acc = ToolCallAccumulator()
+            round_started = False  # any chunk received; a capability fallback is only safe before this
+            last_ui_parse = float("-inf")
+            last_ui_snapshot: dict[str, Any] | None = None
+            seen_milestones: set[str] = set()
+            round_text_start = len(accumulated_text) + len(pending)
+            try:
+                async with contextlib.aclosing(cast("AsyncGenerator[str, None]", stream_iter)) as lines:
+                    async for raw_line in lines:
+                        round_started = True
+                        if loop.time() - last_cancel_check >= CANCEL_CHECK_INTERVAL:
+                            last_cancel_check = loop.time()
+                            if await is_run_cancelled(response_id, redis):
+                                await _mark_cancelled(response_id, session_factory, seq, privacy_fence, scope=job_scope)
+                                return
 
-                line = raw_line.strip()
-                if not line or line == "data: [DONE]":
-                    continue
-                if line.startswith("data: "):
-                    payload_str = line[6:]
-                    try:
-                        chunk_obj = json.loads(payload_str)
-                        choices = chunk_obj.get("choices", [])
-                        if choices and isinstance(choices, list):
-                            delta = choices[0].get("delta", {})
-                            content_delta = delta.get("content", "")
-                            if content_delta:
-                                pending += content_delta
-                                due = len(pending) >= STREAM_FLUSH_CHARS or (
-                                    loop.time() - last_flush >= STREAM_FLUSH_SECONDS
-                                )
-                                if due and await _flush_pending() is None:
-                                    return
-                    except (json.JSONDecodeError, AttributeError):
-                        pass
+                        line = raw_line.strip()
+                        if not line or line == "data: [DONE]":
+                            continue
+                        if line.startswith("data: "):
+                            payload_str = line[6:]
+                            try:
+                                chunk_obj = json.loads(payload_str)
+                                choices = chunk_obj.get("choices", [])
+                                if choices and isinstance(choices, list):
+                                    delta = choices[0].get("delta", {})
+                                    content_delta = delta.get("content", "")
+                                    if content_delta:
+                                        pending += content_delta
+                                        due = len(pending) >= STREAM_FLUSH_CHARS or (
+                                            loop.time() - last_flush >= STREAM_FLUSH_SECONDS
+                                        )
+                                        if due and await _flush_pending() is None:
+                                            return
+                                    fragments = delta.get("tool_calls")
+                                    if fragments:
+                                        acc.feed(fragments)
+                                        term = acc.terminal()
+                                        if term is not None:
+                                            # Milestones are detected on the tail only: re-scanning a 256 KB
+                                            # sandbox per chunk would make streaming quadratic.
+                                            tail = term["arguments"][-(sum(
+                                                len(str(f.get("function", {}).get("arguments", "")))
+                                                for f in fragments if isinstance(f, dict)
+                                            ) + 24):]
+                                            fresh = {k for k in _UI_MILESTONE_KEYS if k in tail} - seen_milestones
+                                            seen_milestones |= fresh
+                                            if fresh or loop.time() - last_ui_parse >= STREAM_FLUSH_SECONDS:
+                                                last_ui_parse = loop.time()
+                                                snap = streaming_snapshot(term["name"], term["arguments"])
+                                                if snap is not None and snap != last_ui_snapshot:
+                                                    last_ui_snapshot = pending_ui = snap
+                                                    if await _flush_pending() is None:
+                                                        return
+                            except (json.JSONDecodeError, AttributeError):
+                                pass
+            except CapabilityUnsupported:
+                if not tools_active or round_started:
+                    raise
+                # Model/gateway cannot call tools: answer text-only (evidence-derived fallback widget later).
+                logger.info("Tool calling unavailable for run %s; continuing text-only", response_id)
+                tools_active = False
+                messages_payload = _base_messages(False)
+                stream_iter = _open_stream(messages_payload, None)
+                continue
 
-        if await _flush_pending() is None:
-            return
+            if await _flush_pending() is None:
+                return
+            pending_ui = None  # the completed payload supersedes any trailing partial snapshot
+
+            calls = acc.calls()
+            for extra in calls:
+                if extra["name"] not in TERMINAL_UI_TOOLS and extra["name"] != TOOL_READ_SKILL:
+                    logger.warning("Ignoring unknown tool call %r for run %s", extra["name"][:64], response_id)
+            ui_call = acc.terminal()
+            reads = [c for c in calls if c["name"] == TOOL_READ_SKILL][:MAX_SKILL_CALLS_PER_ROUND]
+            if ui_call is not None or not reads:
+                break
+            if skill_rounds >= MAX_SKILL_ROUNDS:
+                logger.warning("read_skill round limit reached for run %s; no widget", response_id)
+                break
+            skill_rounds += 1
+            tool_calls = [
+                {"id": c["id"] or f"call_{i}", "type": "function",
+                 "function": {"name": TOOL_READ_SKILL, "arguments": c["arguments"] or "{}"}}
+                for i, c in enumerate(reads)
+            ]
+            messages_payload.append({
+                "role": "assistant", "content": accumulated_text[round_text_start:] or None, "tool_calls": tool_calls,
+            })
+            messages_payload.extend(
+                {"role": "tool", "tool_call_id": tc["id"], "content": skill_tool_result(c["arguments"])}
+                for tc, c in zip(tool_calls, reads, strict=True)
+            )
+            stream_iter = _open_stream(messages_payload, ui_tools)
 
         # 5. Complete generation and citation validation
         # PRODUCTION FIX: ensure_grounded_answer() returns a plain str, so `.answer`/`.citations`
@@ -1154,15 +1275,23 @@ async def run_response_generation(
                     ).model_dump(mode="json"))
         final_answer = renumber_citation_markers(answer_text, number_map, max(total_count, 1 if number_map else 0))
         valid_citations = [c.model_dump(mode="json", by_alias=True) for c in validated.citations] + web_citations
-        local_only_turn = not ai_config.privacy.allow_remote_reasoning or any(
-            getattr(item, "local_only", False) for item in answer_context.evidence
-        )
-        generative_ui = build_generative_ui_for_turn(
-            user_prompt,
-            final_answer,
-            answer_context.evidence,
-            local_only=local_only_turn,
-        )
+        generative_ui: dict[str, Any] | None
+        if ui_call is not None:
+            # The model wrote widget evidence as context numbers; map them through the answer's renumbering
+            # to validated citations so an unvalidated number can never become an evidence reference.
+            widget_citations = {
+                n: valid_citations[m - 1] for n, m in number_map.items() if 0 < m <= len(valid_citations)
+            }
+            generative_ui = finalize_generative_ui(
+                ui_call["name"], ui_call["arguments"], widget_citations, local_only_turn,
+                title_hint=" ".join(user_prompt.split()), locale=ui_locale,
+            )
+        elif not tools_active:
+            generative_ui = fallback_generative_ui(
+                user_prompt, final_answer, answer_context.evidence, local_only=local_only_turn,
+            )
+        else:
+            generative_ui = None  # tools were offered and the model chose a plain-text answer
 
         async with session_factory() as session:
             _, live_run = await _lock_live_response(
@@ -1231,17 +1360,6 @@ async def run_response_generation(
                     )
                 )
             if generative_ui is not None:
-                for ui_delta in iter_generative_ui_deltas(generative_ui):
-                    seq = await _next_event_seq(session, response_id, seq)
-                    session.add(
-                        StreamEvent(
-                            response_id=response_id,
-                            seq=seq,
-                            event_type="message.ui.delta",
-                            event_id=make_event_id(response_id, seq),
-                            data=ui_delta,
-                        )
-                    )
                 seq = await _next_event_seq(session, response_id, seq)
                 session.add(
                     StreamEvent(
@@ -1293,6 +1411,17 @@ async def run_response_generation(
     except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
         logger.error("Response generation failed for run %s: %s", response_id, type(exc).__name__)
         await _mark_failed(response_id, session_factory, seq, privacy_fence, exc, scope=job_scope)
+
+
+async def _owner_locale(session: AsyncSession, scope: InternalJobScope) -> str:
+    """Return the owner's UI locale as `en-US` / `vi-VN` for widget text; any lookup failure yields `en-US`."""
+    try:
+        prefs = await settings_public.read_owner_preferences(
+            session, actor_user_id=scope.actor_user_id, multi_workspace_enabled=multi_workspace_enabled(),
+        )
+        return "vi-VN" if prefs.locale == "vi-vi" else "en-US"
+    except Exception:  # noqa: BLE001  # boundary: locale is a presentation hint, never a reason to fail the turn
+        return "en-US"
 
 
 async def _release_on_shutdown(
@@ -1351,6 +1480,11 @@ async def _privacy_cancel_locked(session: AsyncSession, run: ResponseRun, curren
         StreamEvent.response_id == run.id,
         StreamEvent.event_type == "message.citations",
     ).values(data={"citations": []}))
+    # Widgets carry model output derived from the withdrawn evidence (tables, sandbox code): neutralize them too.
+    await session.execute(update(StreamEvent).where(
+        StreamEvent.response_id == run.id,
+        StreamEvent.event_type.in_(("message.ui.delta", "message.ui.done")),
+    ).values(data={}))
     was_cancelled = run.status == "cancelled"
     run.status = "cancelled"
     run.ephemeral = True

@@ -1,28 +1,10 @@
-"""Unit tests for query_data, query_records, and grounded table/chart payload builders."""
+"""Unit tests for query_records, and grounded table/chart payload builders."""
 
 from modules.chat.generative_ui.tools.query import (
     build_chart_payload,
     build_table_payload,
-    query_data,
     query_records,
 )
-
-
-def test_sample_query_reports_provenance_and_unfiltered_rows() -> None:
-    """Verify query_data identifies its bundled sample provenance without claiming live filtering."""
-    result = query_data.invoke({"query": "Show only last week"})
-    assert result["is_sample"] is True
-    assert result["source"] == "Bundled db.csv sample dataset"
-    assert result["query_applied"] is False
-    assert result["rows"]
-
-
-def test_sample_query_returns_independent_rows() -> None:
-    """Verify mutating returned rows from query_data does not corrupt subsequent calls."""
-    first = query_data.invoke({"query": "all"})
-    first["rows"][0]["injected"] = "changed"
-    second = query_data.invoke({"query": "all"})
-    assert "injected" not in second["rows"][0]
 
 
 def test_query_records_filters_aggregates_and_preserves_citations() -> None:

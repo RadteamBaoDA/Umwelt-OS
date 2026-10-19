@@ -6,8 +6,8 @@ allowed-tools: []
 
 # Open Generative UI response playbook
 
-Answer the task directly. Use text for a short answer, writing, or code; A2UI Table for basic tabular answers; generateSandboxedUi for charts, diagrams
-and custom interaction. Follow Jev's renderer and visualization decision. Native rendering is not evidence of live data.
+Answer the task directly. Use text for a short answer, writing, or code; render_table for basic tabular answers; render_sandboxed_ui for charts, diagrams
+and custom interaction. Native rendering is not evidence of live data.
 
 - Understand: show relationships or mechanisms, with a meaningful variable or stepper.
 - Compare: make criteria and assumptions visible; use a table for simple cases,
@@ -40,7 +40,7 @@ Use the Umwelt-OS semantic CSS variables (and their Open Generative UI aliases) 
 
 ## Tool contract
 
-For generateSandboxedUi, emit these parameters in this EXACT order:
+For render_sandboxed_ui, emit these parameters in this EXACT order:
 
 1. initialHeight — estimated finished height.
 2. placeholderMessages — 2-4 short progress messages.

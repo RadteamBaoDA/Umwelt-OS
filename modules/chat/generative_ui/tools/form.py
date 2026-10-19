@@ -1,31 +1,9 @@
 """Interactive meeting time picker and A2UI demonstration form schemas and builders."""
 
-import json
 from collections.abc import Sequence
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-
-
-class _ToolDescriptor:
-    """Callable tool wrapper exposing `.name`, `.description`, `.func`, and `.invoke`."""
-
-    def __init__(self, func: Any) -> None:
-        """Bind a Python function with tool metadata."""
-        self.func = func
-        self.name = func.__name__
-        self.description = (func.__doc__ or "").strip()
-        self.__doc__ = func.__doc__
-        self.__name__ = func.__name__
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        """Invoke the underlying function directly."""
-        return self.func(*args, **kwargs)
-
-    def invoke(self, input_data: dict[str, Any] | None = None, **kwargs: Any) -> Any:
-        """Invoke the underlying function using a dictionary of keyword arguments."""
-        merged = {**(input_data or {}), **kwargs}
-        return self.func(**merged)
 
 
 class TimeSlot(BaseModel):
@@ -56,125 +34,6 @@ class MeetingTimePickerPayload(BaseModel):
     slots: list[TimeSlot] = Field(min_length=1, max_length=24)
     selected_slot_id: str | None = None
     a2ui_surface: list[dict[str, Any]] = Field(default_factory=list)
-
-
-def _generate_form() -> str:
-    """Return a non-functional sample login-form schema for protocol demonstrations.
-
-    This does not authenticate or save data. Never use it to collect real credentials.
-    """
-    components = [
-        {"id": "root", "component": {"Card": {"child": "main-column"}}},
-        {
-            "id": "main-column",
-            "component": {
-                "Column": {
-                    "children": {
-                        "explicitList": [
-                            "header",
-                            "email-field",
-                            "password-field",
-                            "login-btn",
-                            "divider",
-                            "signup-text",
-                        ]
-                    },
-                    "gap": "medium",
-                }
-            },
-        },
-        {
-            "id": "header",
-            "component": {
-                "Column": {
-                    "children": {"explicitList": ["title", "subtitle"]},
-                    "alignment": "center",
-                }
-            },
-        },
-        {
-            "id": "title",
-            "component": {
-                "Text": {"text": {"literalString": "Welcome back"}, "usageHint": "h2"}
-            },
-        },
-        {
-            "id": "subtitle",
-            "component": {
-                "Text": {
-                    "text": {"literalString": "Sign in to your account"},
-                    "usageHint": "caption",
-                }
-            },
-        },
-        {
-            "id": "email-field",
-            "component": {
-                "TextField": {
-                    "value": {"path": "/email"},
-                    "placeholder": {"literalString": "Email address"},
-                    "label": {"literalString": "Email"},
-                    "action": "updateEmail",
-                }
-            },
-        },
-        {
-            "id": "password-field",
-            "component": {
-                "TextField": {
-                    "value": {"path": "/password"},
-                    "placeholder": {"literalString": "Password"},
-                    "label": {"literalString": "Password"},
-                    "action": "updatePassword",
-                }
-            },
-        },
-        {
-            "id": "login-btn-text",
-            "component": {"Text": {"text": {"literalString": "Sign in"}}},
-        },
-        {
-            "id": "login-btn",
-            "component": {"Button": {"child": "login-btn-text", "action": "login"}},
-        },
-        {"id": "divider", "component": {"Divider": {}}},
-        {
-            "id": "signup-text",
-            "component": {
-                "Row": {
-                    "children": {"explicitList": ["no-account", "signup-link"]},
-                    "distribution": "center",
-                    "gap": "small",
-                }
-            },
-        },
-        {
-            "id": "no-account",
-            "component": {
-                "Text": {
-                    "text": {"literalString": "Don't have an account?"},
-                    "usageHint": "caption",
-                }
-            },
-        },
-        {
-            "id": "signup-link-text",
-            "component": {"Text": {"text": {"literalString": "Sign up"}}},
-        },
-        {
-            "id": "signup-link",
-            "component": {"Button": {"child": "signup-link-text", "action": "signup"}},
-        },
-    ]
-    return json.dumps(
-        [
-            {"surfaceUpdate": {"surfaceId": "login-form", "components": components}},
-            {"beginRendering": {"surfaceId": "login-form", "root": "root"}},
-        ]
-    )
-
-
-generate_form = _ToolDescriptor(_generate_form)
 
 
 def build_meeting_time_picker_payload(

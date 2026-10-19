@@ -82,7 +82,7 @@ async def test_agent_dispatch_enqueues_on_arq_client(monkeypatch: pytest.MonkeyP
 class _Gen:
     """Runs run_response_generation over a scripted token stream with a fake session."""
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, tokens: list[str]) -> None:
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, tokens: list[str], prompt: str = "q?") -> None:
         self.added: list[Any] = []
         self.fence = AsyncMock(return_value=(True, []))
         self.privacy_cancel = AsyncMock(return_value=0)
@@ -92,7 +92,7 @@ class _Gen:
             query="q", evidence=[_evidence(content="Umwelt docs.")], has_sufficient_evidence=True,
         )
         scalars = iter([
-            SimpleNamespace(content="q?", revision_of_message_id=None, created_at=NOW, role="user"),
+            SimpleNamespace(content=prompt, revision_of_message_id=None, created_at=NOW, role="user"),
             None, SimpleNamespace(expires_at=None),
         ])
         self.session = MagicMock()
