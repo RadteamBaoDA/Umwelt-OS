@@ -22,6 +22,7 @@ import {
   WEB_SEARCH_SEND_ENABLED,
 } from '@/modules/chat/api';
 import { ChatComposer } from './chat-composer';
+import { ProviderGateAlert, useChatProviderReady } from './provider-gate';
 import { PickQrButton } from '@/modules/pick/pick-qr-modal';
 import { upsertUiPart, type UiPart } from './generative-ui-parts';
 import { AssistantThemeBanner } from './assistant-theme-banner';
@@ -134,6 +135,8 @@ export function ChatSession({
   const [isPending, setIsPending] = React.useState<boolean>(false);
   const [activeResponseId, setActiveResponseId] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const providerReady = useChatProviderReady(mode === 'full');
+  const [providerGateOpen, setProviderGateOpen] = React.useState(false);
   const [editingMessageId, setEditingMessageId] = React.useState<string | null>(null);
   const [selectedProfileId, setSelectedProfileId] = React.useState('assistant');
   const [activeAgentRunId, setActiveAgentRunId] = React.useState<string | null>(null);
@@ -534,6 +537,12 @@ export function ChatSession({
    */
   const handleSend = React.useCallback(
     async (content: string): Promise<boolean> => {
+      // Key gate: with no usable chat model keep the text as the composer draft and explain, instead of sending.
+      if (!providerReady) {
+        chatCtrl.setDraft(content);
+        setProviderGateOpen(true);
+        return false;
+      }
       if (mode === 'full' && effectiveEditingMessageId) {
         await handleMessageMutation('edit', effectiveEditingMessageId, content);
         // Edit is an append-only mutation, not a widget send; its outcome is not reported here.
@@ -729,6 +738,7 @@ export function ChatSession({
       webSearchOn,
       attachments,
       pendingProfileRun,
+      providerReady,
     ],
   );
 
@@ -957,6 +967,8 @@ export function ChatSession({
             />
           </div>
         )}
+
+        {providerGateOpen && !providerReady && <ProviderGateAlert onDismiss={() => setProviderGateOpen(false)} />}
 
         {/* Bottom composer */}
         <ChatComposer
