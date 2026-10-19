@@ -115,6 +115,11 @@ class Settings(BaseSettings):
     mcp_allowed_endpoint_cidrs: dict[tuple[str, str, int], tuple[str, ...]] = Field(
         default_factory=dict, validation_alias="MCP_ALLOWED_ENDPOINT_CIDRS", repr=False
     )
+    # Widget MCP server (modules/mcp_widgets): off by default; when enabled a bearer token is mandatory.
+    mcp_widgets_enabled: bool = Field(default=False, validation_alias="MCP_WIDGETS_ENABLED")
+    mcp_widgets_token: SecretStr = Field(default=SecretStr(""), validation_alias="MCP_WIDGETS_TOKEN", repr=False)
+    # Exact origin of the host page embedding assembled documents (bridge postMessage target); empty uses public_origin.
+    mcp_widgets_parent_origin: str = Field(default="", validation_alias="MCP_WIDGETS_PARENT_ORIGIN")
     mcp_stdio_profile_manifest: str = Field(
         default="", validation_alias="MCP_STDIO_PROFILE_MANIFEST", repr=False
     )
@@ -242,6 +247,17 @@ class Settings(BaseSettings):
         """Require the public origin to contain only scheme and host, without credentials, path, query, or fragment."""
         if value.path not in ("", "/") or value.query or value.fragment or value.username:
             raise ValueError("public_origin must contain only scheme and host")
+        return value
+
+    @field_validator("mcp_widgets_parent_origin")
+    @classmethod
+    def validate_widgets_parent_origin(cls, value: str) -> str:
+        """Accept empty or one exact http(s) origin; wildcards, paths and credentials would weaken the bridge target."""
+        value = value.strip().rstrip("/")
+        if value:
+            parts = urlsplit(value)
+            if parts.scheme not in ("http", "https") or not parts.hostname or "*" in value or parts.path or parts.query or parts.fragment or parts.username:
+                raise ValueError("MCP_WIDGETS_PARENT_ORIGIN must be one exact http(s) origin")
         return value
 
     @field_validator("github_app_id")

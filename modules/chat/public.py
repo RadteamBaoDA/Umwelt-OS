@@ -34,6 +34,7 @@ from modules.chat.citations import (
     validate_answer_citations,
     validate_citations,
 )
+from modules.chat.generative_ui.skill_backend import load_skill as load_generative_ui_skill
 from modules.chat.models import (
     AgentActivityLink,
     Conversation,
@@ -169,6 +170,7 @@ __all__ = [
     "list_agent_run_ids_for_delete",
     "list_agent_run_ids_for_owner",
     "live_agent_conversation_id",
+    "load_generative_ui_skill",
     "make_event_id",
     "parse_event_id",
     "process_chat_response",
