@@ -81,7 +81,7 @@ export function CitationPanel({
           if (variant === 'card') {
             // Sources rail (Chat.dc.html): numbered chip, title, meta, then the exact-item link.
             const isWeb = citation.sourceType === 'web';
-            const href = isWeb ? safeHttpUrl(citation.url) : `/knowledge/documents/${citation.documentId}?${new URLSearchParams({ versionId: citation.documentVersionId, chunkId: citation.chunkId })}#cited-chunk`;
+            const href = isWeb ? safeHttpUrl(citation.url) : `/knowledge/documents/${encodeURIComponent(citation.documentId)}?${new URLSearchParams({ versionId: citation.documentVersionId, chunkId: citation.chunkId })}#cited-chunk`;
             const when = !isWeb && citation.observedAt ? formatDateTime(citation.observedAt, locale, timezone) : null;
             const linkClass = 'inline-flex min-h-11 items-center gap-1 text-[13px] font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
             return (
@@ -126,7 +126,7 @@ export function CitationPanel({
             versionId: citation.documentVersionId,
             chunkId: citation.chunkId,
           });
-          const docHref = `/knowledge/documents/${citation.documentId}?${citationQuery.toString()}#cited-chunk`;
+          const docHref = `/knowledge/documents/${encodeURIComponent(citation.documentId)}?${citationQuery.toString()}#cited-chunk`;
           const formattedDate = citation.observedAt
             ? formatDateTime(citation.observedAt, locale, timezone)
             : null;

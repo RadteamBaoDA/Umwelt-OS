@@ -97,6 +97,8 @@ export interface ChatMessage {
   citations: Citation[];
   /** Web search outcome for this answer; sent by the backend only for opted-in runs. */
   web_search?: WebSearchOutcome | null;
+  /** Structured or sandboxed Generative UI payload attached to this assistant message. */
+  generative_ui?: Record<string, unknown> | null;
   response_id: string | null;
   /** Message whose prompt or assistant response this append-only revision follows. */
   revision_of_message_id: string | null;
@@ -179,8 +181,16 @@ export interface StreamEventsOptions {
   onDelta?: (text: string) => void;
   onCitations?: (citations: Citation[]) => void;
   onWebSearch?: (outcome: WebSearchOutcome) => void;
+  onUiDelta?: (ui: Record<string, unknown>) => void;
+  onUiDone?: (ui: Record<string, unknown>) => void;
   onStatus?: (status: string, payload?: unknown) => void;
-  onDone?: (result: { text: string; citations: Citation[]; model?: string; status: string }) => void;
+  onDone?: (result: {
+    text: string;
+    citations: Citation[];
+    model?: string;
+    status: string;
+    generative_ui?: Record<string, unknown> | null;
+  }) => void;
   onError?: (error: Error) => void;
 }
 
@@ -479,6 +489,24 @@ export async function streamResponseEvents(
           } catch (err) {
             console.warn('Failed to parse citations SSE payload', err);
           }
+        } else if (eventType === 'message.ui.delta') {
+          try {
+            const parsed = JSON.parse(eventData);
+            if (parsed && typeof parsed === 'object') {
+              options.onUiDelta?.(parsed as Record<string, unknown>);
+            }
+          } catch (err) {
+            console.warn('Failed to parse message.ui.delta SSE payload', err);
+          }
+        } else if (eventType === 'message.ui.done') {
+          try {
+            const parsed = JSON.parse(eventData);
+            if (parsed && typeof parsed === 'object') {
+              options.onUiDone?.(parsed as Record<string, unknown>);
+            }
+          } catch (err) {
+            console.warn('Failed to parse message.ui.done SSE payload', err);
+          }
         } else if (eventType === 'message.done') {
           try {
             const parsed = JSON.parse(eventData);
@@ -487,6 +515,9 @@ export async function streamResponseEvents(
               citations: Array.isArray(parsed?.citations) ? parsed.citations : [],
               model: parsed?.model,
               status: parsed?.status ?? 'completed',
+              generative_ui: parsed?.generative_ui && typeof parsed.generative_ui === 'object'
+                ? (parsed.generative_ui as Record<string, unknown>)
+                : null,
             });
           } catch {
             options.onDone?.({

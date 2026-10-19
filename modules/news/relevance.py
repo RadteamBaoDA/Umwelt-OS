@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,21 +19,96 @@ from modules.news.topics import TopicFilter
 SIGNAL_NAMES = ("topic", "entity", "goal", "project", "recency", "importance", "novelty")
 
 
+class _BoundedProfileList(list[Any]):
+    """Bounded list of active profile records that retains whether pagination exhausted all rows."""
+
+    def __init__(self, items: list[Any], *, complete: bool = True) -> None:
+        """Initialize the profile list and record pagination completeness."""
+        super().__init__(items)
+        self.complete = complete
+
+
 def _empty(method: str = "missing_owner_contract") -> RecordedSignal:
     """Represent an unavailable signal without conflating absence with zero evidence."""
     return RecordedSignal(value=0.0, available=False, method=method)
 
 
+async def load_active_topics(
+    session: AsyncSession,
+    scope: Scope,
+    multi_workspace_enabled: bool = False,
+) -> list[Any]:
+    """Load up to 10 pages (1,000 rows) of active topic profiles for story relevance scoring.
+
+    Extracting this bounded pagination helper allows batch callers such as ``list_stories``
+    to preload active topics once per request instead of repeating up to 10 database queries
+    for every candidate story.
+    """
+    topic_records: list[Any] = []
+    cursor: str | None = None
+    topic_complete = True
+    for _ in range(10):
+        page = await topics.list_topics(
+            session,
+            TopicFilter(is_active=True, limit=100, cursor=cursor),
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        topic_records.extend(page.items)
+        cursor = page.next_cursor
+        if cursor is None:
+            break
+    else:
+        topic_complete = False
+    return _BoundedProfileList(topic_records, complete=topic_complete)
+
+
+async def load_active_goals(
+    session: AsyncSession,
+    scope: Scope,
+    multi_workspace_enabled: bool = False,
+) -> list[Any]:
+    """Load up to 10 pages (1,000 rows) of active goal records for story relevance scoring.
+
+    Extracting this bounded pagination helper allows batch callers such as ``list_stories``
+    to preload active goals once per request instead of repeating up to 10 database queries
+    for every candidate story.
+    """
+    goal_records: list[Any] = []
+    cursor: str | None = None
+    goal_complete = True
+    for _ in range(10):
+        goal_page = await goals.list_goals(
+            session,
+            GoalFilter(status="active", limit=100, cursor=cursor),
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        goal_records.extend(goal_page.items)
+        cursor = goal_page.next_cursor
+        if cursor is None:
+            break
+    else:
+        goal_complete = False
+    return _BoundedProfileList(goal_records, complete=goal_complete)
+
+
 async def score_relevance(
     session: AsyncSession, story: StoryRead, *, scope: Scope, multi_workspace_enabled: bool,
     as_of: datetime | None = None,
+    preloaded_topics: list[Any] | None = None,
+    preloaded_goals: list[Any] | None = None,
+    projection_cache: dict[UUID, Any] | None = None,
 ) -> RelevanceRead:
     """Score a live story with equal bounded weights and explicit provenance for seven signals.
 
-    Topic and goal inputs are read through their owner facades, entity overlap
-    uses canonical IDs retained on current observations, Projects remain
-    unavailable because this checkout has no Project public owner, and the
+    Topic and goal inputs are read through their owner facades (or reused from
+    ``preloaded_topics`` / ``preloaded_goals`` when batch-scoring a story page),
+    entity overlap uses canonical IDs retained on current observations, Projects
+    remain unavailable because this checkout has no Project public owner, and the
     cross-source importance signal is an explicitly named evidence proxy.
+    When ``projection_cache`` is supplied, document projections are reused across
+    the caller's read pass to avoid repeated per-story projection queries.
     No model confidence or generated score enters this calculation.
     """
     now = (as_of or datetime.now(UTC)).astimezone(UTC)
@@ -45,9 +122,14 @@ async def score_relevance(
     from modules.knowledge.entities import public as entities
 
     for item in story.evidence[:100]:
-        current = await documents.get_news_document_projection(
-            session, item.document_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        )
+        if projection_cache is not None and item.document_id in projection_cache:
+            current = projection_cache[item.document_id]
+        else:
+            current = await documents.get_news_document_projection(
+                session, item.document_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            if projection_cache is not None:
+                projection_cache[item.document_id] = current
         if current is None or current.document_version_id != item.document_version_id:
             continue
         if current.chunks_truncated:
@@ -66,18 +148,15 @@ async def score_relevance(
             membership_incomplete = "membership_limit"
             break
         entity_ids.update(str(ref.entity_id) for ref in refs)
-    topic_records = []
-    cursor = None
-    topic_complete = True
-    for _ in range(10):
-        page = await topics.list_topics(session, TopicFilter(is_active=True, limit=100, cursor=cursor),
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-        topic_records.extend(page.items)
-        cursor = page.next_cursor
-        if cursor is None:
-            break
+    if preloaded_topics is not None:
+        topic_records = preloaded_topics
+        topic_complete = bool(getattr(preloaded_topics, "complete", True))
     else:
-        topic_complete = False
+        loaded_topics = await load_active_topics(
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        topic_records = loaded_topics
+        topic_complete = bool(getattr(loaded_topics, "complete", True))
     topic_hits: list[tuple[float, str, set[str]]] = []
     entity_hits: set[str] = set()
     topic_evidence_ids: list[str] = []
@@ -97,18 +176,15 @@ async def score_relevance(
             topic_hits.append((value, str(profile.id), overlap))
             topic_evidence_ids.append(str(profile.id))
     topic_value = max((item[0] for item in topic_hits), default=0.0)
-    goal_records = []
-    cursor = None
-    goal_complete = True
-    for _ in range(10):
-        goal_page = await goals.list_goals(session, GoalFilter(status="active", limit=100, cursor=cursor),
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-        goal_records.extend(goal_page.items)
-        cursor = goal_page.next_cursor
-        if cursor is None:
-            break
+    if preloaded_goals is not None:
+        goal_records = preloaded_goals
+        goal_complete = bool(getattr(preloaded_goals, "complete", True))
     else:
-        goal_complete = False
+        loaded_goals = await load_active_goals(
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        goal_records = loaded_goals
+        goal_complete = bool(getattr(loaded_goals, "complete", True))
     goal_value = 0.0
     goal_evidence_ids: list[str] = []
     for goal in goal_records:

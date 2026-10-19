@@ -42,9 +42,11 @@ class PublicationGateMiddleware:
     """Pure ASGI middleware gating http.response.start and non-empty bodies when a fence is armed."""
 
     def __init__(self, app: ASGIApp) -> None:
+        """Bind the downstream ASGI application wrapped by the publication fence."""
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Intercept HTTP responses and re-verify armed publication fences under FOR SHARE locks before sending."""
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
@@ -52,6 +54,7 @@ class PublicationGateMiddleware:
         denied: HTTPException | None = None
 
         async def gated(message: Message) -> None:
+            """Re-validate the request's PublicationFence in a bounded transaction before each protected send."""
             nonlocal started, denied
             if denied is not None:
                 return  # response start was denied: drop the rest, 404/409 is sent afterwards
@@ -80,7 +83,7 @@ class PublicationGateMiddleware:
                         await workspaces.lock_access_fence(
                             session, scope=fence.scope, expected=fence.access_fence,
                             multi_workspace_enabled=app.state.settings.multi_workspace_enabled,
-                            auth_sessions=(fence.auth_session,))
+                            auth_sessions=(fence.auth_session,), read=True)
                         await workspaces.lock_resource_grants(session, scope=fence.scope, grants=fence.grants)
                 except HTTPException as exc:
                     denied = exc

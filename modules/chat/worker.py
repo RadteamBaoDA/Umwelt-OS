@@ -29,9 +29,14 @@ from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
 from modules.chat import web_search as web
 from modules.chat.citations import (
+    extract_supporting_quote,
     parse_citation_markers,
     renumber_citation_markers,
     validate_answer_citations,
+)
+from modules.chat.generative_ui import (
+    build_generative_ui_for_turn,
+    iter_generative_ui_deltas,
 )
 from modules.chat.history import load_effective_history
 from modules.chat.models import (
@@ -1099,16 +1104,31 @@ async def run_response_generation(
                 sourceType="document", sourceId=item.source_id, documentId=item.document_id,
                 documentVersionId=item.document_version_id, chunkId=item.chunk_id,
                 title=item.title, url=item.canonical_url, observedAt=item.observed_at,
-                quote=item.content.strip()[:200],
+                quote=extract_supporting_quote(accumulated_text, item.content, citation_number=n),
             )
-            for item in (answer_context.evidence[n - 1] for n in unique_numbers) if item.content.strip()
+            for n, item in ((n, answer_context.evidence[n - 1]) for n in unique_numbers) if item.content.strip()
         ]
-        validated = validate_answer_citations(accumulated_text, candidate_citations, answer_context.evidence)
+        all_markers = parse_citation_markers(accumulated_text, max(total_count + 20, 20))
+        allow_uncited_turn = (
+            bool(accumulated_text.strip())
+            and not all_markers
+            and not answer_request.selected_only
+            and not answer_request.selected_refs
+        )
+        validated = validate_answer_citations(
+            accumulated_text,
+            candidate_citations,
+            answer_context.evidence,
+            allow_uncited_conversational=allow_uncited_turn,
+        )
         kept = {(c.documentVersionId, c.chunkId): i for i, c in enumerate(validated.citations, 1)}
         number_map = {
             n: kept[key] for n in doc_numbers
             if (key := _evidence_key(n)) in kept
         }
+        if not doc_numbers and validated.citations:
+            # Preserve the [1] marker attached by post-hoc lexical attribution during renumbering.
+            number_map[1] = 1
         answer_text = validated.answer
         web_citations: list[dict[str, Any]] = []
         if web_numbers and web_run is not None:
@@ -1132,8 +1152,17 @@ async def run_response_generation(
                         url=hit.url, title=hit.title, quote=hit.snippet,
                         provider=web_run.provider, retrievedAt=web_run.retrieved_at or datetime.now(UTC),
                     ).model_dump(mode="json"))
-        final_answer = renumber_citation_markers(answer_text, number_map, total_count)
+        final_answer = renumber_citation_markers(answer_text, number_map, max(total_count, 1 if number_map else 0))
         valid_citations = [c.model_dump(mode="json", by_alias=True) for c in validated.citations] + web_citations
+        local_only_turn = not ai_config.privacy.allow_remote_reasoning or any(
+            getattr(item, "local_only", False) for item in answer_context.evidence
+        )
+        generative_ui = build_generative_ui_for_turn(
+            user_prompt,
+            final_answer,
+            answer_context.evidence,
+            local_only=local_only_turn,
+        )
 
         async with session_factory() as session:
             _, live_run = await _lock_live_response(
@@ -1163,6 +1192,11 @@ async def run_response_generation(
                 citations=valid_citations,
                 response_id=response_id,
                 revision_of_message_id=revision_of_message_id,
+                **(
+                    {"metadata_json": {"generative_ui": generative_ui}}
+                    if generative_ui is not None
+                    else {}
+                ),
             )
             session.add(assistant_msg)
             await session.flush()
@@ -1196,6 +1230,36 @@ async def run_response_generation(
                         data={"citations": valid_citations},
                     )
                 )
+            if generative_ui is not None:
+                for ui_delta in iter_generative_ui_deltas(generative_ui):
+                    seq = await _next_event_seq(session, response_id, seq)
+                    session.add(
+                        StreamEvent(
+                            response_id=response_id,
+                            seq=seq,
+                            event_type="message.ui.delta",
+                            event_id=make_event_id(response_id, seq),
+                            data=ui_delta,
+                        )
+                    )
+                seq = await _next_event_seq(session, response_id, seq)
+                session.add(
+                    StreamEvent(
+                        response_id=response_id,
+                        seq=seq,
+                        event_type="message.ui.done",
+                        event_id=make_event_id(response_id, seq),
+                        data=generative_ui,
+                    )
+                )
+            done_payload: dict[str, Any] = {
+                "text": final_answer,
+                "citations": valid_citations,
+                "model": model_ident,
+                "status": "completed",
+            }
+            if generative_ui is not None:
+                done_payload["generative_ui"] = generative_ui
             seq = await _next_event_seq(session, response_id, seq)
             session.add(
                 StreamEvent(
@@ -1203,12 +1267,7 @@ async def run_response_generation(
                     seq=seq,
                     event_type="message.done",
                     event_id=make_event_id(response_id, seq),
-                    data={
-                        "text": final_answer,
-                        "citations": valid_citations,
-                        "model": model_ident,
-                        "status": "completed",
-                    },
+                    data=done_payload,
                 )
             )
             await session.commit()

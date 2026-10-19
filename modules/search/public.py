@@ -3,6 +3,7 @@ import binascii
 import hashlib
 import json
 import math
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -46,6 +47,66 @@ from modules.tasks.schemas import TaskFilter, TaskPage
 MAX_CANDIDATES = 500
 MAX_RANKED_CANDIDATES = MAX_CANDIDATES * 2
 FALLBACK_WARNING = "Semantic search unavailable"
+_QUERY_VECTOR_CACHE_MAX = 128
+_QUERY_VECTOR_CACHE_TTL_SECONDS = 60.0
+_QUERY_VECTOR_CACHE: dict[tuple[Any, ...], tuple[float, list[float]]] = {}
+
+
+def _query_vector_cache_key(
+    workspace_id: UUID,
+    generation: IndexGeneration,
+    config: AIExecutionConfig,
+    mapping: ModelMapping,
+    query: str,
+) -> tuple[Any, ...]:
+    """Build a workspace-, authority-, and generation-scoped key for paginated query vectors.
+
+    Binding the key to workspace, provider/model identity, gateway identity, configuration
+    revision, and active generation ensures follow-up cursor pages never reuse vectors across
+    tenants, model changes, or privacy/configuration updates.
+    """
+    return (
+        workspace_id,
+        getattr(mapping, "provider_id", None),
+        getattr(mapping, "model_id", None) or getattr(mapping, "model", None),
+        getattr(mapping, "version", None),
+        getattr(config, "gateway_identity", None),
+        getattr(config, "configuration_revision", None),
+        getattr(generation, "id", None),
+        getattr(generation, "dimensions", None),
+        query,
+    )
+
+
+def _get_cached_query_vector(key: tuple[Any, ...]) -> list[float] | None:
+    """Return a defensive copy of a fresh cached query vector and refresh its LRU order."""
+    entry = _QUERY_VECTOR_CACHE.get(key)
+    if entry is None:
+        return None
+    cached_at, vector = entry
+    if time.monotonic() - cached_at > _QUERY_VECTOR_CACHE_TTL_SECONDS:
+        _QUERY_VECTOR_CACHE.pop(key, None)
+        return None
+    _QUERY_VECTOR_CACHE.pop(key, None)
+    _QUERY_VECTOR_CACHE[key] = (cached_at, vector)
+    return list(vector)
+
+
+def _store_cached_query_vector(key: tuple[Any, ...], vector: list[float]) -> None:
+    """Store a defensive copy of a validated query vector in the bounded TTL/LRU cache."""
+    now = time.monotonic()
+    _QUERY_VECTOR_CACHE.pop(key, None)
+    if len(_QUERY_VECTOR_CACHE) >= _QUERY_VECTOR_CACHE_MAX:
+        expired = [
+            cached_key
+            for cached_key, (cached_at, _) in _QUERY_VECTOR_CACHE.items()
+            if now - cached_at > _QUERY_VECTOR_CACHE_TTL_SECONDS
+        ]
+        for cached_key in expired:
+            _QUERY_VECTOR_CACHE.pop(cached_key, None)
+        while len(_QUERY_VECTOR_CACHE) >= _QUERY_VECTOR_CACHE_MAX:
+            _QUERY_VECTOR_CACHE.pop(next(iter(_QUERY_VECTOR_CACHE)))
+    _QUERY_VECTOR_CACHE[key] = (now, list(vector))
 
 
 def is_member_scope(scope: Scope) -> bool:
@@ -419,35 +480,49 @@ async def search(
                 or generation.gateway_identity != config.gateway_identity or not policy.embeddings_allowed
             ):
                 raise ValueError("No permitted active embedding generation")
-            async def recheck_send() -> None:
-                """Reload gateway and privacy state immediately before embedding the query."""
-                if await workspaces.read_access_fence(
-                    session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-                ) != admitted_fence:
-                    raise PrivacyPolicyDenied("Search embedding denied: workspace access changed")
-                latest, latest_mapping, latest_policy = await configured_embedding(
-                    session, settings, redis, scope=scope,
-                )
-                if (latest.configuration_revision != config.configuration_revision
-                        or latest.endpoint_destination_id != config.endpoint_destination_id
-                        or latest.gateway_identity != config.gateway_identity or latest_mapping != mapping
-                        or not may_send(latest_policy, "embedding", latest_mapping,
-                                        latest.endpoint_destination_id or "remote",
-                                        bool(latest.gateway_api_key), "embeddings")):
-                    raise PrivacyPolicyDenied("Search embedding denied by current settings")
-                if before_embedding_send is not None:
-                    await before_embedding_send(
-                        latest, latest_mapping, latest_policy, dict(source_generation_fences or {}),
+            cache_key = _query_vector_cache_key(
+                scope.workspace_id, generation, config, mapping, request.query,
+            )
+            # First-page requests (offset == 0) always verify live gateway embedding authority;
+            # paginated continuation pages (offset > 0) reuse a fresh vector when authority matches.
+            cached_values = (
+                _get_cached_query_vector(cache_key)
+                if offset > 0 and before_embedding_send is None
+                else None
+            )
+            if cached_values is not None:
+                values = cached_values
+            else:
+                async def recheck_send() -> None:
+                    """Reload gateway and privacy state immediately before embedding the query."""
+                    if await workspaces.read_access_fence(
+                        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                    ) != admitted_fence:
+                        raise PrivacyPolicyDenied("Search embedding denied: workspace access changed")
+                    latest, latest_mapping, latest_policy = await configured_embedding(
+                        session, settings, redis, scope=scope,
                     )
+                    if (latest.configuration_revision != config.configuration_revision
+                            or latest.endpoint_destination_id != config.endpoint_destination_id
+                            or latest.gateway_identity != config.gateway_identity or latest_mapping != mapping
+                            or not may_send(latest_policy, "embedding", latest_mapping,
+                                            latest.endpoint_destination_id or "remote",
+                                            bool(latest.gateway_api_key), "embeddings")):
+                        raise PrivacyPolicyDenied("Search embedding denied by current settings")
+                    if before_embedding_send is not None:
+                        await before_embedding_send(
+                            latest, latest_mapping, latest_policy, dict(source_generation_fences or {}),
+                        )
+                    if release_during_embed:
+                        await session.commit()
+
                 if release_during_embed:
                     await session.commit()
-
-            if release_during_embed:
-                await session.commit()
-            response = await gateway(config, redis, recheck_send, scope=scope).embed("embedding", mapping, policy, [request.query])
-            values, returned_model = embedding_values(response, generation.dimensions)
-            if returned_model != generation.response_model_id:
-                raise ValueError("Embedding response identity changed")
+                response = await gateway(config, redis, recheck_send, scope=scope).embed("embedding", mapping, policy, [request.query])
+                values, returned_model = embedding_values(response, generation.dimensions)
+                if returned_model != generation.response_model_id:
+                    raise ValueError("Embedding response identity changed")
+                _store_cached_query_vector(cache_key, values)
             vector = await _vector_ids(
                 session, request, generation, values, destination, source_generation_fences,
                 workspace_id=scope.workspace_id,

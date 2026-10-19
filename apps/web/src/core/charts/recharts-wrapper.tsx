@@ -104,6 +104,47 @@ export function getChartColors(_isDark?: boolean): ChartThemeColors {
   };
 }
 
+/** Maximum cached Intl formatter instances per type to bound memory across locales and currencies. */
+const FORMAT_CACHE_LIMIT = 64;
+const NUMBER_FORMAT_CACHE = new Map<string, Intl.NumberFormat>();
+const DATE_FORMAT_CACHE = new Map<string, Intl.DateTimeFormat>();
+
+/**
+ * Returns a cached Intl.NumberFormat instance keyed by canonical locale and options,
+ * evicting the oldest entry when the cache reaches FORMAT_CACHE_LIMIT.
+ */
+function getCachedNumberFormat(locale: string, options: Intl.NumberFormatOptions): Intl.NumberFormat {
+  const key = `${locale}:${JSON.stringify(options)}`;
+  let formatter = NUMBER_FORMAT_CACHE.get(key);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat(locale, options);
+    if (NUMBER_FORMAT_CACHE.size >= FORMAT_CACHE_LIMIT) {
+      const oldestKey = NUMBER_FORMAT_CACHE.keys().next().value;
+      if (oldestKey !== undefined) NUMBER_FORMAT_CACHE.delete(oldestKey);
+    }
+    NUMBER_FORMAT_CACHE.set(key, formatter);
+  }
+  return formatter;
+}
+
+/**
+ * Returns a cached Intl.DateTimeFormat instance keyed by canonical locale and options,
+ * evicting the oldest entry when the cache reaches FORMAT_CACHE_LIMIT.
+ */
+function getCachedDateFormat(locale: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = `${locale}:${JSON.stringify(options)}`;
+  let formatter = DATE_FORMAT_CACHE.get(key);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(locale, options);
+    if (DATE_FORMAT_CACHE.size >= FORMAT_CACHE_LIMIT) {
+      const oldestKey = DATE_FORMAT_CACHE.keys().next().value;
+      if (oldestKey !== undefined) DATE_FORMAT_CACHE.delete(oldestKey);
+    }
+    DATE_FORMAT_CACHE.set(key, formatter);
+  }
+  return formatter;
+}
+
 /**
  * Formats a numeric value according to currency, unit, and locale.
  *
@@ -130,7 +171,7 @@ export function formatChartValue(
 
   if (options?.currency) {
     try {
-      return new Intl.NumberFormat(canonicalLocale, {
+      return getCachedNumberFormat(canonicalLocale, {
         style: 'currency',
         currency: options.currency,
         maximumFractionDigits: precision,
@@ -142,13 +183,13 @@ export function formatChartValue(
   }
 
   if (options?.unit === '%' || options?.unit === 'percent') {
-    return new Intl.NumberFormat(canonicalLocale, {
+    return getCachedNumberFormat(canonicalLocale, {
       style: 'percent',
       maximumFractionDigits: precision,
     }).format(value > 1 ? value / 100 : value);
   }
 
-  const formatted = new Intl.NumberFormat(canonicalLocale, {
+  const formatted = getCachedNumberFormat(canonicalLocale, {
     maximumFractionDigits: precision,
   }).format(value);
 
@@ -177,14 +218,14 @@ export function formatChartTimestamp(
     const canonicalLocale = normalizeFormattingLocale(locale);
 
     if (formatStyle === 'compact') {
-      return new Intl.DateTimeFormat(canonicalLocale, {
+      return getCachedDateFormat(canonicalLocale, {
         month: 'short',
         day: 'numeric',
         timeZone: timezone,
       }).format(date);
     }
 
-    return new Intl.DateTimeFormat(canonicalLocale, {
+    return getCachedDateFormat(canonicalLocale, {
       dateStyle: 'medium',
       timeStyle: 'short',
       timeZone: timezone,

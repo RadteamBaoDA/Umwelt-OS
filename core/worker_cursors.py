@@ -64,7 +64,11 @@ async def read_cursor(ctx: dict[str, object], key: str, allowed: Collection[str]
         gen = state.get(f"_gen:{key}", "0")  # worked from the newest local value, so our next write may land
     else:
         state[key] = str(cursor) if cursor is not None else ""
-    cast(dict[str, str], ctx.setdefault(_GENS, {}))[key] = gen
+    # Clone the _GENS mapping onto this job's ctx dict so shallow-copied ARQ contexts never share state.
+    existing_gens = cast(dict[str, str] | None, ctx.get(_GENS))
+    job_gens = dict(existing_gens) if existing_gens is not None else {}
+    job_gens[key] = gen
+    ctx[_GENS] = job_gens
     return cursor
 
 
@@ -73,7 +77,9 @@ async def write_cursor(ctx: dict[str, object], key: str, cursor: UUID | None, al
     if key not in allowed:
         raise KeyError(key)
     state = _state(ctx)
-    gens = cast(dict[str, str], ctx.setdefault(_GENS, {}))
+    existing_gens = cast(dict[str, str] | None, ctx.get(_GENS))
+    gens = dict(existing_gens) if existing_gens is not None else {}
+    ctx[_GENS] = gens
     current = state.get(f"_gen:{key}", "0")
     if key in gens and gens[key] != current:
         return

@@ -550,6 +550,8 @@ export function DashboardGrid({
     ? `${t('positionLabel', { x: gesture.currentPlacement.x + 1, y: gesture.currentPlacement.y + 1, w: gesture.currentPlacement.w, h: gesture.currentPlacement.h })}. ${gestureNotice}`
     : announcement;
   const gridMinHeight = maxRow * cellSize + Math.max(0, maxRow - 1) * GRID_GAP_PX;
+  // Cap rendered edit-mode guide rows so a placement with a large y coordinate (up to MAX_LAYOUT_ROWS) cannot allocate millions of DOM nodes.
+  const renderRows = Math.min(maxRow, 200);
 
   return (
     <div
@@ -602,7 +604,7 @@ export function DashboardGrid({
             gap: `${GRID_GAP_PX}px`,
           }}
         >
-          {Array.from({ length: columnCount * maxRow }).map((_, i) => (
+          {Array.from({ length: columnCount * renderRows }).map((_, i) => (
             <div
               key={i}
               className="border border-border/20 rounded-md bg-primary/[0.015]"

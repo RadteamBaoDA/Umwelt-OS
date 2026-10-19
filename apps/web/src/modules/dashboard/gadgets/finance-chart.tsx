@@ -52,6 +52,6 @@ export function FinanceChart(props: FinanceChartProps) {
   if (!comparable) return <p role="status" className="p-3 text-sm text-muted-foreground">{t('observationMixedUnits')}</p>;
   return <>
     {observations.data?.truncated && <p role="status" className="px-3 pt-2 text-xs text-muted-foreground">{t('observationTruncated')}</p>}
-    <MetricsChart {...props} initialData={points} currency={selected?.currency ?? undefined} unit={selected?.currency ? undefined : selected?.unit} providerDelay={selected ? `${selected.provider_delay_seconds == null ? t('observationProviderDelayUnknown') : `${selected.provider_delay_seconds}s`} · ${t('observationCollectedAt')} ${formatDateTime(selected.collected_at, display.locale, selected.timezone ?? display.timezone)} · ${selected.timezone ?? 'UTC'} · Alpha Vantage` : undefined} />
+    <MetricsChart {...props} initialData={points} currency={selected?.currency ?? undefined} unit={selected?.currency ? undefined : selected?.unit} providerDelay={selected ? `${selected.provider_delay_seconds == null ? t('observationProviderDelayUnknown') : `${selected.provider_delay_seconds}s`} · ${t('observationCollectedAt')} ${formatDateTime(selected.collected_at, display.locale, selected.timezone ?? display.timezone)} · ${selected.timezone ?? 'UTC'}${selected.provider ? ` · ${selected.provider}` : ''}` : undefined} />
   </>;
 }

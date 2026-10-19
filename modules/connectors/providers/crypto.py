@@ -28,49 +28,127 @@ COINPAPRIKA_URL = "https://api.coinpaprika.com/v1/tickers/btc-bitcoin"
 COINGECKO_URL = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
 COINGECKO_KEY_HEADER = "x-cg-demo-api-key"
 
+DEFAULT_BINANCE_PAIRS: tuple[tuple[str, str, str], ...] = (
+    ("BTCUSDT", "BTC", "USDT"),
+)
+DEFAULT_COINGECKO_ASSETS: tuple[tuple[str, str, str], ...] = (
+    ("bitcoin", "BTC", "USD"),
+)
+_SYMBOL_RE = re.compile(r"^[A-Z0-9]{2,20}$")
+_COIN_ID_RE = re.compile(r"^[a-z0-9-]{2,64}$")
 
-def binance_request() -> ProviderRequest:
-    return ProviderRequest("GET", BINANCE_URL)
+
+def binance_request(
+    symbol: str = "BTCUSDT",
+    *,
+    pairs: tuple[tuple[str, str, str], ...] = DEFAULT_BINANCE_PAIRS,
+) -> ProviderRequest:
+    """Build a Binance spot ticker GET request; defaults to the approved BTCUSDT endpoint."""
+    target_symbol = symbol
+    if pairs != DEFAULT_BINANCE_PAIRS and pairs:
+        target_symbol = pairs[0][0]
+    if not _SYMBOL_RE.fullmatch(target_symbol):
+        raise ProviderPayloadError("binance_scope_mismatch")
+    if target_symbol == "BTCUSDT" and pairs == DEFAULT_BINANCE_PAIRS:
+        return ProviderRequest("GET", BINANCE_URL)
+    return ProviderRequest(
+        "GET",
+        f"https://data-api.binance.vision/api/v3/ticker/price?symbol={target_symbol}",
+    )
 
 
 def fear_greed_request() -> ProviderRequest:
+    """Return the fixed GET request for the Alternative.me Fear and Greed Index endpoint."""
     return ProviderRequest("GET", FEAR_GREED_URL)
 
 
 def coinpaprika_request() -> ProviderRequest:
+    """Return the fixed GET request for the CoinPaprika BTC/USD ticker endpoint."""
     return ProviderRequest("GET", COINPAPRIKA_URL)
 
 
-def coingecko_request(api_key: str) -> ProviderRequest:
+def coingecko_request(
+    api_key: str,
+    *,
+    assets: tuple[tuple[str, str, str], ...] = DEFAULT_COINGECKO_ASSETS,
+) -> ProviderRequest:
     """Demo key travels only in the header (never in the URL); it is excluded from repr."""
     if not api_key or len(api_key) > 256 or not api_key.isprintable() or api_key != api_key.strip():
         raise ProviderPayloadError("coingecko_key_invalid", "credential")
-    return ProviderRequest("GET", COINGECKO_URL, {COINGECKO_KEY_HEADER: api_key})
+    if not assets:
+        raise ProviderPayloadError("coingecko_scope_mismatch")
+    if assets == DEFAULT_COINGECKO_ASSETS:
+        return ProviderRequest("GET", COINGECKO_URL, {COINGECKO_KEY_HEADER: api_key})
+    coin_ids: list[str] = []
+    quotes: list[str] = []
+    for coin_id, symbol, quote in assets:
+        if not _COIN_ID_RE.fullmatch(coin_id) or not _SYMBOL_RE.fullmatch(symbol) or not _SYMBOL_RE.fullmatch(quote):
+            raise ProviderPayloadError("coingecko_scope_mismatch")
+        if coin_id not in coin_ids:
+            coin_ids.append(coin_id)
+        lower_quote = quote.lower()
+        if lower_quote not in quotes:
+            quotes.append(lower_quote)
+    url = (
+        f"https://api.coingecko.com/api/v3/simple/price"
+        f"?ids={','.join(coin_ids)}&vs_currencies={','.join(quotes)}"
+    )
+    return ProviderRequest("GET", url, {COINGECKO_KEY_HEADER: api_key})
 
 
-def map_binance(payload: object, collected_at: datetime) -> list[IngestionRecord]:
-    """Map the latest BTCUSDT price; Binance supplies no event clock so collection time is the basis."""
-    if not isinstance(payload, dict):
-        raise ProviderPayloadError("binance_response_invalid")
-    if "code" in payload or "msg" in payload:
-        limited = payload.get("code") in {-1003, 429, 418}
-        raise ProviderPayloadError("binance_rate_limited" if limited else "binance_error_payload",
-                                   "rate_limited" if limited else "invalid")
-    if payload.get("symbol") != "BTCUSDT":
+def map_binance(
+    payload: object,
+    collected_at: datetime,
+    *,
+    pairs: tuple[tuple[str, str, str], ...] = DEFAULT_BINANCE_PAIRS,
+) -> list[IngestionRecord]:
+    """Map the latest Binance spot price(s); Binance supplies no event clock so collection time is the basis."""
+    if not pairs:
         raise ProviderPayloadError("binance_scope_mismatch")
-    try:
-        price = positive_decimal(payload.get("price"))
-    except ValueError as exc:
-        raise ProviderPayloadError("binance_price_invalid") from exc
-    text = decimal_text(price)
-    return [build_record(
-        provider="binance", identity="binance:BTCUSDT:price",
-        content=f"Binance BTCUSDT last price: {text} USDT (collected quote, no exchange timestamp)",
-        title="BTCUSDT price", observed_at=collected_at, collected_at=collected_at,
-        version=content_version("binance", "BTCUSDT", text), metric="spot_price", value=price,
-        unit="USDT", currency=None, symbol="BTCUSDT", quality="provider_reported",
-        provider_fields={"symbol": "BTCUSDT", "base": "BTC", "quote": "USDT"},
-    )]
+    allowed_pairs: dict[str, tuple[str, str]] = {
+        pair_symbol: (base_asset, quote_asset)
+        for pair_symbol, base_asset, quote_asset in pairs
+    }
+    items: list[object]
+    if isinstance(payload, dict):
+        if "code" in payload or "msg" in payload:
+            limited = payload.get("code") in {-1003, 429, 418}
+            raise ProviderPayloadError(
+                "binance_rate_limited" if limited else "binance_error_payload",
+                "rate_limited" if limited else "invalid",
+            )
+        items = [payload]
+    elif isinstance(payload, list) and len(pairs) > 1 and payload:
+        items = payload
+    else:
+        raise ProviderPayloadError("binance_response_invalid")
+
+    seen: set[str] = set()
+    records: list[IngestionRecord] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise ProviderPayloadError("binance_response_invalid")
+        symbol = item.get("symbol")
+        if not isinstance(symbol, str) or symbol not in allowed_pairs or symbol in seen:
+            raise ProviderPayloadError("binance_scope_mismatch")
+        seen.add(symbol)
+        base_asset, quote_asset = allowed_pairs[symbol]
+        try:
+            price = positive_decimal(item.get("price"))
+        except ValueError as exc:
+            raise ProviderPayloadError("binance_price_invalid") from exc
+        text = decimal_text(price)
+        records.append(build_record(
+            provider="binance", identity=f"binance:{symbol}:price",
+            content=f"Binance {symbol} last price: {text} {quote_asset} (collected quote, no exchange timestamp)",
+            title=f"{symbol} price", observed_at=collected_at, collected_at=collected_at,
+            version=content_version("binance", symbol, text), metric="spot_price", value=price,
+            unit=quote_asset, currency=None, symbol=symbol, quality="provider_reported",
+            provider_fields={"symbol": symbol, "base": base_asset, "quote": quote_asset},
+        ))
+    if len(records) != len(allowed_pairs):
+        raise ProviderPayloadError("binance_scope_mismatch")
+    return records
 
 
 def map_fear_greed(payload: object, collected_at: datetime) -> list[IngestionRecord]:
@@ -113,6 +191,7 @@ def map_fear_greed(payload: object, collected_at: datetime) -> list[IngestionRec
 
 
 def _error_kind(text: str) -> str:
+    """Classify a provider error string into rate_limited, entitlement, or invalid."""
     lowered = text.lower()
     if "too many" in lowered or "limit" in lowered or "throttl" in lowered:
         return "rate_limited"
@@ -158,8 +237,15 @@ def map_coinpaprika(payload: object, collected_at: datetime) -> list[IngestionRe
 _COINGECKO_CREDENTIAL_CODES = {401, 10002, 10010, 10011}
 
 
-def map_coingecko(payload: object, collected_at: datetime) -> list[IngestionRecord]:
-    """Map bitcoin/usd from the Demo simple-price call; status/error objects fail even on HTTP 200."""
+def map_coingecko(
+    payload: object,
+    collected_at: datetime,
+    *,
+    assets: tuple[tuple[str, str, str], ...] = DEFAULT_COINGECKO_ASSETS,
+) -> list[IngestionRecord]:
+    """Map configured CoinGecko simple-price asset rows; status/error objects fail even on HTTP 200."""
+    if not assets:
+        raise ProviderPayloadError("coingecko_scope_mismatch")
     if not isinstance(payload, dict):
         raise ProviderPayloadError("coingecko_response_invalid")
     if "status" in payload or "error" in payload or "error_code" in payload:
@@ -172,30 +258,34 @@ def map_coingecko(payload: object, collected_at: datetime) -> list[IngestionReco
         if code == 10005:
             raise ProviderPayloadError("coingecko_entitlement_required", "entitlement")
         raise ProviderPayloadError("coingecko_error_payload")
-    coin = payload.get("bitcoin")
-    if not isinstance(coin, dict) or "usd" not in coin:
-        raise ProviderPayloadError("coingecko_scope_mismatch")
-    try:
-        price = None if coin["usd"] is None else positive_decimal(coin["usd"])
-    except ValueError as exc:
-        raise ProviderPayloadError("coingecko_price_invalid") from exc
-    text = "null" if price is None else decimal_text(price)
-    fields: dict[str, str | float | int | None] = {"coin_id": "bitcoin", "quote": "USD"}
-    if "last_updated_at" in coin:  # only when the owner-approved include_last_updated_at is in use
-        observed_at = provider_instant(coin["last_updated_at"], collected_at, unit="s")
-        stamp = int(observed_at.timestamp())
-        fields["last_updated_at"] = stamp
-        identity, basis, modified = f"coingecko:bitcoin:USD:{stamp}", "provider_modified", observed_at
-    else:
-        observed_at, identity, basis, modified = collected_at, "coingecko:bitcoin:USD", "collection", None
-    return [build_record(
-        provider="coingecko", identity=identity,
-        content=f"CoinGecko BTC/USD: {'not reported' if price is None else text + ' USD'}",
-        title="BTC price (CoinGecko)", observed_at=observed_at, collected_at=collected_at,
-        version=content_version("coingecko", "bitcoin", "USD", fields.get("last_updated_at"), text),
-        metric="spot_price", value=price, unit="USD", currency="USD", symbol="BTC",
-        quality="provider_reported", timestamp_basis=basis, modified_at=modified, provider_fields=fields,  # type: ignore[arg-type]
-    )]
+    records: list[IngestionRecord] = []
+    for coin_id, symbol, quote_ccy in assets:
+        quote_key = quote_ccy.lower()
+        coin = payload.get(coin_id)
+        if not isinstance(coin, dict) or quote_key not in coin:
+            raise ProviderPayloadError("coingecko_scope_mismatch")
+        try:
+            price = None if coin[quote_key] is None else positive_decimal(coin[quote_key])
+        except ValueError as exc:
+            raise ProviderPayloadError("coingecko_price_invalid") from exc
+        text = "null" if price is None else decimal_text(price)
+        fields: dict[str, str | float | int | None] = {"coin_id": coin_id, "quote": quote_ccy}
+        if "last_updated_at" in coin:  # only when the owner-approved include_last_updated_at is in use
+            observed_at = provider_instant(coin["last_updated_at"], collected_at, unit="s")
+            stamp = int(observed_at.timestamp())
+            fields["last_updated_at"] = stamp
+            identity, basis, modified = f"coingecko:{coin_id}:{quote_ccy}:{stamp}", "provider_modified", observed_at
+        else:
+            observed_at, identity, basis, modified = collected_at, f"coingecko:{coin_id}:{quote_ccy}", "collection", None
+        records.append(build_record(
+            provider="coingecko", identity=identity,
+            content=f"CoinGecko {symbol}/{quote_ccy}: {'not reported' if price is None else text + ' ' + quote_ccy}",
+            title=f"{symbol} price (CoinGecko)", observed_at=observed_at, collected_at=collected_at,
+            version=content_version("coingecko", coin_id, quote_ccy, fields.get("last_updated_at"), text),
+            metric="spot_price", value=price, unit=quote_ccy, currency=quote_ccy, symbol=symbol,
+            quality="provider_reported", timestamp_basis=basis, modified_at=modified, provider_fields=fields,  # type: ignore[arg-type]
+        ))
+    return records
 
 
 CRYPTO_ADAPTERS: dict[str, PureAdapter] = {

@@ -1,5 +1,6 @@
-# Shared infrastructure. docker-compose.yml extends these services.
-# Standalone (native `npm run dev`): docker compose -f docker-compose.base.yml up -d
+# Shared backing services for local/native development and self-hosted runtime.
+# Start default services (Postgres + Redis): docker compose -f docker-compose.base.yml up -d
+# Optional profiles: --profile graph | --profile n8n
 x-logging: &default-logging
   driver: json-file
   options:
@@ -84,7 +85,7 @@ services:
     logging: *default-logging
     security_opt: ["no-new-privileges:true"]
 
-  # Optional temporal-knowledge graph (Graphiti). Start with: docker compose --profile graph up -d
+  # Optional temporal-knowledge graph (Graphiti). Start with: docker compose -f docker-compose.base.yml --profile graph up -d
   # Community edition = one database ("neo4j"); partitions are separated by group_id, not by database.
   graph:
     image: neo4j:5.26.2-community
@@ -114,7 +115,40 @@ services:
     logging: *default-logging
     security_opt: ["no-new-privileges:true"]
 
+  # Optional workflow automation (n8n). Start with: docker compose -f docker-compose.base.yml --profile n8n up -d
+  n8n:
+    image: n8nio/n8n:2.5.2
+    profiles: ["n8n"]
+    environment:
+      GENERIC_TIMEZONE: Asia/Ho_Chi_Minh
+      TZ: Asia/Ho_Chi_Minh
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-}
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      # Code nodes must not read container env (encryption key etc.).
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "true"
+      # Set these when n8n is served from a hostname; defaults suit loopback-only use.
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
+      WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://localhost:5678/}
+    ports:
+      - "127.0.0.1:${N8N_PORT:-5678}:5678"
+    volumes:
+      - n8n-data:/home/node/.n8n
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging: *default-logging
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 128
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   redis-data:
   graph-data:
+  n8n-data:
+
+

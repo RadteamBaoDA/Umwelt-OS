@@ -349,12 +349,15 @@ async def _live_story_rows(
     evidence_after: tuple[UUID, UUID, UUID] | None = None,
     support_limit: int = 100,
     candidate_limit: int = 50,
+    projection_cache: dict[UUID, Any] | None = None,
 ) -> LiveStoryRows:
     """Keyset-page durable story candidates, then reproject a bounded support window.
 
     The keyset is ordered by latest eligible observation and story ID at the fixed
     ``as_of`` snapshot. Detail callers can constrain one story directly, avoiding a
-    global prefix scan. Current Documents/Sources authority is rechecked for output.
+    global prefix scan. Current Documents/Sources authority is rechecked for output,
+    optionally populating ``projection_cache`` so downstream scoring and filtering
+    Within the same request can reuse live document projections without N+1 queries.
     """
     if not source_ids:
         return LiveStoryRows([], False)
@@ -432,6 +435,7 @@ async def _live_story_rows(
     grouped: dict[UUID, tuple[NewsStory, list[NewsObservation], list[StoryEvidence]]] = {}
     last_evidence_key: dict[UUID, tuple[UUID, UUID, UUID]] = {}
     next_evidence = None
+    selections_by_id = {item.id: item for item in selections}
     for story, observation, support_order in rows:
         if support_order > support_limit:
             incomplete_reasons.add("support_scan_limit")
@@ -440,10 +444,20 @@ async def _live_story_rows(
         last_evidence_key[story.id] = (
             observation.source_id, observation.document_version_id, observation.chunk_id,
         )
-        current = await documents.get_news_document_projection(
-        session, observation.document_id, expected_source_generation=observation.source_generation,
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        )
+        if projection_cache is not None and observation.document_id in projection_cache:
+            cached = projection_cache[observation.document_id]
+            current = (
+                cached
+                if cached is not None and cached.current_source_generation == observation.source_generation
+                else None
+            )
+        else:
+            current = await documents.get_news_document_projection(
+                session, observation.document_id, expected_source_generation=observation.source_generation,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            if projection_cache is not None and current is not None:
+                projection_cache[observation.document_id] = current
         if current is None or current.document_version_id != observation.document_version_id:
             if current is None and await documents.news_projection_scope_unavailable(
                 session, observation.document_id, observation.source_generation,
@@ -454,7 +468,6 @@ async def _live_story_rows(
         chunk = next((item for item in current.chunks if item.id == observation.chunk_id), None)
         if chunk is None:
             continue
-        selections_by_id = {item.id: item for item in selections}
         source = selections_by_id.get(current.source_id)
         if source is None or source.status != "active":
             continue
@@ -482,6 +495,7 @@ async def _live_story_rows(
 
 async def _current_entity_ids(
     session: AsyncSession, observations: list[NewsObservation], *, scope: Scope, multi_workspace_enabled: bool,
+    projection_cache: dict[UUID, Any] | None = None,
 ) -> tuple[set[str], str | None]:
     """Resolve current entity IDs, returning a reason when a bounded scan is incomplete.
 
@@ -492,10 +506,20 @@ async def _current_entity_ids(
     output: set[str] = set()
     incomplete_reason = None
     for observation in observations[:100]:
-        current = await documents.get_news_document_projection(
-            session, observation.document_id, expected_source_generation=observation.source_generation,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        )
+        if projection_cache is not None and observation.document_id in projection_cache:
+            cached = projection_cache[observation.document_id]
+            current = (
+                cached
+                if cached is not None and cached.current_source_generation == observation.source_generation
+                else None
+            )
+        else:
+            current = await documents.get_news_document_projection(
+                session, observation.document_id, expected_source_generation=observation.source_generation,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            if projection_cache is not None and current is not None:
+                projection_cache[observation.document_id] = current
         if current is None or current.document_version_id != observation.document_version_id:
             continue
         if current.chunks_truncated:
@@ -536,8 +560,12 @@ async def list_stories(
             session, tuple(filters.source_ids), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         after = None
+    # Share a single request-scoped document projection cache across candidate reprojection,
+    # entity filtering, relevance scoring, and final support verification to avoid N+1 reads.
+    projection_cache: dict[UUID, Any] = {}
     live = await _live_story_rows(session, source_ids, as_of, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, after=after)
+        multi_workspace_enabled=multi_workspace_enabled, after=after,
+        projection_cache=projection_cache)
     filtered = []
     page_incomplete_reasons = set(live.incomplete_reasons)
     if source_selection_incomplete:
@@ -563,7 +591,8 @@ async def list_stories(
         current_entities: set[str] | None = None
         if filters.entity_id or profile:
             current_entities, membership_incomplete = await _current_entity_ids(session, observations,
-                scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                projection_cache=projection_cache)
             if membership_incomplete:
                 story_incomplete_reasons.add(membership_incomplete)
                 page_incomplete_reasons.add(membership_incomplete)
@@ -593,12 +622,24 @@ async def list_stories(
         translation_revision=_translation_revision(story.id, representative),
         incomplete_reasons=sorted(story_reasons),
     ) for story, _observations, evidence, representative, story_reasons in page]
-    from modules.news.relevance import score_relevance
+    from modules.news.relevance import load_active_goals, load_active_topics, score_relevance
 
+    preloaded_topics = (
+        await load_active_topics(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        if items else None
+    )
+    preloaded_goals = (
+        await load_active_goals(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        if items else None
+    )
     scored = []
     for item in items:
-        relevance = await score_relevance(session, item, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, as_of=as_of)
+        relevance = await score_relevance(
+            session, item, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled, as_of=as_of,
+            preloaded_topics=preloaded_topics, preloaded_goals=preloaded_goals,
+            projection_cache=projection_cache,
+        )
         entity_reason = {
             "membership_limit": "entity_membership_limit",
             "chunk_limit": "chunk_limit",
@@ -613,8 +654,8 @@ async def list_stories(
                 {entity_reason} if entity_reason else set()
             )),
         })
-        # Profiles and membership reads above can await long enough for evidence to be
-        # deleted or replaced; never return a title or score after its support changes.
+        # Verify each evidence item against the resolved projection cache (falling back to a
+        # direct projection read only when absent from cache) so support remains valid.
         still_current = True
         story_row = next((row for row in page if row[0].id == enriched.id), None)
         generation_by_document = {
@@ -622,11 +663,24 @@ async def list_stories(
             for observation in story_row[1]
         } if story_row is not None else {}
         for story_evidence in enriched.evidence:
-            current = await documents.get_news_document_projection(
-                session, story_evidence.document_id,
-                expected_source_generation=generation_by_document.get(story_evidence.document_id),
-                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            )
+            expected_gen = generation_by_document.get(story_evidence.document_id)
+            if story_evidence.document_id in projection_cache:
+                cached = projection_cache[story_evidence.document_id]
+                current = (
+                    cached
+                    if cached is not None and (
+                        expected_gen is None or cached.current_source_generation == expected_gen
+                    )
+                    else None
+                )
+            else:
+                current = await documents.get_news_document_projection(
+                    session, story_evidence.document_id,
+                    expected_source_generation=expected_gen,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                )
+                if current is not None:
+                    projection_cache[story_evidence.document_id] = current
             if (
                 current is None or current.document_version_id != story_evidence.document_version_id
                 or current.source_id != story_evidence.source_id or current.source_id not in source_ids

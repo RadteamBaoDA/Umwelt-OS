@@ -97,7 +97,9 @@ async def _allow_invitation_attempt(request: Request, redis: Redis, digest: str)
     max5/IP-token/minute. No raw address/bearer/email/password enters Redis keys or errors.
     """
     minute = int(time.time() // 60)
-    address = request.client.host if request.client else "unknown"
+    from core.auth.routes import _client_ip
+
+    address = _client_ip(request)
     key = _hash(address)
     script = """
     local ip = redis.call('INCR', KEYS[1]); if ip == 1 then redis.call('EXPIRE', KEYS[1], 120) end

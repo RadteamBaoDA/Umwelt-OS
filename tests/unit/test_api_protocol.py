@@ -1,5 +1,4 @@
 import socket
-from pathlib import Path
 
 from apps.api.protocol import NoDelayHttpToolsProtocol
 
@@ -25,7 +24,3 @@ def test_protocol_sets_tcp_nodelay_on_accepted_socket() -> None:
     for s in (srv, cli, conn):
         s.close()
 
-
-def test_api_dockerfile_uses_nodelay_protocol() -> None:
-    cmd = (Path(__file__).resolve().parents[2] / "infrastructure/docker/api.Dockerfile").read_text()
-    assert '"--http", "apps.api.protocol:NoDelayHttpToolsProtocol"' in cmd

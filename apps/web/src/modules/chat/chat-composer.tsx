@@ -42,11 +42,16 @@ export interface ChatComposerProps {
   contextBar?: React.ReactNode;
   /** Element id explaining why Send is blocked (e.g. attachments still processing); blocks Send when set. */
   sendBlockedBy?: string | null;
+  /** Optional callback invoked when the user pastes one or more files from the clipboard into the composer. */
+  onAttachFiles?: (files: File[]) => void;
+  /** Whether attachment upload or ingestion is currently busy/disabled, blocking clipboard file paste. */
+  attachmentBusy?: boolean;
 }
 
 /**
- * Message input composer featuring multi-line textarea, keyboard shortcut submission (Enter),
- * separate Stop button during streaming, and in-memory draft preservation across drawer toggles.
+ * Message input composer featuring multi-line auto-resizing textarea, clipboard file paste,
+ * keyboard shortcut submission (Enter), separate Stop button during streaming, and in-memory
+ * draft preservation across drawer toggles.
  *
  * @param props - ChatComposerProps interface.
  * @returns Accessible composer control component.
@@ -65,6 +70,8 @@ export function ChatComposer({
   webSearch,
   attachments,
   sendBlockedBy = null,
+  onAttachFiles,
+  attachmentBusy = false,
   mode = 'drawer',
   contextBar,
 }: ChatComposerProps) {
@@ -95,13 +102,28 @@ export function ChatComposer({
   );
 
   /**
-   * Handles textarea input changes and adjusts row height dynamically.
+   * Intercepts clipboard paste events containing binary files (e.g. screenshots or PDFs) and
+   * forwards them to `onAttachFiles` when file attachment is supported and not busy.
+   */
+  const handlePaste = React.useCallback(
+    (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const files = event.clipboardData?.files;
+      if (files && files.length > 0 && onAttachFiles && !attachmentBusy && !disabled) {
+        event.preventDefault();
+        onAttachFiles(Array.from(files));
+      }
+    },
+    [onAttachFiles, attachmentBusy, disabled],
+  );
+
+  /**
+   * Handles textarea input changes and adjusts row height dynamically up to 200px.
    */
   const handleChange = React.useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       onChange(e.target.value);
       e.target.style.height = 'auto';
-      e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
+      e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`;
     },
     [onChange],
   );
@@ -109,8 +131,9 @@ export function ChatComposer({
   React.useLayoutEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
+    // Reset height before measuring scrollHeight so clearing the draft shrinks back to baseline.
     textarea.style.height = 'auto';
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
   }, [value]);
 
   const canSend = value.trim().length > 0 && !isStreaming && !disabled && !sendBlockedBy;
@@ -122,10 +145,11 @@ export function ChatComposer({
       value={value}
       onChange={handleChange}
       onKeyDown={handleKeyDown}
+      onPaste={handlePaste}
       placeholder={placeholder ?? t('composerPlaceholder')}
       disabled={disabled}
       rows={2}
-      className="block max-h-40 min-h-14 w-full resize-none rounded-lg border border-border bg-background p-3 text-base text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 sm:text-[15px]"
+      className="block max-h-[200px] min-h-14 w-full resize-none overflow-y-auto rounded-lg border border-border bg-background p-3 text-base text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 sm:text-[15px]"
       aria-label={t('composerPlaceholder')}
     />
   );

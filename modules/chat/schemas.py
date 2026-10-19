@@ -268,6 +268,7 @@ class MessageRead(BaseModel):
     revision_of_message_id: UUID | None = None
     created_at: datetime
     web_search: WebSearchOutcomeRead | None = None
+    generative_ui: dict[str, Any] | None = None
 
 
 class ChatExportCitation(BaseModel):

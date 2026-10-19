@@ -42,12 +42,16 @@ class BackupActivityMiddleware:
             receipt = getattr(request.state, "backup_activity", None)
             if receipt is None:
                 return
-            factory: Any = request.app.state.session_factory
-            async with factory() as session:
-                from modules.settings.public import finish_activity
+            import anyio
 
-                await finish_activity(session, receipt, uncertain=uncertain, interrupted=interrupted)
-                await session.commit()
+            factory: Any = request.app.state.session_factory
+            # Shield from client disconnect cancellation so the activity receipt is always settled.
+            with anyio.CancelScope(shield=True), anyio.fail_after(5):
+                async with factory() as session:
+                    from modules.settings.public import finish_activity
+
+                    await finish_activity(session, receipt, uncertain=uncertain, interrupted=interrupted)
+                    await session.commit()
 
         async def send_and_finalize(message: Message) -> None:
             """Forward one ASGI message while recording status and transport failure."""

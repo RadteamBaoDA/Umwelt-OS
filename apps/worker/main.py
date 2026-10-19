@@ -127,15 +127,23 @@ def _gate_backup_job(function: Callable[..., Any]) -> Callable[..., Any]:
         try:
             result = await function(ctx, *args, **kwargs)
         except BaseException:
+            import anyio
+
+            # Shield cleanup from task cancellation so an ARQ timeout or worker shutdown
+            # cannot abort finish_activity mid-flight and leave a dangling backup lease.
+            with anyio.CancelScope(shield=True), anyio.fail_after(5):
+                async with factory() as session:
+                    # Handler exit only closes this admission lease. Any unresolved external effect
+                    # must remain visible in its owner's durable journal and block snapshot there.
+                    await finish_activity(session, receipt)
+                    await session.commit()
+            raise
+        import anyio
+
+        with anyio.CancelScope(shield=True), anyio.fail_after(5):
             async with factory() as session:
-                # Handler exit only closes this admission lease. Any unresolved external effect
-                # must remain visible in its owner's durable journal and block snapshot there.
                 await finish_activity(session, receipt)
                 await session.commit()
-            raise
-        async with factory() as session:
-            await finish_activity(session, receipt)
-            await session.commit()
         return result
 
     return guarded

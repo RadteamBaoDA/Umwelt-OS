@@ -30,6 +30,28 @@ export type ChartTimeRange = '24h' | '7d' | '30d' | '90d' | '1y' | 'all';
 /** Chart visualization kind selectable by the user. */
 export type ChartKind = 'area' | 'line' | 'bar';
 
+/** Lookback window durations in milliseconds for each bounded ChartTimeRange. */
+const TIME_RANGE_MS: Record<Exclude<ChartTimeRange, 'all'>, number> = {
+  '24h': 86_400_000,
+  '7d': 7 * 86_400_000,
+  '30d': 30 * 86_400_000,
+  '90d': 90 * 86_400_000,
+  '1y': 365 * 86_400_000,
+};
+
+/**
+ * Parses a chart data point timestamp (ISO string or epoch ms) into epoch milliseconds.
+ *
+ * @param timestamp - Raw timestamp string or number from ChartDataPoint.
+ * @returns Epoch milliseconds, or NaN when unparseable.
+ */
+function parsePointTimestampMs(timestamp: string | number): number {
+  if (typeof timestamp === 'number') {
+    return Number.isFinite(timestamp) ? timestamp : Number.NaN;
+  }
+  return Date.parse(timestamp);
+}
+
 /** Props for the MetricsChart gadget component. */
 export interface MetricsChartProps {
   /** Gadget instance configuration projection. */
@@ -76,34 +98,54 @@ export function MetricsChart({
   const [chartKind, setChartKind] = useState<ChartKind>('area');
 
   // Load or generate chart data
-  const data = useMemo(() => {
+  const points = useMemo(() => {
     // Never invent market values: without a connected provider the series is empty (R12).
     return initialData ?? [];
   }, [initialData]);
 
-  // Derive latest value, start value, and absolute/percent change
-  const { latestValue, startValue, changeAmount, changePercent, isPositive } = useMemo(() => {
-    if (!data || data.length === 0) {
+  // Filter points to the active timeRange relative to the maximum valid timestamp in points;
+  // if timestamps are unparseable and filtering leaves 0 points, fall back to all points.
+  const visiblePoints = useMemo(() => {
+    if (timeRange === 'all' || points.length === 0) {
+      return points;
+    }
+    const parsedTimestamps = points.map((point) => parsePointTimestampMs(point.timestamp));
+    const validTimestamps = parsedTimestamps.filter((ts) => Number.isFinite(ts));
+    if (validTimestamps.length === 0) {
+      return points;
+    }
+    const maxTimestamp = Math.max(...validTimestamps);
+    const cutoff = maxTimestamp - TIME_RANGE_MS[timeRange];
+    const filtered = points.filter((_, index) => {
+      const ts = parsedTimestamps[index];
+      return Number.isFinite(ts) && ts >= cutoff;
+    });
+    return filtered.length > 0 ? filtered : points;
+  }, [points, timeRange]);
+
+  const chartData = visiblePoints;
+
+  // Derive current value, period change value, and percent change over the filtered visiblePoints window
+  const { currentValue, changeValue, changePercent, isPositive } = useMemo(() => {
+    if (!visiblePoints || visiblePoints.length === 0) {
       return {
-        latestValue: 0,
-        startValue: 0,
-        changeAmount: 0,
+        currentValue: 0,
+        changeValue: 0,
         changePercent: null,
         isPositive: true,
       };
     }
-    const first = data[0].value;
-    const last = data[data.length - 1].value;
-    const diff = last - first;
+    const first = visiblePoints[0].value;
+    const last = visiblePoints[visiblePoints.length - 1].value;
+    const diff = visiblePoints.length >= 2 ? last - first : last - first;
     const pct = first !== 0 ? (diff / first) * 100 : null;
     return {
-      latestValue: last,
-      startValue: first,
-      changeAmount: diff,
+      currentValue: last,
+      changeValue: diff,
       changePercent: pct,
       isPositive: diff >= 0,
     };
-  }, [data]);
+  }, [visiblePoints]);
 
   const series: ChartSeries[] = [
     {
@@ -114,7 +156,7 @@ export function MetricsChart({
     },
   ];
 
-  if (data.length === 0) {
+  if (points.length === 0) {
     return <p role="status" className="p-3 text-sm text-muted-foreground">{daily('noGadgetData')}</p>;
   }
 
@@ -131,7 +173,7 @@ export function MetricsChart({
 
           <div className="flex items-baseline gap-2">
             <span className="text-xl font-bold font-mono tracking-tight text-foreground">
-              {formatChartValue(latestValue, { currency, unit, locale: display.locale })}
+              {formatChartValue(currentValue, { currency, unit, locale: display.locale })}
             </span>
 
             {/* Change delta with visible sign, percentage, and text tag (not color only) */}
@@ -151,7 +193,7 @@ export function MetricsChart({
               </span>
               <span className="text-[10px] text-muted-foreground font-normal">
                 ({isPositive ? '+' : ''}
-                {formatChartValue(changeAmount, { currency, unit, locale: display.locale })})
+                {formatChartValue(changeValue, { currency, unit, locale: display.locale })})
               </span>
             </div>
           </div>
@@ -221,7 +263,7 @@ export function MetricsChart({
         </div>
 
         <span className="text-[10px] text-muted-foreground font-mono">
-          {data.length} observations
+          {visiblePoints.length} observations
         </span>
       </div>
 
@@ -229,7 +271,7 @@ export function MetricsChart({
       <div className="flex-1 w-full min-h-[140px] shrink-0 relative">
         {chartKind === 'area' && (
           <BaseAreaChart
-            data={data}
+            data={chartData}
             series={series}
             currency={currency}
             unit={unit}
@@ -239,7 +281,7 @@ export function MetricsChart({
         )}
         {chartKind === 'line' && (
           <BaseLineChart
-            data={data}
+            data={chartData}
             series={series}
             currency={currency}
             unit={unit}
@@ -249,7 +291,7 @@ export function MetricsChart({
         )}
         {chartKind === 'bar' && (
           <BaseBarChart
-            data={data}
+            data={chartData}
             series={series}
             currency={currency}
             unit={unit}

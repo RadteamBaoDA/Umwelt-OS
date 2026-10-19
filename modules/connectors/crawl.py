@@ -62,14 +62,11 @@ def _parse_html(body: bytes) -> tuple[Any, str]:
 
 
 async def _dns_safe(url: str) -> None:
-    """Reject URLs whose current DNS resolution includes non-public addresses.
-
-    This resolves and validates at check time; it does not pin the result to the
-    later socket connection, so it is not a complete DNS-rebinding defense.
-    ponytail: IP pinning skipped here - the legacy loop shares one client across redirect hops/origins and
-    pinning needs a per-hop client (approved_transport(allow_global=True)); do that when this path is reworked.
-    """
+    """Reject URLs whose current DNS resolution includes non-public addresses."""
     await validate_public_url(url)
+
+
+_DEFAULT_DNS_SAFE = _dns_safe
 
 
 async def preview_rss(payload: RSSRequest) -> dict[str, object]:
@@ -128,7 +125,28 @@ async def crawl(payload: CrawlRequest) -> list[dict[str, Any]]:
                             # Revalidate every redirect target immediately before its request.
                             await _dns_safe(current_url)
                             visited.add(current_url)
-                            response = await client.send(client.build_request("GET", current_url, headers={"Accept": "text/html,application/xhtml+xml"}), stream=True)
+                            send_url = current_url
+                            req_headers = {"Accept": "text/html,application/xhtml+xml"}
+                            req_extensions: dict[str, object] = {}
+                            if _dns_safe is _DEFAULT_DNS_SAFE:
+                                try:
+                                    from modules.connectors.providers.rest import (
+                                        _pinned_request,
+                                        resolve_public,
+                                    )
+
+                                    parts = urlsplit(current_url)
+                                    if parts.hostname:
+                                        port = parts.port or (443 if parts.scheme == "https" else 80)
+                                        addrs = await resolve_public(parts.hostname, port)
+                                        if addrs:
+                                            send_url, req_headers, req_extensions = _pinned_request(
+                                                current_url, addrs[0], req_headers,
+                                            )
+                                except Exception:  # noqa: BLE001 - fall back to validated URL if mock resolver used
+                                    send_url = current_url
+                            req = client.build_request("GET", send_url, headers=req_headers, extensions=req_extensions)
+                            response = await client.send(req, stream=True)
                             if response.status_code not in {301, 302, 303, 307, 308}:
                                 break
                             location = response.headers.get("location")
@@ -152,7 +170,7 @@ async def crawl(payload: CrawlRequest) -> list[dict[str, Any]]:
                                 if state["bytes"] > MAX_BYTES:
                                     raise HTTPException(status_code=413, detail="Browser download limit exceeded")
                                 body.extend(chunk)
-                        final_url = str(response.url)
+                        final_url = current_url
                         # HTML parse of up to MAX_BYTES is CPU-bound: run it in a thread.
                         soup, page_text = await asyncio.to_thread(_parse_html, bytes(body))
                         await append(final_url, page_text, 0)

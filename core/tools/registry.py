@@ -239,14 +239,23 @@ class ToolRegistry:
         handler = self._handlers[name]
         try:
             async with asyncio.timeout(definition.timeout_seconds):
+                t0 = time.monotonic()
                 async with self._semaphore:
                     # Queue wait can outlive a capability revocation or registry replacement.
+                    # Only skip the second DB module refresh when the semaphore was acquired without waiting (>5ms)
+                    # and no admission approval await yielded before acquiring the semaphore.
+                    waited_for_admission_approval = bool(approval_required and callable(approval_verifier))
+                    waited_on_semaphore = (time.monotonic() - t0) > 0.005
                     principal_revalidator = execution_context.get("principal_revalidator")
                     principal_current = (
                         await principal_revalidator(principal)
                         if callable(principal_revalidator) else False
                     )
-                    queued_modules = await self._refresh_module_registry(execution_context, principal)
+                    queued_modules = (
+                        await self._refresh_module_registry(execution_context, principal)
+                        if (waited_on_semaphore or waited_for_admission_approval)
+                        else modules
+                    )
                     module_state_current = queued_modules is not None
                     queued_definition = self._tools.get(name)
                     try:

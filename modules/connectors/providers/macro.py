@@ -174,16 +174,65 @@ def build_record(
 # --------------------------------------------------------------------------- World Bank
 
 WORLD_BANK_URL = "https://api.worldbank.org/v2/country/VN/indicator/NY.GDP.MKTP.CD?format=json&per_page=3"
+WORLD_BANK_INDICATORS: tuple[tuple[str, str, str], ...] = (
+    ("VN", "NY.GDP.MKTP.CD", "gdp_current_usd"),
+)
+FRED_SERIES: tuple[tuple[str, str, str], ...] = (
+    ("DFF", "fed_funds_rate", "percent"),
+    ("CPIAUCSL", "us_cpi_index", "index"),
+    ("DGS10", "us_10y_treasury_yield", "percent"),
+)
 _WB_MAX_ROWS = 50
+_WB_COUNTRY_RE = re.compile(r"^[A-Z]{2}$")
+_WB_INDICATOR_RE = re.compile(r"^[A-Z0-9._-]{3,40}$")
+_WB_ISO2_META: dict[str, tuple[str, str]] = {
+    "VN": ("VNM", "Viet Nam"),
+    "US": ("USA", "United States"),
+    "EU": ("EUU", "European Union"),
+    "JP": ("JPN", "Japan"),
+    "CN": ("CHN", "China"),
+    "GB": ("GBR", "United Kingdom"),
+}
 
 
-def world_bank_request() -> ProviderRequest:
-    """Fixed approved endpoint; exact continuation paging is a controller decision (see report)."""
-    return ProviderRequest("GET", WORLD_BANK_URL)
+def world_bank_request(
+    country: str = "VN",
+    indicator: str = "NY.GDP.MKTP.CD",
+    per_page: int = 3,
+    *,
+    indicators: tuple[tuple[str, str, str], ...] = WORLD_BANK_INDICATORS,
+) -> ProviderRequest:
+    """Build a World Bank indicator GET request; defaults to the approved Viet Nam GDP endpoint."""
+    target_country = country
+    target_indicator = indicator
+    if indicators != WORLD_BANK_INDICATORS and indicators:
+        target_country, target_indicator, _ = indicators[0]
+    if not _WB_COUNTRY_RE.fullmatch(target_country) or not _WB_INDICATOR_RE.fullmatch(target_indicator):
+        raise ProviderPayloadError("world_bank_scope_mismatch")
+    if per_page < 1 or per_page > _WB_MAX_ROWS:
+        raise ProviderPayloadError("world_bank_paging_invalid")
+    if target_country == "VN" and target_indicator == "NY.GDP.MKTP.CD" and per_page == 3:
+        return ProviderRequest("GET", WORLD_BANK_URL)
+    url = (
+        f"https://api.worldbank.org/v2/country/{target_country}"
+        f"/indicator/{target_indicator}?format=json&per_page={per_page}"
+    )
+    return ProviderRequest("GET", url)
 
 
-def map_world_bank(payload: object, collected_at: datetime) -> list[IngestionRecord]:
-    """Map annual GDP (current US$) rows; null stays missing and never replaces earlier valid years."""
+def map_world_bank(
+    payload: object,
+    collected_at: datetime,
+    *,
+    indicators: tuple[tuple[str, str, str], ...] = WORLD_BANK_INDICATORS,
+) -> list[IngestionRecord]:
+    """Map annual World Bank indicator rows; null stays missing and never replaces earlier valid years."""
+    if not indicators:
+        raise ProviderPayloadError("world_bank_scope_mismatch")
+    allowed_indicators: dict[tuple[str, str], str] = {
+        (country_code, indicator_id): metric_name
+        for country_code, indicator_id, metric_name in indicators
+    }
     if isinstance(payload, list) and len(payload) == 1 and isinstance(payload[0], dict) and "message" in payload[0]:
         raise ProviderPayloadError("world_bank_error_payload")
     if not isinstance(payload, list) or len(payload) != 2 or not isinstance(payload[0], dict) or not isinstance(payload[1], list):
@@ -198,21 +247,36 @@ def map_world_bank(payload: object, collected_at: datetime) -> list[IngestionRec
     if not rows:
         raise ProviderPayloadError("world_bank_no_rows", "incomplete")
     coverage: Literal["returned_snapshot", "truncated"] = "truncated" if pages > 1 else "returned_snapshot"
-    seen: set[str] = set()
+    seen: set[tuple[str, str, str]] = set()
     records = []
     for row in rows:
         if not isinstance(row, dict):
             raise ProviderPayloadError("world_bank_row_invalid")
         indicator, country = row.get("indicator"), row.get("country")
-        if (
-            not isinstance(indicator, dict) or indicator.get("id") != "NY.GDP.MKTP.CD"
-            or not isinstance(country, dict) or country.get("id") != "VN" or row.get("countryiso3code") != "VNM"
-        ):
+        if not isinstance(indicator, dict) or not isinstance(country, dict):
             raise ProviderPayloadError("world_bank_scope_mismatch")
+        country_id = country.get("id")
+        indicator_id = indicator.get("id")
+        if not isinstance(country_id, str) or not isinstance(indicator_id, str):
+            raise ProviderPayloadError("world_bank_scope_mismatch")
+        metric_name = allowed_indicators.get((country_id, indicator_id))
+        if metric_name is None:
+            raise ProviderPayloadError("world_bank_scope_mismatch")
+        iso3_meta = _WB_ISO2_META.get(country_id)
+        iso3_code = row.get("countryiso3code")
+        if iso3_meta is not None:
+            if iso3_code != iso3_meta[0]:
+                raise ProviderPayloadError("world_bank_scope_mismatch")
+            region_name = iso3_meta[1]
+        else:
+            if not isinstance(iso3_code, str) or not re.fullmatch(r"[A-Z]{3}", iso3_code):
+                raise ProviderPayloadError("world_bank_scope_mismatch")
+            country_value = country.get("value")
+            region_name = country_value if isinstance(country_value, str) and country_value.strip() else country_id
         period = row.get("date")
-        if not isinstance(period, str) or not re.fullmatch(r"[0-9]{4}", period) or period in seen:
+        if not isinstance(period, str) or not re.fullmatch(r"[0-9]{4}", period) or (country_id, indicator_id, period) in seen:
             raise ProviderPayloadError("world_bank_period_invalid")
-        seen.add(period)
+        seen.add((country_id, indicator_id, period))
         observed_at = datetime(int(period), 1, 1, tzinfo=UTC)
         if observed_at > collected_at:
             raise ProviderPayloadError("world_bank_period_in_future")
@@ -222,14 +286,102 @@ def map_world_bank(payload: object, collected_at: datetime) -> list[IngestionRec
         except ValueError as exc:
             raise ProviderPayloadError("world_bank_value_invalid") from exc
         text = "null" if value is None else decimal_text(value)
+        # Preserve exact canonical title and content for the default Viet Nam GDP indicator.
+        if country_id == "VN" and indicator_id == "NY.GDP.MKTP.CD":
+            content = f"Viet Nam GDP (current US$) {period}: {'not reported' if value is None else text + ' USD'}"
+            title = f"Viet Nam GDP {period}"
+        else:
+            content = (
+                f"{region_name} {indicator_id} (current US$) {period}: "
+                f"{'not reported' if value is None else text + ' USD'}"
+            )
+            title = f"{region_name} {indicator_id} {period}"
         records.append(build_record(
-            provider="world_bank", identity=f"world_bank:VN:NY.GDP.MKTP.CD:{period}",
-            content=f"Viet Nam GDP (current US$) {period}: {'not reported' if value is None else text + ' USD'}",
-            title=f"Viet Nam GDP {period}", observed_at=observed_at, collected_at=collected_at,
-            version=content_version("world_bank", "VN", "NY.GDP.MKTP.CD", period, text),
-            metric="gdp_current_usd", value=value, unit="current US$", currency="USD", region="Viet Nam",
+            provider="world_bank", identity=f"world_bank:{country_id}:{indicator_id}:{period}",
+            content=content,
+            title=title, observed_at=observed_at, collected_at=collected_at,
+            version=content_version("world_bank", country_id, indicator_id, period, text),
+            metric=metric_name, value=value, unit="current US$", currency="USD", region=region_name,
             quality="provider_reported", coverage=coverage,
-            provider_fields={"country": "VN", "indicator": "NY.GDP.MKTP.CD", "period": period, "unit": "current US$"},
+            provider_fields={"country": country_id, "indicator": indicator_id, "period": period, "unit": "current US$"},
+        ))
+    return records
+
+
+def fetch_world_bank_indicators(
+    payloads_by_indicator: dict[tuple[str, str], object],
+    collected_at: datetime,
+    *,
+    indicators: tuple[tuple[str, str, str], ...] = WORLD_BANK_INDICATORS,
+) -> list[IngestionRecord]:
+    """Map a batch of pre-fetched World Bank payloads keyed by ``(country_iso2, indicator_id)``."""
+    records: list[IngestionRecord] = []
+    for country_id, indicator_id, metric_name in indicators:
+        payload = payloads_by_indicator.get((country_id, indicator_id))
+        if payload is None:
+            raise ProviderPayloadError("world_bank_response_invalid")
+        records.extend(
+            map_world_bank(
+                payload,
+                collected_at,
+                indicators=((country_id, indicator_id, metric_name),),
+            )
+        )
+    return records
+
+
+def map_fred_series(
+    payload: object,
+    collected_at: datetime,
+    *,
+    series_id: str = "DFF",
+    series: tuple[tuple[str, str, str], ...] = FRED_SERIES,
+) -> list[IngestionRecord]:
+    """Map FRED observations JSON into typed ``IngestionRecord`` items for a configured series."""
+    allowed_series = {sid: (metric, unit) for sid, metric, unit in series}
+    if series_id not in allowed_series:
+        raise ProviderPayloadError("fred_scope_mismatch")
+    metric_name, unit_name = allowed_series[series_id]
+    if not isinstance(payload, dict):
+        raise ProviderPayloadError("fred_response_invalid")
+    if "error_code" in payload or "error_message" in payload:
+        raise ProviderPayloadError("fred_error_payload")
+    observations = payload.get("observations")
+    if not isinstance(observations, list) or not observations or len(observations) > _WB_MAX_ROWS:
+        raise ProviderPayloadError("fred_observations_invalid")
+    seen: set[str] = set()
+    records: list[IngestionRecord] = []
+    for item in observations:
+        if not isinstance(item, dict):
+            raise ProviderPayloadError("fred_observations_invalid")
+        day = parse_iso_date(item.get("date"))
+        iso = day.isoformat()
+        if iso in seen:
+            raise ProviderPayloadError("fred_date_duplicate")
+        seen.add(iso)
+        observed_at = day_start(day)
+        if observed_at > collected_at:
+            raise ProviderPayloadError("fred_date_in_future")
+        raw_val = item.get("value")
+        try:
+            # FRED encodes missing observations as "."
+            value = None if raw_val in {None, "."} else finite_decimal(raw_val)
+        except ValueError as exc:
+            raise ProviderPayloadError("fred_value_invalid") from exc
+        text = "null" if value is None else decimal_text(value)
+        records.append(build_record(
+            provider="fred",
+            identity=f"fred:{series_id}:{iso}",
+            content=f"FRED {series_id} ({metric_name}) {iso}: {'not reported' if value is None else text + ' ' + unit_name}",
+            title=f"FRED {series_id} {iso}",
+            observed_at=observed_at,
+            collected_at=collected_at,
+            version=content_version("fred", series_id, iso, text),
+            metric=metric_name,
+            value=value,
+            unit=unit_name,
+            quality="provider_reported",
+            provider_fields={"series_id": series_id, "date": iso, "unit": unit_name},
         ))
     return records
 
@@ -240,6 +392,7 @@ FRANKFURTER_URL = "https://api.frankfurter.dev/v2/rate/usd/vnd"
 
 
 def frankfurter_request() -> ProviderRequest:
+    """Return the fixed GET request for the Frankfurter USD/VND reference rate endpoint."""
     return ProviderRequest("GET", FRANKFURTER_URL)
 
 
@@ -283,10 +436,12 @@ _ECB_MAX_RATES = 64
 
 
 def ecb_request() -> ProviderRequest:
+    """Return the fixed GET request for the ECB daily euro reference rates XML feed."""
     return ProviderRequest("GET", ECB_URL)
 
 
 def _local(tag: str) -> str:
+    """Strip any XML namespace URI prefix from an ElementTree tag name."""
     return tag.rsplit("}", 1)[-1]
 
 

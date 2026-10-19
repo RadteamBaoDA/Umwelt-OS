@@ -56,3 +56,4 @@ networks:
         - subnet: 172.29.250.0/24
   browser_egress:
     driver: bridge
+

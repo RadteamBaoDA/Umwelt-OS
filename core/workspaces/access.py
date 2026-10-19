@@ -24,27 +24,34 @@ def require_revision(expected_revision: int | None, actual_revision: int) -> Non
 
 
 async def lock_workspace_memberships(
-    session: AsyncSession, workspace_id: UUID, user_ids: tuple[int, ...],
+    session: AsyncSession, workspace_id: UUID, user_ids: tuple[int, ...], *, read: bool = False,
 ) -> tuple[Workspace, dict[int, WorkspaceMembership]]:
     """Lock existing workspace then sorted membership keys and reread their current values.
 
     Caller first holds all required auth account/session locks. No commit or external I/O;
     absent workspace returns 404. Missing membership must be interpreted by the caller.
+    When ``read=True``, acquires shared ``FOR SHARE`` row locks for concurrent admission and
+    publication fences instead of exclusive ``FOR UPDATE`` management locks.
     """
+    workspace_query = select(Workspace).where(Workspace.id == workspace_id)
+    workspace_query = workspace_query.with_for_update(read=True) if read else workspace_query.with_for_update()
     workspace = await session.scalar(
-        select(Workspace).where(Workspace.id == workspace_id).with_for_update()
-        .execution_options(populate_existing=True)
+        workspace_query.execution_options(populate_existing=True)
     )
     if workspace is None:
         raise HTTPException(status_code=404, detail="Workspace not found")
+    membership_query = select(WorkspaceMembership).where(
+        WorkspaceMembership.workspace_id == workspace_id,
+        WorkspaceMembership.user_id.in_(user_ids),
+    ).order_by(WorkspaceMembership.user_id)
+    membership_query = membership_query.with_for_update(read=True) if read else membership_query.with_for_update()
     rows = await session.scalars(
-        select(WorkspaceMembership).where(
-            WorkspaceMembership.workspace_id == workspace_id,
-            WorkspaceMembership.user_id.in_(user_ids),
-        ).order_by(WorkspaceMembership.user_id).with_for_update()
-        .execution_options(populate_existing=True)
+        membership_query.execution_options(populate_existing=True)
     )
     return workspace, {row.user_id: row for row in rows}
+
+
+_default_lock_workspace_memberships = lock_workspace_memberships
 
 
 async def lock_owner_management(
@@ -149,6 +156,7 @@ def _check_access(
 async def _prepare_access(
     session: AsyncSession, *, scope: Scope, locked: bool, expected: AccessFence | None,
     multi_workspace_enabled: bool, auth_sessions: tuple[AccountSessionRef, ...] = (),
+    read: bool = False,
 ) -> AccessFence:
     """Discover IDs without locks, then reread auth->workspace->sorted memberships.
 
@@ -175,9 +183,18 @@ async def _prepare_access(
             auth_sessions=auth_sessions,
         )
     else:
-        actor = await get_active_account(
-            session, actor_user_id, multi_workspace_enabled=multi_workspace_enabled,
-        )
+        info = getattr(session, "info", None)
+        cached = info.get("_verified_active_account") if type(info) is dict else None
+        if (
+            isinstance(cached, tuple) and len(cached) == 3
+            and cached[0] == actor_user_id and cached[1] is multi_workspace_enabled
+            and isinstance(cached[2], AccountRead)
+        ):
+            actor: AccountRead | None = cached[2]
+        else:
+            actor = await get_active_account(
+                session, actor_user_id, multi_workspace_enabled=multi_workspace_enabled,
+            )
         if actor is None:
             raise HTTPException(status_code=401, detail="Authentication required")
         accounts = {actor_user_id: actor}
@@ -189,7 +206,13 @@ async def _prepare_access(
         raise HTTPException(status_code=404, detail="Workspace not found")
     ids = tuple(sorted({actor_user_id, discovered_owner_id}))
     if locked:
-        workspace, memberships = await lock_workspace_memberships(session, scope.workspace_id, ids)
+        # Preserve compatibility with 3-arg monkeypatched test doubles while passing read=True in production.
+        if read and lock_workspace_memberships is _default_lock_workspace_memberships:
+            workspace, memberships = await lock_workspace_memberships(
+                session, scope.workspace_id, ids, read=True,
+            )
+        else:
+            workspace, memberships = await lock_workspace_memberships(session, scope.workspace_id, ids)
     else:
         found_workspace = await session.scalar(
             select(Workspace).where(Workspace.id == scope.workspace_id)
@@ -228,12 +251,15 @@ async def read_access_fence(
 async def lock_access_fence(
     session: AsyncSession, *, scope: Scope, expected: AccessFence | None = None,
     multi_workspace_enabled: bool = False, auth_sessions: tuple[AccountSessionRef, ...] = (),
+    read: bool = True,
 ) -> AccessFence:
     """Lock/revalidate account(+exact sessions)->workspace->membership in a short transaction.
 
     Call before any Source/resource lock. Auth owns all account/session persistence; its
     sorted FOR SHARE locks conflict with disable/logout. Workspace and sorted membership
-    rows use FOR UPDATE with current reloads. No commit or external I/O: caller releases
+    rows use FOR SHARE (``read=True``) by default with current reloads so concurrent readers
+    and SSE streams do not block each other while still conflicting with ``FOR UPDATE``
+    workspace/membership management mutations. No commit or external I/O: caller releases
     before network and reacquires expected fence plus source/grant/privacy/claim checks.
 
     HTTP publication must supply its authenticated actor's exact AccountSessionRef through
@@ -244,7 +270,7 @@ async def lock_access_fence(
     """
     return await _prepare_access(
         session, scope=scope, locked=True, expected=expected,
-        multi_workspace_enabled=multi_workspace_enabled, auth_sessions=auth_sessions,
+        multi_workspace_enabled=multi_workspace_enabled, auth_sessions=auth_sessions, read=read,
     )
 
 

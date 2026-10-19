@@ -22,40 +22,106 @@ class CandidateEvaluation:
     should_auto_accept: bool
 
 
+# Transient conversational utterances (greetings, acknowledgments, questions) in English and Vietnamese
+# that carry low future personalization value and should not be proposed as durable memories.
 _TRANSIENT_PATTERNS = [
     re.compile(r"^(hi|hello|hey|good\s+(morning|afternoon|evening)|bye|goodbye)\b", re.IGNORECASE),
     re.compile(r"^(thanks|thank\s+you|ok|okay|yes|no|yep|nope|sure|got\s+it)\b", re.IGNORECASE),
     re.compile(r"^(what|where|when|why|how|who|can\s+you|could\s+you)\b.*\?", re.IGNORECASE),
     re.compile(r"^(test|testing|ping|foo|bar)\b", re.IGNORECASE),
+    re.compile(
+        r"^(xin\s+chào|chào\s+bạn|tạm\s+biệt|chào\s+buổi\s+(sáng|chiều|tối))\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(cảm\s+ơn|cám\s+ơn|vâng|dạ|ừ|được\s+rồi|đã\s+hiểu)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(cái\s+gì|ở\s+đâu|khi\s+nào|tại\s+sao|vì\s+sao|như\s+thế\s+nào|ai|bạn\s+có\s+thể)\b.*\?",
+        re.IGNORECASE,
+    ),
 ]
 
+# Bilingual (en-US / vi-VN) owner preference patterns evaluated first for personalization value.
 _PREFERENCE_PATTERNS = [
-    re.compile(r"\b(i\s+prefer|i\s+like|i\s+dislike|i\s+hate|i\s+want|i\s+need|my\s+favorite)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(i\s+prefer|i\s+like|i\s+dislike|i\s+hate|i\s+want|i\s+need|my\s+favorite|my\s+preference\s+is)\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"\b(please\s+always|always\s+use|never\s+use|don't\s+use|do\s+not\s+use)\b", re.IGNORECASE),
     re.compile(r"\b(prefer\s+to|rather\s+than)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(tôi\s+thích|mình\s+thích|tôi\s+không\s+thích|mình\s+không\s+thích|tôi\s+ghét|tôi\s+muốn|mình\s+muốn|tôi\s+cần|mình\s+cần)\s+(.+)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(ưu\s+tiên\s+của\s+(?:tôi|mình)\s+là|sở\s+thích\s+của\s+(?:tôi|mình)\s+là|tôi\s+ưu\s+tiên|mình\s+ưu\s+tiên)\s+(.+)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(vui\s+lòng\s+luôn|luôn\s+dùng|luôn\s+sử\s+dụng|không\s+bao\s+giờ\s+dùng|đừng\s+dùng|không\s+sử\s+dụng)\b",
+        re.IGNORECASE,
+    ),
 ]
 
+# Bilingual (en-US / vi-VN) standing operational instructions and behavioral directives.
 _INSTRUCTION_PATTERNS = [
     re.compile(r"\b(always\s+(respond|format|include|write|answer))\b", re.IGNORECASE),
     re.compile(r"\b(remember\s+to|make\s+sure\s+to|be\s+concise|keep\s+it\s+short)\b", re.IGNORECASE),
     re.compile(r"\b(rule:|guideline:|instruction:)\b", re.IGNORECASE),
+    re.compile(r"\b(luôn\s+luôn|đừng\s+bao\s+giờ|không\s+bao\s+giờ)\s+(.+)", re.IGNORECASE),
+    re.compile(
+        r"\b(luôn\s+(trả\s+lời|định\s+dạng|bao\s+gồm|viết|phản\s+hồi)|hãy\s+nhớ\s+phải|đảm\s+bảo\s+rằng|giữ\s+ngắn\s+gọn)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\b(quy\s+tắc:|hướng\s+dẫn:|chỉ\s+dẫn:)\b", re.IGNORECASE),
 ]
 
+# Bilingual (en-US / vi-VN) explicit factual statements about the owner, role, or projects.
 _FACT_PATTERNS = [
-    re.compile(r"\b(my\s+name\s+is|i\s+am|i\s+live\s+in|i\s+work\s+at|my\s+role\s+is)\b", re.IGNORECASE),
+    re.compile(r"\b(my\s+name\s+is|i\s+am|i\s+live\s+in|i\s+work\s+at|i\s+work\s+on|my\s+role\s+is)\b", re.IGNORECASE),
     re.compile(r"\b(my\s+(wife|husband|partner|child|son|daughter|brother|sister|father|mother|dog|cat)\s+is)\b", re.IGNORECASE),
     re.compile(r"\b(remember\s+that|note\s+that|for\s+the\s+record)\b", re.IGNORECASE),
     re.compile(r"\b(we\s+decided\s+to|the\s+plan\s+is\s+to|our\s+project\s+is)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(hãy\s+nhớ\s+rằng|ghi\s+nhớ\s+là|ghi\s+nhớ\s+rằng|lưu\s+ý\s+rằng|lưu\s+ý\s+là)\s+(.+)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(vai\s+trò\s+của\s+(?:tôi|mình)\s+là|tên\s+(?:tôi|mình)\s+là|(?:tôi|mình)\s+sống\s+(?:ở|tại)|(?:tôi|mình)\s+làm\s+việc\s+(?:về|trên|tại|ở))\s+(.+)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(chúng\s+tôi\s+đã\s+quyết\s+định|kế\s+hoạch\s+là|dự\s+án\s+của\s+(?:tôi|mình|chúng\s+tôi)\s+là)\s+(.+)",
+        re.IGNORECASE,
+    ),
 ]
 
+# Bilingual (en-US / vi-VN) hedging markers that lower extraction confidence.
 _SPECULATIVE_PATTERNS = [
     re.compile(r"\b(maybe|perhaps|i\s+think|possibly|probably|might|could\s+be)\b", re.IGNORECASE),
     re.compile(r"\b(not\s+sure|guess|speculating)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(có\s+lẽ|có\s+thể\s+là|tôi\s+nghĩ|mình\s+nghĩ|chắc\s+là|không\s+chắc|đoán\s+là)\b",
+        re.IGNORECASE,
+    ),
 ]
+
+# Consolidated category-to-patterns lookup table for bilingual heuristic inspection.
+_PATTERNS: dict[str, list[re.Pattern[str]]] = {
+    "preference": _PREFERENCE_PATTERNS,
+    "instruction": _INSTRUCTION_PATTERNS,
+    "fact": _FACT_PATTERNS,
+}
 
 
 def _tokenize(text: str) -> set[str]:
     """Tokenize text into lowercase alphanumeric word tokens for set overlap comparison.
+
+    Supports both English and Vietnamese Unicode word characters while filtering
+    high-frequency function words in both locales so Jaccard deduplication focuses
+    on substantive terms.
 
     Args:
         text: Input string.
@@ -63,7 +129,10 @@ def _tokenize(text: str) -> set[str]:
     Returns:
         Set of lowercase string tokens with stopwords excluded.
     """
-    stopwords = {"a", "an", "the", "and", "or", "is", "in", "it", "to", "of", "for", "with", "on", "at", "by", "this", "that"}
+    stopwords = {
+        "a", "an", "the", "and", "or", "is", "in", "it", "to", "of", "for", "with", "on", "at", "by", "this", "that",
+        "là", "và", "của", "có", "cho", "với", "trong", "này", "đó",
+    }
     words = re.findall(r"\b\w{2,}\b", text.lower())
     return {w for w in words if w not in stopwords}
 

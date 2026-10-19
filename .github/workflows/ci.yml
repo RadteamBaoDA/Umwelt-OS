@@ -149,15 +149,6 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
-      - run: docker build -f infrastructure/docker/api.Dockerfile -t umwelt-api:ci .
-      - name: Trivy image scan (api)
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
-        with:
-          scan-type: image
-          image-ref: umwelt-api:ci
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
 
   codeql:
     runs-on: ubuntu-latest

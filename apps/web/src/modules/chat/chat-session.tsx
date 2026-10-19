@@ -34,6 +34,7 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cancelAgentRun, getAgentProfiles, getAgentRun, listAgentRuns, startAgentRun } from '@/modules/agents/api';
 import { AgentRunDetail } from '@/modules/agents/run-detail';
+import { PromptBridgeProvider } from './generative-ui/bridge';
 
 const profileTitleKeys: Record<string, 'agentProfileSupervisor' | 'agentProfileKnowledge' | 'agentProfileResearch' | 'agentProfilePersonal' | 'agentProfileProject' | 'agentProfileNews' | 'agentProfilePlanning' | 'agentProfileAutomation'> = {
   supervisor: 'agentProfileSupervisor', knowledge: 'agentProfileKnowledge', research: 'agentProfileResearch',
@@ -116,6 +117,7 @@ export function ChatSession({
   const [streamingText, setStreamingText] = React.useState<string>('');
   const [streamingCitations, setStreamingCitations] = React.useState<Citation[]>([]);
   const [streamingWebSearch, setStreamingWebSearch] = React.useState<WebSearchOutcome | null>(null);
+  const [streamingUi, setStreamingUi] = React.useState<Record<string, unknown> | null>(null);
   const [webSearchOn, setWebSearchOn] = React.useState(false);
   const [isStreaming, setIsStreaming] = React.useState<boolean>(false);
   const [isPending, setIsPending] = React.useState<boolean>(false);
@@ -233,6 +235,7 @@ export function ChatSession({
     setStreamingText('');
     setStreamingCitations([]);
     setStreamingWebSearch(null);
+    setStreamingUi(null);
     setActiveResponseId(null);
     setEditingMessageId(null);
     const promoted = promotedSelectionRef.current;
@@ -286,12 +289,19 @@ export function ChatSession({
       onCitations: (cites) => {
         if (isCurrentView()) setStreamingCitations(cites);
       },
+      onUiDelta: (ui) => {
+        if (isCurrentView()) setStreamingUi(ui);
+      },
+      onUiDone: (ui) => {
+        if (isCurrentView()) setStreamingUi(ui);
+      },
       onDone: () => {
         if (isCurrentView()) {
           setIsStreaming(false);
           setStreamingText('');
           setStreamingCitations([]);
           setStreamingWebSearch(null);
+          setStreamingUi(null);
           setActiveResponseId(null);
         }
         void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(responseConversationId) });
@@ -305,6 +315,7 @@ export function ChatSession({
             setStreamingText('');
             setStreamingCitations([]);
             setStreamingWebSearch(null);
+            setStreamingUi(null);
             setActiveResponseId(null);
             setError(t('cancelled'));
           }
@@ -323,6 +334,7 @@ export function ChatSession({
             setError(null);
             setStreamingText('');
             setStreamingCitations([]);
+            setStreamingUi(null);
             setActiveResponseId(responseId);
             setIsStreaming(true);
             await streamRunRef.current?.(responseId, responseConversationId, isCurrentView);
@@ -388,6 +400,7 @@ export function ChatSession({
     setStreamingText('');
     setStreamingCitations([]);
     setStreamingWebSearch(null);
+    setStreamingUi(null);
     setError(null);
     void streamResponseRun(responseId, conversationId, isCurrentView).catch(() => {
       // streamResponseRun reports visible failures through its guarded error path.
@@ -457,6 +470,7 @@ export function ChatSession({
       setStreamingText('');
       setStreamingCitations([]);
       setStreamingWebSearch(null);
+      setStreamingUi(null);
       await streamResponseRun(run.response_id, targetConversationId, isCurrentView);
     } catch (mutationError: unknown) {
       if (isCurrentView()) {
@@ -637,6 +651,7 @@ export function ChatSession({
         setStreamingText('');
         setStreamingCitations([]);
         setStreamingWebSearch(null);
+        setStreamingUi(null);
 
         await streamResponseRun(responseRun.response_id, responseConversationId, canUpdateCurrentView);
       } catch (err: unknown) {
@@ -714,148 +729,161 @@ export function ChatSession({
     setStreamingText('');
     setStreamingCitations([]);
     setStreamingWebSearch(null);
+    setStreamingUi(null);
     setWebSearchOn(false);
     setIsStreaming(false);
     setIsPending(false);
   }, [chatCtrl]);
 
+  const handleWidgetSendPrompt = React.useCallback(
+    (prompt: string) => {
+      if (isPending || isStreaming) return;
+      void handleSend(prompt);
+    },
+    [handleSend, isPending, isStreaming],
+  );
+
   return (
-    <div className="flex flex-col h-full bg-background relative overflow-hidden">
-      {/* Session header if inside drawer or full mode */}
-      <div className={`flex items-center justify-between gap-2 border-b border-border bg-surface shrink-0 ${mode === 'drawer' ? 'px-4 py-3 pr-14' : 'px-5 py-3'}`}>
-        {mode === 'full' ? (
-          <h1 className="min-w-0 flex-1 truncate text-lg font-semibold text-foreground">
-            {conversationDetail?.title || t('title')}
-          </h1>
+    <PromptBridgeProvider onSendPrompt={handleWidgetSendPrompt}>
+      <div className="flex flex-col h-full bg-background relative overflow-hidden">
+        {/* Session header if inside drawer or full mode */}
+        <div className={`flex items-center justify-between gap-2 border-b border-border bg-surface shrink-0 ${mode === 'drawer' ? 'px-4 py-3 pr-14' : 'px-5 py-3'}`}>
+          {mode === 'full' ? (
+            <h1 className="min-w-0 flex-1 truncate text-lg font-semibold text-foreground">
+              {conversationDetail?.title || t('title')}
+            </h1>
+          ) : null}
+
+          <div className={`flex items-center gap-2 shrink-0 ${mode === 'drawer' ? 'order-first' : ''}`}>
+            {mode === 'full' && headerActions}
+            {mode === 'full' && (
+              <Select value={pendingProfileRun?.profileId ?? selectedProfileId} onValueChange={setSelectedProfileId}>
+                <SelectTrigger aria-label={tAgents('agentSelect')} className="w-40" disabled={Boolean(pendingProfileRun)}><SelectValue placeholder={tAgents('agentSelect')} /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="assistant">{tAgents('agentAssistant')}</SelectItem>
+                  {(profiles.data ?? []).map((profile) => (
+                    <SelectItem key={profile.id} value={profile.id} disabled={!profile.enabled || profile.capability === 'unavailable'}>
+                      {tAgents(profileTitleKeys[profile.id] ?? 'agentProfileKnowledge')}{profile.capability === 'partial' ? ` · ${tAgents('agentPartial')}` : profile.capability === 'unavailable' ? ` · ${tAgents('agentUnavailable')}` : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            <Button
+              type="button"
+              onClick={handleNewChat}
+              className={`secondary inline-flex min-h-11 items-center gap-2 px-4 text-sm font-semibold transition-colors ${mode === 'full' ? 'hidden' : ''}`}
+              title={t('newChat')}
+            >
+              <PlusIcon className="size-4" />
+              <span>{t('newChat')}</span>
+            </Button>
+          </div>
+        </div>
+
+        {pendingProfileRun ? (
+          <div role="status" className="shrink-0 border-b border-border px-4 py-2 text-xs text-muted-foreground">
+            {tAgents(profileTitleKeys[pendingProfileRun.profileId] ?? 'agentProfileKnowledge')} · {tAgents('agentPendingProfileRevision', { revision: pendingProfileRun.profileRevision })}
+          </div>
         ) : null}
 
-        <div className={`flex items-center gap-2 shrink-0 ${mode === 'drawer' ? 'order-first' : ''}`}>
-          {mode === 'full' && headerActions}
-          {mode === 'full' && (
-            <Select value={pendingProfileRun?.profileId ?? selectedProfileId} onValueChange={setSelectedProfileId}>
-              <SelectTrigger aria-label={tAgents('agentSelect')} className="w-40" disabled={Boolean(pendingProfileRun)}><SelectValue placeholder={tAgents('agentSelect')} /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="assistant">{tAgents('agentAssistant')}</SelectItem>
-                {(profiles.data ?? []).map((profile) => (
-                  <SelectItem key={profile.id} value={profile.id} disabled={!profile.enabled || profile.capability === 'unavailable'}>
-                    {tAgents(profileTitleKeys[profile.id] ?? 'agentProfileKnowledge')}{profile.capability === 'partial' ? ` · ${tAgents('agentPartial')}` : profile.capability === 'unavailable' ? ` · ${tAgents('agentUnavailable')}` : ''}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          <Button
-            type="button"
-            onClick={handleNewChat}
-            className={`secondary inline-flex min-h-11 items-center gap-2 px-4 text-sm font-semibold transition-colors ${mode === 'full' ? 'hidden' : ''}`}
-            title={t('newChat')}
-          >
-            <PlusIcon className="size-4" />
-            <span>{t('newChat')}</span>
-          </Button>
-        </div>
-      </div>
-
-      {pendingProfileRun ? (
-        <div role="status" className="shrink-0 border-b border-border px-4 py-2 text-xs text-muted-foreground">
-          {tAgents(profileTitleKeys[pendingProfileRun.profileId] ?? 'agentProfileKnowledge')} · {tAgents('agentPendingProfileRevision', { revision: pendingProfileRun.profileRevision })}
-        </div>
-      ) : null}
-
-      <ConversationAgentActivity conversationId={conversationId} csrfToken={session.csrfToken} />
-      {mode === 'full' && activeAgentRun.data && (
-        <div className="shrink-0 border-b border-border p-3">
-          <AgentRunDetail run={activeAgentRun.data} onCancel={() => cancelAgent.mutate()} cancelling={cancelAgent.isPending} />
-        </div>
-      )}
-      {mode === 'full' && agentRuns.data?.items.length ? (
-        <details className="shrink-0 border-b border-border px-4 py-2">
-          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">{tAgents('agentHistory')} ({agentRuns.data.items.length})</summary>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {agentRuns.data.items.map((run) => <Button key={run.id} type="button" className="secondary h-auto rounded-md px-2 py-1 text-xs font-normal" onClick={() => setActiveAgentRunId(run.id)}>{run.agent_id === 'assistant' ? tAgents('agentAssistant') : tAgents(profileTitleKeys[run.agent_id] ?? 'agentProfileKnowledge')}: {tAgents(runStatusKeys[run.status] ?? 'agentRunFailed')}</Button>)}
+        <ConversationAgentActivity conversationId={conversationId} csrfToken={session.csrfToken} />
+        {mode === 'full' && activeAgentRun.data && (
+          <div className="shrink-0 border-b border-border p-3">
+            <AgentRunDetail run={activeAgentRun.data} onCancel={() => cancelAgent.mutate()} cancelling={cancelAgent.isPending} />
           </div>
-        </details>
-      ) : null}
+        )}
+        {mode === 'full' && agentRuns.data?.items.length ? (
+          <details className="shrink-0 border-b border-border px-4 py-2">
+            <summary className="cursor-pointer text-xs font-medium text-muted-foreground">{tAgents('agentHistory')} ({agentRuns.data.items.length})</summary>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {agentRuns.data.items.map((run) => <Button key={run.id} type="button" className="secondary h-auto rounded-md px-2 py-1 text-xs font-normal" onClick={() => setActiveAgentRunId(run.id)}>{run.agent_id === 'assistant' ? tAgents('agentAssistant') : tAgents(profileTitleKeys[run.agent_id] ?? 'agentProfileKnowledge')}: {tAgents(runStatusKeys[run.status] ?? 'agentRunFailed')}</Button>)}
+            </div>
+          </details>
+        ) : null}
 
-      {mode === 'drawer' && <ChatContextBar variant="bar" context={chatCtrl.context} onRemove={() => chatCtrl.setContext(null)} />}
+        {mode === 'drawer' && <ChatContextBar variant="bar" context={chatCtrl.context} onRemove={() => chatCtrl.setContext(null)} />}
 
-      {mode === 'full' && pendingMessageMutation && (
-        <div role="status" className="flex items-center justify-between gap-3 border-b border-border bg-secondary px-4 py-2 text-xs">
-          <span className="text-muted-foreground">{t('revisionUnacknowledged')}</span>
-          <Button
-            type="button"
-            className="secondary h-8 px-2 text-xs"
-            disabled={isPending || isStreaming}
-            onClick={() => void handleMessageMutation(
-              pendingMessageMutation.action,
-              pendingMessageMutation.targetMessageId,
-              pendingMessageMutation.content,
-            )}
-          >
-            {t('retryRevision')}
-          </Button>
-        </div>
-      )}
+        {mode === 'full' && pendingMessageMutation && (
+          <div role="status" className="flex items-center justify-between gap-3 border-b border-border bg-secondary px-4 py-2 text-xs">
+            <span className="text-muted-foreground">{t('revisionUnacknowledged')}</span>
+            <Button
+              type="button"
+              className="secondary h-8 px-2 text-xs"
+              disabled={isPending || isStreaming}
+              onClick={() => void handleMessageMutation(
+                pendingMessageMutation.action,
+                pendingMessageMutation.targetMessageId,
+                pendingMessageMutation.content,
+              )}
+            >
+              {t('retryRevision')}
+            </Button>
+          </div>
+        )}
 
-      {mode === 'full' && effectiveEditingMessageId && !pendingMessageMutation && (
-        <div className="flex items-center justify-between gap-3 border-b border-border bg-secondary px-4 py-2 text-xs">
-          <span className="text-muted-foreground">{t('editingPrompt')}</span>
-          <Button
-            type="button"
-            className="secondary h-8 px-2 text-xs"
-            onClick={() => {
-              setEditingMessageId(null);
-              chatCtrl.setDraft('');
-            }}
-          >
-            {t('cancelEdit')}
-          </Button>
-        </div>
-      )}
+        {mode === 'full' && effectiveEditingMessageId && !pendingMessageMutation && (
+          <div className="flex items-center justify-between gap-3 border-b border-border bg-secondary px-4 py-2 text-xs">
+            <span className="text-muted-foreground">{t('editingPrompt')}</span>
+            <Button
+              type="button"
+              className="secondary h-8 px-2 text-xs"
+              onClick={() => {
+                setEditingMessageId(null);
+                chatCtrl.setDraft('');
+              }}
+            >
+              {t('cancelEdit')}
+            </Button>
+          </div>
+        )}
 
-      {/* Transcript area */}
-      <ChatTranscript
-        conversationId={conversationId}
-        mode={mode}
-        messages={messages}
-        streamingText={streamingText}
-        streamingCitations={streamingCitations}
-        streamingWebSearch={streamingWebSearch}
-        isStreaming={isStreaming}
-        isPending={isPending}
-        error={error}
-        onEditMessage={mode === 'full' ? handleEditMessage : undefined}
-        onRegenerateMessage={mode === 'full' ? handleRegenerateMessage : undefined}
-        onRetry={() => {
-          const retryDraft = pendingProfileRun?.prompt ?? chatCtrl.draft;
-          if (retryDraft) {
-            void handleSend(retryDraft);
-          }
-        }}
-      />
+        {/* Transcript area */}
+        <ChatTranscript
+          conversationId={conversationId}
+          mode={mode}
+          messages={messages}
+          streamingText={streamingText}
+          streamingCitations={streamingCitations}
+          streamingWebSearch={streamingWebSearch}
+          streamingUi={streamingUi}
+          isStreaming={isStreaming}
+          isPending={isPending}
+          error={error}
+          onEditMessage={mode === 'full' ? handleEditMessage : undefined}
+          onRegenerateMessage={mode === 'full' ? handleRegenerateMessage : undefined}
+          onSendPrompt={handleWidgetSendPrompt}
+          onRetry={() => {
+            const retryDraft = pendingProfileRun?.prompt ?? chatCtrl.draft;
+            if (retryDraft) {
+              void handleSend(retryDraft);
+            }
+          }}
+        />
 
-      {/* Bottom composer */}
-      <ChatComposer
-        mode={mode}
-        contextBar={mode === 'full' ? <ChatContextBar variant="badges" context={chatCtrl.context} onRemove={() => chatCtrl.setContext(null)} onChange={mode === 'full' ? chatCtrl.setContext : undefined} /> : undefined}
-        value={pendingProfileRun?.prompt ?? chatCtrl.draft}
-        onChange={pendingProfileRun ? () => undefined : chatCtrl.setDraft}
-        onSend={handleSend}
-        onStop={handleStop}
-        isStreaming={isStreaming}
-        disabled={isPending}
-        modelLabel={latestAssistant?.model_identity ?? null}
-        sourcesCount={latestAssistant?.citations?.length ?? 0}
-        showCapabilityNote={mode === 'full'}
-        attachments={mode === 'full' ? (
-          <ChatAttachmentBar
-            state={attachments}
-            disabled={isPending || isStreaming || attachmentsUnavailable}
-          />
-        ) : undefined}
-        sendBlockedBy={mode === 'full' && attachments.sendBlock ? ATTACHMENT_STATUS_ID : null}
-        webSearch={mode === 'full' && WEB_SEARCH_SEND_ENABLED ? { available: webSearchAvailable, provider: WEB_SEARCH_PROVIDER_LABELS[aiSettings.data?.web_search_provider ?? ''] ?? t('webSearchProviderGeneric'), profileBlocked: webSearchProfileBlocked, enabled: webSearchOn, onChange: setWebSearchOn } : undefined}
-      />
-    </div>
+        {/* Bottom composer */}
+        <ChatComposer
+          mode={mode}
+          contextBar={mode === 'full' ? <ChatContextBar variant="badges" context={chatCtrl.context} onRemove={() => chatCtrl.setContext(null)} onChange={mode === 'full' ? chatCtrl.setContext : undefined} /> : undefined}
+          value={pendingProfileRun?.prompt ?? chatCtrl.draft}
+          onChange={pendingProfileRun ? () => undefined : chatCtrl.setDraft}
+          onSend={handleSend}
+          onStop={handleStop}
+          isStreaming={isStreaming}
+          disabled={isPending}
+          modelLabel={latestAssistant?.model_identity ?? null}
+          sourcesCount={latestAssistant?.citations?.length ?? 0}
+          showCapabilityNote={mode === 'full'}
+          attachments={mode === 'full' ? (
+            <ChatAttachmentBar
+              state={attachments}
+              disabled={isPending || isStreaming || attachmentsUnavailable}
+            />
+          ) : undefined}
+          sendBlockedBy={mode === 'full' && attachments.sendBlock ? ATTACHMENT_STATUS_ID : null}
+          webSearch={mode === 'full' && WEB_SEARCH_SEND_ENABLED ? { available: webSearchAvailable, provider: WEB_SEARCH_PROVIDER_LABELS[aiSettings.data?.web_search_provider ?? ''] ?? t('webSearchProviderGeneric'), profileBlocked: webSearchProfileBlocked, enabled: webSearchOn, onChange: setWebSearchOn } : undefined}
+        />
+      </div>
+    </PromptBridgeProvider>
   );
 }

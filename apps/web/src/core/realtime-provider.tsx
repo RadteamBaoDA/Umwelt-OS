@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslations } from 'next-intl';
 import { ApiError, apiRequest, workspaceGeneration, workspaceHeaders } from '@/core/api';
 import { useDisplayPreferences } from '@/core/query-provider';
@@ -582,7 +582,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     };
   }, [client, display.authGeneration, display.isCurrentGeneration, invalidateOperationalQueries, isAuthenticated, queueDocumentUpdate, sessionExpired]);
 
-  const context = { status, newDocumentCount, documentRefreshRequired, documentRefreshFailed, consumeDocumentUpdates };
+  // Memoize context value so consumers do not re-render when internal barrier state ticks without changing exposed values.
+  const context = useMemo(
+    () => ({ status, newDocumentCount, documentRefreshRequired, documentRefreshFailed, consumeDocumentUpdates }),
+    [status, newDocumentCount, documentRefreshRequired, documentRefreshFailed, consumeDocumentUpdates],
+  );
   const waitingForBarrier = isAuthenticated && barrierGeneration !== display.authGeneration;
   return <RealtimeContext.Provider value={context}>
     {waitingForBarrier

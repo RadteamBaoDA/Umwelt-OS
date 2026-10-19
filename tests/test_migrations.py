@@ -124,3 +124,17 @@ def test_translation_runtime_migration_renders_slot_and_purge_index() -> None:
     down = _alembic("downgrade", "p14_translation_runtime:p14_workspace_shares", "--sql")
     assert down.returncode == 0, down.stderr
     assert "DROP TABLE translation_admission_slots" in down.stdout
+
+
+def test_r20_search_tsv_and_trgm_indexes_migration() -> None:
+    """Verify r20 migration emits concurrent GIN FTS and trigram indexes and drops them cleanly on downgrade."""
+    up = _alembic("upgrade", "r19_db_indexes_and_tuning:r20_search_tsv_and_trgm_indexes", "--sql")
+    assert up.returncode == 0, up.stderr
+    assert "CREATE EXTENSION IF NOT EXISTS pg_trgm" in up.stdout
+    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_document_chunks_content_tsv ON document_chunks USING gin (to_tsvector('simple', content))" in up.stdout
+    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_entities_normalized_name_trgm ON entities USING gin (normalized_name gin_trgm_ops)" in up.stdout
+    down = _alembic("downgrade", "r20_search_tsv_and_trgm_indexes:r19_db_indexes_and_tuning", "--sql")
+    assert down.returncode == 0, down.stderr
+    assert "DROP INDEX CONCURRENTLY IF EXISTS ix_entities_normalized_name_trgm" in down.stdout
+    assert "DROP INDEX CONCURRENTLY IF EXISTS ix_document_chunks_content_tsv" in down.stdout
+

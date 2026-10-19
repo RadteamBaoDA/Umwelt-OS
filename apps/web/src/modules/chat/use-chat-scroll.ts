@@ -100,9 +100,17 @@ export function useChatScroll({
 
   React.useEffect(() => {
     if (!isStreaming) return;
+    let lastScrollHeight = -1;
+    /** Pins transcript to bottom on animation frames only when streaming deltas change scrollHeight. */
     const tick = () => {
       const element = containerRef.current;
-      if (element && followRef.current) element.scrollTop = element.scrollHeight;
+      if (element && followRef.current) {
+        const currentHeight = element.scrollHeight;
+        if (currentHeight !== lastScrollHeight) {
+          lastScrollHeight = currentHeight;
+          element.scrollTop = currentHeight;
+        }
+      }
       streamFrameRef.current = requestAnimationFrame(tick);
     };
     streamFrameRef.current = requestAnimationFrame(tick);

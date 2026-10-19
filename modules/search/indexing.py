@@ -140,6 +140,11 @@ async def _commit_index_change(
     )
 
 
+def _vector_literal(values: list[float]) -> str:
+    """Serialize a validated float vector into a pgvector literal outside locked transactions."""
+    return json.dumps(values)
+
+
 def embedding_values(response: object, expected_dimensions: int | None = None) -> tuple[list[float], str | None]:
     """Validate one finite, nonzero, bounded embedding and return its model identity."""
     if not isinstance(response, dict) or not isinstance(response.get("data"), list) or len(response["data"]) != 1:
@@ -153,11 +158,21 @@ def embedding_values(response: object, expected_dimensions: int | None = None) -
     values = row["embedding"]
     if not 1 <= len(values) <= MAX_VECTOR_DIMENSIONS or expected_dimensions not in (None, len(values)):
         raise ValueError("Embedding dimensions do not match the index generation")
-    if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) for value in values):
-        raise ValueError("Embedding contains invalid values")
-    if not any(value != 0 for value in values):
+    # Validate finiteness, reject booleans/NaNs, verify non-zero norm, and coerce to float in a single pass.
+    parsed: list[float] = []
+    nonzero = False
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("Embedding contains invalid values")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+        fval = float(value)
+        if not math.isfinite(fval):
+            raise ValueError("Embedding contains invalid values")
+        if fval != 0.0:
+            nonzero = True
+        parsed.append(fval)
+    if not nonzero:
         raise ValueError("Embedding cannot be a zero vector")
-    return [float(value) for value in values], returned_model
+    return parsed, returned_model
 
 
 def gateway(
@@ -216,10 +231,18 @@ class EmbeddingAuthority:
         self, config: AIExecutionConfig, mapping: ModelMapping | None, policy: RequestPolicy,
     ) -> bool:
         """Compare a fresh read with the original revision, gateway identity, mapping and policy."""
-        return (config.configuration_revision == self.config.configuration_revision
-                and config.gateway_identity == self.config.gateway_identity
-                and config.endpoint_destination_id == self.config.endpoint_destination_id
-                and mapping == self.mapping and policy == self.policy)
+        return (
+            (
+                config is self.config
+                or (
+                    config.configuration_revision == self.config.configuration_revision
+                    and config.gateway_identity == self.config.gateway_identity
+                    and config.endpoint_destination_id == self.config.endpoint_destination_id
+                )
+            )
+            and (mapping is self.mapping or mapping == self.mapping)
+            and (policy is self.policy or policy == self.policy)
+        )
 
 
 async def capture_authority(
@@ -635,13 +658,15 @@ async def _index_generation(
     deadline = time.monotonic() + INDEX_RUN_SECONDS
     last_chunk: UUID | None = None
     last_emit, unemitted = float("-inf"), 0
+    multi_workspace_enabled = settings.multi_workspace_enabled
+    workspace_id_str = str(workspace_id)
     for _ in range(INDEX_RUN_ITEMS):
         if time.monotonic() >= deadline:
             break
         async with factory() as session:
             try:
                 access_fence = await _admit(
-                    session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+                    session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
                     lock=True, expected=original.fence,
                 )
             except HTTPException as exc:
@@ -651,7 +676,7 @@ async def _index_generation(
                 raise
             if not await ai_settings.module_is_enabled(
                 session, "search", scope=scope,
-                multi_workspace_enabled=settings.multi_workspace_enabled,
+                multi_workspace_enabled=multi_workspace_enabled,
             ):
                 await session.rollback()
                 break
@@ -697,7 +722,7 @@ async def _index_generation(
                         "AND d.workspace_id = :workspace_id AND s.workspace_id = :workspace_id "
                         "AND d.extraction_status IN ('ready', 'succeeded') "
                         "AND s.status = 'active' AND s.local_only = false)"
-                    ), {"generation_id": generation_id, "workspace_id": str(workspace_id)})
+                    ), {"generation_id": generation_id, "workspace_id": workspace_id_str})
                     failed = await session.scalar(select(func.count()).select_from(SearchIndexItem).where(
                         SearchIndexItem.generation_id == generation_id, SearchIndexItem.status != "succeeded",
                     ))
@@ -711,7 +736,7 @@ async def _index_generation(
                         await activate_generation(session, generation, scope=scope)
                 await _commit_index_change(
                     session, before, generation_id=generation_id, scope=scope,
-                    multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=access_fence,
+                    multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
                 )
                 break
             assert row is not None
@@ -728,7 +753,7 @@ async def _index_generation(
             dimensions = generation.dimensions
             await _commit_index_change(
                 session, before, generation_id=generation_id, scope=scope,
-                multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=access_fence,
+                multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
                 publish=claim_was_queued,
             )
         try:
@@ -768,6 +793,9 @@ async def _index_generation(
                 "embedding", mapping, original.policy, [content],
             )
             values, returned_model = embedding_values(response, dimensions)
+            # Pre-serialize the pgvector literal before acquiring publication locks so JSON
+            # encoding of up to 2,000 floats does not extend FOR UPDATE lock hold time.
+            embedding_literal = _vector_literal(values)
             # Publication: same lock order (access -> Source -> chunk -> generation/item).
             async with factory() as session:
                 fence, live, _g = await _recheck_prepared(
@@ -789,7 +817,7 @@ async def _index_generation(
                         await session.delete(item)
                         await _commit_index_change(
                             session, before, generation_id=item.generation_id, scope=scope,
-                            multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=fence,
+                            multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
                         )
                     else:
                         await session.rollback()
@@ -809,18 +837,18 @@ async def _index_generation(
                     # Status change: always published (before=None differs from any projection).
                     await _commit_index_change(
                         session, before, generation_id=generation_id, scope=scope,
-                        multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=fence,
+                        multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
                     )
                     break
                 elif generation.dimensions != len(values):
                     raise ValueError("Embedding dimensions changed during indexing")
                 await session.execute(text("UPDATE search_index_items SET embedding = CAST(:embedding AS vector) WHERE id = :item_id"),
-                                      {"embedding": json.dumps(values), "item_id": item_id})
+                                      {"embedding": embedding_literal, "item_id": item_id})
                 item.status = "succeeded"
                 item.error_code = None
                 await _commit_index_change(
                     session, before, generation_id=generation_id, scope=scope,
-                    multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=fence,
+                    multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
                     publish=publish,
                 )
                 completed += 1

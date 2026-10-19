@@ -578,6 +578,11 @@ async def get_conversation(
             revision_of_message_id=m.revision_of_message_id,
             created_at=m.created_at,
             web_search=web_search_by_assistant.get(m.id),
+            generative_ui=(
+                raw_ui
+                if isinstance((raw_ui := (m.metadata_json or {}).get("generative_ui")), dict)
+                else None
+            ),
         )
         for m, citations in zip(messages_rows, current_citations, strict=True)
     ]

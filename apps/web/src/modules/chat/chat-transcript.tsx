@@ -13,6 +13,9 @@ import { useChatScroll } from './use-chat-scroll';
 import { useCopyMessage } from './use-copy-message';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
+import { ToolRendering } from './generative-ui/components/tool-rendering';
+import { GenerativeUIStarterGallery } from './generative-ui/templates';
+import type { GenerativeUIPayload } from './generative-ui/sandbox/schema';
 
 const KNOWN_REASONS = ['not_configured', 'query_too_long', 'empty_query', 'local_only_context', 'daily_limit', 'timeout', 'provider_error', 'network_denied', 'run_inactive'];
 
@@ -32,7 +35,13 @@ function WebSearchNotice({ outcome }: { outcome?: WebSearchOutcome | null }) {
   );
 }
 
-/** Compact numbered source links for the quick-chat drawer, where the full citation panel is not shown. */
+/**
+ * Compact numbered source links for the quick-chat drawer, where the full citation panel is not shown.
+ * Encodes document path parameters and validates external web URLs before rendering navigation links.
+ *
+ * @param props - Ordered citations attached to the assistant response.
+ * @returns Ordered list of citation chips.
+ */
 function CitationChips({ citations }: { citations: Citation[] }) {
   const t = useTranslations('chat');
   return (
@@ -60,7 +69,7 @@ function CitationChips({ citations }: { citations: Citation[] }) {
         return (
         <li key={`${citation.chunkId}-${index}`}>
           <Link
-            href={`/knowledge/documents/${citation.documentId}?${new URLSearchParams({ versionId: citation.documentVersionId, chunkId: citation.chunkId })}#cited-chunk`}
+            href={`/knowledge/documents/${encodeURIComponent(citation.documentId)}?${new URLSearchParams({ versionId: citation.documentVersionId, chunkId: citation.chunkId })}#cited-chunk`}
             title={`${citation.title} (${t('viewCitation')})`}
             className={chipClass}
           >
@@ -87,6 +96,8 @@ export interface ChatTranscriptProps {
   streamingCitations?: Citation[];
   /** Web search outcome streamed for the active run. */
   streamingWebSearch?: WebSearchOutcome | null;
+  /** Active streaming Generative UI widget payload, if any. */
+  streamingUi?: Record<string, unknown> | null;
   /** Whether response generation is actively streaming tokens. */
   isStreaming?: boolean;
   /** Whether a response run has been dispatched and is awaiting initial tokens. */
@@ -101,11 +112,14 @@ export interface ChatTranscriptProps {
   onRegenerateMessage?: (message: ChatMessage) => void;
   /** Optional callback when user clicks a citation badge. */
   onSelectCitation?: (citation: Citation) => void;
+  /** Optional callback invoked when an interactive widget or starter template dispatches a prompt. */
+  onSendPrompt?: (prompt: string) => void;
 }
 
 /**
  * Conversation transcript rendering ordered messages, append-only revision relationships,
- * full-page copy/edit/regenerate actions, full-page grounded citations, streaming deltas, and error states.
+ * full-page copy/edit/regenerate actions, full-page grounded citations, streaming deltas,
+ * Generative UI widgets (Sandboxed UI and Native Structured Widgets), and error states.
  *
  * @param props - ChatTranscriptProps interface; mutation actions are rendered only for full Chat.
  * @returns Accessible conversation transcript viewport.
@@ -117,12 +131,14 @@ export function ChatTranscript({
   streamingText,
   streamingCitations,
   streamingWebSearch,
+  streamingUi = null,
   isStreaming = false,
   isPending = false,
   error = null,
   onRetry,
   onEditMessage,
   onRegenerateMessage,
+  onSendPrompt,
 }: ChatTranscriptProps) {
   const t = useTranslations('chat');
   const display = useDisplayPreferences();
@@ -151,17 +167,24 @@ export function ChatTranscript({
       aria-live="polite"
       aria-label={t('title')}
     >
-      {messages.length === 0 && !streamingText && !isPending && (
-        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground my-auto">
-          <div className="size-12 rounded-full bg-primary/10 text-primary flex items-center justify-center mb-3">
-            <BotIcon className="size-6" />
+      {messages.length === 0 && !streamingText && !streamingUi && !isPending && (
+        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground my-auto gap-6">
+          <div className="flex flex-col items-center">
+            <div className="size-12 rounded-full bg-primary/10 text-primary flex items-center justify-center mb-3">
+              <BotIcon className="size-6" />
+            </div>
+            <h3 className="text-base font-semibold text-foreground mb-1">
+              {t('emptyStateTitle')}
+            </h3>
+            <p className="text-xs max-w-sm text-muted-foreground leading-normal">
+              {t('emptyStateDescription')}
+            </p>
           </div>
-          <h3 className="text-base font-semibold text-foreground mb-1">
-            {t('emptyStateTitle')}
-          </h3>
-          <p className="text-xs max-w-sm text-muted-foreground leading-normal">
-            {t('emptyStateDescription')}
-          </p>
+          {mode === 'full' && onSendPrompt && (
+            <div className="w-full max-w-3xl text-left">
+              <GenerativeUIStarterGallery onSelectPrompt={onSendPrompt} locale={locale} />
+            </div>
+          )}
         </div>
       )}
 
@@ -203,9 +226,20 @@ export function ChatTranscript({
               <ChatMarkdown content={msg.content} citations={isUser ? undefined : msg.citations} />
             </div>
 
+            {!isUser && msg.generative_ui && (
+              <div className="w-full" data-testid="generative-ui-widget">
+                <ToolRendering
+                  payload={msg.generative_ui as unknown as GenerativeUIPayload}
+                  onSendPrompt={onSendPrompt}
+                  locale={locale}
+                />
+              </div>
+            )}
+
             <div className="flex flex-wrap items-center gap-2">
               {formattedDate && <span className="text-xs text-muted-foreground">{formattedDate}</span>}
-              {mode === 'full' && <button
+              {/* Expose one-click copy for all full-page messages and completed assistant messages in the drawer. */}
+              {(mode === 'full' || (!isUser && Boolean(msg.content))) && <button
                 type="button"
                 onClick={() => void copyMessage(msg.id, msg.content)}
                 className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -214,7 +248,7 @@ export function ChatTranscript({
                 {copiedMessageId === msg.id ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
                 <span>{copiedMessageId === msg.id ? t('copiedMessage') : t('copyMessage')}</span>
               </button>}
-              {mode === 'full' && failedMessageId === msg.id && (
+              {(mode === 'full' || !isUser) && failedMessageId === msg.id && (
                 <span role="status" className="text-xs text-destructive">{t('copyFailed')}</span>
               )}
               {canEdit && (
@@ -258,7 +292,7 @@ export function ChatTranscript({
       })}
 
       {/* Pending status indicator */}
-      {isPending && !streamingText && (
+      {isPending && !streamingText && !streamingUi && (
         <div className="mr-auto flex max-w-[88%] items-center gap-2 text-xs text-muted-foreground">
           <Loader2Icon className="size-4 animate-spin text-primary" />
           <span>{t('thinking')}</span>
@@ -266,7 +300,7 @@ export function ChatTranscript({
       )}
 
       {/* Active streaming assistant bubble */}
-      {(streamingText || isStreaming) && (
+      {(streamingText || streamingUi || isStreaming) && (
         <div className="mr-auto flex max-w-[88%] flex-col gap-2.5">
           <div className="text-sm text-foreground">
             <div className="flex items-center gap-2 text-xs text-muted-foreground mb-0.5">
@@ -281,6 +315,15 @@ export function ChatTranscript({
             {/* Always-mounted live region so the notice text change is announced. */}
             <div role="status">{mode === 'full' && <WebSearchNotice outcome={streamingWebSearch} />}</div>
           </div>
+            {streamingUi && (
+              <div className="w-full" data-testid="streaming-generative-ui-widget">
+                <ToolRendering
+                  payload={streamingUi as unknown as GenerativeUIPayload}
+                  onSendPrompt={onSendPrompt}
+                  locale={locale}
+                />
+              </div>
+            )}
             {mode === 'full' && streamingCitations && streamingCitations.length > 0 && (
               <CitationPanel citations={streamingCitations} variant="inline" />
             )}

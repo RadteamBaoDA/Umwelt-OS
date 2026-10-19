@@ -176,7 +176,15 @@ class ToolDefinition(BaseModel):
     @computed_field(return_type=str)  # type: ignore[prop-decorator]  # pydantic computed_field over property
     @property
     def schema_fingerprint(self) -> str:
-        """Return a stable digest binding name/version, schemas, permissions and execution bounds."""
+        """Return a stable digest binding name/version, schemas, permissions and execution bounds.
+
+        Caches the SHA-256 digest on the frozen instance while verifying that mutable schema dicts
+        were not mutated in-place since the last computation.
+        """
+        cached_state = self.__dict__.get("_cached_fingerprint_state")
+        current_state = (self.input_schema, self.output_schema)
+        if cached_state is not None and cached_state[0] == current_state:
+            return cast("str", cached_state[1])
         identity = {
             "name": self.name, "version": self.version,
             "input_schema": self.input_schema, "output_schema": self.output_schema,
@@ -187,7 +195,15 @@ class ToolDefinition(BaseModel):
             "max_result_bytes": self.max_result_bytes,
         }
         canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False)
-        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        try:
+            self.__dict__["_cached_fingerprint_state"] = (
+                (dict(self.input_schema), dict(self.output_schema)),
+                digest,
+            )
+        except Exception:  # noqa: BLE001, S110  # fallback cleanly if dict copy fails on unhashable keys
+            pass
+        return digest
 
 
 class ToolResult(BaseModel):

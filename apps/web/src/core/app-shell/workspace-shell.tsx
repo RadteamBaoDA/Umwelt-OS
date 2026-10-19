@@ -53,23 +53,24 @@ export function useWorkspaceSession() {
 function ChatTriggerButton() {
   const t = useTranslations('chat');
   const chatCtrl = useChatController();
+  const { toggleDrawer } = chatCtrl;
 
   useEffect(() => {
-    /** Global shortcut Ctrl+J or Cmd+J to toggle chat drawer */
+    /** Global shortcut Ctrl+J or Cmd+J to toggle chat drawer without rebinding on draft changes. */
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') {
         e.preventDefault();
-        chatCtrl.toggleDrawer();
+        toggleDrawer();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [chatCtrl]);
+  }, [toggleDrawer]);
 
   return (
     <button
       type="button"
-      onClick={chatCtrl.toggleDrawer}
+      onClick={toggleDrawer}
       className="button secondary flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold"
       title={t('quickChat')}
       aria-label={t('quickChat')}

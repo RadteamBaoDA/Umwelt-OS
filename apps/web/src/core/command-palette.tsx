@@ -128,9 +128,18 @@ export function CommandPalette() {
           list.push({ id: `go-${dest.id}`, group: 'goTo', label, run: () => go(dest.href) });
         }
       }
+      // Expose quick actions when the query is empty so keyboard users can trigger common workflows immediately.
+      if (!query) {
+        list.push(
+          { id: 'quick-chat', group: 'actions', label: tc('quickChat'), meta: tc('newChat'), run: () => { openDrawer(); close(); } },
+          { id: 'manage-sources', group: 'actions', label: t('dataSources'), run: () => go('/settings/sources') },
+          { id: 'create-rule', group: 'actions', label: tc('paletteCreateRule'), meta: tc('paletteCreateRuleHint'), run: () => go('/settings/dashboard') },
+          { id: 'collect-now', group: 'actions', label: tc('paletteCollectNow'), disabledReason: tc('paletteCollectUnavailable'), run: () => undefined },
+        );
+      }
     }
-    if (wantsDocs) for (const hit of docs.data?.items ?? []) list.push({ id: `doc-${hit.chunk_id}`, group: 'documents', label: hit.title, meta: `${hit.source.name} · v${hit.version_number}`, run: () => go(`/knowledge/documents/${hit.document_id}?versionId=${hit.document_version_id}&chunkId=${hit.chunk_id}#cited-chunk`) });
-    if (wantsEntities) for (const hit of entities.data?.items ?? []) list.push({ id: `ent-${hit.id}`, group: 'entities', label: hit.name ?? hit.id, badge: hit.type, run: () => go(`/knowledge/entities/${hit.id}`) });
+    if (wantsDocs) for (const hit of docs.data?.items ?? []) list.push({ id: `doc-${hit.chunk_id}`, group: 'documents', label: hit.title, meta: `${hit.source.name} · v${hit.version_number}`, run: () => go(`/knowledge/documents/${encodeURIComponent(hit.document_id)}?versionId=${encodeURIComponent(hit.document_version_id)}&chunkId=${encodeURIComponent(hit.chunk_id)}#cited-chunk`) });
+    if (wantsEntities) for (const hit of entities.data?.items ?? []) list.push({ id: `ent-${hit.id}`, group: 'entities', label: hit.name ?? hit.id, badge: hit.type, run: () => go(`/knowledge/entities/${encodeURIComponent(hit.id)}`) });
     if (wantsEvents) for (const hit of events.data?.items ?? []) list.push({ id: `evt-${hit.id}`, group: 'events', label: hit.title, meta: hit.type, run: () => go(`/timeline?event_id=${encodeURIComponent(hit.id)}`) });
     if (wantsConversations) {
       for (const conv of conversations.data ?? []) {

@@ -62,13 +62,33 @@ function createMarkdownRenderer(): MarkdownItInstance {
 
 const markdownRenderer = createMarkdownRenderer();
 
+let cachedPurifier: ReturnType<typeof DOMPurify> | null = null;
+
+/**
+ * Returns the browser-bound DOMPurify singleton, initializing it lazily on first client call
+ * so SSR never touches `window` and repeated renders reuse the same sanitizer instance.
+ *
+ * @returns Configured DOMPurify instance bound to the active browser window.
+ */
+function getPurifier(): ReturnType<typeof DOMPurify> {
+  if (!cachedPurifier) {
+    cachedPurifier = DOMPurify(window);
+  }
+  return cachedPurifier;
+}
+
 /**
  * Turns `[n]` markers in rendered HTML text into `.cite` chips that link to the n-th citation's exact item.
- * Code blocks and tags are left untouched; markers without a matching citation stay as plain text.
+ * Preformatted code blocks, inline code spans, and HTML tags are left untouched; markers without a matching citation stay as plain text.
+ *
+ * @param html - Rendered HTML string produced by markdown-it prior to sanitization.
+ * @param citations - Optional 1-indexed list of grounded citations for the message.
+ * @returns HTML string with plain-text `[n]` markers replaced by `.cite` links.
  */
 function linkCitations(html: string, citations?: Citation[]): string {
   if (!citations?.length) return html;
-  return html.split(/(<pre[\s\S]*?<\/pre>|<[^>]+>)/).map((part, index) => {
+  // Odd split indices capture <pre>...</pre>, <code>...</code>, or HTML tags and must remain untouched.
+  return html.split(/(<pre[\s\S]*?<\/pre>|<code[\s\S]*?<\/code>|<[^>]+>)/).map((part, index) => {
     if (index % 2) return part;
     return part.replace(/\[(\d{1,2})\]/g, (marker, num: string) => {
       const citation = citations[Number(num) - 1];
@@ -83,13 +103,20 @@ function linkCitations(html: string, citations?: Citation[]): string {
   }).join('');
 }
 
-/** Renders adapted AnythingLLM markdown only after the browser sanitizer can initialize safely; optional `citations` turn `[n]` markers into linked cite chips. */
+/**
+ * Renders adapted AnythingLLM markdown only after the browser sanitizer can initialize safely;
+ * optional `citations` turn `[n]` markers outside code spans into linked cite chips.
+ *
+ * @param props - Markdown content string and optional grounded citations.
+ * @returns Sanitized markdown container element.
+ */
 export function ChatMarkdown({ content, citations }: { content: string; citations?: Citation[] }) {
   const [safeHtml, setSafeHtml] = React.useState('');
+  const containerRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
-    // DOMPurify needs the live browser window; keeping creation here avoids touching it during SSR.
-    const purifier = DOMPurify(window);
+    // DOMPurify needs the live browser window; lazy singleton creation avoids touching it during SSR.
+    const purifier = getPurifier();
     const rendered = linkCitations(markdownRenderer.render(content), citations);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- sanitizer needs the live window, so state is set after mount
     setSafeHtml(purifier.sanitize(rendered, {
@@ -101,8 +128,38 @@ export function ChatMarkdown({ content, citations }: { content: string; citation
     }));
   }, [content, citations]);
 
+  React.useEffect(() => {
+    const root = containerRef.current;
+    if (!root || !safeHtml) return;
+    // Attach copy buttons after DOMPurify runs so the HTML sanitizer allowlist never needs <button>.
+    const preBlocks = root.querySelectorAll('pre');
+    preBlocks.forEach((pre) => {
+      if (pre.querySelector('[data-code-copy="true"]')) return;
+      pre.classList.add('relative', 'group');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.setAttribute('data-code-copy', 'true');
+      btn.setAttribute('aria-label', 'Copy code');
+      btn.textContent = 'Copy';
+      btn.className =
+        'absolute right-2 top-2 rounded border border-border bg-background/90 px-2 py-0.5 text-[11px] font-medium text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 hover:text-foreground';
+      btn.addEventListener('click', () => {
+        const codeEl = pre.querySelector('code');
+        const rawCode = codeEl?.textContent ?? pre.textContent ?? '';
+        void navigator.clipboard?.writeText(rawCode).then(() => {
+          btn.textContent = 'Copied';
+          window.setTimeout(() => {
+            btn.textContent = 'Copy';
+          }, 1500);
+        });
+      });
+      pre.appendChild(btn);
+    });
+  }, [safeHtml]);
+
   return (
     <div
+      ref={containerRef}
       className="chat-markdown min-w-0 break-words text-sm leading-relaxed text-foreground [&_p]:my-1.5 [&_h1]:my-2 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:my-2 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:my-2 [&_h3]:font-semibold [&_a]:text-primary [&_a:not(.cite)]:underline [&_table]:my-2 [&_table]:border-collapse [&_table]:text-sm [&_td]:border-b [&_td]:border-border [&_td]:px-2.5 [&_td]:py-1.5 [&_tr:last-child_td]:border-b-0 [&_th]:border-b [&_th]:border-border [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left [&_th]:font-semibold [&_th]:text-muted-foreground"
       dangerouslySetInnerHTML={{ __html: safeHtml }}
     />

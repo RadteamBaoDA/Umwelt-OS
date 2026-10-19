@@ -94,8 +94,6 @@ class Compose:
         )
         self.files = [
             "docker-compose.yml",
-            "infrastructure/graph/compose.yml",
-            "infrastructure/backup/compose.yml",
         ]
         if include_connectors:
             self.files.insert(1, "docker-compose.connectors.yml")
@@ -476,10 +474,6 @@ def _copy_configuration(root: Path, stage: Path) -> None:
     shutil.copyfile(source_env, directory / "runtime.env")
     for relative in (
         "docker-compose.yml", "docker-compose.base.yml", "docker-compose.connectors.yml",
-        "infrastructure/graph/compose.yml", "infrastructure/backup/compose.yml",
-        "infrastructure/docker/api.Dockerfile",
-        "infrastructure/docker/n8n-connectors.Dockerfile",
-        "infrastructure/docker/n8n-connectors-entrypoint.sh",
     ):
         source = root / relative
         if source.is_symlink() or not source.is_file():

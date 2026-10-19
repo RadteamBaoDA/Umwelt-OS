@@ -564,7 +564,9 @@ async def revalidate_context_fence(
         if not selection_valid:
             reasons.append("One or more exact selected document versions or provider scopes are stale")
 
-    # 1. Recheck source status and generations
+    # 1. Recheck source status and generations (deduplicated per unique source_id / expected fence)
+    source_fence_cache: dict[UUID, Any] = {}
+    seen_fence_checks: set[tuple[UUID, Any, Any]] = set()
     for source_id_str, expected in context.fence_snapshot.items():
         try:
             source_id = UUID(source_id_str)
@@ -572,7 +574,18 @@ async def revalidate_context_fence(
             reasons.append(f"Invalid source identifier in fence: {source_id_str}")
             continue
 
-        fence = await sources_public.get_source_fence(session, source_id, **scope_kw)
+        expected_gen = expected.get("generation") if isinstance(expected, dict) else None
+        expected_local = expected.get("local_only") if isinstance(expected, dict) else None
+        check_key = (source_id, expected_gen, expected_local)
+        if check_key in seen_fence_checks:
+            continue
+        seen_fence_checks.add(check_key)
+
+        if source_id not in source_fence_cache:
+            source_fence_cache[source_id] = await sources_public.get_source_fence(
+                session, source_id, **scope_kw,
+            )
+        fence = source_fence_cache[source_id]
         if fence is None:
             reasons.append(f"Source {source_id} no longer exists")
             continue
@@ -580,9 +593,9 @@ async def revalidate_context_fence(
         if fence.status != "active":
             reasons.append(f"Source {source_id} is inactive (status: {fence.status})")
 
-        if fence.generation != expected.get("generation"):
+        if fence.generation != expected_gen:
             reasons.append(
-                f"Source {source_id} generation changed ({fence.generation} != {expected.get('generation')})"
+                f"Source {source_id} generation changed ({fence.generation} != {expected_gen})"
             )
 
         if destination == "remote" and fence.local_only:

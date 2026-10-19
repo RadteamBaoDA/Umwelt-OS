@@ -149,12 +149,21 @@ def _freeze_arg(item: Any) -> Any:
 def _stable_record(record: logging.LogRecord, redacted: str) -> tuple[str, Any]:
     """Return (msg, args) whose rendering holds no secret yet keeps the positional shape formatters unpack.
 
-    uvicorn's AccessFormatter needs the 5-tuple, so mask every str arg at once: masking one at a time can
-    hide the context (e.g. ``cookie=``) that makes a neighbouring arg a secret. Fall back to the fully
-    collapsed string with no args only when even that rendering is not redaction-stable.
+    Tries per-argument ``redact_text`` first so harmless positional strings (such as HTTP methods
+    and route prefixes in ``uvicorn.access``) remain intact when the secret is self-contained inside
+    one argument. When a secret spans the template and arguments or splits across adjacent arguments
+    (e.g. ``cookie=`` + ``SECRET``), ``record.msg % individual`` will not equal ``redacted``; in that
+    case we fall back to masking every string argument with ``_MASK``, or collapsing to ``(redacted, None)``.
     """
     args = record.args
     if isinstance(record.msg, str) and isinstance(args, tuple):
+        individual = tuple(redact_text(item) if isinstance(item, str) else item for item in args)
+        try:
+            individual_text = record.msg % individual
+        except (TypeError, ValueError):
+            return redacted, None
+        if individual_text == redacted and redact_text(individual_text) == individual_text:
+            return record.msg, individual
         trial = tuple(_MASK if isinstance(item, str) else item for item in args)
         try:
             text = record.msg % trial

@@ -306,29 +306,46 @@ async def login(
 async def _login_verify(
     request: Request, response: Response, body: LoginRequest, session: AsyncSession, settings: Settings,
 ) -> tuple[AuthState, int]:
-    """Verify credentials under the owner lock and issue the session; raises generic 401 on any mismatch.
+    """Verify credentials outside the exclusive owner lock, then lock the owner row to issue the session.
 
+    Running Argon2id verification before acquiring ``FOR UPDATE NOWAIT`` prevents CPU-bound password
+    hashing from blocking concurrent ``FOR SHARE`` admission reads or causing 409 lock conflicts.
     Returns the CSRF state and the authenticated account id (for audit).
     """
     await admit_identity_write(request, session, "auth_password_login")
     account_id: int | None
+    unlocked_hash: str | None = None
     if body.identifier is None:
         account_id = 1
+        if hasattr(session, "scalar"):
+            unlocked_hash = await session.scalar(select(Owner.password_hash).where(Owner.id == 1))
+        else:
+            preview = await _lock_owner(session, 1)
+            unlocked_hash = getattr(preview, "password_hash", None)
     else:
         try:
             email = normalize_account_email(body.identifier)
         except ValueError:
             await asyncio.to_thread(verify_login_password, None, body.password)
             raise HTTPException(status_code=401, detail="Email or password is incorrect") from None
-        account_id = await session.scalar(select(Owner.id).where(Owner.email == email))
+        row = (
+            await session.execute(select(Owner.id, Owner.password_hash).where(Owner.email == email))
+        ).one_or_none()
+        account_id = row[0] if row is not None else None
+        unlocked_hash = row[1] if row is not None else None
+
+    password_matches = await asyncio.to_thread(verify_login_password, unlocked_hash, body.password)
+    if account_id is None or not password_matches:
+        raise HTTPException(status_code=401, detail="Email or password is incorrect")
+
     try:
-        owner = await _lock_owner(session, account_id) if account_id is not None else None
+        owner = await _lock_owner(session, account_id)
     except HTTPException:
-        await asyncio.to_thread(verify_login_password, None, body.password)
         raise HTTPException(status_code=401, detail="Email or password is incorrect") from None
-    password_matches = await asyncio.to_thread(
-        verify_login_password, owner.password_hash if owner else None, body.password,
-    )
+
+    if owner is not None and owner.password_hash != unlocked_hash:
+        password_matches = await asyncio.to_thread(verify_login_password, owner.password_hash, body.password)
+
     if owner is None or not password_matches or await get_active_account(
         session, owner.id, multi_workspace_enabled=settings.multi_workspace_enabled,
     ) is None:

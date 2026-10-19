@@ -142,25 +142,41 @@ def submit_model_summary(
 async def _export_queue(queue: asyncio.Queue[dict[str, Any]]) -> None:
     """Send spans serially with a cooperative total deadline and no response-body buffering.
 
-    The HTTPX timeout also bounds individual I/O operations. A total timeout covers client
-    creation, sending, and response/client cleanup; failures only drop optional telemetry.
+    Reuses a single HTTPX client across spans drained from an active burst so persistent TCP/TLS
+    connections are shared, while closing the client cleanly whenever the queue drains to idle.
+    The HTTPX timeout also bounds individual I/O operations; failures only drop optional telemetry.
     """
     while True:
         item = await queue.get()
-        endpoint, public_key, secret_key = item["config"]
+        pending_done = True
         try:
-            async with asyncio.timeout(_SEND_TIMEOUT_SECONDS):
-                async with httpx.AsyncClient(
-                    timeout=_SEND_TIMEOUT_SECONDS, follow_redirects=False, trust_env=False,
-                ) as client:
-                    async with client.stream(
-                        "POST", endpoint, json=item["payload"], auth=(public_key, secret_key),
-                        headers={"x-langfuse-ingestion-version": "4"},
-                    ) as response:
-                        status_code = response.status_code
-                    if not 200 <= status_code < 300:
-                        logger.debug("Langfuse metadata export failed (http_status=%d)", status_code)
-        except Exception as exc:  # noqa: BLE001 - an unavailable optional sink cannot alter application results
+            async with httpx.AsyncClient(
+                timeout=_SEND_TIMEOUT_SECONDS, follow_redirects=False, trust_env=False,
+            ) as client:
+                while True:
+                    endpoint, public_key, secret_key = item["config"]
+                    try:
+                        async with asyncio.timeout(_SEND_TIMEOUT_SECONDS):
+                            async with client.stream(
+                                "POST", endpoint, json=item["payload"], auth=(public_key, secret_key),
+                                headers={"x-langfuse-ingestion-version": "4"},
+                            ) as response:
+                                status_code = response.status_code
+                            if not 200 <= status_code < 300:
+                                logger.debug("Langfuse metadata export failed (http_status=%d)", status_code)
+                    except Exception as exc:  # noqa: BLE001 - an unavailable optional sink cannot alter application results
+                        logger.debug("Langfuse metadata export failed (%s)", type(exc).__name__)
+                    finally:
+                        queue.task_done()
+                        pending_done = False
+                    try:
+                        item = queue.get_nowait()
+                        pending_done = True
+                    except asyncio.QueueEmpty:
+                        break
+        except Exception as exc:  # noqa: BLE001 - client setup/teardown failures must not crash the worker
             logger.debug("Langfuse metadata export failed (%s)", type(exc).__name__)
         finally:
-            queue.task_done()
+            if pending_done:
+                queue.task_done()
+

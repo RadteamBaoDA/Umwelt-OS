@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useCallback, useContext, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { ChatContext } from '@/modules/chat/api';
 
 /** Immutable request identity retained until the server acknowledges a message revision. */
@@ -274,7 +274,8 @@ export function ChatControllerProvider({ children }: { children: ReactNode }) {
     setDraft('');
   }, [selectConversationRaw]);
 
-  const value: ChatControllerContextValue = {
+  // Memoize the context value so consumers only re-render when chat state or stable callbacks change.
+  const value = useMemo<ChatControllerContextValue>(() => ({
     isDrawerOpen,
     activeConversationId,
     activeConversationGeneration,
@@ -297,7 +298,28 @@ export function ChatControllerProvider({ children }: { children: ReactNode }) {
     bindDayConversation,
     selectConversation: selectHistoryConversation,
     unbindConversation,
-  };
+  }), [
+    isDrawerOpen,
+    activeConversationId,
+    activeConversationGeneration,
+    context,
+    draft,
+    pendingSpecialistRuns,
+    pendingMessageMutations,
+    openDrawer,
+    closeDrawer,
+    toggleDrawer,
+    selectConversationRaw,
+    setPendingSpecialistRun,
+    clearPendingSpecialistRun,
+    getOrCreatePendingMessageMutation,
+    clearPendingMessageMutation,
+    resetConversation,
+    selectDay,
+    bindDayConversation,
+    selectHistoryConversation,
+    unbindConversation,
+  ]);
 
   return (
     <ChatControllerContext.Provider value={value}>

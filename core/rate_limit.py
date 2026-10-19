@@ -10,13 +10,18 @@ from redis.exceptions import RedisError
 
 
 def _identity(request: Request) -> str:
-    """Return an opaque hash of the session cookie, bearer token, or client address, in that order."""
+    """Return an opaque hash of the authenticated account, session cookie, bearer token, or client IP."""
     from core.auth.dependencies import SESSION_COOKIE as cookie_name
+    from core.auth.routes import _client_ip
 
+    state = getattr(request, "state", None)
+    account = getattr(state, "account", None) if state is not None else None
+    account_id = getattr(account, "id", None) if account is not None else None
     raw = (
-        request.cookies.get(cookie_name)
+        (f"account:{account_id}" if isinstance(account_id, int) else None)
+        or request.cookies.get(cookie_name)
         or request.headers.get("authorization")
-        or (request.client.host if request.client else "unknown")
+        or _client_ip(request)
     )
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 

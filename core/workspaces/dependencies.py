@@ -24,6 +24,9 @@ def _parse_workspace_id(workspace_id: UUID | str | None) -> UUID | None:
         raise HTTPException(status_code=400, detail="invalid_workspace_id") from None
 
 
+_default_get_active_account = get_active_account
+
+
 async def _request_account(request: Request, session: AsyncSession) -> AccountRead:
     """Recheck the authenticated detached account with this app's explicit rollout gate.
 
@@ -34,13 +37,25 @@ async def _request_account(request: Request, session: AsyncSession) -> AccountRe
     authenticated = getattr(request.state, "account", None)
     if not isinstance(authenticated, AccountRead):
         raise HTTPException(status_code=401, detail="Authentication required")
+    gate = request.app.state.settings.multi_workspace_enabled
+    # Reuse the verified account when already checked on this exact session and rollout gate.
+    if (
+        get_active_account is _default_get_active_account
+        and getattr(request.state, "_verified_active_account_session", None) is session
+        and getattr(request.state, "_verified_active_account_id", None) == authenticated.id
+        and getattr(request.state, "_verified_active_account_gate", None) is gate
+    ):
+        return authenticated
     current = await get_active_account(
         session, authenticated.id,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        multi_workspace_enabled=gate,
     )
     if current is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     request.state.account = current
+    request.state._verified_active_account_session = session
+    request.state._verified_active_account_id = current.id
+    request.state._verified_active_account_gate = gate
     return current
 
 
@@ -63,9 +78,17 @@ async def _selected_workspace(
     context = await resolve_workspace_context(session, account.id, selected)
     if context is None:
         raise HTTPException(status_code=404, detail="Workspace not found")
-    await read_access_fence(
-        session, scope=context, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-    )
+    gate = request.app.state.settings.multi_workspace_enabled
+    info = getattr(session, "info", None)
+    if type(info) is dict and get_active_account is _default_get_active_account:
+        info["_verified_active_account"] = (account.id, gate, account)
+    try:
+        await read_access_fence(
+            session, scope=context, multi_workspace_enabled=gate,
+        )
+    finally:
+        if type(info) is dict:
+            info.pop("_verified_active_account", None)
     return context
 
 
@@ -85,9 +108,17 @@ async def _default_workspace(
     context = await resolve_workspace_context(session, account.id, account.default_workspace_id)
     if context is None or context.role != "owner":
         raise HTTPException(status_code=404, detail="Workspace not found")
-    await read_access_fence(
-        session, scope=context, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-    )
+    gate = request.app.state.settings.multi_workspace_enabled
+    info = getattr(session, "info", None)
+    if type(info) is dict and get_active_account is _default_get_active_account:
+        info["_verified_active_account"] = (account.id, gate, account)
+    try:
+        await read_access_fence(
+            session, scope=context, multi_workspace_enabled=gate,
+        )
+    finally:
+        if type(info) is dict:
+            info.pop("_verified_active_account", None)
     return context
 
 

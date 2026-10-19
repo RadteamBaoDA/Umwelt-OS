@@ -14,6 +14,7 @@ import { useTranslations } from 'next-intl';
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import type { GadgetInstance, HighlightRule } from '../api';
@@ -45,7 +46,8 @@ export interface WatchlistGadgetProps {
 /**
  * Standard Watchlist and Rules table gadget template.
  * Renders tracked symbols, keywords, condition matches, and explainable highlight rules
- * with visible text-based severity badges (Info, Warning, Critical) and notification states.
+ * with visible text-based severity badges (Info, Warning, Critical), client-side search filtering,
+ * and notification states.
  * The bounded root scrolls its controls and watchlist instead of clipping them in compact cards.
  *
  * @param props Gadget instance configuration and watchlist items.
@@ -125,6 +127,21 @@ export function WatchlistGadget({
           )}
         </div>
       </div>
+
+      {/* Search Filter Input */}
+      {items.length > 0 && (
+        <div className="relative shrink-0">
+          <Search className="w-3.5 h-3.5 absolute left-2 top-2 text-muted-foreground pointer-events-none" aria-hidden="true" />
+          <Input
+            type="search"
+            value={filterQuery}
+            onChange={(e) => setFilterQuery(e.target.value)}
+            placeholder={t('feedSearch')}
+            aria-label={t('feedSearch')}
+            className="h-7 w-full text-xs pl-7 bg-muted/20"
+          />
+        </div>
+      )}
 
       {/* Empty State */}
       {matchesQuery.isPending && highlightRules.length > 0 && definition.source_ids.length > 0 && <p role="status" className="text-sm text-muted-foreground">{t('gadgetDataLoading')}</p>}

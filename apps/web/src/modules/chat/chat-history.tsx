@@ -118,15 +118,17 @@ export function ChatHistory({
     },
   });
 
+  // Filter sessions case-insensitively by title (including untitled fallback) or context kind.
   const filteredConversations = React.useMemo(() => {
-    if (!searchQuery.trim()) return conversations;
-    const query = searchQuery.toLowerCase();
+    const trimmed = searchQuery.trim();
+    if (!trimmed) return conversations;
+    const query = trimmed.toLowerCase();
     return conversations.filter(
       (c) =>
-        c.title.toLowerCase().includes(query) ||
+        (c.title || t('untitledConversation')).toLowerCase().includes(query) ||
         (c.context_kind && c.context_kind.toLowerCase().includes(query)),
     );
-  }, [conversations, searchQuery]);
+  }, [conversations, searchQuery, t]);
 
   // Grouping uses the viewer's local calendar day; the server already orders newest first.
   const groupedConversations = React.useMemo(() => {
@@ -156,8 +158,17 @@ export function ChatHistory({
         <div className="relative">
           <SearchIcon className="absolute left-2.5 top-3.5 size-4 text-muted-foreground pointer-events-none" aria-hidden="true" />
           <Input
+            type="search"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              // Allow Escape to clear the active filter without closing surrounding overlays.
+              if (e.key === 'Escape' && searchQuery) {
+                e.preventDefault();
+                e.stopPropagation();
+                setSearchQuery('');
+              }
+            }}
             placeholder={t('searchConversations')}
             aria-label={t('searchConversations')}
             className="pl-8 min-h-11 text-sm bg-background"
@@ -173,8 +184,17 @@ export function ChatHistory({
         )}
 
         {!isLoading && filteredConversations.length === 0 && (
-          <div className="p-4 text-xs text-center text-muted-foreground">
-            {t('noHistory')}
+          <div className="p-4 text-xs text-center text-muted-foreground flex flex-col items-center gap-2">
+            <span>{searchQuery.trim() && conversations.length > 0 ? t('paletteNoResults') : t('noHistory')}</span>
+            {searchQuery.trim() && conversations.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="inline-flex min-h-8 items-center rounded-md border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {t('cancel')}
+              </button>
+            )}
           </div>
         )}
 

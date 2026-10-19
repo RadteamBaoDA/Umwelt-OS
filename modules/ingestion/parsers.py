@@ -56,7 +56,7 @@ def _parse_pdf(path: Path, page_limit: int) -> ParsedDocument:
 
 
 def _parse_docx(path: Path, expanded_limit: int) -> str:
-    """Read DOCX paragraphs and tables after archive size and structure checks."""
+    """Read DOCX paragraphs and tables in document order after archive size and structure checks."""
     with zipfile.ZipFile(path) as archive:
         if sum(item.file_size for item in archive.infolist()) > expanded_limit:
             raise ValueError("DOCX expanded size exceeds the configured limit")
@@ -64,8 +64,26 @@ def _parse_docx(path: Path, expanded_limit: int) -> str:
         if "word/document.xml" not in names or "[Content_Types].xml" not in names:
             raise ValueError("Invalid DOCX file")
     document = DocxDocument(str(path))
-    parts = [paragraph.text for paragraph in document.paragraphs if paragraph.text]
-    parts.extend(" | ".join(cell.text for cell in row.cells) for table in document.tables for row in table.rows)
+    parts: list[str] = []
+    # Traverse block-level items in document order so tables stay near their surrounding prose.
+    inner_items = list(document.iter_inner_content()) if hasattr(document, "iter_inner_content") else []
+    if inner_items:
+        for item in inner_items:
+            if hasattr(item, "text"):
+                if item.text:
+                    parts.append(item.text)
+            elif hasattr(item, "rows"):
+                for row in item.rows:
+                    row_text = " | ".join(cell.text.strip() for cell in row.cells)
+                    if row_text.replace("|", "").strip():
+                        parts.append(row_text)
+    else:
+        parts = [paragraph.text for paragraph in document.paragraphs if paragraph.text]
+        parts.extend(
+            " | ".join(cell.text for cell in row.cells)
+            for table in document.tables
+            for row in table.rows
+        )
     return "\n".join(parts)
 
 
@@ -104,6 +122,10 @@ def _parse_process(
         output.put((type(exc).__name__, str(exc)))
 
 
+_IN_PROCESS_TEXT_MIMES = frozenset({"text/plain", "text/markdown", "text/csv", "application/json"})
+_IN_PROCESS_MAX_BYTES = 2 * 1024 * 1024
+
+
 async def parse_file_bounded(
     path: Path,
     mime: str,
@@ -111,7 +133,22 @@ async def parse_file_bounded(
     docx_expanded_limit: int,
     pdf_page_limit: int,
 ) -> ParsedDocument:
-    """Parse in an isolated process, enforce timeout, and terminate/join on exit."""
+    """Parse in a bounded worker thread for small plain-text files or an isolated process for binary/large files."""
+    try:
+        is_small_text = mime in _IN_PROCESS_TEXT_MIMES and path.stat().st_size <= _IN_PROCESS_MAX_BYTES
+    except OSError:
+        is_small_text = False
+    if is_small_text:
+        try:
+            return await wait_for(
+                to_thread(parse_file, path, mime, docx_expanded_limit, pdf_page_limit),
+                timeout_seconds,
+            )
+        except TimeoutError as exc:
+            raise TimeoutError("File parser exceeded its time limit") from exc
+        except Exception as exc:
+            raise ValueError(str(exc)) from exc
+
     context = multiprocessing.get_context("spawn")
     output = context.Queue(maxsize=1)
     process = context.Process(
@@ -134,3 +171,4 @@ async def parse_file_bounded(
             process.terminate()
         await to_thread(process.join)
         output.close()
+

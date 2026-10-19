@@ -529,8 +529,15 @@ async def _retain_and_append(
             # New writer creation occurs at its canonical position. Only admitted
             # writer parent keys are referenced; victim updates are non-key fields.
             await session.flush([head])
-        elif key != writer_key:
-            await _retained_window(session, head)
+        elif key == writer_key:
+            if planned_head is None or (
+                head.epoch, head.sequence, head.floor_sequence,
+            ) != (planned_head.epoch, persisted_sequence, persisted_floor):
+                raise _ReplayStorageError()
+        else:
+            victim_count = await _retained_window(session, head)
+            if victim_count < allocations[key]:
+                raise _ReplayStorageError()
         heads[key] = head
 
     writer = heads[writer_key]
@@ -550,20 +557,14 @@ async def _retain_and_append(
     for key in sorted(allocations, key=lambda item: (item[0].int, item[1])):
         head = heads[key]
         amount = allocations[key]
-        prefix = list((await session.scalars(select(ReplayRecord.sequence).where(
-            ReplayRecord.workspace_id == key[0], ReplayRecord.user_id == key[1],
-            ReplayRecord.epoch == head.epoch, ReplayRecord.sequence >= head.floor_sequence,
-        ).order_by(ReplayRecord.sequence).limit(amount))).all())
-        if len(prefix) != amount or prefix != list(range(head.floor_sequence, head.floor_sequence + amount)):
-            raise _ReplayStorageError()
         deleted = cast(CursorResult[Any], await session.execute(delete(ReplayRecord).where(
             ReplayRecord.workspace_id == key[0], ReplayRecord.user_id == key[1],
             ReplayRecord.epoch == head.epoch, ReplayRecord.sequence >= head.floor_sequence,
-            ReplayRecord.sequence <= prefix[-1],
+            ReplayRecord.sequence < head.floor_sequence + amount,
         ).execution_options(synchronize_session=False)))
         if deleted.rowcount != amount:
             raise _ReplayStorageError()
-        head.floor_sequence = prefix[-1] + 1
+        head.floor_sequence = head.floor_sequence + amount
         head.updated_at = now
 
     for index, (event_type, payload) in enumerate(encoded, start=1):
@@ -572,8 +573,15 @@ async def _retain_and_append(
                                  event_type=event_type, payload=payload))
     writer.sequence, writer.updated_at = final_sequence, now
     await session.flush()
-    # Recheck scalar cap after planned mutations; no occupancy escapes this module.
-    await _bounded_replay_count(session)
+    # Recheck scalar cap in-memory after planned mutations under the advisory gate; no second table/head scan needed.
+    final_total = total - local_deleted - sum(allocations.values()) + len(encoded)
+    if (
+        final_total < 0
+        or final_total > MAX_INSTANCE_REPLAY_EVENTS
+        or writer.sequence - writer.floor_sequence + 1 < 0
+        or writer.sequence - writer.floor_sequence + 1 > MAX_REPLAY_EVENTS
+    ):
+        raise _ReplayStorageError()
 
 
 async def _rollback_replay(session: AsyncSession) -> None:
