@@ -88,13 +88,17 @@ def to_read(row: ChatTodo) -> TodoRead:
 
 async def _conversation(session: AsyncSession, scope: WorkspaceContext, conversation_id: UUID,
                         *, lock: bool = False) -> Conversation:
-    """Load the workspace-scoped parent conversation, optionally locking it to serialize list writers.
+    """Load the owner-scoped parent conversation, optionally locking it to serialize list writers.
+
+    Scoping by ``actor_user_id`` as well as workspace matches templates.py: the schema pins a
+    workspace to one owner today, but the todo API must not rely on that to deny another principal.
 
     Raises:
-        TodoError: ``not_found`` when the conversation is missing or belongs to another workspace.
+        TodoError: ``not_found`` when the conversation is missing or belongs to another owner/workspace.
     """
     stmt = select(Conversation).where(
-        Conversation.id == conversation_id, Conversation.workspace_id == scope.workspace_id)
+        Conversation.id == conversation_id, Conversation.workspace_id == scope.workspace_id,
+        Conversation.actor_user_id == scope.user_id)
     if lock:
         stmt = stmt.with_for_update()
     conversation = await session.scalar(stmt)
@@ -179,7 +183,8 @@ async def update_todo_status(session: AsyncSession, scope: WorkspaceContext, con
     """
     await _conversation(session, scope, conversation_id, lock=True)
     row = await session.scalar(select(ChatTodo).where(
-        ChatTodo.id == todo_id, ChatTodo.conversation_id == conversation_id))
+        ChatTodo.id == todo_id, ChatTodo.conversation_id == conversation_id,
+        ChatTodo.actor_user_id == scope.user_id))
     if row is None:
         raise TodoError("not_found", "Todo not found")
     if status is not None:

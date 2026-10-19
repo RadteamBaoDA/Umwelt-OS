@@ -54,6 +54,8 @@ class FakeSession:
         self.rollbacks += 1
 
 
+_REAL_CONVERSATION = todos._conversation  # captured before the autouse fixture swaps it
+
 @pytest.fixture(autouse=True)
 def _patch(monkeypatch: pytest.MonkeyPatch) -> None:
     async def conv(session: Any, scope: Any, conversation_id: UUID, *, lock: bool = False) -> Any:
@@ -168,3 +170,20 @@ def test_routes_registered_with_account_auth() -> None:
     by_method = {next(iter(r.methods)): r for r in todos_routes.router.routes}
     assert _account_read in deps(by_method["GET"])
     assert _account_write in deps(by_method["PUT"]) and _account_write in deps(by_method["PATCH"])
+
+
+@pytest.mark.asyncio
+async def test_conversation_lookup_is_owner_scoped() -> None:
+    """The real ``_conversation`` query filters by workspace AND owner, so another principal in the
+    same workspace cannot reach the todo list (matches templates.py ownership)."""
+    captured: list[Any] = []
+
+    class Recorder:
+        async def scalar(self, stmt: Any) -> None:
+            captured.append(str(stmt.compile(compile_kwargs={"literal_binds": False})))
+
+    with pytest.raises(todos.TodoError):
+        await _REAL_CONVERSATION(Recorder(), SCOPE, CONV)  # type: ignore[arg-type]
+    # Only the WHERE clause counts: the SELECT list names every column, which proves nothing.
+    where = captured[0].split("WHERE", 1)[1]
+    assert "actor_user_id" in where and "workspace_id" in where
