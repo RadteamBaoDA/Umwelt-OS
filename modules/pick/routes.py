@@ -24,7 +24,8 @@ async def _enabled(request: Request) -> None:
 router = APIRouter(prefix="/api/v1/pick", tags=["pick"], dependencies=[Depends(_enabled)])
 OwnerRead = Annotated[AuthSession, Depends(require_account)]
 OwnerWrite = Annotated[AuthSession, Depends(require_account_write)]
-phone_budget = Depends(require_budget("pick_phone", 30, 60))
+# Phone routes are unauthenticated: key on the client IP only (cookies/Authorization are attacker-chosen).
+phone_budget = Depends(require_budget("pick_phone", 30, 60, anonymous=True))
 create_budget = Depends(require_budget("pick_create", 20, 60))
 
 

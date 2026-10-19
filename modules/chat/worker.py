@@ -59,6 +59,8 @@ from modules.chat.generative_ui.tool_specs import (
 from modules.chat.history import load_effective_history
 from modules.chat.models import (
     AgentActivityLink,
+    ChatTemplate,
+    ChatTodo,
     Conversation,
     Message,
     MessageMutationReceipt,
@@ -1210,8 +1212,9 @@ async def run_response_generation(
                     await todo_session.commit()
                     return theme_result
                 if name in TEMPLATE_TOOLS:
-                    return await run_template_tool(name, raw_args or "{}", todo_session, conversation_id)
-                return await run_todo_tool(name, raw_args or "{}", todo_session, conversation_id)
+                    return await run_template_tool(
+                        name, raw_args or "{}", todo_session, conversation_id, response_id)
+                return await run_todo_tool(name, raw_args or "{}", todo_session, conversation_id, response_id)
         while True:
             acc = ToolCallAccumulator()
             round_started = False  # any chunk received; a capability fallback is only safe before this
@@ -1349,6 +1352,7 @@ async def run_response_generation(
                     content = await media.run_trip_images_tool(
                         c["arguments"], config=ai_config, local_only=local_only_turn,
                         secret=settings.csrf_signing_secret.get_secret_value(),
+                        subject=f"{run_workspace_id}:{run_actor_id}",
                     )
                 elif name in LOCAL_DATA_TOOLS:
                     todo_result = await _run_todos(name, c["arguments"])
@@ -1746,6 +1750,24 @@ async def neutralize_ui_events(session: AsyncSession, response_id: UUID) -> None
     ).values(data={}))
 
 
+async def purge_run_model_copies(session: AsyncSession, response_id: UUID) -> None:
+    """Drop every model-derived copy of one run outside its widgets: input request, input events, todos, templates.
+
+    Clears the run's ``input_request`` (prompt, options, free-text answer), blanks the run's ``message.input.*`` event
+    payloads (rows and seqs stay for replay identity), and deletes ``chat_todos`` and model-created
+    ``chat_templates`` whose ``source_response_id`` is this run. Owner-created templates have no provenance and stay.
+    Works for any run status; the caller holds the run lock and commits.
+    """
+    await session.execute(update(ResponseRun).where(ResponseRun.id == response_id).values(input_request=None)
+                          .execution_options(synchronize_session="fetch"))
+    await session.execute(update(StreamEvent).where(
+        StreamEvent.response_id == response_id,
+        StreamEvent.event_type.in_(("message.input.request", "message.input.resolved")),
+    ).values(data={}))
+    await session.execute(delete(ChatTodo).where(ChatTodo.source_response_id == response_id))
+    await session.execute(delete(ChatTemplate).where(ChatTemplate.source_response_id == response_id))
+
+
 async def _privacy_cancel_locked(session: AsyncSession, run: ResponseRun, current_seq: int = 0) -> int:
     """Redact an active run while the caller holds Memory, parent, then run locks.
 
@@ -1764,12 +1786,8 @@ async def _privacy_cancel_locked(session: AsyncSession, run: ResponseRun, curren
     ).values(data={"citations": []}))
     # Widgets carry model output derived from the withdrawn evidence (tables, sandbox code): neutralize them too.
     await neutralize_ui_events(session, run.id)
-    # A parked user-input request (prompt/options/answer) is model output too: drop it and its request event.
-    run.input_request = None
-    await session.execute(update(StreamEvent).where(
-        StreamEvent.response_id == run.id,
-        StreamEvent.event_type.in_(("message.input.request", "message.input.resolved")),
-    ).values(data={}))
+    # Parked input request, its events and todos/templates the model wrote from the evidence.
+    await purge_run_model_copies(session, run.id)
     was_cancelled = run.status == "cancelled"
     run.status = "cancelled"
     run.ephemeral = True

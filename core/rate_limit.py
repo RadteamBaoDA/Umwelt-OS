@@ -9,14 +9,20 @@ from fastapi import HTTPException, Request
 from redis.exceptions import RedisError
 
 
-def _identity(request: Request) -> str:
-    """Return an opaque hash of the authenticated account, session cookie, bearer token, or client IP."""
+def _identity(request: Request, *, anonymous: bool = False) -> str:
+    """Return an opaque hash of the authenticated account, session cookie, bearer token, or client IP.
+
+    ``anonymous`` ignores the account, cookie and Authorization header (all caller-supplied on unauthenticated
+    routes, so rotating them would mint a fresh bucket) and keys on the resolved client IP only.
+    """
     from core.auth.dependencies import SESSION_COOKIE as cookie_name
     from core.auth.routes import _client_ip
 
     state = getattr(request, "state", None)
     account = getattr(state, "account", None) if state is not None else None
     account_id = getattr(account, "id", None) if account is not None else None
+    if anonymous:
+        return hashlib.sha256(f"ip:{_client_ip(request)}".encode()).hexdigest()[:32]
     raw = (
         (f"account:{account_id}" if isinstance(account_id, int) else None)
         or request.cookies.get(cookie_name)
@@ -26,13 +32,16 @@ def _identity(request: Request) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
-def require_budget(name: str, limit: int, window: int) -> Callable[[Request], Awaitable[None]]:
+def require_budget(
+    name: str, limit: int, window: int, *, anonymous: bool = False,
+) -> Callable[[Request], Awaitable[None]]:
     """Build a FastAPI dependency allowing `limit` requests per `window` seconds per session for `name`.
 
     Fixed-window counter in Redis, keyed by hashed session so accounts never share budget.
     Exceeding it raises 429 with Retry-After in the project error envelope. A Redis outage
     raises 503 (fail-closed) unless settings.request_budget_fail_open is true. A settings
-    `request_budget_overrides` entry `{name: [limit, window]}` replaces the defaults.
+    `request_budget_overrides` entry `{name: [limit, window]}` replaces the defaults. Use ``anonymous=True`` on
+    unauthenticated routes so only the client IP (see ``_client_ip``) selects the bucket.
     """
 
     async def dependency(request: Request) -> None:
@@ -42,7 +51,7 @@ def require_budget(name: str, limit: int, window: int) -> Callable[[Request], Aw
             return
         lim, win = getattr(settings, "request_budget_overrides", {}).get(name, (limit, window))
         now = int(time.time())
-        key = f"budget:{name}:{_identity(request)}:{now // win}"
+        key = f"budget:{name}:{_identity(request, anonymous=anonymous)}:{now // win}"
         try:
             pipeline = request.app.state.redis.pipeline(transaction=True)
             pipeline.incr(key)

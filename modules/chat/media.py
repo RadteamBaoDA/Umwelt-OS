@@ -97,25 +97,32 @@ def check_upstream_url(url: str) -> str:
     return url
 
 
-def sign_media_url(secret: str, url: str, *, now: float | None = None) -> str:
-    """Issue a short-lived token binding exactly ``url`` (allowlist checked at signing and again at verify)."""
+def sign_media_url(secret: str, url: str, *, now: float | None = None, subject: str = "") -> str:
+    """Issue a short-lived token binding exactly ``url`` (allowlist checked at signing and again at verify).
+
+    ``subject`` (``"<workspace_id>:<user_id>"``) binds the token to the actor it was issued for, so a leaked
+    token cannot be replayed by another account.
+    """
     check_upstream_url(url)
-    body = json.dumps({"u": url, "e": int((now or time.time()) + TOKEN_TTL_SECONDS)}, separators=(",", ":"))
+    body = json.dumps({"u": url, "e": int((now or time.time()) + TOKEN_TTL_SECONDS), "s": subject},
+                      separators=(",", ":"))
     payload = base64.urlsafe_b64encode(body.encode()).decode().rstrip("=")
     sig = hmac.new(_key(secret), payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}.{sig}"
 
 
-def verify_media_token(secret: str, token: str, *, now: float | None = None) -> str:
-    """Return the bound upstream URL for a valid, unexpired token; raise MediaError otherwise."""
+def verify_media_token(secret: str, token: str, *, now: float | None = None, subject: str = "") -> str:
+    """Return the bound upstream URL for a valid, unexpired token issued for ``subject``; raise MediaError otherwise."""
     payload, _, sig = token.partition(".")
     if not hmac.compare_digest(hmac.new(_key(secret), payload.encode(), hashlib.sha256).hexdigest(), sig):
         raise MediaError("bad_token")
     try:
         data = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-        url, expires = data["u"], int(data["e"])
-    except (ValueError, KeyError, TypeError):
+        url, expires, bound = data["u"], int(data["e"]), data.get("s", "")
+    except (ValueError, KeyError, TypeError, AttributeError):
         raise MediaError("bad_token") from None
+    if not isinstance(bound, str) or not hmac.compare_digest(bound.encode(), subject.encode()):
+        raise MediaError("bad_token")
     if (now or time.time()) > expires:
         raise MediaError("expired")
     return check_upstream_url(str(url))
@@ -193,7 +200,7 @@ def _clean(value: Any) -> str:
     return " ".join(_TAGS.sub(" ", str(raw or "")).split())[:200]
 
 
-async def _lookup(title: str, secret: str, factory: TransportFactory) -> dict[str, str]:
+async def _lookup(title: str, secret: str, factory: TransportFactory, subject: str = "") -> dict[str, str]:
     """Resolve one article title to a licensed, credited, proxied image; raises MediaError when unusable."""
     summary = await _json(WIKI_SUMMARY + quote(title.replace(" ", "_"), safe=""), factory)
     if not isinstance(summary, dict):
@@ -217,12 +224,12 @@ async def _lookup(title: str, secret: str, factory: TransportFactory) -> dict[st
     article = ((summary.get("content_urls") or {}).get("desktop") or {}).get("page")
     if not (isinstance(article, str) and urlsplit(article).hostname == "en.wikipedia.org"):
         article = "https://en.wikipedia.org/wiki/" + quote(title.replace(" ", "_"), safe="")
-    return {"title": title, "status": "ok", "image_url": f"{PROXY_PATH}?token={sign_media_url(secret, source)}",
+    return {"title": title, "status": "ok", "image_url": f"{PROXY_PATH}?token={sign_media_url(secret, source, subject=subject)}",
             "credit": credit, "license": licence, "article_url": article}
 
 
 async def get_trip_stop_images(
-    titles: list[str], *, secret: str, factory: TransportFactory = default_transport_factory,
+    titles: list[str], *, secret: str, factory: TransportFactory = default_transport_factory, subject: str = "",
 ) -> list[dict[str, str]]:
     """Look up 1-8 English Wikipedia titles concurrently (4 workers, 12 s each, no redirects).
 
@@ -237,7 +244,7 @@ async def get_trip_stop_images(
         async with gate:
             try:
                 async with asyncio.timeout(LOOKUP_TIMEOUT_SECONDS):
-                    return await _lookup(title[:200], secret, factory)
+                    return await _lookup(title[:200], secret, factory, subject)
             except (MediaError, TimeoutError):
                 return {"title": title, "status": "unavailable"}
 
@@ -246,7 +253,7 @@ async def get_trip_stop_images(
 
 async def run_trip_images_tool(
     raw_arguments: str, *, config: AIExecutionConfig, local_only: bool, secret: str,
-    factory: TransportFactory = default_transport_factory,
+    factory: TransportFactory = default_transport_factory, subject: str = "",
 ) -> str:
     """Execute the ``get_trip_stop_images`` tool call and return the JSON string for the tool message.
 
@@ -261,4 +268,4 @@ async def run_trip_images_tool(
             raise ValueError("titles")
     except ValueError:
         return json.dumps({"error": "invalid_arguments"})
-    return json.dumps({"stops": await get_trip_stop_images(args.titles, secret=secret, factory=factory)})
+    return json.dumps({"stops": await get_trip_stop_images(args.titles, secret=secret, factory=factory, subject=subject)})
