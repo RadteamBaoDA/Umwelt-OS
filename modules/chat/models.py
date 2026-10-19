@@ -56,6 +56,8 @@ class Conversation(Base):
     ephemeral: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
+    # Id (user template UUID or built-in seed id) the owner picked in the library for `apply_template` to consume.
+    pending_template: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
@@ -295,6 +297,37 @@ class ChatTodo(Base):
     emoji: Mapped[str] = mapped_column(String(8), nullable=False, server_default="")
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
     position: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class ChatTemplate(Base):
+    """Store one owner-saved widget template (markup rendered only inside the sandbox iframe).
+
+    Scoped by workspace and owner like ``ChatTodo`` but not by conversation. ``html`` is user/model authored and
+    is never interpreted server-side; it leaves the service only through the owner's API or ``apply_template``.
+    The principal FK blocks workspace removal while templates exist (RESTRICT), matching conversations.
+    """
+
+    __tablename__ = "chat_templates"
+    __table_args__ = (
+        CheckConstraint("version >= 1", name="ck_chat_templates_version"),
+        ForeignKeyConstraint(
+            ["workspace_id", "actor_user_id"], ["workspaces.id", "workspaces.owner_user_id"],
+            name="fk_chat_templates_principal", ondelete="RESTRICT",
+        ),
+        Index("ix_chat_templates_owner_created", "workspace_id", "actor_user_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str] = mapped_column(String(500), nullable=False, server_default="")
+    html: Mapped[str] = mapped_column(Text, nullable=False)
+    data_description: Mapped[str] = mapped_column(String(500), nullable=False, server_default="")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())

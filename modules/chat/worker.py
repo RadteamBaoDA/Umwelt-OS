@@ -50,8 +50,10 @@ from modules.chat.generative_ui import (
 )
 from modules.chat.generative_ui import external_router as viz
 from modules.chat.generative_ui.tool_specs import (
-    TODO_TOOLS,
+    LOCAL_DATA_TOOLS,
+    TEMPLATE_TOOLS,
     TOOL_REQUEST_USER_INPUT,
+    TOOL_SET_THEME,
     RequestUserInputArgs,
 )
 from modules.chat.history import load_effective_history
@@ -82,7 +84,9 @@ from modules.chat.scope import (
     owner_default_scope,
 )
 from modules.chat.stream import make_event_id
+from modules.chat.templates import run_template_tool
 from modules.chat.todos import run_todo_tool
+from modules.chat.ui_theme import publish_theme
 from modules.chat.user_input import (
     InputOutcome,
     await_user_input,
@@ -1023,12 +1027,12 @@ async def run_response_generation(
             trip_images_on = media.media_permitted(ai_config, local_only=local_only_turn)
             ui_tools: list[dict[str, Any]] | None = build_chat_tool_specs(
                 include_read_skill=bool(skill_names), include_trip_images=trip_images_on,
-                include_todos=True, include_user_input=True,
+                include_todos=True, include_user_input=True, include_templates=True, include_theme=True,
             )
             ui_locale = await _owner_locale(session, job_scope)
             ui_system_text = system_text + "\n\n" + build_generative_ui_system_prompt(
                 locale=ui_locale, local_only=local_only_turn, skills=skill_names, remote_media=trip_images_on,
-                todos=True,
+                todos=True, templates=True, theme=True,
             )
 
             def _base_messages(with_ui_prompt: bool) -> list[dict[str, Any]]:
@@ -1184,10 +1188,12 @@ async def run_response_generation(
             return outcome if outcome.outcome in ("answered", "declined") else None
 
         async def _run_todos(name: str, raw_args: str) -> str | None:
-            """Run one todo tool under the live-run fence; None when the run was cancelled meanwhile.
+            """Run one todo/template/theme tool under the live-run fence; None when the run was cancelled meanwhile.
 
-            ``run_todo_tool`` commits its own writes, which also releases the fence locks taken here.
+            ``run_todo_tool``/``run_template_tool`` commit their own writes, which also releases the fence locks
+            taken here. ``set_theme`` appends its ``ui.theme`` event under the run lock and commits here.
             """
+            nonlocal seq
             async with session_factory() as todo_session:
                 _, todo_run = await _lock_live_response(
                     todo_session, response_id, conversation_id, privacy_fence,
@@ -1197,6 +1203,14 @@ async def run_response_generation(
                     await _cancel_response_locked(todo_session, todo_run, seq)
                     await todo_session.commit()
                     return None
+                if name == TOOL_SET_THEME:
+                    theme_result = await publish_theme(todo_session, response_id, raw_args or "{}")
+                    # The helper allocated its own seq; resync the local high-water mark (as _park_for_input does).
+                    seq = await _next_event_seq(todo_session, response_id, seq) - 1
+                    await todo_session.commit()
+                    return theme_result
+                if name in TEMPLATE_TOOLS:
+                    return await run_template_tool(name, raw_args or "{}", todo_session, conversation_id)
                 return await run_todo_tool(name, raw_args or "{}", todo_session, conversation_id)
         while True:
             acc = ToolCallAccumulator()
@@ -1272,7 +1286,7 @@ async def run_response_generation(
             pending_ui = {}  # the completed payloads supersede any trailing partial snapshots
 
             calls = acc.calls()
-            known_data = {TOOL_READ_SKILL, TOOL_REQUEST_USER_INPUT, *TODO_TOOLS}
+            known_data = {TOOL_READ_SKILL, TOOL_REQUEST_USER_INPUT, *LOCAL_DATA_TOOLS}
             if trip_images_on:
                 known_data.add(TOOL_TRIP_IMAGES)
             for extra in calls:
@@ -1297,7 +1311,7 @@ async def run_response_generation(
                 elif name == TOOL_TRIP_IMAGES and trip_images_on and trips < MAX_TRIP_IMAGE_CALLS_PER_ROUND:
                     trips += 1
                     handled.append(c)
-                elif name in TODO_TOOLS and todo_calls < MAX_SKILL_CALLS_PER_ROUND:
+                elif name in LOCAL_DATA_TOOLS and todo_calls < MAX_SKILL_CALLS_PER_ROUND:
                     todo_calls += 1
                     handled.append(c)
                 elif name == TOOL_REQUEST_USER_INPUT and input_requests + asks < MAX_USER_INPUT_REQUESTS_PER_TURN:
@@ -1336,7 +1350,7 @@ async def run_response_generation(
                         c["arguments"], config=ai_config, local_only=local_only_turn,
                         secret=settings.csrf_signing_secret.get_secret_value(),
                     )
-                elif name in TODO_TOOLS:
+                elif name in LOCAL_DATA_TOOLS:
                     todo_result = await _run_todos(name, c["arguments"])
                     if todo_result is None:
                         return  # cancelled while the tool was about to run

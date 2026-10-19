@@ -184,4 +184,16 @@ def test_r24_viz_router_settings_migration() -> None:
     down = _alembic("downgrade", "r24_viz_router_settings:r23_chat_run_awaiting_input", "--sql")
     assert down.returncode == 0, down.stderr
     assert "DROP COLUMN viz_router" in down.stdout
-    assert HEAD == "r24_viz_router_settings"
+
+
+def test_r25_chat_templates_migration() -> None:
+    """Verify r25 creates chat_templates plus the pending pointer, reverses cleanly and is the single head."""
+    up = _alembic("upgrade", "r24_viz_router_settings:r25_chat_templates", "--sql")
+    assert up.returncode == 0, up.stderr
+    assert "CREATE TABLE chat_templates" in up.stdout
+    assert "fk_chat_templates_principal" in up.stdout
+    assert "ALTER TABLE chat_conversations ADD COLUMN pending_template VARCHAR(64)" in up.stdout
+    down = _alembic("downgrade", "r25_chat_templates:r24_viz_router_settings", "--sql")
+    assert down.returncode == 0, down.stderr
+    assert "DROP TABLE chat_templates" in down.stdout
+    assert HEAD == "r25_chat_templates"

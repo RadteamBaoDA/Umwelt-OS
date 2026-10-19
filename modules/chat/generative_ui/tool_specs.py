@@ -13,9 +13,16 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from modules.chat.generative_ui.prompt import SandboxedUiArgs
 from modules.chat.generative_ui.tools.form import FormPayload, TimeSlot
 from modules.chat.generative_ui.tools.query import ChartSeriesConfig, TableColumn
+from modules.chat.templates import (
+    ApplyTemplateArgs,
+    DeleteTemplateArgs,
+    TemplateIn,
+    run_template_tool,
+)
 from modules.chat.todos import TodoReplace, run_todo_tool
+from modules.chat.ui_theme import SetThemeArgs
 
-__all__ = ["run_todo_tool"]  # re-exported so the worker imports every tool runner from here
+__all__ = ["run_template_tool", "run_todo_tool"]  # re-exported so the worker imports every tool runner from here
 
 TOOL_SANDBOXED_UI = "render_sandboxed_ui"
 TOOL_TABLE = "render_table"
@@ -27,6 +34,16 @@ TOOL_READ_SKILL = "read_skill"
 TOOL_MANAGE_TODOS = "manage_todos"  # non-terminal; conversation todos, offered only when the worker opts in
 TOOL_GET_TODOS = "get_todos"
 TODO_TOOLS: frozenset[str] = frozenset({TOOL_MANAGE_TODOS, TOOL_GET_TODOS})
+TOOL_SAVE_TEMPLATE = "save_template"  # non-terminal; owner-saved widget templates, offered only when the worker opts in
+TOOL_LIST_TEMPLATES = "list_templates"
+TOOL_APPLY_TEMPLATE = "apply_template"
+TOOL_DELETE_TEMPLATE = "delete_template"
+TOOL_CLEAR_PENDING_TEMPLATE = "clear_pending_template"
+TEMPLATE_TOOLS: frozenset[str] = frozenset({
+    TOOL_SAVE_TEMPLATE, TOOL_LIST_TEMPLATES, TOOL_APPLY_TEMPLATE, TOOL_DELETE_TEMPLATE, TOOL_CLEAR_PENDING_TEMPLATE,
+})
+TOOL_SET_THEME = "set_theme"  # non-terminal; emits a transient `ui.theme` event, offered only when the worker opts in
+LOCAL_DATA_TOOLS: frozenset[str] = TODO_TOOLS | TEMPLATE_TOOLS | {TOOL_SET_THEME}  # run under the worker's live-run fence
 TOOL_REQUEST_USER_INPUT = "request_user_input"  # non-terminal HITL tool: parks the run until the user answers
 TOOL_TRIP_IMAGES = "get_trip_stop_images"  # non-terminal data tool; offered only with allow_widget_remote_media
 
@@ -222,7 +239,7 @@ def _sandbox_schema() -> dict[str, Any]:
 
 def build_chat_tool_specs(
     *, include_read_skill: bool, include_trip_images: bool = False, include_todos: bool = False,
-    include_user_input: bool = False,
+    include_user_input: bool = False, include_templates: bool = False, include_theme: bool = False,
 ) -> list[dict[str, Any]]:
     """Build the OpenAI-format `tools` list for a generative-UI chat turn.
 
@@ -231,6 +248,8 @@ def build_chat_tool_specs(
         include_trip_images: Whether to expose `get_trip_stop_images` (only when remote widget media is allowed).
         include_todos: Whether to expose the non-terminal `manage_todos` and `get_todos` tools.
         include_user_input: Whether to expose the non-terminal `request_user_input` (pause for a user answer).
+        include_templates: Whether to expose the five non-terminal template tools.
+        include_theme: Whether to expose the non-terminal `set_theme` tool.
 
     Returns:
         Fresh (caller-mutable) list of function specs whose parameters come from the pydantic models.
@@ -276,6 +295,33 @@ def build_chat_tool_specs(
             "name": TOOL_GET_TODOS,
             "description": "Read the conversation's current todo list. Not terminal.",
             "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        }})
+    if include_templates:
+        no_args = {"type": "object", "properties": {}, "additionalProperties": False}
+        for tool, description, params in (
+            (TOOL_SAVE_TEMPLATE, (
+                "Save a reusable widget template (HTML for render_sandboxed_ui, max 60000 chars). "
+                "Pass `id` to update one of the user's templates. At most 30. Not terminal."
+            ), TemplateIn.model_json_schema()),
+            (TOOL_LIST_TEMPLATES, "List built-in and saved templates (no html) and the pending one. Not terminal.", no_args),
+            (TOOL_APPLY_TEMPLATE, (
+                "Get a template's html to adapt and render. Omit template_id to use the template "
+                "the user selected (pending); it is cleared afterwards. Not terminal."
+            ), ApplyTemplateArgs.model_json_schema()),
+            (TOOL_DELETE_TEMPLATE, (
+                "Delete one of the user's saved templates (built-ins are read-only). Not terminal."
+            ), DeleteTemplateArgs.model_json_schema()),
+            (TOOL_CLEAR_PENDING_TEMPLATE, "Discard the user's pending template selection. Not terminal.", no_args),
+        ):
+            specs.append({"type": "function", "function": {"name": tool, "description": description, "parameters": params}})
+    if include_theme:
+        specs.append({"type": "function", "function": {
+            "name": TOOL_SET_THEME,
+            "description": (
+                "Switch the app theme (light, dark or system) for the user's current browser session; they can keep "
+                "or revert it. Use only when the user asks. Not terminal."
+            ),
+            "parameters": SetThemeArgs.model_json_schema(),
         }})
     return copy.deepcopy(specs)
 
