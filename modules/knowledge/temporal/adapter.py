@@ -11,8 +11,8 @@ import logging
 import math
 import os
 import re
+import secrets
 import struct
-from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from contextvars import ContextVar
@@ -43,7 +43,7 @@ MAX_RESULTS = 50
 MAX_CANDIDATES = 100
 MAX_MODEL_CALLS = 32
 _UUID = re.compile(r"^[0-9a-fA-F-]{36}$")
-_dispatch_transport: ContextVar[Any | None] = ContextVar("temporal_dispatch_transport", default=None)
+_dispatch_scope: ContextVar[Any | None] = ContextVar("temporal_dispatch_scope", default=None)
 
 
 class GraphState(StrEnum):
@@ -590,10 +590,15 @@ class TemporalSearchResult:
 
 @dataclass(frozen=True)
 class DispatchOwnership:
-    """Durable identity of one non-reconnecting synchronous graph transport.
+    """Durable identity of one journaled graph dispatch scope.
 
-    Pair Redis process run_id with client_id so restart cannot authorize killing
-    an unrelated reused client ID. Persist before any graph command is sent.
+    server_run_id is a random 40-hex nonce and client_id a random positive 63-bit
+    integer, both minted by the adapter (Neo4j exposes no comparable server-side
+    identity), so no database migration is needed. Together they form the token
+    stamped into every transaction's metadata; cessation finds and terminates
+    exactly the transactions carrying it. A forged or reused token cannot match
+    another operation because the nonce is unguessable. Persist before any graph
+    command is sent.
     """
 
     operation_id: UUID
@@ -602,7 +607,7 @@ class DispatchOwnership:
     client_id: int
 
     def __post_init__(self) -> None:
-        """Reject unbounded graph identity and invalid Redis process/client IDs."""
+        """Reject unbounded graph identity and malformed nonce/client IDs."""
         if (not isinstance(self.operation_id, UUID) or not self.group_id
                 or len(self.group_id.encode()) > 200
                 or not re.fullmatch(r"[0-9a-f]{40}", self.server_run_id)
@@ -676,9 +681,9 @@ class OperationAuthorization:
     values are authorized again and are never copied into durable receipts as text.
     record_dispatch_ownership commits the exact synchronous transport before graph
     commands; authorize_dispatch_cessation compares that stored ownership, live
-    recovery lease and stopped local tasks before disconnecting its Redis client.
+    recovery lease and stopped local tasks before terminating its tagged transactions.
     record_dispatch_completion marks only this immutable journal entry after a
-    normal fully replied synchronous scope and successful socket closure; it does
+    normal fully replied scope whose transactions all completed; it does
     not mark the graph operation synchronized or erase other dispatch identities.
     receipt_aggregate binds actual bounded witnesses to the complete paged journal
     prefix; authorize_receipt_aggregate certifies all proof obligations without
@@ -875,10 +880,10 @@ class GraphConfiguration:
 
     enabled: bool = False
     host: str | None = None
-    port: int = 6379
+    port: int = 7687
     username: str | None = None
     password: str | None = None
-    database: str = "bbd_temporal"
+    database: str = "neo4j"
 
     @classmethod
     def from_settings(cls, settings: Settings) -> GraphConfiguration:
@@ -895,7 +900,7 @@ class GraphConfiguration:
 
 def _safe_error(exc: BaseException) -> GraphOperationError:
     """Map dependency failures to stable redacted graph error categories."""
-    if "already indexed" in str(exc).lower():
+    if "EquivalentSchemaRuleAlreadyExists" in str(exc) or "already indexed" in str(exc).lower():
         return GraphOperationError("graph_index_exists")
     return GraphOperationUnknown("graph_transport_outcome_unknown")
 
@@ -998,7 +1003,7 @@ def _entity_state_fingerprint(
     payload = {
         **identity,
         "created_at": created_at,
-        # EntityNode.save always applies the mandatory Entity label on FalkorDB.
+        # EntityNode.save always applies the mandatory Entity label.
         "labels": sorted(label_set),
         "attributes": _normalize_graph_values(attributes),
         "name_embedding": normalized_embedding,
@@ -1011,6 +1016,17 @@ def _fact_states(receipt: GraphWriteReceipt) -> tuple[ExactFactState | ExactFact
     return (*receipt.existing_fact_states, *receipt.intended_fact_support)
 
 
+def _require_group(items: Sequence[Any], group_id: str) -> None:
+    """Reject any graph record outside the authorized partition.
+
+    All partitions share one Neo4j database and Graphiti's get_by_uuid(s) lookups are
+    not group-scoped, so every fetched record must be proven to belong to group_id
+    before it is trusted, compared or mutated.
+    """
+    if any(getattr(item, "group_id", None) != group_id for item in items):
+        raise GraphOperationError("graph_partition_mismatch")
+
+
 def _datetimes_to_strings(value: Any) -> Any:
     """Typed wrapper for graphiti's untyped UTC datetime-to-string converter (lazy import keeps graph optional)."""
     from graphiti_core.utils.datetime_utils import convert_datetimes_to_strings
@@ -1018,8 +1034,7 @@ def _datetimes_to_strings(value: Any) -> Any:
 
 
 def _normalize_graph_values(value: Any) -> Any:
-    """Project values through Falkor's UTC datetime and NUL-string send normalization, rejecting lossy objects."""
-    from graphiti_core.driver.falkordb_driver import _strip_nul_bytes
+    """Project values through UTC datetime-string and NUL-string normalization, rejecting lossy objects."""
 
     def reject_naive_datetime(item: Any) -> None:
         """Reject naive datetime leaves before the pinned serializer would assume a timezone."""
@@ -1193,20 +1208,21 @@ async def _authorize_cross_rebuild_absence(
     return True
 
 
-async def _incident_ids_absent(driver: Any, edge_ids: Sequence[str]) -> bool:
+async def _incident_ids_absent(driver: Any, edge_ids: Sequence[str], group_id: str) -> bool:
     """Read exact formerly incident edge IDs after typed rebuild deletion.
 
     No broad graph traversal or text is loaded. Every observed UUID must be
     absent before node cleanup converges, including edges supported elsewhere.
+    The single database is shared by all partitions, so the read is bound to group_id.
     """
     if len(set(edge_ids)) > MAX_SUPPORT:
         raise GraphOperationError("graph_rebuild_incident_bound")
     if not edge_ids:
         return True
     rows, _, _ = await driver.execute_query(
-        "MATCH ()-[edge]->() WHERE edge.uuid IN $edge_ids "
+        "MATCH ()-[edge {group_id: $group_id}]->() WHERE edge.uuid IN $edge_ids "
         "RETURN edge.uuid AS edge_id LIMIT $limit",
-        edge_ids=list(edge_ids), limit=MAX_SUPPORT + 1,
+        edge_ids=list(edge_ids), group_id=group_id, limit=MAX_SUPPORT + 1,
     )
     return isinstance(rows, list) and not rows
 
@@ -1242,119 +1258,105 @@ async def _delete_rebuild_node(driver: Any, action: CanonicalNodeRecoveryAction,
     if (not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict)
             or rows[0].get("entity_id") != action.graph_entity_uuid):
         return False
-    return await _incident_ids_absent(driver, [link.edge_id for link in action.expected_incident_links])
+    return await _incident_ids_absent(
+        driver, [link.edge_id for link in action.expected_incident_links], group_id,
+    )
 
 
-async def _send_owned_command(connection: Any, *args: Any) -> None:
-    """Send only on the already-owned socket without reconnect or health retries.
+def _strip_nul_bytes(value: Any) -> Any:
+    """Recursively remove NUL characters from strings, which graph storage rejects or truncates."""
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, dict):
+        return {key: _strip_nul_bytes(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_strip_nul_bytes(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_strip_nul_bytes(item) for item in value)
+    return value
 
-    No await separates the connected check from the pinned send implementation's
-    own connected check. Disable health probes that could reconnect transparently.
+
+def _to_native(value: Any) -> Any:
+    """Convert neo4j.time values (recursively) to stdlib date/time objects Graphiti's parsers expect."""
+    from neo4j import time as neo_time
+
+    if isinstance(value, neo_time.DateTime | neo_time.Date | neo_time.Time):
+        return value.to_native()
+    if isinstance(value, dict):
+        return {key: _to_native(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_to_native(item) for item in value]
+    return value
+
+
+# Statements allowed without a dispatch scope: connectivity probe and Graphiti's idempotent index DDL.
+_HEALTH_QUERY = "RETURN 1 AS healthy"
+_SETUP_PREFIXES = ("CREATE INDEX", "CREATE FULLTEXT INDEX")
+_SETUP_METADATA = {"umwelt_dispatch": "setup"}
+_CONTROL_METADATA = {"umwelt_dispatch": "control"}
+
+
+@dataclass
+class _DispatchScope:
+    """Per-operation graph dispatch state shared by every query of one journaled scope.
+
+    The token (server_run_id nonce + client_id) is stamped into the metadata of every
+    transaction, so cessation can find and terminate exactly this scope's transactions.
+    poisoned means a write outcome became ambiguous or the scope closed; no later
+    command may use the scope. pending counts in-flight transactions.
     """
-    if not connection.is_connected:
-        raise GraphOperationUnknown("graph_dispatch_connection_lost")
-    await connection.send_command(*args, check_health=False)
+
+    ownership: DispatchOwnership
+    poisoned: bool = False
+    pending: int = 0
+
+    @property
+    def token(self) -> str:
+        """Return the unguessable per-dispatch marker persisted in the ownership journal."""
+        return f"{self.ownership.server_run_id}:{self.ownership.client_id}"
+
+    @property
+    def metadata(self) -> dict[str, str]:
+        """Return transaction metadata that tags server-side transactions with this dispatch."""
+        return {"umwelt_dispatch": self.token, "operation_id": str(self.ownership.operation_id)}
 
 
-class _OwnedDispatchTransport:
-    """Serialize graph commands on one journaled socket without retry/reconnection.
-
-    Every graph command executes under Redis MULTI/EXEC, forcing pinned FalkorDB
-    to finish on the Redis main thread. This excludes detached query-worker queues.
-    """
-
-    def __init__(self, connection: Any, ownership: DispatchOwnership) -> None:
-        """Bind an already-connected socket and immutable persisted identity."""
-        self.connection = connection
-        self.ownership = ownership
-        self.lock = asyncio.Lock()
-        self.poisoned = False
-        self.pending_commands = 0
-
-    async def command(self, *args: Any, **kwargs: Any) -> Any:
-        """Run one owned graph command synchronously and poison ambiguous transport.
-
-        Raw send/read deliberately bypass Redis client's reconnect/retry logic.
-        Query parsing and schema lookups remain in the pinned FalkorDB client;
-        their subsequent graph commands use this same transport and lock.
-        """
-        if (kwargs or len(args) < 3 or str(args[0]).upper() not in {"GRAPH.QUERY", "GRAPH.RO_QUERY"}
-                or args[1] != self.ownership.group_id):
-            raise GraphOperationError("graph_dispatch_command_denied")
-        self.pending_commands += 1
-        try:
-            async with self.lock:
-                if self.poisoned or not self.connection.is_connected:
-                    raise GraphOperationUnknown("graph_dispatch_connection_lost")
-                completed = False
-                try:
-                    await _send_owned_command(self.connection, "MULTI")
-                    if await self.connection.read_response() != "OK":
-                        raise GraphOperationUnknown("graph_dispatch_protocol")
-                    await _send_owned_command(self.connection, *args)
-                    if await self.connection.read_response() != "QUEUED":
-                        raise GraphOperationUnknown("graph_dispatch_protocol")
-                    await _send_owned_command(self.connection, "EXEC")
-                    response = await self.connection.read_response()
-                    if not isinstance(response, list) or len(response) != 1:
-                        raise GraphOperationUnknown("graph_dispatch_protocol")
-                    completed = True
-                    if isinstance(response[0], Exception):
-                        raise response[0]
-                    return response[0]
-                except BaseException:
-                    # Never reuse a socket whose EXEC/result ownership became ambiguous.
-                    if not completed:
-                        self.poisoned = True
-                    raise
-        finally:
-            self.pending_commands -= 1
+def _positive_server_duration(value: Any) -> bool:
+    """Report whether a Neo4j duration setting such as '5s' is a positive (enabled) timeout."""
+    return isinstance(value, str) and not re.fullmatch(r"\s*0+(\.0+)?\s*[a-zA-Zμ]*\s*", value)
 
 
 def _make_driver_type() -> type[Any]:
-    """Load Graphiti after telemetry is disabled and wrap every Falkor query path."""
+    """Load Graphiti after telemetry is disabled and wrap every Neo4j query path."""
     os.environ["GRAPHITI_TELEMETRY_ENABLED"] = "false"
-    from graphiti_core.driver.falkordb_driver import FalkorDriver, FalkorDriverSession
+    from graphiti_core.driver.driver import GraphDriverSession, GraphProvider
+    from graphiti_core.driver.neo4j_driver import Neo4jDriver
+    from neo4j import READ_ACCESS, WRITE_ACCESS, AsyncGraphDatabase
 
-    class SafeGraph:
-        """Apply timeouts and redacted failures to all AsyncGraph query callers."""
+    class SafeSession(GraphDriverSession):
+        """Graphiti session facade that captures/journals bulk writes and dispatches them in one transaction."""
 
-        def __init__(self, graph: Any, write_intent_hook: Callable[..., Awaitable[None]] | None = None) -> None:
-            """Wrap one graph with the request-scoped prewrite journal callback."""
-            self._graph = graph
-            self.write_intent_hook = write_intent_hook
+        provider = GraphProvider.NEO4J
 
-        async def query(self, query: str, params: dict[str, Any] | None = None, **kwargs: Any) -> Any:
-            """Run one parameterized query with bounded client and server deadlines."""
-            try:
-                async with asyncio.timeout(QUERY_SECONDS):
-                    return await self._graph.query(
-                        query, params or {}, timeout=QUERY_SECONDS * 1000, **kwargs
-                    )
-            except Exception as exc:  # noqa: BLE001  # error boundary: re-mapped to a sanitized error
-                raise _safe_error(exc) from None
-
-        def __getattr__(self, name: str) -> Any:
-            """Forward non-query methods while keeping the protected query override authoritative."""
-            if name == "query":
-                raise AttributeError(name)
-            return getattr(self._graph, name)
-
-    class SafeSession(FalkorDriverSession):
-        """Preserve upstream session operations while routing queries through SafeGraph."""
-
-        def __init__(self, graph: Any) -> None:
-            """Attach the already-protected graph without losing its operation callback."""
-            super().__init__(graph)
+        def __init__(self, driver: Any) -> None:
+            """Bind the protected driver (carrying the request-scoped prewrite hook)."""
+            self.driver = driver
             self._bulk_capture: list[tuple[Any, dict[str, Any]]] | None = None
+            self._bulk_capture_size = 0
+
+        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+            """Release the session; there is no pooled resource held between calls."""
+            await self.close()
+
+        async def close(self) -> None:
+            """Drop any uncommitted capture; transactions are opened and closed per call."""
+            self._bulk_capture = None
             self._bulk_capture_size = 0
 
         def _validated_bulk_payloads(
             self, calls: Sequence[tuple[Any, dict[str, Any]]], args: tuple[Any, ...], kwargs: dict[str, Any],
         ) -> list[dict[str, Any]]:
-            """Validate the pinned four-call Falkor shape and return its final hydrated node payloads."""
-            from graphiti_core.driver.driver import GraphProvider
-            from graphiti_core.driver.falkordb_driver import _strip_nul_bytes
+            """Validate the pinned four-call Neo4j shape and return its final hydrated node payloads."""
             from graphiti_core.models.edges.edge_db_queries import (
                 get_entity_edge_save_bulk_query,
                 get_episodic_edge_save_bulk_query,
@@ -1365,7 +1367,7 @@ def _make_driver_type() -> type[Any]:
             )
 
             driver = kwargs["driver"]
-            if (driver.provider != GraphProvider.FALKORDB
+            if (driver.provider != GraphProvider.NEO4J
                     or getattr(driver, "graph_operations_interface", None) is not None
                     or len(calls) != 4 or len(args) != 5):
                 raise GraphOperationError("graph_bulk_dispatch_shape_unsupported")
@@ -1376,10 +1378,9 @@ def _make_driver_type() -> type[Any]:
                     or not isinstance(episode_params, dict) or set(episode_params) != {"episodes"}
                     or not isinstance(episode_params["episodes"], list)
                     or len(episode_params["episodes"]) != len(args[0])
-                    or not isinstance(node_query, list)
+                    or not isinstance(node_query, str)
                     or not isinstance(node_params, dict) or set(node_params) != {"nodes"}
                     or not isinstance(node_params["nodes"], list)
-                    or len(node_query) != len(node_params["nodes"])
                     or not isinstance(mention_query, str)
                     or mention_query != get_episodic_edge_save_bulk_query(provider)
                     or not isinstance(mention_params, dict) or set(mention_params) != {"episodic_edges"}
@@ -1395,14 +1396,10 @@ def _make_driver_type() -> type[Any]:
             expected_episode_ids = {str(item.uuid) for item in args[0]}
             expected_mention_ids = {str(item.uuid) for item in args[1]}
             expected_fact_ids = {str(item.uuid) for item in args[3]}
-            expected_node_queries = get_entity_node_save_bulk_query(provider, node_payloads)
-            if len(expected_node_queries) != len(node_query):
+            # The node statement is text derived from payload labels; recomputing it proves no
+            # label expression outside Graphiti's validated generator is being dispatched.
+            if node_query != get_entity_node_save_bulk_query(provider, node_payloads):
                 raise GraphOperationError("graph_bulk_dispatch_shape_unsupported")
-            for actual, expected in zip(node_query, expected_node_queries, strict=True):
-                if (not isinstance(actual, tuple) or len(actual) != 2
-                        or actual[0] != expected[0]
-                        or actual[1] != _strip_nul_bytes(_datetimes_to_strings(expected[1]))):
-                    raise GraphOperationError("graph_bulk_dispatch_shape_unsupported")
             ids = [str(item.get("uuid")) for item in node_payloads if isinstance(item, dict)]
             if (len(ids) != len(node_payloads) or len(ids) != len(set(ids))
                     or any(not _UUID.fullmatch(value) for value in ids)
@@ -1441,18 +1438,17 @@ def _make_driver_type() -> type[Any]:
             return node_payloads
 
         async def execute_write(self, func: Callable[..., Awaitable[Any]], *args: Any, **kwargs: Any) -> Any:
-            """Journal exact hydrated state before replaying the pinned structured bulk calls."""
+            """Journal exact hydrated state, then replay the captured bulk calls in ONE write transaction."""
             from graphiti_core.utils.bulk_utils import add_nodes_and_edges_bulk_tx
 
             if func is add_nodes_and_edges_bulk_tx:
-                hook = getattr(self.graph, "write_intent_hook", None)
+                hook = getattr(self.driver, "_write_intent_hook", None)
                 if hook is None:
                     raise GraphOperationError("graph_write_intent_unavailable")
                 if len(args) != 5 or "driver" not in kwargs or self._bulk_capture is not None:
                     raise GraphOperationError("graph_write_intent_arguments_invalid")
-                from graphiti_core.driver.driver import GraphProvider
                 bulk_driver = kwargs["driver"]
-                if (bulk_driver.provider != GraphProvider.FALKORDB
+                if (bulk_driver.provider != GraphProvider.NEO4J
                         or getattr(bulk_driver, "graph_operations_interface", None) is not None):
                     raise GraphOperationError("graph_bulk_dispatch_shape_unsupported")
                 # Initial receipt proves the full ID/prior inventory; hydration vectors are not
@@ -1470,10 +1466,10 @@ def _make_driver_type() -> type[Any]:
                         args[0], args[1], args[2], args[3], kwargs["driver"],
                         final_node_payloads=nodes,
                     )
-                    # No Graphiti bulk write reaches Falkor before the final-vector receipt commits.
+                    # No Graphiti bulk write reaches Neo4j before the final-vector receipt commits.
                     self._bulk_capture = None
-                    for query, params in calls:
-                        await self.run(query, **params)
+                    # One explicit transaction: either all four statements commit or none do.
+                    await self.driver.execute_statements([(str(query), dict(params)) for query, params in calls])
                     return result
                 finally:
                     self._bulk_capture = None
@@ -1481,103 +1477,171 @@ def _make_driver_type() -> type[Any]:
             return await func(self, *args, **kwargs)
 
         async def run(self, query: str | list[Any], **kwargs: Any) -> Any:
-            """Capture bounded normalized bulk calls or dispatch through the protected graph."""
-            from graphiti_core.driver.falkordb_driver import _strip_nul_bytes
-
-            try:
-                if self._bulk_capture is not None:
-                    normalized_query: str | list[tuple[Any, Any]]
-                    if isinstance(query, list):
-                        normalized_query = [
-                            (cypher, _strip_nul_bytes(_datetimes_to_strings(params)))
-                            for cypher, params in query
-                        ]
-                    else:
-                        normalized_query = query
-                    normalized_params = _strip_nul_bytes(_datetimes_to_strings(dict(kwargs)))
-                    serialized = json.dumps(
-                        {"query": normalized_query, "params": normalized_params},
-                        sort_keys=True, separators=(",", ":"), default=str,
-                    ).encode()
-                    if (len(self._bulk_capture) >= 4
-                            or self._bulk_capture_size + len(serialized) > MAX_CAPTURE_BYTES):
-                        raise GraphOperationError("graph_bulk_capture_limit")
-                    self._bulk_capture.append((copy.deepcopy(normalized_query), copy.deepcopy(normalized_params)))
-                    self._bulk_capture_size += len(serialized)
-                    return None
-                async with asyncio.timeout(QUERY_SECONDS):
-                    if isinstance(query, list):
-                        for cypher, params in query:
-                            values = _strip_nul_bytes(_datetimes_to_strings(params))
-                            await self.graph.query(str(cypher), values)
-                    else:
-                        values = _strip_nul_bytes(_datetimes_to_strings(dict(kwargs)))
-                        await self.graph.query(str(query), values)
+            """Capture bounded normalized bulk calls or dispatch one statement through the protected driver."""
+            if isinstance(query, list):
+                raise GraphOperationError("graph_dispatch_command_denied")
+            # Datetimes are deliberately kept native: the driver sends tz-aware values as temporal types.
+            normalized_params = _strip_nul_bytes(dict(kwargs))
+            if self._bulk_capture is not None:
+                serialized = json.dumps(
+                    {"query": query, "params": normalized_params},
+                    sort_keys=True, separators=(",", ":"), default=str,
+                ).encode()
+                if (len(self._bulk_capture) >= 4
+                        or self._bulk_capture_size + len(serialized) > MAX_CAPTURE_BYTES):
+                    raise GraphOperationError("graph_bulk_capture_limit")
+                self._bulk_capture.append((query, copy.deepcopy(normalized_params)))
+                self._bulk_capture_size += len(serialized)
                 return None
-            except Exception as exc:  # noqa: BLE001  # error boundary: re-mapped to a sanitized error
-                raise _safe_error(exc) from None
+            await self.driver.execute_statements([(str(query), normalized_params)])
+            return None
 
-    class SafeDriver(FalkorDriver):
-        """Prevent upstream raw Cypher logs and share one bounded client lifecycle."""
+    class SafeDriver(Neo4jDriver):
+        """Neo4j driver whose every statement is one bounded, tagged, non-retried explicit transaction."""
 
-        def _get_graph(self, graph_name: str | None) -> Any:
-            """Return a protected graph that retains this operation clone's receipt hook."""
-            graph = super()._get_graph(graph_name)
-            transport = _dispatch_transport.get()
-            if transport is not None:
-                if graph.name != transport.ownership.group_id:
-                    raise GraphOperationError("graph_dispatch_partition_mismatch")
-                # Schema refresh/procedure paths call AsyncGraph.execute_command too;
-                # overriding this boundary prevents those reads bypassing ownership.
-                graph.execute_command = transport.command
-            return SafeGraph(graph, getattr(self, "_write_intent_hook", None))
+        def __init__(self, uri: str, user: str | None, password: str | None, database: str = "neo4j") -> None:
+            """Build the client with bounded pool/timeouts and no automatic retries or index task.
+
+            The upstream constructor opens a default-config client (and may schedule an index
+            task when a loop is running); both are discarded so only the hardened client exists.
+            Index setup runs once from TemporalGraph.initialize instead.
+            """
+            super().__init__(uri, user, password, database)
+            default_client = self.client
+            if self._init_task is not None:
+                self._init_task.cancel()
+                self._init_task = None
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                # Worker thread: nothing is connected yet, so closing only marks it closed.
+                asyncio.run(default_client.close())
+            self.client = AsyncGraphDatabase.driver(
+                uri, auth=(user or "", password or ""), max_connection_pool_size=4,
+                connection_timeout=2, connection_acquisition_timeout=QUERY_SECONDS,
+                # Retrying a write transaction function could double-apply an unknown outcome.
+                max_transaction_retry_time=0, fetch_size=MAX_SUPPORT + 2,
+            )
+
+        async def _transact(
+            self, statements: Sequence[tuple[str, dict[str, Any]]], *, read: bool,
+            metadata: dict[str, str], scope: _DispatchScope | None,
+        ) -> list[tuple[list[dict[str, Any]], list[str]]]:
+            """Run statements in ONE explicit tagged transaction and return (rows, keys) for each.
+
+            Never uses driver.execute_query/execute_read/execute_write because they retry.
+            Row count above MAX_SUPPORT + 1 aborts and rolls back. A write that fails after the
+            commit was sent, is cancelled or times out has an unknown outcome: the scope is
+            poisoned so no later command runs under it, and GraphOperationUnknown is raised.
+            """
+            if not metadata.get("umwelt_dispatch"):
+                # Untagged transactions could not be found and terminated by cessation.
+                raise GraphOperationError("graph_dispatch_command_denied")
+            if scope is not None:
+                if scope.poisoned:
+                    raise GraphOperationUnknown("graph_dispatch_connection_lost")
+                scope.pending += 1
+            commit_sent = False
+            try:
+                async with asyncio.timeout(QUERY_SECONDS):
+                    async with self.client.session(
+                        database=self._database, default_access_mode=READ_ACCESS if read else WRITE_ACCESS,
+                    ) as session:
+                        tx = await session.begin_transaction(metadata=metadata, timeout=QUERY_SECONDS)
+                        try:
+                            outputs: list[tuple[list[dict[str, Any]], list[str]]] = []
+                            for query, params in statements:
+                                result = await tx.run(query, params)
+                                rows: list[dict[str, Any]] = []
+                                async for record in result:
+                                    rows.append(_to_native(record.data()))
+                                    if len(rows) > MAX_SUPPORT + 1:
+                                        raise GraphOperationError("graph_query_result_limit")
+                                outputs.append((rows, list(result.keys())))
+                            commit_sent = True
+                            await tx.commit()
+                        except BaseException:
+                            if not commit_sent:
+                                try:
+                                    await tx.rollback()
+                                except Exception:  # noqa: BLE001  # best effort: server-side timeout reaps it
+                                    logger.debug("Graph rollback failed")
+                            raise
+                return outputs
+            except GraphOperationError:
+                raise
+            except BaseException as exc:
+                if scope is not None and (commit_sent or not read):
+                    scope.poisoned = True
+                if isinstance(exc, Exception):
+                    raise _safe_error(exc) from None
+                raise
+            finally:
+                if scope is not None:
+                    scope.pending -= 1
+
+        async def execute_statements(self, statements: Sequence[tuple[str, dict[str, Any]]]) -> None:
+            """Write statements atomically in one transaction; requires a dispatch scope."""
+            scope = _dispatch_scope.get()
+            if scope is None:
+                raise GraphOperationError("graph_dispatch_ownership_required")
+            await self._transact(statements, read=False, metadata=scope.metadata, scope=scope)
+
+        async def control_query(self, query: str, params: dict[str, Any], *, read: bool) -> list[dict[str, Any]]:
+            """Run an adapter-owned management/probe statement outside any dispatch scope.
+
+            Used for server-setting probes and cessation SHOW/TERMINATE only; carries a
+            fixed control tag so it can never match an operation's dispatch token.
+            """
+            results = await self._transact([(query, params)], read=read, metadata=_CONTROL_METADATA, scope=None)
+            return results[0][0]
 
         async def execute_query(self, cypher_query_: str, **kwargs: Any) -> Any:
-            """Normalize Falkor values, execute safely, and translate rows for Graphiti."""
-            from graphiti_core.driver.falkordb_driver import _strip_nul_bytes
+            """Run one Graphiti statement as a guarded transaction and return (rows, None, keys).
 
-            params = _strip_nul_bytes(_datetimes_to_strings(dict(kwargs)))
+            Requires an active dispatch scope except for the health probe and index DDL.
+            """
+            params = dict(kwargs.pop("params", None) or {})
+            routing = kwargs.pop("routing_", None)
+            database = kwargs.pop("database_", None)
+            if database not in (None, self._database):
+                raise GraphOperationError("graph_dispatch_partition_mismatch")
+            params.update(kwargs)
+            read = getattr(routing, "value", routing) == "r"
+            scope = _dispatch_scope.get()
+            if scope is not None:
+                metadata = scope.metadata
+            elif cypher_query_ == _HEALTH_QUERY or cypher_query_.lstrip().startswith(_SETUP_PREFIXES):
+                metadata = _SETUP_METADATA
+            else:
+                raise GraphOperationError("graph_dispatch_ownership_required")
             try:
-                result = await self._get_graph(self._database).query(cypher_query_, params)
+                results = await self._transact(
+                    [(cypher_query_, _strip_nul_bytes(params))], read=read, metadata=metadata, scope=scope,
+                )
             except GraphOperationError as exc:
                 if str(exc) == "graph_index_exists":
                     return None
                 raise
-            if len(result.result_set) > MAX_SUPPORT + 1:
-                raise GraphOperationError("graph_query_result_limit")
-            headers = [column[1] for column in result.header]
-            records = [
-                {name: row[index] if index < len(row) else None for index, name in enumerate(headers)}
-                for row in result.result_set
-            ]
-            return records, headers, None
+            rows, keys = results[0]
+            return rows, None, keys
 
         def session(self, database: str | None = None) -> Any:
             """Return a protected session retaining the request-scoped prewrite hook."""
-            return SafeSession(self._get_graph(database))
-
-        def clone(self, database: str) -> Any:
-            """Copy driver state for a partition without creating a new client or index task."""
-            import copy
-
-            clone = copy.copy(self)
-            clone._database = self.default_group_id if database == self.default_group_id else database
-            clone._init_task = None
-            clone._owns_client = False  # type: ignore[attr-defined]  # attribute declared by FalkorDriver at runtime only
-            return clone
+            return SafeSession(self)
 
         async def health_check(self) -> None:
             """Run one connectivity query without printing upstream exceptions."""
-            await self.execute_query("RETURN 1 AS healthy")
+            await self.execute_query(_HEALTH_QUERY, routing_="r")
 
         async def close(self) -> None:
-            """Await the owning shared transport close and mark it closed only on success.
+            """Await the owning client close and mark it closed only on success.
 
             Lifecycle callers shield and join this coroutine under heavy ownership;
             no local timeout cancels upstream cleanup or masks a retryable failure.
             """
-            if getattr(self, "_owns_client", True) and not getattr(self, "_transport_closed", False):
-                await super().close()
+            if not getattr(self, "_transport_closed", False):
+                await self.client.close()
                 self._transport_closed = True
 
     return SafeDriver
@@ -1758,8 +1822,6 @@ class TemporalGraph:
         self._driver: Any | None = None
         self._graphiti_type: Any | None = None
         self._lock = asyncio.Lock()
-        self._partition_index_lock = asyncio.Lock()
-        self._indexed_partitions: OrderedDict[str, None] = OrderedDict()
 
     async def initialize(self) -> GraphState:
         """Adopt a usable client after owned construction, cleanup and index setup.
@@ -1795,15 +1857,10 @@ class TemporalGraph:
                 driver_type = _make_driver_type()
 
                 def construct() -> Any:
-                    """Own synchronous INFO off-loop with bounded transport and no retries."""
-                    module = importlib.import_module("falkordb.asyncio")
-                    client = module.FalkorDB(
-                        host=config.host, port=config.port, username=config.username,
-                        password=config.password, socket_connect_timeout=2,
-                        socket_timeout=QUERY_SECONDS, retry_on_timeout=False,
-                        max_connections=4, protocol=2,
+                    """Build the bounded, non-retrying Neo4j client off-loop (no network I/O happens here)."""
+                    return driver_type(
+                        f"bolt://{config.host}:{config.port}", config.username, config.password, config.database,
                     )
-                    return driver_type(falkor_db=client, database=config.database)
 
                 loop = asyncio.get_running_loop()
                 deadline = loop.time() + STARTUP_SECONDS
@@ -1945,81 +2002,71 @@ class TemporalGraph:
 
     @asynccontextmanager
     async def dispatch_session(self, context: OperationAuthorization) -> AsyncIterator[DispatchOwnership]:
-        """Journal a dedicated Redis socket before all operation graph commands.
+        """Journal a unique dispatch token before all operation graph transactions.
 
         The owner callback must commit exact identity under its live operation
         lease; no graph command precedes that durable commit. Parent holds this
-        scope around the complete awaited adapter operation. Raw socket use never
-        reconnects; cancellation disconnects it and leaves remote outcome to exact
-        cessation verification. Setup probes contain no private evidence.
-        Requires positive modern server TIMEOUT_DEFAULT/MAX configuration for
-        bounded write commands, verifies it read-only, and never changes settings.
-        Completion callback runs only after normal fully replied scope/socket
-        closure, updating this exact dispatch rather than any earlier unknown one.
+        scope around the complete awaited adapter operation. Every transaction in
+        the scope carries the token as metadata and is never retried; cancellation
+        leaves the remote outcome to exact cessation verification (terminating
+        the tagged transactions). Setup probes contain no private evidence.
+        Requires a positive server db.transaction.timeout (read-only probe; the
+        adapter never changes settings) so abandoned transactions cannot run forever.
+        Completion callback runs only after normal fully replied scope closure,
+        updating this exact dispatch rather than any earlier unknown one.
         """
         if (self.state != GraphState.READY or self._driver is None
                 or context.record_dispatch_ownership is None
-                or _dispatch_transport.get() is not None):
+                or _dispatch_scope.get() is not None):
             raise GraphOperationError("graph_dispatch_ownership_required")
-        pool = self._driver.client.connection.connection_pool
-        connection = None
         context_token = None
+        scope: _DispatchScope | None = None
         replied = False
         try:
             async with asyncio.timeout(QUERY_SECONDS):
-                connection = await pool.get_connection()
-                await _send_owned_command(connection, "INFO", "server")
-                info = await connection.read_response()
-                run_id = next((line.split(":", 1)[1].strip() for line in str(info).splitlines()
-                               if line.startswith("run_id:")), "")
-                await _send_owned_command(connection, "CLIENT", "ID")
-                client_id = await connection.read_response()
-                await _send_owned_command(connection, "GRAPH.CONFIG", "GET", "TIMEOUT_DEFAULT")
-                default_timeout = await connection.read_response()
-                await _send_owned_command(connection, "GRAPH.CONFIG", "GET", "TIMEOUT_MAX")
-                maximum_timeout = await connection.read_response()
-                if (not isinstance(default_timeout, list) or len(default_timeout) != 2
-                        or not isinstance(maximum_timeout, list) or len(maximum_timeout) != 2
-                        or max(int(default_timeout[1]), int(maximum_timeout[1])) <= 0
-                        or (int(maximum_timeout[1]) > 0 and int(maximum_timeout[1]) < QUERY_SECONDS * 1000)):
+                rows = await self._driver.control_query(
+                    "SHOW SETTINGS YIELD name, value WHERE name = 'db.transaction.timeout'", {}, read=True,
+                )
+                if len(rows) != 1 or not _positive_server_duration(rows[0].get("value")):
                     raise GraphOperationError("graph_write_timeout_unconfigured")
-                ownership = DispatchOwnership(context.operation_id, context.group_id, run_id, client_id)
+                # Neo4j exposes no comparable server/client identity; mint an unguessable one.
+                ownership = DispatchOwnership(
+                    context.operation_id, context.group_id,
+                    secrets.token_hex(20), secrets.randbelow(2**63 - 2) + 1,
+                )
                 await context.record_dispatch_ownership(ownership)
-            transport = _OwnedDispatchTransport(connection, ownership)
-            context_token = _dispatch_transport.set(transport)
+            scope = _DispatchScope(ownership)
+            context_token = _dispatch_scope.set(scope)
             yield ownership
-            replied = not transport.poisoned and transport.pending_commands == 0
+            replied = not scope.poisoned and scope.pending == 0
         except GraphOperationError:
             raise
         except Exception as exc:  # noqa: BLE001  # error boundary: re-mapped to a sanitized error
             raise _safe_error(exc) from None
         finally:
             if context_token is not None:
-                live_transport = _dispatch_transport.get()
-                if live_transport is not None:
-                    live_transport.poisoned = True
-                _dispatch_transport.reset(context_token)
-            if connection is not None:
-                # Closing a socket is not itself proof of prior remote completion.
-                await connection.disconnect()
-                await pool.release(connection)
+                # Late tasks must not reuse a closed scope; closing is not proof of remote completion.
+                if scope is not None:
+                    scope.poisoned = True
+                _dispatch_scope.reset(context_token)
         if replied and context.record_dispatch_completion is not None:
-            # Exact synchronous reply proof closes only this dispatch journal row.
+            # Exact reply proof closes only this dispatch journal row.
             async with asyncio.timeout(QUERY_SECONDS):
                 await context.record_dispatch_completion(ownership)
 
     async def verify_dispatch_cessation(
         self, ownership: DispatchOwnership, context: OperationAuthorization,
     ) -> bool:
-        """Disconnect exactly an owner-journaled synchronous dispatch and prove cessation.
+        """Terminate exactly an owner-journaled dispatch's transactions and prove cessation.
 
         Owner callback must compare stored ownership, current recovery lease and
-        stopped local tasks before any CLIENT KILL. Same-process Redis main-thread
-        kill reply follows every earlier synchronous EXEC and prevents buffered
-        commands on the killed socket. A changed process run_id proves old process
-        cessation without killing a potentially reused ID. No graph/model context
-        is loaded; this says nothing about success, requiring exact-ID reconciliation.
-        Legacy asynchronous dispatch without this ownership cannot use this proof.
+        stopped local tasks before any TERMINATE; it is called again immediately
+        before terminating. Only transactions whose metadata carries the journaled
+        token are listed and terminated, then SHOW is polled (bounded by
+        QUERY_SECONDS) until none remain, so no tagged statement can still commit.
+        A restarted server has no such transactions, which also proves cessation.
+        No graph/model context is loaded; this says nothing about success,
+        requiring exact-ID reconciliation.
         """
         if (self.state != GraphState.READY or self._driver is None
                 or ownership.group_id != context.group_id
@@ -2027,62 +2074,44 @@ class TemporalGraph:
                 or context.authorize_dispatch_cessation is None):
             raise GraphOperationError("graph_dispatch_cessation_denied")
         await context.authorize_dispatch_cessation(ownership)
-        pool = self._driver.client.connection.connection_pool
-        connection = None
+        show = ("SHOW TRANSACTIONS YIELD transactionId, metaData "
+                "WHERE metaData.umwelt_dispatch = $token RETURN transactionId")
+        token = _DispatchScope(ownership).token
+        driver = self._driver
         try:
             async with asyncio.timeout(QUERY_SECONDS):
-                connection = await pool.get_connection()
-                await _send_owned_command(connection, "INFO", "server")
-                info = await connection.read_response()
-                run_id = next((line.split(":", 1)[1].strip() for line in str(info).splitlines()
-                               if line.startswith("run_id:")), "")
-                if not re.fullmatch(r"[0-9a-f]{40}", run_id):
-                    raise GraphOperationError("graph_dispatch_server_identity")
-                if run_id != ownership.server_run_id:
+                rows = await driver.control_query(show, {"token": token}, read=True)
+                if not rows:
                     return True
-                await _send_owned_command(connection, "CLIENT", "ID")
-                if await connection.read_response() == ownership.client_id:
-                    raise GraphOperationError("graph_dispatch_cessation_connection")
+                ids = [str(row["transactionId"]) for row in rows[:MAX_SUPPORT]]
+                # Re-authorize right before the destructive command: the lease may have changed.
                 await context.authorize_dispatch_cessation(ownership)
-                if not connection.is_connected:
-                    raise GraphOperationError("graph_dispatch_connection_lost")
-                # Same raw socket for INFO and KILL: no reconnect can change the
-                # server between identity validation and killing an exact client.
-                await _send_owned_command(connection, "CLIENT", "KILL", "ID", ownership.client_id, "SKIPME", "NO")
-                killed = await connection.read_response()
-                if killed not in (0, 1):
-                    raise GraphOperationError("graph_dispatch_cessation_result")
+                await driver.control_query("TERMINATE TRANSACTIONS $ids", {"ids": ids}, read=False)
+                while await driver.control_query(show, {"token": token}, read=True):
+                    await asyncio.sleep(0.1)
                 return True
-        finally:
-            if connection is not None:
-                await connection.disconnect()
-                await pool.release(connection)
+        except GraphOperationError:
+            raise
+        except Exception as exc:  # noqa: BLE001  # error boundary: re-mapped to a sanitized error
+            raise _safe_error(exc) from None
 
     async def _partition_driver(
         self, group_id: str,
         write_intent_hook: Callable[..., Awaitable[None]] | None = None,
     ) -> Any:
-        """Return a partition clone only inside a journaled owned dispatch scope.
+        """Return a per-operation driver copy only inside a journaled dispatch scope.
 
-        Index setup and all graph query/session/schema paths consume that same
-        non-reconnecting transport; receipt hooks retain their original ordering.
+        The copy shares the single client and database; partition isolation comes
+        from group_id predicates in every query, not from the database. Indexes are
+        built once in initialize. Receipt hooks retain their original ordering.
         """
         if self._driver is None:
             raise GraphOperationError("graph_unavailable")
-        transport = _dispatch_transport.get()
-        if transport is None or transport.ownership.group_id != group_id:
+        scope = _dispatch_scope.get()
+        if scope is None or scope.ownership.group_id != group_id:
             raise GraphOperationError("graph_dispatch_ownership_required")
-        driver = self._driver.clone(group_id)
-        async with self._partition_index_lock:
-            if group_id not in self._indexed_partitions:
-                await driver.build_indices_and_constraints(delete_existing=False)
-                self._indexed_partitions[group_id] = None
-                if len(self._indexed_partitions) > MAX_SUPPORT:
-                    self._indexed_partitions.popitem(last=False)
-            else:
-                self._indexed_partitions.move_to_end(group_id)
-        if write_intent_hook is not None:
-            driver._write_intent_hook = write_intent_hook
+        driver = copy.copy(self._driver)
+        driver._write_intent_hook = write_intent_hook
         return driver
 
     async def _record_bulk_write_intent(
@@ -2139,6 +2168,7 @@ class TemporalGraph:
                 ),
             ) for entity_id in entity_ids))
         prior_edges = await EntityEdge.get_by_uuids(driver, list(fact_ids))
+        _require_group(prior_edges, request.group_id)
         prior_by_id = {str(item.uuid): item for item in prior_edges}
         if set(prior_by_id) - set(fact_ids):
             raise GraphOperationError("graph_write_intent_prior_state_invalid")
@@ -2317,8 +2347,8 @@ class TemporalGraph:
     ) -> dict[str, Any]:
         """Upsert a stable episode under its full source/evidence fence and durable write receipts.
 
-        T3 commits mapping and intent first. Falkor writes span multiple
-        non-atomic statements; a timeout returns unknown and must be reconciled
+        T3 commits mapping and intent first. Graph writes outside the bulk
+        transaction span multiple non-atomic statements; a timeout returns unknown and must be reconciled
         by exact UUID before retrying.
         """
         if (request.group_id != context.group_id
@@ -2546,11 +2576,11 @@ class TemporalGraph:
                     for fact in facts:
                         await fact.load_fact_embedding(driver)
                     link_records, _, _ = await driver.execute_query(
-                        "MATCH (source)-[edge]-(entity:Entity) WHERE entity.uuid IN $entity_ids "
+                        "MATCH (source)-[edge]-(entity:Entity {group_id: $group_id}) WHERE entity.uuid IN $entity_ids "
                         "RETURN DISTINCT edge.uuid AS edge_id, type(edge) AS relationship_type, "
                         "startNode(edge).uuid AS source_node_id, endNode(edge).uuid AS target_node_id, "
                         "edge.episodes AS episode_ids ORDER BY edge.uuid LIMIT $limit",
-                        entity_ids=list(entity_ids), limit=MAX_SUPPORT + 1,
+                        entity_ids=list(entity_ids), group_id=context.group_id, limit=MAX_SUPPORT + 1,
                     ) if entity_ids else ([], [], None)
                     incident_links: list[ExactGraphLink] = []
                     if not isinstance(link_records, list) or len(link_records) > MAX_SUPPORT:
@@ -2673,11 +2703,11 @@ class TemporalGraph:
         async def incident_links(driver: Any, entity_id: str) -> tuple[ExactGraphLink, ...]:
             """Read the complete bounded exact-ID link inventory for one entity node."""
             rows, _, _ = await driver.execute_query(
-                "MATCH (source)-[edge]-(entity:Entity {uuid: $entity_id}) "
+                "MATCH (source)-[edge]-(entity:Entity {uuid: $entity_id, group_id: $group_id}) "
                 "RETURN edge.uuid AS edge_id, type(edge) AS relationship_type, "
                 "startNode(edge).uuid AS source_node_id, endNode(edge).uuid AS target_node_id, "
                 "edge.episodes AS episode_ids ORDER BY edge.uuid LIMIT $limit",
-                entity_id=entity_id, limit=MAX_SUPPORT + 1,
+                entity_id=entity_id, group_id=context.group_id, limit=MAX_SUPPORT + 1,
             )
             if not isinstance(rows, list) or len(rows) > MAX_SUPPORT:
                 raise GraphOperationError("graph_node_link_inventory_invalid")
@@ -2715,6 +2745,8 @@ class TemporalGraph:
                         except Exception as exc:  # noqa: BLE001  # error boundary: re-mapped to a sanitized error
                             if type(exc).__name__ != "NodeNotFoundError":
                                 raise _safe_error(exc) from None
+                        if entity is not None:
+                            _require_group([entity], context.group_id)
                         links = await incident_links(driver, action.graph_entity_uuid)
                         if (links != action.expected_incident_links
                                 and not (entity is None and not links and action.action == "delete_for_rebuild")):
@@ -2766,6 +2798,7 @@ class TemporalGraph:
                                          if action.graph_entity_uuid in item.entity_ids
                                          for link in item.incident_links]
                                 + [link.edge_id for link in action.expected_incident_links],
+                                context.group_id,
                             ):
                                 deleted[:] = [value for value in deleted if value != action.graph_entity_uuid]
                                 unwritten[:] = [value for value in unwritten if value != action.graph_entity_uuid]
@@ -2803,7 +2836,7 @@ class TemporalGraph:
                             replacement = EntityNode(
                                 uuid=action.graph_entity_uuid, group_id=context.group_id,
                                 name=node_name, summary=node_summary, attributes={},
-                                # Falkor's SET n: labels are additive, so preserve the exact current physical labels.
+                                # Label assignment is additive (SET n:$(labels)), so preserve the exact current physical labels.
                                 labels=(list(entity.labels) if entity is not None else ["Entity"]),
                                 created_at=(entity.created_at if entity is not None
                                             else action.replacement_created_at),
@@ -2844,6 +2877,8 @@ class TemporalGraph:
                             except Exception as exc:
                                 if type(exc).__name__ != "NodeNotFoundError":
                                     raise
+                            if latest is not None:
+                                _require_group([latest], context.group_id)
                             if ((_entity_state_fingerprint(latest, context.embedding.dimensions)
                                  if latest is not None else None)
                                     != current_fingerprint
@@ -2999,6 +3034,7 @@ class TemporalGraph:
                     driver = await self._partition_driver(context.group_id)
                     for action in actions:
                         current_rows = await EntityEdge.get_by_uuids(driver, [action.fact_id])
+                        _require_group(current_rows, context.group_id)
                         current_by_id = {str(item.uuid): item for item in current_rows}
                         if len(current_by_id) != len(current_rows):
                             unresolved.append(action.fact_id)
@@ -3053,10 +3089,10 @@ class TemporalGraph:
 
                         endpoint_ids = sorted({action.source_node_id, action.target_node_id})
                         endpoint_rows, _, _ = await driver.execute_query(
-                            "MATCH (node:Entity) WHERE node.uuid IN $node_ids "
+                            "MATCH (node:Entity {group_id: $group_id}) WHERE node.uuid IN $node_ids "
                             "RETURN node.uuid AS node_id, node.group_id AS group_id "
                             "ORDER BY node.uuid LIMIT $limit",
-                            node_ids=endpoint_ids, limit=len(endpoint_ids) + 1,
+                            node_ids=endpoint_ids, group_id=context.group_id, limit=len(endpoint_ids) + 1,
                         )
                         if (not isinstance(endpoint_rows, list) or len(endpoint_rows) != len(endpoint_ids)
                                 or len({row.get("node_id") for row in endpoint_rows if isinstance(row, dict)})
@@ -3132,16 +3168,17 @@ class TemporalGraph:
                         assert context.authorize_fact_recovery is not None
                         await context.authorize_fact_recovery(tuple(retained_receipts), actions)
                         fresh_rows = await EntityEdge.get_by_uuids(driver, [action.fact_id])
+                        _require_group(fresh_rows, context.group_id)
                         fresh = next((item for item in fresh_rows if str(item.uuid) == action.fact_id), None)
                         if fresh is None:
                             unresolved.append(action.fact_id)
                             continue
                         await fresh.load_fact_embedding(driver)
                         fresh_endpoint_rows, _, _ = await driver.execute_query(
-                            "MATCH (node:Entity) WHERE node.uuid IN $node_ids "
+                            "MATCH (node:Entity {group_id: $group_id}) WHERE node.uuid IN $node_ids "
                             "RETURN node.uuid AS node_id, node.group_id AS group_id "
                             "ORDER BY node.uuid LIMIT $limit",
-                            node_ids=endpoint_ids, limit=len(endpoint_ids) + 1,
+                            node_ids=endpoint_ids, group_id=context.group_id, limit=len(endpoint_ids) + 1,
                         )
                         if (_fact_recovery_fingerprint(fresh, context.embedding.dimensions)
                                 != current_fingerprint
@@ -3156,6 +3193,7 @@ class TemporalGraph:
                         if replacement_edge is not None:
                             await replacement_edge.save(driver)
                             saved_rows = await EntityEdge.get_by_uuids(driver, [action.fact_id])
+                            _require_group(saved_rows, context.group_id)
                             saved = next((item for item in saved_rows if str(item.uuid) == action.fact_id), None)
                             if saved is None:
                                 unresolved.append(action.fact_id)
@@ -3320,6 +3358,7 @@ class TemporalGraph:
                     if len(candidate_fact_ids) > MAX_SUPPORT:
                         raise GraphOperationError("graph_episode_receipt_mismatch")
                     edges = await EntityEdge.get_by_uuids(driver, list(candidate_fact_ids))
+                    _require_group(edges, context.group_id)
                     observed_fact_fingerprints: dict[str, str] = {}
                     cross_rebuild_absent_fact_ids: set[str] = set()
                     for edge in edges:
@@ -3355,10 +3394,10 @@ class TemporalGraph:
                         driver, list(known_mention_ids),
                     ) if known_mention_ids else []
                     records, _, _ = await driver.execute_query(
-                        "MATCH (episode:Episodic {uuid: $episode_id})-"
+                        "MATCH (episode:Episodic {uuid: $episode_id, group_id: $group_id})-"
                         "[mention:MENTIONS]->() RETURN mention.uuid AS mention_id "
                         "ORDER BY mention.uuid LIMIT $limit",
-                        episode_id=str(episode_id), limit=MAX_SUPPORT + 1,
+                        episode_id=str(episode_id), group_id=context.group_id, limit=MAX_SUPPORT + 1,
                     )
                     if not isinstance(records, list) or len(records) > MAX_SUPPORT:
                         raise GraphOperationError("graph_episode_mention_inventory_invalid")
@@ -3536,17 +3575,19 @@ class TemporalGraph:
                     if episode is not None:
                         await self._validate_partition(context, "delete", str(episode_id))
                         latest_episode = await EpisodicNode.get_by_uuid(driver, str(episode_id))
+                        _require_group([latest_episode], context.group_id)
                         if (_episode_state_fingerprint(latest_episode)
                                 not in {item.episode_state_fingerprint for item in receipts
                                         if item.episode_state_fingerprint is not None}):
                             raise GraphOperationError("graph_delete_episode_recheck_failed")
                         latest_mentions = await EpisodicEdge.get_by_uuids(driver, list(known_mention_ids)) \
                             if known_mention_ids else []
+                        _require_group(latest_mentions, context.group_id)
                         live_links, _, _ = await driver.execute_query(
-                            "MATCH (episode:Episodic {uuid: $episode_id})-"
+                            "MATCH (episode:Episodic {uuid: $episode_id, group_id: $group_id})-"
                             "[mention:MENTIONS]->() RETURN mention.uuid AS mention_id "
                             "ORDER BY mention.uuid LIMIT $limit",
-                            episode_id=str(episode_id), limit=MAX_SUPPORT + 1,
+                            episode_id=str(episode_id), group_id=context.group_id, limit=MAX_SUPPORT + 1,
                         )
                         live_ids = {row.get("mention_id") for row in live_links if isinstance(row, dict)} \
                             if isinstance(live_links, list) else set()
@@ -3568,10 +3609,11 @@ class TemporalGraph:
                         episode_absent = True
                     remaining_mentions = await EpisodicEdge.get_by_uuids(driver, list(known_mention_ids)) \
                         if known_mention_ids else []
+                    _require_group(remaining_mentions, context.group_id)
                     reverse_support, _, _ = await driver.execute_query(
-                        "MATCH ()-[edge]->() WHERE $episode_id IN coalesce(edge.episodes, []) "
+                        "MATCH ()-[edge {group_id: $group_id}]->() WHERE $episode_id IN coalesce(edge.episodes, []) "
                         "RETURN edge.uuid AS fact_id ORDER BY edge.uuid LIMIT $limit",
-                        episode_id=str(episode_id), limit=MAX_SUPPORT + 1,
+                        episode_id=str(episode_id), group_id=context.group_id, limit=MAX_SUPPORT + 1,
                     )
                     if (not isinstance(reverse_support, list) or len(reverse_support) > MAX_SUPPORT
                             or any(not isinstance(row, dict) or not _UUID.fullmatch(str(row.get("fact_id")))
@@ -3591,11 +3633,11 @@ class TemporalGraph:
                     async def read_node_links(entity_id: str) -> tuple[ExactGraphLink, ...]:
                         """Read and validate the complete bounded incident-link set for terminal node proof."""
                         rows, _, _ = await driver.execute_query(
-                            "MATCH (source)-[edge]-(entity:Entity {uuid: $entity_id}) "
+                            "MATCH (source)-[edge]-(entity:Entity {uuid: $entity_id, group_id: $group_id}) "
                             "RETURN edge.uuid AS edge_id, type(edge) AS relationship_type, "
                             "startNode(edge).uuid AS source_node_id, endNode(edge).uuid AS target_node_id, "
                             "edge.episodes AS episode_ids ORDER BY edge.uuid LIMIT $limit",
-                            entity_id=entity_id, limit=MAX_SUPPORT + 1,
+                            entity_id=entity_id, group_id=context.group_id, limit=MAX_SUPPORT + 1,
                         )
                         if not isinstance(rows, list) or len(rows) > MAX_SUPPORT:
                             raise GraphOperationError("graph_delete_node_links_invalid")
@@ -3625,6 +3667,8 @@ class TemporalGraph:
                         except Exception as exc:  # noqa: BLE001  # error boundary: re-mapped to a sanitized error
                             if type(exc).__name__ != "NodeNotFoundError":
                                 raise _safe_error(exc) from None
+                        if entity is not None:
+                            _require_group([entity], context.group_id)
                         links = await read_node_links(action.graph_entity_uuid)
                         fingerprint = (
                             _entity_state_fingerprint(entity, context.embedding.dimensions)
@@ -3722,6 +3766,7 @@ class TemporalGraph:
                                              if action.graph_entity_uuid in item.entity_ids
                                              for link in item.incident_links]
                                     + [link.edge_id for link in action.expected_incident_links],
+                                    context.group_id,
                                 )):
                                     node_converged.add(action.graph_entity_uuid)
 
@@ -3761,6 +3806,7 @@ class TemporalGraph:
                     authorized_absent_fact_ids.update(cross_rebuild_absent_fact_ids)
                     remaining_facts = await EntityEdge.get_by_uuids(driver, list(known_fact_ids)) \
                         if known_fact_ids else []
+                    _require_group(remaining_facts, context.group_id)
                     current_fact_by_id = {str(edge.uuid): edge for edge in remaining_facts}
                     if (len(current_fact_by_id) != len(remaining_facts)
                             or not set(current_fact_by_id) <= set(known_fact_ids)):

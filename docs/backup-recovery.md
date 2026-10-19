@@ -8,7 +8,7 @@ Create a new archive from the repository root:
 make backup BACKUP=./private-backups/umwelt-2026-10-06.age DRAIN_TIMEOUT=600
 ```
 
-Restore always creates a uniquely named Compose project with its own PostgreSQL and named volumes. It checks the archive checksums, archived database identity, known migration ancestry, migrations to current heads, and component-specific graph/n8n state. Validation API and worker run behind a quiesced backup fence on an internal-only network. n8n workflow activation remains paused for review. `fully_restored` stays false for this isolated validation result; it is not a claim that schedules or owner operations have been reconciled.
+Restore always creates a uniquely named Compose project with its own PostgreSQL and named volumes. It checks the archive checksums, archived database identity, known migration ancestry, migrations to current heads, and component-specific graph/n8n state. The optional Neo4j graph volume is backed up offline: Community edition has no online backup or `STOP DATABASE`, so the backup stops the `graph` container and archives its data volume (schema `neo4j-5.26-data-volume-v1`); restore starts it and requires the `neo4j` database to report `online`. Archives with any other graph format (for example pre-Neo4j ones) are rejected as `incompatible_format`. Validation API and worker run behind a quiesced backup fence on an internal-only network. n8n workflow activation remains paused for review. `fully_restored` stays false for this isolated validation result; it is not a claim that schedules or owner operations have been reconciled.
 
 ```sh
 make restore BACKUP=./private-backups/umwelt-2026-10-06.age KEEP_ISOLATED=1

@@ -179,9 +179,8 @@ dependencies = [
     { name = "authlib" },
     { name = "backoff" },
     { name = "cryptography" },
-    { name = "falkordb" },
     { name = "fastapi" },
-    { name = "graphiti-core", extra = ["falkordb"] },
+    { name = "graphiti-core" },
     { name = "httpx" },
     { name = "httpx2" },
     { name = "itsdangerous" },
@@ -198,7 +197,6 @@ dependencies = [
     { name = "psycopg-pool" },
     { name = "pydantic-settings" },
     { name = "pypdf" },
-    { name = "python-dateutil" },
     { name = "python-docx" },
     { name = "python-multipart" },
     { name = "pytz" },
@@ -231,9 +229,8 @@ requires-dist = [
     { name = "authlib", specifier = ">=1.6,<2" },
     { name = "backoff", specifier = "==2.2.1" },
     { name = "cryptography", specifier = ">=50,<51" },
-    { name = "falkordb", specifier = "==1.2.0" },
     { name = "fastapi", specifier = ">=0.116,<1" },
-    { name = "graphiti-core", extras = ["falkordb"], specifier = "==0.30.2" },
+    { name = "graphiti-core", specifier = "==0.30.2" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "httpx2", specifier = "==2.13.1" },
     { name = "itsdangerous", specifier = ">=2.2,<3" },
@@ -250,7 +247,6 @@ requires-dist = [
     { name = "psycopg-pool", specifier = "==3.3.0" },
     { name = "pydantic-settings", specifier = ">=2.10,<3" },
     { name = "pypdf", specifier = ">=6,<7" },
-    { name = "python-dateutil", specifier = "==2.9.0.post0" },
     { name = "python-docx", specifier = ">=1.2,<2" },
     { name = "python-multipart", specifier = ">=0.0.20,<1" },
     { name = "pytz", specifier = "==2026.4" },
@@ -534,19 +530,6 @@ wheels = [
 ]
 
 [[package]]
-name = "falkordb"
-version = "1.2.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "python-dateutil" },
-    { name = "redis" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/9e/3b/2d846e877aec104841c523e99e1c584d4aa2423a0e31afee5b8369e3c8c5/falkordb-1.2.0.tar.gz", hash = "sha256:ce57365b86722d538e75aa5d438de67ecd8eb9478da612506d9812cd7f182d0b", size = 28976, upload-time = "2025-06-30T18:03:37.829Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/39/81/1265e623c989bb8c12fe566645bad390d04e66fa62b84ca656e5bafce1f0/falkordb-1.2.0-py3-none-any.whl", hash = "sha256:7572d9cc377735d22efc52fe6fe73c7a435422c827b6ea3ca223a850a77be12e", size = 34737, upload-time = "2025-06-30T18:03:36.582Z" },
-]
-
-[[package]]
 name = "fastapi"
 version = "0.141.1"
 source = { registry = "https://pypi.org/simple" }
@@ -587,11 +570,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/4a/a1/3e0fe119b6f3116ef7671ae1b2d98ef70655ac634d9914e748b5f97ecacb/graphiti_core-0.30.2.tar.gz", hash = "sha256:b8ac6999705d350ebb53d799505d49b76f5d74c20265a09df4094645b5d8ada9", size = 6978112, upload-time = "2026-09-08T20:39:14.59Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/13/19/7ee37826a9dff81eb4d242a785c4ca76d2d510528dd52fc7dd10fb45d9cd/graphiti_core-0.30.2-py3-none-any.whl", hash = "sha256:97674a49514130db175faecf23221ce9338240be3cbe13a7e23e5a5033892b9f", size = 363163, upload-time = "2026-09-08T20:39:12.422Z" },
-]
-
-[package.optional-dependencies]
-falkordb = [
-    { name = "falkordb" },
 ]
 
 [[package]]
@@ -1800,18 +1778,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/43/7c/d36d04db312ecf4298932ef77e6e4a9e8ad017906e24e34f0b0c361a2473/pytest_asyncio-1.4.0.tar.gz", hash = "sha256:c6c0d2259945122819f171a32ecea2c349ead889ee28176caaf492143424be42", size = 58514, upload-time = "2026-05-26T09:56:04.083Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/03/e2/08a497ef684b88559c9cc5f4ad53a37e7b99e727094a86d6ea32536d5d3c/pytest_asyncio-1.4.0-py3-none-any.whl", hash = "sha256:933ca923a23075a87fb7070c0ec272a6848489824d887c85c812670932835aa1", size = 16930, upload-time = "2026-05-26T09:56:02.576Z" },
-]
-
-[[package]]
-name = "python-dateutil"
-version = "2.9.0.post0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "six" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/66/c0/0c8b6ad9f17a802ee498c46e004a0eb49bc148f2fd230864601a86dcf6db/python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3", size = 342432, upload-time = "2024-03-01T18:36:20.211Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ec/57/56b9bcc3c9c6a792fcbaf139543cee77261f3651ca9da0c93f5c1221264b/python_dateutil-2.9.0.post0-py2.py3-none-any.whl", hash = "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427", size = 229892, upload-time = "2024-03-01T18:36:18.57Z" },
 ]
 
 [[package]]

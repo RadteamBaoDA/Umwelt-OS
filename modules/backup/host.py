@@ -1021,6 +1021,23 @@ def _decrypt_snapshot(age: str, identity: Path, archive_path: Path, stage: Path)
             process.stdout.close()
 
 
+GRAPH_SCHEMA_VERSION = "neo4j-5.26-data-volume-v1"
+"""Manifest schema version of the Neo4j Community data-volume archive."""
+
+
+def _require_graph_format(graph: Any) -> None:
+    """Fail closed when a complete graph component is not a Neo4j data-volume archive.
+
+    Archives with any legacy graph format cannot be opened by the
+    Neo4j runtime, so they are rejected before any volume is imported.
+    """
+    if graph is not None and graph.status == "complete" and graph.schema_version != GRAPH_SCHEMA_VERSION:
+        raise BackupHostError(
+            "Backup graph component has an incompatible format (incompatible_format); "
+            f"expected {GRAPH_SCHEMA_VERSION}"
+        )
+
+
 def _verify_manifest_keys(manifest: BackupManifest, stage: Path,
                           recipient: str) -> dict[str, str]:
     """Match protected-key digests and n8n payload state before isolated restore."""
@@ -1058,6 +1075,7 @@ def _verify_manifest_keys(manifest: BackupManifest, stage: Path,
     for required in ("postgres", "raw_files", "configuration"):
         if required not in components or components[required].status != "complete":
             raise BackupHostError("Backup is missing a required restore component")
+    _require_graph_format(components.get("graph"))
     n8n = components.get("n8n")
     if n8n is not None and n8n.status == "complete":
         key_path = stage / "n8n" / "encryption-key"
@@ -1201,24 +1219,27 @@ def _run_n8n_validation(
 
 
 def _verify_graph_volume(compose: Compose) -> None:
-    """Open the restored FalkorDB volume with its pinned runtime and query its graph catalog."""
+    """Start the restored Neo4j volume with its pinned runtime and require the ``neo4j`` database online.
+
+    Polls ``cypher-shell`` inside the graph container for up to 180 seconds; the
+    credentials come from the container's own ``GRAPH_USERNAME``/``GRAPH_PASSWORD``
+    environment, never from argv. Raises ``BackupHostError`` when it never reports ``online``.
+    """
     compose.quiet("up", "-d", "graph")
     deadline = time.monotonic() + 180
     while time.monotonic() < deadline:
         try:
-            ping = compose.capture(
+            status = compose.capture(
                 "exec", "-T", "graph", "sh", "-c",
-                'REDISCLI_AUTH="$GRAPH_PASSWORD" redis-cli ping',
-            ).decode("ascii", "strict").strip()
-            if ping == "PONG":
-                compose.capture(
-                    "exec", "-T", "graph", "sh", "-c",
-                    'REDISCLI_AUTH="$GRAPH_PASSWORD" redis-cli --raw GRAPH.LIST',
-                )
+                'cypher-shell -u "$GRAPH_USERNAME" -p "$GRAPH_PASSWORD" --format plain '
+                "\"SHOW DATABASES YIELD name, currentStatus WHERE name='neo4j' RETURN currentStatus\"",
+            ).decode("utf-8", "strict")
+            if "online" in status.split():
                 return
         except (BackupHostError, UnicodeDecodeError):
-            time.sleep(2)
-    raise BackupHostError("Restored graph volume did not open under the pinned FalkorDB runtime")
+            pass
+        time.sleep(2)
+    raise BackupHostError("Restored graph volume did not open under the pinned Neo4j runtime")
 
 
 def restore_backup(
@@ -1406,7 +1427,7 @@ def create_backup(output: Path, *, root: Path | None = None, drain_timeout: int 
     graph_enabled = settings.graph_enabled
     n8n_configured = bool(settings.n8n_api_key.get_secret_value())
     if graph_enabled and "graph" not in running:
-        raise BackupHostError("Enabled FalkorDB profile is not running")
+        raise BackupHostError("Enabled graph profile is not running")
     if n8n_configured and "n8n" not in running:
         raise BackupHostError("Configured n8n connector service is not running")
     if "n8n" in running and not n8n_configured:
@@ -1512,19 +1533,6 @@ def create_backup(output: Path, *, root: Path | None = None, drain_timeout: int 
                 "components": {"raw_files": "complete"},
             })
             if graph_enabled:
-                try:
-                    result = compose.capture(
-                        "exec", "-T", "graph", "sh", "-c",
-                        'REDISCLI_AUTH="$GRAPH_PASSWORD" redis-cli SAVE',
-                    ).decode("utf-8", "strict").strip()
-                    if result != "OK":
-                        raise BackupHostError("FalkorDB persistence snapshot failed")
-                except BaseException:
-                    _record_stage_failure(compose, operation_id, phase, "graph_save", "graph_save_failed")
-                    raise
-                _record_receipt(compose, operation_id, phase, "graph_save", {
-                    "status": "complete", "components": {"graph": "complete"},
-                })
                 recovery_blocked = True
                 try:
                     _stop_service(compose, running, stopped, "graph")
@@ -1598,14 +1606,14 @@ def create_backup(output: Path, *, root: Path | None = None, drain_timeout: int 
             component_specs = {
                 "postgres": ("postgres", schema_version),
                 "raw_files": ("raw_files", "raw-files-v1"),
-                "graph": ("graph", "falkordb-rdb-volume-v1"),
+                "graph": ("graph", GRAPH_SCHEMA_VERSION),
                 "n8n": ("n8n", "n8n-2.5.2"),
                 "configuration": ("configuration", "compose-env-v1"),
             }
             manifest = build_manifest(
                 stage, components=component_specs,
                 required_key_references=required_keys,
-                consistency_method="transactional-admission-barrier+service-stop+postgres-logical-dump+falkordb-save",
+                consistency_method="transactional-admission-barrier+service-stop+postgres-logical-dump+graph-service-stop",
                 operation_id=UUID(operation_id),
             )
             statuses = {item.name: item.status for item in manifest.components}

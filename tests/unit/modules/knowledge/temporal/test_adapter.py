@@ -9,22 +9,32 @@ Tests cover:
 - Fingerprint calculations (_episode_state_fingerprint, _entity_state_fingerprint,
   _fact_state, _canonical_json, _normalized_graph_timestamp).
 - GraphWriteReceipt validation and bounded field constraints.
-- TemporalGraph adapter lifecycle (init, initialize, health, close) and _OwnedDispatchTransport.
+- TemporalGraph adapter lifecycle (init, initialize, health, close), the Neo4j dispatch scope,
+  SafeDriver transaction guard, bulk shape validation, cessation and partition isolation.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
+import re
+from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
+from neo4j import time as neo_time
 
 from modules.knowledge.temporal.adapter import (
+    MAX_SUPPORT,
     CandidateNodeReplacement,
     CanonicalEntityBinding,
     CanonicalNodeRecoveryAction,
+    DispatchOwnership,
     EvidenceIdentity,
     ExactFactState,
     ExactGraphLink,
@@ -35,11 +45,16 @@ from modules.knowledge.temporal.adapter import (
     GraphWriteReceipt,
     TemporalGraph,
     _canonical_json,
+    _dispatch_scope,
+    _DispatchScope,
     _entity_state_fingerprint,
     _episode_state_fingerprint,
     _fact_state,
+    _incident_ids_absent,
+    _make_driver_type,
     _normalized_graph_timestamp,
-    _OwnedDispatchTransport,
+    _require_group,
+    _safe_error,
 )
 
 
@@ -585,7 +600,7 @@ class TestTemporalGraphAdapterLifecycle:
     async def test_initialize_disabled_returns_disabled(self) -> None:
         """Verify initialize returns DISABLED immediately when config is disabled."""
         config = GraphConfiguration(
-            enabled=False, host="localhost", port=6379, username=None, password="secret",
+            enabled=False, host="localhost", port=7687, username=None, password="secret",
             database="test_db",
         )
         adapter = TemporalGraph(config)
@@ -596,7 +611,7 @@ class TestTemporalGraphAdapterLifecycle:
     async def test_initialize_missing_credentials_returns_unconfigured(self) -> None:
         """Verify initialize returns UNCONFIGURED when host or password missing."""
         config = GraphConfiguration(
-            enabled=True, host="", port=6379, username=None, password="secret",
+            enabled=True, host="", port=7687, username=None, password="secret",
             database="test_db",
         )
         adapter = TemporalGraph(config)
@@ -608,7 +623,7 @@ class TestTemporalGraphAdapterLifecycle:
         """Verify health checks report appropriate states."""
         # Disabled
         config_disabled = GraphConfiguration(
-            enabled=False, host="localhost", port=6379, username=None, password="secret",
+            enabled=False, host="localhost", port=7687, username=None, password="secret",
             database="test_db",
         )
         adapter_disabled = TemporalGraph(config_disabled)
@@ -616,7 +631,7 @@ class TestTemporalGraphAdapterLifecycle:
 
         # Unconfigured
         config_unconf = GraphConfiguration(
-            enabled=True, host="", port=6379, username=None, password=None,
+            enabled=True, host="", port=7687, username=None, password=None,
             database="test_db",
         )
         adapter_unconf = TemporalGraph(config_unconf)
@@ -626,7 +641,7 @@ class TestTemporalGraphAdapterLifecycle:
     async def test_close_resets_state(self) -> None:
         """Verify close resets adapter state to unconfigured or disabled."""
         config = GraphConfiguration(
-            enabled=True, host="localhost", port=6379, username=None, password="secret",
+            enabled=True, host="localhost", port=7687, username=None, password="secret",
             database="test_db",
         )
         adapter = TemporalGraph(config)
@@ -638,64 +653,377 @@ class TestTemporalGraphAdapterLifecycle:
         assert adapter._driver is None
 
 
-class TestOwnedDispatchTransport:
-    """Tests for _OwnedDispatchTransport Redis MULTI/EXEC dispatch and error handling."""
+class _FakeRecord:
+    """Minimal neo4j Record stand-in exposing data()."""
 
-    @pytest.fixture
-    def mock_ownership(self) -> MagicMock:
-        """Fixture for DispatchOwnership."""
-        ownership = MagicMock()
-        ownership.group_id = "test_group"
-        return ownership
+    def __init__(self, row: dict[str, Any]) -> None:
+        """Store one row."""
+        self._row = row
+
+    def data(self) -> dict[str, Any]:
+        """Return the row as the driver would."""
+        return self._row
+
+
+class _FakeResult:
+    """Async-iterable query result with keys()."""
+
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        """Store rows to stream."""
+        self._rows = rows
+
+    def __aiter__(self) -> AsyncIterator[_FakeRecord]:
+        """Stream rows lazily so the row cap can abort early."""
+        async def gen() -> AsyncIterator[_FakeRecord]:
+            """Yield each stored row."""
+            for row in self._rows:
+                yield _FakeRecord(row)
+        return gen()
+
+    def keys(self) -> list[str]:
+        """Return column names of the first row."""
+        return list(self._rows[0]) if self._rows else []
+
+
+class _FakeTx:
+    """Fake explicit transaction whose run results are queued per call."""
+
+    def __init__(self, results: list[list[dict[str, Any]]] | None = None, commit_error: Exception | None = None) -> None:
+        """Queue result sets; commit may be told to fail."""
+        self._results = list(results or [])
+        self.run = AsyncMock(side_effect=self._next)
+        self.commit = AsyncMock(side_effect=commit_error)
+        self.rollback = AsyncMock()
+
+    async def _next(self, *_args: Any, **_kwargs: Any) -> _FakeResult:
+        """Return the next queued result (empty when exhausted)."""
+        return _FakeResult(self._results.pop(0) if self._results else [])
+
+
+class _FakeSession:
+    """Fake session handing out one prepared transaction."""
+
+    def __init__(self, tx: _FakeTx) -> None:
+        """Bind the transaction returned by begin_transaction."""
+        self.begin_transaction = AsyncMock(return_value=tx)
+
+    async def __aenter__(self) -> Self:
+        """Enter the session context."""
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        """Leave the session context."""
+
+
+def _fake_client(*txs: _FakeTx) -> tuple[MagicMock, list[_FakeSession]]:
+    """Build a client whose successive session() calls return sessions over the given transactions."""
+    sessions = [_FakeSession(tx) for tx in txs]
+    client = MagicMock()
+    client.session = MagicMock(side_effect=sessions)
+    client.close = AsyncMock()
+    return client, sessions
+
+
+async def _make_driver(*txs: _FakeTx) -> tuple[Any, MagicMock, list[_FakeSession]]:
+    """Build a SafeDriver off-loop (as production does) and swap in a fake client."""
+    driver = await asyncio.to_thread(_make_driver_type(), "bolt://127.0.0.1:7687", "neo4j", "pw", "neo4j")
+    await driver.client.close()
+    client, sessions = _fake_client(*txs)
+    driver.client = client
+    return driver, client, sessions
+
+
+def _ownership() -> DispatchOwnership:
+    """Return a valid dispatch ownership."""
+    return DispatchOwnership(uuid4(), "g1", "a" * 40, 123)
+
+
+@contextlib.contextmanager
+def _in_scope(scope: _DispatchScope | None) -> Iterator[None]:
+    """Run the body with the dispatch scope ContextVar set."""
+    token = _dispatch_scope.set(scope)
+    try:
+        yield
+    finally:
+        _dispatch_scope.reset(token)
+
+
+class TestDispatchScopeDriver:
+    """Tests for the Neo4j SafeDriver transaction guard and dispatch scope."""
 
     @pytest.mark.asyncio
-    async def test_command_denied_for_non_graph_query(self, mock_ownership: MagicMock) -> None:
-        """Verify commands other than GRAPH.QUERY and GRAPH.RO_QUERY are rejected."""
-        conn = AsyncMock()
-        conn.is_connected = True
-        transport = _OwnedDispatchTransport(conn, mock_ownership)
+    async def test_read_routing_uses_read_mode_with_metadata_and_timeout(self) -> None:
+        """routing_='r' opens a READ session; the transaction carries the token and 5s timeout."""
+        tx = _FakeTx([[{"x": 1}]])
+        driver, client, sessions = await _make_driver(tx)
+        scope = _DispatchScope(_ownership())
+        with _in_scope(scope):
+            rows, _, keys = await driver.execute_query("MATCH (n) RETURN n.x AS x", routing_="r", p=1)
+        assert rows == [{"x": 1}] and keys == ["x"]
+        assert client.session.call_args.kwargs["default_access_mode"] == "READ"
+        kwargs = sessions[0].begin_transaction.call_args.kwargs
+        assert kwargs["timeout"] == 5
+        assert kwargs["metadata"]["umwelt_dispatch"] == scope.token
+        tx.run.assert_awaited_once_with("MATCH (n) RETURN n.x AS x", {"p": 1})
+        tx.commit.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_default_routing_uses_write_mode(self) -> None:
+        """Without routing_ the session is WRITE."""
+        driver, client, _ = await _make_driver(_FakeTx())
+        with _in_scope(_DispatchScope(_ownership())):
+            await driver.execute_query("MATCH (n) RETURN n")
+        assert client.session.call_args.kwargs["default_access_mode"] == "WRITE"
+
+    @pytest.mark.asyncio
+    async def test_row_cap_aborts_and_rolls_back(self) -> None:
+        """More than MAX_SUPPORT + 1 rows aborts with graph_query_result_limit and never commits."""
+        tx = _FakeTx([[{"x": i} for i in range(MAX_SUPPORT + 5)]])
+        driver, _, _ = await _make_driver(tx)
+        with _in_scope(_DispatchScope(_ownership())), pytest.raises(GraphOperationError, match="graph_query_result_limit"):
+            await driver.execute_query("MATCH (n) RETURN n")
+        tx.rollback.assert_awaited_once()
+        tx.commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_neo4j_temporal_converted_to_native(self) -> None:
+        """neo4j.time values, including nested ones, come back as stdlib datetimes."""
+        moment = neo_time.DateTime(2024, 1, 2, 3, 4, 5, tzinfo=UTC)
+        tx = _FakeTx([[{"t": moment, "nested": {"d": [moment]}}]])
+        driver, _, _ = await _make_driver(tx)
+        with _in_scope(_DispatchScope(_ownership())):
+            rows, _, _ = await driver.execute_query("MATCH (n) RETURN n")
+        native = datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC)
+        assert rows[0]["t"] == native and isinstance(rows[0]["t"], datetime)
+        assert rows[0]["nested"]["d"] == [native]
+
+    @pytest.mark.asyncio
+    async def test_nul_stripped_and_datetimes_not_stringified(self) -> None:
+        """Parameters lose NUL bytes but keep datetimes as native objects."""
+        tx = _FakeTx()
+        driver, _, _ = await _make_driver(tx)
+        moment = datetime(2024, 1, 2, tzinfo=UTC)
+        with _in_scope(_DispatchScope(_ownership())):
+            await driver.execute_query("MATCH (n) RETURN n", name="a\x00b", when=moment, items=["c\x00"])
+        sent = tx.run.call_args.args[1]
+        assert sent == {"name": "ab", "when": moment, "items": ["c"]}
+        assert isinstance(sent["when"], datetime)
+
+    @pytest.mark.asyncio
+    async def test_unscoped_query_denied_but_health_allowed(self) -> None:
+        """Arbitrary statements need a dispatch scope; health and index DDL carry the setup tag."""
+        tx = _FakeTx([[{"healthy": 1}]])
+        driver, _, sessions = await _make_driver(tx)
+        with pytest.raises(GraphOperationError, match="graph_dispatch_ownership_required"):
+            await driver.execute_query("MATCH (n) RETURN n")
+        await driver.health_check()
+        assert sessions[0].begin_transaction.call_args.kwargs["metadata"]["umwelt_dispatch"] == "setup"
+
+    @pytest.mark.asyncio
+    async def test_index_exists_error_ignored(self) -> None:
+        """A racing EquivalentSchemaRuleAlreadyExists failure on index DDL is swallowed."""
+        tx = _FakeTx()
+        tx.run = AsyncMock(side_effect=RuntimeError("EquivalentSchemaRuleAlreadyExists: x"))
+        driver, _, _ = await _make_driver(tx)
+        assert await driver.execute_query("CREATE INDEX a IF NOT EXISTS FOR (n:Entity) ON (n.uuid)") is None
+
+    @pytest.mark.asyncio
+    async def test_statements_share_one_write_transaction(self) -> None:
+        """execute_statements runs every statement in a single explicit transaction and commits once."""
+        tx = _FakeTx()
+        driver, client, sessions = await _make_driver(tx)
+        with _in_scope(_DispatchScope(_ownership())):
+            await driver.execute_statements([("Q1", {"a": 1}), ("Q2", {}), ("Q3", {}), ("Q4", {})])
+        assert client.session.call_count == 1
+        sessions[0].begin_transaction.assert_awaited_once()
+        assert tx.run.await_count == 4
+        tx.commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_commit_poisons_scope(self) -> None:
+        """A failure while committing is unknown and blocks later commands under the scope."""
+        tx = _FakeTx(commit_error=RuntimeError("connection reset"))
+        driver, _, _ = await _make_driver(tx)
+        scope = _DispatchScope(_ownership())
+        with _in_scope(scope):
+            with pytest.raises(GraphOperationUnknown):
+                await driver.execute_statements([("Q1", {})])
+            assert scope.poisoned
+            tx.rollback.assert_not_awaited()
+            with pytest.raises(GraphOperationUnknown, match="graph_dispatch_connection_lost"):
+                await driver.execute_query("MATCH (n) RETURN n")
+
+    @pytest.mark.asyncio
+    async def test_untagged_metadata_rejected(self) -> None:
+        """The transaction wrapper refuses any transaction lacking a dispatch tag."""
+        driver, client, _ = await _make_driver()
         with pytest.raises(GraphOperationError, match="graph_dispatch_command_denied"):
-            await transport.command("SET", "key", "val")
+            await driver._transact([("Q", {})], read=True, metadata={}, scope=None)
+        client.session.assert_not_called()
+
+
+class TestBulkShape:
+    """Tests for the pinned four-call NEO4J bulk payload validation."""
+
+    @staticmethod
+    def _bulk(provider: Any, node_query_override: Any = None) -> tuple[Any, list[Any], tuple[Any, ...], dict[str, Any]]:
+        """Build captured calls and Graphiti arguments for one episode/entity/mention/fact."""
+        from graphiti_core.models.edges.edge_db_queries import (
+            get_entity_edge_save_bulk_query,
+            get_episodic_edge_save_bulk_query,
+        )
+        from graphiti_core.models.nodes.node_db_queries import (
+            get_entity_node_save_bulk_query,
+            get_episode_node_save_bulk_query,
+        )
+
+        ids = [str(uuid4()) for _ in range(4)]
+        episode = SimpleNamespace(uuid=ids[0], group_id="g1")
+        node = SimpleNamespace(uuid=ids[1], group_id="g1")
+        mention = SimpleNamespace(uuid=ids[2], group_id="g1", source_node_uuid=ids[0], target_node_uuid=ids[1])
+        fact = SimpleNamespace(uuid=ids[3], group_id="g1", source_node_uuid=ids[1], target_node_uuid=ids[1],
+                               episodes=[ids[0]])
+        payload = {"uuid": ids[1], "group_id": "g1", "labels": ["Entity"]}
+        node_query = get_entity_node_save_bulk_query(provider, [payload]) if node_query_override is None else node_query_override
+        calls = [
+            (get_episode_node_save_bulk_query(provider), {"episodes": [{"uuid": ids[0], "group_id": "g1"}]}),
+            (node_query, {"nodes": [payload]}),
+            (get_episodic_edge_save_bulk_query(provider),
+             {"episodic_edges": [{"uuid": ids[2], "group_id": "g1", "source_node_uuid": ids[0],
+                                  "target_node_uuid": ids[1]}]}),
+            (get_entity_edge_save_bulk_query(provider),
+             {"entity_edges": [{"uuid": ids[3], "group_id": "g1", "source_node_uuid": ids[1],
+                                "target_node_uuid": ids[1], "episodes": [ids[0]]}]}),
+        ]
+        args = ([episode], [mention], [node], [fact], object())
+        kwargs = {"driver": SimpleNamespace(provider=provider, graph_operations_interface=None)}
+        return calls, args, kwargs, payload
 
     @pytest.mark.asyncio
-    async def test_command_denied_for_group_id_mismatch(self, mock_ownership: MagicMock) -> None:
-        """Verify command with mismatched group_id is denied."""
-        conn = AsyncMock()
-        conn.is_connected = True
-        transport = _OwnedDispatchTransport(conn, mock_ownership)
+    async def test_neo4j_shape_accepted(self) -> None:
+        """The pinned four-call NEO4J shape validates and returns the final node payloads."""
+        from graphiti_core.driver.driver import GraphProvider
 
-        with pytest.raises(GraphOperationError, match="graph_dispatch_command_denied"):
-            await transport.command("GRAPH.QUERY", "wrong_group", "MATCH (n) RETURN n")
-
-    @pytest.mark.asyncio
-    async def test_command_successful_multi_exec(self, mock_ownership: MagicMock) -> None:
-        """Verify successful MULTI/EXEC sequence returns the execution result."""
-        conn = AsyncMock()
-        conn.is_connected = True
-        conn.send_command = AsyncMock()
-        conn.read_response = AsyncMock(side_effect=["OK", "QUEUED", [["node_result"]]])
-
-        transport = _OwnedDispatchTransport(conn, mock_ownership)
-        result = await transport.command("GRAPH.QUERY", "test_group", "MATCH (n) RETURN n")
-
-        assert result == ["node_result"]
-        assert not transport.poisoned
+        driver, _, _ = await _make_driver()
+        calls, args, kwargs, payload = self._bulk(GraphProvider.NEO4J)
+        assert driver.session()._validated_bulk_payloads(calls, args, kwargs) == [payload]
 
     @pytest.mark.asyncio
-    async def test_transport_poisoned_on_exception(self, mock_ownership: MagicMock) -> None:
-        """Verify transport is poisoned when communication fails during execution."""
-        conn = AsyncMock()
-        conn.is_connected = True
-        conn.send_command = AsyncMock()
-        conn.read_response = AsyncMock(side_effect=["OK", RuntimeError("Socket closed")])
+    async def test_legacy_provider_and_list_shape_rejected(self) -> None:
+        """A non-Neo4j provider or list-of-queries node call (the removed per-node shape) is refused."""
+        from graphiti_core.driver.driver import GraphProvider
 
-        transport = _OwnedDispatchTransport(conn, mock_ownership)
-        with pytest.raises(RuntimeError, match="Socket closed"):
-            await transport.command("GRAPH.QUERY", "test_group", "MATCH (n) RETURN n")
+        driver, _, _ = await _make_driver()
+        session = driver.session()
+        calls, args, kwargs, _ = self._bulk(GraphProvider.KUZU)
+        with pytest.raises(GraphOperationError, match="graph_bulk_dispatch_shape_unsupported"):
+            session._validated_bulk_payloads(calls, args, kwargs)
+        calls, args, kwargs, _ = self._bulk(GraphProvider.NEO4J, node_query_override=[("Q", {"nodes": []})])
+        with pytest.raises(GraphOperationError, match="graph_bulk_dispatch_shape_unsupported"):
+            session._validated_bulk_payloads(calls, args, kwargs)
 
-        assert transport.poisoned
 
-        # Subsequent commands fail with connection lost
-        with pytest.raises(GraphOperationUnknown, match="graph_dispatch_connection_lost"):
-            await transport.command("GRAPH.QUERY", "test_group", "MATCH (n) RETURN n")
+class TestCessationAndDispatchSession:
+    """Tests for tagged-transaction cessation and dispatch-session probing."""
+
+    @staticmethod
+    async def _graph(*txs: _FakeTx) -> tuple[TemporalGraph, MagicMock]:
+        """Return a READY TemporalGraph over a fake-client SafeDriver."""
+        graph = TemporalGraph(GraphConfiguration(enabled=True, host="graph", password="pw"))
+        driver, client, _ = await _make_driver(*txs)
+        graph._driver = driver
+        graph.state = GraphState.READY
+        return graph, client
+
+    @pytest.mark.asyncio
+    async def test_cessation_show_terminate_poll(self) -> None:
+        """Matching tagged transactions are listed, terminated, and polled until none remain."""
+        show = _FakeTx([[{"transactionId": "t1"}]])
+        terminate = _FakeTx([[]])
+        poll = _FakeTx([[]])
+        graph, _ = await self._graph(show, terminate, poll)
+        ownership = _ownership()
+        context = SimpleNamespace(
+            group_id=ownership.group_id, operation_id=ownership.operation_id,
+            authorize_dispatch_cessation=AsyncMock(),
+        )
+        assert await graph.verify_dispatch_cessation(ownership, context) is True  # type: ignore[arg-type]
+        token = _DispatchScope(ownership).token
+        assert show.run.call_args.args[1] == {"token": token}
+        assert "SHOW TRANSACTIONS" in show.run.call_args.args[0]
+        assert terminate.run.call_args.args == ("TERMINATE TRANSACTIONS $ids", {"ids": ["t1"]})
+        assert poll.run.await_count == 1
+        assert context.authorize_dispatch_cessation.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_cessation_no_transactions(self) -> None:
+        """No tagged transaction means cessation is proven without a TERMINATE."""
+        show = _FakeTx([[]])
+        graph, client = await self._graph(show)
+        ownership = _ownership()
+        context = SimpleNamespace(
+            group_id=ownership.group_id, operation_id=ownership.operation_id,
+            authorize_dispatch_cessation=AsyncMock(),
+        )
+        assert await graph.verify_dispatch_cessation(ownership, context) is True  # type: ignore[arg-type]
+        assert client.session.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_dispatch_session_probes_timeout_and_journals_before_scope(self) -> None:
+        """A positive server timeout mints a valid ownership, journals it, and sets the scope."""
+        probe = _FakeTx([[{"name": "db.transaction.timeout", "value": "5s"}]])
+        graph, _ = await self._graph(probe)
+        journal = AsyncMock()
+        completion = AsyncMock()
+        context = SimpleNamespace(
+            group_id="g1", operation_id=uuid4(),
+            record_dispatch_ownership=journal, record_dispatch_completion=completion,
+        )
+        async with graph.dispatch_session(context) as ownership:  # type: ignore[arg-type]
+            journal.assert_awaited_once_with(ownership)
+            scope = _dispatch_scope.get()
+            assert scope is not None and scope.ownership is ownership
+        assert re.fullmatch(r"[0-9a-f]{40}", ownership.server_run_id)
+        assert _dispatch_scope.get() is None and scope.poisoned
+        completion.assert_awaited_once_with(ownership)
+
+    @pytest.mark.asyncio
+    async def test_dispatch_session_rejects_disabled_server_timeout(self) -> None:
+        """A zero db.transaction.timeout is refused before anything is journaled."""
+        probe = _FakeTx([[{"name": "db.transaction.timeout", "value": "0s"}]])
+        graph, _ = await self._graph(probe)
+        journal = AsyncMock()
+        context = SimpleNamespace(
+            group_id="g1", operation_id=uuid4(), record_dispatch_ownership=journal, record_dispatch_completion=None,
+        )
+        with pytest.raises(GraphOperationError, match="graph_write_timeout_unconfigured"):
+            async with graph.dispatch_session(context):  # type: ignore[arg-type]
+                pytest.fail("scope must not open")
+        journal.assert_not_awaited()
+
+
+class TestPartitionIsolation:
+    """Tests that shared-database reads are bound to the authorized partition."""
+
+    @pytest.mark.asyncio
+    async def test_incident_ids_absent_binds_group(self) -> None:
+        """The absence read carries the group_id predicate and parameter."""
+        driver = MagicMock()
+        driver.execute_query = AsyncMock(return_value=([], None, []))
+        assert await _incident_ids_absent(driver, ["e1"], "g1") is True
+        query = driver.execute_query.call_args.args[0]
+        assert "group_id: $group_id" in query
+        assert driver.execute_query.call_args.kwargs["group_id"] == "g1"
+
+    def test_foreign_group_record_rejected(self) -> None:
+        """A fetched record from another group is refused; same-group and empty pass."""
+        _require_group([SimpleNamespace(group_id="g1")], "g1")
+        _require_group([], "g1")
+        with pytest.raises(GraphOperationError, match="graph_partition_mismatch"):
+            _require_group([SimpleNamespace(group_id="g1"), SimpleNamespace(group_id="other")], "g1")
+
+    def test_defaults_and_index_error_mapping(self) -> None:
+        """Graph defaults target Neo4j and an equivalent-index race maps to graph_index_exists."""
+        config = GraphConfiguration()
+        assert config.port == 7687 and config.database == "neo4j"
+        assert str(_safe_error(RuntimeError("EquivalentSchemaRuleAlreadyExists"))) == "graph_index_exists"

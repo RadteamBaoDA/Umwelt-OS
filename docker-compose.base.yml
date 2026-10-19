@@ -88,7 +88,7 @@ services:
   # Optional temporal-knowledge graph (Graphiti). Start with: docker compose -f docker-compose.base.yml --profile graph up -d
   # Community edition = one database ("neo4j"); partitions are separated by group_id, not by database.
   graph:
-    image: neo4j:5.26.2-community
+    image: neo4j:5.26.2-community@sha256:099b9f74968c123209972835417985ed2a1cc19c0422c0753a313e26a736c365
     profiles: ["graph"]
     environment:
       NEO4J_AUTH: ${NEO4J_AUTH:-}
@@ -111,6 +111,7 @@ services:
       start_period: 30s
     cpus: 1.0
     mem_limit: 1792m
+    stop_grace_period: 60s  # clean checkpoint on stop
     restart: unless-stopped
     logging: *default-logging
     security_opt: ["no-new-privileges:true"]

@@ -705,7 +705,7 @@ async def _context(factory: async_sessionmaker[AsyncSession], adm: _Admission, s
     active_dispatch: DispatchOwnership | None = None
 
     async def dispatch(ownership: DispatchOwnership) -> None:
-        """Persist exact dedicated server/client command ownership before any graph send, rejecting reassignment during ambiguity."""
+        """Persist the exact dispatch token (nonce + client id) before any graph transaction, rejecting reassignment during ambiguity."""
         nonlocal active_dispatch
         await _lease(factory, adm, operation.id, token)
         async with factory() as journal:
@@ -747,7 +747,7 @@ async def _context(factory: async_sessionmaker[AsyncSession], adm: _Admission, s
             active_dispatch = None
 
     async def authorize_cessation(ownership: DispatchOwnership) -> None:
-        """Authorize exact journal-owned CLIENT KILL after exclusive local worker takeover; never accept arbitrary numeric IDs."""
+        """Authorize terminating exactly the journal-owned tagged transactions after exclusive local worker takeover; never accept arbitrary tokens."""
         await _lease(factory, adm, operation.id, token)
         async with factory() as check:
             await _admit(check, adm)
