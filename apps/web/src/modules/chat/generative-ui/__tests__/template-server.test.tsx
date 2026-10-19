@@ -2,12 +2,15 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TemplateLibrary } from '../templates/template-library';
-import { deleteUserTemplate, listUserTemplates, refreshUserTemplates, saveUserTemplate } from '../templates/template-store';
+import { clearUserTemplates, deleteUserTemplate, listUserTemplates, refreshUserTemplates, saveUserTemplate, setTemplateAccount } from '../templates/template-store';
 
 const server = (id: string, name: string) => ({ id, name, description: '', html: '{"html":"x"}', data_description: '', version: 1, created_at: '2026-10-19T00:00:00Z' });
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
-beforeEach(() => window.localStorage.clear());
+beforeEach(() => {
+  window.localStorage.clear();
+  setTemplateAccount('1');
+});
 afterEach(() => vi.unstubAllGlobals());
 
 describe('server-backed template store', () => {
@@ -47,6 +50,41 @@ describe('server-backed template store', () => {
     deleteUserTemplate('22222222-2222-2222-2222-222222222222', 'tok');
     expect(listUserTemplates()).toEqual([]);
     await waitFor(() => expect(fetchMock.mock.calls.at(-1)?.[1]?.method).toBe('DELETE'));
+  });
+});
+
+describe('per-account template mirror', () => {
+  it('never shows or uploads account A entries to account B, and drops the legacy key', async () => {
+    window.localStorage.setItem('umwelt.genui.templates.v1', JSON.stringify([
+      { id: 'tpl-legacy', title: 'Legacy', content: '{}', createdAt: 1 },
+    ]));
+    setTemplateAccount('2'); // re-bind so the legacy drop runs
+    setTemplateAccount('1');
+    saveUserTemplate('A secret', '{"html":"a"}');
+    expect(listUserTemplates().map((t) => t.title)).toEqual(['A secret']);
+
+    setTemplateAccount('2');
+    expect(listUserTemplates()).toEqual([]);
+    const posted: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') posted.push(JSON.parse(String(init.body)).name);
+      return json([]);
+    }));
+    await refreshUserTemplates('tok-b');
+    expect(posted).toEqual([]);
+    expect(listUserTemplates()).toEqual([]);
+    expect(window.localStorage.getItem('umwelt.genui.templates.v1')).toBeNull();
+
+    setTemplateAccount('1');
+    expect(listUserTemplates().map((t) => t.title)).toEqual(['A secret']);
+  });
+
+  it('clears the mirror on logout and stays empty until an account is bound', () => {
+    saveUserTemplate('Keep?', '{"html":"a"}');
+    clearUserTemplates();
+    expect(listUserTemplates()).toEqual([]);
+    expect(saveUserTemplate('x', '{}')).toBe(false);
+    expect(window.localStorage.getItem('umwelt.genui.templates.v2:1')).toBeNull();
   });
 });
 
