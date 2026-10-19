@@ -22,8 +22,11 @@ export const PROVIDER_READY_STALE_MS = 30_000;
 
 /**
  * Decides whether the owner's chat alias maps to a usable model: a mapped model on a provider that is not
- * policy-denied and is either local (Ollama, LM Studio) or has a stored credential plus remote-reasoning consent
- * for its destination.
+ * policy-denied and is either local (Ollama, LM Studio) or has a stored credential plus remote-reasoning consent.
+ * The per-destination allow-list is deliberately NOT checked here: the server falls back from
+ * `reasoning_destinations` to `permitted_destinations` (core/model_gateway/policy.py), so mirroring only one list
+ * could block a send the server would accept. The gate must only block when chat is certainly unconfigured; any
+ * remaining policy denial still reaches the user through the normal run error.
  *
  * @param s - AI settings read from `/api/v1/settings/ai`.
  * @returns True when a chat send can resolve a model under current policy.
@@ -36,8 +39,7 @@ export function isChatProviderReady(s: GateSettings): boolean {
   const provider = providers.find((p) => p.id === id);
   if (!provider || provider.policy_denied) return false;
   if (provider.local) return true;
-  return provider.credential_configured && s.privacy?.allow_remote_reasoning === true
-    && Boolean(provider.destination_id && s.privacy.reasoning_destinations?.includes(provider.destination_id));
+  return provider.credential_configured && s.privacy?.allow_remote_reasoning === true;
 }
 
 /**

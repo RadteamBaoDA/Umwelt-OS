@@ -45,6 +45,11 @@ describe('isChatProviderReady', () => {
     expect(isChatProviderReady({ ...base, providers: [{ ...base.providers[0], policy_denied: true }] })).toBe(false);
     expect(isChatProviderReady({ ...base, providers: [] })).toBe(false);
   });
+  it('does not block on the destination allow-list: the server falls back to permitted_destinations', () => {
+    // Credential and consent are present but reasoning_destinations is empty: the server may still accept the
+    // destination via permitted_destinations, so the gate must not stop the send.
+    expect(isChatProviderReady({ ...base, privacy: { allow_remote_reasoning: true, reasoning_destinations: [] } })).toBe(true);
+  });
 });
 
 describe('useChatProviderReady', () => {
