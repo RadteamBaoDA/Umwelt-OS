@@ -58,6 +58,8 @@ class AISettingsRecord(Base):
     providers: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     # {service_url, api_key_ciphertext, webhook_token_ciphertext}; empty means "use the N8N_* environment".
     n8n: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    # Opt-in visualization router; empty = internal router (see r24_viz_router_settings).
+    viz_router: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     chat_alias: Mapped[str] = mapped_column(String(32), nullable=False, server_default="reasoning-large")
     brief_alias: Mapped[str] = mapped_column(String(32), nullable=False, server_default="reasoning-small")
     web_search_provider: Mapped[str] = mapped_column(String(32), nullable=False, server_default="none")

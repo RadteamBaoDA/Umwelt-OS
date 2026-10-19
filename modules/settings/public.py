@@ -60,9 +60,14 @@ from modules.settings.schemas import (
     SystemPromptsRead,
     SystemPromptsUpdate,
     TranslationSettingsRead,
+    VizRouterRead,
+    VizRouterUpdate,
     WebSearchRead,
     WebSearchUpdate,
 )
+
+VIZ_TYPESAFE_DESTINATION = "typesafe:api.typesafe.ai"
+VIZ_ROUTER_ALIAS = "viz-router"
 
 ALIASES = ("reasoning-large", "reasoning-small", "fast", "embedding", "reranker", "vision", "local-private")
 
@@ -811,6 +816,135 @@ async def save_n8n(session: AsyncSession, update: N8nUpdate, settings: Settings,
     row.n8n = stored
     await session.flush()
     return await read_n8n(session, settings, scope=scope)
+
+
+class VizRouterResolved(BaseModel):
+    """Effective visualization router configuration. ``allow_remote`` is already destination-checked; key stays out of repr."""
+    kind: str = "internal"
+    provider_id: str | None = None
+    model: str = ""
+    mode: str = "json_schema"
+    typesafe_key: str = Field(default="", repr=False)
+    allow_remote: bool = False
+    destination_id: str | None = None
+    revision: int = 1
+
+
+def _viz_stored(row: Any) -> dict[str, Any]:
+    """Stored visualization router JSON of a settings row; empty (internal router) when absent."""
+    return dict(getattr(row, "viz_router", None) or {}) if row else {}
+
+
+def _viz_destination(stored: dict[str, Any], providers: dict[str, dict[str, Any]], settings: Settings) -> str | None:
+    """Destination id the stored router would send to: the fixed TypeSafe host or the chosen provider's destination."""
+    if stored.get("kind") == "typesafe":
+        return VIZ_TYPESAFE_DESTINATION
+    if stored.get("kind") == "llm":
+        record = providers.get(stored.get("provider_id") or DEFAULT_PROVIDER_ID)
+        return _destination(record, settings) if record else None
+    return None
+
+
+async def resolve_viz_router(session: AsyncSession, settings: Settings, *, scope: Scope) -> VizRouterResolved:
+    """Resolve the visualization router for the owner workspace; no row/JSON means the internal router.
+
+    ``allow_remote`` is true only when the owner granted consent for the *current* destination (so editing the
+    provider endpoint later revokes it) or the provider is local (no remote egress, so no consent is needed).
+    An undecryptable TypeSafe key counts as unset. Plain read: no lock.
+    """
+    row = await _row(session, scope=scope)
+    stored = _viz_stored(row)
+    kind = stored.get("kind", "internal")
+    if row is None or kind not in {"llm", "typesafe"}:
+        return VizRouterResolved(revision=int(stored.get("revision", 1)))
+    providers = _stored_providers(row)
+    destination = _viz_destination(stored, providers, settings)
+    record = providers.get(stored.get("provider_id") or DEFAULT_PROVIDER_ID) if kind == "llm" else None
+    local = bool(record and record.get("kind") in LOCAL_PROVIDER_KINDS)
+    consent = (bool(stored.get("allow_remote_visualization_routing")) and destination is not None
+               and stored.get("consent_destination") == destination)
+    key = ""
+    if kind == "typesafe" and stored.get("typesafe_key_ciphertext"):
+        try:
+            key = _decrypt(stored["typesafe_key_ciphertext"], settings)
+        except HTTPException:
+            key = ""
+    return VizRouterResolved(
+        kind=kind, provider_id=stored.get("provider_id"), model=stored.get("model", ""), mode=stored.get("mode", "json_schema"),
+        typesafe_key=key, allow_remote=consent or (local and destination is not None), destination_id=destination,
+        revision=int(stored.get("revision", 1)))
+
+
+def viz_router_gateway_config(config: AIExecutionConfig, resolved: VizRouterResolved) -> tuple[AIExecutionConfig, ModelMapping]:
+    """Pure: the execution config pointed at the router's provider, plus the router's model mapping.
+
+    The mapping is registered under ``VIZ_ROUTER_ALIAS`` so ``derive_for_alias`` selects the provider's endpoint,
+    key and destination; remote providers are marked ``destination="remote"`` for the gateway privacy policy.
+    """
+    provider = config.providers.get(resolved.provider_id or DEFAULT_PROVIDER_ID)
+    mapping = ModelMapping(model=resolved.model, provider_id=resolved.provider_id,
+                           destination="unknown" if provider is None or provider.local else "remote")
+    return derive_for_alias(config.model_copy(update={"aliases": {**config.aliases, VIZ_ROUTER_ALIAS: mapping}}),
+                            VIZ_ROUTER_ALIAS), mapping
+
+
+async def read_viz_router(session: AsyncSession, settings: Settings, *, scope: Scope) -> VizRouterRead:
+    """Return the router settings projection for the owner workspace: key presence only, never the key."""
+    await require_settings_scope(session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled)
+    row = await _row(session, scope=scope)
+    resolved = await resolve_viz_router(session, settings, scope=scope)
+    return VizRouterRead.model_validate({
+        "configuration_revision": resolved.revision, "kind": resolved.kind, "provider_id": resolved.provider_id,
+        "model": resolved.model, "mode": resolved.mode,
+        "typesafe_key_configured": bool(_viz_stored(row).get("typesafe_key_ciphertext")),
+        "allow_remote_visualization_routing": resolved.allow_remote, "destination_id": resolved.destination_id})
+
+
+async def save_viz_router(session: AsyncSession, update: VizRouterUpdate, settings: Settings, *, scope: Scope,
+                          auth_sessions: tuple[AccountSessionRef, ...] = ()) -> VizRouterRead:
+    """Revision-checked replace of the visualization router settings (own ``revision`` inside the JSON).
+
+    ``llm`` needs an existing provider and a model from that provider's discovered ``llm`` list; ``typesafe``
+    encrypts its key like AI credentials. Consent is stored bound to the destination chosen in this save and is
+    dropped for ``internal``. Never bumps ``configuration_revision`` (that would fail in-flight AI runs).
+    """
+    await require_settings_scope(session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+                                 locked=True, auth_sessions=auth_sessions)
+    await session.execute(insert(AISettingsRecord).values(owner_id=scope_actor(scope), workspace_id=scope.workspace_id)
+                          .on_conflict_do_nothing(index_elements=["owner_id"]))
+    row = await _row(session, scope=scope, locked=True)
+    if row is None:
+        raise RuntimeError("AI settings singleton could not be initialized")
+    previous = _viz_stored(row)
+    if int(previous.get("revision", 1)) != update.expected_revision:
+        raise HTTPException(status_code=409, detail="Visualization router settings changed; reload before saving")
+    providers = _stored_providers(row)
+    stored: dict[str, Any] = {"kind": update.kind, "revision": int(previous.get("revision", 1)) + 1}
+    if update.kind == "llm":
+        pid = update.provider_id or DEFAULT_PROVIDER_ID
+        record = providers.get(pid)
+        if record is None:
+            raise HTTPException(status_code=422, detail="Unknown model provider")
+        if not any(m.id == update.model and m.type == "llm" for m in _models(record)):
+            raise HTTPException(status_code=422, detail="Choose a language model discovered on this provider")
+        stored.update(provider_id=pid, model=update.model, mode=update.mode)
+    ciphertext = previous.get("typesafe_key_ciphertext")
+    if update.kind == "typesafe":
+        if update.typesafe_key_action == "replaced":
+            if not update.typesafe_key:
+                raise HTTPException(status_code=422, detail="Replacement TypeSafe key is required")
+            ciphertext = _cipher(settings).encrypt(update.typesafe_key.encode()).decode()
+        elif update.typesafe_key_action == "removed":
+            ciphertext = None
+    if ciphertext:
+        stored["typesafe_key_ciphertext"] = ciphertext  # kept while another kind is selected; only "removed" drops it
+    destination = _viz_destination(stored, providers, settings)
+    if update.kind != "internal" and update.allow_remote_visualization_routing and destination:
+        stored["allow_remote_visualization_routing"] = True
+        stored["consent_destination"] = destination
+    row.viz_router = stored
+    await session.flush()
+    return await read_viz_router(session, settings, scope=scope)
 
 
 async def read_owner_preferences(session: AsyncSession, *, actor_user_id: int, multi_workspace_enabled: bool) -> OwnerPreferencesRead:

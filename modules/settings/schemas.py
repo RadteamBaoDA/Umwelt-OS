@@ -204,6 +204,48 @@ class N8nTest(BaseModel):
     api_key: str = Field(default="", max_length=4096, repr=False)
 
 
+VizRouterKind = Literal["internal", "llm", "typesafe"]
+VizRouterMode = Literal["json_schema", "forced_tool"]
+
+
+class VizRouterRead(BaseModel):
+    """Visualization router settings; the TypeSafe key is never returned, only whether one is stored."""
+    configuration_revision: int = Field(ge=1)
+    kind: VizRouterKind = "internal"
+    provider_id: str | None = None
+    model: str = ""
+    mode: VizRouterMode = "json_schema"
+    typesafe_key_configured: bool = False
+    allow_remote_visualization_routing: bool = False
+    destination_id: str | None = None
+
+
+class VizRouterUpdate(BaseModel):
+    """Full replace of the visualization router settings under its own revision check.
+
+    ``allow_remote_visualization_routing`` is consent bound to the destination chosen here: changing the
+    provider or kind in a later save clears it.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=1)
+    kind: VizRouterKind = "internal"
+    provider_id: str | None = Field(default=None, max_length=32)
+    model: str = Field(default="", max_length=200)
+    mode: VizRouterMode = "json_schema"
+    typesafe_key_action: CredentialAction = "unchanged"
+    typesafe_key: str | None = Field(default=None, max_length=4096, repr=False)
+    allow_remote_visualization_routing: bool = False
+
+
+class VizRouterTestResult(BaseModel):
+    """Outcome of Test routing: ``mode`` is the mode that worked (LLM classifier only); ``error`` is a short code."""
+    ok: bool
+    category: str | None = None
+    mode: VizRouterMode | None = None
+    error: str | None = None
+
+
 __all__ = [
     "ConnectionTestResult",
     "MaintenanceSummaryRead",
@@ -224,6 +266,9 @@ __all__ = [
     "SystemPromptsUpdate",
     "TranslationSettingsRead",
     "TranslationSettingsUpdate",
+    "VizRouterRead",
+    "VizRouterTestResult",
+    "VizRouterUpdate",
     "WebSearchRead",
     "WebSearchTest",
     "WebSearchUpdate",
