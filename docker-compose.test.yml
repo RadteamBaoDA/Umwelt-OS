@@ -85,7 +85,7 @@ services:
     # Minimal OpenAI-compatible streaming server for chat acceptance tests.
     build:
       context: .
-      dockerfile: infrastructure/docker/api.Dockerfile
+      dockerfile: docker/api.Dockerfile
     command: ["uvicorn", "fake_model:app", "--host", "0.0.0.0", "--port", "8000", "--app-dir", "/fake"]
     env_file: !reset []
     environment:

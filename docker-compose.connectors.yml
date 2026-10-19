@@ -14,7 +14,7 @@ services:
   n8n:
     build:
       context: .
-      dockerfile: infrastructure/docker/n8n-connectors.Dockerfile
+      dockerfile: docker/n8n-connectors.Dockerfile
     environment:
       GENERIC_TIMEZONE: Asia/Ho_Chi_Minh
       TZ: Asia/Ho_Chi_Minh

@@ -14,6 +14,14 @@
 		-Server
 	}
 
+	# Vendored generative-UI libraries are fetched cross-origin by opaque-origin sandbox iframes (CORS + CORP required).
+	@genui path /vendor/genui/*
+	header @genui {
+		Access-Control-Allow-Origin "*"
+		Cross-Origin-Resource-Policy "cross-origin"
+		Cache-Control "public, max-age=31536000, immutable"
+	}
+
 	# Uploads are capped at UPLOAD_MAX_BYTES (25 MiB default); the API enforces the real per-route limits.
 	request_body {
 		max_size 30MB

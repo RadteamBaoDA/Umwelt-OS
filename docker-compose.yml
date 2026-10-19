@@ -11,7 +11,7 @@ services:
   migrate:
     build:
       context: .
-      dockerfile: infrastructure/docker/api.Dockerfile
+      dockerfile: docker/api.Dockerfile
     command: ["alembic", "upgrade", "head"]
     env_file: .env
     depends_on:
@@ -28,7 +28,7 @@ services:
   api:
     build:
       context: .
-      dockerfile: infrastructure/docker/api.Dockerfile
+      dockerfile: docker/api.Dockerfile
     env_file: .env
     environment:
       # env_file can retain owner opt-in values; base deployment must force remote export off.
@@ -62,7 +62,7 @@ services:
   worker:
     build:
       context: .
-      dockerfile: infrastructure/docker/api.Dockerfile
+      dockerfile: docker/api.Dockerfile
     command: ["arq", "apps.worker.main.WorkerSettings"]
     env_file: .env
     environment:
@@ -96,7 +96,7 @@ services:
   chat-worker:
     build:
       context: .
-      dockerfile: infrastructure/docker/api.Dockerfile
+      dockerfile: docker/api.Dockerfile
     command: ["arq", "apps.worker.main.ChatWorkerSettings"]
     env_file: .env
     healthcheck:
@@ -127,7 +127,7 @@ services:
   web:
     build:
       context: .
-      dockerfile: infrastructure/docker/web.Dockerfile
+      dockerfile: docker/web.Dockerfile
     environment:
       API_INTERNAL_URL: http://api:8000
       NODE_OPTIONS: --max-old-space-size=512

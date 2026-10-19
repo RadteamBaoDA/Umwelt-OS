@@ -1,4 +1,4 @@
-"""Add functional GIN full-text search index on document_chunks and trigram GIN index on entities.
+"""Add functional GIN full-text search index on document_chunks and trigram GIN index on entities.canonical_name.
 
 Builds both indexes concurrently inside autocommit_block so active ingestion and entity resolution
 queries do not experience table-level write locks during migration.
@@ -20,9 +20,9 @@ _INDEXES: tuple[tuple[str, str, str], ...] = (
         "USING gin (to_tsvector('simple', content))",
     ),
     (
-        "ix_entities_normalized_name_trgm",
+        "ix_entities_canonical_name_trgm",
         "entities",
-        "USING gin (normalized_name gin_trgm_ops)",
+        "USING gin (canonical_name gin_trgm_ops)",
     ),
 )
 

@@ -11,7 +11,7 @@ services:
   browser:
     build:
       context: .
-      dockerfile: infrastructure/docker/browser.Dockerfile
+      dockerfile: docker/browser.Dockerfile
     environment:
       BROWSER_SHARED_TOKEN: ${BROWSER_SHARED_TOKEN:-}
     expose: ["8001"]
