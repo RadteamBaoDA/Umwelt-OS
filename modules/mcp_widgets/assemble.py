@@ -1,12 +1,14 @@
 """Standalone HTML5 document assembly for the widget MCP server.
 
-Ported from CopilotKit/OpenIntelligentUI@8391a94 apps/mcp (MIT). The theme/SVG/form CSS below is a minimal
-copy of the design system that lives in TypeScript at
-apps/web/src/modules/chat/generative-ui/design-system/index.ts; keep token values in sync with it.
+Ported from CopilotKit/OpenIntelligentUI@8391a94 apps/mcp (MIT). The theme/SVG/form CSS comes from design_css.py,
+generated from the TypeScript design system (apps/web/src/modules/chat/generative-ui/design-system/index.ts)
+by scripts/sync_design_css.py; a unit test fails when it is stale.
 """
 
 import html as _html
 import json
+
+from modules.mcp_widgets.design_css import FORM_STYLES_CSS, SVG_CLASSES_CSS, THEME_CSS
 
 MAX_HTML_BYTES = 256 * 1024
 MAX_TITLE_CHARS = 200
@@ -17,32 +19,32 @@ CSP = (
     "img-src data: blob:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"
 )
 
-_CSS = """
-:root{color-scheme:light;--bg:#f4f5f2;--surface:#fff;--text:#17211c;--muted:#69756e;--line:#dfe4df;--accent:#176a4a;--on-accent:#fff;--danger:#a82e35;
---p:var(--text);--s:var(--muted);--bg2:var(--surface);--b:var(--line);--t:var(--muted);--font-sans:system-ui,-apple-system,"Segoe UI",sans-serif;--radius:8px}
-@media (prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#141a17;--surface:#1d2621;--text:#edf3ee;--muted:#a1afa6;--line:#35433a;--accent:#77c69c;--on-accent:#102117;--danger:#ff9b9f}}
-*{box-sizing:border-box;margin:0}
-body{font:15px/1.6 var(--font-sans);color:var(--text);background:transparent;padding:8px}
-svg text.t{font:400 14px var(--font-sans);fill:var(--p)}svg text.ts{font:400 12px var(--font-sans);fill:var(--s)}svg text.th{font:600 14px var(--font-sans);fill:var(--p)}
-svg .box>rect,svg .box>circle,svg .box>ellipse{fill:var(--bg2);stroke:var(--b)}
-svg .arr{stroke:var(--s);stroke-width:1.5;fill:none}svg .leader{stroke:var(--t);stroke-width:.5;stroke-dasharray:4 4;fill:none}
-button{font:600 14px var(--font-sans);min-height:36px;padding:6px 14px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);color:var(--text);cursor:pointer}
-button:hover{border-color:var(--accent)}button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
-input[type=text],input[type=number],input[type=email],input[type=search],textarea,select{font:inherit;min-height:36px;padding:6px 10px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);color:var(--text)}
-input[type=range]{accent-color:var(--accent)}
-"""
+_CSS = chr(10).join((THEME_CSS, SVG_CLASSES_CSS, FORM_STYLES_CSS))
 
 # Bridge: widget -> embedding page. The target origin is injected as a JSON string literal; never '*'.
+# Mirrors upstream renderer.ts (send-prompt/open-link/widget-resize, link interception, 200 ms height
+# polling for 15 s) except that the target origin is explicit. `text` is the upstream key; `prompt` is kept
+# for compatibility with earlier Umwelt-OS hosts.
 _BRIDGE_JS = """
 (function(){
   var TARGET=__TARGET__;
   function post(m){if(window.parent&&window.parent!==window)window.parent.postMessage(m,TARGET);}
-  window.sendPrompt=function(t){t=typeof t==='string'?t:(t&&t.prompt)||'';t=String(t).trim();if(t)post({type:'send-prompt',prompt:t});};
+  window.sendPrompt=function(t){t=typeof t==='string'?t:(t&&(t.text||t.prompt))||'';t=String(t).trim();if(t)post({type:'send-prompt',text:t,prompt:t});};
   window.openLink=function(u){post({type:'open-link',url:String(u)});};
-  var last=0;
-  function report(){var h=Math.ceil(document.documentElement.getBoundingClientRect().height);if(h!==last){last=h;post({type:'widget-resize',height:h});}}
-  if(typeof ResizeObserver==='function')new ResizeObserver(report).observe(document.documentElement);
+  document.addEventListener('click',function(e){
+    var a=e.target&&e.target.closest?e.target.closest('a[href]'):null;
+    if(a&&a.href.startsWith('https://')){e.preventDefault();post({type:'open-link',url:a.href});}
+  });
+  var last=-1;
+  function report(){
+    var c=document.getElementById('content');
+    var h=Math.ceil(c?c.offsetHeight:document.documentElement.scrollHeight);
+    if(h!==last){last=h;post({type:'widget-resize',height:h});}
+  }
+  if(typeof ResizeObserver==='function')new ResizeObserver(report).observe(document.getElementById('content')||document.body);
   window.addEventListener('load',report);
+  var iv=setInterval(report,200);
+  setTimeout(function(){clearInterval(iv);},15000);
 })();
 """
 
@@ -83,5 +85,5 @@ def assemble_document(title: str, description: str, html: str, *, parent_origin:
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f'<meta name="description" content="{_html.escape(description, quote=True)}">'
         f"<title>{_html.escape(title)}</title><style>{_CSS}</style></head>"
-        f"<body>{html}<script>{bridge}</script></body></html>"
+        f'<body><div id="content">{html}</div><script>{bridge}</script></body></html>'
     )

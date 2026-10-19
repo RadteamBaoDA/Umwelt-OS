@@ -128,6 +128,8 @@ class Settings(BaseSettings):
     mcp_widgets_token: SecretStr = Field(default=SecretStr(""), validation_alias="MCP_WIDGETS_TOKEN", repr=False)
     # Exact origin of the host page embedding assembled documents (bridge postMessage target); empty uses public_origin.
     mcp_widgets_parent_origin: str = Field(default="", validation_alias="MCP_WIDGETS_PARENT_ORIGIN")
+    # Comma-separated exact browser origins allowed to call /mcp cross-origin (CORS); empty = no CORS. Never "*".
+    mcp_widgets_allowed_origins: str = Field(default="", validation_alias="MCP_WIDGETS_ALLOWED_ORIGINS")
     mcp_stdio_profile_manifest: str = Field(
         default="", validation_alias="MCP_STDIO_PROFILE_MANIFEST", repr=False
     )
@@ -266,6 +268,16 @@ class Settings(BaseSettings):
             parts = urlsplit(value)
             if parts.scheme not in ("http", "https") or not parts.hostname or "*" in value or parts.path or parts.query or parts.fragment or parts.username:
                 raise ValueError("MCP_WIDGETS_PARENT_ORIGIN must be one exact http(s) origin")
+        return value
+
+    @field_validator("mcp_widgets_allowed_origins")
+    @classmethod
+    def validate_widgets_allowed_origins(cls, value: str) -> str:
+        """Accept empty or comma-separated exact http(s) origins; wildcards would expose a bearer-protected endpoint."""
+        for item in (v.strip().rstrip("/") for v in value.split(",") if v.strip()):
+            parts = urlsplit(item)
+            if parts.scheme not in ("http", "https") or not parts.hostname or "*" in item or parts.path or parts.query or parts.fragment or parts.username:
+                raise ValueError("MCP_WIDGETS_ALLOWED_ORIGINS must list exact http(s) origins")
         return value
 
     @field_validator("github_app_id")
