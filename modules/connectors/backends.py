@@ -17,13 +17,28 @@ PROVIDER_SOURCE_TYPES = MappingProxyType({
     "google_news": "rss",  # scoped free preset: URL is built server-side from validated query/site/locale
     "sec_edgar": "api",  # scoped free preset: URL is built server-side from a validated 10-digit CIK
     "openalex": "api",  # scoped free preset: URL is built server-side from a validated scholarly_query
+    **dict.fromkeys((  # built-in RSS/Atom feeds (providers/news.py FEED_URLS)
+        "aljazeera_world", "npr_news", "fed_press", "gdacs_rss", "lobsters", "us_travel_advisories",
+        "noaa_tsunami", "jma_eqvol",
+    ), "rss"),
+    **dict.fromkeys((  # built-in JSON feeds (providers/json_feed.py)
+        "gdacs_events", "nws_alerts", "emsc_quakes", "launch_library", "wikipedia_mostread", "wikipedia_top_views", "bmkg_quakes", "satnogs_observations",
+    ), "api"),
+    **dict.fromkeys((  # keyed free-tier presets (providers/keyed.py); the owner key lives in connector_rest_credentials
+        "finnhub_news", "newsapi", "fred", "openweathermap", "openaq", "nasa_firms",
+    ), "api"),
+    **dict.fromkeys((  # bespoke keyless mappers
+        "noaa_kp", "open_er_api", "oecd_cli", "iss_position", "disease_sh", "ioda", "nvd",
+    ), "api"),
 })
 FIXED_SCOPE_PROVIDERS = frozenset(PROVIDER_SOURCE_TYPES) - frozenset({
     "youtube", "arxiv", "huggingface", "github_releases", "github", "telegram", "alpha_vantage", "open_meteo", "google_news", "sec_edgar",
-    "openalex",
+    "openalex", "fred", "openweathermap", "openaq", "nasa_firms",
 })
 # Free presets collected only by the gated shared executor (fixed-endpoint presets plus the scoped Google News preset).
-GATED_EXECUTOR_PROVIDERS = FIXED_SCOPE_PROVIDERS | {"google_news", "sec_edgar", "openalex"}
+GATED_EXECUTOR_PROVIDERS = FIXED_SCOPE_PROVIDERS | {
+    "google_news", "sec_edgar", "openalex", "fred", "openweathermap", "openaq", "nasa_firms",
+}
 PROVIDER_SCOPE_FIELDS = MappingProxyType({
     "youtube": frozenset({"youtube_channel_id"}), "arxiv": frozenset({"arxiv_category"}),
     "huggingface": frozenset({"huggingface_author"}),
@@ -38,6 +53,10 @@ PROVIDER_SCOPE_FIELDS = MappingProxyType({
     "google_news": frozenset({"news_query", "news_site", "news_locale"}),
     "sec_edgar": frozenset({"sec_cik", "sec_contact_email"}),
     "openalex": frozenset({"scholarly_query"}),
+    "fred": frozenset({"fred_series_id"}),
+    "openweathermap": frozenset({"owm_latitude", "owm_longitude"}),
+    "openaq": frozenset({"openaq_location_id"}),
+    "nasa_firms": frozenset({"firms_country"}),
     **dict.fromkeys(FIXED_SCOPE_PROVIDERS, frozenset[str]()),
 })
 NATIVE_PROVIDERS = frozenset(PROVIDER_SOURCE_TYPES)

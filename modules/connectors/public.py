@@ -269,6 +269,11 @@ class ConnectorConfig(BaseModel):
     sec_contact_email: str | None = Field(
         default=None, max_length=254, pattern=r"^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$")
     scholarly_query: str | None = Field(default=None, min_length=1, max_length=200)
+    fred_series_id: str | None = Field(default=None, pattern=r"^[A-Z0-9_]{1,25}$")
+    owm_latitude: float | None = Field(default=None, ge=-90, le=90)
+    owm_longitude: float | None = Field(default=None, ge=-180, le=180)
+    openaq_location_id: StrictInt | None = Field(default=None, ge=1, le=2_147_483_647)
+    firms_country: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     history_mode: Literal["returned_snapshot", "pending_updates"] | None = None
 
     @field_validator("news_query", mode="before")

@@ -39,6 +39,8 @@ from modules.connectors.models import ConnectorCollectionRequest, ConnectorProvi
 from modules.connectors.provider_specs import get_provider_spec
 from modules.connectors.providers import news as _news
 from modules.connectors.providers import rest
+from modules.connectors.providers.json_feed import JSON_FEEDS
+from modules.connectors.providers.keyed import KEYED, KEYED_MAX_BYTES
 from modules.ingestion import public as ingestion
 from modules.ingestion.schemas import (
     CollectionState,
@@ -53,8 +55,12 @@ from modules.sources.schemas import ConnectorSource, SourceFence
 RENEW_EVERY_SECONDS = 20
 PAYLOAD_RATE_LIMIT_BACKOFF = timedelta(minutes=15)  # body-level throttling carries no Retry-After; coarse until observed
 PURE_MAX_BYTES = {"ecb": 256 * 1024, "cisa_kev": 4 * 1024 * 1024}  # every other P3 body is capped at macro.MAX_BODY_BYTES
-PURE_PROVIDERS = ("world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika", "nasa_eonet", "cisa_kev")  # coingecko needs a key slot
-KEYED_PROVIDERS = {"coingecko": "x-cg-demo-api-key"}  # provider -> fixed header; key in connector_rest_credentials
+PURE_PROVIDERS = (  # coingecko needs a key slot
+    "world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika", "nasa_eonet", "cisa_kev",
+    *JSON_FEEDS,  # table-driven JSON list/event feeds (providers/json_feed.py)
+    "noaa_kp", "open_er_api", "oecd_cli", "iss_position", "disease_sh", "ioda", "nvd",  # bespoke keyless mappers
+)
+KEYED_PROVIDERS = {provider: row.placement for provider, row in KEYED.items()}  # provider -> stored credential header_name (header | query:<p> | path:<t>)
 SIMPLE_NATIVE = frozenset({"youtube", "arxiv", "huggingface", "github_releases", "alpha_vantage", "open_meteo"})
 REFUSED_HERE: frozenset[str] = frozenset()  # providers that must never run here (GitHub/Telegram are native now)
 Snapshot = tuple[int, int, int]
@@ -767,31 +773,47 @@ async def _run_pure(run: Run) -> None:
 
 
 async def _keyed_secret(run: Run) -> str:
-    """Owner key for this exact generation/revision, read at send time; typed ``credential_missing`` if unusable."""
-    header = KEYED_PROVIDERS[str(run.attempt.source.provider)]
+    """Owner key for this exact generation/revision, read at send time; typed ``credential_missing`` if unusable.
+
+    The stored ``header_name`` must equal the provider's fixed placement (header name, ``query:<param>`` or
+    ``path:<token>``), so a credential saved for another placement is never replayed here.
+    """
+    placement = KEYED_PROVIDERS[str(run.attempt.source.provider)]
     try:
-        stored_header, secret = await _rest_secret(run)
+        stored_placement, secret = await _rest_secret(run)
     except rest.ProviderHttpError as exc:
         raise CredentialMissing from exc
-    if stored_header != header:
+    if stored_placement != placement:
         raise CredentialMissing
     run.gate.bind_credential(quota.credential_fingerprint(
         secret, deployment_key=run.settings.connector_credential_encryption_key.get_secret_value()))
     return secret
 
 
-async def _run_coingecko(run: Run) -> None:
-    """CoinGecko Demo: key read first (no lease, no send without it), header-only, one gated send."""
-    from modules.connectors.providers.crypto import coingecko_request
-    from modules.connectors.providers.macro import MAX_BODY_BYTES
-    from modules.connectors.providers.world_data import map_pure_provider_body
+async def _run_keyed(run: Run) -> None:
+    """Keyed free-tier providers: key read first (no lease and no send without it), one gated send.
 
-    request = _payload(coingecko_request, await _keyed_secret(run))
+    Order matters: the credential and the request (which validates key shape and owner scope) are resolved
+    before the lease so a missing key or bad scope fails closed without consuming quota or a lease.
+    """
+    from modules.connectors.providers.macro import decode_json
+
+    provider = str(run.attempt.source.provider)
+    row = KEYED[provider]
+    cfg = getattr(run.attempt.source, "configuration", None) or {}
+    request = _payload(row.build, await _keyed_secret(run), cfg)
     collected_at = datetime.now(UTC)
     lease = await _lease(run)
-    fetched = await _get_body(run, request, max_bytes=MAX_BODY_BYTES)
-    records = _payload(map_pure_provider_body, "coingecko", _require_body(fetched), collected_at)
+    fetched = await _get_body(run, request, max_bytes=KEYED_MAX_BYTES)
+    body = _require_body(fetched)
+    payload = body if row.binary else _payload(decode_json, body)
+    records = _payload(row.mapper, payload, collected_at, cfg)
     await _accept_native(run, lease, records, _coverage(records), collected_at)
+
+
+async def _run_coingecko(run: Run) -> None:
+    """CoinGecko Demo: the first keyed preset; kept as a named entry point for its executor wiring and tests."""
+    await _run_keyed(run)
 
 
 async def _run_feed(run: Run) -> None:
@@ -883,6 +905,7 @@ async def _run_openalex(run: Run) -> None:
 
 ADAPTERS.update({
     **dict.fromkeys(PURE_PROVIDERS, _run_pure),
+    **dict.fromkeys(KEYED, _run_keyed),
     "coingecko": _run_coingecko,
     **dict.fromkeys(_news.FEED_URLS, _run_feed),  # every fixed-URL feed preset shares one adapter
     "google_news": _run_feed, "openalex": _run_openalex, "sec_edgar": _run_sec_edgar, "hn_top": _run_hn, "gdelt_economy": _run_gdelt,

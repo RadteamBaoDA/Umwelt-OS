@@ -15,10 +15,20 @@ from pydantic import (
 
 MAX_CONTENT_BYTES = 1_048_576
 MAX_METADATA_BYTES = 65_536
-NEWS_PROVIDER_IDS = ("bbc_world", "vnexpress_business", "dantri_news", "thanhnien_news", "tuoitre_news", "hn_top", "gdelt_economy", "google_news", "openalex", "sec_edgar")
+# Built-in feed-class presets (RSS/Atom and JSON event/list feeds): news-shaped records, no typed measurement.
+BUILTIN_FEED_PROVIDER_IDS = (
+    "aljazeera_world", "npr_news", "fed_press", "gdacs_rss", "lobsters", "us_travel_advisories",
+    "noaa_tsunami", "jma_eqvol",
+    "gdacs_events", "nws_alerts", "emsc_quakes", "launch_library", "wikipedia_mostread", "wikipedia_top_views", "bmkg_quakes", "satnogs_observations",
+)
+# Keyed news-shaped presets (providers/keyed.py).
+KEYED_FEED_PROVIDER_IDS = ("finnhub_news", "newsapi")
+NEWS_PROVIDER_IDS = (*BUILTIN_FEED_PROVIDER_IDS, *KEYED_FEED_PROVIDER_IDS, "bbc_world", "vnexpress_business", "dantri_news", "thanhnien_news", "tuoitre_news", "hn_top", "gdelt_economy", "google_news", "openalex", "sec_edgar")
 MEASUREMENT_PROVIDER_IDS = (
     "alpha_vantage", "open_meteo", "world_bank", "frankfurter", "ecb", "binance",
     "alternative_me", "usgs", "coinpaprika", "coingecko", "cisa_kev", "nasa_eonet",
+    "fred", "openweathermap", "openaq", "nasa_firms",
+    "noaa_kp", "open_er_api", "oecd_cli", "iss_position", "disease_sh", "ioda", "nvd",
 )
 PROVIDER_IDS = (
     "youtube", "arxiv", "huggingface", "github_releases", "github", "telegram",
@@ -38,6 +48,17 @@ MEASUREMENT_PROVIDER_FIELDS = {
     "coinpaprika": {"id", "symbol", "last_updated", "quote", "decimal_value"},
     "coingecko": {"coin_id", "quote", "decimal_value", "last_updated_at"},
     "nasa_eonet": {"categories", "closed", "latitude", "longitude", "event_time", "magnitude_unit", "decimal_value"},
+    "fred": {"series_id", "date", "decimal_value"},
+    "openweathermap": {"dt", "place", "decimal_value"},
+    "openaq": {"location_id", "sensor_id", "datetime", "decimal_value"},
+    "nasa_firms": {"acq", "confidence", "satellite", "daynight", "decimal_value"},
+    "noaa_kp": {"time_tag", "a_running", "station_count", "decimal_value"},
+    "open_er_api": {"date", "base", "quote", "decimal_value"},
+    "oecd_cli": {"area", "period", "decimal_value"},
+    "iss_position": {"velocity_kmh", "timestamp", "visibility", "decimal_value"},
+    "disease_sh": {"updated", "decimal_value"},
+    "ioda": {"location", "datasource", "start", "duration_s", "method"},
+    "nvd": {"cveID", "status", "published", "lastModified", "severity", "decimal_value"},
 }
 
 
@@ -47,10 +68,7 @@ _FEED_FIELDS = {"title", "summary", "canonical_url", "guid", "published_at", "pr
 class WorldDataMeasurement(BaseModel):
     """Preserve one provider-declared numeric value with its original measurement semantics."""
     model_config = ConfigDict(extra="forbid", frozen=True)
-    provider: Literal[
-        "alpha_vantage", "open_meteo", "world_bank", "frankfurter", "ecb", "binance",
-        "alternative_me", "usgs", "coinpaprika", "coingecko", "cisa_kev", "nasa_eonet",
-    ]
+    provider: str = Field(min_length=1, max_length=64)  # membership checked against MEASUREMENT_PROVIDER_IDS
     metric: str = Field(min_length=1, max_length=80)
     value: float | None
     unit: str = Field(min_length=1, max_length=64)
@@ -64,6 +82,14 @@ class WorldDataMeasurement(BaseModel):
     quality: Literal["provider_reported", "forecast", "reference", "missing"]
     missing_reason: str | None = Field(default=None, max_length=64)
     provider_fields: dict[str, str | float | int | None] = Field(default_factory=dict, max_length=12)
+
+    @field_validator("provider")
+    @classmethod
+    def measurement_provider(cls, value: str) -> str:
+        """Accept only providers registered as structured measurement sources."""
+        if value not in MEASUREMENT_PROVIDER_IDS:
+            raise ValueError("Provider is not registered for measurements")
+        return value
 
     @field_validator("value")
     @classmethod
@@ -157,12 +183,7 @@ class ProviderTelegramMetadata(BaseModel):
 class ProviderRecordMetadata(BaseModel):
     """Retain typed, bounded provider fields separately from generic metadata."""
     model_config = ConfigDict(extra="forbid", frozen=True)
-    provider: Literal[
-        "youtube", "arxiv", "huggingface", "github_releases", "github", "telegram",
-        "alpha_vantage", "open_meteo", "world_bank", "frankfurter", "ecb", "binance",
-        "alternative_me", "usgs", "coinpaprika", "coingecko", "cisa_kev", "nasa_eonet",
-        "bbc_world", "vnexpress_business", "dantri_news", "thanhnien_news", "tuoitre_news", "hn_top", "gdelt_economy", "google_news", "openalex", "sec_edgar",
-    ]
+    provider: str = Field(min_length=1, max_length=64)  # membership checked against PROVIDER_IDS below
     identity: str = Field(min_length=1, max_length=512)
     provider_version: str | None = Field(default=None, max_length=255)
     timestamp_basis: Literal["provider_modified", "provider_published", "collection"]
@@ -173,6 +194,14 @@ class ProviderRecordMetadata(BaseModel):
     source_fields: dict[str, Any] = Field(default_factory=dict)
     telegram: ProviderTelegramMetadata | None = None
     world_data: WorldDataMeasurement | None = None
+
+    @field_validator("provider")
+    @classmethod
+    def registered_provider(cls, value: str) -> str:
+        """Accept only registered provider ids (the closed set that used to be a ``Literal``)."""
+        if value not in PROVIDER_IDS:
+            raise ValueError("Provider is not registered for typed records")
+        return value
 
     @field_validator("provider_modified_at")
     @classmethod
@@ -202,6 +231,7 @@ class ProviderRecordMetadata(BaseModel):
             "github": {"record_type", "node_id", "html_url"},
             "telegram": set(),
             **{provider: set() for provider in MEASUREMENT_PROVIDER_IDS},
+            **dict.fromkeys((*BUILTIN_FEED_PROVIDER_IDS, *KEYED_FEED_PROVIDER_IDS), _FEED_FIELDS),
             "bbc_world": _FEED_FIELDS, "vnexpress_business": _FEED_FIELDS, "tuoitre_news": _FEED_FIELDS, "thanhnien_news": _FEED_FIELDS, "dantri_news": _FEED_FIELDS, "google_news": _FEED_FIELDS,
             "sec_edgar": _FEED_FIELDS | {"form", "cik"},
             "openalex": {"title", "summary", "canonical_url", "published_at", "authors", "doi", "source", "cited_by_count"},

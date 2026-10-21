@@ -52,6 +52,19 @@ class SourceCreate(BaseModel):
             "google_news": "rss",
             "sec_edgar": "api",
             "openalex": "api",
+            **dict.fromkeys((  # built-in RSS/Atom feeds; keep in step with connectors.backends
+                "aljazeera_world", "npr_news", "fed_press", "gdacs_rss", "lobsters", "us_travel_advisories",
+                "noaa_tsunami", "jma_eqvol",
+            ), "rss"),
+            **dict.fromkeys((
+                "gdacs_events", "nws_alerts", "emsc_quakes", "launch_library", "wikipedia_mostread", "wikipedia_top_views", "bmkg_quakes", "satnogs_observations",
+            ), "api"),
+            **dict.fromkeys((  # keyed free-tier presets
+                "finnhub_news", "newsapi", "fred", "openweathermap", "openaq", "nasa_firms",
+            ), "api"),
+            **dict.fromkeys((
+                "noaa_kp", "open_er_api", "oecd_cli", "iss_position", "disease_sh", "ioda", "nvd",
+            ), "api"),
         }.get(self.provider or "")
         if self.provider is not None and expected is None:
             raise ValueError("Provider is not registered")

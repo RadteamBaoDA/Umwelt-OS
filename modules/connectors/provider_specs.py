@@ -6,7 +6,7 @@ license grant, and nothing here asserts runtime acceptance. Facts were checked o
 caps are recorded as ``limit_units=None`` (never unlimited).
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 CHECKED_ON = "2026-10-07"
@@ -52,7 +52,7 @@ class FreeProviderSpec:
     code_implemented: bool = False
     runtime_verified: bool = False
     checked_on: str = CHECKED_ON
-    secret_location: Literal["header", "query"] | None = None
+    secret_location: Literal["header", "query", "path"] | None = None
     category: Literal["news", "economy", "hazards", "space", "security", "tech"] = "news"
 
 
@@ -63,6 +63,14 @@ DISPATCHABLE = frozenset({
     "bbc_world", "vnexpress_business", "dantri_news", "thanhnien_news", "tuoitre_news", "hn_top", "gdelt_economy",
     "world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika",
     "coingecko", "google_news", "nasa_eonet", "cisa_kev", "sec_edgar", "openalex",
+    # Built-in RSS/Atom world-data feeds (providers/news.py FEED_URLS).
+    "aljazeera_world", "npr_news", "fed_press", "gdacs_rss", "lobsters", "us_travel_advisories",
+    "noaa_tsunami", "jma_eqvol",
+    # Built-in table-driven JSON feeds (providers/json_feed.py JSON_FEEDS).
+    "gdacs_events", "nws_alerts", "emsc_quakes", "launch_library", "wikipedia_mostread", "wikipedia_top_views", "bmkg_quakes", "satnogs_observations",
+    "noaa_kp", "open_er_api", "oecd_cli", "iss_position", "disease_sh", "ioda", "nvd",  # bespoke keyless mappers
+    # Keyed free-tier presets (providers/keyed.py); each needs an owner-entered key and fails closed without one.
+    "fred", "finnhub_news", "newsapi", "openweathermap", "openaq", "nasa_firms",
 })
 
 
@@ -89,7 +97,7 @@ def _spec(id_: str, label: str, category: str, hosts: tuple[str, ...], kind: str
     )
 
 
-FREE_PROVIDER_SPECS: tuple[FreeProviderSpec, ...] = (
+_SPECS_RAW: tuple[FreeProviderSpec, ...] = (
     _spec("bbc_world", "BBC World News", "news", ("feeds.bbci.co.uk",), "news", 30,
           "https://www.bbc.co.uk/usingthebbc/terms/", "review",
           "Display BBC as publisher with a link to the original article; feed-only title, summary and link.",
@@ -202,6 +210,189 @@ FREE_PROVIDER_SPECS: tuple[FreeProviderSpec, ...] = (
            QuotaWindowPolicy("official_calls_per_day", "credential", "day", "http_calls", 25, 1,
                              "official_documented")),
           key=True, secret="query", implemented=True),
+    # ---- Built-in RSS/Atom world-data feeds. Feed-only title/summary/link; the linked page is never fetched.
+    # Eligibility follows each publisher's published terms; where a free-reuse statement is not explicit it is review.
+    _spec("aljazeera_world", "Al Jazeera World News", "news", ("www.aljazeera.com",), "news", 30,
+          "https://www.aljazeera.com/terms-and-conditions", "review",
+          "Credit Al Jazeera and link the original article; feed-only title, summary and link.",
+          ("/xml/rss/all.xml",), (_day(96), _unknown())),
+    _spec("npr_news", "NPR News", "news", ("feeds.npr.org",), "news", 30,
+          "https://www.npr.org/about-npr/179876898/terms-of-use", "noncommercial",
+          "Credit NPR and link the original story; RSS is licensed for personal, noncommercial use.",
+          ("/1001/rss.xml",), (_day(96), _unknown())),
+    _spec("fed_press", "Federal Reserve press releases", "economy", ("www.federalreserve.gov",), "news", 60,
+          "https://www.federalreserve.gov/disclaimer.htm", "open",
+          "Credit the Board of Governors of the Federal Reserve System; link the original release.",
+          ("/feeds/press_all.xml",), (_day(48), _unknown())),
+    _spec("gdacs_rss", "GDACS disaster alerts (RSS)", "hazards", ("www.gdacs.org",), "event", 60,
+          "https://www.gdacs.org/About/overview.aspx", "open",
+          "Credit GDACS (UN OCHA / European Commission JRC) and link the event page.",
+          ("/xml/rss.xml",), (_day(48), _unknown())),
+    _spec("lobsters", "Lobsters", "tech", ("lobste.rs",), "news", 60,
+          "https://lobste.rs/about", "review",
+          "Credit Lobsters and link the story; the feed carries submitter links and titles only.",
+          ("/rss",), (_day(48), _unknown())),
+    _spec("us_travel_advisories", "U.S. travel advisories", "hazards", ("travel.state.gov",), "event", 360,
+          "https://www.state.gov/copyright-information/", "open",
+          "Credit the U.S. Department of State; advisories are a point-in-time statement, check the original.",
+          ("/_res/rss/TAsTWs.xml",), (_day(12), _unknown())),
+    _spec("noaa_tsunami", "NOAA tsunami bulletins", "hazards", ("www.tsunami.gov",), "event", 30,
+          "https://www.tsunami.gov/", "open",
+          "Credit the NOAA/NWS Tsunami Warning Centers; this is not an official warning channel.",
+          ("/events/xml/PHEBAtom.xml",), (_day(96), _unknown())),
+    _spec("jma_eqvol", "JMA earthquake and volcano bulletins", "hazards", ("www.data.jma.go.jp",), "event", 30,
+          "https://www.jma.go.jp/jma/en/copyright.html", "open",
+          "Source: Japan Meteorological Agency; state any processing (feed title and link only).",
+          ("/developer/xml/feed/eqvol.xml",), (_day(96), _unknown())),
+    # ---- Built-in JSON list/event feeds (providers/json_feed.py). Endpoint shapes probed 2026-10-21.
+    _spec("gdacs_events", "GDACS Orange/Red disaster events", "hazards", ("www.gdacs.org",), "event", 60,
+          "https://www.gdacs.org/About/overview.aspx", "open",
+          "Credit GDACS (UN OCHA / European Commission JRC) and link the event report.",
+          ("/gdacsapi/api/events/geteventlist/SEARCH?eventlist=EQ;TC;FL;VO;WF;DR&alertlevel=Orange;Red",), (_day(48), _unknown())),
+    _spec("nws_alerts", "NWS severe alerts (US)", "hazards", ("api.weather.gov",), "event", 15,
+          "https://www.weather.gov/disclaimer", "open",
+          "Credit the U.S. National Weather Service; alerts expire, check the original.",
+          ("/alerts/active?status=actual&message_type=alert&severity=Extreme,Severe",), (_day(192), _unknown())),
+    _spec("emsc_quakes", "EMSC earthquakes (M4+)", "hazards", ("www.seismicportal.eu",), "event", 30,
+          "https://www.emsc-csem.org/", "open",
+          "Credit EMSC (Euro-Mediterranean Seismological Centre); magnitudes are preliminary.",
+          ("/fdsnws/event/1/query?limit=50&format=json&minmag=4",), (_day(96), _unknown())),
+    # Launch Library free tier: documented 15 requests/hour, non-commercial. 120-minute interval stays far below it.
+    _spec("launch_library", "Launch Library upcoming launches", "space", ("ll.thespacedevs.com",), "event", 120,
+          "https://thespacedevs.com/llapi", "noncommercial",
+          "Credit The Space Devs Launch Library; free tier is non-commercial with a 15 requests/hour limit.",
+          ("/2.2.0/launch/upcoming/?limit=10&mode=list",),
+          (_day(12), _unknown())),
+    _spec("wikipedia_mostread", "Wikipedia most-read articles", "tech", ("api.wikimedia.org",), "news", 1440,
+          "https://foundation.wikimedia.org/wiki/Policy:Terms_of_Use", "open",
+          "Credit Wikipedia (CC BY-SA 4.0) and link the article; counts are for the previous UTC day.",
+          ("/feed/v1/wikipedia/en/featured/{yyyy}/{mm}/{dd}",), (_day(4), _unknown())),
+    _spec("wikipedia_top_views", "Wikipedia top page views", "tech", ("wikimedia.org",), "news", 1440,
+          "https://foundation.wikimedia.org/wiki/Policy:Terms_of_Use", "open",
+          "Credit Wikimedia pageviews (CC0 data) and link the article; counts are for the previous UTC day.",
+          ("/api/rest_v1/metrics/pageviews/top/en.wikipedia/all-access/{yyyy}/{mm}/{dd}",), (_day(4), _unknown())),
+    _spec("bmkg_quakes", "BMKG recent earthquakes (Indonesia)", "hazards", ("data.bmkg.go.id",), "event", 30,
+          "https://data.bmkg.go.id/", "open",
+          "Source: BMKG (Badan Meteorologi, Klimatologi, dan Geofisika); state any processing.",
+          ("/DataMKG/TEWS/gempaterkini.json",), (_day(96), _unknown())),
+    _spec("satnogs_observations", "SatNOGS recent observations", "space", ("network.satnogs.org",), "event", 120,
+          "https://db.satnogs.org/about", "open",
+          "Credit SatNOGS Network (CC BY-SA 4.0); station observations are community-contributed.",
+          ("/api/observations/?format=json&status=good",), (_day(12), _unknown())),
+    # ---- Bespoke keyless mappers. Endpoint shapes probed 2026-10-21.
+    _spec("noaa_kp", "NOAA planetary Kp index", "space", ("services.swpc.noaa.gov",), "measurement", 180,
+          "https://www.weather.gov/disclaimer", "open",
+          "Credit NOAA Space Weather Prediction Center; Kp is a 3-hour planetary index (0-9).",
+          ("/products/noaa-planetary-k-index.json",), (_day(16), _unknown())),
+    _spec("open_er_api", "Open ER API daily USD rates", "economy", ("open.er-api.com",), "measurement", 1440,
+          "https://www.exchangerate-api.com/terms", "review",
+          "Rates By Exchange Rate API (https://www.exchangerate-api.com); attribution is required on the free plan.",
+          ("/v6/latest/USD",), (_day(4), _unknown())),
+    # OECD documents roughly 20 queries/hour for anonymous SDMX access; one daily send is far below it.
+    _spec("oecd_cli", "OECD composite leading indicators", "economy", ("sdmx.oecd.org",), "measurement", 1440,
+          "https://www.oecd.org/en/about/terms-conditions.html", "open",
+          "Source: OECD (CC BY 4.0); cite the dataset OECD.SDD.STES DF_CLI and state any processing.",
+          (("/public/rest/data/OECD.SDD.STES,DSD_STES@DF_CLI/USA+CHN+JPN+DEU+GBR.M.LI...AA...H"
+            "?lastNObservations=1&dimensionAtObservation=AllDimensions"),), (_day(4), _unknown())),
+    _spec("iss_position", "ISS position", "space", ("api.wheretheiss.at",), "measurement", 15,
+          "https://wheretheiss.at/w/developer", "noncommercial",
+          "Credit wheretheiss.at; the API is free for non-commercial use with a documented ~1 request/second cap.",
+          ("/v1/satellites/25544",), (_day(96), QuotaWindowPolicy("pilot_calls_utc_second", "provider", "second", "http_calls", 1))),
+    _spec("disease_sh", "disease.sh global COVID-19 totals", "tech", ("disease.sh",), "measurement", 1440,
+          "https://disease.sh/", "review",
+          "Credit disease.sh and its upstream sources (Johns Hopkins CSSE and others); totals may be stale.",
+          ("/v3/covid-19/all",), (_day(4), _unknown())),
+    _spec("ioda", "IODA internet outage events", "security", ("api.ioda.inetintel.cc.gatech.edu",), "event", 60,
+          "https://ioda.inetintel.cc.gatech.edu/", "noncommercial",
+          "Credit the Georgia Tech IODA project; the service is a research tool, terms are not a license grant.",
+          ("/v2/outages/events?from={unix}&until={unix}&entityType=country&limit=50",), (_day(24), _unknown())),
+    # NVD keyless limit: 5 requests per rolling 30 seconds; one small page every six hours stays far below it.
+    _spec("nvd", "NVD recent CVEs", "security", ("services.nvd.nist.gov",), "event", 360,
+          "https://nvd.nist.gov/general/FAQ-Sections/General-FAQs", "open",
+          "Credit the NIST National Vulnerability Database; this product uses NVD data but is not endorsed by NIST.",
+          ("/rest/json/cves/2.0?resultsPerPage=20&pubStartDate={start}&pubEndDate={end}",), (_day(8), _unknown())),
+    # ---- Keyed free-tier presets (providers/keyed.py). Owner-entered key in connector_rest_credentials; response
+    # shapes follow the providers' public API documentation (not probed: no key is available to probe with).
+    _spec("fred", "FRED series (latest observations)", "economy", ("api.stlouisfed.org",), "measurement", 1440,
+          "https://fred.stlouisfed.org/docs/api/terms_of_use.html", "review",
+          "This product uses the FRED API but is not endorsed or certified by the Federal Reserve Bank of St. Louis; "
+          "some series carry third-party copyright.",
+          ("/fred/series/observations?file_type=json&sort_order=desc&limit=5&series_id={series}",),
+          (_day(8, kind="credential"),
+           QuotaWindowPolicy("official_calls_per_minute", "credential", "minute", "http_calls", 120, 1,
+                             "official_documented")),
+          key=True, secret="query"),
+    _spec("finnhub_news", "Finnhub market news", "news", ("finnhub.io",), "news", 60,
+          "https://finnhub.io/terms-of-service", "personal",
+          "Credit Finnhub and link the original article; the free plan is for personal use.",
+          ("/api/v1/news?category=general",),
+          (_day(48, kind="credential"),
+           QuotaWindowPolicy("official_calls_per_minute", "credential", "minute", "http_calls", 60, 1,
+                             "official_documented")),
+          key=True, secret="header"),
+    _spec("newsapi", "NewsAPI top headlines (US business)", "news", ("newsapi.org",), "news", 120,
+          "https://newsapi.org/terms", "review",
+          "Credit NewsAPI.org and the article's publisher; the free Developer plan is for development use only.",
+          ("/v2/top-headlines?country=us&category=business&pageSize=20",),
+          (_day(12, kind="credential"),
+           QuotaWindowPolicy("official_calls_per_day", "credential", "day", "http_calls", 100, 1,
+                             "official_documented")),
+          key=True, secret="header"),
+    _spec("openweathermap", "OpenWeather current conditions", "hazards", ("api.openweathermap.org",), "measurement", 60,
+          "https://openweathermap.org/api", "open",
+          "Weather data provided by OpenWeather (CC BY-SA 4.0); state any processing.",
+          ("/data/2.5/weather?units=metric&lat={lat}&lon={lon}",),
+          (_day(48, kind="credential"),
+           QuotaWindowPolicy("official_calls_per_minute", "credential", "minute", "http_calls", 60, 1,
+                             "official_documented")),
+          key=True, secret="query"),
+    _spec("openaq", "OpenAQ latest air quality", "hazards", ("api.openaq.org",), "measurement", 60,
+          "https://docs.openaq.org/about/about", "open",
+          "Credit OpenAQ and the originating data provider; data licenses vary per provider (mostly CC BY 4.0).",
+          ("/v3/locations/{location}/sensors",), (_day(48, kind="credential"), _unknown("credential")),
+          key=True, secret="header"),
+    _spec("nasa_firms", "NASA FIRMS active fires (VIIRS, 24h)", "hazards", ("firms.modaps.eosdis.nasa.gov",), "event", 180,
+          "https://www.earthdata.nasa.gov/engage/open-data-services-software-policies", "open",
+          "Credit NASA FIRMS (LANCE/EOSDIS); hotspots are detections, not confirmed fires.",
+          ("/api/country/csv/{MAP_KEY}/VIIRS_SNPP_NRT/{country}/1",), (_day(16, kind="credential"), _unknown("credential")),
+          key=True, secret="path"),
+)
+
+# The built-in expansion (RSS, JSON, bespoke and keyed presets) was checked later than the original 21 presets;
+# the date doubles as the terms version the owner acknowledges, so it must not claim the older check.
+EXPANSION_CHECKED_ON = "2026-10-21"
+_EXPANSION_IDS = frozenset({
+    "npr_news",
+    "fed_press",
+    "gdacs_rss",
+    "lobsters",
+    "us_travel_advisories",
+    "noaa_tsunami",
+    "jma_eqvol",
+    "gdacs_events",
+    "nws_alerts",
+    "emsc_quakes",
+    "launch_library",
+    "wikipedia_mostread",
+    "wikipedia_top_views",
+    "bmkg_quakes",
+    "satnogs_observations",
+    "noaa_kp",
+    "open_er_api",
+    "oecd_cli",
+    "iss_position",
+    "disease_sh",
+    "ioda",
+    "nvd",
+    "fred",
+    "finnhub_news",
+    "newsapi",
+    "openweathermap",
+    "openaq",
+    "nasa_firms",
+})
+FREE_PROVIDER_SPECS: tuple[FreeProviderSpec, ...] = tuple(
+    replace(spec, checked_on=EXPANSION_CHECKED_ON) if spec.id in _EXPANSION_IDS else spec for spec in _SPECS_RAW
 )
 
 _BY_ID = {spec.id: spec for spec in FREE_PROVIDER_SPECS}

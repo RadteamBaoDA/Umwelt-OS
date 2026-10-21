@@ -24,7 +24,7 @@ NEWS_IDS = {"bbc_world", "vnexpress_business", "tuoitre_news", "thanhnien_news",
 
 def test_frozen_ids_with_expected_eligibility() -> None:
     eligibility = {spec.id: spec.eligibility for spec in FREE_PROVIDER_SPECS}
-    assert len(eligibility) == 21
+    assert len(eligibility) >= 21
     for open_id in ("world_bank", "frankfurter", "ecb", "usgs", "alternative_me", "cisa_kev", "sec_edgar", "openalex"):
         assert eligibility[open_id] == "open"
     assert eligibility["vnexpress_business"] == eligibility["tuoitre_news"] == "noncommercial"

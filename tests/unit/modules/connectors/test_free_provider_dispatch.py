@@ -161,6 +161,10 @@ def test_registration_agrees_across_registry_sources_and_scope_validators(provid
         "google_news": {"news_query": "economy", "news_site": "any", "news_locale": "en-US"},
         "sec_edgar": {"sec_cik": "0000320193", "sec_contact_email": "owner@example.com"},
         "openalex": {"scholarly_query": "economy"},
+        "fred": {"fred_series_id": "DFF"},
+        "openweathermap": {"owm_latitude": 21.0, "owm_longitude": 105.8},
+        "openaq": {"openaq_location_id": 8118},
+        "nasa_firms": {"firms_country": "VNM"},
     }.get(provider, {})
     assert native_dispatch_supported(source_type, provider) and PROVIDER_SCOPE_FIELDS[provider] == frozenset(scope)
     source = SimpleNamespace(

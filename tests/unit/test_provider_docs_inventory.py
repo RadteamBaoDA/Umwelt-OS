@@ -81,7 +81,9 @@ def test_registered_presets_are_the_dispatchable_set() -> None:
     registered = {pid for pid, group in rows.items() if group[0][7].startswith("registered")}
     assert registered == set(DISPATCHABLE)
     assert rows["coingecko"][0][7] == "registered (requires API key)"
-    assert [pid for pid, group in rows.items() if group[0][7] == "registered (requires API key)"] == ["coingecko"]
+    keyed = {pid for pid, group in rows.items() if group[0][7] == "registered (requires API key)"}
+    assert keyed == {spec.id for spec in FREE_PROVIDER_SPECS if spec.key_required and spec.id in DISPATCHABLE}
+    assert "coingecko" in keyed
 
 
 def test_google_news_is_documented_as_unofficial_unverified_and_terms_gated() -> None:

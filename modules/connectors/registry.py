@@ -89,6 +89,7 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
         "github_owner", "github_repository", "include_issues", "include_pulls", "include_commits", "include_releases", "telegram_chat_ids", "history_mode",
         "market_symbols", "market_currency", "market_exchange_timezone", "weather_latitude", "weather_longitude", "weather_timezone", "weather_metrics",
         "news_query", "news_site", "news_locale", "sec_cik", "sec_contact_email", "scholarly_query",
+        "fred_series_id", "owm_latitude", "owm_longitude", "openaq_location_id", "firms_country",
     }:
         raise ValueError("Provider scope requires a registered source provider")
     config = configuration(source)

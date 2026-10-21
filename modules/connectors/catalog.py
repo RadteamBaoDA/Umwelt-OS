@@ -280,6 +280,13 @@ _NEWS = {"title": "Example headline", "url": "https://example.org/article", "pub
 SAMPLE_OUTPUTS: dict[str, dict[str, Any]] = {
     "bbc_world": _NEWS, "vnexpress_business": _NEWS, "tuoitre_news": _NEWS, "thanhnien_news": _NEWS, "dantri_news": _NEWS,
     "gdelt_economy": _NEWS,
+    **dict.fromkeys((
+        "aljazeera_world", "npr_news", "fed_press", "gdacs_rss", "lobsters", "us_travel_advisories",
+        "noaa_tsunami", "jma_eqvol",
+    ), _NEWS),
+    **dict.fromkeys((
+        "gdacs_events", "nws_alerts", "emsc_quakes", "launch_library", "wikipedia_mostread", "wikipedia_top_views", "bmkg_quakes", "satnogs_observations",
+    ), _NEWS),
     "hn_top": {"title": "Example story", "url": "https://example.org/story", "by": "example_user", "score": 123,
                "published_at": "2026-01-01T08:00:00Z"},
     "world_bank": {"indicator": "NY.GDP.MKTP.CD", "country": "VN", "period": "2024", "value": 1.0e11},
@@ -295,6 +302,18 @@ SAMPLE_OUTPUTS: dict[str, dict[str, Any]] = {
     "google_news": {"title": "Example headline", "url": "https://news.google.com/rss/articles/EXAMPLE",
                     "publisher": "Reuters", "published_at": "2026-01-01T08:00:00Z"},
     "sec_edgar": {"accession": "0000320193-26-000001", "form": "8-K", "filing_date": "2026-01-01", "cik": "0000320193"},
+    "fred": {"series_id": "DFF", "date": "2026-01-01", "value": 4.33},
+    "finnhub_news": _NEWS, "newsapi": _NEWS,
+    "openweathermap": {"metric": "temperature", "value": 28.4, "unit": "degC", "observed_at": "2026-01-01T08:00:00Z"},
+    "openaq": {"metric": "pm25", "value": 18.0, "unit": "ug/m3", "observed_at": "2026-01-01T08:00:00Z"},
+    "nasa_firms": {"latitude": 21.1, "longitude": 105.9, "frp_mw": 4.2, "acq": "2026-01-01T08:00:00+00:00"},
+    "noaa_kp": {"time_tag": "2026-01-01T00:00:00+00:00", "kp": 2.33},
+    "open_er_api": {"base": "USD", "quote": "VND", "rate": 26000.0, "date": "2026-01-01"},
+    "oecd_cli": {"area": "USA", "period": "2026-01", "value": 100.0, "unit": "index"},
+    "iss_position": {"latitude": -30.1, "longitude": 65.2, "altitude_km": 427.3, "observed_at": "2026-01-01T08:00:00Z"},
+    "disease_sh": {"metric": "cases", "region": "Global", "value": 700000000},
+    "ioda": {"location": "country/PG", "datasource": "bgp", "start": "2026-01-01T08:00:00Z", "score": 24448.5},
+    "nvd": {"cveID": "CVE-2026-0001", "severity": "HIGH", "base_score": 7.5, "published": "2026-01-01T08:00:00+00:00"},
     "coingecko": {"coin_id": "bitcoin", "price_usd": 100000.0, "observed_at": "2026-01-01T08:00:00Z"},
     "openalex": {"title": "Example paper", "canonical_url": "https://openalex.org/W0000000000", "doi": "https://doi.org/10.0000/example",
                  "authors": ["Example Author"], "cited_by_count": 0, "published_at": "2026-01-01T00:00:00+00:00"},
@@ -306,6 +325,10 @@ _SCOPED_EXAMPLES: dict[str, dict[str, Any]] = {
     "google_news": {"news_query": "Vietnam economy", "news_site": "reuters.com", "news_locale": "en-US"},
     "sec_edgar": {"sec_cik": "0000320193", "sec_contact_email": "owner@example.com"},
     "openalex": {"scholarly_query": "large language models"},
+    "fred": {"fred_series_id": "DFF"},
+    "openweathermap": {"owm_latitude": 21.0285, "owm_longitude": 105.8542},
+    "openaq": {"openaq_location_id": 8118},
+    "nasa_firms": {"firms_country": "VNM"},
 }
 
 
