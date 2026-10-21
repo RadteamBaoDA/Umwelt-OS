@@ -7,6 +7,7 @@ import { workspaceKeys } from '@/core/query-keys';
 const items: WorkspaceRead[] = [
   { id: 'ws-a', name: 'Work', owner_user_id: 1, is_default: false, role: 'owner', configuration_revision: 1 },
   { id: 'ws-b', name: 'Home', owner_user_id: 1, is_default: true, role: 'owner', configuration_revision: 3 },
+  { id: 'ws-c', name: 'Observed', owner_user_id: 7, is_default: true, role: 'admin_viewer', configuration_revision: 2 },
 ];
 
 function Probe({ onRender }: { onRender: (value: WorkspaceContextValue) => void }) {
@@ -41,7 +42,7 @@ describe('WorkspaceProvider', () => {
   it('loads the workspace list and defaults to the is_default workspace', async () => {
     const latest = renderProvider(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
 
-    await waitFor(() => expect(latest().workspaces).toHaveLength(2));
+    await waitFor(() => expect(latest().workspaces).toHaveLength(3));
     expect(latest().defaultWorkspaceId).toBe('ws-b');
     expect(latest().selection?.id).toBe('ws-b');
     expect(latest().isOwner).toBe(true);
@@ -60,5 +61,19 @@ describe('WorkspaceProvider', () => {
     expect(latest().selection?.id).toBe('ws-a');
     expect(client.getQueryData(['documents'])).toBeUndefined();
     expect(client.getQueryData(workspaceKeys.list())).toEqual({ items });
+  });
+
+  it('marks a selected cross-workspace view read-only and clears the prior workspace cache', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const latest = renderProvider(client);
+    await waitFor(() => expect(latest().selection?.id).toBe('ws-b'));
+    client.setQueryData(['documents'], { items: ['private-to-old-workspace'] });
+
+    act(() => latest().selectWorkspace('ws-c'));
+
+    await waitFor(() => expect(latest().isAdminViewer).toBe(true));
+    expect(latest().isOwner).toBe(false);
+    expect(latest().selection?.role).toBe('admin_viewer');
+    expect(client.getQueryData(['documents'])).toBeUndefined();
   });
 });

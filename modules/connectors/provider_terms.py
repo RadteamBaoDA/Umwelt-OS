@@ -62,6 +62,19 @@ class ProviderTermsRead(BaseModel):
     decision: str
 
 
+class OperatorTermsQueueItem(BaseModel):
+    """Safe cross-workspace summary of acknowledged terms awaiting operator review."""
+
+    workspace_id: UUID
+    workspace_name: str
+    source_id: UUID
+    provider_id: str
+    terms_url: str
+    terms_version: str
+    declared_use: str
+    operator_review_state: Literal["pending"]
+
+
 def decide(spec: FreeProviderSpec, row: ConnectorProviderTerms | None) -> TermsDecision:
     """The single eligibility check; a missing row is denied by default."""
     if row is None:
@@ -82,6 +95,31 @@ def _read(row: ConnectorProviderTerms, spec: FreeProviderSpec) -> ProviderTermsR
         declared_use=row.declared_use, operator_review_state=row.operator_review_state,
         reviewed_allowed_use=row.reviewed_allowed_use, eligible=decision.allowed, decision=decision.code,
     )
+
+
+async def list_operator_pending_terms(
+    session: AsyncSession, workspace_names: dict[UUID, str],
+) -> list[OperatorTermsQueueItem]:
+    """Return pending review metadata only; evidence references and source configuration stay private."""
+    rows = await session.scalars(
+        select(ConnectorProviderTerms)
+        .where(ConnectorProviderTerms.operator_review_state == "pending")
+        .order_by(ConnectorProviderTerms.workspace_id, ConnectorProviderTerms.source_id)
+    )
+    return [
+        OperatorTermsQueueItem(
+            workspace_id=row.workspace_id,
+            workspace_name=workspace_names[row.workspace_id],
+            source_id=row.source_id,
+            provider_id=row.provider_id,
+            terms_url=row.terms_url,
+            terms_version=row.terms_version,
+            declared_use=row.declared_use,
+            operator_review_state="pending",
+        )
+        for row in rows
+        if row.workspace_id in workspace_names
+    ]
 
 
 async def _terms_row(

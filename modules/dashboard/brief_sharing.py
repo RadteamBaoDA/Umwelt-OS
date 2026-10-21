@@ -20,7 +20,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.workspaces import public as workspaces
-from core.workspaces.schemas import GrantRef, ResourceAccessProjection, Scope, WorkspaceContext
+from core.workspaces.schemas import (
+    AdminWorkspaceReadContext,
+    GrantRef,
+    ResourceAccessProjection,
+    Scope,
+    WorkspaceContext,
+)
 from modules.dashboard import briefs
 from modules.dashboard.daily_schemas import BriefRead
 from modules.dashboard.models import DailyBrief, DailyBriefEvidence
@@ -170,7 +176,8 @@ async def list_shared_briefs(
 
 
 async def read_shared_brief(
-    session: AsyncSession, brief_id: UUID, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+    session: AsyncSession, brief_id: UUID, *, scope: WorkspaceContext | AdminWorkspaceReadContext,
+    multi_workspace_enabled: bool,
 ) -> SharedBrief | None:
     """Read one brief for a member (all grants required) or an owner; None means identical 404."""
     await workspaces.read_access_fence(
@@ -179,13 +186,14 @@ async def read_shared_brief(
     row = await _row(session, brief_id, scope.workspace_id)
     if row is None:
         return None
-    if scope.role == "owner":
+    if scope.role in {"owner", "admin_viewer"}:
         if row.owner_id != scope.user_id:
             return None
         (item,) = await briefs._with_live_status(
             session, [row], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         return SharedBrief(item, ())
+    assert isinstance(scope, WorkspaceContext)
     grants = await _member_grants(
         session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )

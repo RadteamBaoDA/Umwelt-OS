@@ -548,7 +548,7 @@ async def list_stories(
         raise HTTPException(status_code=422, detail="date_from must be earlier than date_to")
     as_of = datetime.now(UTC)
     cursor = _decode_cursor(filters.cursor, access_fence, filters) if filters.cursor else None
-    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+    if isinstance(scope, WorkspaceContext) and scope.role == "member":
         return await _member_list_stories(session, filters, scope, access_fence, cursor, as_of)
     if cursor:
         as_of = cursor.as_of
@@ -792,7 +792,7 @@ async def get_story(
     access_fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not 1 <= evidence_limit <= 100:
         raise ValueError("Evidence page size must be between 1 and 100")
-    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+    if isinstance(scope, WorkspaceContext) and scope.role == "member":
         return await _member_get_story(
             session, story_id, source_ids, scope, access_fence, evidence_limit, evidence_cursor,
         )
@@ -1098,7 +1098,7 @@ async def read_story_translation_input(
         )
     )).all()
     grant_revisions: dict[UUID, int] = {}
-    if scope.role != "owner":
+    if scope.role == "member":
         grants = await workspaces.read_resource_grants(
             session, scope=scope, kind="document",
             resource_ids=tuple(sorted({row.document_id for row in rows}, key=str)),

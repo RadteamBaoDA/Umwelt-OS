@@ -7,15 +7,16 @@ import { workspaceKeys } from '@/core/query-keys';
 
 export type WorkspaceRead = {
   id: string; name: string; owner_user_id: number; is_default: boolean;
-  role: 'owner' | 'member'; configuration_revision: number;
+  role: 'owner' | 'member' | 'admin_viewer'; configuration_revision: number;
 };
-export type WorkspaceSelection = { id: string; role: 'owner' | 'member'; revision: number };
+export type WorkspaceSelection = { id: string; role: 'owner' | 'member' | 'admin_viewer'; revision: number };
 export type WorkspaceContextValue = {
   selection: WorkspaceSelection | null;
   defaultWorkspaceId: string | null;
   workspaces: WorkspaceRead[];
   generation: number;
   isOwner: boolean;
+  isAdminViewer: boolean;
   selectWorkspace(id: string): void;
 };
 
@@ -38,7 +39,7 @@ function writeStored(id: string | null) {
   } catch { /* sessionStorage can be blocked; the selection then lives only in memory. */ }
 }
 
-/** Loads the account's workspaces, owns the per-tab selection, and resets all scoped state on a switch. */
+/** Loads workspaces, owns the per-tab owner/member/admin-viewer selection, and clears scoped state on a switch. */
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const client = useQueryClient();
   // A 401 leaves the list empty and the selection null, so bootstrap and login work as before.
@@ -108,7 +109,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<WorkspaceContextValue>(() => ({
     selection, defaultWorkspaceId, workspaces, generation,
-    isOwner: selection?.role === 'owner', selectWorkspace,
+    isOwner: selection?.role === 'owner', isAdminViewer: selection?.role === 'admin_viewer', selectWorkspace,
   }), [selection, defaultWorkspaceId, workspaces, generation, selectWorkspace]);
 
   // Remounting on the selection clears protected view state and chat drafts.

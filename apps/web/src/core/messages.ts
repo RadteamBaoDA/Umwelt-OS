@@ -38,6 +38,7 @@ import { sharingMessages } from './messages/sharing';
 import { translationsMessages } from './messages/translations';
 import { uiSweepMessages } from './messages/ui-sweep';
 import { routeErrorsMessages } from './messages/route-errors';
+import { globalSettingsMessages } from './messages/global-settings';
 
 /**
  * Compose every locale from per-area fragments in ./messages/<area>.ts.
@@ -81,6 +82,7 @@ export const messages = {
     notifications: notificationMessages['en-us'],
     pick: pickMessages['en-us'],
     workspaces: workspacesMessages['en-us'],
+    globalSettings: globalSettingsMessages['en-us'],
     workspaceMembers: workspaceMembersMessages['en-us'],
     sharing: sharingMessages['en-us'],
     translations: translationsMessages['en-us'],
@@ -124,6 +126,7 @@ export const messages = {
     notifications: notificationMessages['vi-vi'],
     pick: pickMessages['vi-vi'],
     workspaces: workspacesMessages['vi-vi'],
+    globalSettings: globalSettingsMessages['vi-vi'],
     workspaceMembers: workspaceMembersMessages['vi-vi'],
     sharing: sharingMessages['vi-vi'],
     translations: translationsMessages['vi-vi'],

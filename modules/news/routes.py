@@ -12,8 +12,13 @@ from core.auth.public import authenticated_session_ref
 from core.database import get_session
 from core.publication import require_publication_gate
 from core.workspaces import public as workspaces
-from core.workspaces.dependencies import require_workspace_read
-from core.workspaces.schemas import GrantRef, PublicationFence, WorkspaceContext
+from core.workspaces.dependencies import require_workspace_observer_read
+from core.workspaces.schemas import (
+    AdminWorkspaceReadContext,
+    GrantRef,
+    PublicationFence,
+    WorkspaceContext,
+)
 from modules.connectors import public as connector_public
 from modules.news.public import build_correlations
 from modules.news.schemas import (
@@ -33,7 +38,7 @@ from modules.settings.public import module_dependency
 
 router = APIRouter(prefix="/api/v1", tags=["news"], dependencies=[Depends(module_dependency("news"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
-WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
+WorkspaceRead = Annotated[WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)]
 
 
 def _no_store(response: Response) -> None:
@@ -41,9 +46,9 @@ def _no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "private, no-store"
 
 
-def _require_owner(scope: WorkspaceContext) -> None:
+def _require_owner(scope: WorkspaceContext | AdminWorkspaceReadContext) -> None:
     """Trends, correlations and CII stay owner only; members see story projections alone."""
-    if scope.role != "owner":
+    if scope.role not in {"owner", "admin_viewer"}:
         raise HTTPException(status_code=403, detail="Workspace owner required")
 
 
@@ -51,7 +56,7 @@ async def _gate_member_read(
     session: AsyncSession, request: Request, scope: WorkspaceContext, stories: list[StoryRead],
 ) -> None:
     """Bind a member's shared-content response to its grants and access fence for the publication gate."""
-    if scope.role == "owner":
+    if scope.role in {"owner", "admin_viewer"}:
         return
     ids = sorted({item.document_id for story in stories for item in story.evidence}, key=str)
     grants: list[GrantRef] = []
@@ -85,7 +90,8 @@ async def list_stories_route(
             multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="Invalid story filter") from exc
-    await _gate_member_read(session, request, scope, page.items)
+    if scope.role == "member":
+        await _gate_member_read(session, request, scope, page.items)
     return page
 
 
@@ -106,7 +112,8 @@ async def get_story_route(
     )
     if value is None:
         raise HTTPException(status_code=404, detail="Story not found")
-    await _gate_member_read(session, request, scope, [value.story] if value.story else [])
+    if scope.role == "member":
+        await _gate_member_read(session, request, scope, [value.story] if value.story else [])
     return value
 
 

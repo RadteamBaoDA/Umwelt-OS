@@ -42,6 +42,7 @@ from core.workspaces import public as workspaces
 from core.workspaces.public import authorize_internal_job, read_access_fence
 from core.workspaces.schemas import (
     AccessFence,
+    AdminWorkspaceReadContext,
     InternalJobScope,
     ResourceAccessProjection,
     Scope,
@@ -2463,7 +2464,7 @@ def _require_document_owner(scope: Scope) -> None:
     Construction is not admission. Public callers must additionally revalidate the actual
     actor, membership and feature gate through the workspace owner before any query.
     """
-    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
+    if not isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext, InternalJobScope)):
         raise TypeError("An explicit Document scope is required")
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
         raise HTTPException(status_code=403, detail="Workspace owner required")
@@ -3876,7 +3877,7 @@ def _decode_document_owner_cursor(
 
 async def list_documents(
     session: AsyncSession, limit: int, cursor: str | None, source_id: UUID | None, *,
-    scope: WorkspaceContext, multi_workspace_enabled: bool,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[list[Document], str | None]:
     """Page <=100 retained owner roots, constraining workspace/Source before limit and cursor.
 
@@ -3884,7 +3885,7 @@ async def list_documents(
     an empty page. Members cannot enumerate IDs/counts. Data-purged Sources are excluded,
     while paused/connector-only archived metadata remains readable. No locks or commit.
     """
-    if not isinstance(scope, WorkspaceContext):
+    if not isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext)):
         raise TypeError("Document list requires a workspace owner")
     fence = await _admit_document_scope(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True)
@@ -4759,7 +4760,7 @@ def decode_version_cursor(cursor: str) -> int:
 
 async def list_versions(
     session: AsyncSession, document_id: UUID, limit: int, cursor: str | None, *,
-    scope: WorkspaceContext, multi_workspace_enabled: bool,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[list[DocumentVersion] | None, str | None]:
     """Page <=100 ascending immutable revisions through an admitted retained owner root.
 
@@ -4767,7 +4768,7 @@ async def list_versions(
     Historical revisions remain exact, including inactive retained metadata; missing/foreign
     parent returns None. Members cannot enumerate versions. No lock, mutation or commit.
     """
-    if not isinstance(scope, WorkspaceContext):
+    if not isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext)):
         raise TypeError("Document history requires a workspace owner")
     fence = await _admit_document_scope(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True)
@@ -4795,7 +4796,7 @@ async def list_versions(
 
 
 async def get_version(
-    session: AsyncSession, document_id: UUID, number: int, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+    session: AsyncSession, document_id: UUID, number: int, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> DocumentVersion | None:
     """Read one exact historical owner revision through its retained scoped parent.
 
@@ -4803,7 +4804,7 @@ async def get_version(
     remains visible except unfinished/failed data purges. No current-version substitution,
     member visibility, parent lock, mutation or commit; missing/foreign versions return None.
     """
-    if not isinstance(scope, WorkspaceContext):
+    if not isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext)):
         raise TypeError("Document history requires a workspace owner")
     await _admit_document_scope(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True)

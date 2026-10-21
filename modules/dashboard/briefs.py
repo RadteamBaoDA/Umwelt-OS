@@ -29,7 +29,7 @@ from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import RequestPolicy
 from core.realtime import commit_with_replay, make_dashboard_change
 from core.workspaces import public as workspaces
-from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
+from core.workspaces.schemas import AccessFence, AdminWorkspaceReadContext, Scope, WorkspaceContext
 from modules.dashboard.daily_schemas import (
     BriefCleanupProgress,
     BriefLegacyCoverage,
@@ -54,7 +54,7 @@ _CITATION = re.compile(r"\[(\d{1,3})\]")
 
 def _actor(scope: Scope) -> int:
     """Return the admitted owner actor used by workspace-local brief rows."""
-    return scope.user_id if isinstance(scope, WorkspaceContext) else scope.actor_user_id
+    return scope.user_id if isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext)) else scope.actor_user_id
 
 
 async def _admit(
@@ -65,6 +65,9 @@ async def _admit(
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
         from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="Workspace owner required")
+    if lock and isinstance(scope, AdminWorkspaceReadContext):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Admin workspace access is read-only")
     if type(multi_workspace_enabled) is not bool:
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     if lock:

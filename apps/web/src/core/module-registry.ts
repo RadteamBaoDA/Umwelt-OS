@@ -8,6 +8,7 @@ export type ShellMessageKey =
   | 'dashboardGadgets'
   | 'workspaceMembers'
   | 'documents'
+  | 'timeline'
   | 'entities'
   | 'search'
   | 'news'
@@ -18,7 +19,10 @@ export type ShellMessageKey =
   | 'systemStatus'
   | 'sourcesTab'
   | 'mcpTab'
-  | 'permissionsTab';
+  | 'permissionsTab'
+  | 'globalSettings'
+  | 'collapseSidebar'
+  | 'expandSidebar';
 
 export type NavigationDestination = {
   id: string;
@@ -26,12 +30,18 @@ export type NavigationDestination = {
   messageKey: ShellMessageKey;
   /** Visible to invited members (read-only shared surfaces); omitted means owner only. */
   members?: true;
+  /** Visible only to the instance administrator. */
+  adminOnly?: true;
+  /** Readable by an administrator observing another workspace. */
+  adminViewer?: true;
 };
 
 export type ModuleAvailability = { modules: { id: string; enabled: boolean }[] };
 
-/** Members of an invited workspace see only destinations flagged `members`; owners (and an unresolved selection) see all. */
-export function destinationForRole(destination: NavigationDestination, role?: 'owner' | 'member'): boolean {
+/** Allows member-shared surfaces, a narrower administrator read set, or all owner destinations. */
+export function destinationForRole(destination: NavigationDestination, role?: 'owner' | 'member' | 'admin_viewer'): boolean {
+  if (destination.adminOnly) return false;
+  if (role === 'admin_viewer') return Boolean(destination.adminViewer || destination.members) && !['chat', 'settings', 'translation-settings'].includes(destination.id);
   return role !== 'member' || Boolean(destination.members);
 }
 
@@ -64,6 +74,7 @@ export const settingsGroups: NavigationDestination[] = [
 
 /** Owner-only settings links shown after the three design groups and Members/Translation in the settings panel nav (not in the main Settings rail or palette). */
 export const settingsExtraLinks: NavigationDestination[] = [
+  { id: 'global-settings', href: '/settings/global', messageKey: 'globalSettings', adminOnly: true },
   { id: 'memory-settings', href: '/settings/memory', messageKey: 'memorySettings' },
   { id: 'web-search-settings', href: '/settings/web-search', messageKey: 'webSearchSettings' },
   { id: 'n8n-settings', href: '/settings/n8n', messageKey: 'n8nSettings' },
@@ -80,7 +91,8 @@ export const sourcesSubNavigation: (NavigationDestination & { exact?: boolean })
 /** Routes kept reachable from the command palette only (not shown in the Settings rail). */
 export const detailDestinations: NavigationDestination[] = [
   { id: 'documents', href: '/knowledge/documents', messageKey: 'documents', members: true },
-  { id: 'entities', href: '/knowledge/entities', messageKey: 'entities' },
+  { id: 'timeline', href: '/timeline', messageKey: 'timeline', adminViewer: true },
+  { id: 'entities', href: '/knowledge/entities', messageKey: 'entities', adminViewer: true },
   { id: 'news', href: '/news', messageKey: 'news', members: true },
   { id: 'search', href: '/search', messageKey: 'search', members: true },
   { id: 'system', href: '/settings/system', messageKey: 'systemStatus' },

@@ -41,6 +41,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
+import { useWorkspace } from '@/core/workspace-context';
 import { useGuardedNavigation, type GuardedNavigationIntent } from '@/core/guarded-navigation';
 import {
   createDashboard,
@@ -271,8 +272,8 @@ function projectMobilePlacements(
 
 /**
  * Main dashboard container view for BBD-OS, keeping dashboard controls visible while its content scrolls.
- * Supports owner-scoped desktop/mobile drafts, local mobile reading projection/adoption, complete
- * group-independent geometry history, dashboard switching, and dirty navigation guarding.
+ * Supports owner-scoped desktop/mobile drafts and administrator read-only views, plus mobile reading,
+ * geometry history, dashboard switching, and dirty navigation guarding.
  *
  * @returns Authenticated dashboard view component.
  */
@@ -280,6 +281,7 @@ export function DashboardPage() {
   const t = useTranslations('dashboard');
   const ts = useTranslations('uiSweep');
   const session = useWorkspaceSession();
+  const { isAdminViewer } = useWorkspace();
   const queryClient = useQueryClient();
   const guardedNavigation = useGuardedNavigation();
   const display = useDisplayPreferences();
@@ -1007,16 +1009,16 @@ export function DashboardPage() {
 
               <DropdownMenuSeparator />
 
-              <DropdownMenuItem
+              {!isAdminViewer && <DropdownMenuItem
                 disabled={layoutOperationPending}
                 onClick={() => setCreateDashboardOpen(true)}
                 className="text-xs gap-2 font-medium"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>{t('newDashboard')}</span>
-              </DropdownMenuItem>
+              </DropdownMenuItem>}
 
-              {activeDashboard && (
+              {!isAdminViewer && activeDashboard && (
                 <>
                   <DropdownMenuItem
                     disabled={layoutOperationPending}
@@ -1041,21 +1043,21 @@ export function DashboardPage() {
                 </>
               )}
 
-              <DropdownMenuSeparator />
+              {!isAdminViewer && <DropdownMenuSeparator />}
 
-              <DropdownMenuItem
+              {!isAdminViewer && <DropdownMenuItem
                 disabled={layoutOperationPending}
                 onClick={() => setPresetPickerOpen(true)}
                 className="text-xs gap-2"
               >
                 <Sparkles className="w-3.5 h-3.5 text-primary" />
                 <span>{t('presets')}</span>
-              </DropdownMenuItem>
+              </DropdownMenuItem>}
             </DropdownMenuContent>
           </DropdownMenu>
           </h1>
         </div>
-        <Button
+        {!isAdminViewer && <Button
           type="button"
           variant={isEditMode ? 'default' : 'outline'}
           className="min-h-11 font-semibold"
@@ -1064,7 +1066,7 @@ export function DashboardPage() {
         >
           {isEditMode ? <Eye className="w-4 h-4" aria-hidden="true" /> : <Edit3 className="w-4 h-4" aria-hidden="true" />}
           <span>{isEditMode ? t('finishEditing') : t('toggleEdit')}</span>
-        </Button>
+        </Button>}
       </div>
       {/* Group tabs: rendered only when the dashboard has groups */}
       {activeDashboard && activeDashboard.groups.length > 0 && (
@@ -1151,7 +1153,7 @@ export function DashboardPage() {
             <h2 className="m-0 mb-1 text-xl font-bold leading-snug text-foreground">{t('noDashboardsYet')}</h2>
             <p className="m-0 text-sm text-muted-foreground">{t('noDashboardsDesc')}</p>
           </div>
-          <div className="flex flex-wrap gap-2">
+          {!isAdminViewer && <div className="flex flex-wrap gap-2">
             <Button type="button" variant="outline" className="min-h-11" onClick={() => setPresetPickerOpen(true)}>
               <Sparkles className="size-4" aria-hidden="true" />
               {t('presets')}
@@ -1160,7 +1162,7 @@ export function DashboardPage() {
               <Plus className="size-4" aria-hidden="true" />
               {t('createFirstDashboard')}
             </Button>
-          </div>
+          </div>}
         </section>
       ) : visibleInstances.length === 0 ? (
         <section className="dashboard-empty flex flex-wrap items-center gap-6 rounded-xl border border-dashed border-border bg-card p-8">
@@ -1168,14 +1170,14 @@ export function DashboardPage() {
             <h2 className="m-0 mb-1 text-xl font-bold leading-snug text-foreground">{t('emptyTitle')}</h2>
             <p className="m-0 text-sm text-muted-foreground">{t('emptyDesc')}</p>
           </div>
-          <div className="flex flex-wrap gap-2">
+          {!isAdminViewer && <div className="flex flex-wrap gap-2">
             <Button type="button" variant="outline" className="min-h-11" disabled={!canEditLayout} onClick={() => { setIsEditMode(true); }}>
               {t('startEmpty')}
             </Button>
             <Button type="button" className="min-h-11 font-semibold" onClick={() => setPresetPickerOpen(true)}>
               {t('choosePreset')}
             </Button>
-          </div>
+          </div>}
         </section>
       ) : (
         <DashboardGrid

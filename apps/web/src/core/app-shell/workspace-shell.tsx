@@ -5,10 +5,11 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslations } from 'next-intl';
-import { MessageSquareIcon } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, PanelLeftClose, PanelLeftOpen, Settings, type LucideIcon } from 'lucide-react';
 import { UmweltLogo } from '@/components/brand/umwelt-mark';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import { CommandPalette } from '@/core/command-palette';
 import { ConnectionFooter } from '@/core/app-shell/connection-footer';
@@ -28,7 +29,13 @@ import { OwnerPreferences, PreferencesDialog } from '@/modules/account/preferenc
 import { ChatDrawer } from '@/modules/chat/chat-drawer';
 import { NotificationBell } from '@/modules/notifications/notification-bell';
 
-type Session = { authenticated: true; csrfToken: string };
+type Session = { authenticated: true; csrfToken: string; isInstanceAdmin: boolean };
+
+const navigationIcons: Record<string, LucideIcon> = {
+  dashboard: LayoutDashboard,
+  chat: MessageSquare,
+  settings: Settings,
+};
 
 /** Browser connectivity (navigator.onLine); assumed online during server render. */
 function useBrowserOnline() {
@@ -48,7 +55,7 @@ export function useWorkspaceSession() {
 }
 
 /**
- * Button that toggles the quick-chat Sheet drawer presentation and listens for keyboard shortcut (Cmd+J / Ctrl+J).
+ * Button that toggles the quick-chat Sheet drawer and listens for Cmd+J / Ctrl+J.
  *
  * @returns Accessible button triggering chat drawer.
  */
@@ -77,13 +84,19 @@ function ChatTriggerButton() {
       title={t('quickChat')}
       aria-label={t('quickChat')}
     >
-      <MessageSquareIcon className="size-4 text-primary" />
+      <MessageSquare className="size-4 text-primary" />
       <span className="hidden sm:inline">{t('quickChat')}</span>
     </button>
   );
 }
 
-/** Owns session state and the app shell: the viewport is fixed (64px header, 180px main nav and connection footer never scroll) and only `.workspace-main` scrolls. */
+/**
+ * Render the authenticated app shell with session, route, and responsive main-navigation state.
+ * The sidebar starts expanded, stays in its chosen state across route changes, and resets on reload;
+ * CSS restores its labels and hides the toggle at tablet and mobile widths. The shell keeps the header,
+ * navigation, and connection footer fixed while `.workspace-main` owns page scrolling.
+ * @param children The current route content rendered inside the main scroll region.
+ */
 export function WorkspaceShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -96,6 +109,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   const [accountOpen, setAccountOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const sessionEndedRef = useRef(false);
   /** Set while the owner's own logout is in flight: the server has revoked the session, so 401s are expected. */
@@ -179,7 +193,16 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   const visibleSettingsGroups = settingsGroups.filter((item) => destinationEnabled(item, moduleAvailability.data) && destinationForRole(item, role));
   // A member deep-linking to an owner settings page is sent to the first settings group they may see.
   const memberSettingsRedirect = role === 'member' && pathname.startsWith('/settings') && !visibleSettingsGroups.some((g) => groupActive(pathname, g.href)) ? visibleSettingsGroups[0]?.href : undefined;
-  useEffect(() => { if (memberSettingsRedirect) router.replace(memberSettingsRedirect); }, [memberSettingsRedirect, router]);
+  const adminViewerSettingsRedirect = role === 'admin_viewer' && pathname.startsWith('/settings') && pathname !== '/settings/global'
+    ? session.data?.isInstanceAdmin ? '/settings/global' : '/app'
+    : undefined;
+  const adminViewerPrivateRedirect = role === 'admin_viewer' && (pathname === '/chat' || pathname.startsWith('/chat/') || pathname.startsWith('/knowledge/memory'))
+    ? '/app'
+    : undefined;
+  useEffect(() => {
+    const redirect = memberSettingsRedirect ?? adminViewerSettingsRedirect ?? adminViewerPrivateRedirect;
+    if (redirect) router.replace(redirect);
+  }, [adminViewerPrivateRedirect, adminViewerSettingsRedirect, memberSettingsRedirect, router]);
 
   if (session.isPending) return <div className="shell">
     <header className="topbar"><Link href="/login" className="brand-name" aria-label="Umwelt-OS"><UmweltLogo /></Link></header>
@@ -201,7 +224,10 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
 
   const savedPreferences = preferences.data ?? display.confirmedPreferences ?? null;
   // Members see only the read-only translation settings group; their Settings entry opens it directly.
-  const visibleMainNavigation = mainNavigation.filter((item) => destinationEnabled(item, moduleAvailability.data) && destinationForRole(item, role) && (item.id !== 'settings' || visibleSettingsGroups.length > 0));
+  const visibleMainNavigation = mainNavigation.filter((item) => destinationEnabled(item, moduleAvailability.data)
+    && (destinationForRole(item, role) || item.id === 'settings' && session.data.isInstanceAdmin)
+    && !(role === 'admin_viewer' && item.id === 'chat')
+    && (item.id !== 'settings' || visibleSettingsGroups.length > 0 || session.data.isInstanceAdmin));
   const settingsActive = pathname.startsWith('/settings');
   // A member deep-linking to an owner settings page is sent to the first group they may see.
   const active = visibleMainNavigation.find((item) => item.id !== 'settings' && (pathname === item.href || pathname.startsWith(`${item.href}/`)))?.id ?? (settingsActive ? 'settings' : '');
@@ -224,12 +250,50 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
             <UserMenu triggerRef={menuTriggerRef} onOpenPreferences={() => setPreferencesOpen(true)} onOpenAccount={() => setAccountOpen(true)} onOpenChangePassword={() => setPasswordOpen(true)} onSignOut={() => logout.mutate()} signOutPending={logout.isPending} />
           </div>
         </header>
-        <div className="workspace">
-          <nav className="workspace-nav" aria-label={t('mainNavigation')}>
-            {visibleMainNavigation.map((item) => <Link key={item.id} href={item.id === 'settings' && role === 'member' ? visibleSettingsGroups[0].href : item.href} aria-current={active === item.id ? 'page' : undefined}>{t(item.messageKey)}</Link>)}
-          </nav>
-          <main id="main-content" tabIndex={-1} className="workspace-main">{memberSettingsRedirect ? null : settingsActive
-            ? <SettingsPanel links={[...visibleSettingsGroups, ...settingsExtraLinks.filter((item) => destinationForRole(item, role))]} pathname={pathname}>{pathname.startsWith('/settings/sources') && <SourcesSubNav pathname={pathname} />}{children}</SettingsPanel>
+        <div className="workspace" data-nav-collapsed={sidebarCollapsed}>
+          <TooltipProvider delayDuration={300}>
+            <nav id="workspace-nav" className="workspace-nav" aria-label={t('mainNavigation')}>
+              <div className="workspace-nav-header">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="workspace-nav-toggle"
+                      aria-label={t(sidebarCollapsed ? 'expandSidebar' : 'collapseSidebar')}
+                      aria-controls="workspace-nav-links"
+                      aria-expanded={!sidebarCollapsed}
+                      onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+                    >
+                      {sidebarCollapsed ? <PanelLeftOpen aria-hidden="true" /> : <PanelLeftClose aria-hidden="true" />}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent className="workspace-nav-tooltip" side="right">{t(sidebarCollapsed ? 'expandSidebar' : 'collapseSidebar')}</TooltipContent>
+                </Tooltip>
+              </div>
+              <div id="workspace-nav-links" className="workspace-nav-links">
+                {visibleMainNavigation.map((item) => {
+                  const Icon = navigationIcons[item.id];
+                  const link = <Link
+                    key={item.id}
+                    href={item.id === 'settings' && role === 'admin_viewer' ? '/settings/global' : item.id === 'settings' && role === 'member' ? visibleSettingsGroups[0].href : item.href}
+                    aria-current={active === item.id ? 'page' : undefined}
+                    className="workspace-nav-link"
+                  >
+                    <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <span className="workspace-nav-label">{t(item.messageKey)}</span>
+                  </Link>;
+                  return sidebarCollapsed ? <Tooltip key={item.id}>
+                    <TooltipTrigger asChild>{link}</TooltipTrigger>
+                    <TooltipContent className="workspace-nav-tooltip" side="right">{t(item.messageKey)}</TooltipContent>
+                  </Tooltip> : link;
+                })}
+              </div>
+            </nav>
+          </TooltipProvider>
+          <main id="main-content" tabIndex={-1} className="workspace-main" data-workspace-readonly={role === 'admin_viewer' || undefined}>{memberSettingsRedirect || adminViewerSettingsRedirect ? null : settingsActive
+            ? <SettingsPanel links={[...visibleSettingsGroups, ...settingsExtraLinks.filter((item) => item.adminOnly ? session.data.isInstanceAdmin : destinationForRole(item, role))]} pathname={pathname}>{pathname.startsWith('/settings/sources') && <SourcesSubNav pathname={pathname} />}{children}</SettingsPanel>
             : children}</main>
         </div>
         <ConnectionFooter
@@ -261,7 +325,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
           </DialogContent>
         </Dialog>
         <ChangePasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} csrfToken={session.data.csrfToken} closeLabel={t('close')} onCloseAutoFocus={restoreMenuFocus} />
-        <ChatDrawer />
+        {role !== 'admin_viewer' && <ChatDrawer />}
       </div>
   </SessionContext.Provider>;
 }

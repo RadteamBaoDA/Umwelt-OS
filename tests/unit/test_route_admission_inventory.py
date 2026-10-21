@@ -24,12 +24,13 @@ from modules.timeline.routes import router as timeline_router
 
 OPERATOR = {"require_owner", "require_owner_write"}
 SCOPED = {
-    "require_account", "require_account_write", "require_workspace_read", "require_workspace_write",
+    "require_account", "require_account_write", "require_workspace_read", "require_workspace_observer_read", "require_workspace_write",
     "require_default_workspace_read", "require_default_workspace_write",
 }
 # Routes that deliberately keep the bootstrap-operator dependency.
 OPERATOR_ROUTES = {
     ("GET", "/api/v1/connectors/github/webhook-status"),
+    ("GET", "/api/v1/operator/connectors/terms-review"),
     ("PUT", "/api/v1/operator/connectors/{workspace_id}/{source_id}/terms-review"),
 }
 # Capability-token ingress: authenticates by bearer/signature inside the handler, not by session.

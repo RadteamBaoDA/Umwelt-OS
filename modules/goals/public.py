@@ -24,7 +24,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.pagination import decode_cursor, encode_cursor
 from core.realtime import commit_with_replay
 from core.workspaces import public as workspaces
-from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
+from core.workspaces.schemas import (
+    AccessFence,
+    AdminWorkspaceReadContext,
+    InternalJobScope,
+    Scope,
+    WorkspaceContext,
+)
 from modules.goals.models import Goal
 from modules.goals.schemas import (
     GoalCreate,
@@ -52,7 +58,7 @@ __all__ = [
 
 def _actor(scope: Scope) -> int:
     """Return the principal recorded by a real workspace or durable job scope."""
-    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+    return scope.user_id if isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext)) else scope.actor_user_id
 
 
 async def _admit(
@@ -60,10 +66,12 @@ async def _admit(
     lock: bool = False, expected: AccessFence | None = None,
 ) -> AccessFence:
     """Require owner scope and capture or lock authorization before goal/task locks."""
-    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
+    if not isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext, InternalJobScope)):
         raise TypeError("An explicit goal workspace scope is required")
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
         raise HTTPException(status_code=403, detail="Workspace owner required")
+    if lock and isinstance(scope, AdminWorkspaceReadContext):
+        raise HTTPException(status_code=403, detail="Admin workspace access is read-only")
     if type(multi_workspace_enabled) is not bool:
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     if lock:

@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { apiRequest } from '@/core/api';
+import { useWorkspace } from '@/core/workspace-context';
 import type { GadgetInstance } from '../api';
 import { GoalForm } from '@/modules/goals/goal-form';
 import { GoalList } from '@/modules/goals/goal-list';
@@ -20,9 +21,10 @@ export type GoalProposalInput = { goalId: string; proposal: PlanProposal };
 /** Props for a configured goals gadget and its optional stable plan proposal review. */
 export interface GoalsGadgetProps { instance: GadgetInstance; proposal?: GoalProposalInput }
 
-/** Renders configured owner goals and opens forms, details, linked task owners, or explicit proposal review. */
+/** Renders configured goals and opens details; administrator viewers cannot create goals or act on proposals. */
 export function GoalsGadget({ instance, proposal }: GoalsGadgetProps) {
   const t = useTranslations('taskGoal');
+  const { isAdminViewer } = useWorkspace();
   const [creating, setCreating] = useState(false);
   const [selected, setSelected] = useState<Goal | null>(null);
   const [linkedTaskId, setLinkedTaskId] = useState<string | null>(null);
@@ -42,8 +44,8 @@ export function GoalsGadget({ instance, proposal }: GoalsGadgetProps) {
     : <div className="p-3 text-sm" role={linkedTask.isError ? 'alert' : 'status'}>{linkedTask.isLoading ? t('loadingTask') : t('linkedTaskUnavailable')} <Button type="button" variant="outline" onClick={() => setLinkedTaskId(null)}>{t('back')}</Button></div>;
   return <section className="flex h-full min-h-0 flex-col gap-3 overflow-auto p-3">
     {definition.source_ids.length > 0 && <p role="status" className="rounded border border-border p-2 text-xs text-muted-foreground">{t('goalSourceFilterUnavailable', { count: definition.source_ids.length })}</p>}
-    {selected ? proposal && selected.id === proposal.goalId ? <ProposalReview goal={selected} proposal={proposal.proposal} csrfToken={token} onClose={() => setSelected(null)} /> : <GoalDetail goal={selected} csrfToken={token} onClose={() => setSelected(null)} onEditLinkedTask={setLinkedTaskId} /> : creating ? <GoalForm csrfToken={token} onSuccess={() => setCreating(false)} onCancel={() => setCreating(false)} /> : <>
-      <header className="flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">{instance.title || t('goalsTitle')}</h2><Button type="button" size="sm" onClick={() => setCreating(true)}>{t('newGoal')}</Button></header>
+    {selected ? !isAdminViewer && proposal && selected.id === proposal.goalId ? <ProposalReview goal={selected} proposal={proposal.proposal} csrfToken={token} onClose={() => setSelected(null)} /> : <GoalDetail goal={selected} csrfToken={token} onClose={() => setSelected(null)} onEditLinkedTask={setLinkedTaskId} /> : creating && !isAdminViewer ? <GoalForm csrfToken={token} onSuccess={() => setCreating(false)} onCancel={() => setCreating(false)} /> : <>
+      <header className="flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">{instance.title || t('goalsTitle')}</h2>{!isAdminViewer && <Button type="button" size="sm" onClick={() => setCreating(true)}>{t('newGoal')}</Button>}</header>
       <GoalList ids={ids.length ? ids : undefined} filters={filters} limit={filters.limit ?? 50} cacheScope={scopeKey} onSelectGoal={setSelected} />
       {proposal && <p className="text-xs text-muted-foreground">{t('proposalAvailable')}</p>}
     </>}

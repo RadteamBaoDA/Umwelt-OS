@@ -917,7 +917,7 @@ async def auth_session(
         row.csrf_hash = _hash(csrf_token)
         await session.commit()
         _set_csrf_cookie(request, response, csrf_cookie)
-    return AuthState(csrfToken=csrf_token)
+    return AuthState(csrfToken=csrf_token, isInstanceAdmin=row.owner_id == 1)
 
 
 @router.post("/logout", status_code=204)

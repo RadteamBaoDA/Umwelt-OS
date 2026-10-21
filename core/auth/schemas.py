@@ -52,6 +52,7 @@ class AuthState(BaseModel):
     """Authenticated response containing the client CSRF token."""
     authenticated: bool = True
     csrfToken: str
+    isInstanceAdmin: bool = False
 
 
 class CsrfResponse(BaseModel):

@@ -38,7 +38,7 @@ from core.database import Base, get_session
 from core.realtime import commit_with_replay
 from core.workspaces import public as workspaces
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
-from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
+from core.workspaces.schemas import AccessFence, AdminWorkspaceReadContext, Scope, WorkspaceContext
 
 MAX_REVISION = 9_007_199_254_740_991
 MAX_KEYWORDS = 50
@@ -48,7 +48,7 @@ MAX_ENTITIES = 100
 
 def _actor(scope: Scope) -> int:
     """Return the admitted owner actor used by this workspace-local row."""
-    return scope.user_id if isinstance(scope, WorkspaceContext) else scope.actor_user_id
+    return scope.user_id if isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext)) else scope.actor_user_id
 
 
 async def _admit(
@@ -58,6 +58,8 @@ async def _admit(
     """Admit owner scope before topic or entity reads and return its publication fence."""
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
         raise HTTPException(status_code=403, detail="Workspace owner required")
+    if lock and isinstance(scope, AdminWorkspaceReadContext):
+        raise HTTPException(status_code=403, detail="Admin workspace access is read-only")
     if type(multi_workspace_enabled) is not bool:
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     if lock:

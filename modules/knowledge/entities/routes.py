@@ -6,8 +6,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_session
-from core.workspaces.dependencies import require_workspace_read, require_workspace_write
-from core.workspaces.schemas import WorkspaceContext
+from core.workspaces.dependencies import (
+    require_workspace_observer_read,
+    require_workspace_read,
+    require_workspace_write,
+)
+from core.workspaces.schemas import AdminWorkspaceReadContext, WorkspaceContext
 from modules.knowledge.entities import corrections, public
 from modules.knowledge.entities.corrections import CorrectionConflictError
 from modules.knowledge.entities.schemas import (
@@ -35,7 +39,8 @@ from modules.settings.public import module_dependency
 
 router = APIRouter(tags=["knowledge"], dependencies=[Depends(module_dependency("knowledge.entities"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
-WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
+WorkspaceRead = Annotated[WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)]
+WorkspaceStandardRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 
@@ -228,7 +233,7 @@ async def list_evidence(
 @router.post("/api/v1/entities/{entity_id}/corrections/merge-preview", response_model=EntityCorrectionPreview)
 async def preview_merge(
     entity_id: UUID, payload: EntityMergeRequest, session: Session,
-    request: Request, scope: WorkspaceRead,
+    request: Request, scope: WorkspaceStandardRead,
 ) -> EntityCorrectionPreview:
     """Preview merge scope and conflicts without applying a correction."""
     return await corrections.preview_merge(
@@ -240,7 +245,7 @@ async def preview_merge(
 @router.post("/api/v1/entities/{entity_id}/corrections/split-preview", response_model=EntityCorrectionPreview)
 async def preview_split(
     entity_id: UUID, payload: EntitySplitRequest, session: Session,
-    request: Request, scope: WorkspaceRead,
+    request: Request, scope: WorkspaceStandardRead,
 ) -> EntityCorrectionPreview:
     """Preview split scope and conflicts without applying a correction."""
     return await corrections.preview_split(

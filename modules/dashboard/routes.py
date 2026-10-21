@@ -15,8 +15,8 @@ from core.auth.public import authenticated_session_ref
 from core.database import get_session
 from core.rate_limit import require_budget
 from core.workspaces import public as workspaces
-from core.workspaces.dependencies import require_workspace_read, require_workspace_write
-from core.workspaces.schemas import PublicationFence, WorkspaceContext
+from core.workspaces.dependencies import require_workspace_observer_read, require_workspace_write
+from core.workspaces.schemas import AdminWorkspaceReadContext, PublicationFence, WorkspaceContext
 from modules.dashboard import brief_sharing, briefs, context, public
 from modules.dashboard.daily_schemas import (
     BriefGenerateRequest,
@@ -55,7 +55,7 @@ from modules.sources.schemas import GadgetSourceSelectionPage
 
 router = APIRouter(prefix="/api/v1", tags=["dashboard"], dependencies=[Depends(module_dependency("dashboard"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
-WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
+WorkspaceRead = Annotated[WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 
@@ -352,8 +352,9 @@ async def list_brief_revisions(
     """List saved revisions of a day's brief, newest first; members see only shared, admissible ones."""
     _no_store(response)
     flag = request.app.state.settings.multi_workspace_enabled
-    if scope.role == "owner":
+    if scope.role in {"owner", "admin_viewer"}:
         return await briefs.list_briefs(session, date, _timezone(timezone), scope=scope, multi_workspace_enabled=flag)
+    assert isinstance(scope, WorkspaceContext)
     shared = await brief_sharing.list_shared_briefs(session, date, _timezone(timezone), scope=scope, multi_workspace_enabled=flag)
     await _gate_member(request, session, scope, shared, flag)
     return [item.brief for item in shared]
@@ -428,5 +429,6 @@ async def read_brief(
     item = await brief_sharing.read_shared_brief(session, brief_id, scope=scope, multi_workspace_enabled=flag)
     if item is None:
         raise HTTPException(status_code=404, detail="Brief not found")
-    await _gate_member(request, session, scope, [item], flag)
+    if scope.role == "member":
+        await _gate_member(request, session, scope, [item], flag)
     return item.brief

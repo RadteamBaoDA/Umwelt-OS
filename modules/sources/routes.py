@@ -9,8 +9,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_session
-from core.workspaces.dependencies import require_workspace_read, require_workspace_write
-from core.workspaces.schemas import WorkspaceContext
+from core.workspaces.dependencies import require_workspace_observer_read, require_workspace_write
+from core.workspaces.schemas import AdminWorkspaceReadContext, WorkspaceContext
 from modules.settings.public import module_dependency
 from modules.sources import public
 from modules.sources.schemas import (
@@ -23,7 +23,7 @@ from modules.sources.schemas import (
 )
 
 
-async def _with_timing(session: AsyncSession, scope: WorkspaceContext, reads: list[SourceRead]) -> None:
+async def _with_timing(session: AsyncSession, scope: WorkspaceContext | AdminWorkspaceReadContext, reads: list[SourceRead]) -> None:
     """Fill next_due_at/retry_at from connector schedule state, scoped to the workspace."""
     from modules.connectors import public as connectors
 
@@ -38,13 +38,13 @@ router = APIRouter(
     dependencies=[Depends(module_dependency("sources"))],
 )
 Session = Annotated[AsyncSession, Depends(get_session)]
-WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
+WorkspaceRead = Annotated[WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 
-def _require_source_owner(scope: WorkspaceContext) -> None:
+def _require_source_owner(scope: WorkspaceContext | AdminWorkspaceReadContext) -> None:
     """Reject invited members before Source configuration, identities or counts are read."""
-    if scope.role != "owner":
+    if scope.role not in {"owner", "admin_viewer"}:
         raise HTTPException(status_code=403, detail="Workspace owner required")
 
 
@@ -105,6 +105,8 @@ async def get_source_impact(
     source_id: UUID, session: Session, request: Request, scope: WorkspaceRead,
 ) -> SourceImpactRead:
     """Return owner-only dependent counts; 409 while a data purge is pending."""
+    if scope.role == "admin_viewer":
+        raise HTTPException(status_code=403, detail="Source impact includes private activity counts")
     _require_source_owner(scope)
     impact = await public.get_source_impact(
         session, source_id, scope=scope,

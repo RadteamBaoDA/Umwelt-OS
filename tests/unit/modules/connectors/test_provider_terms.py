@@ -176,7 +176,7 @@ async def test_operator_review_route_uses_bootstrap_operator_admission_and_clear
     from core.auth.dependencies import require_owner_write
     from modules.connectors import routes
 
-    route = next(r for r in routes.operator_router.routes if r.path.endswith("/terms-review"))
+    route = next(r for r in routes.operator_router.routes if "PUT" in r.methods and r.path.endswith("/terms-review"))
     assert require_owner_write in {d.call for d in route.dependant.dependencies}
     calls = []
 
@@ -208,7 +208,7 @@ async def test_operator_review_route_rejects_non_operator_before_any_write(monke
 
     from modules.connectors import routes
 
-    route = next(r for r in routes.operator_router.routes if r.path.endswith("/terms-review"))
+    route = next(r for r in routes.operator_router.routes if "PUT" in r.methods and r.path.endswith("/terms-review"))
     calls = []
 
     async def review(*a, **k): calls.append("review")

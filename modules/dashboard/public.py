@@ -27,7 +27,7 @@ from sqlalchemy.sql.expression import Exists
 
 from core.realtime import commit_with_replay, make_dashboard_change
 from core.workspaces import public as workspaces
-from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
+from core.workspaces.schemas import AccessFence, AdminWorkspaceReadContext, Scope, WorkspaceContext
 from modules.dashboard import briefs, gadgets, layouts
 from modules.dashboard.daily_schemas import (
     BriefExportFence,
@@ -121,7 +121,7 @@ def _owner_tzinfo(name: str) -> tzinfo:
 
 def _actor(scope: Scope) -> int:
     """Return the admitted owner actor used by dashboard-owned rows."""
-    return scope.user_id if isinstance(scope, WorkspaceContext) else scope.actor_user_id
+    return scope.user_id if isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext)) else scope.actor_user_id
 
 
 async def _admit(
@@ -131,6 +131,8 @@ async def _admit(
     """Admit owner scope before reading or locking dashboard-owned data."""
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
         raise HTTPException(status_code=403, detail="Workspace owner required")
+    if lock and isinstance(scope, AdminWorkspaceReadContext):
+        raise HTTPException(status_code=403, detail="Admin workspace access is read-only")
     if type(multi_workspace_enabled) is not bool:
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     if lock:

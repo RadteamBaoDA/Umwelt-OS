@@ -39,8 +39,8 @@ function WidgetSummary({ widget }: { widget: DailyWidgetData }) {
 }
 
 /**
- * Daily brief gadget body: the saved brief for the selected day (historical, revisioned) beside
- * clearly labelled current-record summaries. Regenerating appends a revision and never replaces text.
+ * Daily brief gadget body for owners and read-only administrators: saved revisions and current records
+ * stay visible, while generation, chat, and sharing actions remain owner-only.
  */
 export function DailyBrief() {
   const t = useTranslations('daily');
@@ -48,12 +48,13 @@ export function DailyBrief() {
   const client = useQueryClient();
   const { date, timezone } = useSelectedDay();
   const chat = useChatController();
-  const { isOwner } = useWorkspace();
+  const { isOwner, isAdminViewer } = useWorkspace();
+  const canReadOwnerWorkspace = isOwner || isAdminViewer;
   const session = useQuery({ queryKey: ['session'], queryFn: () => apiRequest<{ authenticated: true; csrfToken: string }>('/api/v1/auth/session') });
   const context = useQuery({
     queryKey: dailyKeys.context(date, timezone),
     queryFn: ({ signal }) => getDailyContext(date, timezone, signal),
-    enabled: isOwner,
+    enabled: canReadOwnerWorkspace,
   });
   const generate = useMutation({
     mutationFn: () => generateBrief(date, timezone, session.data!.csrfToken),
@@ -68,15 +69,15 @@ export function DailyBrief() {
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3.5">
       <header className="flex flex-wrap items-center justify-between gap-2">
         <DateSelector />
-        {isOwner && context.data && <span className="rounded bg-secondary px-2 py-0.5 text-xs font-semibold">{t(`relation_${context.data.relation}`)}</span>}
+        {canReadOwnerWorkspace && context.data && <span className="rounded bg-secondary px-2 py-0.5 text-xs font-semibold">{t(`relation_${context.data.relation}`)}</span>}
       </header>
 
-      {!isOwner && <SharedBriefs date={date} timezone={timezone} />}
+      {!canReadOwnerWorkspace && <SharedBriefs date={date} timezone={timezone} />}
 
-      {isOwner && context.isLoading && <p role="status" className="text-sm text-muted-foreground">{t('loading')}</p>}
-      {isOwner && context.isError && <p role="alert" className="text-sm text-destructive">{t('loadError')}</p>}
+      {canReadOwnerWorkspace && context.isLoading && <p role="status" className="text-sm text-muted-foreground">{t('loading')}</p>}
+      {canReadOwnerWorkspace && context.isError && <p role="alert" className="text-sm text-destructive">{t('loadError')}</p>}
 
-      {isOwner && context.data && (
+      {canReadOwnerWorkspace && context.data && (
         <>
           <section aria-labelledby="saved-brief-heading" className="space-y-2 border-b border-border pb-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -98,7 +99,7 @@ export function DailyBrief() {
               </>
             ) : <p className="text-sm text-muted-foreground">{t('noBrief')}</p>}
             {errorKey && <p role="alert" className="text-xs text-destructive">{t(errorKey)}</p>}
-            <div className="flex flex-wrap gap-2">
+            {isOwner && <div className="flex flex-wrap gap-2">
               <Button type="button" size="sm" disabled={!session.data || generate.isPending} onClick={() => generate.mutate()}>
                 <RefreshCw className="h-3.5 w-3.5" aria-hidden />
                 {generate.isPending ? t('generating') : brief ? t('regenerate') : t('generate')}
@@ -108,7 +109,7 @@ export function DailyBrief() {
                 {t('askAboutDay')}
               </Button>
               {brief && <BriefShareButton brief={brief} />}
-            </div>
+            </div>}
           </section>
 
           <section aria-labelledby="current-records-heading" className="space-y-2">

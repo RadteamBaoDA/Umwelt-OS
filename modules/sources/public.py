@@ -33,7 +33,13 @@ from core.pagination import decode_cursor, encode_cursor
 from core.realtime import commit_with_replay, make_source_change
 from core.tools.schemas import ToolDestination
 from core.workspaces import public as workspaces
-from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
+from core.workspaces.schemas import (
+    AccessFence,
+    AdminWorkspaceReadContext,
+    InternalJobScope,
+    Scope,
+    WorkspaceContext,
+)
 from modules.sources.models import Source, SourcePurgeOperation
 from modules.sources.schemas import (
     ConnectorSource,
@@ -105,7 +111,7 @@ async def list_provider_sources(
 
 def _require_source_owner(scope: Scope) -> None:
     """Reject member metadata access; detached scope construction still requires admission."""
-    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
+    if not isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext, InternalJobScope)):
         raise TypeError("An explicit Source scope is required")
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
         raise HTTPException(status_code=403, detail="Workspace owner required")
@@ -147,6 +153,8 @@ async def _admit_source_scope(
     A caller already holding domain locks must reuse its admission, never call this with lock.
     """
     _require_source_owner(scope)
+    if lock and isinstance(scope, AdminWorkspaceReadContext):
+        raise HTTPException(status_code=403, detail="Admin workspace access is read-only")
     if type(multi_workspace_enabled) is not bool:
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     if lock:
@@ -1981,7 +1989,7 @@ class SourceImpact:
 
 
 async def get_source_impact(
-    session: AsyncSession, source_id: UUID, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> SourceImpact | None:
     """Count dependents of a source through public APIs; None when foreign/absent, 409 when purge-pending."""
     if await get_source(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled) is None:

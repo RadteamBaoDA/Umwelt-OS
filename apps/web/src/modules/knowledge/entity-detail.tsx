@@ -25,6 +25,7 @@ import { CheckboxField, FieldGrid, SettingsActions, SettingsSection } from '@/mo
 import { useGuardedNavigation } from '@/core/guarded-navigation';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
+import { useWorkspace } from '@/core/workspace-context';
 import { addEntityAlias, deleteEntityAlias, entityKeys, getEntity, getEntityNeighbors, getEntityTimeline, getRelationshipEvidence, listEntities, listEntityEvidence, listEntityHistory, mergeEntity, previewMergeEntity, previewSplitEntity, splitEntity, suppressEntityEvidence, updateEntity, type Entity } from './api';
 import { FollowEntityButton } from '@/modules/detail/follow-entity';
 import { EntityGraph } from './entity-graph';
@@ -58,12 +59,13 @@ function conflictDetails(error: unknown): string[] {
   }).slice(0, 20);
 }
 
-/** Loads an entity and its evidence, then coordinates revision-fenced identity corrections. */
+/** Loads entity evidence and history; administrator viewers can inspect it without identity or evidence writes. */
 export function EntityDetail() {
   const t = useTranslations('entities');
   const { entityId } = useParams<{ entityId: string }>();
   const router = useRouter();
   const session = useWorkspaceSession();
+  const { isAdminViewer } = useWorkspace();
   const display = useDisplayPreferences();
   const client = useQueryClient();
   const { registerLeaveGuard, ensureEntityDocument } = useGuardedNavigation();
@@ -288,27 +290,27 @@ export function EntityDetail() {
         <TabsTrigger value="timeline" className={tabClass}>{t('tabTimeline')}</TabsTrigger>
         <TabsTrigger value="documents" className={tabClass}>{t('tabDocuments')}{evidenceItems.length > 0 ? ` ${evidenceItems.length}${evidence.hasNextPage ? '+' : ''}` : ''}</TabsTrigger>
         <TabsTrigger value="events" className={tabClass}>{t('tabEvents')}{entityEvents.length > 0 ? ` ${entityEvents.length}${entityTimeline.hasNextPage ? '+' : ''}` : ''}</TabsTrigger>
-        <TabsTrigger value="review" className={tabClass}>{t('tabReview')}{unconfirmedAliases.length > 0 ? ` ${unconfirmedAliases.length}` : ''}</TabsTrigger>
+        {!isAdminViewer && <TabsTrigger value="review" className={tabClass}>{t('tabReview')}{unconfirmedAliases.length > 0 ? ` ${unconfirmedAliases.length}` : ''}</TabsTrigger>}
       </TabsList>
       <TabsContent value="overview" className="mt-5"><div className="grid grid-cols-1 gap-6 min-[900px]:grid-cols-5">
         <div className="flex min-w-0 flex-col gap-4 min-[900px]:col-span-2">
-          {unconfirmedAliases.length > 0 && <div className="flex flex-col gap-2 rounded-lg border border-dashed border-border px-4 py-3" role="status"><h3 className="m-0 text-[15px] font-bold">{t('needsReview')}</h3><span className="text-sm">{t('needsReviewBody', { count: unconfirmedAliases.length })}</span><Button type="button" variant="outline" className="self-start" onClick={() => setTab('review')}>{t('openReview')}</Button></div>}
+          {!isAdminViewer && unconfirmedAliases.length > 0 && <div className="flex flex-col gap-2 rounded-lg border border-dashed border-border px-4 py-3" role="status"><h3 className="m-0 text-[15px] font-bold">{t('needsReview')}</h3><span className="text-sm">{t('needsReviewBody', { count: unconfirmedAliases.length })}</span><Button type="button" variant="outline" className="self-start" onClick={() => setTab('review')}>{t('openReview')}</Button></div>}
           <SettingsSection title={t('identity')}>
             <p className="text-muted-foreground m-0">{value.name_origin === 'owner' ? t('ownerIdentity') : value.name_origin ? t('derivedIdentity') : t('unknownOrigin')} · {t('nameOrigin')}: {value.name_origin ?? t('unknownOrigin')}</p>
             <p className="text-muted-foreground m-0">{t('descriptionOrigin')}: {value.description_origin ?? t('unknownOrigin')}</p>
-            <form className="flex flex-col gap-4" onSubmit={identity.handleSubmit((values) => update.mutate(values))}>
+            {!isAdminViewer && <form className="flex flex-col gap-4" onSubmit={identity.handleSubmit((values) => update.mutate(values))}>
               <FieldGrid>
                 <div className="field"><Label htmlFor="entity-name">{t('name')}</Label><Input id="entity-name" maxLength={300} {...identity.register('name')} /><small>{value.name_origin === 'owner' ? t('ownerFieldHelp') : t('derivedFieldHelp')}</small></div>
                 <div className="field"><Label htmlFor="entity-description">{t('description')}</Label><Input id="entity-description" maxLength={10_000} {...identity.register('description')} /><small>{value.description_origin === 'owner' ? t('ownerFieldHelp') : t('derivedFieldHelp')}</small></div>
               </FieldGrid>
               <div className="field"><Label htmlFor="entity-reason">{t('reason')}</Label><Input id="entity-reason" maxLength={300} {...identity.register('reason')} />{identity.formState.errors.reason && <p className="error">{t('reasonRequired')}</p>}</div>
               <SettingsActions><Button disabled={update.isPending || !identity.formState.isDirty || (!identity.formState.dirtyFields.name && !identity.formState.dirtyFields.description)}>{update.isPending ? t('saving') : t('saveIdentity')}</Button></SettingsActions>
-            </form>
+            </form>}
           </SettingsSection>
           <SettingsSection title={t('aliases')}>
-    {value.aliases.length ? <ul className="m-0 flex list-none flex-col gap-2 p-0">{value.aliases.map((item) => <li key={item.id} className="flex flex-wrap items-center gap-2"><Badge variant="outline" className={item.confirmed ? undefined : 'border-dashed'}>{item.alias} · {item.confirmed ? t('confirmed') : t('unconfirmed')}</Badge><span className="meta">{t('aliasOrigin')}: {item.origin}{item.confidence !== null && Number.isFinite(item.confidence) ? ` · ${t('confidence')} ${item.confidence.toFixed(2)}` : ` · ${t('confidence')} ${t('unknownValue')}`}{item.source_id && <span> · {t('source')} {item.source_id}</span>}</span> <Button type="button" variant="outline" disabled={removeAlias.isPending} onClick={() => openAliasRemoval(item.id, item.alias)}>{t('removeAlias')}</Button></li>)}</ul> : <p className="text-muted-foreground">{t('noAliases')}</p>}
+    {value.aliases.length ? <ul className="m-0 flex list-none flex-col gap-2 p-0">{value.aliases.map((item) => <li key={item.id} className="flex flex-wrap items-center gap-2"><Badge variant="outline" className={item.confirmed ? undefined : 'border-dashed'}>{item.alias} · {item.confirmed ? t('confirmed') : t('unconfirmed')}</Badge><span className="meta">{t('aliasOrigin')}: {item.origin}{item.confidence !== null && Number.isFinite(item.confidence) ? ` · ${t('confidence')} ${item.confidence.toFixed(2)}` : ` · ${t('confidence')} ${t('unknownValue')}`}{item.source_id && <span> · {t('source')} {item.source_id}</span>}</span> {!isAdminViewer && <Button type="button" variant="outline" disabled={removeAlias.isPending} onClick={() => openAliasRemoval(item.id, item.alias)}>{t('removeAlias')}</Button>}</li>)}</ul> : <p className="text-muted-foreground">{t('noAliases')}</p>}
     {addAlias.error && <p className="error" role="alert">{t('aliasFailed')} {formatError(addAlias.error)}</p>}
-            <form className="flex flex-col gap-4" onSubmit={aliasForm.handleSubmit((values) => addAlias.mutate(values))}><FieldGrid><div className="field"><Label htmlFor="entity-alias">{t('addAlias')}</Label><Input id="entity-alias" maxLength={300} {...aliasForm.register('alias')} />{aliasForm.formState.errors.alias && <p className="error">{t('aliasRequired')}</p>}</div><div className="field"><Label htmlFor="alias-reason">{t('reason')}</Label><Input id="alias-reason" maxLength={300} {...aliasForm.register('reason')} /></div></FieldGrid><SettingsActions><Button disabled={addAlias.isPending}>{t('addAlias')}</Button></SettingsActions></form>
+            {!isAdminViewer && <form className="flex flex-col gap-4" onSubmit={aliasForm.handleSubmit((values) => addAlias.mutate(values))}><FieldGrid><div className="field"><Label htmlFor="entity-alias">{t('addAlias')}</Label><Input id="entity-alias" maxLength={300} {...aliasForm.register('alias')} />{aliasForm.formState.errors.alias && <p className="error">{t('aliasRequired')}</p>}</div><div className="field"><Label htmlFor="alias-reason">{t('reason')}</Label><Input id="alias-reason" maxLength={300} {...aliasForm.register('reason')} /></div></FieldGrid><SettingsActions><Button disabled={addAlias.isPending}>{t('addAlias')}</Button></SettingsActions></form>}
           </SettingsSection>
         </div>
         <div className="flex min-w-0 flex-col gap-3 min-[900px]:col-span-3"><h2 className="m-0 text-[15px] font-bold">{t('relationships')}</h2>
@@ -375,7 +377,7 @@ export function EntityDetail() {
       <div className="flex flex-col gap-3">{entityEvents.map((event) => <EventDetail key={event.id} event={event} locale={display.locale} timezone={display.timezone} entityNames={new Map([[value.id, value.name ?? t('unnamedEntity')]])} />)}</div>
       {entityTimeline.hasNextPage && <Button variant="outline" disabled={entityTimeline.isFetchingNextPage} onClick={() => entityTimeline.fetchNextPage()}>{t('loadTimeline')}</Button>}
       </SettingsSection></TabsContent>
-      <TabsContent value="review" className="mt-5 flex flex-col gap-5">
+      {!isAdminViewer && <TabsContent value="review" className="mt-5 flex flex-col gap-5">
         <SettingsSection title={t('split')}><p className="text-muted-foreground m-0">{t('splitHelp')}</p>
     <div className="field"><Label htmlFor="split-name">{t('newEntityName')}</Label><Input id="split-name" maxLength={300} aria-invalid={!!correction.formState.errors.splitName} {...correction.register('splitName')} onChange={(event) => { correction.setValue('splitName', event.target.value, { shouldDirty: true }); correction.clearErrors('splitName'); }} />{correction.formState.errors.splitName && <p className="error" role="alert">{t('splitNameRequired')}</p>}</div>
     <Button variant="outline" disabled={!selected.length || staleSelection || splitPreview.isPending} onClick={previewSplitForm}>{t('previewSplit')}</Button>
@@ -393,9 +395,9 @@ export function EntityDetail() {
     {mergePreview.data && !currentMergePreview && <p className="error" role="status">{t('previewStale')}</p>}
     {correctionErrors.map((error, index) => <div key={index} className="error" role="alert">{formatError(error!)}{conflictDetails(error).map((line, i) => <p key={i}>{line}</p>)}</div>)}
         </SettingsSection>
-      </TabsContent>
+      </TabsContent>}
     </Tabs>
-    <div className="mt-5 flex flex-wrap items-start gap-2 border-t border-border pt-4"><FollowEntityButton entityId={value.id} name={value.name} /><Button type="button" variant="outline" onClick={correctIdentity}>{t('correctIdentity')}</Button><span className="flex-1" /><Button type="button" onClick={askAi}>{t('askAiAbout')}</Button></div>
+    <div className="mt-5 flex flex-wrap items-start gap-2 border-t border-border pt-4">{!isAdminViewer && <><FollowEntityButton entityId={value.id} name={value.name} /><Button type="button" variant="outline" onClick={correctIdentity}>{t('correctIdentity')}</Button><span className="flex-1" /><Button type="button" onClick={askAi}>{t('askAiAbout')}</Button></>}</div>
     <AlertDialog open={!!aliasRemovalSnapshot} onOpenChange={(open) => { if (!open && !removeAlias.isPending) { setAliasRemovalSnapshot(null); removeAlias.reset(); } }}>
       <AlertDialogContent onEscapeKeyDown={(event) => { if (removeAlias.isPending) event.preventDefault(); }}>
         <AlertDialogHeader><AlertDialogTitle>{t('removeAliasConfirmation')}</AlertDialogTitle><AlertDialogDescription>{t('aliasRemovalDescription')}</AlertDialogDescription></AlertDialogHeader>

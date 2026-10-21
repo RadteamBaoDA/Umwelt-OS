@@ -12,7 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.schemas import AccountRead, AccountSessionRef
 from core.workspaces.models import Workspace, WorkspaceMembership
-from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
+from core.workspaces.schemas import (
+    AccessFence,
+    AdminWorkspaceReadContext,
+    InternalJobScope,
+    Scope,
+    WorkspaceContext,
+)
 
 
 def require_revision(expected_revision: int | None, actual_revision: int) -> None:
@@ -104,6 +110,8 @@ def _scope_actor(scope: Scope) -> int:
         return scope.actor_user_id
     if isinstance(scope, WorkspaceContext):
         return scope.user_id
+    if isinstance(scope, AdminWorkspaceReadContext):
+        return scope.actor_user_id
     raise HTTPException(status_code=401, detail="Authentication required")
 
 
@@ -124,6 +132,29 @@ def _check_access(
     owner_account = accounts.get(discovered_owner_id)
     owner_membership = memberships.get(discovered_owner_id)
     actor_membership = memberships.get(actor_user_id)
+    if isinstance(scope, AdminWorkspaceReadContext):
+        owner_membership = memberships.get(discovered_owner_id)
+        if (
+            actor_user_id != 1 or actor_account.id != 1 or owner_account is None
+            or workspace.owner_user_id != discovered_owner_id
+            or owner_membership is None or owner_membership.role != "owner"
+            or owner_membership.owner_user_id != discovered_owner_id
+        ):
+            raise HTTPException(status_code=404, detail="Workspace not found")
+        if (
+            owner_membership.revision != scope.membership_revision
+            or workspace.configuration_revision != scope.configuration_revision
+        ):
+            raise HTTPException(status_code=409, detail="Workspace access fence changed")
+        fence = AccessFence(
+            workspace_id=workspace.id, user_id=actor_user_id,
+            membership_revision=owner_membership.revision,
+            configuration_revision=workspace.configuration_revision,
+            workspace_owner_user_id=discovered_owner_id,
+        )
+        if expected is not None and fence != expected:
+            raise HTTPException(status_code=409, detail="Workspace access fence changed")
+        return fence
     if (workspace.owner_user_id != discovered_owner_id or not workspace.is_default
             or owner_account is None or owner_account.default_workspace_id != workspace.id
             or owner_membership is None or owner_membership.role != "owner"
@@ -179,7 +210,8 @@ async def _prepare_access(
     if locked:
         ids: tuple[int, ...] = (actor_user_id,) if discovered_owner_id is None else (actor_user_id, discovered_owner_id)
         accounts = await lock_account_admission(
-            session, ids, actor_user_id=actor_user_id, multi_workspace_enabled=multi_workspace_enabled,
+            session, ids, actor_user_id=actor_user_id,
+            multi_workspace_enabled=True if isinstance(scope, AdminWorkspaceReadContext) else multi_workspace_enabled,
             auth_sessions=auth_sessions,
         )
     else:
@@ -200,7 +232,8 @@ async def _prepare_access(
         accounts = {actor_user_id: actor}
         if discovered_owner_id is not None and discovered_owner_id != actor_user_id:
             accounts[discovered_owner_id] = await get_active_account(
-                session, discovered_owner_id, multi_workspace_enabled=multi_workspace_enabled,
+                session, discovered_owner_id,
+                multi_workspace_enabled=True if isinstance(scope, AdminWorkspaceReadContext) else multi_workspace_enabled,
             )
     if discovered_owner_id is None:
         raise HTTPException(status_code=404, detail="Workspace not found")
@@ -291,15 +324,20 @@ async def authorize_internal_job(
     )
 
 
-def can_read_resource(scope: WorkspaceContext, resource_workspace_id: UUID, shared_to_actor: bool) -> bool:
-    """Pure predicate, no DB access: same workspace and (owner or an active share for the actor)."""
-    return scope.workspace_id == resource_workspace_id and (scope.role == "owner" or shared_to_actor)
+def can_read_resource(
+    scope: WorkspaceContext | AdminWorkspaceReadContext, resource_workspace_id: UUID, shared_to_actor: bool,
+) -> bool:
+    """Pure predicate; instance admins can read any resource in their admitted workspace."""
+    return scope.workspace_id == resource_workspace_id and (scope.role in {"owner", "admin_viewer"} or shared_to_actor)
 
 
 async def assert_resource_access(
-    session: AsyncSession, scope: WorkspaceContext, kind: str, resource_id: UUID, expected_revision: int,
+    session: AsyncSession, scope: WorkspaceContext | AdminWorkspaceReadContext,
+    kind: str, resource_id: UUID, expected_revision: int,
 ) -> None:
     """Owner passes; a member needs a live grant at ``expected_revision`` (FOR SHARE locked), else 404."""
+    if isinstance(scope, AdminWorkspaceReadContext):
+        return
     if scope.role == "owner":
         return
     from core.workspaces.public import lock_resource_grants, read_resource_grants

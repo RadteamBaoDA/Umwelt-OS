@@ -35,6 +35,35 @@ class WorkspaceContext:
 
 
 @dataclass(frozen=True, slots=True)
+class AdminWorkspaceReadContext:
+    """Read-only cross-workspace view retaining operator and data-owner identities separately."""
+
+    actor_user_id: int
+    workspace_id: UUID
+    workspace_owner_user_id: int
+    membership_revision: int
+    configuration_revision: int
+    role: Literal["admin_viewer"] = "admin_viewer"
+
+    @property
+    def user_id(self) -> int:
+        """Identify the data owner for existing workspace-scoped projections, never the actor."""
+        return self.workspace_owner_user_id
+
+    def __post_init__(self) -> None:
+        """Reject incomplete detached admin views; authority is rechecked against the live session."""
+        if type(self.actor_user_id) is not int or self.actor_user_id != 1:
+            raise ValueError("Instance operator identity is required")
+        if type(self.workspace_owner_user_id) is not int or self.workspace_owner_user_id <= 0:
+            raise ValueError("A valid workspace owner is required")
+        if not isinstance(self.workspace_id, UUID) or any(
+            type(value) is not int or value <= 0
+            for value in (self.membership_revision, self.configuration_revision)
+        ):
+            raise ValueError("A valid workspace and positive revisions are required")
+
+
+@dataclass(frozen=True, slots=True)
 class InternalJobScope:
     """Durable worker subject snapshot, never authorization supplied by queued JSON alone.
 
@@ -66,7 +95,7 @@ class InternalJobScope:
             raise ValueError("A valid source ID and positive generation are required")
 
 
-Scope: TypeAlias = WorkspaceContext | InternalJobScope  # noqa: UP040  # runtime alias is used in isinstance/pydantic positions; `type` statement would change that
+Scope: TypeAlias = WorkspaceContext | AdminWorkspaceReadContext | InternalJobScope  # noqa: UP040
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +106,7 @@ class AccessFence:
     user_id: int
     membership_revision: int
     configuration_revision: int
+    workspace_owner_user_id: int | None = None
 
     def __post_init__(self) -> None:
         """Reject malformed revision snapshots; a valid snapshot is still not permission."""
@@ -86,6 +116,10 @@ class AccessFence:
             self.user_id, self.membership_revision, self.configuration_revision,
         )):
             raise ValueError("Positive actor and fence revisions are required")
+        if self.workspace_owner_user_id is not None and (
+            type(self.workspace_owner_user_id) is not int or self.workspace_owner_user_id <= 0
+        ):
+            raise ValueError("A valid workspace owner is required")
 
 
 class WorkspaceRead(BaseModel):
@@ -96,7 +130,7 @@ class WorkspaceRead(BaseModel):
     name: str
     owner_user_id: int
     is_default: bool
-    role: Literal["owner", "member"]
+    role: Literal["owner", "member", "admin_viewer"]
     configuration_revision: int
 
 
@@ -235,9 +269,9 @@ class GrantRef:
 
 @dataclass(frozen=True, slots=True)
 class PublicationFence:
-    """Set only on member reads of shared content."""
+    """Fence member-shared content or an administrator's cross-workspace read until send."""
 
-    scope: WorkspaceContext
+    scope: WorkspaceContext | AdminWorkspaceReadContext
     access_fence: AccessFence
     auth_session: AccountSessionRef
     grants: tuple[GrantRef, ...]

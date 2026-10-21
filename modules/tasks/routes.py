@@ -10,8 +10,8 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_session
-from core.workspaces.dependencies import require_workspace_read, require_workspace_write
-from core.workspaces.schemas import WorkspaceContext
+from core.workspaces.dependencies import require_workspace_observer_read, require_workspace_write
+from core.workspaces.schemas import AdminWorkspaceReadContext, WorkspaceContext
 from modules.settings.public import module_dependency
 from modules.tasks import public
 from modules.tasks.public import TaskConflict, TaskMissing
@@ -27,7 +27,7 @@ from modules.tasks.schemas import (
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"], dependencies=[Depends(module_dependency("tasks"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
-WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
+WorkspaceRead = Annotated[WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 

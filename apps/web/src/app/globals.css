@@ -118,7 +118,14 @@ html.dark {
   .top-actions { display: flex; gap: 9px; }
   .workspace { width: 100%; flex: 1 1 0; min-height: 0; overflow: hidden; display: flex; align-items: stretch; gap: 24px; padding: 24px; }
   .workspace-nav { flex: 0 0 180px; display: flex; flex-direction: column; gap: 5px; overflow-y: auto; }
-  .workspace-nav a { padding: 11px 13px; border-radius: 9px; text-decoration: none; font-weight: 650; }
+  .workspace[data-nav-collapsed='true'] .workspace-nav { flex-basis: 64px; }
+  .workspace-nav-header { display: flex; justify-content: flex-end; }
+  .workspace[data-nav-collapsed='true'] .workspace-nav-header { justify-content: center; }
+  .workspace-nav-toggle { flex: 0 0 44px; }
+  .workspace-nav-links { display: flex; flex-direction: column; gap: 5px; }
+  .workspace-nav-link { min-height: 44px; display: flex; align-items: center; gap: 12px; padding: 0 13px; border-radius: 9px; text-decoration: none; font-weight: 650; }
+  .workspace[data-nav-collapsed='true'] .workspace-nav-link { justify-content: center; padding: 0; }
+  .workspace[data-nav-collapsed='true'] .workspace-nav-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   .workspace-nav a[aria-current='page'] { background: var(--surface); color: var(--text); border: 1px solid var(--line); }
   .workspace-main { flex: 1 1 0; min-width: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
   /* Children keep their natural height so overflow scrolls .workspace-main instead of shrinking/clipping them. */
@@ -281,7 +288,12 @@ html.dark {
 @media (max-width: 840px) {
   .workspace { flex-direction: column; gap: 12px; }
   .workspace-nav { flex: 0 0 auto; flex-direction: row; overflow-x: auto; overflow-y: visible; }
-  .workspace-nav a { white-space: nowrap; }
+  .workspace[data-nav-collapsed='true'] .workspace-nav { flex-basis: auto; }
+  .workspace-nav-header { display: none; }
+  .workspace-nav-links { flex-direction: row; gap: 6px; }
+  .workspace-nav-link, .workspace[data-nav-collapsed='true'] .workspace-nav-link { flex: 0 0 auto; justify-content: center; padding: 0 8px; white-space: nowrap; }
+  .workspace[data-nav-collapsed='true'] .workspace-nav-label { position: static; width: auto; height: auto; padding: 0; margin: 0; overflow: visible; clip: auto; white-space: nowrap; }
+  .workspace-nav-tooltip { display: none; }
 }
 
 /* phase-6 mobile */

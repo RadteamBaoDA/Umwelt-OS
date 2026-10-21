@@ -6,13 +6,14 @@ import { useTranslations } from 'next-intl';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { ApiError } from '@/core/api';
+import { useWorkspace } from '@/core/workspace-context';
 import { Button } from '@/components/ui/button';
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { deleteTask, getTask } from './api';
 import { TaskForm } from './task-form';
 import type { Task } from './types';
 
-/** Shows owner task data with retained refetch drafts; saves and frozen deletes require the current verified identity and revision. */
+/** Shows task details with retained refetch drafts; administrator viewers can read but cannot edit or delete. */
 export function TaskDetail({ task, csrfToken, onClose, onTaskChanged }: {
   task: Task;
   csrfToken: string;
@@ -20,6 +21,7 @@ export function TaskDetail({ task, csrfToken, onClose, onTaskChanged }: {
   onTaskChanged?: (task: Task) => void;
 }) {
   const t = useTranslations('taskGoal');
+  const { isAdminViewer } = useWorkspace();
   const display = useDisplayPreferences();
   const [editing, setEditing] = useState(false);
   const [formPending, setFormPending] = useState(false);
@@ -64,7 +66,7 @@ export function TaskDetail({ task, csrfToken, onClose, onTaskChanged }: {
     <header className="flex items-start justify-between gap-3"><div><h2 className="text-lg font-semibold">{ownerVerified ? current.title : t('taskDetailTitle')}</h2>{ownerVerified && <p className="text-xs text-muted-foreground">{statusLabels[current.status]} · {t('revisionNumber', { revision: current.revision })}</p>}</div>{onClose && <Button type="button" variant="outline" disabled={formPending || remove.isPending} onClick={onClose}>{t('back')}</Button>}</header>
     {taskQuery.isFetching && <p role="status" className="text-sm text-muted-foreground">{t('loadingTask')}</p>}
     {taskQuery.isError && <div role="alert" className="text-sm text-destructive"><p>{taskQuery.error instanceof ApiError && taskQuery.error.status === 404 ? t('taskOwnerMissing') : taskQuery.error instanceof ApiError && [401, 403].includes(taskQuery.error.status) ? t('ownerAccessDenied') : t('taskReadFailed')}</p><Button type="button" variant="outline" size="sm" disabled={taskQuery.isFetching} onClick={() => void taskQuery.refetch()}>{taskQuery.isFetching ? t('loading') : t('retry')}</Button></div>}
-    {editing && current
+    {editing && !isAdminViewer && current
       ? <TaskForm key={current.id} task={current} csrfToken={csrfToken} canSave={ownerVerified} onPendingChange={setFormPending} onSuccess={(saved) => { queryClient.setQueryData(['task', saved.id], saved); setExpectedRevision(saved.revision); setEditing(false); onTaskChanged?.(saved); }} onCancel={() => { if (!formPending) setEditing(false); }} />
       : ownerVerified && (
       <>
@@ -73,10 +75,10 @@ export function TaskDetail({ task, csrfToken, onClose, onTaskChanged }: {
         <p className="text-xs text-muted-foreground">{t('entityReferences', { ids: current.entity_ids.length ? current.entity_ids.join(', ') : t('none') })}</p>
         <p className="text-sm">{t('deadline')}: {current.due_at ? formatDateTime(current.due_at, display.locale, display.timezone) : current.due_date ?? t('none')}</p>
         {current.completed_at && <p className="text-sm">{t('completedAt')}: {formatDateTime(current.completed_at, display.locale, display.timezone)}</p>}
-        <div className="flex gap-2"><Button type="button" disabled={conflict || remove.isPending} onClick={() => setEditing(true)}>{t('editTask')}</Button><Button type="button" variant="destructive" disabled={conflict || remove.isPending} onClick={() => { setExpectedRevision(current.revision); setDeleteIntent({ id: current.id, revision: current.revision, title: current.title }); setConfirmDelete(true); }}>{t('deleteTask')}</Button></div>
+        {!isAdminViewer && <div className="flex gap-2"><Button type="button" disabled={conflict || remove.isPending} onClick={() => setEditing(true)}>{t('editTask')}</Button><Button type="button" variant="destructive" disabled={conflict || remove.isPending} onClick={() => { setExpectedRevision(current.revision); setDeleteIntent({ id: current.id, revision: current.revision, title: current.title }); setConfirmDelete(true); }}>{t('deleteTask')}</Button></div>}
       </>
       )}
     {remove.error && <div role="alert" className="text-sm text-destructive"><p>{conflict ? t('taskDeleteConflict') : remove.error instanceof ApiError && remove.error.status === 404 ? t('taskOwnerMissing') : remove.error instanceof ApiError && [401, 403].includes(remove.error.status) ? t('ownerAccessDenied') : t('taskDeleteFailed')}</p>{conflict && <Button type="button" variant="outline" size="sm" disabled={refreshing} onClick={() => void refreshCurrentTask()}>{refreshing ? t('loading') : t('refreshCurrentTask')}</Button>}{refreshError && <p>{refreshError}</p>}{currentTask && <div className="rounded border border-border p-2"><p>{t('currentTaskRevision', { title: currentTask.title, status: statusLabels[currentTask.status], revision: currentTask.revision })}</p><p>{currentTask.description ?? t('none')} · {currentTask.due_at ?? currentTask.due_date ?? t('noDueDate')}</p><Button type="button" variant="outline" size="sm" onClick={() => { queryClient.setQueryData(['task', currentTask.id], currentTask); setExpectedRevision(currentTask.revision); setCurrentTask(null); remove.reset(); }}>{t('useCurrentRevisionForDelete', { revision: currentTask.revision })}</Button></div>}</div>}
-    <AlertDialog open={confirmDelete} onOpenChange={(open) => { if (remove.isPending || formPending) return; setConfirmDelete(open); if (!open) setDeleteIntent(null); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{t('deleteTaskConfirmTitle')}</AlertDialogTitle><AlertDialogDescription>{t('deleteTaskConfirmDescription', { title: deleteIntent?.title ?? '' })} · {t('revisionNumber', { revision: deleteIntent?.revision ?? expectedRevision })}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={remove.isPending || formPending}>{t('cancel')}</AlertDialogCancel><Button type="button" variant="destructive" disabled={!ownerVerified || remove.isPending || formPending || !deleteIntent || deleteIntent.id !== current?.id || deleteIntent.revision !== current?.revision} onClick={() => { if (deleteIntent && ownerVerified && current && !remove.isPending && !formPending && deleteIntent.id === current.id && deleteIntent.revision === current.revision) remove.mutate(deleteIntent); }}>{remove.isPending ? t('deleting') : t('deleteTask')}</Button></AlertDialogFooter></AlertDialogContent></AlertDialog>
+    {!isAdminViewer && <AlertDialog open={confirmDelete} onOpenChange={(open) => { if (remove.isPending || formPending) return; setConfirmDelete(open); if (!open) setDeleteIntent(null); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{t('deleteTaskConfirmTitle')}</AlertDialogTitle><AlertDialogDescription>{t('deleteTaskConfirmDescription', { title: deleteIntent?.title ?? '' })} · {t('revisionNumber', { revision: deleteIntent?.revision ?? expectedRevision })}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={remove.isPending || formPending}>{t('cancel')}</AlertDialogCancel><Button type="button" variant="destructive" disabled={!ownerVerified || remove.isPending || formPending || !deleteIntent || deleteIntent.id !== current?.id || deleteIntent.revision !== current?.revision} onClick={() => { if (deleteIntent && ownerVerified && current && !remove.isPending && !formPending && deleteIntent.id === current.id && deleteIntent.revision === current.revision) remove.mutate(deleteIntent); }}>{remove.isPending ? t('deleting') : t('deleteTask')}</Button></AlertDialogFooter></AlertDialogContent></AlertDialog>}
   </section>;
 }

@@ -19,6 +19,7 @@ from core.auth.dependencies import (
     _hash,
     _origin_allowed,
     _valid_csrf,
+    is_instance_operator,
     require_account,
     require_account_write,
 )
@@ -37,6 +38,7 @@ from core.workspaces.public import (
     edit_workspace_in_uow,
     grant_share_in_uow,
     invitation_target,
+    list_instance_workspaces,
     list_invitations,
     list_members,
     list_resource_shares,
@@ -154,7 +156,9 @@ async def _consume_google_enrollment(
 async def workspace_list(
     auth: Annotated[AuthSession, Depends(require_account)], session: Annotated[AsyncSession, Depends(get_session)],
 ) -> WorkspaceList:
-    """List actor memberships only; selected workspace header never broadens enumeration."""
+    """List actor memberships, or all workspace metadata for the instance operator."""
+    if is_instance_operator(auth):
+        return WorkspaceList(items=await list_instance_workspaces(session))
     return WorkspaceList(items=await list_workspaces(session, auth.owner_id))
 
 

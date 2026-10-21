@@ -7,11 +7,16 @@ from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import require_account, require_account_write
-from core.auth.public import get_active_account
+from core.auth.public import authenticated_session_ref, get_active_account
 from core.auth.schemas import AccountRead
 from core.database import get_session
-from core.workspaces.public import read_access_fence, resolve_workspace_context
-from core.workspaces.schemas import WorkspaceContext
+from core.publication import require_publication_gate
+from core.workspaces.public import (
+    read_access_fence,
+    resolve_admin_workspace_context,
+    resolve_workspace_context,
+)
+from core.workspaces.schemas import AdminWorkspaceReadContext, PublicationFence, WorkspaceContext
 
 
 def _parse_workspace_id(workspace_id: UUID | str | None) -> UUID | None:
@@ -127,7 +132,7 @@ async def require_workspace_read(
     auth_session: Annotated[object, Depends(require_account)],
     session: Annotated[AsyncSession, Depends(get_session)],
     workspace_id: Annotated[str | None, Header(alias="X-Workspace-ID")] = None,
-) -> WorkspaceContext:
+) -> WorkspaceContext | AdminWorkspaceReadContext:
     """Authenticate and prepare selected identity; members still need explicit resource grants.
 
     Auth dependency owns its session persistence; use only its detached request account.
@@ -137,6 +142,57 @@ async def require_workspace_read(
     if not isinstance(account, AccountRead):
         raise HTTPException(status_code=401, detail="Authentication required")
     return await _selected_workspace(request, session, account.id, workspace_id)
+
+
+async def require_workspace_observer_read(
+    request: Request,
+    auth_session: Annotated[object, Depends(require_account)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    workspace_id: Annotated[str | None, Header(alias="X-Workspace-ID")] = None,
+) -> WorkspaceContext | AdminWorkspaceReadContext:
+    """Allow the instance operator a fenced read view in a workspace without membership."""
+    # Search uses POST for a query body; keep the exception on its exact read-only route.
+    read_only_search = request.method == "POST" and request.url.path == "/api/v1/search"
+    if request.method not in {"GET", "HEAD"} and not read_only_search:
+        raise HTTPException(status_code=403, detail="Admin workspace access is read-only")
+    account = getattr(request.state, "account", None)
+    if not isinstance(account, AccountRead):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    selected = _parse_workspace_id(workspace_id)
+    if account.id == 1 and selected is not None:
+        viewer = await resolve_admin_workspace_context(
+            session, actor_user_id=account.id, workspace_id=selected,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        )
+        if viewer is not None and viewer.workspace_owner_user_id != account.id:
+            fence = await read_access_fence(
+                session, scope=viewer, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+            )
+            require_publication_gate(request, PublicationFence(
+                scope=viewer, access_fence=fence,
+                auth_session=authenticated_session_ref(request), grants=(),
+            ))
+            return viewer
+    try:
+        return await _selected_workspace(request, session, account.id, workspace_id)
+    except HTTPException as exc:
+        if exc.status_code != 404 or account.id != 1 or workspace_id is None:
+            raise
+    assert selected is not None
+    viewer = await resolve_admin_workspace_context(
+        session, actor_user_id=account.id, workspace_id=selected,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
+    if viewer is None:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    fence = await read_access_fence(
+        session, scope=viewer, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
+    require_publication_gate(request, PublicationFence(
+        scope=viewer, access_fence=fence,
+        auth_session=authenticated_session_ref(request), grants=(),
+    ))
+    return viewer
 
 
 async def require_workspace_write(

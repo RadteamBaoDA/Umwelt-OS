@@ -32,6 +32,7 @@ from core.workspaces.models import (
     WorkspaceShare,
 )
 from core.workspaces.schemas import (
+    AdminWorkspaceReadContext,
     GrantRef,
     InvitationAccepted,
     InvitationList,
@@ -160,6 +161,58 @@ async def list_workspaces(session: AsyncSession, user_id: int) -> list[Workspace
         ).where(WorkspaceMembership.user_id == user_id).order_by(Workspace.created_at, Workspace.id)
     )
     return [_workspace_read(workspace, membership) for workspace, membership in rows]
+
+
+async def list_instance_workspaces(session: AsyncSession) -> list[WorkspaceRead]:
+    """List workspace metadata for an admitted instance operator without creating memberships."""
+    rows = await session.execute(
+        select(Workspace, WorkspaceMembership).join(
+            WorkspaceMembership,
+            (WorkspaceMembership.workspace_id == Workspace.id)
+            & (WorkspaceMembership.user_id == Workspace.owner_user_id)
+            & (WorkspaceMembership.role == "owner"),
+        ).order_by(Workspace.created_at, Workspace.id)
+    )
+    return [
+        WorkspaceRead(
+            id=workspace.id, name=workspace.name, owner_user_id=workspace.owner_user_id,
+            is_default=workspace.is_default,
+            role="owner" if workspace.owner_user_id == 1 else "admin_viewer",
+            configuration_revision=workspace.configuration_revision,
+        )
+        for workspace, _membership in rows
+    ]
+
+
+async def resolve_admin_workspace_context(
+    session: AsyncSession, *, actor_user_id: int, workspace_id: UUID, multi_workspace_enabled: bool,
+) -> AdminWorkspaceReadContext | None:
+    """Resolve an operator-only viewer context while keeping the actual actor separate from the data owner."""
+    from core.auth.public import get_active_account
+
+    if type(actor_user_id) is not int or actor_user_id != 1 or not isinstance(workspace_id, UUID):
+        return None
+    workspace, owner_membership = (await session.execute(
+        select(Workspace, WorkspaceMembership).join(
+            WorkspaceMembership,
+            (WorkspaceMembership.workspace_id == Workspace.id)
+            & (WorkspaceMembership.user_id == Workspace.owner_user_id)
+            & (WorkspaceMembership.role == "owner"),
+        ).where(Workspace.id == workspace_id).execution_options(populate_existing=True)
+    )).one_or_none() or (None, None)
+    if workspace is None or owner_membership is None:
+        return None
+    owner_account = await get_active_account(
+        session, workspace.owner_user_id, multi_workspace_enabled=True,
+    )
+    if owner_account is None:
+        return None
+    return AdminWorkspaceReadContext(
+        actor_user_id=actor_user_id, workspace_id=workspace.id,
+        workspace_owner_user_id=workspace.owner_user_id,
+        membership_revision=owner_membership.revision,
+        configuration_revision=workspace.configuration_revision,
+    )
 
 
 async def list_workspace_job_candidate_ids(
@@ -449,7 +502,7 @@ async def active_grant_ids(
 
 
 async def lock_resource_grants(
-    session: AsyncSession, *, scope: WorkspaceContext, grants: tuple[GrantRef, ...],
+    session: AsyncSession, *, scope: WorkspaceContext | AdminWorkspaceReadContext, grants: tuple[GrantRef, ...],
 ) -> None:
     """FOR SHARE the grants sorted; 404 if any is missing, revoked or changed. Fence already held."""
     if not grants:

@@ -8,13 +8,14 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
+import { useWorkspace } from '@/core/workspace-context';
 import { fetchTasks, fetchTasksByIds, getTask, updateTask } from './api';
 import type { Task, TaskFilter, TaskPage, TaskStatus, TaskView } from './types';
 
 const VIEWS: TaskView[] = ['inbox', 'today', 'upcoming', 'blocked', 'completed', 'all'];
 const STATUSES: TaskStatus[] = ['inbox', 'todo', 'in_progress', 'blocked', 'done', 'cancelled'];
 
-/** Displays one bounded owner cursor page at a time or bounded configured IDs, with conflict-safe completion. */
+/** Displays bounded task pages or configured IDs; completion remains conflict-safe and disabled for administrator viewers. */
 export function TaskList({
   initialView = 'all', csrfToken, onSelectTask, ids, filters, limit = 50, cacheScope = 'page',
 }: {
@@ -27,6 +28,7 @@ export function TaskList({
   cacheScope?: string;
 }) {
   const t = useTranslations('taskGoal');
+  const { isAdminViewer } = useWorkspace();
   const [view, setView] = useState<TaskView>(initialView);
   const [activePage, setActivePage] = useState<{ key: string; index: number }>({ key: '', index: 0 });
   const [conflictedTask, setConflictedTask] = useState<Task | null>(null);
@@ -110,7 +112,7 @@ export function TaskList({
     {boundedIds.length < (ids?.length ?? 0) && <p role="status" className="text-xs text-muted-foreground">{t('selectedIdsTruncated', { count: (ids?.length ?? 0) - boundedIds.length, limit: 100 })}</p>}
     {!isLoading && !isError && tasks.length === 0 && <p className="py-5 text-sm text-muted-foreground">{canAdvance ? t('noTasksThisPage') : t('noTasks')}</p>}
     <ul className="flex flex-col gap-2">{tasks.map((task) => <li key={task.id} className="flex items-start gap-3 rounded-lg border border-border p-3">
-      <Checkbox checked={task.status === 'done'} disabled={toggleMutation.isPending} onCheckedChange={(checked) => toggleMutation.mutate({ task, done: checked === true })} aria-label={t('toggleTask', { title: task.title, state: task.status === 'done' ? t('incomplete') : t('complete') })} />
+      <Checkbox checked={task.status === 'done'} disabled={isAdminViewer || toggleMutation.isPending} onCheckedChange={(checked) => toggleMutation.mutate({ task, done: checked === true })} aria-label={t('toggleTask', { title: task.title, state: task.status === 'done' ? t('incomplete') : t('complete') })} />
       <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onSelectTask?.(task)}><span className="block truncate text-sm font-medium">{task.title}</span><span className="text-xs text-muted-foreground">{statusLabels[task.status]} · {task.due_at ? formatDateTime(task.due_at, display.locale, display.timezone) : task.due_date ?? t('noDueDate')}</span></button>
     </li>)}</ul>
     {toggleMutation.error && <div role="alert" className="text-sm text-destructive"><p>{t('taskUpdateFailed')}</p>{conflictLoadError && <p>{t('currentTaskLoadFailed')}: {conflictLoadError}</p>}{conflictedTask && <div className="rounded border border-border p-2"><p>{t('currentTaskRevision', { title: conflictedTask.title, status: statusLabels[conflictedTask.status], revision: conflictedTask.revision })}</p><Button type="button" variant="outline" size="sm" onClick={() => onSelectTask?.(conflictedTask)}>{t('reviewCurrentTask')}</Button></div>}</div>}

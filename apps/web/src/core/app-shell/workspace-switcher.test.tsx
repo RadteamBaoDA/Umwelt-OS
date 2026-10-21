@@ -32,6 +32,15 @@ describe("member navigation", () => {
     expect(groups("owner")).toEqual(expect.arrayContaining(["/settings/ai", "/settings/sources", "/settings/translation"]));
     expect(commandDestinations.filter((d) => destinationForRole(d, "member")).map((d) => d.href)).not.toContain("/settings/ai");
   });
+
+  it("limits an administrator viewer to shared data destinations and excludes private surfaces", () => {
+    const ids = [...mainNavigation, ...detailDestinations]
+      .filter((d) => destinationForRole(d, "admin_viewer"))
+      .map((d) => d.id);
+    expect(ids).toEqual(["dashboard", "documents", "timeline", "entities", "news", "search"]);
+    expect(commandDestinations.filter((d) => destinationForRole(d, "admin_viewer")).map((d) => d.href))
+      .not.toContain("/settings/memory");
+  });
 });
 
 describe("WorkspaceSwitcher", () => {

@@ -11,9 +11,13 @@ from core.auth.public import authenticated_session_ref
 from core.database import get_session
 from core.publication import require_publication_gate
 from core.storage import storage_path
-from core.workspaces.dependencies import require_workspace_read, require_workspace_write
+from core.workspaces.dependencies import (
+    require_workspace_observer_read,
+    require_workspace_read,
+    require_workspace_write,
+)
 from core.workspaces.public import lock_access_fence, read_access_fence, read_resource_grants
-from core.workspaces.schemas import PublicationFence, WorkspaceContext
+from core.workspaces.schemas import AdminWorkspaceReadContext, PublicationFence, WorkspaceContext
 from modules.knowledge.documents import public
 from modules.knowledge.documents.models import Document
 from modules.knowledge.documents.schemas import (
@@ -44,26 +48,29 @@ router = APIRouter(
     dependencies=[Depends(module_dependency("knowledge.documents"))],
 )
 Session = Annotated[AsyncSession, Depends(get_session)]
-WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
+WorkspaceRead = Annotated[WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)]
+WorkspaceStandardRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 
-def _require_document_route_owner(scope: WorkspaceContext) -> None:
+def _require_document_route_owner(scope: WorkspaceContext | AdminWorkspaceReadContext) -> None:
     """Deny members before owner Document IDs/content; W3 grants remain separately owned."""
-    if scope.role != "owner":
+    if scope.role not in {"owner", "admin_viewer"}:
         raise HTTPException(status_code=403, detail="Workspace owner required")
 
 
 async def _gate_member_read(
-    request: Request, session: AsyncSession, scope: WorkspaceContext, document_ids: tuple[UUID, ...],
+    request: Request, session: AsyncSession, scope: WorkspaceContext | AdminWorkspaceReadContext,
+    document_ids: tuple[UUID, ...],
 ) -> None:
     """Arm the publication gate for a member read; owners are unaffected.
 
     The grant set is read after the query; any returned ID without an active grant (revoked in
     between) fails closed as 404 so unshared bytes are never sent.
     """
-    if scope.role == "owner":
+    if scope.role in {"owner", "admin_viewer"}:
         return
+    assert isinstance(scope, WorkspaceContext)
     flag = request.app.state.settings.multi_workspace_enabled
     unique = tuple(dict.fromkeys(document_ids))
     grants = await read_resource_grants(session, scope=scope, kind="document", resource_ids=unique) if unique else ()
@@ -102,7 +109,7 @@ async def _lock_document_write_request(request: Request, session: AsyncSession, 
 @router.post("/provider-snapshots", response_model=list[ProviderDocumentSnapshotRead])
 async def read_provider_snapshots(
     payload: ProviderSnapshotRequest, session: Session, request: Request,
-    workspace: WorkspaceRead,
+    workspace: WorkspaceStandardRead,
 ) -> list[ProviderDocumentSnapshotRead]:
     """Return exact immutable provider versions after owner-route authentication."""
     _require_document_route_owner(workspace)
@@ -175,7 +182,7 @@ async def list_documents(
     """
     items, next_cursor = await public.list_documents(session, limit, cursor, source_id,
         scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
-    if scope.role != "owner":
+    if scope.role == "member":
         await _gate_member_read(request, session, scope, tuple(item.id for item in items))
         return MemberDocumentList(items=[as_member_document_read(item) for item in items], next_cursor=next_cursor)
     return DocumentList(items=[as_document_read(item) for item in items], next_cursor=next_cursor)
@@ -289,7 +296,7 @@ async def get_document(
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
-    if scope.role != "owner":
+    if scope.role == "member":
         await _gate_member_read(request, session, scope, (document.id,))
         return as_member_document_read(document)
     return as_document_read(document)

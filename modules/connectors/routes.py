@@ -11,14 +11,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import is_instance_operator, require_owner_write
+from core.auth.dependencies import is_instance_operator, require_owner, require_owner_write
 from core.auth.models import AuthSession
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
 from core.rate_limit import require_budget
 from core.realtime import commit_with_replay, make_source_change
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
-from core.workspaces.public import lock_access_fence, read_access_fence
+from core.workspaces.public import list_instance_workspaces, lock_access_fence, read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.connectors import mcp as mcp_collection
 from modules.connectors import provider_terms, provisioning, registry, scheduler
@@ -78,6 +78,18 @@ router = APIRouter(prefix="/api/v1/connectors/sources", tags=["connectors"])
 Session = Annotated[AsyncSession, Depends(get_session)]
 operator_router = APIRouter(prefix="/api/v1/operator/connectors", tags=["connectors"])
 OwnerWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
+
+
+@operator_router.get("/terms-review", response_model=list[provider_terms.OperatorTermsQueueItem])
+async def list_operator_terms_review(
+    session: Session,
+    operator: Annotated[AuthSession, Depends(require_owner)],
+) -> list[provider_terms.OperatorTermsQueueItem]:
+    """List pending provider terms across workspaces without exposing evidence or credentials."""
+    del operator
+    workspaces = await list_instance_workspaces(session)
+    names = {workspace.id: workspace.name for workspace in workspaces}
+    return await provider_terms.list_operator_pending_terms(session, names)
 
 
 async def _owner_access(session: AsyncSession, request: Request, scope: WorkspaceContext, *, expected: AccessFence | None = None) -> AccessFence:

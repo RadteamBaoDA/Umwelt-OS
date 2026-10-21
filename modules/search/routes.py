@@ -11,8 +11,16 @@ from core.database import get_session
 from core.publication import require_publication_gate
 from core.rate_limit import require_budget
 from core.workspaces import public as workspaces
-from core.workspaces.dependencies import require_workspace_read, require_workspace_write
-from core.workspaces.schemas import AccessFence, PublicationFence, WorkspaceContext
+from core.workspaces.dependencies import (
+    require_workspace_observer_read,
+    require_workspace_write,
+)
+from core.workspaces.schemas import (
+    AccessFence,
+    AdminWorkspaceReadContext,
+    PublicationFence,
+    WorkspaceContext,
+)
 from modules.goals.schemas import GoalFilter
 from modules.search import indexing, public
 from modules.search.schemas import (
@@ -29,7 +37,7 @@ from modules.tasks.schemas import TaskFilter
 
 router = APIRouter(prefix="/api/v1/search", tags=["search"], dependencies=[Depends(module_dependency("search"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
-WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
+WorkspaceRead = Annotated[WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 
@@ -47,10 +55,14 @@ async def _gate_member_hits(
     ))
 
 
-async def _member_fence(request: Request, session: AsyncSession, workspace: WorkspaceContext) -> AccessFence | None:
+async def _member_fence(
+    request: Request, session: AsyncSession,
+    workspace: WorkspaceContext | AdminWorkspaceReadContext,
+) -> AccessFence | None:
     """Admission fence for member reads (None for owners, who need no publication gate)."""
     if not public.is_member_scope(workspace):
         return None
+    assert isinstance(workspace, WorkspaceContext)
     return await workspaces.read_access_fence(
         session, scope=workspace, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
@@ -96,6 +108,7 @@ async def global_search(
     )
     if member_fence is not None:
         # Members get documents only: no task/goal rows and no cross-type counts.
+        assert isinstance(workspace, WorkspaceContext)
         await _gate_member_hits(request, session, workspace, member_fence, doc_response.items)
         return GlobalSearchResponse(
             documents=doc_response.items, document_next_cursor=doc_response.next_cursor,
@@ -135,6 +148,7 @@ async def search(
         release_during_embed=member_fence is None,
     )
     if member_fence is not None:
+        assert isinstance(workspace, WorkspaceContext)
         await _gate_member_hits(request, session, workspace, member_fence, response.items)
     return response
 
