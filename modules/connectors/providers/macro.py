@@ -125,6 +125,23 @@ def provider_instant(raw: object, collected_at: datetime, *, unit: Literal["s", 
     return moment
 
 
+def naive_utc_instant(raw: object, collected_at: datetime) -> datetime:
+    """Provider ISO time documented as UTC but sent without a zone (NOAA SWPC, NVD) -> aware UTC.
+
+    An explicit zone is honoured; future beyond the 10-minute skew is invalid like ``provider_instant``.
+    """
+    try:
+        if not isinstance(raw, str) or len(raw) > 40:
+            raise ValueError
+        moment = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise ProviderPayloadError("provider_time_invalid") from exc
+    moment = moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment.astimezone(UTC)
+    if moment.year < 2000 or (moment - collected_at).total_seconds() > 600:
+        raise ProviderPayloadError("provider_time_invalid")
+    return moment
+
+
 def day_start(day: date) -> datetime:
     """Documented period convention: a day (or year) is observed at its UTC start."""
     return datetime(day.year, day.month, day.day, tzinfo=UTC)
@@ -494,6 +511,122 @@ def map_ecb(xml: bytes, collected_at: datetime) -> list[IngestionRecord]:
     return records
 
 
+# --------------------------------------------------------------------------- Open ER API (daily FX)
+
+OPEN_ER_API_URL = "https://open.er-api.com/v6/latest/USD"
+OPEN_ER_QUOTES = ("VND", "EUR", "JPY", "GBP", "CNY")  # fixed quote set: one request, a handful of records
+
+
+def open_er_api_request() -> ProviderRequest:
+    """Return the fixed keyless USD-base daily rate request (open.er-api.com)."""
+    return ProviderRequest("GET", OPEN_ER_API_URL)
+
+
+def map_open_er_api(payload: object, collected_at: datetime) -> list[IngestionRecord]:
+    """Map USD-base daily rates for ``OPEN_ER_QUOTES``; one record per quote and provider update day.
+
+    The provider updates once a day and names that instant (``time_last_update_unix``). A non-success
+    result, a quota error or a missing quote raises ``ProviderPayloadError`` rather than a partial series.
+    """
+    if not isinstance(payload, dict):
+        raise ProviderPayloadError("open_er_api_response_invalid")
+    if payload.get("result") != "success":
+        kind = "rate_limited" if payload.get("error-type") == "quota-reached" else "invalid"
+        raise ProviderPayloadError("open_er_api_error_payload", kind)  # type: ignore[arg-type]
+    rates = payload.get("rates")
+    if payload.get("base_code") != "USD" or not isinstance(rates, dict):
+        raise ProviderPayloadError("open_er_api_scope_mismatch")
+    updated = provider_instant(payload.get("time_last_update_unix"), collected_at, unit="s")
+    iso = updated.date().isoformat()
+    records = []
+    for quote in OPEN_ER_QUOTES:
+        try:
+            rate = positive_decimal(rates.get(quote))
+        except ValueError as exc:
+            raise ProviderPayloadError("open_er_api_rate_invalid") from exc
+        text = decimal_text(rate)
+        records.append(build_record(
+            provider="open_er_api", identity=f"open_er_api:USD:{quote}:{iso}",
+            content=f"Open ER API daily rate {iso}: 1 USD = {text} {quote}",
+            title=f"USD/{quote} daily rate", observed_at=updated, collected_at=collected_at,
+            version=content_version("open_er_api", quote, iso, text), metric="fx_reference_rate",
+            value=rate, unit=f"{quote} per USD", currency=quote, symbol=f"USD/{quote}", quality="reference",
+            timestamp_basis="provider_modified", modified_at=updated,
+            provider_fields={"date": iso, "base": "USD", "quote": quote},
+        ))
+    return records
+
+
+# --------------------------------------------------------------------------- SDMX-JSON (OECD CLI)
+
+OECD_CLI_URL = (
+    "https://sdmx.oecd.org/public/rest/data/OECD.SDD.STES,DSD_STES@DF_CLI/USA+CHN+JPN+DEU+GBR.M.LI...AA...H"
+    "?lastNObservations=1&dimensionAtObservation=AllDimensions"
+)
+_SDMX_MAX_OBSERVATIONS = 200
+_PERIOD_RE = re.compile(r"^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$")
+
+
+def oecd_cli_request() -> ProviderRequest:
+    """Return the fixed OECD composite-leading-indicator request (SDMX-JSON 2.0, latest observation per area)."""
+    return ProviderRequest("GET", OECD_CLI_URL, {"Accept": "application/vnd.sdmx.data+json; version=2"})
+
+
+def map_sdmx_json(
+    provider: str, payload: object, collected_at: datetime, *, metric: str, unit: str, title: str,
+) -> list[IngestionRecord]:
+    """Map an SDMX-JSON 2.0 ``AllDimensions`` data message to one record per (REF_AREA, TIME_PERIOD).
+
+    Observation keys are colon-joined indexes into the message's observation dimensions; the first
+    observation value is the measure. Periods ``YYYY``, ``YYYY-MM`` or ``YYYY-MM-DD`` are observed at their
+    UTC start. Any structural mismatch raises ``ProviderPayloadError`` so a changed shape is not silent.
+    """
+    code = f"{provider}_response_invalid"
+    data = payload.get("data") if isinstance(payload, dict) else None
+    try:
+        observations = data["dataSets"][0]["observations"]  # type: ignore[index]
+        dims = data["structures"][0]["dimensions"]["observation"]  # type: ignore[index]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ProviderPayloadError(code) from exc
+    if not isinstance(observations, dict) or not isinstance(dims, list) or not observations:
+        raise ProviderPayloadError(code)
+    if len(observations) > _SDMX_MAX_OBSERVATIONS:
+        raise ProviderPayloadError(f"{provider}_too_many_observations", "incomplete")
+    records = []
+    for key, obs in observations.items():
+        parts = key.split(":") if isinstance(key, str) else []
+        if len(parts) != len(dims) or not all(p.isdigit() for p in parts) or not isinstance(obs, list) or not obs:
+            raise ProviderPayloadError(code)
+        try:
+            members = {d["id"]: d["values"][int(i)] for d, i in zip(dims, parts, strict=True)}
+            area, period = members["REF_AREA"]["id"], members["TIME_PERIOD"]["id"]
+            value = finite_decimal(obs[0])
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise ProviderPayloadError(code) from exc
+        match = _PERIOD_RE.match(str(period))
+        if not match or not isinstance(area, str) or not re.fullmatch(r"[A-Z0-9_]{2,16}", area):
+            raise ProviderPayloadError(code)
+        observed = datetime(int(match[1]), int(match[2] or 1), int(match[3] or 1), tzinfo=UTC)
+        text = decimal_text(value)
+        records.append(build_record(
+            provider=provider, identity=f"{provider}:{area}:{period}",
+            content=f"{title} {area} {period}: {text} {unit}", title=f"{title} {area}",
+            observed_at=observed, collected_at=collected_at,
+            version=content_version(provider, area, period, text), metric=metric, value=value, unit=unit,
+            region=area, quality="provider_reported",
+            provider_fields={"area": area, "period": str(period)},
+        ))
+    return sorted(records, key=lambda r: r.provider_id)
+
+
+def map_oecd_cli(payload: object, collected_at: datetime) -> list[IngestionRecord]:
+    """Latest OECD composite leading indicator (amplitude adjusted, index) per configured area."""
+    return map_sdmx_json(
+        "oecd_cli", payload, collected_at, metric="composite_leading_indicator", unit="index",
+        title="OECD composite leading indicator",
+    )
+
+
 # --------------------------------------------------------------------------- adapter registry
 
 @dataclass(frozen=True)
@@ -508,4 +641,6 @@ MACRO_ADAPTERS: dict[str, PureAdapter] = {
     "world_bank": PureAdapter(world_bank_request, map_world_bank),
     "frankfurter": PureAdapter(frankfurter_request, map_frankfurter),
     "ecb": PureAdapter(ecb_request, map_ecb, binary=True),
+    "open_er_api": PureAdapter(open_er_api_request, map_open_er_api),
+    "oecd_cli": PureAdapter(oecd_cli_request, map_oecd_cli),
 }

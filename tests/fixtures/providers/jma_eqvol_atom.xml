@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" lang="ja">
+  <title>JMA earthquake and volcano feed</title>
+  <updated>2026-10-07T17:01:11+09:00</updated>
+  <id>https://www.data.jma.go.jp/developer/xml/feed/eqvol.xml#short</id>
+  <entry>
+    <title>Ashfall forecast (scheduled)</title>
+    <id>https://www.data.jma.go.jp/developer/xml/data/20261007080049_0_VFVO53_010000.xml</id>
+    <updated>2026-10-07T08:00:00Z</updated>
+    <author><name>JMA</name></author>
+    <link type="application/xml" href="https://www.data.jma.go.jp/developer/xml/data/20261007080049_0_VFVO53_010000.xml"/>
+    <content type="text">Volcano Kirishima ashfall forecast.</content>
+  </entry>
+  <entry>
+    <title>Seismic intensity information</title>
+    <id>https://www.data.jma.go.jp/developer/xml/data/20261007070000_0_VXSE53_010000.xml</id>
+    <updated>2026-10-07T07:00:00Z</updated>
+    <link type="application/xml" href="https://www.data.jma.go.jp/developer/xml/data/20261007070000_0_VXSE53_010000.xml"/>
+    <content type="text">Max intensity 3.</content>
+  </entry>
+</feed>

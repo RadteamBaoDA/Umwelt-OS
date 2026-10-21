@@ -1,0 +1,247 @@
+{
+ "mostread": {
+  "date": "2026-10-19Z",
+  "articles": [
+   {
+    "views": 321853,
+    "rank": 4,
+    "type": "standard",
+    "title": "Jailer_2",
+    "displaytitle": "<i>Jailer 2</i>",
+    "namespace": {
+     "id": 0,
+     "text": ""
+    },
+    "wikibase_item": "Q133255153",
+    "titles": {
+     "canonical": "Jailer_2",
+     "normalized": "Jailer 2",
+     "display": "<i>Jailer 2</i>"
+    },
+    "pageid": 78888721,
+    "lang": "en",
+    "dir": "ltr",
+    "revision": "1381283978",
+    "tid": "484608da-cd2c-11f1-b2e2-1e901aa37523",
+    "timestamp": "2026-10-21T08:49:10Z",
+    "description": "2026 Indian film by Nelson Dilipkumar",
+    "description_source": "local",
+    "content_urls": {
+     "desktop": {
+      "page": "https://en.wikipedia.org/wiki/Jailer_2",
+      "revisions": "https://en.wikipedia.org/wiki/Jailer_2?action=history",
+      "edit": "https://en.wikipedia.org/wiki/Jailer_2?action=edit",
+      "talk": "https://en.wikipedia.org/wiki/Talk:Jailer_2"
+     },
+     "mobile": {
+      "page": "https://en.wikipedia.org/wiki/Jailer_2",
+      "revisions": "https://en.wikipedia.org/wiki/Special:History/Jailer_2",
+      "edit": "https://en.wikipedia.org/wiki/Jailer_2?action=edit",
+      "talk": "https://en.wikipedia.org/wiki/Talk:Jailer_2"
+     }
+    },
+    "normalizedtitle": "Jailer 2"
+   },
+   {
+    "views": 301284,
+    "rank": 5,
+    "type": "standard",
+    "title": "Elizabeth_Holmes",
+    "displaytitle": "<span lang=\"en\" dir=\"ltr\"><span class=\"mw-page-title-main\">Elizabeth Holmes</span></span>",
+    "namespace": {
+     "id": 0,
+     "text": ""
+    },
+    "wikibase_item": "Q17503525",
+    "titles": {
+     "canonical": "Elizabeth_Holmes",
+     "normalized": "Elizabeth Holmes",
+     "display": "<span lang=\"en\" dir=\"ltr\"><span class=\"mw-page-title-main\">Elizabeth Holmes</span></span>"
+    },
+    "pageid": 43573275,
+    "lang": "en",
+    "dir": "ltr",
+    "revision": "1381258681",
+    "tid": "6abe2e4f-ccf8-11f1-9fbf-1fb3fe6a7f93",
+    "timestamp": "2026-10-21T02:37:54Z",
+    "description": "American businesswoman (born 1984)",
+    "description_source": "local",
+    "content_urls": {
+     "desktop": {
+      "page": "https://en.wikipedia.org/wiki/Elizabeth_Holmes",
+      "revisions": "https://en.wikipedia.org/wiki/Elizabeth_Holmes?action=history",
+      "edit": "https://en.wikipedia.org/wiki/Elizabeth_Holmes?action=edit",
+      "talk": "https://en.wikipedia.org/wiki/Talk:Elizabeth_Holmes"
+     },
+     "mobile": {
+      "page": "https://en.wikipedia.org/wiki/Elizabeth_Holmes",
+      "revisions": "https://en.wikipedia.org/wiki/Special:History/Elizabeth_Holmes",
+      "edit": "https://en.wikipedia.org/wiki/Elizabeth_Holmes?action=edit",
+      "talk": "https://en.wikipedia.org/wiki/Talk:Elizabeth_Holmes"
+     }
+    },
+    "normalizedtitle": "Elizabeth Holmes"
+   },
+   {
+    "views": 268900,
+    "rank": 6,
+    "type": "standard",
+    "title": "You_Can_See_Everything",
+    "displaytitle": "<i>You Can See Everything</i>",
+    "namespace": {
+     "id": 0,
+     "text": ""
+    },
+    "wikibase_item": "Q141336617",
+    "titles": {
+     "canonical": "You_Can_See_Everything",
+     "normalized": "You Can See Everything",
+     "display": "<i>You Can See Everything</i>"
+    },
+    "pageid": 84163385,
+    "lang": "en",
+    "dir": "ltr",
+    "revision": "1381279577",
+    "tid": "2778b4f7-cd22-11f1-a5bc-b68de3ce676f",
+    "timestamp": "2026-10-21T07:36:40Z",
+    "description": "2026 documentary film",
+    "description_source": "local",
+    "content_urls": {
+     "desktop": {
+      "page": "https://en.wikipedia.org/wiki/You_Can_See_Everything",
+      "revisions": "https://en.wikipedia.org/wiki/You_Can_See_Everything?action=history",
+      "edit": "https://en.wikipedia.org/wiki/You_Can_See_Everything?action=edit",
+      "talk": "https://en.wikipedia.org/wiki/Talk:You_Can_See_Everything"
+     },
+     "mobile": {
+      "page": "https://en.wikipedia.org/wiki/You_Can_See_Everything",
+      "revisions": "https://en.wikipedia.org/wiki/Special:History/You_Can_See_Everything",
+      "edit": "https://en.wikipedia.org/wiki/You_Can_See_Everything?action=edit",
+      "talk": "https://en.wikipedia.org/wiki/Talk:You_Can_See_Everything"
+     }
+    },
+    "normalizedtitle": "You Can See Everything"
+   },
+   {
+    "views": 220295,
+    "rank": 7,
+    "type": "standard",
+    "title": "Helen_Haines",
+    "displaytitle": "<span lang=\"en\" dir=\"ltr\"><span class=\"mw-page-title-main\">Helen Haines</span></span>",
+    "namespace": {
+     "id": 0,
+     "text": ""
+    },
+    "wikibase_item": "Q41662205",
+    "titles": {
+     "canonical": "Helen_Haines",
+     "normalized": "Helen Haines",
+     "display": "<span lang=\"en\" dir=\"ltr\"><span class=\"mw-page-title-main\">Helen Haines</span></span>"
+    },
+    "pageid": 60823557,
+    "lang": "en",
+    "dir": "ltr",
+    "revision": "1381282561",
+    "tid": "d7e9b6c1-cd28-11f1-8771-bd09df1710f7",
+    "timestamp": "2026-10-21T08:24:33Z",
+    "description": "Australian politician (born 1961)",
+    "description_source": "local",
+    "content_urls": {
+     "desktop": {
+      "page": "https://en.wikipedia.org/wiki/Helen_Haines",
+      "revisions": "https://en.wikipedia.org/wiki/Helen_Haines?action=history",
+      "edit": "https://en.wikipedia.org/wiki/Helen_Haines?action=edit",
+      "talk": "https://en.wikipedia.org/wiki/Talk:Helen_Haines"
+     },
+     "mobile": {
+      "page": "https://en.wikipedia.org/wiki/Helen_Haines",
+      "revisions": "https://en.wikipedia.org/wiki/Special:History/Helen_Haines",
+      "edit": "https://en.wikipedia.org/wiki/Helen_Haines?action=edit",
+      "talk": "https://en.wikipedia.org/wiki/Talk:Helen_Haines"
+     }
+    },
+    "normalizedtitle": "Helen Haines"
+   },
+   {
+    "views": 191702,
+    "rank": 8,
+    "type": "standard",
+    "title": "Kim_Jong_Un",
+    "displaytitle": "<span lang=\"en\" dir=\"ltr\"><span class=\"mw-page-title-main\">Kim Jong Un</span></span>",
+    "namespace": {
+     "id": 0,
+     "text": ""
+    },
+    "wikibase_item": "Q56226",
+    "titles": {
+     "canonical": "Kim_Jong_Un",
+     "normalized": "Kim Jong Un",
+     "display": "<span lang=\"en\" dir=\"ltr\"><span class=\"mw-page-title-main\">Kim Jong Un</span></span>"
+    },
+    "pageid": 5962511,
+    "lang": "en",
+    "dir": "ltr",
+    "revision": "1381257972",
+    "tid": "28e0b756-ccf7-11f1-8e2c-f6a41d40a765",
+    "timestamp": "2026-10-21T02:28:54Z",
+    "description": "Supreme Leader of North Korea since 2011",
+    "description_source": "local",
+    "content_urls": {
+     "desktop": {
+      "page": "https://en.wikipedia.org/wiki/Kim_Jong_Un",
+      "revisions": "https://en.wikipedia.org/wiki/Kim_Jong_Un?action=history",
+      "edit": "https://en.wikipedia.org/wiki/Kim_Jong_Un?action=edit",
+      "talk": "https://en.wikipedia.org/wiki/Talk:Kim_Jong_Un"
+     },
+     "mobile": {
+      "page": "https://en.wikipedia.org/wiki/Kim_Jong_Un",
+      "revisions": "https://en.wikipedia.org/wiki/Special:History/Kim_Jong_Un",
+      "edit": "https://en.wikipedia.org/wiki/Kim_Jong_Un?action=edit",
+      "talk": "https://en.wikipedia.org/wiki/Talk:Kim_Jong_Un"
+     }
+    },
+    "normalizedtitle": "Kim Jong Un"
+   },
+   {
+    "views": 153073,
+    "rank": 9,
+    "type": "standard",
+    "title": "Street_Fighter_(2026_film)",
+    "displaytitle": "<i>Street Fighter</i> (2026 film)",
+    "namespace": {
+     "id": 0,
+     "text": ""
+    },
+    "wikibase_item": "Q130345436",
+    "titles": {
+     "canonical": "Street_Fighter_(2026_film)",
+     "normalized": "Street Fighter (2026 film)",
+     "display": "<i>Street Fighter</i> (2026 film)"
+    },
+    "pageid": 73661481,
+    "lang": "en",
+    "dir": "ltr",
+    "revision": "1381281285",
+    "tid": "f9956f6f-cd25-11f1-9c5a-017b42a62ceb",
+    "timestamp": "2026-10-21T08:04:01Z",
+    "description": "2026 film by Kitao Sakurai",
+    "description_source": "local",
+    "content_urls": {
+     "desktop": {
+      "page": "https://en.wikipedia.org/wiki/Street_Fighter_(2026_film)",
+      "revisions": "https://en.wikipedia.org/wiki/Street_Fighter_(2026_film)?action=history",
+      "edit": "https://en.wikipedia.org/wiki/Street_Fighter_(2026_film)?action=edit",
+      "talk": "https://en.wikipedia.org/wiki/Talk:Street_Fighter_(2026_film)"
+     },
+     "mobile": {
+      "page": "https://en.wikipedia.org/wiki/Street_Fighter_(2026_film)",
+      "revisions": "https://en.wikipedia.org/wiki/Special:History/Street_Fighter_(2026_film)",
+      "edit": "https://en.wikipedia.org/wiki/Street_Fighter_(2026_film)?action=edit",
+      "talk": "https://en.wikipedia.org/wiki/Talk:Street_Fighter_(2026_film)"
+     }
+    },
+    "normalizedtitle": "Street Fighter (2026 film)"
+   }
+  ]
+ }
+}

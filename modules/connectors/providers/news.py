@@ -48,9 +48,24 @@ FEED_URLS: dict[str, str] = {
     "tuoitre_news": "https://tuoitre.vn/home.rss",
     "thanhnien_news": "https://thanhnien.vn/rss/home.rss",
     "dantri_news": "https://dantri.com.vn/rss/home.rss",
+    # Built-in world-data feeds. reliefweb_updates and gvp_volcano_weekly were dropped: their hosts answer
+    # server clients with a bot challenge (HTTP 202 empty / 403), so no usable feed is reachable.
+    "aljazeera_world": "https://www.aljazeera.com/xml/rss/all.xml",
+    "npr_news": "https://feeds.npr.org/1001/rss.xml",
+    "fed_press": "https://www.federalreserve.gov/feeds/press_all.xml",
+    "gdacs_rss": "https://www.gdacs.org/xml/rss.xml",
+    "lobsters": "https://lobste.rs/rss",
+    "us_travel_advisories": "https://travel.state.gov/_res/rss/TAsTWs.xml",
+    "noaa_tsunami": "https://www.tsunami.gov/events/xml/PHEBAtom.xml",
+    "jma_eqvol": "https://www.data.jma.go.jp/developer/xml/feed/eqvol.xml",
 }
-PUBLISHERS: dict[str, str] = {"bbc_world": "BBC News", "vnexpress_business": "VnExpress", "tuoitre_news": "Tuổi Trẻ",
-                              "thanhnien_news": "Báo Thanh Niên", "dantri_news": "Dân trí"}
+PUBLISHERS: dict[str, str] = {
+    "bbc_world": "BBC News", "vnexpress_business": "VnExpress", "tuoitre_news": "Tuổi Trẻ",
+    "thanhnien_news": "Báo Thanh Niên", "dantri_news": "Dân trí",
+    "aljazeera_world": "Al Jazeera", "npr_news": "NPR", "fed_press": "Federal Reserve Board",
+    "gdacs_rss": "GDACS", "lobsters": "Lobsters", "us_travel_advisories": "U.S. Department of State",
+    "noaa_tsunami": "NOAA Tsunami Warning Centers", "jma_eqvol": "Japan Meteorological Agency",
+}
 
 # Google News RSS search: unofficial endpoint, no API contract. The URL is built here from validated scope only.
 GOOGLE_NEWS_URL = "https://news.google.com/rss/search"

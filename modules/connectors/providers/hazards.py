@@ -12,7 +12,9 @@ from modules.connectors.providers.macro import (
     PureAdapter,
     build_record,
     content_version,
+    decimal_text,
     finite_decimal,
+    naive_utc_instant,
     provider_instant,
 )
 from modules.ingestion.schemas import IngestionRecord
@@ -145,4 +147,52 @@ def map_nasa_eonet(payload: object, collected_at: datetime) -> list[IngestionRec
     return records
 
 
-HAZARD_ADAPTERS: dict[str, PureAdapter] = {"nasa_eonet": PureAdapter(nasa_eonet_request, map_nasa_eonet)}
+NOAA_KP_URL = "https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json"
+_KP_MAX_ROWS = 24  # newest 24 three-hour bins = the last three days
+
+
+def noaa_kp_request() -> ProviderRequest:
+    """Return the fixed keyless NOAA SWPC planetary K-index request."""
+    return ProviderRequest("GET", NOAA_KP_URL)
+
+
+def map_noaa_kp(payload: object, collected_at: datetime) -> list[IngestionRecord]:
+    """Map the newest ``_KP_MAX_ROWS`` three-hour planetary Kp bins to one measurement each.
+
+    ``time_tag`` is the bin start in UTC (sent without a zone). Kp is a 0-9 index; anything else, a
+    non-list body or a malformed row raises ``ProviderPayloadError`` instead of yielding a partial series.
+    """
+    if not isinstance(payload, list) or not payload or not all(isinstance(r, dict) for r in payload):
+        raise ProviderPayloadError("noaa_kp_response_invalid")
+    rows = []
+    for row in payload:
+        observed = naive_utc_instant(row.get("time_tag"), collected_at)
+        try:
+            kp = finite_decimal(row.get("Kp"))
+        except ValueError as exc:
+            raise ProviderPayloadError("noaa_kp_value_invalid") from exc
+        if not 0 <= kp <= 9:
+            raise ProviderPayloadError("noaa_kp_value_invalid")
+        rows.append((observed, kp, row))
+    rows.sort(key=lambda item: item[0])
+    records = []
+    for observed, kp, row in rows[-_KP_MAX_ROWS:]:
+        tag, text = observed.isoformat(), decimal_text(kp)
+        running, stations = row.get("a_running"), row.get("station_count")
+        records.append(build_record(
+            provider="noaa_kp", identity=f"noaa_kp:{tag}", content=f"Planetary Kp index {tag}: {text}",
+            title="NOAA planetary Kp index", observed_at=observed, collected_at=collected_at,
+            version=content_version("noaa_kp", tag, text), metric="kp_index", value=kp, unit="kp",
+            quality="provider_reported",
+            provider_fields={
+                "time_tag": tag, "a_running": running if type(running) is int else None,
+                "station_count": stations if type(stations) is int else None,
+            },
+        ))
+    return records
+
+
+HAZARD_ADAPTERS: dict[str, PureAdapter] = {
+    "nasa_eonet": PureAdapter(nasa_eonet_request, map_nasa_eonet),
+    "noaa_kp": PureAdapter(noaa_kp_request, map_noaa_kp),
+}

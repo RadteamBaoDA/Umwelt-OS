@@ -21,6 +21,7 @@ from modules.connectors.providers.crypto import CRYPTO_ADAPTERS
 from modules.connectors.providers.disasters import DISASTER_ADAPTERS
 from modules.connectors.providers.feed_catalog import _retry_deadline
 from modules.connectors.providers.hazards import HAZARD_ADAPTERS
+from modules.connectors.providers.json_feed import json_feed_adapters
 from modules.connectors.providers.macro import (
     MACRO_ADAPTERS,
     ProviderPayloadError,
@@ -28,6 +29,7 @@ from modules.connectors.providers.macro import (
     decode_json,
 )
 from modules.connectors.providers.security import SECURITY_ADAPTERS
+from modules.connectors.providers.space import SPACE_ADAPTERS
 from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
 from modules.ingestion.schemas import IngestionRecord
 from modules.sources.schemas import ConnectorSource, SourceFence
@@ -377,7 +379,7 @@ async def collect_world_data(
     return ProviderCollectionPage(records=tuple(records), coverage="returned_snapshot", credential_operation_id=operation_id)
 
 
-PURE_ADAPTERS: dict[str, PureAdapter] = {**MACRO_ADAPTERS, **CRYPTO_ADAPTERS, **DISASTER_ADAPTERS, **HAZARD_ADAPTERS, **SECURITY_ADAPTERS}
+PURE_ADAPTERS: dict[str, PureAdapter] = {**MACRO_ADAPTERS, **CRYPTO_ADAPTERS, **DISASTER_ADAPTERS, **HAZARD_ADAPTERS, **SECURITY_ADAPTERS, **SPACE_ADAPTERS, **json_feed_adapters()}
 
 
 def map_pure_provider_body(provider: str, body: bytes, collected_at: datetime) -> list[IngestionRecord]:
