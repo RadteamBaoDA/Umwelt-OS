@@ -217,7 +217,7 @@ async def _dependency_fingerprint(session: AsyncSession, ctx: dict[str, object],
     return public.digest([str(graph_state), owner_state, settings.graph_enabled, settings.graph_host, settings.graph_port,
         settings.graph_database, settings.graph_embedding_dimensions,
         config.configuration_revision, config.gateway_identity,
-        {alias: value.model_dump(mode="json") for alias, value in config.aliases.items()},
+        config.defaults.model_dump(mode="json"),
         config.privacy.model_dump(mode="json"), config.endpoint_destination_id])
 
 
@@ -590,11 +590,11 @@ async def _context(factory: async_sessionmaker[AsyncSession], adm: _Admission, s
                                       item.document_version_id, item.chunk_id) for item in live_support)
     settings = cast(Settings, ctx["settings"])
     redis = cast(Redis, ctx["redis"])
-    # ponytail: the graph pipeline shares one gateway, so every alias resolves through the reasoning-large provider;
-    # split per-alias gateways if graph aliases ever need different providers.
-    config = settings_public.derive_for_alias(
-        await settings_public.get_ai_execution_config(session, settings, redis, scope=adm.scope), "reasoning-large")
-    embedding = config.aliases.get("embedding")
+    # ponytail: the graph pipeline shares one gateway, so every role resolves through the background provider;
+    # split per-role gateways if graph roles ever need different providers.
+    config = settings_public.derive_for_role(
+        await settings_public.get_ai_execution_config(session, settings, redis, scope=adm.scope), "background")
+    embedding = config.defaults.resolve("embedding")
     if not cleanup:
         # Slot dimensions (from the embeddings probe) win; the env var is a legacy fallback.
         dims = embedding.dimensions or settings.graph_embedding_dimensions if embedding else None
@@ -611,7 +611,7 @@ async def _context(factory: async_sessionmaker[AsyncSession], adm: _Admission, s
             await _commit(identity_session, adm)
         mapping.embedding_identity = identity
     snapshot = public.digest([config.configuration_revision, config.gateway_identity,
-                              {alias: value.model_dump(mode="json") for alias, value in config.aliases.items()},
+                              config.defaults.model_dump(mode="json"),
                               config.privacy.model_dump(mode="json"), config.endpoint_destination_id])
     # Policy and gateway are bound to the admitted job identity and the config revision read above.
     bound: dict[str, Any] = {
@@ -653,10 +653,10 @@ async def _context(factory: async_sessionmaker[AsyncSession], adm: _Admission, s
         await validate_partition("upsert", str(mapping.episode_id))
         async with factory() as check:
             await _admit(check, adm)
-            current = settings_public.derive_for_alias(
-                await settings_public.get_ai_execution_config(check, settings, redis, scope=adm.scope), "reasoning-large")
+            current = settings_public.derive_for_role(
+                await settings_public.get_ai_execution_config(check, settings, redis, scope=adm.scope), "background")
         fingerprint = public.digest([current.configuration_revision, current.gateway_identity,
-                                     {alias: value.model_dump(mode="json") for alias, value in current.aliases.items()},
+                                     current.defaults.model_dump(mode="json"),
                                      current.privacy.model_dump(mode="json"), current.endpoint_destination_id])
         if fingerprint != snapshot:
             raise PrivacyPolicyDenied("Graph policy changed before egress")
@@ -899,25 +899,25 @@ async def _context(factory: async_sessionmaker[AsyncSession], adm: _Admission, s
         raise GraphOperationError("graph_rebuild_absence_proof_missing")
 
     @overload
-    def model_policy(alias: str) -> GraphModelPolicy: ...
+    def model_policy(role: str) -> GraphModelPolicy: ...
 
     @overload
-    def model_policy(alias: str, *, optional: Literal[True]) -> GraphModelPolicy | None: ...
+    def model_policy(role: str, *, optional: Literal[True]) -> GraphModelPolicy | None: ...
 
-    def model_policy(alias: str, *, optional: bool = False) -> GraphModelPolicy | None:
-        """Resolve owner-configured aliases with current privacy policy; absent required aliases block egress."""
-        selected = config.aliases.get(alias)
+    def model_policy(role: str, *, optional: bool = False) -> GraphModelPolicy | None:
+        """Resolve owner-configured roles with current privacy policy; absent required roles block egress."""
+        selected = config.defaults.resolve(role)
         if selected is None:
             if optional:
                 return None
             if cleanup:
                 # Empty ModelMapping is the gateway's actual disabled model
                 # contract; authorize rejects inference for this cleanup scope.
-                dimensions = mapping.embedding_identity.get("dimensions") if alias == "embedding" else None
-                return GraphModelPolicy(alias, ModelMapping(), RequestPolicy(**bound), dimensions=dimensions)
-            raise GraphOperationError("graph_model_alias_unconfigured")
-        dimensions = (mapping.embedding_identity.get("dimensions") or selected.dimensions or settings.graph_embedding_dimensions) if alias == "embedding" else None
-        return GraphModelPolicy(alias, selected, policy, dimensions=dimensions)
+                dimensions = mapping.embedding_identity.get("dimensions") if role == "embedding" else None
+                return GraphModelPolicy(role, ModelMapping(), RequestPolicy(**bound), dimensions=dimensions)
+            raise GraphOperationError("graph_model_role_unconfigured")
+        dimensions = (mapping.embedding_identity.get("dimensions") or selected.dimensions or settings.graph_embedding_dimensions) if role == "embedding" else None
+        return GraphModelPolicy(role, selected, policy, dimensions=dimensions)
 
     graph_episode_ids = tuple(str(row.episode_id) for row in rows
                               if row.external_state != "absent" or row.id == mapping.id)
@@ -928,7 +928,7 @@ async def _context(factory: async_sessionmaker[AsyncSession], adm: _Admission, s
         source_generation=mapping.source_generation, operation_id=operation.id, lease_token=operation.receipt_token,
         evidence=evidence, fence=fence, authorize=authorize, canonicalize=canonicalize,
         validate_partition=validate_partition, record_write_intent=record,
-        reasoning=model_policy("reasoning-large"), small_reasoning=model_policy("reasoning-small"),
+        reasoning=model_policy("background"), small_reasoning=model_policy("background"),
         embedding=model_policy("embedding"), reranking=model_policy("reranker", optional=True),
         authorize_node_recovery=node_authorization, authorize_fact_recovery=fact_authorization,
         canonical_bindings=bindings, mapping_revision=operation.desired_revision,
@@ -1066,7 +1066,7 @@ async def _fresh_fact_action(factory: async_sessionmaker[AsyncSession], adm: _Ad
         raise GraphOperationError("graph_embedding_identity_changed_requires_rebuild")
     settings = cast(Settings, ctx["settings"])
     redis = cast(Redis, ctx["redis"])
-    config = settings_public.derive_for_alias(
+    config = settings_public.derive_for_role(
         await settings_public.get_ai_execution_config(session, settings, redis, scope=adm.scope), "embedding")
     async def before_send() -> None:
         """Fence a fresh surviving-fact embedding against policy/model drift and deleted canonical evidence."""
@@ -1083,7 +1083,7 @@ async def _fresh_fact_action(factory: async_sessionmaker[AsyncSession], adm: _Ad
         if (current_source is None or current_source.status != "active" or current_source.generation != mapping.source_generation
                 or current_relation is None or current_relation.digest != relation.digest
                 or current_config.configuration_revision != config.configuration_revision
-                or current_config.aliases.get("embedding") != model.mapping):
+                or current_config.defaults.resolve("embedding") != model.mapping):
             raise PrivacyPolicyDenied("Current surviving fact support or model policy changed")
 
     gateway = ModelGateway(redis, config.gateway_base_url, config.gateway_api_key,
@@ -1092,7 +1092,7 @@ async def _fresh_fact_action(factory: async_sessionmaker[AsyncSession], adm: _Ad
         configuration_revision=config.configuration_revision, before_send=before_send,
         approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers)
 
-    raw = await gateway.embed(model.alias, model.mapping, model.policy, [value], before_send=before_send)
+    raw = await gateway.embed(model.role, model.mapping, model.policy, [value], before_send=before_send)
     data = raw.get("data") if isinstance(raw, dict) else None
     vector = data[0].get("embedding") if isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict) and data[0].get("index") == 0 else None
     if (not isinstance(vector, list) or len(vector) != dimensions or any(isinstance(item, bool) or

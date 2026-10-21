@@ -8,7 +8,7 @@ const PUBLIC_EXACT = ['/opengraph-image', '/twitter-image'];
 export const SESSION_COOKIE = 'bbd_session';
 
 // Public entry points: the home page decides setup vs sign-in itself, and invite/setup flows run unauthenticated.
-const PUBLIC_PREFIXES = ['/login', '/setup', '/invite', '/invitations', '/pick', '/_next', '/api', '/health'];
+const PUBLIC_PREFIXES = ['/login', '/setup', '/invite', '/invitations', '/pick', '/privacy', '/terms', '/refunds', '/account-deletion', '/_next', '/api', '/health'];
 
 /**
  * Decides whether a page request should be redirected to /login.
@@ -17,6 +17,7 @@ const PUBLIC_PREFIXES = ['/login', '/setup', '/invite', '/invitations', '/pick',
  * @param hasSession Whether the session cookie is present.
  */
 export function needsLoginRedirect(pathname: string, hasSession: boolean): boolean {
-  if (hasSession || pathname === '/' || PUBLIC_EXACT.includes(pathname)) return false;
+  const lastSegment = pathname.slice(pathname.lastIndexOf('/') + 1);
+  if (hasSession || pathname === '/' || PUBLIC_EXACT.includes(pathname) || lastSegment.includes('.')) return false;
   return !PUBLIC_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 }

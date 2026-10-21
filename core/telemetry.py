@@ -300,7 +300,7 @@ def usage_from_response(response: Any, *, model_identity: str | None, latency_ms
 
 # Cardinality bounds: at most MAX_SERIES label-sets per metric name per process; overflow folds
 # into a single {"overflow": "true"} series. Label values are truncated to 64 characters. Callers
-# pass route templates, ARQ function names, enumerated outcomes and model aliases only.
+# pass route templates, ARQ function names, enumerated outcomes and model roles only.
 MAX_SERIES = 200
 MAX_LABEL_LEN = 64
 BUCKETS_MS = (5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 15000, 60000)
@@ -385,7 +385,7 @@ def observe_ms(name: str, started: float, **labels: str) -> None:
     _isolated(lambda: registry.observe(name, (time.perf_counter() - started) * 1000, **labels))
 
 
-def record_model_call(capability: str, alias: str | None, started: float, ok: bool, response: Any = None,
+def record_model_call(capability: str, role: str | None, started: float, ok: bool, response: Any = None,
                       model_identity: str | None = None, first_token_ms: float | None = None) -> Usage | None:
     """Record model-call latency/outcome and token totals; unknown usage is counted, never zeroed."""
     result: list[Usage | None] = [None]
@@ -393,7 +393,7 @@ def record_model_call(capability: str, alias: str | None, started: float, ok: bo
     def work() -> None:
         """Update metrics for the call."""
         latency = (time.perf_counter() - started) * 1000
-        labels = {"capability": capability, "alias": alias or "unknown"}
+        labels = {"capability": capability, "role": role or "unknown"}
         registry.observe("model_call_ms", latency, **labels, outcome="ok" if ok else "error")
         registry.inc("model_calls_total", **labels, outcome="ok" if ok else "error")
         if first_token_ms is not None:

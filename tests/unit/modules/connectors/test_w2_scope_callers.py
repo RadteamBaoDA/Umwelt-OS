@@ -291,16 +291,18 @@ def _delete_harness(envelope: dict, *, delete=None, retained_denied: bool = Fals
         commit_retained_connector_effect=AsyncMock(),
         record_retained_credential_result_in_uow=AsyncMock(return_value="stored"),
     )
-    client = SimpleNamespace(delete=delete or AsyncMock())
+    client = SimpleNamespace(delete=delete or AsyncMock(), service_url="http://n8n")
     return session, prov, client, claimed
 
 
 async def test_delete_success_acknowledges_under_original_scope_and_fence() -> None:
     session, prov, client, claimed = _delete_harness(_envelope())
     with patch.object(worker, "read_access_fence", AsyncMock(return_value=FENCE)), \
-            patch.object(worker, "provisioning", prov):
+            patch.object(worker, "provisioning", prov), \
+            patch("modules.settings.public.resolve_n8n", AsyncMock(return_value=SimpleNamespace(service_url="http://n8n", api_key="key"))), \
+            patch.object(worker, "N8nCredentials", return_value=client):
         assert await worker._delete_credential(
-            session, client, SOURCE_ID, "collector", OPERATION_ID, multi_workspace_enabled=False,
+            session, SimpleNamespace(), SOURCE_ID, "collector", OPERATION_ID, multi_workspace_enabled=False,
         ) is True
     client.delete.assert_awaited_once_with("cred-1")
     for mock in (prov.claim_credential_operation, prov.lock_retained_connector_effect,
@@ -320,9 +322,11 @@ async def test_delete_rejection_is_known_and_timeout_is_unknown() -> None:
         failing = AsyncMock(side_effect=httpx.HTTPStatusError("x", request=response.request, response=response))
         session, prov, client, _claimed = _delete_harness(_envelope(), delete=failing)
         with patch.object(worker, "read_access_fence", AsyncMock(return_value=FENCE)), \
-                patch.object(worker, "provisioning", prov):
+                patch.object(worker, "provisioning", prov), \
+                patch("modules.settings.public.resolve_n8n", AsyncMock(return_value=SimpleNamespace(service_url="http://n8n", api_key="key"))), \
+                patch.object(worker, "N8nCredentials", return_value=client):
             assert await worker._delete_credential(
-                session, client, SOURCE_ID, "collector", OPERATION_ID, multi_workspace_enabled=False,
+                session, SimpleNamespace(), SOURCE_ID, "collector", OPERATION_ID, multi_workspace_enabled=False,
             ) is False
         args, kwargs = prov.fail_credential_operation.await_args
         assert args[4] == code and kwargs["unknown"] is unknown
@@ -332,9 +336,11 @@ async def test_delete_rejection_is_known_and_timeout_is_unknown() -> None:
 async def test_delete_after_access_loss_journals_the_transport_and_changes_nothing_else() -> None:
     session, prov, client, _claimed = _delete_harness(_envelope(), retained_denied=True)
     with patch.object(worker, "read_access_fence", AsyncMock(return_value=FENCE)), \
-            patch.object(worker, "provisioning", prov):
+            patch.object(worker, "provisioning", prov), \
+            patch("modules.settings.public.resolve_n8n", AsyncMock(return_value=SimpleNamespace(service_url="http://n8n", api_key="key"))), \
+            patch.object(worker, "N8nCredentials", return_value=client):
         assert await worker._delete_credential(
-            session, client, SOURCE_ID, "collector", OPERATION_ID, multi_workspace_enabled=False,
+            session, SimpleNamespace(), SOURCE_ID, "collector", OPERATION_ID, multi_workspace_enabled=False,
         ) is False
     journal = prov.record_retained_credential_result_in_uow
     assert journal.await_args.kwargs["outcome"] == "known_success"
@@ -350,7 +356,7 @@ async def test_delete_never_claims_or_sends_without_the_original_admission(fence
     read = AsyncMock(return_value=fence) if fence else AsyncMock(side_effect=HTTPException(status_code=404))
     with patch.object(worker, "read_access_fence", read), patch.object(worker, "provisioning", prov):
         assert await worker._delete_credential(
-            session, client, SOURCE_ID, "collector", OPERATION_ID, multi_workspace_enabled=False,
+            session, SimpleNamespace(), SOURCE_ID, "collector", OPERATION_ID, multi_workspace_enabled=False,
         ) is False
     prov.claim_credential_operation.assert_not_awaited()
     client.delete.assert_not_awaited()

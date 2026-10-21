@@ -681,7 +681,7 @@ async def activate_source(
         raise HTTPException(status_code=409, detail="Source changed; save its current configuration before enabling")
     backend = _choose_backend(payload.execution_backend, row, source)
     if backend == "native":
-        return await _activate_native(session, request, scope, source, payload, access_fence=access_fence)
+        return await activate_native(session, request, scope, source, payload, access_fence=access_fence)
     if backend != row.execution_backend and not _is_fresh(row):
         raise HTTPException(status_code=409, detail="Use backend-transition to change the backend")
     settings = request.app.state.settings
@@ -1109,11 +1109,16 @@ _NATIVE_ERRORS = {
 }
 
 
-async def _activate_native(
+async def activate_native(
     session: AsyncSession, request: Request, scope: WorkspaceContext, source: ConnectorSource,
     payload: ActivationRequest, *, access_fence: AccessFence,
 ) -> ActivationRead:
-    """Activate the native backend in one transaction; no n8n key, credential or workflow is involved."""
+    """Activate the native backend in one transaction; no n8n key, credential or workflow is involved.
+
+    Shared by the generic activate route and the built-in source toggle (``builtins.py``). The caller
+    supplies a source whose generation and the row's ``desired_revision`` must still match under the lock,
+    otherwise 409 "Original activation configuration changed".
+    """
     gate = request.app.state.settings.multi_workspace_enabled
     if payload.secret_action == "replace":
         raise HTTPException(status_code=422, detail="Native credentials are entered with the credential endpoint")

@@ -1,7 +1,8 @@
 'use client';
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
+import { RouteLoader } from '@/core/app-shell/route-loader';
 import { ThemeProvider, useTheme } from 'next-themes';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AppLocaleId, normalizeFormattingLocale } from '@/core/i18n';
@@ -11,6 +12,7 @@ import { messages } from '@/core/messages';
 import { OwnerPreferences, PreferenceValues } from '@/core/preferences';
 import { RealtimeProvider } from '@/core/realtime-provider';
 import { WorkspaceProvider } from '@/core/workspace-context';
+import { clearAccountBrowserStorage, subscribeToAccountErasure } from '@/core/account-erasure';
 
 /** Resolves a missing translated message from the English catalog using its namespace and key. */
 function englishMessageFallback(namespace: string | undefined, key: string): string {
@@ -31,7 +33,7 @@ type DisplayPreferenceContextValue = {
   authGeneration: number;
   confirmPreferences: (value: OwnerPreferences, generation: number) => void;
   setPreview: (value: PreferenceValues | null, generation: number) => void;
-  endAuthSession: () => void;
+  endAuthSession: (erase?: boolean) => void;
   isCurrentGeneration: (generation: number) => boolean;
 };
 
@@ -66,6 +68,7 @@ export function QueryProvider({ children }: { children: ReactNode }) {
 
 /** Owns application display preferences, including bootstrap values, confirmed owner values, temporary previews, and auth-generation resets. */
 function DisplayPreferencesProvider({ children }: { children: ReactNode }) {
+  const client = useQueryClient();
   const { setTheme } = useTheme();
   const themeSetterRef = useRef(setTheme);
   useLayoutEffect(() => { themeSetterRef.current = setTheme; });
@@ -114,9 +117,9 @@ function DisplayPreferencesProvider({ children }: { children: ReactNode }) {
     if (generationRef.current !== generation) return;
     setPreviewState(value ? { value, generation } : (current) => current?.generation === generation ? null : current);
   }, []);
-  /** Retains the current theme, locale, and time zone as bootstrap values, clears confirmed and preview state, and advances the auth generation. */
-  const endAuthSession = useCallback(() => {
-    const retained = confirmedRef.current
+  /** End auth and advance its generation; erasure resets preferences instead of retaining them. */
+  const endAuthSession = useCallback((erase = false) => {
+    const retained: PreferenceValues = erase ? { theme: 'system', locale: 'en-us', timezone: 'Asia/Ho_Chi_Minh' } : confirmedRef.current
       ? { theme: confirmedRef.current.theme, locale: confirmedRef.current.locale, timezone: confirmedRef.current.timezone }
       : bootstrapRef.current;
     themeSetterRef.current(retained.theme);
@@ -128,6 +131,23 @@ function DisplayPreferencesProvider({ children }: { children: ReactNode }) {
     generationRef.current += 1;
     setAuthGeneration(generationRef.current);
   }, []);
+
+  useEffect(() => {
+    let ended = false;
+    /** Abort private streams and drafts across tabs, then reload outside protected routes. */
+    const erased = () => {
+      if (ended) return;
+      ended = true;
+      window.dispatchEvent(new Event('bbd:auth-ending'));
+      void client.cancelQueries();
+      client.clear();
+      endAuthSession(true);
+      clearAccountBrowserStorage();
+      // Full navigation drops module-level state and requests not owned by React Query.
+      window.location.replace('/account-deletion');
+    };
+    return subscribeToAccountErasure(erased);
+  }, [client, endAuthSession]);
 
   return <DisplayPreferenceContext.Provider value={{
         locale: effective.locale,
@@ -145,6 +165,8 @@ function DisplayPreferencesProvider({ children }: { children: ReactNode }) {
       <ChatControllerProvider key={authGeneration}>
         <WorkspaceProvider><RealtimeProvider>{children}</RealtimeProvider></WorkspaceProvider>
       </ChatControllerProvider>
+      {/* Outside RealtimeProvider/auth-keyed providers: their loading branches replace children and would unmount the overlay mid-load. */}
+      <RouteLoader />
     </NextIntlClientProvider>
   </DisplayPreferenceContext.Provider>;
 }

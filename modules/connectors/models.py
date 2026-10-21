@@ -73,6 +73,8 @@ class ConnectorProvisioning(Base):
     transition_phase: Mapped[str] = mapped_column(String(24), nullable=False, server_default="idle")
     transition_operation_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     old_workflow_id: Mapped[str | None] = mapped_column(String(128))
+    # Never infer remote ID ownership from mutable workspace settings or backfill legacy origins.
+    n8n_service_url: Mapped[str | None] = mapped_column(String(2048))
     template_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     applied_template_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     # Bumped for any credential binding/secret/operation replacement; blocked schedules reopen on it.
@@ -105,6 +107,7 @@ class ConnectorManagedCredential(Base):
     )
     slot: Mapped[str] = mapped_column(String(64), primary_key=True)
     credential_id: Mapped[str | None] = mapped_column(String(128))
+    n8n_service_url: Mapped[str | None] = mapped_column(String(2048))
     operation_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     operation_revision: Mapped[int] = mapped_column(Integer, nullable=False)
     source_generation: Mapped[int] = mapped_column(Integer, nullable=False)

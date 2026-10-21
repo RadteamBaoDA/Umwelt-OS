@@ -173,7 +173,7 @@ async def _policy_fingerprint(
     reader = getattr(import_module("modules.settings.public"), "read_ai_policy_fingerprint", None)
     if reader is None or app_settings is None:
         return ""
-    return (await reader(session, app_settings, redis, workspace_id=workspace_id, alias="reasoning-small")) or "none"
+    return (await reader(session, app_settings, redis, workspace_id=workspace_id, role="background")) or "none"
 
 
 def _too_many(detail: str) -> HTTPException:

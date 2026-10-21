@@ -17,13 +17,13 @@ export function PolicyDocument({ name, documents, language, inventory }: {
     <div className="mx-auto flex max-w-3xl flex-col gap-6">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <Link href="/login" className="font-semibold">Umwelt-OS</Link>
-        <nav aria-label="Language" className="flex flex-wrap gap-1">
+        <nav aria-label={t.language} className="flex flex-wrap gap-1">
           <Button asChild variant="outline" className="min-h-11"><Link href={`/${name}?lang=en-us`} lang="en-US" aria-current={locale === 'en-us' ? 'page' : undefined}>English</Link></Button>
-          <Button asChild variant="outline" className="min-h-11"><Link href={`/${name}?lang=vi-vi`} lang="vi-VN" aria-current={locale === 'vi-vi' ? 'page' : undefined}>Ti?ng Vi?t</Link></Button>
+          <Button asChild variant="outline" className="min-h-11"><Link href={`/${name}?lang=vi-vi`} lang="vi-VN" aria-current={locale === 'vi-vi' ? 'page' : undefined}>Tiếng Việt</Link></Button>
         </nav>
       </header>
       <aside className="rounded-lg border border-border bg-secondary p-4 text-sm"><strong>{t.draft}</strong><p className="mt-1">{t.notice}</p></aside>
-      <nav aria-label={t.privacy} className="flex flex-wrap gap-1">
+      <nav aria-label={t.policies} className="flex flex-wrap gap-1">
         {(['privacy', 'terms', 'refunds'] as const).map((policy) => <Button asChild variant="link" key={policy} className="min-h-11"><Link href={`/${policy}?lang=${locale}`} aria-current={policy === name ? 'page' : undefined}>{t[policy]}</Link></Button>)}
         <Button asChild variant="link" className="min-h-11"><Link href="/login">{t.login}</Link></Button>
       </nav>

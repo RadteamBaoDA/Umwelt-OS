@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import os
 import tempfile
@@ -10,6 +9,9 @@ from typing import BinaryIO
 from uuid import UUID
 
 from fastapi import UploadFile
+
+from core.heavy_work import to_thread_joined
+from core.storage_admission import workspace_filesystem_lease
 
 
 def storage_path(root: Path, relative_path: str) -> Path:
@@ -42,41 +44,44 @@ async def save_upload(
     Pure filesystem I/O: the caller supplies the actual authorized workspace and releases
     SQL locks before streaming. Return relative URI, byte count and SHA-256; reject invalid
     identity/suffix, empty/oversized uploads, traversal and symlinks in the publication path.
-    Temporary bytes are removed on failure or cancellation; existing legacy URIs are untouched.
+    An OS destination lock and permanent deletion flag reject stale admitted uploads after account
+    erasure, even if their SQL lease was lost. Cancellation joins physical writer threads before
+    cleanup/unlock. Temporary bytes are removed on failure; existing legacy URIs are untouched.
     """
     if not isinstance(workspace_id, UUID) or not isinstance(document_id, UUID):
         raise ValueError("Valid workspace and document UUIDs are required")  # noqa: TRY004  # ValueError is the documented contract for invalid upload identity
     if type(max_bytes) is not int or max_bytes <= 0 or not suffix.startswith(".") or any(char in suffix for char in ("/", "\\", ":", "\x00")):
         raise ValueError("Invalid upload suffix or byte limit")
-    relative = Path("workspaces") / str(workspace_id) / "documents" / str(document_id) / f"{document_id}{suffix}"
-    destination = storage_path(root, relative.as_posix())
-    # Check the lexical path as well: resolve() alone would hide in-root symlink redirects.
-    lexical = root.resolve() / relative
-    if any(parent.is_symlink() for parent in (lexical, *lexical.parents) if parent.is_relative_to(root.resolve())):
-        raise ValueError("Upload path cannot contain symlinks")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary_name = tempfile.mkstemp(prefix=".upload-", dir=destination.parent)
-    size = 0
-    digest = hashlib.sha256()
-    try:
-        with os.fdopen(fd, "wb") as temporary:
-            while block := await upload.read(1024 * 1024):
-                size += len(block)
-                if size > max_bytes:
-                    raise ValueError("Upload exceeds the configured size limit")
-                await asyncio.to_thread(_write_block, temporary, digest, block)
-            await asyncio.to_thread(_sync, temporary)
-        if size == 0:
-            raise ValueError("Uploaded file is empty")
-        if storage_path(root, relative.as_posix()) != destination or any(
-            parent.is_symlink() for parent in (lexical, *lexical.parents) if parent.is_relative_to(root.resolve())
-        ):
-            raise ValueError("Upload path changed during publication")
-        os.replace(temporary_name, destination)
-        return relative.as_posix(), size, digest.hexdigest()
-    except BaseException:
-        Path(temporary_name).unlink(missing_ok=True)
-        raise
+    with workspace_filesystem_lease(root, workspace_id):
+        relative = Path("workspaces") / str(workspace_id) / "documents" / str(document_id) / f"{document_id}{suffix}"
+        destination = storage_path(root, relative.as_posix())
+        # Check the lexical path as well: resolve() alone would hide in-root symlink redirects.
+        lexical = root.resolve() / relative
+        if any((parent.is_symlink() or parent.is_junction()) for parent in (lexical, *lexical.parents) if parent.is_relative_to(root.resolve())):
+            raise ValueError("Upload path cannot contain symlinks")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary_name = tempfile.mkstemp(prefix=".upload-", dir=destination.parent)
+        size = 0
+        digest = hashlib.sha256()
+        try:
+            with os.fdopen(fd, "wb") as temporary:
+                while block := await upload.read(1024 * 1024):
+                    size += len(block)
+                    if size > max_bytes:
+                        raise ValueError("Upload exceeds the configured size limit")
+                    await to_thread_joined(_write_block, temporary, digest, block)
+                await to_thread_joined(_sync, temporary)
+            if size == 0:
+                raise ValueError("Uploaded file is empty")
+            if storage_path(root, relative.as_posix()) != destination or any(
+                (parent.is_symlink() or parent.is_junction()) for parent in (lexical, *lexical.parents) if parent.is_relative_to(root.resolve())
+            ):
+                raise ValueError("Upload path changed during publication")
+            os.replace(temporary_name, destination)
+            return relative.as_posix(), size, digest.hexdigest()
+        except BaseException:
+            Path(temporary_name).unlink(missing_ok=True)
+            raise
 
 
 def cleanup_orphaned_files(root: Path, referenced: set[str], grace_seconds: int) -> int:

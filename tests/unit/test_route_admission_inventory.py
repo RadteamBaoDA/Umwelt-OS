@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 from fastapi.routing import APIRoute
 
+from modules.connectors.builtins import router as builtins_router
 from modules.connectors.github.routes import router as github_router
 from modules.connectors.provisioning_routes import router as provisioning_router
 from modules.connectors.routes import operator_router as connectors_operator_router
@@ -48,7 +49,7 @@ OPERATOR_ROUTERS = (operations_router, observability_router)
 FLIPPED_ROUTERS = (
     tasks_router, goals_router, timeline_router, entities_router, relationships_router, temporal_router,
     observations_router, sources_router, ingestion_router, documents_router, connectors_router,
-    provisioning_router, github_router, onboarding_router,
+    provisioning_router, builtins_router, github_router, onboarding_router,
 )
 
 

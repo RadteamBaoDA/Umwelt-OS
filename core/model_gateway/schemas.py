@@ -5,10 +5,12 @@ from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
 
 Capability = Literal["chat", "streaming", "embeddings", "structured", "tools", "reranking"]
 ProviderKind = Literal["openai", "openrouter", "groq", "gemini", "anthropic", "ollama", "lmstudio", "custom"]
-ModelType = Literal["llm", "embedding", "reranker", "vision", "asr", "tts"]
+# "background" tags models for entity extraction, timeline, translation and graph work; vision/asr/tts are
+# legacy tags still accepted when reading stored provider rows.
+ModelType = Literal["llm", "embedding", "reranker", "decision", "background", "vision", "asr", "tts"]
+ModelRole = Literal["chat", "brief", "background", "embedding", "reranker", "vision"]
+MODEL_ROLES: tuple[ModelRole, ...] = ("chat", "brief", "background", "embedding", "reranker", "vision")
 WebSearchProvider = Literal["none", "tavily", "brave", "searxng"]
-# Alias slots that need a specific model type; every other alias takes an llm.
-ALIAS_MODEL_TYPE = {"embedding": "embedding", "reranker": "reranker", "vision": "vision"}
 LOCAL_PROVIDER_KINDS = frozenset({"ollama", "lmstudio"})
 MAX_PROVIDERS = 8
 DEFAULT_PROVIDER_ID = "default"
@@ -44,7 +46,33 @@ class ModelMapping(BaseModel):
     version: str | None = Field(default=None, max_length=200)
     destination: Literal["unknown", "remote"] = "unknown"
     provider_id: ProviderId | None = None  # None resolves to the "default" provider
-    dimensions: int | None = Field(default=None, ge=1, le=4096)  # embedding slot only; set from the embeddings probe
+    dimensions: int | None = Field(default=None, ge=1, le=4096)  # embedding role only; set from the embeddings probe
+
+
+class ModelDefaults(BaseModel):
+    """Default model mapping per role; ``None`` leaves the role unconfigured.
+
+    ``background`` falls back to ``brief`` then ``chat`` at resolution time when unset.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    chat: ModelMapping | None = None
+    brief: ModelMapping | None = None
+    background: ModelMapping | None = None
+    embedding: ModelMapping | None = None
+    reranker: ModelMapping | None = None
+    vision: ModelMapping | None = None
+
+    def resolve(self, role: str) -> ModelMapping | None:
+        """Mapping that serves ``role``; an unset ``background`` falls back to ``brief`` then ``chat``.
+
+        Unknown roles (e.g. the viz router label) resolve to ``None``.
+        """
+        if role not in MODEL_ROLES:
+            return None
+        mapping: ModelMapping | None = getattr(self, role)
+        if mapping is None and role == "background":
+            mapping = self.brief or self.chat
+        return mapping
 
 
 class PrivacySettings(BaseModel):
@@ -64,6 +92,8 @@ class ProviderModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     id: str = Field(min_length=1, max_length=200)
     type: ModelType = "llm"
+    # Chat (llm) models that also accept images may serve the `vision` role.
+    vision: bool = False
 
 
 class ProviderUpdate(BaseModel):
@@ -106,7 +136,7 @@ class ProviderConfig(BaseModel):
 
 
 class AISettingsUpdate(BaseModel):
-    """Validated update payload with expected revision, provider credentials/actions, aliases, privacy, and timeout bounds."""
+    """Validated update payload with expected revision, provider credentials/actions, role defaults, privacy, and timeout bounds."""
     model_config = ConfigDict(extra="forbid")
     # None keeps the stored providers; a list replaces them all.
     providers: list[ProviderUpdate] | None = None
@@ -114,9 +144,7 @@ class AISettingsUpdate(BaseModel):
     web_search_endpoint: AnyHttpUrl | None = None
     web_search_credential_action: Literal["unchanged", "replaced", "removed"] = "unchanged"
     web_search_api_key: str | None = Field(default=None, max_length=4096, repr=False)
-    chat_alias: Literal["reasoning-large", "reasoning-small", "fast"] = "reasoning-large"
-    brief_alias: Literal["reasoning-large", "reasoning-small", "fast"] = "reasoning-small"
-    aliases: dict[str, ModelMapping] = Field(default_factory=dict)
+    defaults: ModelDefaults = Field(default_factory=ModelDefaults)
     privacy: PrivacySettings = Field(default_factory=PrivacySettings)
     request_timeout_seconds: int = Field(default=20, ge=5, le=180)
     expected_revision: int = Field(ge=1)
@@ -139,6 +167,7 @@ class DraftProbeRequest(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     version: str | None = Field(default=None, max_length=200)
     capability: Capability
+    role: ModelRole | None = None
     provider_id: ProviderId | None = None
     kind: ProviderKind | None = None
 
@@ -170,10 +199,8 @@ class AIExecutionConfig(BaseModel):
     gateway_base_url: str | None
     gateway_api_key: str = Field(repr=False, exclude=True)
     gateway_credential_configured: bool = False
-    aliases: dict[str, ModelMapping]
+    defaults: ModelDefaults
     privacy: PrivacySettings
-    chat_alias: str
-    brief_alias: str
     request_timeout_seconds: int
     web_search_provider: str
     web_search_endpoint: str | None
@@ -188,7 +215,7 @@ class CapabilityResult(BaseModel):
     workspace_id: UUID
     actor_user_id: int = Field(gt=0)
     membership_revision: int = Field(gt=0)
-    alias: str
+    role: str
     model: str
     version: str | None = None
     gateway_identity: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -209,9 +236,7 @@ class AISettingsRead(BaseModel):
     web_search_endpoint: AnyHttpUrl | None = None
     web_search_destination_id: str | None = None
     web_search_credential_configured: bool
-    chat_alias: Literal["reasoning-large", "reasoning-small", "fast"]
-    brief_alias: Literal["reasoning-large", "reasoning-small", "fast"]
-    aliases: dict[str, ModelMapping]
+    defaults: ModelDefaults
     capabilities: list[CapabilityResult]
     privacy: PrivacySettings
     request_timeout_seconds: int
@@ -225,6 +250,6 @@ class ProbeRequest(BaseModel):
 
 class ModelSettingsRead(BaseModel):
     """Safe model configuration and capability response without returning credential material."""
-    aliases: dict[str, ModelMapping]
+    defaults: ModelDefaults
     capabilities: list[CapabilityResult]
     credential_configured: bool

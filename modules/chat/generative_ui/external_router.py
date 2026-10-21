@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import urlsplit
@@ -43,7 +44,12 @@ WINDOW_CHARS = 6000
 TYPESAFE_URL = "https://api.typesafe.ai/v1/systemone"
 TYPESAFE_TIMEOUT_SECONDS = 15.0
 MAX_RESPONSE_BYTES = 64 * 1024
-ROUTER_ALIAS = "viz-router"
+ROUTER_ROLE = "viz-router"
+DECISION_STATE_CHARS = 8000  # Clef models read ~2000 text tokens; keep the newest text inside that bound
+DECISION_QUESTION = "visualization"
+MAX_DECISION_MODELS = 200
+_MODEL_ID = re.compile(r"[A-Za-z0-9@][A-Za-z0-9._:/@+-]{0,199}")
+_INPUT_MODALITIES = frozenset({"text", "image", "audio", "video", "file"})
 _TOOL_NAME = "select_visualization"
 
 INSTRUCTIONS = (
@@ -137,7 +143,7 @@ def _is_openrouter(base_url: str | None) -> bool:
     return host == "openrouter.ai" or host.endswith(".openrouter.ai")
 
 
-def _error_from_gateway(exc: Exception) -> VisualizationRouterError:
+def error_from_gateway(exc: Exception) -> VisualizationRouterError:
     """Map a gateway failure onto a safe router error code."""
     if isinstance(exc, PrivacyPolicyDenied):
         return VisualizationRouterError("privacy_denied", retryable=False)
@@ -154,7 +160,7 @@ def _error_from_gateway(exc: Exception) -> VisualizationRouterError:
 async def classify_llm(
     gateway: ModelGateway, mapping: ModelMapping, policy: RequestPolicy, window: list[dict[str, str]], *,
     mode: str = "json_schema", base_url: str | None = None, probe: bool = False,
-    before_send: Callable[[], Awaitable[None]] | None = None, alias: str = ROUTER_ALIAS,
+    before_send: Callable[[], Awaitable[None]] | None = None, role: str = ROUTER_ROLE,
 ) -> str:
     """Adapter 1: classify through the configured model gateway with an enum-constrained answer.
 
@@ -173,22 +179,79 @@ async def classify_llm(
         if mode == "forced_tool":
             tool = {"type": "function", "function": {"name": _TOOL_NAME, "description": INSTRUCTIONS, "parameters": schema}}
             response = await gateway.tools(
-                alias, mapping, policy, messages, [tool], probe, max_tokens=64, before_send=before_send,
+                role, mapping, policy, messages, [tool], probe, max_tokens=64, before_send=before_send,
                 tool_choice={"type": "function", "function": {"name": _TOOL_NAME}}, extra_body=extra)
         elif mode == "json_schema":
             response = await gateway.structured(
-                alias, mapping, policy, messages, {"name": "visualization_route", "strict": True, "schema": schema},
+                role, mapping, policy, messages, {"name": "visualization_route", "strict": True, "schema": schema},
                 probe, max_tokens=64, temperature=0, before_send=before_send, extra_body=extra)
         else:
             raise VisualizationRouterError("invalid_mode", retryable=False)
     except (ModelGatewayError, ValueError) as exc:
-        raise _error_from_gateway(exc) from exc
+        raise error_from_gateway(exc) from exc
     try:
         message = response["choices"][0]["message"]
         raw = message["tool_calls"][0]["function"]["arguments"] if mode == "forced_tool" else message["content"]
         return _valid(json.loads(raw)["category"])
     except (KeyError, IndexError, TypeError, ValueError) as exc:
         raise VisualizationRouterError("invalid_category") from exc
+
+
+def decision_questions() -> dict[str, Any]:
+    """The single OpenRouter ``choice`` question: criteria keys are the 13 categories (values null), prompt is the LLM's."""
+    return {DECISION_QUESTION: {
+        "type": "choice", "instructions": INSTRUCTIONS + " Categories: " + json.dumps(CRITERIA),
+        "criteria": dict.fromkeys(CATEGORIES)}}
+
+
+async def classify_decisions(
+    gateway: ModelGateway, mapping: ModelMapping, policy: RequestPolicy, window: list[dict[str, str]], *,
+    probe: bool = False, before_send: Callable[[], Awaitable[None]] | None = None, role: str = ROUTER_ROLE,
+) -> str:
+    """Adapter 3: OpenRouter Decisions API (alpha) ``choice`` question over the bounded window as one text item.
+
+    State is the window as ``role: text`` lines cut to the newest ``DECISION_STATE_CHARS`` characters. The answer
+    must be a ``choice`` answer naming one of the 13 categories; anything else raises ``invalid_category`` (no guess,
+    no fallback). Transport, consent fences and key handling are the gateway's, same as ``classify_llm``.
+
+    Raises:
+        VisualizationRouterError: invalid answer, provider/timeout/auth failure or denial.
+    """
+    text = "\n".join(f"{m['role']}: {m['content']}" for m in window)[-DECISION_STATE_CHARS:]
+    try:
+        response = await gateway.decisions(role, mapping, policy, [text], decision_questions(), probe, before_send=before_send)
+    except (ModelGatewayError, ValueError) as exc:
+        raise error_from_gateway(exc) from exc
+    try:
+        answer = response["answers"][DECISION_QUESTION]
+        if answer["type"] != "choice":
+            raise VisualizationRouterError("invalid_category")
+        return _valid(answer["choice"])
+    except (KeyError, TypeError) as exc:
+        raise VisualizationRouterError("invalid_category") from exc
+
+
+def parse_decision_models(payload: Any) -> list[dict[str, Any]]:
+    """Validate and bound an OpenRouter ``/models`` listing into ``[{id, input_modalities}]``.
+
+    At most ``MAX_DECISION_MODELS`` entries; ids must match a conservative pattern, are unique, and modalities are
+    reduced to the known set. Malformed entries are skipped, never repaired.
+    """
+    data = payload.get("data") if isinstance(payload, dict) else None
+    models: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in data if isinstance(data, list) else []:
+        model_id = item.get("id") if isinstance(item, dict) else None
+        if not isinstance(model_id, str) or not _MODEL_ID.fullmatch(model_id) or model_id in seen:
+            continue
+        arch = item.get("architecture")
+        raw = arch.get("input_modalities") if isinstance(arch, dict) else None
+        modalities = sorted({m for m in raw if isinstance(m, str) and m in _INPUT_MODALITIES}) if isinstance(raw, list) else []
+        seen.add(model_id)
+        models.append({"id": model_id, "input_modalities": modalities})
+        if len(models) >= MAX_DECISION_MODELS:
+            break
+    return models
 
 
 async def classify_typesafe(

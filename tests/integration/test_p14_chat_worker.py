@@ -73,10 +73,10 @@ async def _wait_api_ready(client: AsyncClient, timeout: float = 90) -> None:
 
 
 async def configure_fake_model(
-    client: AsyncClient, *, allow_embeddings: bool = False, extra_aliases: dict[str, dict[str, object]] | None = None,
+    client: AsyncClient, *, allow_embeddings: bool = False, extra_defaults: dict[str, dict[str, object]] | None = None,
     extra_models: tuple[dict[str, str], ...] = (),
 ) -> None:
-    """Save the fake-model server as the `default` provider and map reasoning-large to `fake-chat`.
+    """Save the fake-model server as the `default` provider and map the chat and brief roles to `fake-chat`.
 
     Two PUTs because remote-privacy consent is bound to a provider destination that only exists once the provider
     is stored: the first PUT creates the provider (consent is dropped for a new destination), the second grants
@@ -85,9 +85,9 @@ async def configure_fake_model(
     """
     models = [{"id": "fake-chat", "type": "llm"}, *extra_models]
     common = {
-        "chat_alias": "reasoning-large", "brief_alias": "reasoning-large",
-        "aliases": {"reasoning-large": {"model": "fake-chat", "destination": "remote", "provider_id": "default"},
-                    **(extra_aliases or {})},
+        "defaults": {"chat": {"model": "fake-chat", "destination": "remote", "provider_id": "default"},
+                     "brief": {"model": "fake-chat", "destination": "remote", "provider_id": "default"},
+                     **(extra_defaults or {})},
         "request_timeout_seconds": 30,
     }
     current = (await client.get("/api/v1/settings/ai")).json()
@@ -114,7 +114,7 @@ async def chat_ready(ready_owner_client: AsyncClient) -> AsyncClient:
     """Point the AI settings at the fake model, grant reasoning, and probe streaming through the real routes."""
     client = ready_owner_client
     await configure_fake_model(client)
-    probe = await client.post("/api/v1/settings/models/reasoning-large/test", json={"capability": "streaming"})
+    probe = await client.post("/api/v1/settings/models/chat/test", json={"capability": "streaming"})
     assert probe.status_code == 200 and probe.json()["result"] == "supported", probe.text
     return client
 
@@ -287,17 +287,17 @@ async def test_chat_worker_sigterm_before_first_delta_returns_pending_then_compl
 
 
 @pytest.mark.asyncio
-async def test_reranker_alias_probe_and_chat_with_reranking(chat_ready: AsyncClient) -> None:
+async def test_reranker_role_probe_and_chat_with_reranking(chat_ready: AsyncClient) -> None:
     """Regression: /rerank replies used to fail SDK parsing (probe 500, reranking silently unavailable)."""
     client = chat_ready
     await configure_fake_model(
         client, allow_embeddings=True, extra_models=({"id": "fake-rerank", "type": "reranker"},),
-        extra_aliases={"reranker": {"model": "fake-rerank", "destination": "remote", "provider_id": "default"}},
+        extra_defaults={"reranker": {"model": "fake-rerank", "destination": "remote", "provider_id": "default"}},
     )
     probe = await client.post("/api/v1/settings/models/reranker/test", json={"capability": "reranking"})
     assert probe.status_code == 200 and probe.json()["result"] == "supported", probe.text
-    # Saving settings invalidates earlier capability proofs; re-prove streaming for the chat alias.
-    stream_probe = await client.post("/api/v1/settings/models/reasoning-large/test", json={"capability": "streaming"})
+    # Saving settings invalidates earlier capability proofs; re-prove streaming for the chat role.
+    stream_probe = await client.post("/api/v1/settings/models/chat/test", json={"capability": "streaming"})
     assert stream_probe.status_code == 200 and stream_probe.json()["result"] == "supported", stream_probe.text
 
     response_id = await _send(client, "hello [fake:tokens=5]")

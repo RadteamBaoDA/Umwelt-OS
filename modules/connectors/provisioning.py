@@ -35,6 +35,22 @@ from modules.sources.schemas import ConnectorSource, SourceFence
 _ALL_CREDENTIAL_SLOTS = ("collector", "manual_trigger", "provider")
 
 
+def _bind_n8n_service(row: ConnectorProvisioning | ConnectorManagedCredential, service_url: str, *, has_liability: bool) -> None:
+    """Bind a first dispatch to its endpoint under existing owner/Source/row locks.
+
+    Never reinterpret a legacy or differently hosted ID using current settings. A row
+    with no outstanding remote liability may start a new binding; caller commits this
+    field in the same transaction as the dispatch barrier before any provider request.
+    """
+    from modules.connectors.n8n import n8n_service_identity
+
+    endpoint = n8n_service_identity(service_url)
+    previous = row.n8n_service_url
+    if has_liability and (previous is None or n8n_service_identity(previous) != endpoint):
+        raise RuntimeError("n8n endpoint lineage requires operator reconciliation")
+    row.n8n_service_url = endpoint
+
+
 class RetainedEffectAdmissionDenied(HTTPException):
     """Identify definitive original admission denial at the retained Source boundary.
 
@@ -1993,13 +2009,13 @@ async def claim_credential_operation(
     source_id: UUID,
     slot: str,
     operation_id: UUID,
-    *, scope: Scope, multi_workspace_enabled: bool,
+    *, scope: Scope, multi_workspace_enabled: bool, service_url: str,
 ) -> dict[str, object] | None:
     """Durably claim a prepared credential operation before external dispatch.
 
     Rechecks source, activation/delete intent, generation, and revision; returns
     the dispatched envelope or None when absent/stale. Claiming commits the
-    dispatch barrier (and stale-intent cleanup when applicable), preventing blind
+    dispatch barrier and actual endpoint (and stale-intent cleanup when applicable), preventing blind
     re-dispatch after an uncertain provider response.
     """
     before = await capture_connector_observation(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
@@ -2061,6 +2077,7 @@ async def claim_credential_operation(
                 desired.error_code = "activation_intent_stale"
         await commit_connector_observation(session, before, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         return None
+    _bind_n8n_service(row, service_url, has_liability=bool(row.credential_id or envelope.get("target_id")))
     envelope["state"] = "dispatched"
     envelope["dispatch_started_at"] = datetime.now(UTC).isoformat()
     row.operation_envelope = envelope
@@ -2113,7 +2130,7 @@ async def drive_credential_operation(
     except CredentialEncryptionUnavailable:
         await session.rollback()
         return False
-    envelope = await claim_credential_operation(session, source_id, slot, operation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    envelope = await claim_credential_operation(session, source_id, slot, operation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled, service_url=client.service_url)
     if envelope is None:
         await session.rollback()
         return False
@@ -2454,13 +2471,13 @@ async def acknowledge_credential_delete(
 async def claim_workflow_step(
     session: AsyncSession, source_id: UUID,
     *, scope: Scope, multi_workspace_enabled: bool,
-    original_operation: dict[str, object], access_fence: AccessFence,
+    original_operation: dict[str, object], access_fence: AccessFence, service_url: str,
 ) -> dict[str, object] | None:
     """Claim current activation or exact retained prepared deactivation under original access.
 
     Returns the dispatched operation or None when there is no eligible step;
     None can still commit blocked-credential or stale-intent cleanup. A claim
-    commits its dispatch barrier before external n8n work, preventing automatic
+    commits its actual endpoint and dispatch barrier before external n8n work, preventing automatic
     blind replay when the provider outcome is uncertain.
     Supplied envelope is captured before entry; CAS includes original step/request/target.
     Deactivation remains usable after Source/config advancement without changing its lineage.
@@ -2519,6 +2536,7 @@ async def claim_workflow_step(
             row.activation_intent = None
         await commit_retained_connector_effect(session, before, source_id=source_id, original_operation=original_operation, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
         return None
+    _bind_n8n_service(row, service_url, has_liability=bool(row.workflow_id or row.old_workflow_id or step.get("target")))
     step["state"] = "dispatched"
     step["dispatch_started_at"] = datetime.now(UTC).isoformat()
     operation["step"] = step
@@ -2855,7 +2873,7 @@ async def drive_workflow_operation(
     for _ in range(4):
         operation = await claim_workflow_step(
             session, source_id, original_operation=original_operation, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, service_url=api.service_url,
         )
         if operation is None:
             await session.rollback()

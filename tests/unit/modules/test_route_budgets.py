@@ -8,8 +8,8 @@ from modules.translations.routes import router as translations
 
 CASES = [
     (dashboard, "/api/v1/briefs/generate"),
-    (gateway, "/api/v1/settings/models/{alias}/test"),
-    (gateway, "/api/v1/settings/models/{alias}/draft-test"),
+    (gateway, "/api/v1/settings/models/{role}/test"),
+    (gateway, "/api/v1/settings/models/draft-test"),
     (translations, "/api/v1/translations/batches"),
 ]
 

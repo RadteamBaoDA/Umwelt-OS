@@ -87,6 +87,22 @@ async def list_connector_status(
     return {row.id: ConnectorStatusRead(*row) for row in rows}
 
 
+async def list_provider_sources(
+    session: AsyncSession, providers: frozenset[str], *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[Source]:
+    """Non-archived owner-workspace Sources whose provider is in ``providers``, oldest first.
+
+    Read only, no locks. Bounded by one row per (provider, re-created source) in a single workspace;
+    callers pick the oldest per provider so a toggled preset keeps reusing its original Source.
+    """
+    await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    return list((await session.scalars(
+        select(Source).where(
+            Source.provider.in_(sorted(providers)), Source.status != "archived", *_source_scope(scope),
+        ).order_by(Source.created_at, Source.id).limit(500).execution_options(populate_existing=True)
+    )).all())
+
+
 def _require_source_owner(scope: Scope) -> None:
     """Reject member metadata access; detached scope construction still requires admission."""
     if not isinstance(scope, (WorkspaceContext, InternalJobScope)):

@@ -1,6 +1,5 @@
-from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any
 from uuid import UUID
 
 from redis.asyncio import Redis
@@ -21,11 +20,15 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
-from core.config import Settings
 from core.database import Base
 from core.model_gateway.cache import capability_key, validate_capability_scope
-from core.model_gateway.schemas import AIExecutionConfig, CapabilityResult, ModelMapping
-from core.workspaces.schemas import InternalJobScope, Scope, WorkspaceContext
+from core.model_gateway.schemas import (
+    MODEL_ROLES,
+    AIExecutionConfig,
+    CapabilityResult,
+    ModelMapping,
+)
+from core.workspaces.schemas import Scope
 
 
 class AISettingsRecord(Base):
@@ -51,7 +54,8 @@ class AISettingsRecord(Base):
 
     owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), primary_key=True)
     configuration_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
-    aliases: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    # {role: ModelMapping json} for chat, brief, background, embedding, reranker, vision (see r29_model_roles).
+    defaults: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     privacy: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     system_prompts: Mapped[dict[str, str]] = mapped_column(JSONB, nullable=False, server_default="{}")
     # {provider_id: {kind, label, base_url, key_ciphertext, local, models: [{id, type}]}}.
@@ -60,8 +64,6 @@ class AISettingsRecord(Base):
     n8n: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     # Opt-in visualization router; empty = internal router (see r24_viz_router_settings).
     viz_router: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
-    chat_alias: Mapped[str] = mapped_column(String(32), nullable=False, server_default="reasoning-large")
-    brief_alias: Mapped[str] = mapped_column(String(32), nullable=False, server_default="reasoning-small")
     web_search_provider: Mapped[str] = mapped_column(String(32), nullable=False, server_default="none")
     web_search_endpoint: Mapped[str | None] = mapped_column(Text)
     web_search_api_key_ciphertext: Mapped[str | None] = mapped_column(Text)
@@ -192,40 +194,6 @@ class TranslationSettingsRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
-ALIASES = ("reasoning-large", "reasoning-small", "fast", "embedding", "reranker", "vision", "local-private")
-_MAPPINGS = "bbd:settings:model-mappings"
-
-
-async def legacy_aliases(redis: Redis | None, settings: Settings, *, scope: Scope) -> dict[str, ModelMapping]:
-    """Return server defaults; overlay old Redis aliases only for already-proven bootstrap owner.
-
-    Caller first admits active owned-default scope with actual settings feature flag. Redis
-    singleton aliases never initialize a new workspace or grant remote-data consent.
-    """
-    if isinstance(scope, InternalJobScope):
-        actor = scope.actor_user_id
-    elif isinstance(scope, WorkspaceContext) and scope.role == "owner":
-        actor = scope.user_id
-    else:
-        raise ValueError("An admitted owner scope is required")
-    if actor != 1 and not settings.multi_workspace_enabled:
-        raise ValueError("Multi-workspace execution is disabled")
-    configured: dict[str, ModelMapping] = {}
-    if redis is not None and actor == 1:
-        try:
-            legacy = await cast("Awaitable[dict[Any, Any]]", redis.hgetall(_MAPPINGS))
-        except RedisError:
-            legacy = {}  # cache is non-authoritative; fall back to server defaults
-        for alias, value in legacy.items():
-            alias = alias.decode() if isinstance(alias, bytes) else alias
-            try:
-                if alias in ALIASES:
-                    configured[alias] = ModelMapping.model_validate_json(value)
-            except ValueError:
-                continue
-    return configured
-
-
 async def save_capability(redis: Redis, result: CapabilityResult, *, config: AIExecutionConfig, scope: Scope, multi_workspace_enabled: bool) -> None:
     """Cache only exact scoped configuration evidence after caller's locked publication fence.
 
@@ -238,26 +206,27 @@ async def save_capability(redis: Redis, result: CapabilityResult, *, config: AIE
             or result.gateway_identity != config.gateway_identity
             or result.configuration_revision != config.configuration_revision):
         raise ValueError("Capability evidence does not match execution identity")
-    mapping = config.aliases.get(result.alias)
+    mapping = config.defaults.resolve(result.role)
     if mapping is None or mapping.model != result.model or mapping.version != result.version:
         raise ValueError("Capability evidence does not match configured model")
     ttl = int((datetime.fromisoformat(result.expires_at) - datetime.now(UTC)).total_seconds())
     if ttl <= 0:
         return
-    key = capability_key(result.alias, result.model, result.version, result.capability, result.gateway_identity,
+    key = capability_key(result.role, result.model, result.version, result.capability, result.gateway_identity,
                          workspace_id=config.workspace_id, actor_user_id=config.actor_user_id)
     await redis.set(key, result.model_dump_json(), ex=min(ttl, 86400))
 
 
 async def list_capabilities(redis: Redis, *, config: AIExecutionConfig, scope: Scope, multi_workspace_enabled: bool) -> list[CapabilityResult]:
-    """Read at most7 aliases x6 capabilities by exact workspace/actor/config keys, never global SCAN."""
+    """Read at most 6 roles x 6 capabilities by exact workspace/actor/config keys, never global SCAN."""
     validate_capability_scope(config, scope, multi_workspace_enabled)
     results: list[CapabilityResult] = []
-    for alias, mapping in config.aliases.items():
-        if alias not in ALIASES:
+    for role in MODEL_ROLES:
+        mapping = config.defaults.resolve(role)
+        if mapping is None:
             continue
         for capability in ("chat", "streaming", "embeddings", "structured", "tools", "reranking"):
-            key = capability_key(alias, mapping.model, mapping.version, capability, config.gateway_identity,
+            key = capability_key(role, mapping.model, mapping.version, capability, config.gateway_identity,
                                  workspace_id=config.workspace_id, actor_user_id=config.actor_user_id)
             try:
                 value = CapabilityResult.model_validate_json(await redis.get(key))
@@ -272,13 +241,13 @@ async def list_capabilities(redis: Redis, *, config: AIExecutionConfig, scope: S
                     and value.membership_revision == config.membership_revision
                     and value.gateway_identity == config.gateway_identity
                     and value.configuration_revision == config.configuration_revision
-                    and value.alias == alias and value.capability == capability
+                    and value.role == role and value.capability == capability
                     and value.model == mapping.model and value.version == mapping.version):
                 results.append(value)
     return results
 
 
-def new_capability_result(alias: str, mapping: ModelMapping, capability: str, result: str, *, config: AIExecutionConfig, scope: Scope, multi_workspace_enabled: bool) -> CapabilityResult:
+def new_capability_result(role: str, mapping: ModelMapping, capability: str, result: str, *, config: AIExecutionConfig, scope: Scope, multi_workspace_enabled: bool) -> CapabilityResult:
     """Detach probe evidence for the exact workspace/actor/configuration with24h validity.
 
     Does not authorize storage: caller must reacquire matching identity/settings fence
@@ -287,6 +256,6 @@ def new_capability_result(alias: str, mapping: ModelMapping, capability: str, re
     validate_capability_scope(config, scope, multi_workspace_enabled)
     now = datetime.now(UTC)
     return CapabilityResult(workspace_id=config.workspace_id, actor_user_id=config.actor_user_id,
-        membership_revision=config.membership_revision, alias=alias, model=mapping.model, version=mapping.version,
+        membership_revision=config.membership_revision, role=role, model=mapping.model, version=mapping.version,
         gateway_identity=config.gateway_identity, configuration_revision=config.configuration_revision,
         capability=capability, result=result, checked_at=now.isoformat(), expires_at=(now + timedelta(hours=24)).isoformat())

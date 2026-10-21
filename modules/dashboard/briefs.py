@@ -695,9 +695,9 @@ async def generate_brief(
             return result
 
     config = await settings_public.get_ai_execution_config(session, settings, redis, scope=scope)
-    alias = config.brief_alias
-    config = settings_public.derive_for_alias(config, alias)
-    mapping = config.aliases.get(alias)
+    role = "brief"
+    config = settings_public.derive_for_role(config, role)
+    mapping = config.defaults.resolve(role)
     destination = config.endpoint_destination_id
     policy = _brief_policy(config)
     # Rollback, not commit: nothing was written, and a caller transaction is never committed by mistake.
@@ -707,15 +707,15 @@ async def generate_brief(
         """Deny when workspace access, AI settings, destination, mapping or consent changed since Phase A."""
         if await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled) != access_fence:
             raise BriefUnavailable("Workspace access changed before model egress")
-        now = settings_public.derive_for_alias(
-            await settings_public.get_ai_execution_config(session, settings, redis, scope=scope), alias)
-        now_mapping = now.aliases.get(alias)
+        now = settings_public.derive_for_role(
+            await settings_public.get_ai_execution_config(session, settings, redis, scope=scope), role)
+        now_mapping = now.defaults.resolve(role)
         if (now.configuration_revision != config.configuration_revision
                 or now.gateway_identity != config.gateway_identity
-                or now.endpoint_destination_id != destination or now.brief_alias != alias
+                or now.endpoint_destination_id != destination
                 or now_mapping != mapping):
             raise BriefUnavailable("Gateway configuration changed before model egress")
-        if not may_send(_brief_policy(now), alias, now_mapping, destination or "",
+        if not may_send(_brief_policy(now), role, now_mapping, destination or "",
                         bool(now.gateway_api_key), "chat"):
             raise PrivacyPolicyDenied("Brief egress denied by current settings")
 
@@ -749,7 +749,7 @@ async def generate_brief(
     )
     try:
         response = await gateway.chat(
-            alias, mapping, policy, _messages(day, facts, resolve_prompt(config.system_prompts, "brief")), max_tokens=500, temperature=0.2,
+            role, mapping, policy, _messages(day, facts, resolve_prompt(config.system_prompts, "brief")), max_tokens=500, temperature=0.2,
             before_send=send_fence, after_send=release_fence,
         )
         content = str(response["choices"][0]["message"]["content"]).strip()
@@ -792,7 +792,7 @@ async def generate_brief(
         row = DailyBrief(
             workspace_id=scope.workspace_id, owner_id=owner_id, brief_date=day, timezone=timezone,
             revision=(latest.revision + 1) if latest else 1, input_fingerprint=fingerprint,
-            content=content[:4000], model_alias=alias,
+            content=content[:4000], model_alias=role,
             evidence_capture_version=1, evidence_capture_status="captured", evidence_fact_count=len(facts),
             citations=[{"ref": n, **{k: facts[n - 1][k] for k in ("kind", "id", "title", "source_ids")}} for n in cited],
         )

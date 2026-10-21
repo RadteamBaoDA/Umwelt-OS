@@ -26,6 +26,12 @@ from uuid import UUID
 from core.config import Settings
 from core.model_gateway.client import ModelGateway, ModelGatewayError
 from core.model_gateway.schemas import ModelMapping, RequestPolicy
+from modules.knowledge.temporal.graph_fence import (
+    LOCK_PARTITION_FENCE,
+    PARTITION_FENCE_CONSTRAINT,
+    PARTITION_FENCE_SCHEMA,
+    require_partition_fence_schema,
+)
 
 logger = logging.getLogger(__name__)
 OPERATION_SECONDS = 120
@@ -566,9 +572,9 @@ GraphWriteState = Literal["intent", "succeeded", "unknown"]
 
 @dataclass(frozen=True)
 class GraphModelPolicy:
-    """Bind a gateway alias to one resolved model and current capability policy."""
+    """Bind a gateway role to one resolved model and current capability policy."""
 
-    alias: str
+    role: str
     mapping: ModelMapping
     policy: RequestPolicy
     dimensions: int | None = None
@@ -1529,6 +1535,9 @@ def _make_driver_type() -> type[Any]:
         ) -> list[tuple[list[dict[str, Any]], list[str]]]:
             """Run statements in ONE explicit tagged transaction and return (rows, keys) for each.
 
+            Scoped requests first lock and check the permanent partition erasure fence in
+            this same transaction. Even read routing uses WRITE access for this guard;
+            routing hints cannot bypass erasure. No payload runs after a tombstone.
             Never uses driver.execute_query/execute_read/execute_write because they retry.
             Row count above MAX_SUPPORT + 1 aborts and rolls back. A write that fails after the
             commit was sent, is cancelled or times out has an unknown outcome: the scope is
@@ -1545,10 +1554,19 @@ def _make_driver_type() -> type[Any]:
             try:
                 async with asyncio.timeout(QUERY_SECONDS):
                     async with self.client.session(
-                        database=self._database, default_access_mode=READ_ACCESS if read else WRITE_ACCESS,
+                        database=self._database, default_access_mode=READ_ACCESS if read and scope is None else WRITE_ACCESS,
                     ) as session:
                         tx = await session.begin_transaction(metadata=metadata, timeout=QUERY_SECONDS)
                         try:
+                            if scope is not None:
+                                guard = await tx.run(LOCK_PARTITION_FENCE, {"partition_id": scope.ownership.group_id})
+                                guarded = []
+                                async for record in guard:
+                                    guarded.append(record.data())
+                                    if len(guarded) > 1:
+                                        break
+                                if len(guarded) != 1 or guarded[0].get("erased") is not False:
+                                    raise GraphOperationError("graph_partition_erased")
                             outputs: list[tuple[list[dict[str, Any]], list[str]]] = []
                             for query, params in statements:
                                 result = await tx.run(query, params)
@@ -1686,7 +1704,7 @@ def _make_clients(context: OperationAuthorization, gateway: ModelGateway) -> tup
                         "schema": response_model.model_json_schema(),
                     }
                     raw = await gateway.structured(
-                        model.alias, model.mapping,
+                        model.role, model.mapping,
                         model.policy, payload, schema, max_tokens=token_limit,
                         temperature=0, before_send=before_send,
                     )
@@ -1694,7 +1712,7 @@ def _make_clients(context: OperationAuthorization, gateway: ModelGateway) -> tup
                     parsed = json.loads(content)
                 else:
                     raw = await gateway.chat(
-                        model.alias, model.mapping,
+                        model.role, model.mapping,
                         model.policy, payload, max_tokens=token_limit,
                         temperature=0, before_send=before_send,
                     )
@@ -1741,7 +1759,7 @@ def _make_clients(context: OperationAuthorization, gateway: ModelGateway) -> tup
                 await _authorize(context, "embedding")
 
             raw = await gateway.embed(
-                model.alias, model.mapping, model.policy, input_data_list, before_send=before_send,
+                model.role, model.mapping, model.policy, input_data_list, before_send=before_send,
             )
             data = raw.get("data") if isinstance(raw, dict) else None
             if not isinstance(data, list) or len(data) != len(input_data_list):
@@ -1773,7 +1791,7 @@ def _make_clients(context: OperationAuthorization, gateway: ModelGateway) -> tup
                 await _authorize(context, "embedding")
 
             raw = await gateway.rerank(
-                model.alias, model.mapping, model.policy, query, passages, before_send=before_send,
+                model.role, model.mapping, model.policy, query, passages, before_send=before_send,
             )
             rows = raw.get("results") if isinstance(raw, dict) else None
             if not isinstance(rows, list) or len(rows) > len(passages):
@@ -1824,7 +1842,7 @@ class TemporalGraph:
         self._lock = asyncio.Lock()
 
     async def initialize(self) -> GraphState:
-        """Adopt a usable client after owned construction, cleanup and index setup.
+        """Adopt a client after owned construction, indexes and erasure-schema verification.
 
         Startup budget bounds normal construction/index admission; timeout or
         cancellation still joins the noncancellable constructor thread and closes
@@ -1885,6 +1903,10 @@ class TemporalGraph:
                 async with asyncio.timeout_at(deadline):
                     assert self._driver is not None
                     await self._driver.build_indices_and_constraints(delete_existing=False)
+                    await self._driver.control_query(PARTITION_FENCE_CONSTRAINT, {}, read=False)
+                    require_partition_fence_schema(
+                        await self._driver.control_query(PARTITION_FENCE_SCHEMA, {}, read=True),
+                    )
                 self.state = GraphState.READY
             except asyncio.CancelledError:
                 self.state = GraphState.UNAVAILABLE

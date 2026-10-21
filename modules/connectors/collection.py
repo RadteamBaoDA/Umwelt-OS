@@ -37,6 +37,7 @@ from modules.connectors import public as connectors
 from modules.connectors.collection_schemas import CollectionAdmissionRead, CollectionRequestRef
 from modules.connectors.models import ConnectorCollectionRequest, ConnectorProvisioning
 from modules.connectors.provider_specs import get_provider_spec
+from modules.connectors.providers import news as _news
 from modules.connectors.providers import rest
 from modules.ingestion import public as ingestion
 from modules.ingestion.schemas import (
@@ -883,7 +884,8 @@ async def _run_openalex(run: Run) -> None:
 ADAPTERS.update({
     **dict.fromkeys(PURE_PROVIDERS, _run_pure),
     "coingecko": _run_coingecko,
-    "bbc_world": _run_feed, "vnexpress_business": _run_feed, "dantri_news": _run_feed, "thanhnien_news": _run_feed, "tuoitre_news": _run_feed, "google_news": _run_feed, "openalex": _run_openalex, "sec_edgar": _run_sec_edgar, "hn_top": _run_hn, "gdelt_economy": _run_gdelt,
+    **dict.fromkeys(_news.FEED_URLS, _run_feed),  # every fixed-URL feed preset shares one adapter
+    "google_news": _run_feed, "openalex": _run_openalex, "sec_edgar": _run_sec_edgar, "hn_top": _run_hn, "gdelt_economy": _run_gdelt,
 })
 
 

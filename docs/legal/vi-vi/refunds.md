@@ -1,15 +1,15 @@
-# Ch?nh s?ch ho?n ti?n
+# Chính sách hoàn tiền
 
-B?n nh?p ng?y 19 th?ng 10 n?m 2026. ??n v? v?n h?nh: **[LEGAL NAME]**. Li?n h?: **[CONTACT EMAIL]**. Khu v?c ph?p l?: **[JURISDICTION]**. Ho?n thi?n v? r? so?t tr??c khi cung c?p d?ch v? c? thu ph?.
+Bản nháp ngày 19 tháng 10 năm 2026. Đơn vị vận hành: **[LEGAL NAME]**. Liên hệ: **[CONTACT EMAIL]**. Khu vực pháp lý: **[JURISDICTION]**. Cần hoàn thiện và rà soát trước khi cung cấp dịch vụ có thu phí.
 
-## ?ng d?ng kh?ng qu?n l? thanh to?n
+## Ứng dụng không quản lý thanh toán
 
-Kho m? hi?n kh?ng tri?n khai checkout, g?i thu? bao, thu ti?n ho?c giao d?ch ho?n ti?n. Trang n?y kh?ng h?a ho?n ti?n, t?n d?ng, d?ng th? ho?c th?i h?n h?y cho kho?n ti?n m? ?ng d?ng kh?ng thu.
+Kho mã này không triển khai trang thanh toán, gói thuê bao, thu tiền hoặc giao dịch hoàn tiền. Trang này không hứa hoàn tiền, tín dụng, dùng thử miễn phí hoặc thời hạn hủy đối với khoản tiền mà ứng dụng không thu.
 
-## Mua h?ng b?n ngo?i
+## Thanh toán cho bên ngoài
 
-B?n c? th? thanh to?n tr?c ti?p cho nh? cung c?p m? h?nh/API, h? t?ng ho?c d?ch v? kh?c. Vi?c mua, gia h?n, h?y v? ho?n ti?n tu?n theo h?p ??ng v?i b?n b?n v? ph?p lu?t. T?t t?ch h?p ho?c x?a t?i kho?n Umwelt-OS kh?ng h?y thu? bao ho?c x?a h? s? c?a b?n b?n. Li?n h? b?n b?n ?? x? l? thanh to?n.
+Bạn có thể trả tiền trực tiếp cho nhà cung cấp mô hình/API, hạ tầng hoặc dịch vụ khác. Việc mua, gia hạn, hủy và yêu cầu hoàn tiền tuân theo hợp đồng với nhà cung cấp tương ứng và pháp luật áp dụng. Tắt tích hợp hoặc xóa tài khoản Umwelt-OS không hủy thuê bao hay xóa hồ sơ của nhà cung cấp. Liên hệ nhà cung cấp về quy trình thanh toán của họ.
 
-## Ngh?a v? c?a ??n v? v?n h?nh v? quy?n b?t bu?c
+## Nghĩa vụ của đơn vị vận hành và quyền bắt buộc
 
-N?u **[LEGAL NAME]** thu ph? hosting, h? tr? ho?c d?ch v? kh?c, ph?i c?ng b? b?n b?n th?c t?, gi?, thanh to?n v? ?i?u ki?n h?y/ho?n ti?n tr??c khi mua. B?n nh?p kh?ng thay th? c?c ?i?u ki?n ??. Li?n h? **[CONTACT EMAIL]**. N?i dung n?y kh?ng h?n ch? bi?n ph?p b?o v? ng??i ti?u d?ng, quy?n r?t/h?y theo lu?t ho?c quy?n kh?ng th? lo?i tr? t?i khu v?c ph?p l? c?a b?n.
+Nếu **[LEGAL NAME]** thu phí riêng cho hosting, hỗ trợ hoặc dịch vụ khác, đơn vị này phải công bố người bán thực tế, giá, điều kiện thanh toán, hủy và hoàn tiền trước khi mua. Bản nháp không thay thế các điều kiện đó. Liên hệ **[CONTACT EMAIL]** nếu có câu hỏi. Nội dung này không hạn chế biện pháp bảo vệ người tiêu dùng, quyền rút lui/hủy theo luật hoặc quyền khác không thể bị loại trừ tại khu vực pháp lý của bạn.

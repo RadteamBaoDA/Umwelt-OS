@@ -3,14 +3,14 @@ import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider, useTranslations } from 'next-intl';
 import { describe, expect, it, vi } from 'vitest';
 import { messages } from '@/core/messages';
-import { aliasProviderId, aliasModelType, guessModelType, maxProviders, mergeDiscovered, modelIdsForAlias, newProvider, parseDraftSnapshot, ProviderEditor, type ProviderRead } from './provider-editor';
+import { mappingProviderId, guessModelType, maxProviders, newProvider, parseDraftSnapshot, ProviderEditor, type ProviderRead } from './provider-editor';
 
 const cloud: ProviderRead = { id: 'default', kind: 'openai', label: 'OpenAI', base_url: 'https://api.openai.com/v1', destination_id: 'remote:x', credential_configured: true, local: false, policy_denied: false, models: [{ id: 'gpt-4o', type: 'llm' }] };
 const local: ProviderRead = { ...cloud, id: 'ollama-1', kind: 'ollama', label: 'Ollama', base_url: 'http://localhost:11434/v1', local: true, policy_denied: true, credential_configured: false };
 
-function Harness({ providers, onChange = vi.fn(), onDiscover = vi.fn() }: { providers: ProviderRead[]; onChange?: (p: ProviderRead[]) => void; onDiscover?: (p: ProviderRead) => void }) {
+function Harness({ providers, onChange = vi.fn(), onDiscover = vi.fn(), discovered = {} }: { providers: ProviderRead[]; onChange?: (p: ProviderRead[]) => void; onDiscover?: (p: ProviderRead) => void; discovered?: Record<string, string[]> }) {
   const t = useTranslations('aiSettings');
-  return <ProviderEditor providers={providers} savedIds={providers.map((p) => p.id)} secrets={{}} disabled={false} discoveringId={null} discoverError={null} onChange={onChange} onSecret={vi.fn()} onDiscover={onDiscover} t={t as never} />;
+  return <ProviderEditor providers={providers} savedIds={providers.map((p) => p.id)} secrets={{}} disabled={false} discoveringId={null} discoverError={null} discovered={discovered} onChange={onChange} onSecret={vi.fn()} onDiscover={onDiscover} t={t as never} />;
 }
 const renderEditor = (props: Parameters<typeof Harness>[0]) => render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><Harness {...props} /></NextIntlClientProvider>);
 
@@ -33,12 +33,11 @@ describe('provider editor', () => {
     expect(onChange).toHaveBeenLastCalledWith([]);
   });
 
-  it('removes a single model from a provider', async () => {
-    const onChange = vi.fn();
-    const two: ProviderRead = { ...cloud, models: [{ id: 'gpt-4o', type: 'llm' }, { id: 'text-embed', type: 'embedding' }] };
-    renderEditor({ providers: [two], onChange });
-    await userEvent.click(screen.getByRole('button', { name: 'Remove model gpt-4o' }));
-    expect(onChange).toHaveBeenLastCalledWith([{ ...two, models: [{ id: 'text-embed', type: 'embedding' }] }]);
+  it('keeps provider cards to connection fields only', () => {
+    renderEditor({ providers: [cloud], discovered: { default: ['gpt-4o', 'x'] } });
+    expect(screen.getByText('2 models discovered · pick one to add (draft, not saved)')).toBeTruthy();
+    expect(screen.queryByRole('table')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add' })).toBeNull();
   });
 
   it('disables add at the maximum', () => {
@@ -49,11 +48,11 @@ describe('provider editor', () => {
 });
 
 describe('provider helpers', () => {
-  it('generates unique ids and resolves the alias provider', () => {
+  it('generates unique ids and resolves the mapping provider', () => {
     expect(newProvider('ollama', [local]).id).toBe('ollama-2');
-    expect(aliasProviderId(null, [local, cloud])).toBe('default');
-    expect(aliasProviderId(null, [local])).toBe('ollama-1');
-    expect(aliasProviderId('x', [local])).toBe('x');
+    expect(mappingProviderId(null, [local, cloud])).toBe('default');
+    expect(mappingProviderId(null, [local])).toBe('ollama-1');
+    expect(mappingProviderId('x', [local])).toBe('x');
   });
 
   it('migrates drafts without providers and drops other revisions', () => {
@@ -69,13 +68,5 @@ describe('model types', () => {
   it('guesses types from ids', () => {
     const cases: [string, string][] = [['text-embedding-3-small', 'embedding'], ['bge-reranker-v2', 'reranker'], ['whisper-1', 'asr'], ['tts-1', 'tts'], ['llava:7b', 'vision'], ['qwen2-vl', 'vision'], ['gpt-4o', 'llm']];
     for (const [id, type] of cases) expect(guessModelType(id)).toBe(type);
-  });
-
-  it('keeps saved types on discover and filters by alias', () => {
-    expect(mergeDiscovered([{ id: 'x-embed', type: 'llm' }], ['x-embed', 'whisper-1'])).toEqual([{ id: 'x-embed', type: 'llm' }, { id: 'whisper-1', type: 'asr' }]);
-    const p = { ...cloud, models: [{ id: 'e', type: 'embedding' as const }, { id: 'c', type: 'llm' as const }] };
-    expect(modelIdsForAlias('embedding', [p])).toEqual(['e']);
-    expect(modelIdsForAlias('fast', [p])).toEqual(['c']);
-    expect(aliasModelType('local-private')).toBe('llm');
   });
 });

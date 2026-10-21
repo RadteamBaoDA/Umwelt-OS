@@ -10,6 +10,8 @@ export const commonMessages = {
       unavailable: 'Unavailable',
       failed: 'Request failed.',
       close: 'Close',
+      showPassword: 'Show password',
+      hidePassword: 'Hide password',
   },
   'vi-vi': {
       retry: 'Thử lại',
@@ -21,5 +23,7 @@ export const commonMessages = {
       unavailable: 'Không khả dụng',
       failed: 'Yêu cầu không thành công.',
       close: 'Đóng',
+      showPassword: 'Hiện mật khẩu',
+      hidePassword: 'Ẩn mật khẩu',
   },
 } as const;

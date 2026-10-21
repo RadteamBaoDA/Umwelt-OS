@@ -30,6 +30,7 @@ MAX_BATCH_BYTES = 10 * 1024 * 1024
 MAX_TRANSPORT_BYTES = 25 * 1024 * 1024
 MAX_PAGE_BYTES = 10 * 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 30
+DEFAULT_USER_AGENT = "Umwelt-OS/1.0 (self-hosted personal intelligence; +https://github.com/umwelt-os)"
 RUN_DEADLINE_SECONDS = 90
 
 Resolver = Callable[[str, int], Awaitable[list[str]]]
@@ -121,8 +122,12 @@ async def fetch_bounded(
     addresses = await resolve(parts.hostname, port)
     if not addresses or any(not ip_address(address).is_global for address in addresses):
         raise UnsafeDestination("non_public_destination")
-    pinned, request_headers, extensions = _pinned_request(
-        url, addresses[0], {"Accept-Encoding": "gzip, deflate", **(headers or {})})
+    # Several public APIs (NWS, Wikimedia, CISA) reject UA-less clients; caller headers (e.g. SEC's contact
+    # User-Agent) always win, compared case-insensitively.
+    merged = {"Accept-Encoding": "gzip, deflate", **(headers or {})}
+    if not any(name.lower() == "user-agent" for name in merged):
+        merged["User-Agent"] = DEFAULT_USER_AGENT
+    pinned, request_headers, extensions = _pinned_request(url, addresses[0], merged)
     async with httpx.AsyncClient(
         transport=transport, timeout=httpx.Timeout(timeout), trust_env=False,
         follow_redirects=False, verify=True,

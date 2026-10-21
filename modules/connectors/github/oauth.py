@@ -122,7 +122,11 @@ def _validate_expiring_token(token: dict[str, Any]) -> dict[str, Any]:
 
 
 async def revoke_github_grant(settings: Settings, access_token: str) -> None:
-    """Revoke GitHub's app/user grant; this revokes all tokens for that app and account."""
+    """Require GitHub's explicit 204 confirmation for app/user-wide revocation.
+
+    A missing/expired token or lost response does not prove the grant is gone. Keep such
+    outcomes failed for reconciliation; never treat 404 or an unexpected 2xx as success.
+    """
     async with httpx.AsyncClient(timeout=httpx.Timeout(10), follow_redirects=False, trust_env=False) as client:
         # PRODUCTION FIX: AsyncClient.delete() takes no json=; a DELETE body requires request().
         response = await client.request(
@@ -133,6 +137,7 @@ async def revoke_github_grant(settings: Settings, access_token: str) -> None:
         )
         if response.status_code != 204:
             response.raise_for_status()
+            raise RuntimeError("GitHub grant revocation was not confirmed")
 
 
 def new_pkce_pair() -> tuple[str, str, str]:

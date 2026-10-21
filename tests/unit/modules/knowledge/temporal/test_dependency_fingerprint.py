@@ -16,7 +16,7 @@ from modules.sources.schemas import SourceFence
 def _config() -> SimpleNamespace:
     dump = SimpleNamespace(model_dump=lambda mode="json": {})
     return SimpleNamespace(
-        configuration_revision=1, gateway_identity="g", aliases={}, privacy=dump,
+        configuration_revision=1, gateway_identity="g", defaults=dump, privacy=dump,
         endpoint_destination_id=None,
     )
 

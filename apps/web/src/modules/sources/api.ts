@@ -120,6 +120,7 @@ export type DraftValidation = {
   verified_bot_id?: string | null;
   scope_verified?: boolean | null;
 };
+export type BuiltinCategory = 'news' | 'economy' | 'hazards' | 'space' | 'security' | 'tech';
 export type ConnectorCatalogEntry = {
   provider_id: string;
   label: string;
@@ -141,6 +142,7 @@ export type ConnectorCatalogEntry = {
   terms_url?: string | null;
   terms_checked_on?: string | null;
   attribution?: string | null;
+  category?: BuiltinCategory | null;
   hosts?: string[];
   endpoints?: string[];
   execution?: 'supported' | 'experimental' | 'research_only' | null;
@@ -177,6 +179,7 @@ export const connectorKeys = {
   activation: (id: string) => ['connector-activation', id] as const,
   ingestion: (id: string) => ['source-ingestion', id] as const,
   terms: (id: string) => ['connector-terms', id] as const,
+  builtins: ['connector-builtins'] as const,
   collection: (id: string, requestId: string) => ['source-collection-request', id, requestId] as const,
 };
 
@@ -423,4 +426,26 @@ export function getProviderTerms(id: string, signal?: AbortSignal) {
 /** Owner declares deployment use and acknowledges one terms version. */
 export function acknowledgeProviderTerms(id: string, declaredUse: DeclaredUse, termsVersion: string, csrfToken: string, signal?: AbortSignal) {
   return apiRequest<ProviderTerms>(`/api/v1/connectors/${id}/terms`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ declared_use: declaredUse, terms_version: termsVersion }), signal });
+}
+
+/** One built-in preset with the owner's toggle state; `source_id` stays null until it is first enabled. */
+export type BuiltinSource = {
+  id: string; label: string; category: BuiltinCategory; eligibility: 'open' | 'personal' | 'noncommercial' | 'review';
+  terms_url: string; terms_checked_on: string; attribution: string; execution: 'supported' | 'experimental' | 'research_only';
+  source_id: string | null; enabled: boolean;
+};
+
+/** Lists every built-in data source with its on/off state. */
+export function listBuiltinSources(signal?: AbortSignal) {
+  return apiRequest<BuiltinSource[]>('/api/v1/connectors/builtins', { signal });
+}
+
+/** Turns a built-in on; the server creates the source, records the terms acknowledgement (and operator review where required) and activates it. */
+export function enableBuiltinSource(provider: string, declaredUse: DeclaredUse, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<BuiltinSource>(`/api/v1/connectors/builtins/${encodeURIComponent(provider)}/enable`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ declared_use: declaredUse }), signal });
+}
+
+/** Turns a built-in off by pausing its source; the source, terms and history are kept. */
+export function disableBuiltinSource(provider: string, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<BuiltinSource>(`/api/v1/connectors/builtins/${encodeURIComponent(provider)}/disable`, { method: 'POST', headers: csrfHeaders(csrfToken), signal });
 }

@@ -5,7 +5,6 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { useFormatter, useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { apiRequest, csrfHeaders } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
@@ -15,7 +14,6 @@ import { AgentRunDetail } from './run-detail';
 
 interface SourceItem { id: string; name: string; status: string }
 interface SourcePage { items: SourceItem[]; next_cursor: string | null }
-interface AISettingsAliases { aliases: Record<string, { model: string; version: string | null; destination: string }> }
 const profileTitleKeys: Record<string, 'agentProfileSupervisor' | 'agentProfileKnowledge' | 'agentProfileResearch' | 'agentProfilePersonal' | 'agentProfileProject' | 'agentProfileNews' | 'agentProfilePlanning' | 'agentProfileAutomation'> = {
   supervisor: 'agentProfileSupervisor', knowledge: 'agentProfileKnowledge', research: 'agentProfileResearch',
   personal: 'agentProfilePersonal', project: 'agentProfileProject', news: 'agentProfileNews',
@@ -33,7 +31,6 @@ export function AgentSettingsWorkspace() {
   const { csrfToken } = useWorkspaceSession();
   const client = useQueryClient();
   const profiles = useQuery({ queryKey: ['agent-profiles'], queryFn: getAgentProfiles });
-  const settings = useQuery({ queryKey: ['ai-settings'], queryFn: () => apiRequest<AISettingsAliases>('/api/v1/settings/ai') });
   const sources = useInfiniteQuery({
     queryKey: ['agent-profile-sources'],
     initialPageParam: null as string | null,
@@ -81,8 +78,8 @@ export function AgentSettingsWorkspace() {
     },
   });
 
-  if (profiles.isLoading || settings.isLoading || sources.isLoading) return <p className="text-muted-foreground" role="status">{t('agentLoading')}</p>;
-  if (profiles.isError || settings.isError || sources.isError || !draft) return <p className="error" role="alert">{t('agentLoadFailed')}</p>;
+  if (profiles.isLoading || sources.isLoading) return <p className="text-muted-foreground" role="status">{t('agentLoading')}</p>;
+  if (profiles.isError || sources.isError || !draft) return <p className="error" role="alert">{t('agentLoadFailed')}</p>;
   const listedSources = (sources.data?.pages ?? []).flatMap((page) => page.items);
   const sourceOptions = new Map(listedSources.map((item) => [item.id, item]));
   for (const id of draft.source_ids) {
@@ -99,7 +96,7 @@ export function AgentSettingsWorkspace() {
     phase_8_planning_tools_unavailable: 'agentPlanningToolsUnavailable',
     phase_10_automation_unavailable: 'agentAutomationGate',
     bounded_browser_unavailable: 'agentBrowserUnavailable',
-    model_alias_unconfigured: 'agentModelUnavailable',
+    model_role_unconfigured: 'agentModelUnavailable',
     model_tool_capability_unverified: 'agentModelToolUnverified',
     registered_read_tools_unavailable: 'agentRegisteredToolsUnavailable',
   };
@@ -120,15 +117,6 @@ export function AgentSettingsWorkspace() {
           <label className="flex items-center gap-2 text-sm text-foreground">
             <Checkbox checked={draft.enabled} onCheckedChange={(checked) => setDraft({ ...draft, enabled: checked === true })} />
             {t('agentEnabled')}
-          </label>
-          <label className="block space-y-1 text-sm">
-            <span className="font-medium text-foreground">{t('agentModel')}</span>
-            <Select value={draft.model_alias} onValueChange={(value) => setDraft({ ...draft, model_alias: value })}>
-              <SelectTrigger aria-label={t('agentModel')}><SelectValue /></SelectTrigger>
-              <SelectContent>{Object.entries(settings.data?.aliases ?? {}).map(([alias, mapping]) => (
-                <SelectItem key={alias} value={alias} disabled={!mapping.model}>{alias}{mapping.model ? '' : ` · ${t('agentUnconfiguredAlias')}`}</SelectItem>
-              ))}</SelectContent>
-            </Select>
           </label>
           <label className="block space-y-1 text-sm">
             <span className="font-medium text-foreground">{t('agentPrompt')}</span>

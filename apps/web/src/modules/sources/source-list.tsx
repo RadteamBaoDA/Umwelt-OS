@@ -12,6 +12,7 @@ import { useGuardedNavigation } from '@/core/guarded-navigation';
 import {
   connectorKeys,
   ConnectorConfiguration,
+  getConnectorCatalog,
   getConnectorActivation,
   getGitHubWebhookStatus,
   getMonotonicConnectorConfiguration,
@@ -21,6 +22,7 @@ import {
   sourceKeys,
   triggerCollection,
 } from './api';
+import { BuiltinSources } from './builtin-sources';
 import { ConnectorEditor } from './connector-editor';
 import { DisconnectDialog } from './disconnect-dialog';
 import { useSourceActions } from './use-source-actions';
@@ -35,15 +37,15 @@ function formatDate(value: string | null, locale: AppLocaleId, timezone: string,
   }).format(new Date(value)) : fallback;
 }
 
-/** Resolves registered provider IDs to translated names while preserving generic source labels. */
-function providerLabel(provider: string | null, t: ReturnType<typeof useTranslations<'sources'>>) {
+/** Resolves registered provider IDs to translated names, then to the catalog label, so new providers need no message key; otherwise the raw ID. */
+function providerLabel(provider: string | null, t: ReturnType<typeof useTranslations<'sources'>>, catalogLabel?: string) {
   if (!provider) return null;
   const keys: Record<string, string> = {
     youtube: 'providerYoutube', arxiv: 'providerArxiv', huggingface: 'providerHuggingface', github_releases: 'providerGithubReleases',
     telegram: 'providerTelegram', rss: 'providerRss', web: 'providerWeb', rest: 'providerRest',
   };
   const key = keys[provider];
-  return key ? t(key as 'providerYoutube') : provider;
+  return key ? t(key as 'providerYoutube') : catalogLabel ?? provider;
 }
 
 /** Formats a connector schedule interval as localized display text. */
@@ -153,6 +155,9 @@ function SourceEntry({
     queryFn: () => getConnectorActivation(source.id),
     enabled: connector,
   });
+  // Shared cache with the editor; supplies the label for providers that have no message key of their own.
+  const catalog = useQuery({ queryKey: connectorKeys.catalog, queryFn: ({ signal }) => getConnectorCatalog(signal), enabled: Boolean(source.provider), staleTime: 5 * 60_000 });
+  const catalogLabel = catalog.data?.find((entry) => entry.provider_id === source.provider)?.label;
   const collect = useMutation({
     mutationFn: () => triggerCollection(source.id, csrfToken),
     onSuccess: (result) => {
@@ -185,7 +190,7 @@ function SourceEntry({
     <tr className="border-b border-border max-[720px]:mb-3 max-[720px]:block max-[720px]:rounded-lg max-[720px]:border max-[720px]:p-3">
       <th scope="row" ref={nameCellRef} tabIndex={-1} className={`${cell} font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}>
         <strong>{source.name}</strong>
-        <p className="text-muted-foreground">{providerLabel(source.provider, t) ?? source.type}</p>
+        <p className="text-muted-foreground">{providerLabel(source.provider, t, catalogLabel) ?? source.type}</p>
         {(source.collection_error_code || source.processing_error_code) && <p className="error">{t('collectionError')}: {source.collection_error_code ?? t('noError')} · {t('processingError')}: {source.processing_error_code ?? t('noError')}</p>}
       </th>
       <td className={cell}>
@@ -309,6 +314,7 @@ export function SourceList() {
         {githubWebhook.data.oldest_pending_at && <p className="text-muted-foreground">{t('githubWebhookOldest', { time: formatDate(githubWebhook.data.oldest_pending_at, display.locale, display.timezone, t('never')) })}</p>}
       </>}
     </section>
+    <BuiltinSources />
     <div className="form-actions source-list-actions">
       <Button onClick={() => transition(null)}>{t('addConnector')}</Button>
       <Button variant="outline" onClick={() => transition(undefined, !adding)}>{t('addManual')}</Button>

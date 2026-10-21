@@ -21,6 +21,8 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { useRealtime } from '@/core/realtime-provider';
 import { ChangePasswordDialog } from '@/modules/account/change-password-dialog';
 import { GoogleLink } from '@/modules/account/google-link';
+import { AccountDeletionSection } from '@/modules/account/account-deletion';
+import { LegalLinks } from '@/modules/legal/legal-links';
 import { UserMenu } from '@/modules/account/user-menu';
 import { OwnerPreferences, PreferencesDialog } from '@/modules/account/preferences-dialog';
 import { ChatDrawer } from '@/modules/chat/chat-drawer';
@@ -254,6 +256,8 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
           <DialogContent closeLabel={t('close')} onCloseAutoFocus={restoreMenuFocus}>
             <DialogHeader><DialogTitle>{t('accountSettings')}</DialogTitle><DialogDescription>{t('googleAccountDescription')}</DialogDescription></DialogHeader>
             <GoogleLink />
+            <AccountDeletionSection csrfToken={session.data.csrfToken} />
+            <LegalLinks />
           </DialogContent>
         </Dialog>
         <ChangePasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} csrfToken={session.data.csrfToken} closeLabel={t('close')} onCloseAutoFocus={restoreMenuFocus} />

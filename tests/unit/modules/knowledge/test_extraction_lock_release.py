@@ -60,9 +60,8 @@ def _harness(monkeypatch: pytest.MonkeyPatch, name: str) -> SimpleNamespace:
     target = mod.timeline if timeline else mod.entities
     factory = _Factory()
     mapping = SimpleNamespace(model="m")
-    alias = mod.ALIAS if timeline else mod.EXTRACTION_ALIAS
     config = SimpleNamespace(
-        configuration_revision=1, gateway_identity="g", endpoint_destination_id="d", aliases={alias: mapping},
+        configuration_revision=1, gateway_identity="g", endpoint_destination_id="d", defaults=SimpleNamespace(resolve=lambda _role: mapping),
         gateway_base_url="u", gateway_api_key="k", request_timeout_seconds=10, endpoint_allowed_cidrs=(),
         allow_public_providers=False, system_prompts={}, workspace_id=WS, actor_user_id=1, membership_revision=1,
         endpoint_policy_denied=False, gateway_credential_configured=True,
@@ -90,7 +89,7 @@ def _harness(monkeypatch: pytest.MonkeyPatch, name: str) -> SimpleNamespace:
     monkeypatch.setattr(mod, "_workspace_job_scope", AsyncMock(return_value=scope))
     monkeypatch.setattr(mod.settings_public, "module_is_enabled", AsyncMock(return_value=True))
     monkeypatch.setattr(mod.settings_public, "get_ai_execution_config", AsyncMock(return_value=config))
-    monkeypatch.setattr(mod.settings_public, "derive_for_alias", lambda cfg, _alias: cfg)
+    monkeypatch.setattr(mod.settings_public, "derive_for_role", lambda cfg, _role: cfg)
     monkeypatch.setattr(target, "claim_extraction_work",
                         AsyncMock(return_value=SimpleNamespace(document_version_id=uuid4(), source_generation=1)))
     monkeypatch.setattr(target, "set_extraction_work_error", m.set_error)

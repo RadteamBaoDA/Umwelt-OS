@@ -1,4 +1,5 @@
 import hashlib
+import logging
 from typing import Annotated
 
 import httpx
@@ -11,6 +12,7 @@ from core.auth.public import authenticated_session_ref
 from core.database import get_session
 from core.model_gateway.client import ModelGateway, ModelGatewayError
 from core.model_gateway.schemas import (
+    MODEL_ROLES,
     AISettingsRead,
     AISettingsUpdate,
     ConnectionDraft,
@@ -41,6 +43,9 @@ from modules.settings.schemas import (
     SystemPromptsUpdate,
     TranslationSettingsRead,
     TranslationSettingsUpdate,
+    VizDecisionModel,
+    VizDecisionModelsRequest,
+    VizDecisionModelsResult,
     VizRouterRead,
     VizRouterTestResult,
     VizRouterUpdate,
@@ -185,31 +190,32 @@ async def discover_models(body: ConnectionDraft, request: Request, session: Sess
         await recheck_send()
         return {"model_ids": model_ids}
     except ModelGatewayError as exc:
-        raise HTTPException(status_code=502, detail="Model discovery failed") from exc
+        logging.getLogger(__name__).warning("Model discovery failed: %s", exc, exc_info=exc)
+        raise HTTPException(status_code=502, detail=str(exc) or "Model discovery failed") from exc
 
 
 @router.get("/models", response_model=ModelSettingsRead)
 async def read_models(session: Session, request: Request, _owner: OwnerRead) -> ModelSettingsRead:
-    """Return model aliases and capability status without exposing credentials."""
+    """Return role defaults and capability status without exposing credentials."""
     value = await _read(session, request, scope=_owner)
-    return ModelSettingsRead(aliases=value.aliases, capabilities=value.capabilities,
+    return ModelSettingsRead(defaults=value.defaults, capabilities=value.capabilities,
         credential_configured=any(p.credential_configured for p in value.providers))
 
 
 @router.patch("/models", response_model=ModelSettingsRead)
-async def patch_models(values: dict[str, ModelMapping], session: Session, request: Request, _owner: OwnerWrite) -> ModelSettingsRead:
-    """Merge valid alias changes into current settings using revision checking."""
+async def patch_models(values: dict[str, ModelMapping | None], session: Session, request: Request, _owner: OwnerWrite) -> ModelSettingsRead:
+    """Merge role default changes (a null value clears the role) into current settings using revision checking."""
     current = await _read(session, request, scope=_owner)
-    if not values or any(alias not in models.ALIASES for alias in values):
-        raise HTTPException(status_code=422, detail="Unknown or empty model alias mapping")
+    if not values or any(role not in MODEL_ROLES for role in values):
+        raise HTTPException(status_code=422, detail="Unknown or empty model role mapping")
     config = await public.get_ai_execution_config(session, request.app.state.settings, request.app.state.redis, scope=_owner)
     update = AISettingsUpdate(expected_revision=current.configuration_revision,
         web_search_provider=config.web_search_provider, web_search_endpoint=config.web_search_endpoint,
-        chat_alias=config.chat_alias, brief_alias=config.brief_alias, aliases={**config.aliases, **values},
+        defaults=config.defaults.model_copy(update=values),
         privacy=config.privacy, request_timeout_seconds=config.request_timeout_seconds)
     saved = await public.save_ai_settings(session, update, request.app.state.settings, scope=_owner, auth_sessions=(authenticated_session_ref(request),))
     await session.commit()
-    return ModelSettingsRead(aliases=saved.aliases, capabilities=[], credential_configured=any(p.credential_configured for p in saved.providers))
+    return ModelSettingsRead(defaults=saved.defaults, capabilities=[], credential_configured=any(p.credential_configured for p in saved.providers))
 
 
 @router.get("/privacy", response_model=PrivacySettings)
@@ -225,8 +231,8 @@ async def patch_privacy(value: PrivacySettings, session: Session, request: Reque
     config = await public.get_ai_execution_config(session, request.app.state.settings, request.app.state.redis, scope=_owner)
     update = AISettingsUpdate(expected_revision=current.configuration_revision,
         web_search_provider=config.web_search_provider,
-        web_search_endpoint=config.web_search_endpoint, chat_alias=config.chat_alias, brief_alias=config.brief_alias,
-        aliases=config.aliases, privacy=value, request_timeout_seconds=config.request_timeout_seconds)
+        web_search_endpoint=config.web_search_endpoint,
+        defaults=config.defaults, privacy=value, request_timeout_seconds=config.request_timeout_seconds)
     saved = await public.save_ai_settings(session, update, request.app.state.settings, scope=_owner, auth_sessions=(authenticated_session_ref(request),))
     await session.commit()
     return saved.privacy
@@ -339,7 +345,7 @@ async def save_viz_router(value: VizRouterUpdate, session: Session, request: Req
 async def test_viz_router(session: Session, request: Request, _owner: OwnerWrite) -> VizRouterTestResult:
     """Send one fixed synthetic prompt through the saved external router and validate the enum answer.
 
-    Requires saved consent (or a local provider). For the LLM classifier the configured mode is tried first, then
+    Requires saved consent (or a local provider). For the LLM, OpenRouter and Cloudflare classifiers the configured mode is tried first, then
     the other one; the mode that works is returned and recorded as a supported gateway capability so real turns can
     use it. No user data is sent. The result carries a short error code, never a URL, body or key.
     """
@@ -367,6 +373,8 @@ async def test_viz_router(session: Session, request: Request, _owner: OwnerWrite
 
     base = await public.get_ai_execution_config(session, settings, redis, scope=_owner)
     config, mapping = public.viz_router_gateway_config(base, resolved)
+    if resolved.kind in public.VIZ_KEYED_KINDS and not (resolved.api_key and resolved.base_url):
+        return VizRouterTestResult(ok=False, error="credential_required" if not resolved.api_key else "network_denied")
     destination = config.endpoint_destination_id or "remote"
     policy = RequestPolicy(
         workspace_id=config.workspace_id, actor_user_id=config.actor_user_id, membership_revision=config.membership_revision,
@@ -389,20 +397,25 @@ async def test_viz_router(session: Session, request: Request, _owner: OwnerWrite
                            gateway_identity=config.gateway_identity, before_send=recheck_send,
                            approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
                            allow_public_endpoints=config.allow_public_providers)
-    modes = [resolved.mode, "forced_tool" if resolved.mode == "json_schema" else "json_schema"]
+    # Decisions API: one adapter, no constraint modes (None); otherwise the configured mode then the other one.
+    modes: list[str | None] = ([None] if resolved.api == "decisions"
+                               else [resolved.mode, "forced_tool" if resolved.mode == "json_schema" else "json_schema"])
     error = "provider_error"
     for mode in modes:
         try:
-            category = await viz.classify_llm(gateway, mapping, policy, window, mode=mode, base_url=config.gateway_base_url,
-                                              probe=True, before_send=recheck_send)
+            if mode is None:
+                category = await viz.classify_decisions(gateway, mapping, policy, window, probe=True, before_send=recheck_send)
+            else:
+                category = await viz.classify_llm(gateway, mapping, policy, window, mode=mode, base_url=config.gateway_base_url,
+                                                  probe=True, before_send=recheck_send)
         except viz.VisualizationRouterError as exc:
             error = exc.code
             if exc.code in {"mode_unsupported", "invalid_category"}:
                 continue  # this endpoint may support the other constrained-output mode
             return VizRouterTestResult(ok=False, error=exc.code)
-        capability = "structured" if mode == "json_schema" else "tools"
+        capability = "tools" if mode == "forced_tool" else "structured"
         result = public.new_capability_result(
-            public.VIZ_ROUTER_ALIAS, mapping, capability, "supported", config=base, scope=_owner,
+            public.VIZ_ROUTER_ROLE, mapping, capability, "supported", config=base, scope=_owner,
             multi_workspace_enabled=settings.multi_workspace_enabled)
         try:
             await public.check_ai_execution_config(session, settings, redis, scope=_owner, expected=base,
@@ -415,3 +428,52 @@ async def test_viz_router(session: Session, request: Request, _owner: OwnerWrite
             await session.rollback()
         return VizRouterTestResult(ok=True, category=category, mode=mode)
     return VizRouterTestResult(ok=False, error=error)
+
+
+@router.post("/viz-router/decision-models", response_model=VizDecisionModelsResult,
+             dependencies=[Depends(require_budget("model_probe", 10, 60))])
+async def discover_viz_decision_models(
+    body: VizDecisionModelsRequest, session: Session, request: Request, _owner: OwnerWrite,
+) -> VizDecisionModelsResult:
+    """List OpenRouter Decisions-API models (``output_modalities=decisions``) with a transient or the saved key.
+
+    Sends only the key to the fixed openrouter.ai endpoint, through the gateway's endpoint-policy-checked client
+    (no user data, so no routing consent is needed). The result is bounded to 200 validated ``{id, input_modalities}``
+    entries; failures return a short code, never a URL, body or key.
+    """
+    settings = request.app.state.settings
+    redis = request.app.state.redis
+    key = body.api_key or ""
+    if not key:
+        saved = await public.resolve_viz_router(session, settings, scope=_owner)
+        # Only the saved OpenRouter key may go to openrouter.ai; another kind's key is never reused for this host.
+        key = saved.api_key if saved.kind == "openrouter" else ""
+    if not key:
+        return VizDecisionModelsResult(ok=False, error="credential_required")
+    base = await public.get_ai_execution_config(session, settings, redis, scope=_owner)
+    config = public.viz_decision_discovery_config(base, key, settings)
+    if config.gateway_base_url is None:
+        return VizDecisionModelsResult(ok=False, error="network_denied")
+    session_ref = authenticated_session_ref(request)
+
+    async def recheck_send() -> None:
+        """Recheck session, workspace and settings identity before egress; roll back before provider network."""
+        try:
+            await public.check_ai_execution_config(session, settings, redis, scope=_owner, expected=base,
+                                                   auth_sessions=(session_ref,))
+        finally:
+            await session.rollback()
+
+    await session.rollback()
+    gateway = ModelGateway(redis, config.gateway_base_url, config.gateway_api_key, config.endpoint_destination_id or "remote",
+                           timeout_seconds=15, scope=_owner, configuration_revision=config.configuration_revision,
+                           gateway_identity=config.gateway_identity, before_send=recheck_send,
+                           approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
+                           allow_public_endpoints=config.allow_public_providers)
+    try:
+        payload = await gateway.discover_decision_models()
+    except ModelGatewayError as exc:
+        error = viz.error_from_gateway(exc).code
+        return VizDecisionModelsResult(ok=False, error=error)
+    return VizDecisionModelsResult(
+        ok=True, models=[VizDecisionModel(**item) for item in viz.parse_decision_models(payload)])

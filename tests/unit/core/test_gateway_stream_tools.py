@@ -31,7 +31,7 @@ def _evidence(capability: str) -> str:
     """Supported capability evidence bound to the test principal and configuration."""
     now = datetime.now(UTC)
     return json.dumps({
-        "workspace_id": str(WORKSPACE_ID), "actor_user_id": 7, "membership_revision": 3, "alias": "fast",
+        "workspace_id": str(WORKSPACE_ID), "actor_user_id": 7, "membership_revision": 3, "role": "chat",
         "model": "m", "version": "1", "gateway_identity": IDENTITY, "configuration_revision": 1,
         "capability": capability, "result": "supported", "checked_at": now.isoformat(),
         "expires_at": (now + timedelta(hours=1)).isoformat(),
@@ -41,7 +41,7 @@ def _evidence(capability: str) -> str:
 def _gateway(capabilities: tuple[str, ...]) -> ModelGateway:
     """Gateway whose Redis cache verifies only the given capabilities."""
     table = {
-        capability_key("fast", "m", "1", c, IDENTITY, workspace_id=WORKSPACE_ID, actor_user_id=7): _evidence(c)
+        capability_key("chat", "m", "1", c, IDENTITY, workspace_id=WORKSPACE_ID, actor_user_id=7): _evidence(c)
         for c in capabilities
     }
     redis = MagicMock()
@@ -76,7 +76,7 @@ async def _run(gw: ModelGateway, **kwargs: Any) -> dict[str, Any]:
          patch.object(ModelGateway, "_http_client", return_value=MagicMock()), \
          patch.object(ModelGateway, "_breaker_check", AsyncMock()), patch.object(ModelGateway, "_breaker_ok", AsyncMock()), \
          patch.object(ModelGateway, "_lease", side_effect=lambda *_: _null_ctx()):
-        _ = [x async for x in gw.stream("fast", MAPPING, POLICY, [], **kwargs)]
+        _ = [x async for x in gw.stream("chat", MAPPING, POLICY, [], **kwargs)]
     return seen
 
 

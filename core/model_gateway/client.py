@@ -179,16 +179,16 @@ class ModelGateway:
                 and policy.gateway_identity == self.gateway_identity
                 and policy.configuration_revision == self.configuration_revision)
 
-    def _capability_key(self, alias: str, mapping: ModelMapping, capability: str) -> str:
-        """Resolve only this immutable client's capability namespace, never a global alias."""
+    def _capability_key(self, role: str, mapping: ModelMapping, capability: str) -> str:
+        """Resolve only this immutable client's capability namespace, never a global role."""
         actor = self.scope.actor_user_id if isinstance(self.scope, InternalJobScope) else self.scope.user_id
-        return capability_key(alias, mapping.model, mapping.version, capability, self.gateway_identity,
+        return capability_key(role, mapping.model, mapping.version, capability, self.gateway_identity,
                               workspace_id=self.scope.workspace_id, actor_user_id=actor)
 
-    async def _capability_supported(self, alias: str, mapping: ModelMapping, policy: RequestPolicy, capability: str) -> bool:
+    async def _capability_supported(self, role: str, mapping: ModelMapping, policy: RequestPolicy, capability: str) -> bool:
         """Read exact principal/config cache evidence; malformed, expired or mismatched values deny."""
         try:
-            result = CapabilityResult.model_validate_json(await self.redis.get(self._capability_key(alias, mapping, capability)))
+            result = CapabilityResult.model_validate_json(await self.redis.get(self._capability_key(role, mapping, capability)))
             expiry = datetime.fromisoformat(result.expires_at)
         except (ValueError, TypeError):
             return False
@@ -196,7 +196,7 @@ class ModelGateway:
                 and result.workspace_id == self.scope.workspace_id and result.actor_user_id == policy.actor_user_id
                 and result.membership_revision == self.scope.membership_revision
                 and result.configuration_revision == self.configuration_revision
-                and result.gateway_identity == self.gateway_identity and result.alias == alias
+                and result.gateway_identity == self.gateway_identity and result.role == role
                 and result.capability == capability and result.model == mapping.model and result.version == mapping.version)
 
     def _http_client(self, base_url: str) -> httpx.AsyncClient:
@@ -342,7 +342,7 @@ class ModelGateway:
 
     async def _request(
         self,
-        alias: str,
+        role: str,
         mapping: ModelMapping | None,
         policy: RequestPolicy,
         capability: str,
@@ -355,11 +355,11 @@ class ModelGateway:
         """Check policy and cached capability before sending a bounded, retried gateway request; map transport and provider errors."""
         if not probe and before_send is None:
             raise ValueError("before_send_required")  # fail closed: every non-probe call needs a per-call fence
-        if not self._policy_matches(policy) or not may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), capability):
+        if not self._policy_matches(policy) or not may_send(policy, role, mapping, self.destination_id, bool(self.api_key), capability):
             raise PrivacyPolicyDenied("Model request denied by privacy policy")
         if self.base_url is None or mapping is None:
             raise ModelGatewayError("Model gateway is not configured")
-        if not probe and not await self._capability_supported(alias, mapping, policy, capability):
+        if not probe and not await self._capability_supported(role, mapping, policy, capability):
             raise ModelGatewayError("Model capability is not supported")
         if not probe:
             # Probes must be able to reach a tripped upstream, otherwise it could never be re-verified.
@@ -383,7 +383,7 @@ class ModelGateway:
                         await self.before_send()
                         if before_send is not None and before_send is not self.before_send:
                             await before_send()
-                        if not self._policy_matches(policy) or not may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), capability):
+                        if not self._policy_matches(policy) or not may_send(policy, role, mapping, self.destination_id, bool(self.api_key), capability):
                             raise PrivacyPolicyDenied("Model request denied by privacy policy")
                         # Gated (P2-3): with no after_send the ContextVar is never touched, so the
                         # transport sends request.stream unwrapped exactly as before.
@@ -395,6 +395,11 @@ class ModelGateway:
                                 response = await client.embeddings.create(**body)
                             elif path == "rerank":
                                 response = await client.post("/rerank", cast_to=dict[str, Any], body=body)
+                            elif path == "decisions":
+                                # OpenRouter Decisions (alpha) lives beside /api/v1 at /api/alpha; same host, so the
+                                # pinned http client and endpoint policy above already cover it.
+                                response = await client.post(
+                                    re.sub(r"/v1$", "/alpha", base_url) + "/decisions", cast_to=dict[str, Any], body=body)
                             else:
                                 raise ModelGatewayError("Unsupported model gateway operation")
                         finally:
@@ -423,19 +428,19 @@ class ModelGateway:
                     raise ModelGatewayError("Model gateway returned an invalid response")
             raise ModelGatewayError("Model gateway request failed")
 
-        # Telemetry only: labels are capability and configured alias; model name is identity, never a label.
+        # Telemetry only: labels are capability and configured role; model name is identity, never a label.
         started = time.perf_counter()
         try:
             response = await self._with_slot(send)
         except _GatewayTimeout:
             await self._breaker_fail()
-            record_model_call(capability, alias, started, False)
+            record_model_call(capability, role, started, False)
             raise
         except BaseException:
-            record_model_call(capability, alias, started, False)
+            record_model_call(capability, role, started, False)
             raise
         await self._breaker_ok()
-        record_model_call(capability, alias, started, True, response, mapping.model)
+        record_model_call(capability, role, started, True, response, mapping.model)
         return response
 
     async def discover_models(self) -> list[str]:
@@ -454,7 +459,14 @@ class ModelGateway:
                     page = await client.models.list()
                 except (APIConnectionError, APITimeoutError, APIStatusError) as exc:
                     _raise_if_policy_denied(exc)
-                    raise ModelGatewayError("Model gateway discovery failed") from exc
+                    # Static reason only (no upstream body/URL): lets the owner tell auth, timeout and DNS/TLS apart.
+                    if isinstance(exc, APIStatusError):
+                        reason = f"upstream returned HTTP {exc.status_code}"
+                    elif isinstance(exc, APITimeoutError):
+                        reason = "upstream timed out"
+                    else:
+                        reason = f"could not connect to upstream ({type(exc.__cause__ or exc).__name__})"
+                    raise ModelGatewayError(f"Model gateway discovery failed: {reason}") from exc
                 model_ids: list[str] = [item.id for item in page.data if isinstance(item.id, str) and item.id]
                 return model_ids
 
@@ -463,8 +475,51 @@ class ModelGateway:
         await self._breaker_ok()
         return models
 
+    async def discover_decision_models(self) -> dict[str, Any]:
+        """Fetch the raw OpenRouter ``/models?output_modalities=decisions`` listing under capacity and endpoint policy.
+
+        The caller validates and bounds the payload (``parse_decision_models``). Errors carry a static reason only.
+        """
+        if self.base_url is None or not self.api_key:
+            raise ModelGatewayError("Model gateway is not configured")
+        base_url = _api_base(self.base_url)
+
+        async def send() -> dict[str, Any]:
+            """GET the filtered model list and map SDK/network failures to the gateway error."""
+            await self.before_send()
+            async with AsyncOpenAI(base_url=base_url, api_key=self.api_key, timeout=self._timeout(), max_retries=0,
+                                   http_client=self._http_client(base_url)) as client:
+                try:
+                    page = await client.get("/models", cast_to=dict[str, Any],
+                                            options={"params": {"output_modalities": "decisions"}})
+                except (APIConnectionError, APITimeoutError, APIStatusError) as exc:
+                    _raise_if_policy_denied(exc)
+                    if isinstance(exc, APIStatusError):
+                        reason = f"upstream returned HTTP {exc.status_code}"
+                    elif isinstance(exc, APITimeoutError):
+                        reason = "upstream timed out"
+                    else:
+                        reason = "could not connect to upstream"
+                    raise ModelGatewayError(f"Model gateway discovery failed: {reason}") from exc
+                return page if isinstance(page, dict) else {}
+
+        return await self._with_slot(send)
+
+    async def decisions(
+        self, role: str, mapping: ModelMapping | None, policy: RequestPolicy,
+        state: list[Any], questions: dict[str, Any], probe: bool = False, *,
+        before_send: Callable[[], Awaitable[None]] | None = None,
+    ) -> Any:
+        """Ask an OpenRouter Decisions-API model (alpha) the given questions about ``state``.
+
+        Uses the ``structured`` capability slot (verified by Test routing) and the same privacy, breaker, lease,
+        retry and endpoint fences as chat calls.
+        """
+        return await self._request(
+            role, mapping, policy, "structured", "decisions", {"state": state, "questions": questions}, probe, before_send)
+
     async def chat(
-        self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy,
+        self, role: str, mapping: ModelMapping | None, policy: RequestPolicy,
         messages: list[dict[str, Any]], probe: bool = False, *,
         max_tokens: int | None = None, temperature: float | None = None,
         before_send: Callable[[], Awaitable[None]] | None = None,
@@ -485,11 +540,11 @@ class ModelGateway:
         if temperature is not None:
             payload["temperature"] = temperature
         return await self._request(
-            alias, mapping, policy, "chat", "chat/completions", payload, probe, before_send, after_send
+            role, mapping, policy, "chat", "chat/completions", payload, probe, before_send, after_send
         )
 
     async def stream(
-        self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy,
+        self, role: str, mapping: ModelMapping | None, policy: RequestPolicy,
         messages: list[dict[str, Any]], probe: bool = False, *,
         after_send: Callable[[], Awaitable[None]] | None = None,
         before_send: Callable[[], Awaitable[None]] | None = None,
@@ -512,7 +567,7 @@ class ModelGateway:
         ok = False
         try:
             async with aclosing(self._stream_inner(
-                alias, mapping, policy, messages, probe, after_send=after_send, before_send=before_send,
+                role, mapping, policy, messages, probe, after_send=after_send, before_send=before_send,
                 tools=tools, tool_choice=tool_choice, max_tokens=max_tokens,
             )) as inner:
                 async for line in inner:
@@ -526,11 +581,11 @@ class ModelGateway:
                     yield line
             ok = True
         finally:
-            record_model_call("streaming", alias, started, ok, {"usage": usage} if usage else None,
+            record_model_call("streaming", role, started, ok, {"usage": usage} if usage else None,
                               mapping.model if mapping else None, first_ms)
 
     async def _stream_inner(
-        self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy,
+        self, role: str, mapping: ModelMapping | None, policy: RequestPolicy,
         messages: list[dict[str, Any]], probe: bool = False, *,
         after_send: Callable[[], Awaitable[None]] | None = None,
         before_send: Callable[[], Awaitable[None]] | None = None,
@@ -545,11 +600,11 @@ class ModelGateway:
         ``tool_choice`` and ``max_tokens`` are forwarded only when not None.
         """
         capabilities = ("streaming", "tools") if tools else ("streaming",)
-        if not self._policy_matches(policy) or not all(may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), c) for c in capabilities) or self.base_url is None or mapping is None:
+        if not self._policy_matches(policy) or not all(may_send(policy, role, mapping, self.destination_id, bool(self.api_key), c) for c in capabilities) or self.base_url is None or mapping is None:
             raise PrivacyPolicyDenied("Model request denied by privacy policy")
-        if not probe and not await self._capability_supported(alias, mapping, policy, "streaming"):
+        if not probe and not await self._capability_supported(role, mapping, policy, "streaming"):
             raise ModelGatewayError("Streaming capability has not been verified")
-        if tools and not probe and not await self._capability_supported(alias, mapping, policy, "tools"):
+        if tools and not probe and not await self._capability_supported(role, mapping, policy, "tools"):
             raise CapabilityUnsupported("Tool calling capability has not been verified")
         extra: dict[str, Any] = {}
         if tools:
@@ -575,7 +630,7 @@ class ModelGateway:
                         await self.before_send()
                         if before_send is not None and before_send is not self.before_send:
                             await before_send()
-                        if not self._policy_matches(policy) or not all(may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), c) for c in capabilities):
+                        if not self._policy_matches(policy) or not all(may_send(policy, role, mapping, self.destination_id, bool(self.api_key), c) for c in capabilities):
                             raise PrivacyPolicyDenied("Model request denied by privacy policy")
                         # I6/T7: the transport releases the send fence once the body is handed to
                         # transport.write; publication is re-fenced per flush (T3). Gated (P2-3).
@@ -620,17 +675,17 @@ class ModelGateway:
                         raise ModelGatewayError(f"Model gateway returned HTTP {exc.status_code}") from exc
 
     async def embed(
-        self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy,
+        self, role: str, mapping: ModelMapping | None, policy: RequestPolicy,
         inputs: list[str], probe: bool = False, *,
         before_send: Callable[[], Awaitable[None]] | None = None,
     ) -> Any:
         """Request embeddings through gateway policy with a fresh per-attempt authorization check."""
         return await self._request(
-            alias, mapping, policy, "embeddings", "embeddings", {"input": inputs}, probe, before_send
+            role, mapping, policy, "embeddings", "embeddings", {"input": inputs}, probe, before_send
         )
 
     async def structured(
-        self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy,
+        self, role: str, mapping: ModelMapping | None, policy: RequestPolicy,
         messages: list[dict[str, Any]], schema: dict[str, Any], probe: bool = False, *,
         max_tokens: int | None = None, temperature: float | None = None,
         before_send: Callable[[], Awaitable[None]] | None = None,
@@ -655,12 +710,12 @@ class ModelGateway:
         if extra_body:
             payload["extra_body"] = extra_body
         return await self._request(
-            alias, mapping, policy, "structured", "chat/completions", payload, probe, before_send
+            role, mapping, policy, "structured", "chat/completions", payload, probe, before_send
         )
 
     async def tools(
         self,
-        alias: str,
+        role: str,
         mapping: ModelMapping | None,
         policy: RequestPolicy,
         messages: list[dict[str, Any]],
@@ -690,17 +745,17 @@ class ModelGateway:
         if extra_body:
             payload["extra_body"] = extra_body
         return await self._request(
-            alias, mapping, policy, "tools", "chat/completions", payload, probe, before_send
+            role, mapping, policy, "tools", "chat/completions", payload, probe, before_send
         )
 
     async def rerank(
-        self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy,
+        self, role: str, mapping: ModelMapping | None, policy: RequestPolicy,
         query: str, documents: list[str], probe: bool = False, *,
         before_send: Callable[[], Awaitable[None]] | None = None,
         after_send: Callable[[], Awaitable[None]] | None = None,
     ) -> Any:
         """Request bounded reranking with fresh authorization and optional attempt cleanup."""
         return await self._request(
-            alias, mapping, policy, "reranking", "rerank",
+            role, mapping, policy, "reranking", "rerank",
             {"query": query, "documents": documents}, probe, before_send, after_send,
         )

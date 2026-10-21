@@ -55,7 +55,7 @@ async def read_owner_export_privacy(session: AsyncSession, owner_id: int = 1):  
     )
 
 
-async def ensure_ai_config_unchanged(session_factory, settings, redis, scope, snapshot, alias, mapping) -> None:  # type: ignore[no-untyped-def]
+async def ensure_ai_config_unchanged(session_factory, settings, redis, scope, snapshot, role, mapping) -> None:  # type: ignore[no-untyped-def]
     """Fresh-session recheck at ``before_send``: raise when settings/access drifted since the snapshot."""
     from modules.settings import public as settings_public
 
@@ -64,8 +64,8 @@ async def ensure_ai_config_unchanged(session_factory, settings, redis, scope, sn
     if (
         current.configuration_revision != snapshot.configuration_revision
         or current.gateway_identity != snapshot.gateway_identity
-        or settings_public.derive_for_alias(current, alias).endpoint_destination_id
-        != settings_public.derive_for_alias(snapshot, alias).endpoint_destination_id
-        or current.aliases.get(alias) != mapping
+        or settings_public.derive_for_role(current, role).endpoint_destination_id
+        != settings_public.derive_for_role(snapshot, role).endpoint_destination_id
+        or current.defaults.resolve(role) != mapping
     ):
         raise PrivacyPolicyDenied("Chat model configuration changed before send")

@@ -111,10 +111,10 @@ async def _apply_configured_reranking(
         config = await settings_public.get_ai_execution_config(
             session, settings, redis, scope=scope_kw["scope"],
         )
-        config = settings_public.derive_for_alias(config, "reranker")
-        rerank_mapping = config.aliases.get("reranker")
+        config = settings_public.derive_for_role(config, "reranker")
+        rerank_mapping = config.defaults.resolve("reranker")
         if not rerank_mapping or not rerank_mapping.model.strip():
-            return evidence_items, "unavailable", ["Configured reranker alias is not mapped"]
+            return evidence_items, "unavailable", ["Configured reranker role is not mapped"]
 
         if config.endpoint_policy_denied:
             return evidence_items, "unavailable", ["Gateway endpoint policy denies remote calls"]
@@ -203,7 +203,7 @@ async def _apply_configured_reranking(
         # uses its own send_session and this session is unused afterwards in this function.
         await session.commit()
         raw_result = await gateway.rerank(
-            alias="reranker",
+            role="reranker",
             mapping=rerank_mapping,
             policy=policy,
             query=query,

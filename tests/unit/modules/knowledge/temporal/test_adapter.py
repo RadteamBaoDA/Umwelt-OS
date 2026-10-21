@@ -619,6 +619,32 @@ class TestTemporalGraphAdapterLifecycle:
         assert state == GraphState.UNCONFIGURED
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("found", [0, 1])
+    async def test_initialize_requires_actual_partition_uniqueness(
+        self, monkeypatch: pytest.MonkeyPatch, found: int,
+    ) -> None:
+        """A successful IF NOT EXISTS DDL is insufficient when its name collides."""
+        from modules.knowledge.temporal import adapter as module
+        from modules.knowledge.temporal.graph_fence import PARTITION_FENCE_SCHEMA
+
+        driver = SimpleNamespace(
+            build_indices_and_constraints=AsyncMock(),
+            control_query=AsyncMock(return_value=[{"found": found}]),
+            close=AsyncMock(),
+        )
+        monkeypatch.setattr(module, "_make_driver_type", lambda: lambda *_args: driver)
+        graph = TemporalGraph(GraphConfiguration(
+            enabled=True, host="localhost", port=7687, username="neo4j", password="secret",
+            database="test_db",
+        ))
+        state = await graph.initialize()
+        assert state == (GraphState.READY if found else GraphState.UNAVAILABLE)
+        assert driver.control_query.await_args_list[-1].args[0] == PARTITION_FENCE_SCHEMA
+        if not found:
+            driver.close.assert_awaited_once()
+            assert graph._driver is None
+
+    @pytest.mark.asyncio
     async def test_health_checks(self) -> None:
         """Verify health checks report appropriate states."""
         # Disabled
@@ -691,12 +717,17 @@ class _FakeTx:
     def __init__(self, results: list[list[dict[str, Any]]] | None = None, commit_error: Exception | None = None) -> None:
         """Queue result sets; commit may be told to fail."""
         self._results = list(results or [])
+        self.fence_rows: list[dict[str, Any]] = [{"erased": False}]
         self.run = AsyncMock(side_effect=self._next)
         self.commit = AsyncMock(side_effect=commit_error)
         self.rollback = AsyncMock()
 
-    async def _next(self, *_args: Any, **_kwargs: Any) -> _FakeResult:
+    async def _next(self, *args: Any, **_kwargs: Any) -> _FakeResult:
         """Return the next queued result (empty when exhausted)."""
+        from modules.knowledge.temporal.graph_fence import LOCK_PARTITION_FENCE
+
+        if args and args[0] == LOCK_PARTITION_FENCE:
+            return _FakeResult(self.fence_rows)
         return _FakeResult(self._results.pop(0) if self._results else [])
 
 
@@ -760,11 +791,12 @@ class TestDispatchScopeDriver:
         with _in_scope(scope):
             rows, _, keys = await driver.execute_query("MATCH (n) RETURN n.x AS x", routing_="r", p=1)
         assert rows == [{"x": 1}] and keys == ["x"]
-        assert client.session.call_args.kwargs["default_access_mode"] == "READ"
+        assert client.session.call_args.kwargs["default_access_mode"] == "WRITE"
         kwargs = sessions[0].begin_transaction.call_args.kwargs
         assert kwargs["timeout"] == 5
         assert kwargs["metadata"]["umwelt_dispatch"] == scope.token
-        tx.run.assert_awaited_once_with("MATCH (n) RETURN n.x AS x", {"p": 1})
+        assert tx.run.await_args_list[-1].args == ("MATCH (n) RETURN n.x AS x", {"p": 1})
+        assert tx.run.await_count == 2
         tx.commit.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -836,7 +868,35 @@ class TestDispatchScopeDriver:
             await driver.execute_statements([("Q1", {"a": 1}), ("Q2", {}), ("Q3", {}), ("Q4", {})])
         assert client.session.call_count == 1
         sessions[0].begin_transaction.assert_awaited_once()
-        assert tx.run.await_count == 4
+        assert tx.run.await_count == 5  # One guard and all payloads share this transaction.
+        tx.commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("fence_rows", [
+        [{"erased": True}], [], [{}], [{"erased": None}], [{"erased": 0}],
+        [{"erased": False}, {"erased": False}],
+    ])
+    async def test_erased_or_unproved_partition_never_reaches_payload(self, fence_rows: list[dict[str, Any]]) -> None:
+        tx = _FakeTx()
+        tx.fence_rows = fence_rows
+        driver, _, _ = await _make_driver(tx)
+        with _in_scope(_DispatchScope(_ownership())), pytest.raises(GraphOperationError, match="graph_partition_erased"):
+            await driver.execute_query("CREATE (n {secret: $text})", text="private")
+        assert tx.run.await_count == 1
+        tx.commit.assert_not_awaited()
+        tx.rollback.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_partition_guard_locks_original_group_before_payload(self) -> None:
+        from modules.knowledge.temporal.graph_fence import LOCK_PARTITION_FENCE
+
+        tx = _FakeTx()
+        driver, _, _ = await _make_driver(tx)
+        ownership = _ownership()
+        with _in_scope(_DispatchScope(ownership)):
+            await driver.execute_statements([("Q1", {}), ("Q2", {})])
+        assert tx.run.await_args_list[0].args == (LOCK_PARTITION_FENCE, {"partition_id": ownership.group_id})
+        assert [call.args[0] for call in tx.run.await_args_list[1:]] == ["Q1", "Q2"]
         tx.commit.assert_awaited_once()
 
     @pytest.mark.asyncio

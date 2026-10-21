@@ -179,7 +179,7 @@ def gateway(
     config: AIExecutionConfig, redis: Redis, before_send: Callable[[], Awaitable[None]], *, scope: Scope,
 ) -> ModelGateway:
     """Construct the model gateway bound to one scope, config revision, identity and fresh send check."""
-    config = ai_settings.derive_for_alias(config, "embedding")  # embedding is this module's only alias
+    config = ai_settings.derive_for_role(config, "embedding")   # embedding is this module's only role
     return ModelGateway(redis, config.gateway_base_url, config.gateway_api_key,
         config.endpoint_destination_id or "remote", config.request_timeout_seconds,
         scope=scope, gateway_identity=config.gateway_identity,
@@ -190,8 +190,8 @@ def gateway(
 async def configured_embedding(
     session: AsyncSession, settings: Settings, redis: Redis, *, scope: Scope,
 ) -> tuple[AIExecutionConfig, ModelMapping | None, RequestPolicy]:
-    """Return scoped gateway config, embedding alias and privacy-constrained policy."""
-    config = ai_settings.derive_for_alias(
+    """Return scoped gateway config, embedding role and privacy-constrained policy."""
+    config = ai_settings.derive_for_role(
         await ai_settings.get_ai_execution_config(session, settings, redis, scope=scope), "embedding")
     destination = config.endpoint_destination_id
     privacy = config.privacy
@@ -205,7 +205,7 @@ async def configured_embedding(
         embedding_destinations=frozenset(privacy.embedding_destinations),
         configuration_revision=config.configuration_revision,
     )
-    return config, config.aliases.get("embedding"), policy
+    return config, config.defaults.resolve("embedding"), policy
 
 
 @dataclass(frozen=True)

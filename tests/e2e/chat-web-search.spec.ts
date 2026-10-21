@@ -34,6 +34,8 @@ test.describe('web search toggle', () => {
     await mockChat(page, { configured: true });
     await page.goto('/');
     await page.getByRole('button', { name: /chat/i }).first().click();
+    // The drawer has no + menu, so the web search item cannot exist.
+    await expect(page.getByRole('button', { name: 'Add context, files or options' })).toHaveCount(0);
     await expect(page.locator('#chat-web-search')).toHaveCount(0);
   });
 
@@ -41,14 +43,15 @@ test.describe('web search toggle', () => {
     test.skip(!SEND_ENABLED, 'toggle hidden until W3 enables WEB_SEARCH_SEND_ENABLED');
     await mockChat(page, { configured: false });
     await page.goto('/chat');
-    await expect(page.locator('#chat-web-search')).toBeDisabled();
-    await expect(page.locator('#chat-web-search-help')).toContainText('unavailable');
+    await page.getByRole('button', { name: 'Add context, files or options' }).click();
+    await expect(page.getByRole('menuitemcheckbox', { name: 'Search the web for this message' })).toBeDisabled();
   });
 
   test('is hidden while the send flag is off', async ({ page }) => {
     test.skip(SEND_ENABLED, 'only meaningful while WEB_SEARCH_SEND_ENABLED is false');
     await mockChat(page, { configured: true });
     await page.goto('/chat');
+    await page.getByRole('button', { name: 'Add context, files or options' }).click();
     await expect(page.locator('#chat-web-search')).toHaveCount(0);
   });
 
@@ -61,7 +64,9 @@ test.describe('web search toggle', () => {
       await route.fulfill({ status: 500, json: { detail: 'stop' } });
     });
     await openChat(page);
-    await page.locator('#chat-web-search').check();
+    await page.getByRole('button', { name: 'Add context, files or options' }).click();
+    await page.getByRole('menuitemcheckbox', { name: 'Search the web for this message' }).click();
+    await page.keyboard.press('Escape');
     await page.getByRole('textbox', { name: /Ask a question about your knowledge/ }).fill('q1');
     await page.keyboard.press('Enter');
     await expect.poll(() => bodies.length).toBe(1);

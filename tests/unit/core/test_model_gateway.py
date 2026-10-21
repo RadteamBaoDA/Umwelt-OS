@@ -23,9 +23,9 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import RedisError
 
 from core.model_gateway.cache import (
-    capability_alias_pattern,
     capability_key,
     capability_model_pattern,
+    capability_role_pattern,
 )
 from core.model_gateway.client import (
     CapabilityUnsupported,
@@ -60,25 +60,25 @@ def _policy(**overrides) -> RequestPolicy:
     return RequestPolicy(**{**values, **overrides})
 
 
-def _cap_json(alias: str = "fast", capability: str = "chat") -> str:
+def _cap_json(role: str = "chat", capability: str = "chat") -> str:
     """Exact principal/config capability evidence for model "m"."""
     now = datetime.now(UTC)
     return json.dumps({
         "workspace_id": str(WORKSPACE_ID), "actor_user_id": 7, "membership_revision": 3,
-        "alias": alias, "model": "m", "version": "1", "gateway_identity": GATEWAY_IDENTITY,
+        "role": role, "model": "m", "version": "1", "gateway_identity": GATEWAY_IDENTITY,
         "configuration_revision": 1, "capability": capability, "result": "supported",
         "checked_at": now.isoformat(), "expires_at": (now + timedelta(hours=1)).isoformat(),
     })
 
 
 def _cap_get() -> AsyncMock:
-    """Redis ``get`` serving supported evidence for every alias/capability the gateway can ask about."""
+    """Redis ``get`` serving supported evidence for every role/capability the gateway can ask about."""
     from core.model_gateway.cache import capability_key
 
     table = {
-        capability_key(alias, "m", "1", capability, GATEWAY_IDENTITY, workspace_id=WORKSPACE_ID, actor_user_id=7):
-            _cap_json(alias, capability)
-        for alias in ("fast", "reranker") for capability in
+        capability_key(role, "m", "1", capability, GATEWAY_IDENTITY, workspace_id=WORKSPACE_ID, actor_user_id=7):
+            _cap_json(role, capability)
+        for role in ("chat", "reranker") for capability in
         ("chat", "streaming", "embeddings", "structured", "tools", "rerank", "reranking")
     }
     return AsyncMock(side_effect=lambda key: table.get(key))
@@ -100,30 +100,27 @@ class TestPolicyMaySend:
     def test_may_send_rejects_missing_or_empty_model(self) -> None:
         """Verify may_send returns False when mapping is None or model string is empty."""
         policy = _policy(reasoning_allowed=True, permitted_destinations=frozenset({"dest1"}))
-        assert may_send(policy, "fast", None, "dest1", True, "chat") is False
+        assert may_send(policy, "chat", None, "dest1", True, "chat") is False
         empty_mapping = ModelMapping(model="", destination="remote")
-        assert may_send(policy, "fast", empty_mapping, "dest1", True, "chat") is False
+        assert may_send(policy, "chat", empty_mapping, "dest1", True, "chat") is False
 
-    def test_may_send_rejects_local_private_alias_or_local_only(self) -> None:
-        """Verify may_send denies remote dispatch when alias is local-private or policy is local_only."""
+    def test_may_send_rejects_local_only_policy(self) -> None:
+        """Verify may_send denies remote dispatch when policy is local_only."""
         policy = _policy(reasoning_allowed=True, permitted_destinations=frozenset({"dest1"}), local_only=True)
         mapping = ModelMapping(model="gpt-4o", destination="remote")
-        assert may_send(policy, "fast", mapping, "dest1", True, "chat") is False
-
-        policy = policy.model_copy(update={"local_only": False})
-        assert may_send(policy, "local-private", mapping, "dest1", True, "chat") is False
+        assert may_send(policy, "chat", mapping, "dest1", True, "chat") is False
 
     def test_may_send_rejects_unconfigured_credentials(self) -> None:
         """Verify may_send returns False when credentials are not configured."""
         policy = _policy(reasoning_allowed=True, permitted_destinations=frozenset({"dest1"}))
         mapping = ModelMapping(model="gpt-4o", destination="remote")
-        assert may_send(policy, "fast", mapping, "dest1", False, "chat") is False
+        assert may_send(policy, "chat", mapping, "dest1", False, "chat") is False
 
     def test_may_send_rejects_unpermitted_destination(self) -> None:
         """Verify may_send returns False when destination_id is not permitted."""
         policy = _policy(reasoning_allowed=True, permitted_destinations=frozenset({"dest1"}))
         mapping = ModelMapping(model="gpt-4o", destination="remote")
-        assert may_send(policy, "fast", mapping, "dest2", True, "chat") is False
+        assert may_send(policy, "chat", mapping, "dest2", True, "chat") is False
 
     def test_may_send_reasoning_and_embeddings_capabilities(self) -> None:
         """Verify may_send checks reasoning_allowed vs embeddings_allowed flags."""
@@ -133,8 +130,8 @@ class TestPolicyMaySend:
             permitted_destinations=frozenset({"dest1"}),
         )
         mapping = ModelMapping(model="gpt-4o", destination="remote")
-        assert may_send(policy, "fast", mapping, "dest1", True, "chat") is True
-        assert may_send(policy, "fast", mapping, "dest1", True, "embeddings") is False
+        assert may_send(policy, "chat", mapping, "dest1", True, "chat") is True
+        assert may_send(policy, "chat", mapping, "dest1", True, "embeddings") is False
 
 
 class TestCapabilityCacheKeys:
@@ -143,7 +140,7 @@ class TestCapabilityCacheKeys:
     def test_capability_key_format(self) -> None:
         """Verify capability_key builds expected Redis key."""
         key = capability_key(
-            alias="fast",
+            role="chat",
             model="gpt-4o-mini",
             version="2024-07-18",
             capability="chat",
@@ -156,13 +153,13 @@ class TestCapabilityCacheKeys:
         assert str(WORKSPACE_ID) in key
 
     def test_capability_patterns(self) -> None:
-        """Verify pattern builders for alias and model cache invalidation."""
-        alias_pat = capability_alias_pattern(
-            "fast", workspace_id=WORKSPACE_ID, actor_user_id=7, gateway_identity=GATEWAY_IDENTITY,
+        """Verify pattern builders for role and model cache invalidation."""
+        role_pat = capability_role_pattern(
+            "chat", workspace_id=WORKSPACE_ID, actor_user_id=7, gateway_identity=GATEWAY_IDENTITY,
         )
-        assert alias_pat.endswith(":*")
+        assert role_pat.endswith(":*")
         model_pat = capability_model_pattern(
-            "fast", "gpt-4o", "v1", workspace_id=WORKSPACE_ID, actor_user_id=7, gateway_identity=GATEWAY_IDENTITY,
+            "chat", "gpt-4o", "v1", workspace_id=WORKSPACE_ID, actor_user_id=7, gateway_identity=GATEWAY_IDENTITY,
         )
         assert model_pat.endswith(":*")
 
@@ -243,7 +240,7 @@ class TestModelGatewayRequestExecution:
         now = datetime.now(UTC)
         return json.dumps({
             "workspace_id": str(WORKSPACE_ID), "actor_user_id": 7, "membership_revision": 3,
-            "alias": "fast", "model": "gpt-4o", "version": "1", "gateway_identity": GATEWAY_IDENTITY,
+            "role": "chat", "model": "gpt-4o", "version": "1", "gateway_identity": GATEWAY_IDENTITY,
             "configuration_revision": 1, "capability": "chat", "result": "supported",
             "checked_at": now.isoformat(), "expires_at": (now + timedelta(hours=1)).isoformat(),
         })
@@ -255,10 +252,10 @@ class TestModelGatewayRequestExecution:
         mapping = ModelMapping(model="gpt-4o", version="1", destination="remote")
 
         with pytest.raises(ValueError, match="max_tokens"):
-            await mock_gateway.chat("fast", mapping, policy, [], max_tokens=0)
+            await mock_gateway.chat("chat", mapping, policy, [], max_tokens=0)
 
         with pytest.raises(ValueError, match="temperature"):
-            await mock_gateway.chat("fast", mapping, policy, [], temperature=2.5)
+            await mock_gateway.chat("chat", mapping, policy, [], temperature=2.5)
 
     @pytest.mark.asyncio
     async def test_request_denied_by_policy(self, mock_gateway) -> None:
@@ -267,7 +264,7 @@ class TestModelGatewayRequestExecution:
         mapping = ModelMapping(model="gpt-4o", version="1", destination="remote")
 
         with pytest.raises(PrivacyPolicyDenied, match="denied by privacy policy"):
-            await mock_gateway.chat("fast", mapping, policy, [{"role": "user", "content": "hi"}], before_send=AsyncMock())
+            await mock_gateway.chat("chat", mapping, policy, [{"role": "user", "content": "hi"}], before_send=AsyncMock())
 
     @pytest.mark.asyncio
     async def test_request_unverified_capability_raises(self, mock_gateway) -> None:
@@ -277,7 +274,7 @@ class TestModelGatewayRequestExecution:
         mapping = ModelMapping(model="gpt-4o", version="1", destination="remote")
 
         with pytest.raises(ModelGatewayError, match="capability is not supported"):
-            await mock_gateway.chat("fast", mapping, policy, [{"role": "user", "content": "hi"}], before_send=AsyncMock())
+            await mock_gateway.chat("chat", mapping, policy, [{"role": "user", "content": "hi"}], before_send=AsyncMock())
 
     @pytest.mark.asyncio
     async def test_request_maps_unsupported_status_error(self, mock_gateway) -> None:
@@ -301,7 +298,7 @@ class TestModelGatewayRequestExecution:
         with patch("core.model_gateway.client.AsyncOpenAI", side_effect=mock_async_openai), \
              patch.object(ModelGateway, "_http_client", return_value=MagicMock()):  # noqa: SIM117  # style-only; nested with kept
             with pytest.raises(CapabilityUnsupported):
-                await mock_gateway.chat("fast", mapping, policy, [{"role": "user", "content": "hi"}], before_send=AsyncMock())
+                await mock_gateway.chat("chat", mapping, policy, [{"role": "user", "content": "hi"}], before_send=AsyncMock())
 
     @pytest.mark.asyncio
     async def test_discover_models_returns_model_ids(self, mock_gateway) -> None:
@@ -496,7 +493,7 @@ class TestModelGatewayCapacityAndTimeouts:
 
         with patch("core.model_gateway.client.AsyncOpenAI", side_effect=fake_openai), \
              patch.object(ModelGateway, "_http_client", return_value=MagicMock()):
-            lines = [x async for x in gw.stream("fast", mapping, policy, [], after_send=after)]
+            lines = [x async for x in gw.stream("chat", mapping, policy, [], after_send=after)]
         assert len(lines) == 6 and lines[-1] == "data: [DONE]"
         assert before.await_count == 2 and after.await_count == 2  # per attempt
         assert redis.keys == {}
@@ -597,7 +594,7 @@ class TestModelGatewayCapacityAndTimeouts:
         with patch("core.model_gateway.client.AsyncOpenAI", side_effect=fake_openai), \
              patch.object(ModelGateway, "_http_client", return_value=MagicMock()), \
              pytest.raises(ModelGatewayError, match="stream failed"):
-            [x async for x in gw.stream("fast", mapping, policy, [], after_send=after)]
+            [x async for x in gw.stream("chat", mapping, policy, [], after_send=after)]
         assert after.await_count == 2  # both attempts released the fence
         assert redis.keys == {}
 
@@ -617,7 +614,7 @@ class TestModelGatewayCapacityAndTimeouts:
         redis, gw, policy, mapping, fake_openai = self._stream_fixture(create)
         with patch("core.model_gateway.client.AsyncOpenAI", side_effect=fake_openai), \
              patch.object(ModelGateway, "_http_client", return_value=MagicMock()):
-            async with aclosing(gw.stream("fast", mapping, policy, [])) as gen:
+            async with aclosing(gw.stream("chat", mapping, policy, [])) as gen:
                 async for _line in gen:
                     assert len(redis.keys) == 1
                     break
@@ -713,11 +710,11 @@ _BIG = "x" * 200_000  # several socket writes' worth of body
 
 async def _call(gw: ModelGateway, op: str, after_send: Any) -> object:
     if op == "chat":
-        return await gw.chat("fast", _MAPPING, _POLICY, [{"role": "user", "content": _BIG}], after_send=after_send,
+        return await gw.chat("chat", _MAPPING, _POLICY, [{"role": "user", "content": _BIG}], after_send=after_send,
                                before_send=AsyncMock())
     if op == "rerank":
         return await gw.rerank("reranker", _MAPPING, _POLICY, "q", [_BIG], after_send=after_send, before_send=AsyncMock())
-    return [x async for x in gw.stream("fast", _MAPPING, _POLICY, [{"role": "user", "content": _BIG}],
+    return [x async for x in gw.stream("chat", _MAPPING, _POLICY, [{"role": "user", "content": _BIG}],
                                        after_send=after_send)]
 
 
@@ -885,15 +882,15 @@ class TestBodySentHook:
              patch.object(ModelGateway, "_http_client", return_value=MagicMock()), \
              patch.object(client_module, "body_sent", spy):
             if op == "chat":
-                await gw.chat("fast", _MAPPING, _POLICY, [], before_send=AsyncMock())
+                await gw.chat("chat", _MAPPING, _POLICY, [], before_send=AsyncMock())
             elif op == "embed":
-                await gw.embed("fast", _MAPPING, _POLICY, ["x"], before_send=AsyncMock())
+                await gw.embed("chat", _MAPPING, _POLICY, ["x"], before_send=AsyncMock())
             elif op == "structured":
-                await gw.structured("fast", _MAPPING, _POLICY, [], {}, before_send=AsyncMock())
+                await gw.structured("chat", _MAPPING, _POLICY, [], {}, before_send=AsyncMock())
             elif op == "tools":
-                await gw.tools("fast", _MAPPING, _POLICY, [], [], before_send=AsyncMock())
+                await gw.tools("chat", _MAPPING, _POLICY, [], [], before_send=AsyncMock())
             else:
-                [x async for x in gw.stream("fast", _MAPPING, _POLICY, [])]
+                [x async for x in gw.stream("chat", _MAPPING, _POLICY, [])]
         assert seen == [None] and spy.set.call_count == 0 and spy.reset.call_count == 0
 
     @pytest.mark.asyncio
@@ -914,7 +911,7 @@ class TestBodySentHook:
         gw = _loopback_gateway("https://x")
         with patch("core.model_gateway.client.AsyncOpenAI", side_effect=_fake_openai_with(create)), \
              patch.object(ModelGateway, "_http_client", return_value=MagicMock()):
-            await gw.chat("fast", _MAPPING, _POLICY, [], before_send=before, after_send=after)
+            await gw.chat("chat", _MAPPING, _POLICY, [], before_send=before, after_send=after)
         assert during == {"before": None, "create": after}
         assert body_sent.get() is None
 
@@ -933,7 +930,7 @@ class TestG1GatewayTimeouts:
             async with gw._slot():
                 t0 = time.monotonic()
                 with pytest.raises(ModelGatewayError, match="capacity"):
-                    await gw.stream("fast", _MAPPING, _POLICY, [], probe=True).__anext__()
+                    await gw.stream("chat", _MAPPING, _POLICY, [], probe=True).__anext__()
                 assert time.monotonic() - t0 < 5  # stream wait (0.2 s), not the 30 s call wait
 
     @pytest.mark.asyncio
@@ -962,8 +959,8 @@ class TestG1GatewayTimeouts:
 
         gw = _lease_gateway(_LeaseRedis(), timeout=180)
         calls = {
-            "chat": lambda: gw.chat("fast", _MAPPING, _POLICY, [], probe=True),
-            "stream": lambda: gw.stream("fast", _MAPPING, _POLICY, [], probe=True).__anext__(),
+            "chat": lambda: gw.chat("chat", _MAPPING, _POLICY, [], probe=True),
+            "stream": lambda: gw.stream("chat", _MAPPING, _POLICY, [], probe=True).__anext__(),
             "discover": lambda: gw.discover_models(),
         }
         with patch("core.model_gateway.client.AsyncOpenAI", side_effect=fake_openai),              patch.object(ModelGateway, "_http_client", return_value=MagicMock()), pytest.raises(ModelGatewayError):
@@ -989,7 +986,7 @@ class TestG1GatewayTimeouts:
             holder = asyncio.create_task(hold())
             await asyncio.sleep(0.05)
             with pytest.raises(ModelGatewayError, match="stop"):
-                await gw.stream("fast", _MAPPING, _POLICY, [], probe=True).__anext__()
+                await gw.stream("chat", _MAPPING, _POLICY, [], probe=True).__anext__()
             await holder
         assert reached
 
@@ -1003,7 +1000,7 @@ class TestG1GatewayTimeouts:
         create = AsyncMock(side_effect=err)
         gw = _lease_gateway(_LeaseRedis())
         with patch("core.model_gateway.client.AsyncOpenAI", side_effect=_fake_openai_with(create)),              patch.object(ModelGateway, "_http_client", return_value=MagicMock()),              pytest.raises(ModelGatewayError, match="network policy denied"):
-            await gw.chat("fast", _MAPPING, _POLICY, [], probe=True)
+            await gw.chat("chat", _MAPPING, _POLICY, [], probe=True)
         assert create.await_count == 1
 
     @pytest.mark.asyncio
@@ -1031,22 +1028,22 @@ class TestLocalProviderPolicyAndUrls:
 
     def test_local_destination_needs_no_key_marker_or_consent(self) -> None:
         policy = _policy(permitted_destinations=frozenset({"local:abc"}))
-        assert may_send(policy, "fast", ModelMapping(model="llama3"), "local:abc", False, "chat") is True
+        assert may_send(policy, "chat", ModelMapping(model="llama3"), "local:abc", False, "chat") is True
         assert may_send(policy, "embedding", ModelMapping(model="nomic"), "local:abc", False, "embeddings") is True
-        assert may_send(policy, "local-private", ModelMapping(model="llama3"), "local:abc", False, "chat") is True
 
     def test_local_destination_still_must_be_permitted_and_never_serves_local_only(self) -> None:
         mapping = ModelMapping(model="llama3")
-        assert may_send(_policy(), "fast", mapping, "local:abc", False, "chat") is False
+        assert may_send(_policy(), "chat", mapping, "local:abc", False, "chat") is False
         policy = _policy(permitted_destinations=frozenset({"local:abc"}), local_only=True)
-        assert may_send(policy, "fast", mapping, "local:abc", False, "chat") is False
+        assert may_send(policy, "chat", mapping, "local:abc", False, "chat") is False
 
     def test_remote_destination_still_needs_consent_and_key(self) -> None:
         policy = _policy(permitted_destinations=frozenset({"omniroute:abc"}))
         mapping = ModelMapping(model="gpt", destination="remote")
-        assert may_send(policy, "fast", mapping, "omniroute:abc", True, "chat") is False
-        assert may_send(policy.model_copy(update={"reasoning_allowed": True}), "local-private", mapping,
-                        "omniroute:abc", True, "chat") is False
+        assert may_send(policy, "chat", mapping, "omniroute:abc", True, "chat") is False
+        remote = policy.model_copy(update={"reasoning_allowed": True})
+        assert may_send(remote, "chat", mapping, "omniroute:abc", True, "chat") is True
+        assert may_send(remote, "chat", mapping, "omniroute:abc", False, "chat") is False  # no credential
 
     @pytest.mark.parametrize(("url", "expected"), [
         ("https://gw.example", "https://gw.example/v1"),
@@ -1090,7 +1087,7 @@ async def _chat(gw: ModelGateway, create: Any, probe: bool = False, fast_sleep: 
     with patch("core.model_gateway.client.AsyncOpenAI", side_effect=_fake_openai_with(create)), \
          patch.object(ModelGateway, "_http_client", return_value=MagicMock()), \
          patch("core.model_gateway.client.asyncio.sleep", AsyncMock() if fast_sleep else asyncio.sleep):
-        return await gw.chat("fast", _MAPPING, _POLICY, [], probe=probe, before_send=AsyncMock())
+        return await gw.chat("chat", _MAPPING, _POLICY, [], probe=probe, before_send=AsyncMock())
 
 
 class TestCircuitBreaker:
@@ -1179,7 +1176,7 @@ class TestCircuitBreaker:
                  patch.object(ModelGateway, "_http_client", return_value=MagicMock()), \
                  patch("core.model_gateway.client.asyncio.sleep", AsyncMock()), \
                  pytest.raises(ModelGatewayError):
-                [x async for x in gw.stream("fast", _MAPPING, _POLICY, [])]
+                [x async for x in gw.stream("chat", _MAPPING, _POLICY, [])]
 
         gw, redis = _breaker_gateway()
         await run(gw, AsyncMock(side_effect=_status_error(503)))

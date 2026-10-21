@@ -14,6 +14,7 @@ import pytest
 from core.model_gateway.client import ModelGateway
 from core.model_gateway.schemas import (
     AIExecutionConfig,
+    ModelDefaults,
     ModelMapping,
     PrivacySettings,
     RequestPolicy,
@@ -98,9 +99,9 @@ def _config() -> AIExecutionConfig:
         access_configuration_revision=1, configuration_revision=3, gateway_identity="a" * 64,
         endpoint_destination_id="omniroute", gateway_base_url="http://x", gateway_api_key="k",
         gateway_credential_configured=True,
-        aliases={"reasoning-small": ModelMapping(model="m", destination="remote")},
+        defaults=ModelDefaults(background=ModelMapping(model="m", destination="remote")),
         privacy=PrivacySettings(allow_remote_reasoning=True, reasoning_destinations=["omniroute"]),
-        chat_alias="reasoning-large", brief_alias="reasoning-small", request_timeout_seconds=5,
+        request_timeout_seconds=5,
         web_search_provider="none", web_search_endpoint=None, web_search_api_key="",
     )
 
@@ -110,10 +111,10 @@ def test_worker_policies_carry_identity():
     from modules.timeline import worker as timeline_worker
 
     cfg = _config()
-    policy = timeline_worker._policy(cfg, cfg.aliases["reasoning-small"], "omniroute", False)
+    policy = timeline_worker._policy(cfg, cfg.defaults.background, "omniroute", False)
     assert (policy.workspace_id, policy.actor_user_id, policy.membership_revision, policy.gateway_identity) == (
         OWNER.workspace_id, 1, 2, "a" * 64)
-    mapping = cfg.aliases["reasoning-small"]
+    mapping = cfg.defaults.background
     assert isinstance(entity_worker._policy_allows_extraction(cfg, mapping, "omniroute", False), bool)
 
 
@@ -187,7 +188,7 @@ def _bumped(cfg: AIExecutionConfig, **changes) -> AIExecutionConfig:
 def _chat_cfg() -> AIExecutionConfig:
     cfg = _config()
     return cfg.model_copy(update={
-        "aliases": {**cfg.aliases, "reranker": ModelMapping(model="rr", destination="remote")},
+        "defaults": cfg.defaults.model_copy(update={"reranker": ModelMapping(model="rr", destination="remote")}),
     })
 
 
@@ -203,7 +204,7 @@ def _factory():
     {"configuration_revision": 4},
     {"gateway_identity": "b" * 64},
     {"endpoint_destination_id": "other"},
-    {"aliases": {"reasoning-small": ModelMapping(model="changed", destination="remote")}},
+    {"defaults": ModelDefaults(background=ModelMapping(model="changed", destination="remote"))},
 ])
 async def test_chat_config_fence_denies_drift(monkeypatch, change):
     from core.model_gateway.client import PrivacyPolicyDenied
@@ -211,12 +212,12 @@ async def test_chat_config_fence_denies_drift(monkeypatch, change):
     from modules.settings import public as settings_public
 
     snap = _config()
-    alias, mapping = "reasoning-small", snap.aliases["reasoning-small"]
+    role, mapping = "background", snap.defaults.background
     monkeypatch.setattr(settings_public, "get_ai_execution_config", AsyncMock(return_value=_bumped(snap, **change)))
     with pytest.raises(PrivacyPolicyDenied):
-        await chat_scope.ensure_ai_config_unchanged(_factory(), MagicMock(), MagicMock(), OWNER, snap, alias, mapping)
+        await chat_scope.ensure_ai_config_unchanged(_factory(), MagicMock(), MagicMock(), OWNER, snap, role, mapping)
     monkeypatch.setattr(settings_public, "get_ai_execution_config", AsyncMock(return_value=snap))
-    await chat_scope.ensure_ai_config_unchanged(_factory(), MagicMock(), MagicMock(), OWNER, snap, alias, mapping)
+    await chat_scope.ensure_ai_config_unchanged(_factory(), MagicMock(), MagicMock(), OWNER, snap, role, mapping)
 
 
 @pytest.mark.asyncio

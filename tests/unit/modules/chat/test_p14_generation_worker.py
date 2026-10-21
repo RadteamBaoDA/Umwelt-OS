@@ -13,7 +13,7 @@ import pytest
 from arq.connections import ArqRedis
 
 from core.config import Settings
-from core.workspaces.schemas import InternalJobScope
+from core.model_gateway.schemas import ModelDefaults
 from modules.chat import routes, worker
 from modules.chat.models import Message, StreamEvent
 from modules.chat.schemas import AnswerContext
@@ -113,7 +113,7 @@ class _Gen:
         monkeypatch.setattr(worker, "_next_event_seq", AsyncMock(side_effect=lambda *a, **k: next(seq)))
         monkeypatch.setattr(worker, "build_context", AsyncMock(return_value=context))
         monkeypatch.setattr(worker.settings_public, "get_ai_execution_config",
-                            AsyncMock(return_value=_config(aliases={})))
+                            AsyncMock(return_value=_config(defaults=ModelDefaults())))
         monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=self.stream))
         monkeypatch.setattr(worker, "_mark_failed", self.failed)
         # Internal router by default: the pre-request classification step must not consume the scripted session reads.
@@ -349,17 +349,6 @@ def test_chat_worker_settings_isolated_queue() -> None:
     assert ChatWorkerSettings.keep_result == 0
     main_names = [getattr(f, "name", getattr(f, "__name__", "")) for f in WorkerSettings.functions]
     assert "process_chat_response" not in main_names
-
-
-async def test_legacy_aliases_overlay_accepts_bytes_keys() -> None:
-    from modules.settings.models import ALIASES, legacy_aliases
-
-    alias = next(iter(ALIASES))
-    value = json.dumps({"model": "m", "destination": "remote"}).encode()
-    redis = SimpleNamespace(hgetall=AsyncMock(return_value={alias.encode(): value}))
-    scope = InternalJobScope(workspace_id=uuid4(), actor_user_id=1, membership_revision=1)
-    mappings = await legacy_aliases(redis, Settings(csrf_signing_secret="s"), scope=scope)  # type: ignore[arg-type]
-    assert mappings[alias].model == "m"
 
 
 async def test_recover_fails_expired_pending_instead_of_requeueing(monkeypatch: pytest.MonkeyPatch) -> None:

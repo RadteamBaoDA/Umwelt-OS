@@ -56,6 +56,16 @@ async def _noop():
 
 
 @pytest.mark.asyncio
+async def test_default_user_agent_is_sent_but_caller_user_agent_wins():
+    seen = []
+    transport = httpx.MockTransport(lambda r: seen.append(r.headers["user-agent"]) or httpx.Response(200, json={}))
+    await rest.fetch_bounded("https://api.example.com/x", before_send=_noop, resolve=public, transport=transport)
+    await rest.fetch_bounded("https://api.example.com/x", headers={"user-agent": "Umwelt-OS me@example.com"},
+                             before_send=_noop, resolve=public, transport=transport)
+    assert seen == [rest.DEFAULT_USER_AGENT, "Umwelt-OS me@example.com"]
+
+
+@pytest.mark.asyncio
 async def test_any_private_resolution_is_refused_before_send():
     async def mixed(host, port):
         return ["93.184.216.34", "10.0.0.5"]

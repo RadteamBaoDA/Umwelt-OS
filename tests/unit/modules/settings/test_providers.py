@@ -1,4 +1,4 @@
-"""Per-alias multi-provider AI settings: derivation, identity, save validation, consent and Redis degradation."""
+"""Per-role multi-provider AI settings: derivation, identity, save validation, consent and Redis degradation."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from core.config import Settings
 from core.model_gateway.schemas import (
     AIExecutionConfig,
     AISettingsUpdate,
+    ModelDefaults,
     ModelMapping,
     PrivacySettings,
     ProviderConfig,
@@ -50,8 +51,8 @@ def _enc(value: str) -> str:
 
 def _row(**over: object) -> SimpleNamespace:
     base = {
-        "configuration_revision": 2, "providers": {}, "aliases": {}, "n8n": {},
-        "privacy": {}, "system_prompts": {}, "chat_alias": "reasoning-large", "brief_alias": "reasoning-small",
+        "configuration_revision": 2, "providers": {}, "defaults": {}, "n8n": {},
+        "privacy": {}, "system_prompts": {},
         "web_search_provider": "none", "web_search_endpoint": None, "web_search_api_key_ciphertext": None, "request_timeout_seconds": 20}
     return SimpleNamespace(**{**base, **over})
 
@@ -80,17 +81,18 @@ def _provider(pid: str, kind: str = "openai", url: str = GW, **over: object) -> 
     return ProviderUpdate(id=pid, kind=kind, label=pid.title(), base_url=url, **over)  # type: ignore[arg-type]
 
 
-# ---- derive_for_alias ------------------------------------------------------------------------------------------
+# ---- derive_for_role ------------------------------------------------------------------------------------------
 
 def _derived_config() -> AIExecutionConfig:
     return AIExecutionConfig(
         workspace_id=WS, actor_user_id=1, membership_revision=1, access_configuration_revision=1, configuration_revision=2,
         gateway_identity="a" * 64, endpoint_destination_id="remote:default", gateway_base_url="https://d.example",
         gateway_api_key="default-key", gateway_credential_configured=True,
-        aliases={"fast": ModelMapping(model="a", destination="remote", provider_id="local1"),
-                 "reasoning-large": ModelMapping(model="b", destination="remote"),
-                 "reranker": ModelMapping(model="c", destination="remote", provider_id="ghost")},
-        privacy=PrivacySettings(), chat_alias="fast", brief_alias="fast", request_timeout_seconds=20,
+        defaults=ModelDefaults(
+            chat=ModelMapping(model="a", destination="remote", provider_id="local1"),
+            brief=ModelMapping(model="b", destination="remote"),
+            reranker=ModelMapping(model="c", destination="remote", provider_id="ghost")),
+        privacy=PrivacySettings(), request_timeout_seconds=20,
         web_search_provider="none", web_search_endpoint=None, web_search_api_key="",
         providers={
             "default": ProviderConfig(kind="custom", base_url="https://d.example", api_key="default-key",
@@ -98,23 +100,23 @@ def _derived_config() -> AIExecutionConfig:
             "local1": ProviderConfig(kind="ollama", base_url="http://ollama:11434", destination_id="local:abc", local=True)})
 
 
-def test_derive_overrides_endpoint_key_and_destination_from_the_alias_provider() -> None:
+def test_derive_overrides_endpoint_key_and_destination_from_the_role_provider() -> None:
     config = _derived_config()
-    fast = public.derive_for_alias(config, "fast")
-    assert (fast.gateway_base_url, fast.gateway_api_key, fast.endpoint_destination_id, fast.gateway_credential_configured) == (
+    chat = public.derive_for_role(config, "chat")
+    assert (chat.gateway_base_url, chat.gateway_api_key, chat.endpoint_destination_id, chat.gateway_credential_configured) == (
         "http://ollama:11434", "", "local:abc", False)
-    default = public.derive_for_alias(config, "reasoning-large")
+    default = public.derive_for_role(config, "brief")
     assert (default.gateway_api_key, default.endpoint_destination_id) == ("default-key", "remote:default")
-    assert public.derive_for_alias(fast, "fast") == fast  # idempotent
+    assert public.derive_for_role(chat, "chat") == chat  # idempotent
     assert config.gateway_base_url == "https://d.example"  # pure: input untouched
 
 
 def test_derive_unknown_provider_is_unconfigured_and_providerless_config_passes_through() -> None:
     config = _derived_config()
-    ghost = public.derive_for_alias(config, "reranker")
+    ghost = public.derive_for_role(config, "reranker")
     assert ghost.gateway_base_url is None and ghost.endpoint_destination_id is None and not ghost.gateway_credential_configured
     bare = config.model_copy(update={"providers": {}})
-    assert public.derive_for_alias(bare, "fast") is bare
+    assert public.derive_for_role(bare, "chat") is bare
 
 
 def test_execution_config_never_dumps_or_reprs_provider_keys() -> None:
@@ -136,7 +138,7 @@ async def test_first_provider_backs_the_top_level_mirror_when_no_default_exists(
     main = config.providers["main"]
     assert (config.gateway_base_url, config.gateway_api_key) == (GW, "k1")
     assert main.destination_id.startswith("remote:") and [(m.id, m.type) for m in main.models] == [("m1", "embedding")]  # type: ignore[union-attr]
-    derived = public.derive_for_alias(config, "fast")  # alias without provider_id -> first provider
+    derived = public.derive_for_role(config, "chat")  # role without provider_id -> first provider
     assert derived.gateway_base_url == GW and derived.gateway_credential_configured
     read = public._read(config)
     assert read.providers[0].id == "main" and read.providers[0].models[0].type == "embedding"
@@ -146,7 +148,7 @@ async def test_first_provider_backs_the_top_level_mirror_when_no_default_exists(
 @pytest.mark.asyncio
 async def test_no_row_defaults_to_unconfigured_without_env_bootstrap() -> None:
     config = await _config(None)  # type: ignore[arg-type]
-    assert config.providers == {} and config.gateway_base_url is None and config.aliases == {}
+    assert config.providers == {} and config.gateway_base_url is None and config.defaults == ModelDefaults()
 
 
 @pytest.mark.asyncio
@@ -177,8 +179,7 @@ async def test_local_flag_is_derived_from_kind_not_stored_value() -> None:
 @pytest.mark.parametrize("update", [
     lambda: _update(providers=[_provider("a"), _provider("a")]),
     lambda: _update(providers=[_provider(f"p{i}") for i in range(9)]),
-    lambda: _update(providers=[_provider("a")], aliases={"fast": ModelMapping(model="m", provider_id="nope")}),
-    lambda: _update(providers=[_provider("a")], aliases={"local-private": ModelMapping(model="m", provider_id="a")}),
+    lambda: _update(providers=[_provider("a")], defaults=ModelDefaults(chat=ModelMapping(model="m", provider_id="nope"))),
     lambda: _update(providers=[ProviderUpdate(id="a", kind="openai", label="a")]),  # no endpoint
     lambda: _update(providers=[_provider("a", url="https://evil.example/v1")]),  # not allowlisted
     lambda: _update(providers=[_provider("a", credential_action="replaced")]),  # replace without key
@@ -190,11 +191,11 @@ async def test_save_rejects_invalid_provider_sets(update) -> None:
 
 
 @pytest.mark.asyncio
-async def test_save_encrypts_keys_and_allows_local_private_only_on_local() -> None:
+async def test_save_encrypts_keys_and_stores_local_flag() -> None:
     row = await _save(_row(), _update(
         providers=[_provider("cloud", api_key="sk-secret", credential_action="replaced"),
                    _provider("ol", "ollama", OLLAMA, models=[{"id": "llama3", "type": "llm"}])],  # type: ignore[arg-type]
-        aliases={"local-private": ModelMapping(model="llama3", provider_id="ol")}))
+        defaults=ModelDefaults(chat=ModelMapping(model="llama3", provider_id="ol"))))
     assert "sk-secret" not in str(row.providers)
     assert Fernet(KEY.encode()).decrypt(row.providers["cloud"]["key_ciphertext"].encode()).decode() == "sk-secret"
     assert row.providers["ol"]["local"] is True and row.providers["cloud"]["local"] is False
@@ -231,18 +232,22 @@ def _typed(pid: str = "a", **models: str) -> ProviderUpdate:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("alias", "mtype", "ok"), [
+@pytest.mark.parametrize(("role", "mtype", "ok"), [
     ("embedding", "embedding", True), ("embedding", "llm", False),
     ("reranker", "reranker", True), ("reranker", "embedding", False),
     ("vision", "vision", True), ("vision", "llm", False),
-    ("fast", "llm", True), ("reasoning-large", "embedding", False), ("reasoning-small", "tts", False),
+    ("chat", "llm", True), ("chat", "decision", False), ("chat", "background", False), ("chat", "embedding", False),
+    ("brief", "llm", True), ("brief", "tts", False),
+    ("background", "background", True), ("background", "llm", True), ("background", "embedding", False),
 ])
-async def test_alias_requires_matching_model_type(alias: str, mtype: str, ok: bool) -> None:
-    dims = 8 if alias == "embedding" else None
-    update = _update(providers=[_typed("a", m1=mtype)], aliases={alias: ModelMapping(model="m1", provider_id="a", dimensions=dims)})
+async def test_role_requires_matching_model_type(role: str, mtype: str, ok: bool) -> None:
+    dims = 8 if role == "embedding" else None
+    update = _update(providers=[_typed("a", m1=mtype)],
+                     defaults=ModelDefaults(**{role: ModelMapping(model="m1", provider_id="a", dimensions=dims)}))
     if ok:
         row = await _save(_row(), update)
-        assert row.providers["a"]["models"] == [{"id": "m1", "type": mtype}]
+        assert row.providers["a"]["models"] == [{"id": "m1", "type": mtype, "vision": False}]
+        assert row.defaults[role]["model"] == "m1"
     else:
         with pytest.raises(HTTPException) as exc:
             await _save(_row(), update)
@@ -250,13 +255,20 @@ async def test_alias_requires_matching_model_type(alias: str, mtype: str, ok: bo
 
 
 @pytest.mark.asyncio
+async def test_vision_flagged_llm_serves_vision_role_and_flag_round_trips() -> None:
+    provider = _provider("a", models=[{"id": "m1", "type": "llm", "vision": True}])  # type: ignore[list-item]
+    row = await _save(_row(), _update(providers=[provider], defaults=ModelDefaults(vision=ModelMapping(model="m1", provider_id="a"))))
+    assert row.providers["a"]["models"] == [{"id": "m1", "type": "llm", "vision": True}]
+
+
+@pytest.mark.asyncio
 async def test_unlisted_model_is_rejected_when_listed_and_duplicate_model_ids_rejected() -> None:
     with pytest.raises(HTTPException) as exc:  # provider has a model list -> unlisted id is 422
-        await _save(_row(), _update(providers=[_typed("a", m1="llm")], aliases={"embedding": ModelMapping(model="other", provider_id="a")}))
+        await _save(_row(), _update(providers=[_typed("a", m1="llm")], defaults=ModelDefaults(embedding=ModelMapping(model="other", provider_id="a"))))
     assert exc.value.status_code == 422
     # empty model list = not yet discovered -> a chosen model is rejected until discovery runs
     with pytest.raises(HTTPException) as exc:
-        await _save(_row(), _update(providers=[_provider("a")], aliases={"embedding": ModelMapping(model="other", provider_id="a", dimensions=8)}))
+        await _save(_row(), _update(providers=[_provider("a")], defaults=ModelDefaults(embedding=ModelMapping(model="other", provider_id="a", dimensions=8))))
     assert exc.value.status_code == 422 and "Discover" in exc.value.detail
     with pytest.raises(HTTPException):
         await _save(_row(), _update(providers=[_provider("a", models=[{"id": "m", "type": "llm"}, {"id": "m", "type": "tts"}])]))  # type: ignore[arg-type]
@@ -265,13 +277,13 @@ async def test_unlisted_model_is_rejected_when_listed_and_duplicate_model_ids_re
 @pytest.mark.asyncio
 async def test_embedding_dimensions_required_rejected_elsewhere_and_round_trip() -> None:
     providers = [_typed("a", e="embedding", c="llm")]
-    for aliases in ({"embedding": ModelMapping(model="e", provider_id="a")},  # missing dimensions
-                    {"fast": ModelMapping(model="c", provider_id="a", dimensions=8)}):  # dimensions on non-embedding
+    for defaults in (ModelDefaults(embedding=ModelMapping(model="e", provider_id="a")),  # missing dimensions
+                     ModelDefaults(chat=ModelMapping(model="c", provider_id="a", dimensions=8))):  # dimensions on non-embedding
         with pytest.raises(HTTPException) as exc:
-            await _save(_row(), _update(providers=providers, aliases=aliases))
+            await _save(_row(), _update(providers=providers, defaults=defaults))
         assert exc.value.status_code == 422
-    row = await _save(_row(), _update(providers=providers, aliases={"embedding": ModelMapping(model="e", provider_id="a", dimensions=768)}))
-    assert row.aliases["embedding"]["dimensions"] == 768
+    row = await _save(_row(), _update(providers=providers, defaults=ModelDefaults(embedding=ModelMapping(model="e", provider_id="a", dimensions=768))))
+    assert row.defaults["embedding"]["dimensions"] == 768
 
 
 # ---- consent ----------------------------------------------------------------------------------------------------
@@ -339,15 +351,6 @@ def test_draft_reuses_stored_key_only_for_the_same_endpoint() -> None:
 # ---- Redis degradation ------------------------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_legacy_aliases_degrades_to_defaults_when_redis_is_down() -> None:
-    settings = _settings()
-    redis = MagicMock()
-    redis.hgetall = AsyncMock(side_effect=RedisError("down"))
-    aliases = await models.legacy_aliases(redis, settings, scope=SCOPE)
-    assert aliases == {}
-
-
-@pytest.mark.asyncio
 async def test_list_capabilities_returns_empty_when_redis_is_down() -> None:
     config = _derived_config()
     redis = MagicMock()
@@ -362,6 +365,6 @@ def test_every_model_gateway_construction_uses_a_derived_config() -> None:
     offenders = []
     for path in root.rglob("*.py"):
         text = path.read_text(encoding="utf-8")
-        if re.search(r"(?<![A-Za-z_])ModelGateway\(", text) and not re.search(r"derive_for_alias|resolve_draft_provider", text):
+        if re.search(r"(?<![A-Za-z_])ModelGateway\(", text) and not re.search(r"derive_for_role|derive_for_mapping|resolve_draft_provider", text):
             offenders.append(str(path.relative_to(root)))
-    assert not offenders, f"ModelGateway built without derive_for_alias: {offenders}"
+    assert not offenders, f"ModelGateway built without derive_for_role: {offenders}"

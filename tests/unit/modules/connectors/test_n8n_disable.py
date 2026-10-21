@@ -89,7 +89,8 @@ async def test_wake_is_unavailable_when_disabled() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reconcile_disabled_still_deletes_but_skips_create_and_activate() -> None:
+async def test_reconcile_discovers_all_workspaces_without_instance_wide_kill_switch() -> None:
+    """Discovery cannot borrow one workspace's kill switch; admitted workers apply their own."""
     sid = uuid4()
     statements: list[str] = []
 
@@ -112,11 +113,10 @@ async def test_reconcile_disabled_still_deletes_but_skips_create_and_activate() 
 
     drive_credential, drive_workflow = AsyncMock(return_value=1), AsyncMock(return_value=1)
     resume, recover = AsyncMock(return_value=1), AsyncMock(return_value=1)
-    n8n = SimpleNamespace(service_url="http://n8n:5678", api_key="k", enabled=False)
     ctx = {"settings": SimpleNamespace(multi_workspace_enabled=False), "session_factory": lambda: _Session()}
     with patch.object(worker, "dispatch_github_webhooks", AsyncMock(return_value=0)), \
          patch.object(worker, "_advance_transitions", AsyncMock(return_value=0)), \
-         patch("modules.settings.public.resolve_n8n", AsyncMock(return_value=n8n)), \
+         patch("modules.settings.public.resolve_n8n", AsyncMock(side_effect=AssertionError("unscoped n8n settings must not be resolved"))), \
          patch.object(worker, "_cursor_ctx", MagicMock()), patch.object(worker, "_read_cursor", AsyncMock(return_value=None)), \
          patch.object(worker, "_read_slot_cursor", MagicMock(return_value=None)), \
          patch.object(worker, "_write_slot_cursor", MagicMock()), patch.object(worker, "_write_cursor", AsyncMock()), \
@@ -125,10 +125,9 @@ async def test_reconcile_disabled_still_deletes_but_skips_create_and_activate() 
         await worker.reconcile_connectors(ctx)  # type: ignore[arg-type]
     drive_credential.assert_awaited_once()
     drive_workflow.assert_awaited_once()
-    resume.assert_not_awaited()
-    recover.assert_not_awaited()
-    # Only the deactivation-restricted workflow discovery ran; create/activation discovery was skipped.
-    assert len(statements) == 1 and "workflow_operation" in statements[0]
+    resume.assert_awaited_once()
+    recover.assert_awaited_once()
+    assert len(statements) == 3 and "workflow_operation" in statements[0]
 
 
 @pytest.mark.asyncio

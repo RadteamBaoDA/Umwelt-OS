@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, urlunsplit
 from uuid import UUID
 from xml.etree import ElementTree
 
@@ -26,6 +26,26 @@ from modules.sources.schemas import ConnectorSource
 # Fixed in-network address packaged workflows call back to (every infrastructure/n8n/workflows/*.json URL).
 # Not owner-configurable: a different value would desynchronize the shipped templates.
 CALLBACK_BASE = "http://api:8000"
+
+
+def n8n_service_identity(value: str) -> str:
+    """Normalize a credential-free service root without guessing DNS aliases or changing its path.
+
+    Remote IDs are scoped to this exact endpoint. Reject URLs carrying credentials, query
+    parameters or fragments so endpoint lineage never persists secrets or ambiguous targets.
+    """
+    if not isinstance(value, str) or not value or len(value) > 2048:
+        raise ValueError("Invalid n8n service identity")
+    parsed = urlsplit(value)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("Invalid n8n service identity")
+    host = parsed.hostname.lower()
+    if ":" in host:
+        host = f"[{host}]"
+    port = parsed.port
+    if port is not None and (parsed.scheme.lower(), port) not in {("http", 80), ("https", 443)}:
+        host = f"{host}:{port}"
+    return urlunsplit((parsed.scheme.lower(), host, parsed.path.rstrip("/"), "", ""))
 
 
 def workflow_state(cursor: str | None) -> dict[str, str | None]:
@@ -176,6 +196,11 @@ class N8nApi:
         self._base_url = service_url.rstrip("/")
         self._headers = {"X-N8N-API-KEY": api_key}
         self._settings = settings
+
+    @property
+    def service_url(self) -> str:
+        """Expose only the normalized actual dispatch endpoint for durable ownership fencing."""
+        return n8n_service_identity(self._base_url)
 
     def _client(self, timeout: float) -> httpx.AsyncClient:
         """Return the HTTP client: pinned to approved addresses when settings are known, plain otherwise."""

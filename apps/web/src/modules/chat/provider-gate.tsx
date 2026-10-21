@@ -9,9 +9,8 @@ import { apiRequest } from '@/core/api';
 
 type GateProvider = { id: string; credential_configured: boolean; local: boolean; policy_denied: boolean; destination_id: string | null };
 type GateSettings = {
-  chat_alias: string;
   providers: GateProvider[];
-  aliases: Record<string, { model: string; provider_id?: string | null } | undefined>;
+  defaults?: { chat?: { model: string; provider_id?: string | null } | null };
   privacy?: { allow_remote_reasoning?: boolean; reasoning_destinations?: string[] };
 };
 
@@ -21,7 +20,7 @@ export const MODELS_SETTINGS_HREF = '/settings/ai';
 export const PROVIDER_READY_STALE_MS = 30_000;
 
 /**
- * Decides whether the owner's chat alias maps to a usable model: a mapped model on a provider that is not
+ * Decides whether the owner's chat default maps to a usable model: a mapped model on a provider that is not
  * policy-denied and is either local (Ollama, LM Studio) or has a stored credential plus remote-reasoning consent.
  * The per-destination allow-list is deliberately NOT checked here: the server falls back from
  * `reasoning_destinations` to `permitted_destinations` (core/model_gateway/policy.py), so mirroring only one list
@@ -32,7 +31,7 @@ export const PROVIDER_READY_STALE_MS = 30_000;
  * @returns True when a chat send can resolve a model under current policy.
  */
 export function isChatProviderReady(s: GateSettings): boolean {
-  const mapping = s.aliases?.[s.chat_alias];
+  const mapping = s.defaults?.chat;
   if (!mapping?.model) return false;
   const providers = s.providers ?? [];
   const id = mapping.provider_id ?? providers.find((p) => p.id === 'default')?.id ?? providers[0]?.id;

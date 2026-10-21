@@ -20,6 +20,7 @@ from core.database import get_session
 from core.heavy_work import to_thread_joined
 from core.rate_limit import require_budget
 from core.storage import save_upload, storage_path
+from core.storage_admission import WorkspaceStorageBusy, workspace_storage_lease
 from core.workspaces.dependencies import (
     require_default_workspace_read,
     require_default_workspace_write,
@@ -192,7 +193,9 @@ async def _intake_upload(
     Release SQL for bounded temporary/hash/atomic filesystem work. Recheck the captured
     access/Source/session without epoch upgrades before owner intake. Known rejected or
     duplicate staging bytes are deleted; uncertain commit outcomes retain bytes for the
-    reference-proved orphan sweep. Filename sanitization supplies display metadata only.
+    reference-proved orphan sweep. A shared physical-write lease and fresh original admission
+    prevent a previously admitted upload from creating files after account erasure drains
+    writers. Filename sanitization supplies display metadata only.
     Returns the run and the owning Document ID (the existing one for duplicate bytes).
     """
     settings = request.app.state.settings
@@ -216,10 +219,19 @@ async def _intake_upload(
         )
         await session.rollback()
         document_id = uuid4()
-        raw_uri, size, digest = await save_upload(
-            settings.data_dir, upload, document_id, suffix, settings.upload_max_bytes,
-            workspace_id=scope.workspace_id,
-        )
+        async with workspace_storage_lease(request.app.state.session_factory, scope.workspace_id) as connection:
+            # Use the lease's connection for revalidation: a burst of uploads must not hold
+            # every pool slot and then deadlock waiting for a second SQL connection each.
+            async with AsyncSession(bind=connection, expire_on_commit=False) as writer_session:
+                await lock_access_fence(writer_session, scope=scope, expected=access_fence,
+                                        multi_workspace_enabled=enabled, auth_sessions=(session_ref,))
+                await writer_session.rollback()
+            raw_uri, size, digest = await save_upload(
+                settings.data_dir, upload, document_id, suffix, settings.upload_max_bytes,
+                workspace_id=scope.workspace_id,
+            )
+    except WorkspaceStorageBusy as exc:
+        raise HTTPException(status_code=503, detail='Workspace storage is temporarily unavailable') from exc
     except ValueError as exc:
         status = 413 if "size limit" in str(exc) else 415
         raise HTTPException(status_code=status, detail=str(exc)) from exc

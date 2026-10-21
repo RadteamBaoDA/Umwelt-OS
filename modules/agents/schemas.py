@@ -67,7 +67,6 @@ class AgentProfileRead(BaseModel):
     title: str
     enabled: bool
     revision: int
-    model_alias: str
     prompt: str
     allowed_tools: list[AgentProfileTool]
     available_tools: list[AgentProfileTool]
@@ -83,7 +82,6 @@ class AgentProfilePatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_revision: int = Field(ge=0)
     enabled: bool
-    model_alias: str = Field(min_length=1, max_length=64)
     prompt: str = Field(max_length=8_000)
     allowed_tools: list[AgentProfileTool] = Field(max_length=32)
     source_ids: list[UUID] = Field(max_length=32)

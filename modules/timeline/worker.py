@@ -54,7 +54,7 @@ from modules.timeline.extraction import (
 )
 from modules.timeline.models import Event, TimelineExtractionWork
 
-ALIAS = "reasoning-small"
+ROLE = "background"
 TIMEOUT_SECONDS = 35
 
 
@@ -80,8 +80,8 @@ async def _workspace_job_scope(
 
 async def _dependency_snapshot(config: AIExecutionConfig, redis: Redis, *, scope: Scope) -> tuple[str, bool]:
     """Fingerprint nonsecret extraction policy and verify a current structured capability result."""
-    mapping = config.aliases.get(ALIAS)
-    key = capability_key(ALIAS, mapping.model, mapping.version, "structured", config.gateway_identity,
+    mapping = config.defaults.resolve(ROLE)
+    key = capability_key(ROLE, mapping.model, mapping.version, "structured", config.gateway_identity,
                          workspace_id=scope.workspace_id, actor_user_id=config.actor_user_id) if mapping else None
     raw = await redis.get(key) if key else None
     if isinstance(raw, bytes):
@@ -97,7 +97,7 @@ async def _dependency_snapshot(config: AIExecutionConfig, redis: Redis, *, scope
     except ValueError:
         fresh = False
     supported = bool(
-        capability is not None and fresh and capability.result == "supported" and capability.alias == ALIAS
+        capability is not None and fresh and capability.result == "supported" and capability.role == ROLE
         and capability.capability == "structured" and capability.gateway_identity == config.gateway_identity
         and mapping is not None and capability.model == mapping.model
         and capability.version == mapping.version
@@ -134,11 +134,11 @@ def _policy(config: AIExecutionConfig, mapping: ModelMapping | None, destination
 
 
 def _allowed(config: AIExecutionConfig, mapping: ModelMapping | None, destination: str | None, local_only: bool) -> bool:
-    """Check the selected alias, credential, destination, and privacy gates."""
+    """Check the selected model role, credential, destination, and privacy gates."""
     if mapping is None or not destination or config.endpoint_policy_denied:
         return False
     return may_send(
-        _policy(config, mapping, destination, local_only), ALIAS, mapping, destination,
+        _policy(config, mapping, destination, local_only), ROLE, mapping, destination,
         config.gateway_credential_configured, "structured",
     )
 
@@ -263,9 +263,9 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                     scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 await session.commit()
                 return
-            config = settings_public.derive_for_alias(
-                await settings_public.get_ai_execution_config(session, settings, redis, scope=scope), ALIAS)
-            mapping = config.aliases.get(ALIAS)
+            config = settings_public.derive_for_role(
+                await settings_public.get_ai_execution_config(session, settings, redis, scope=scope), ROLE)
+            mapping = config.defaults.resolve(ROLE)
             destination = config.endpoint_destination_id
             fingerprint, capability_supported = await _dependency_snapshot(config, redis, scope=scope)
             dependency_fingerprint = fingerprint
@@ -289,9 +289,9 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
             async def before_send() -> None:
                 """Recheck destination, configuration revision, capability, and policy immediately before egress."""
                 async with factory() as check_session:
-                    current = settings_public.derive_for_alias(
-                        await settings_public.get_ai_execution_config(check_session, settings, redis, scope=scope), ALIAS)
-                    current_mapping = current.aliases.get(ALIAS)
+                    current = settings_public.derive_for_role(
+                        await settings_public.get_ai_execution_config(check_session, settings, redis, scope=scope), ROLE)
+                    current_mapping = current.defaults.resolve(ROLE)
                     current_destination = current.endpoint_destination_id
                     current_fingerprint, current_supported = await _dependency_snapshot(current, redis, scope=scope)
                     if (
@@ -330,7 +330,7 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
             # Release workspace, membership, Source, Document and raw-URI locks before provider I/O.
             await session.rollback()
             response = await gateway.structured(
-                ALIAS, mapping, _policy(config, mapping, destination, source.local_only),
+                ROLE, mapping, _policy(config, mapping, destination, source.local_only),
                 extraction_messages(
                     [(item.id, item.content) for item in data.chunks],
                     [item.model_dump(mode="json", exclude={"name", "entity_id", "entity_revision", "observed_at"}) for item in membership_refs],
@@ -342,9 +342,9 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                 raise ValueError("invalid_model_response")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
             proposals, model = response_content(response)
             async with factory() as check_session:
-                current_config = settings_public.derive_for_alias(
-                    await settings_public.get_ai_execution_config(check_session, settings, redis, scope=scope), ALIAS)
-                current_mapping = current_config.aliases.get(ALIAS)
+                current_config = settings_public.derive_for_role(
+                    await settings_public.get_ai_execution_config(check_session, settings, redis, scope=scope), ROLE)
+                current_mapping = current_config.defaults.resolve(ROLE)
                 current_destination = current_config.endpoint_destination_id
                 current_fingerprint, current_supported = await _dependency_snapshot(current_config, redis, scope=scope)
                 if (
@@ -569,10 +569,10 @@ async def recover_timeline_extraction_work(ctx: dict[str, object]) -> int:
                     )
                     await session.commit()
                     continue
-                config = settings_public.derive_for_alias(await settings_public.get_ai_execution_config(
+                config = settings_public.derive_for_role(await settings_public.get_ai_execution_config(
                     session, cast(Settings, ctx["settings"]), redis, scope=scope,
-                ), ALIAS)
-                mapping = config.aliases.get(ALIAS)
+                ), ROLE)
+                mapping = config.defaults.resolve(ROLE)
                 fingerprint, capability_supported = await _dependency_snapshot(config, redis, scope=scope)
                 if (
                     capability_supported and _allowed(config, mapping, config.endpoint_destination_id, source.local_only)

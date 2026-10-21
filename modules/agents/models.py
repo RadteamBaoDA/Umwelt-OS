@@ -309,7 +309,6 @@ class AgentProfile(Base):
     profile_id: Mapped[str] = mapped_column(String(24), primary_key=True)
     owner_id: Mapped[int] = mapped_column(Integer, nullable=False)
     enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
-    model_alias: Mapped[str] = mapped_column(String(64), nullable=False)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     allowed_tools: Mapped[list[dict[str, str]]] = mapped_column(JSONB, nullable=False, default=list)
     source_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)

@@ -7,7 +7,7 @@ import { useTranslations } from 'next-intl';
 import { useEffect, useState, type FormEvent } from 'react';
 import { UmweltLogo } from '@/components/brand/umwelt-mark';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { PasswordInput } from '@/components/ui/password-input';
 import { Label } from '@/components/ui/label';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import { assignAuthorizationUrl } from '@/core/safe-url';
@@ -149,14 +149,14 @@ export function InviteAccept() {
           {needsPassword && <>
             <div className="field">
               <Label htmlFor="invite-password">{t('invitePassword')}</Label>
-              <Input id="invite-password" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)}
+              <PasswordInput id="invite-password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)}
                 aria-invalid={touched && tooShort ? true : undefined} aria-describedby="invite-password-help" />
               <p id="invite-password-help" className="text-muted-foreground text-xs">{t('invitePasswordHelp')}</p>
               {touched && tooShort && <span className="error" role="alert">{t('invitePasswordShort')}</span>}
             </div>
             <div className="field">
               <Label htmlFor="invite-confirm">{t('invitePasswordConfirm')}</Label>
-              <Input id="invite-confirm" type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)}
+              <PasswordInput id="invite-confirm" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)}
                 aria-invalid={touched && mismatch ? true : undefined} />
               {touched && mismatch && <span className="error" role="alert">{t('invitePasswordMismatch')}</span>}
             </div>

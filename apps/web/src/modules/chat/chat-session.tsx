@@ -22,6 +22,7 @@ import {
   WEB_SEARCH_SEND_ENABLED,
 } from '@/modules/chat/api';
 import { ChatComposer } from './chat-composer';
+import { useChatModelPicker } from './model-picker';
 import { ProviderGateAlert, useChatProviderReady } from './provider-gate';
 import { PickQrButton } from '@/modules/pick/pick-qr-modal';
 import { upsertUiPart, type UiPart } from './generative-ui-parts';
@@ -197,6 +198,8 @@ export function ChatSession({
     return conversationDetail?.messages ?? [];
   }, [conversationDetail?.messages]);
 
+  const modelPicker = useChatModelPicker();
+  const modelChoice = modelPicker?.value ?? null;
   const latestAssistant = React.useMemo(() => [...messages].reverse().find((message) => message.role === 'assistant'), [messages]);
 
   // Same cache key as AI settings; availability needs provider, stored credential and remote-search consent.
@@ -216,6 +219,9 @@ export function ChatSession({
   const attachmentsUnavailable = webSearchProfileBlocked || !!effectiveEditingMessageId
     || (!!chatCtrl.context && chatCtrl.context.kind !== 'selection');
   const attachments = useChatAttachments(session.csrfToken, attachmentsUnavailable);
+  // The composer's + menu drives the context picker dialog and the hidden file input rendered by the bars.
+  const [contextPickerOpen, setContextPickerOpen] = React.useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
   const webSearchUsable = WEB_SEARCH_SEND_ENABLED && webSearchAvailable && !webSearchProfileBlocked;
 
   const profiles = useQuery({ queryKey: ['agent-profiles'], queryFn: getAgentProfiles, enabled: mode === 'full' });
@@ -675,6 +681,7 @@ export function ChatSession({
             client_request_id: clientRequestId,
             context: sendContext ?? undefined,
             ...(mode === 'full' && webSearchUsable && webSearchOn ? { web_search: true } : {}),
+            ...(modelChoice ? { provider_id: modelChoice.providerId, model: modelChoice.model } : {}),
           },
           session.csrfToken,
         );
@@ -736,6 +743,7 @@ export function ChatSession({
       streamResponseRun,
       webSearchUsable,
       webSearchOn,
+      modelChoice,
       attachments,
       pendingProfileRun,
       providerReady,
@@ -973,7 +981,7 @@ export function ChatSession({
         {/* Bottom composer */}
         <ChatComposer
           mode={mode}
-          contextBar={mode === 'full' ? <ChatContextBar variant="badges" context={chatCtrl.context} onRemove={() => chatCtrl.setContext(null)} onChange={mode === 'full' ? chatCtrl.setContext : undefined} /> : undefined}
+          contextBar={mode === 'full' ? <ChatContextBar variant="badges" context={chatCtrl.context} onRemove={() => chatCtrl.setContext(null)} onChange={mode === 'full' ? chatCtrl.setContext : undefined} pickerOpen={contextPickerOpen} onPickerOpenChange={setContextPickerOpen} /> : undefined}
           value={pendingProfileRun?.prompt ?? chatCtrl.draft}
           onChange={pendingProfileRun ? () => undefined : chatCtrl.setDraft}
           onSend={handleSend}
@@ -981,14 +989,21 @@ export function ChatSession({
           isStreaming={isStreaming}
           disabled={isPending}
           modelLabel={latestAssistant?.model_identity ?? null}
+          modelPicker={modelPicker}
           sourcesCount={latestAssistant?.citations?.length ?? 0}
-          showCapabilityNote={mode === 'full'}
           attachments={mode === 'full' ? (
             <ChatAttachmentBar
               state={attachments}
               disabled={isPending || isStreaming || attachmentsUnavailable}
+              inputRef={fileInputRef}
             />
           ) : undefined}
+          menu={mode === 'full' ? {
+            onAddContext: !chatCtrl.context || chatCtrl.context.kind === 'selection' ? () => setContextPickerOpen(true) : undefined,
+            onAttach: () => fileInputRef.current?.click(),
+            attachDisabled: isPending || isStreaming || attachmentsUnavailable || attachments.full,
+            share: { checked: attachments.shareWithModel, disabled: isPending || isStreaming || attachmentsUnavailable, onChange: attachments.setShareWithModel },
+          } : undefined}
           sendBlockedBy={mode === 'full' && attachments.sendBlock ? ATTACHMENT_STATUS_ID : null}
           webSearch={mode === 'full' && WEB_SEARCH_SEND_ENABLED ? { available: webSearchAvailable, provider: WEB_SEARCH_PROVIDER_LABELS[aiSettings.data?.web_search_provider ?? ''] ?? t('webSearchProviderGeneric'), profileBlocked: webSearchProfileBlocked, enabled: webSearchOn, onChange: setWebSearchOn } : undefined}
         />

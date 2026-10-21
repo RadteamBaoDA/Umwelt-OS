@@ -28,6 +28,8 @@ MAX_CONTEXT_BUDGET_BYTES = 64_000
 # ResponseRun.retrieval_context keys: the route writes WEB_SEARCH_KEY, only the worker writes the outcome.
 WEB_SEARCH_KEY = "_web_search"
 WEB_SEARCH_OUTCOME_KEY = "_web_search_outcome"
+# Per-send chat model override {"provider_id", "model"}; written by the route after validation, read by the worker.
+MODEL_OVERRIDE_KEY = "_model_override"
 
 
 class SelectedEvidenceRef(BaseModel):
@@ -585,6 +587,16 @@ class SendMessageRequest(BaseModel):
     client_request_id: str | None = Field(default=None, max_length=128)
     context: dict[str, Any] | None = None
     web_search: bool = False
+    # Optional per-chat model override; omitted keeps the owner's `chat` role default.
+    provider_id: str | None = Field(default=None, min_length=1, max_length=64)
+    model: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def _override_is_pair(self) -> "SendMessageRequest":
+        """Require provider_id and model together so an override always names one exact configured model."""
+        if (self.provider_id is None) != (self.model is None):
+            raise ValueError("provider_id and model must be provided together")
+        return self
 
 
 class MessageMutationRequest(BaseModel):

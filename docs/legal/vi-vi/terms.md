@@ -1,27 +1,27 @@
-# ?i?u kho?n s? d?ng
+# Điều khoản sử dụng
 
-B?n nh?p ng?y 19 th?ng 10 n?m 2026. ??n v? v?n h?nh: **[LEGAL NAME]**. Li?n h?: **[CONTACT EMAIL]**. Khu v?c ph?p l?: **[JURISDICTION]**. C?n ho?n thi?n v? r? so?t ph?p l? tr??c khi cung c?p cho ng??i kh?c.
+Bản nháp ngày 19 tháng 10 năm 2026. Đơn vị vận hành: **[LEGAL NAME]**. Liên hệ: **[CONTACT EMAIL]**. Khu vực pháp lý: **[JURISDICTION]**. Cần hoàn thiện và rà soát pháp lý trước khi cung cấp bản triển khai cho người khác.
 
-## D?ch v? t? l?u tr? v? tr?ch nhi?m
+## Dịch vụ tự lưu trữ và trách nhiệm
 
-?i?u kho?n nh?p n?y m? t? vi?c d?ng b?n tri?n khai Umwelt-OS. ??n v? v?n h?nh ch?u tr?ch nhi?m tri?n khai h?p ph?p, c?u h?nh, b?o m?t, th?ng b?o, ph?n quy?n, l?u tr?, sao l?u v? x? l? y?u c?u c?a ng??i li?n quan. T?nh s?n s?ng v? h? tr? ph? thu?c d?ch v? th?c t?; b?n nh?p kh?ng t?o cam k?t hosting hay th?i gian ho?t ??ng.
+Điều khoản nháp này mô tả việc dùng bản triển khai Umwelt-OS. Đơn vị vận hành chịu trách nhiệm triển khai hợp pháp, cấu hình, bảo mật, thông báo, phân quyền, lưu trữ, sao lưu và xử lý yêu cầu của người liên quan. Tính sẵn sàng và hỗ trợ tùy thuộc dịch vụ thực tế; bản nháp không tự tạo cam kết hosting hoặc thời gian hoạt động.
 
-Gi? k?n th?ng tin ??ng nh?p. Ch? truy c?p t?i kho?n, t?i li?u v? ngu?n ???c ph?p. Kh?ng v??t quy?n, t?n c?ng, vi ph?m quy?n hay x? l? n?i dung tr?i lu?t. Ki?m tra quy?n x? l? d? li?u ng??i kh?c tr??c khi nh?p. C?ng c? v? t? ??ng h?a c? th? thay ??i h? th?ng ngo?i ho?c g?i d? li?u ra ngo?i; h?y c?u h?nh quy?n c?n th?n.
+Giữ kín thông tin đăng nhập và chỉ dùng tài khoản, tài liệu, nguồn mà bạn được phép truy cập. Không vượt quyền, tấn công dịch vụ, xâm phạm quyền hoặc xử lý nội dung trái luật. Kiểm tra quyền xử lý dữ liệu của người khác trước khi nhập. Cấu hình cẩn thận quyền công cụ và tự động hóa: chúng có thể thay đổi hệ thống ngoài và gửi dữ liệu ra khỏi bản triển khai.
 
-## Gi?y ph?p v? b?n th? ba
+## Giấy phép nguồn và bên thứ ba
 
-N?i dung ngu?n thu?c ch? th? quy?n t??ng ?ng. Connector, endpoint c?ng khai ho?c tr?ch d?n kh?ng c?p gi?y ph?p s? d?ng. Tu?n th? ghi ngu?n, gi?i h?n ph?n ph?i, h?n m?c API, ?i?u kho?n ngu?n v? ph?p lu?t. Ph?n m?m v? th?nh ph?n ?i k?m gi? gi?y ph?p v? th?ng b?o ri?ng. Nh?p, d?ch ho?c xu?t n?i dung kh?ng trao quy?n s? h?u n?i dung c?a b?n th? ba.
+Nội dung nguồn thuộc chủ sở hữu quyền tương ứng. Connector, endpoint công khai hoặc trích dẫn không tự cấp giấy phép. Tuân thủ yêu cầu ghi nguồn, giới hạn phân phối, hạn mức API, điều khoản nguồn và pháp luật. Phần mềm và thành phần đi kèm giữ giấy phép và thông báo riêng. Việc nhập, dịch hoặc xuất nội dung không trao cho bạn quyền sở hữu nội dung bên thứ ba.
 
-M? h?nh, t?m ki?m, connector, MCP v? hosting t?y ch?n c? h?p ??ng, ph? v? c?ch x? l? d? li?u ri?ng. B?t t?ch h?p kh?ng bi?n nh? cung c?p th?nh ??n v? v?n h?nh b?n tri?n khai. Xem danh m?c **D?ch v? v? lu?ng d? li?u**; m?c d? ki?n kh?ng ph?i cam k?t ?? h? tr? ho?c ?ang ho?t ??ng.
+Mô hình, tìm kiếm, connector, máy chủ MCP và dịch vụ hosting tùy chọn có hợp đồng, phí và cách xử lý dữ liệu riêng. Bật tích hợp không khiến nhà cung cấp trở thành đơn vị vận hành bản triển khai này. Xem danh mục **Dịch vụ và luồng dữ liệu** bên dưới; mục được lên kế hoạch không phải cam kết hỗ trợ hay đang hoạt động.
 
-## Gi?i h?n AI v? th?ng tin
+## Giới hạn của AI và thông tin
 
-AI c? th? b?a, b? s?t ho?c hi?u sai th?ng tin v? tr?ch d?n. B?n tin, gi? v? c?nh b?o c? th? tr?, thi?u ho?c sai. Ki?m tra th?ng tin quan tr?ng t?i ngu?n g?c. K?t qu? kh?ng ph?i t? v?n y t?, ph?p l?, ??u t?, kh?n c?p ho?c chuy?n m?n c? ?i?u ki?n. Quy?t ??nh quan tr?ng v? h?nh ??ng ra ngo?i c?n con ng??i ki?m tra. B?n nh?p kh?ng b?o ??m ?? ch?nh x?c, ph? h?p ho?c k?t qu?.
+AI có thể tạo thông tin sai, bỏ sót hoặc hiểu sai sự kiện và trích dẫn. Bản tin, giá và cảnh báo có thể trễ, thiếu hoặc sai. Kiểm tra thông tin quan trọng tại nguồn gốc. Kết quả không phải lời khuyên y tế, pháp lý, đầu tư, khẩn cấp hoặc chuyên môn được quản lý khác. Các quyết định quan trọng và hành động ra ngoài cần con người rà soát. Bản nháp không bảo đảm độ chính xác, sự phù hợp hoặc kết quả.
 
-## D? li?u v? ??ng t?i kho?n
+## Dữ liệu, đóng tài khoản và thay đổi
 
-Th?ng b?o quy?n ri?ng t? m? t? lu?ng d? li?u v? gi?i h?n x?a. Xu?t d? li?u ???c h? tr? tr??c khi ??ng t?i kho?n. X?a t?i kho?n c? ?i?u ki?n v? danh t?nh, kh?ng gian l?m vi?c v? an to?n; d?n d?p c? th? th?t b?i v? c?n xem tr?ng th?i. Sao l?u m?y ch?, b?n t?i v? v? b?n nh?n ngo?i ???c ki?m so?t ri?ng. ??n v? v?n h?nh ph?i th?ng b?o thay ??i quan tr?ng v? ?i?u ki?n ch?m d?t theo lu?t.
+Thông báo quyền riêng tư giải thích luồng dữ liệu và giới hạn xóa. Hãy xuất dữ liệu được hỗ trợ trước khi đóng tài khoản. Xóa tài khoản cần kiểm tra danh tính, không gian làm việc và điều kiện an toàn; dọn dẹp có thể thất bại và cần xem trạng thái. Bản sao lưu máy chủ, bản tải xuống và bên nhận ngoài được kiểm soát riêng. Đơn vị vận hành phải thông báo thay đổi quan trọng và điều kiện chấm dứt theo luật áp dụng.
 
-## Quy?n b?t bu?c
+## Quyền bắt buộc
 
-??n v? v?n h?nh ph?i ho?n thi?n lu?t ?p d?ng v? gi?i quy?t tranh ch?p cho **[JURISDICTION]** sau r? so?t ph?p l?. B?n nh?p kh?ng lo?i tr? quy?n ng??i ti?u d?ng kh?ng th? t? b?, ?p ??t gi?i h?n tr?ch nhi?m ch?a ???c r? so?t hay th?a thu?n tr?ng t?i. Li?n h? **[CONTACT EMAIL]** ?? h?i v? khi?u n?i theo lu?t.
+Đơn vị vận hành phải xác định luật áp dụng và cách giải quyết tranh chấp cho **[JURISDICTION]** sau rà soát pháp lý. Bản nháp không loại trừ quyền người tiêu dùng không thể từ bỏ, áp đặt giới hạn trách nhiệm chưa được rà soát hoặc tạo thỏa thuận trọng tài. Liên hệ **[CONTACT EMAIL]** khi có câu hỏi hoặc khiếu nại theo luật.

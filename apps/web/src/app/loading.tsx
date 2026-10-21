@@ -1,9 +1,8 @@
 'use client';
 
-import { useTranslations } from 'next-intl';
+import { RouteSpinner } from '@/core/app-shell/route-loader';
 
-/** Root Suspense fallback shown while a route segment streams in. */
+/** Root Suspense fallback shown while a route segment streams in: the same blocking spinner as the route-change overlay. */
 export default function Loading() {
-  const t = useTranslations('routeErrors');
-  return <main className="page"><div className="skeleton" style={{ width: 'min(100%, 480px)' }} aria-label={t('loading')} /></main>;
+  return <RouteSpinner />;
 }

@@ -31,23 +31,23 @@ def _component(value: str) -> str:
     return base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii").rstrip("=")
 
 
-def capability_key(alias: str, model: str, version: str | None, capability: str, gateway_identity: str, *, workspace_id: UUID, actor_user_id: int) -> str:
+def capability_key(role: str, model: str, version: str | None, capability: str, gateway_identity: str, *, workspace_id: UUID, actor_user_id: int) -> str:
     """Bind capability to workspace/actor and a nonsecret configuration digest.
 
     Gateway identity includes revisions, privacy and credential fingerprint. No bootstrap
     overload is accepted; a credential must never be passed as gateway_identity.
     """
-    return f"{_namespace(workspace_id, actor_user_id, gateway_identity)}:{_component(alias)}:{_model_identity(model, version)}:{_component(capability)}"
+    return f"{_namespace(workspace_id, actor_user_id, gateway_identity)}:{_component(role)}:{_model_identity(model, version)}:{_component(capability)}"
 
 
-def capability_alias_pattern(alias: str, *, workspace_id: UUID, actor_user_id: int, gateway_identity: str) -> str:
-    """Return an alias invalidation pattern restricted to one execution identity."""
-    return f"{_namespace(workspace_id, actor_user_id, gateway_identity)}:{_component(alias)}:*"
+def capability_role_pattern(role: str, *, workspace_id: UUID, actor_user_id: int, gateway_identity: str) -> str:
+    """Return an role invalidation pattern restricted to one execution identity."""
+    return f"{_namespace(workspace_id, actor_user_id, gateway_identity)}:{_component(role)}:*"
 
 
-def capability_model_pattern(alias: str, model: str, version: str | None, *, workspace_id: UUID, actor_user_id: int, gateway_identity: str) -> str:
+def capability_model_pattern(role: str, model: str, version: str | None, *, workspace_id: UUID, actor_user_id: int, gateway_identity: str) -> str:
     """Return a model invalidation pattern restricted to one execution identity."""
-    return f"{_namespace(workspace_id, actor_user_id, gateway_identity)}:{_component(alias)}:{_model_identity(model, version)}:*"
+    return f"{_namespace(workspace_id, actor_user_id, gateway_identity)}:{_component(role)}:{_model_identity(model, version)}:*"
 
 
 def _namespace(workspace_id: UUID, actor_user_id: int, gateway_identity: str) -> str:

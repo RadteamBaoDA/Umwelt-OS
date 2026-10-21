@@ -27,7 +27,7 @@ class AccountDeletionOperation(Base):
     account_id: Mapped[int | None] = mapped_column(Integer)
     workspace_id: Mapped[UUID | None] = mapped_column()
     status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
-    phase: Mapped[str] = mapped_column(String(64), default="external", nullable=False)
+    phase: Mapped[str] = mapped_column(String(64), default="queued", nullable=False)
     cursor: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     error_code: Mapped[str | None] = mapped_column(String(64))
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

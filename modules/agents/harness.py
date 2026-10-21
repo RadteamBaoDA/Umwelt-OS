@@ -463,17 +463,17 @@ class HarnessContext:
         except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
             return False
 
-    async def read_gateway_config(self, alias: str | None = None) -> AIExecutionConfig:
+    async def read_gateway_config(self, role: str | None = None) -> AIExecutionConfig:
         """Resolve current gateway settings in a short transaction after the run fences pass.
 
-        With ``alias`` the endpoint/key/destination are those of that alias's provider.
+        With ``role`` the endpoint/key/destination are those of that role's provider.
         """
         await self._run_snapshot()
         async with self.session_factory() as session:
             config = await settings_public.get_ai_execution_config(
                 session, self.settings, self.redis, scope=self.scope,
             )
-        return settings_public.derive_for_alias(config, alias) if alias else config
+        return settings_public.derive_for_role(config, role) if role else config
 
     async def authorize_remote_send(
         self,
@@ -495,12 +495,9 @@ class HarnessContext:
             ):
                 raise RunCancelled("Source evidence is no longer authorized")
         config = await self.read_gateway_config()
-        alias = (
-            str(self.profile_snapshot.get("model_alias"))
-            if self.profile_snapshot is not None else config.chat_alias or "reasoning-large"
-        )
-        config = settings_public.derive_for_alias(config, alias)
-        mapping = config.aliases.get(alias)
+        role = "chat"  # agents never choose a model: always the owner's chat role default
+        config = settings_public.derive_for_role(config, role)
+        mapping = config.defaults.resolve(role)
         destination = config.endpoint_destination_id or ""
         if self.profile_snapshot is not None:
             pinned = self.profile_snapshot.get("gateway")
@@ -529,10 +526,10 @@ class HarnessContext:
             configuration_revision=config.configuration_revision,
         )
         if config.endpoint_policy_denied or not may_send(
-            policy, alias, mapping, destination, bool(config.gateway_api_key), "tools"
+            policy, role, mapping, destination, bool(config.gateway_api_key), "tools"
         ) or mapping is None:
             raise PermissionError("Remote model execution is not authorized")
-        return config, policy, alias, mapping
+        return config, policy, role, mapping
 
     async def authorize_embedding_send(
         self,
@@ -573,7 +570,7 @@ class HarnessContext:
             multi_workspace_enabled=self.multi_workspace_enabled,
         ):
             raise RunCancelled("Search source scope changed before embedding")
-        current_mapping = current.aliases.get("embedding")
+        current_mapping = current.defaults.resolve("embedding")
         if (
             current.configuration_revision != config.configuration_revision
             or current.endpoint_destination_id != config.endpoint_destination_id
@@ -818,7 +815,7 @@ class HandoffContext(HarnessContext):
     The child shares the parent's run id, claim generation, PostgreSQL lease and active-time clock,
     so every step, tool call and second it consumes is charged to the parent's limits, and a
     parent cancellation, session expiry or lease loss reaches it through ``_run_snapshot``. Only
-    the profile (model alias, tools, source scope, pinned gateway policy) is the specialist's own.
+    the profile (tools, source scope, pinned gateway policy) is the specialist's own.
     """
 
     def __init__(
@@ -897,7 +894,7 @@ async def run_specialist_handoff(
                 scope=parent.scope, multi_workspace_enabled=parent.multi_workspace_enabled,
             )
         except HTTPException as exc:
-            # Disabled, unavailable alias/tools or a stale revision: refuse rather than degrade.
+            # Disabled, unavailable model/tools or a stale revision: refuse rather than degrade.
             raise HandoffRefused("tool_unavailable") from exc
     tools = [item for item in snapshot["allowed_tools"] if item["name"] not in HANDOFF_EXCLUDED_TOOLS]
     if not tools:
@@ -981,7 +978,7 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
         if row.token_budget is not None:
             raise RunLimitReached("token_budget_unavailable")
         specs = _tool_specs(context)
-        config, policy, alias, mapping = await context.authorize_remote_send(state)
+        config, policy, role, mapping = await context.authorize_remote_send(state)
         remaining = min(SEGMENT_ACTIVE_SECONDS - context.elapsed(), context.remaining_active())
         async def before_send() -> None:
             """Recheck session, claim, source fences, revision and destination per retry."""
@@ -1027,7 +1024,7 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
             else DEFAULT_SPECIALIST_MAX_TOKENS
         )
         response = await gateway.tools(
-            alias, mapping, policy, messages, specs, max_tokens=max_tokens, before_send=before_send,
+            role, mapping, policy, messages, specs, max_tokens=max_tokens, before_send=before_send,
         )
         await context._run_snapshot()
         try:

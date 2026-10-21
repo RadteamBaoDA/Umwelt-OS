@@ -42,7 +42,7 @@ from modules.translations.schemas import (
     TranslationItemRequest,
     TranslationPayload,
 )
-from modules.translations.service import ALIAS, TranslationBlocked, content_hash, translate_input
+from modules.translations.service import ROLE, TranslationBlocked, content_hash, translate_input
 
 LEASE_SECONDS = 120
 SLOT_TTL_SECONDS = 120
@@ -294,7 +294,7 @@ async def _translate(run: _Run, source: TranslationInput) -> dict[str, str]:
     config = run.config
     if config is None:
         raise RuntimeError("AI config must be resolved before translating")
-    mapping, destination = config.aliases.get(ALIAS), config.endpoint_destination_id
+    mapping, destination = config.defaults.resolve(ROLE), config.endpoint_destination_id
     if mapping is None or not destination or config.endpoint_policy_denied:
         raise TranslationBlocked("model_capability_missing")
     policy = RequestPolicy(
@@ -324,8 +324,8 @@ async def _execute(run: _Run) -> None:
     """Resolve the owner config, verify, translate, publish (all inside the held slot)."""
     async with run.factory() as session:
         try:
-            run.config = settings_public.derive_for_alias(await settings_public.get_ai_execution_config(
-                session, run.settings, run.redis, scope=run.gateway_scope), ALIAS)
+            run.config = settings_public.derive_for_role(await settings_public.get_ai_execution_config(
+                session, run.settings, run.redis, scope=run.gateway_scope), ROLE)
         finally:
             await session.rollback()
     source = await _checked(run)

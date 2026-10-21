@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -22,13 +23,14 @@ from core.auth.public import get_active_account, lock_account_admission
 from core.auth.schemas import AccountSessionRef
 from core.config import Settings
 from core.model_gateway.schemas import (
-    ALIAS_MODEL_TYPE,
     DEFAULT_PROVIDER_ID,
     LOCAL_PROVIDER_KINDS,
     MAX_PROVIDERS,
+    MODEL_ROLES,
     AIExecutionConfig,
     AISettingsRead,
     AISettingsUpdate,
+    ModelDefaults,
     ModelMapping,
     PrivacySettings,
     ProviderConfig,
@@ -42,7 +44,7 @@ from core.workspaces.public import (
     resolve_workspace_owner_context,
 )
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
-from modules.settings.models import AISettingsRecord, OwnerPreferencesRecord, legacy_aliases
+from modules.settings.models import AISettingsRecord, OwnerPreferencesRecord
 
 # Re-exported for the model_gateway routes (strict mypy forbids implicit re-export, hence the aliases).
 from modules.settings.models import list_capabilities as list_capabilities  # noqa: PLC0414
@@ -67,9 +69,11 @@ from modules.settings.schemas import (
 )
 
 VIZ_TYPESAFE_DESTINATION = "typesafe:api.typesafe.ai"
-VIZ_ROUTER_ALIAS = "viz-router"
-
-ALIASES = ("reasoning-large", "reasoning-small", "fast", "embedding", "reranker", "vision", "local-private")
+VIZ_OPENROUTER_URL = "https://openrouter.ai/api/v1"
+VIZ_CLOUDFLARE_URL = "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
+VIZ_CLOUDFLARE_ACCOUNT = re.compile(r"[0-9a-f]{32}")
+VIZ_KEYED_KINDS = ("openrouter", "cloudflare")  # self-contained OpenAI-compatible routers with their own endpoint and key
+VIZ_ROUTER_ROLE = "viz-router"  # telemetry/capability label of the router; not one of MODEL_ROLES
 
 
 def _fingerprint(value: str) -> str:
@@ -312,15 +316,14 @@ def resolve_draft_provider(
     return api_key, local, _identity(endpoint, "", local=local)[1] or ""
 
 
-def derive_for_alias(config: AIExecutionConfig, alias: str) -> AIExecutionConfig:
-    """Return the config with the gateway-facing endpoint/key/destination of the alias's provider.
+def derive_for_mapping(config: AIExecutionConfig, mapping: ModelMapping | None) -> AIExecutionConfig:
+    """Return the config with the gateway-facing endpoint/key/destination of the mapping's provider.
 
     Pure. A missing or unknown provider resolves to an unconfigured endpoint, which never sends;
     a config carrying no providers (hand-built snapshot) is returned as is.
     """
     if not config.providers:
         return config
-    mapping = config.aliases.get(alias)
     pid = (mapping.provider_id if mapping else None) or DEFAULT_PROVIDER_ID
     provider = config.providers.get(pid)
     if provider is None and pid == DEFAULT_PROVIDER_ID:
@@ -333,28 +336,37 @@ def derive_for_alias(config: AIExecutionConfig, alias: str) -> AIExecutionConfig
         "endpoint_policy_denied": provider.policy_denied})
 
 
+def derive_for_role(config: AIExecutionConfig, role: str) -> AIExecutionConfig:
+    """Return the config pointed at the provider serving ``role`` (``background`` falls back to brief, then chat).
+
+    Pure; an unmapped role resolves like a missing provider, i.e. an endpoint that never sends.
+    """
+    return derive_for_mapping(config, config.defaults.resolve(role))
+
+
 async def get_ai_execution_config(session: AsyncSession, settings: Settings, redis: Redis | None = None, *, scope: Scope) -> AIExecutionConfig:
     """Resolve one active owner workspace execution snapshot using actual settings feature flag.
 
     Enforces endpoint policy before returning credentials and scopes privacy
     consent to exact destinations. Explicit scope is mandatory; recheck snapshot under locks before send.
-    The top-level endpoint fields mirror provider ``default``; use ``derive_for_alias`` before building a gateway.
+    The top-level endpoint fields mirror provider ``default``; use ``derive_for_role`` before building a gateway.
     """
     fence = await require_settings_scope(session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled)
     row = await _row(session, scope=scope)
     if row is None:
         providers: dict[str, ProviderConfig] = {}
-        aliases = await legacy_aliases(redis, settings, scope=scope)
+        defaults = ModelDefaults()
         privacy = PrivacySettings()
-        revision, chat_alias, brief_alias, timeout = 1, "reasoning-large", "reasoning-small", 20
+        revision, timeout = 1, 20
         system_prompts: dict[str, str] = {}
         web_provider, web_endpoint, web_credential, web_configured = "none", None, "", False
     else:
         providers = {pid: _resolve_provider(rec, settings) for pid, rec in _stored_providers(row).items()}
-        aliases = {key: ModelMapping.model_validate(value) for key, value in row.aliases.items() if key in ALIASES}
+        defaults = ModelDefaults.model_validate({key: value for key, value in (row.defaults or {}).items()
+                                                 if key in MODEL_ROLES and value})
         web_destination = f"web-search:{_fingerprint(row.web_search_endpoint or '')[:32]}" if row.web_search_endpoint else None
         privacy = _privacy(row.privacy, [p.destination_id for p in providers.values() if p.destination_id and not p.local], web_destination)
-        revision, chat_alias, brief_alias, timeout = row.configuration_revision, row.chat_alias, row.brief_alias, row.request_timeout_seconds
+        revision, timeout = row.configuration_revision, row.request_timeout_seconds
         system_prompts = dict(row.system_prompts or {})
         web_provider, web_endpoint = row.web_search_provider, row.web_search_endpoint
         web_configured = bool(row.web_search_api_key_ciphertext)
@@ -373,7 +385,7 @@ async def get_ai_execution_config(session: AsyncSession, settings: Settings, red
         {pid: (p.kind, p.base_url, _fingerprint(p.api_key), p.destination_id, p.policy_denied) for pid, p in sorted(providers.items())},
         separators=(",", ":")))
     identity = _fingerprint(json.dumps((str(scope.workspace_id), scope_actor(scope), fence.membership_revision,
-        fence.configuration_revision, revision, credential_identity, {key: value.model_dump() for key, value in aliases.items()},
+        fence.configuration_revision, revision, credential_identity, defaults.model_dump(),
         privacy.model_dump(), web_provider, web_endpoint, _fingerprint(web_credential), tuple(sorted(settings.ai_allowed_endpoint_hosts)),
         tuple(sorted(settings.ai_allowed_endpoint_cidrs)), _fingerprint(settings.ai_credential_encryption_key.get_secret_value())),
         sort_keys=True, separators=(",", ":"), default=str))
@@ -383,8 +395,8 @@ async def get_ai_execution_config(session: AsyncSession, settings: Settings, red
         configuration_revision=revision, gateway_identity=identity, endpoint_destination_id=default.destination_id,
         endpoint_policy_denied=default.policy_denied, gateway_credential_configured=default.credential_configured,
         endpoint_allowed_cidrs=tuple(settings.ai_allowed_endpoint_cidrs), allow_public_providers=settings.ai_allow_public_providers,
-        gateway_base_url=default.base_url, gateway_api_key=default.api_key, aliases=aliases, privacy=privacy,
-        chat_alias=chat_alias, brief_alias=brief_alias, request_timeout_seconds=timeout,
+        gateway_base_url=default.base_url, gateway_api_key=default.api_key, defaults=defaults, privacy=privacy,
+        request_timeout_seconds=timeout,
         web_search_provider=web_provider, web_search_endpoint=web_endpoint, web_search_api_key=web_credential,
         web_search_credential_configured=web_configured, system_prompts=system_prompts, providers=providers,
     )
@@ -402,8 +414,8 @@ def _read(config: AIExecutionConfig) -> AISettingsRead:
                    for pid, p in config.providers.items()],
         web_search_provider=config.web_search_provider, web_search_endpoint=config.web_search_endpoint,
         web_search_destination_id=(f"web-search:{_fingerprint(config.web_search_endpoint or '')[:32]}" if config.web_search_endpoint else None),
-        web_search_credential_configured=config.web_search_credential_configured, chat_alias=config.chat_alias,
-        brief_alias=config.brief_alias, aliases=config.aliases, capabilities=[], privacy=config.privacy,
+        web_search_credential_configured=config.web_search_credential_configured,
+        defaults=config.defaults, capabilities=[], privacy=config.privacy,
         request_timeout_seconds=config.request_timeout_seconds,
     )
 
@@ -505,14 +517,35 @@ def _kept_ciphertext(previous: dict[str, Any] | None, endpoint: str | None, sett
     return previous.get("key_ciphertext") if unchanged else None
 
 
+ROLE_MODEL_TYPE_LABEL = {
+    "chat": "llm", "brief": "llm", "background": "background or llm", "embedding": "embedding",
+    "reranker": "reranker", "vision": "vision-capable llm",
+}
+
+
+def role_accepts(role: str, model: ProviderModel) -> bool:
+    """Whether a provider model's owner-assigned type can serve ``role``.
+
+    chat/brief take ``llm``; background takes ``background`` or ``llm``; vision takes a vision-flagged ``llm``
+    (or the legacy ``vision`` type); embedding and reranker need their own types.
+    """
+    if role in {"chat", "brief"}:
+        return model.type == "llm"
+    if role == "background":
+        return model.type in {"background", "llm"}
+    if role == "vision":
+        return model.type == "vision" or (model.type == "llm" and model.vision)
+    return model.type == role
+
+
 async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, settings: Settings, *, scope: Scope,
                            auth_sessions: tuple[AccountSessionRef, ...] = ()) -> AISettingsRead:
     """Validate and persist an optimistic, revision-checked AI settings update.
 
     Locks admitted auth/workspace then matching owner settings, encrypts replacement credentials, and clears
     destination-bound privacy consent when its endpoint changes; the caller owns
-    transaction commit/rollback. Chosen models must be discovered on their provider and type-match the alias; the
-    embedding alias must carry the probed vector dimensions and no other alias may.
+    transaction commit/rollback. Chosen models must be discovered on their provider and match the role's model type
+    (see ``role_accepts``); the embedding role must carry the probed vector dimensions and no other role may.
     """
     await require_settings_scope(session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
                                  locked=True, auth_sessions=auth_sessions)
@@ -524,8 +557,6 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
         raise RuntimeError("AI settings singleton could not be initialized")
     if row.configuration_revision != update.expected_revision:
         raise HTTPException(status_code=409, detail="AI settings changed; reload before saving")
-    if any(alias not in ALIASES for alias in update.aliases):
-        raise HTTPException(status_code=422, detail="Unknown model alias")
     stored = _stored_providers(row)
     providers: dict[str, dict[str, Any]]
     if update.providers is None:
@@ -552,25 +583,25 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
             providers[item.id] = {"kind": item.kind, "label": item.label or item.id, "base_url": endpoint,
                                   "key_ciphertext": ciphertext, "local": item.kind in LOCAL_PROVIDER_KINDS,
                                   "models": [m.model_dump(mode="json") for m in item.models]}
-    for mapping in update.aliases.values():
+    chosen_defaults = {role: mapping for role in MODEL_ROLES if (mapping := getattr(update.defaults, role)) is not None}
+    for mapping in chosen_defaults.values():
         if mapping.provider_id is not None and mapping.provider_id not in providers:
             raise HTTPException(status_code=422, detail="Unknown model provider")
-    for alias, mapping in update.aliases.items():
+    for role, mapping in chosen_defaults.items():
         provider = providers.get(mapping.provider_id or DEFAULT_PROVIDER_ID) or (
             next(iter(providers.values()), None) if mapping.provider_id is None else None)
-        if alias == "local-private" and mapping.provider_id is not None and providers[mapping.provider_id]["kind"] not in LOCAL_PROVIDER_KINDS:
-            raise HTTPException(status_code=422, detail="Local-private models require a local provider")
-        # A chosen model must come from the provider's discovered list and match the alias's model type.
-        listed = {m.id: m.type for m in _models(provider)} if provider else {}
+        # A chosen model must come from the provider's discovered list and match the role's model type.
+        listed = {m.id: m for m in _models(provider)} if provider else {}
         if mapping.model and not listed:
             raise HTTPException(status_code=422, detail="Discover models for this provider first")
         if mapping.model and mapping.model not in listed:
             raise HTTPException(status_code=422, detail=f"Model {mapping.model} is not in the provider's model list")
-        if mapping.model in listed and listed[mapping.model] != ALIAS_MODEL_TYPE.get(alias, "llm"):
-            raise HTTPException(status_code=422, detail=f"Alias {alias} needs a {ALIAS_MODEL_TYPE.get(alias, 'llm')} model")
-        if mapping.dimensions is not None and alias != "embedding":
-            raise HTTPException(status_code=422, detail="Dimensions apply only to the embedding alias")
-        if alias == "embedding" and mapping.model and mapping.dimensions is None:
+        chosen = listed.get(mapping.model) if mapping.model else None
+        if chosen is not None and not role_accepts(role, chosen):
+            raise HTTPException(status_code=422, detail=f"Role {role} needs a {ROLE_MODEL_TYPE_LABEL[role]} model")
+        if mapping.dimensions is not None and role != "embedding":
+            raise HTTPException(status_code=422, detail="Dimensions apply only to the embedding role")
+        if role == "embedding" and mapping.model and mapping.dimensions is None:
             raise HTTPException(status_code=422, detail="Embedding dimensions required; run the embeddings probe")
     next_web_endpoint = _endpoint(str(update.web_search_endpoint) if update.web_search_endpoint else None, settings)
     current_web_destination = f"web-search:{_fingerprint(row.web_search_endpoint or '')[:32]}" if row.web_search_endpoint else None
@@ -596,8 +627,7 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
     privacy["web_search_destinations"] = [next_web_destination] if privacy["allow_remote_web_search"] else []
     row.providers = providers
     row.privacy = privacy
-    row.aliases = {key: value.model_dump(mode="json") for key, value in update.aliases.items() if key in ALIASES}
-    row.chat_alias, row.brief_alias = update.chat_alias, update.brief_alias
+    row.defaults = {role: mapping.model_dump(mode="json") for role, mapping in chosen_defaults.items()}
     row.web_search_provider = update.web_search_provider
     row.web_search_endpoint = next_web_endpoint
     if update.web_search_credential_action == "replaced":
@@ -824,7 +854,10 @@ class VizRouterResolved(BaseModel):
     provider_id: str | None = None
     model: str = ""
     mode: str = "json_schema"
+    api: str = "chat"  # openrouter only: "decisions" selects the Decisions API (alpha); absent in old rows => chat
     typesafe_key: str = Field(default="", repr=False)
+    base_url: str | None = None  # openrouter/cloudflare only: validated endpoint
+    api_key: str = Field(default="", repr=False)  # openrouter/cloudflare only
     allow_remote: bool = False
     destination_id: str | None = None
     revision: int = 1
@@ -835,10 +868,42 @@ def _viz_stored(row: Any) -> dict[str, Any]:
     return dict(getattr(row, "viz_router", None) or {}) if row else {}
 
 
+def _viz_endpoint(stored: dict[str, Any], settings: Settings) -> str | None:
+    """Validated base URL of a self-contained router kind (``openrouter`` fixed, ``cloudflare`` account or gateway URL).
+
+    Raises HTTP 422 when the Cloudflare account id is malformed, the override is not https, or deployment endpoint
+    policy (allowed hosts / public providers) denies the host. Other kinds have no endpoint of their own: None.
+    """
+    kind = stored.get("kind")
+    if kind == "openrouter":
+        url: str | None = VIZ_OPENROUTER_URL
+    elif kind == "cloudflare":
+        account = str(stored.get("account_id") or "")
+        url = stored.get("gateway_url") or (
+            VIZ_CLOUDFLARE_URL.format(account_id=account) if VIZ_CLOUDFLARE_ACCOUNT.fullmatch(account) else None)
+        if url is None or not url.lower().startswith("https://"):
+            raise HTTPException(status_code=422, detail="Cloudflare needs a 32-character account id or an https gateway URL")
+    else:
+        return None
+    return _endpoint(url, settings)
+
+
 def _viz_destination(stored: dict[str, Any], providers: dict[str, dict[str, Any]], settings: Settings) -> str | None:
-    """Destination id the stored router would send to: the fixed TypeSafe host or the chosen provider's destination."""
+    """Destination id the stored router would send to: TypeSafe host, own endpoint (openrouter/cloudflare) or the provider's.
+
+    Own-endpoint kinds derive the id from the validated URL, so changing the Cloudflare account or gateway changes it
+    and drops saved consent; a policy-denied endpoint has no destination (None).
+    """
     if stored.get("kind") == "typesafe":
         return VIZ_TYPESAFE_DESTINATION
+    if stored.get("kind") in VIZ_KEYED_KINDS:
+        try:
+            endpoint = _viz_endpoint(stored, settings)
+        except HTTPException as exc:
+            if exc.status_code != 422:
+                raise
+            return None
+        return _identity(endpoint, "")[1]
     if stored.get("kind") == "llm":
         record = providers.get(stored.get("provider_id") or DEFAULT_PROVIDER_ID)
         return _destination(record, settings) if record else None
@@ -850,12 +915,12 @@ async def resolve_viz_router(session: AsyncSession, settings: Settings, *, scope
 
     ``allow_remote`` is true only when the owner granted consent for the *current* destination (so editing the
     provider endpoint later revokes it) or the provider is local (no remote egress, so no consent is needed).
-    An undecryptable TypeSafe key counts as unset. Plain read: no lock.
+    An undecryptable TypeSafe/OpenRouter/Cloudflare key counts as unset; a policy-denied own endpoint has no base_url. Plain read: no lock.
     """
     row = await _row(session, scope=scope)
     stored = _viz_stored(row)
     kind = stored.get("kind", "internal")
-    if row is None or kind not in {"llm", "typesafe"}:
+    if row is None or kind not in {"llm", "typesafe", *VIZ_KEYED_KINDS}:
         return VizRouterResolved(revision=int(stored.get("revision", 1)))
     providers = _stored_providers(row)
     destination = _viz_destination(stored, providers, settings)
@@ -864,28 +929,57 @@ async def resolve_viz_router(session: AsyncSession, settings: Settings, *, scope
     consent = (bool(stored.get("allow_remote_visualization_routing")) and destination is not None
                and stored.get("consent_destination") == destination)
     key = ""
-    if kind == "typesafe" and stored.get("typesafe_key_ciphertext"):
+    ciphertext = stored.get(f"{kind}_key_ciphertext")
+    if kind in {"typesafe", *VIZ_KEYED_KINDS} and ciphertext:
         try:
-            key = _decrypt(stored["typesafe_key_ciphertext"], settings)
+            key = _decrypt(ciphertext, settings)
         except HTTPException:
             key = ""
+    base_url = None
+    if kind in VIZ_KEYED_KINDS:
+        try:
+            base_url = _viz_endpoint(stored, settings)
+        except HTTPException as exc:
+            if exc.status_code != 422:
+                raise
     return VizRouterResolved(
         kind=kind, provider_id=stored.get("provider_id"), model=stored.get("model", ""), mode=stored.get("mode", "json_schema"),
-        typesafe_key=key, allow_remote=consent or (local and destination is not None), destination_id=destination,
+        api="decisions" if kind == "openrouter" and stored.get("api") == "decisions" else "chat",
+        typesafe_key=key if kind == "typesafe" else "", base_url=base_url, api_key=key if kind in VIZ_KEYED_KINDS else "",
+        allow_remote=consent or (local and destination is not None), destination_id=destination,
         revision=int(stored.get("revision", 1)))
+
+
+def viz_decision_discovery_config(config: AIExecutionConfig, api_key: str, settings: Settings) -> AIExecutionConfig:
+    """Pure-ish: execution config pointed at the fixed OpenRouter endpoint with ``api_key`` for model discovery.
+
+    The endpoint goes through the same deployment host policy as a saved router (422 when denied), so discovery
+    cannot reach a host the owner's policy forbids. The key is used for this call only.
+    """
+    endpoint = _endpoint(VIZ_OPENROUTER_URL, settings)
+    return config.model_copy(update={
+        "gateway_base_url": endpoint, "gateway_api_key": api_key,
+        "endpoint_destination_id": _identity(endpoint, "")[1], "gateway_credential_configured": bool(api_key),
+        "endpoint_policy_denied": endpoint is None})
 
 
 def viz_router_gateway_config(config: AIExecutionConfig, resolved: VizRouterResolved) -> tuple[AIExecutionConfig, ModelMapping]:
     """Pure: the execution config pointed at the router's provider, plus the router's model mapping.
 
-    The mapping is registered under ``VIZ_ROUTER_ALIAS`` so ``derive_for_alias`` selects the provider's endpoint,
-    key and destination; remote providers are marked ``destination="remote"`` for the gateway privacy policy.
+    ``derive_for_mapping`` selects the router provider's endpoint, key and destination; remote providers are
+    marked ``destination="remote"`` for the gateway privacy policy. The router has no role slot in the defaults.
     """
+    if resolved.kind in VIZ_KEYED_KINDS:
+        # Self-contained kind: its own validated endpoint and key replace the provider's; never the owner's providers.
+        own = ModelMapping(model=resolved.model, destination="remote")
+        return config.model_copy(update={
+            "gateway_base_url": resolved.base_url, "gateway_api_key": resolved.api_key,
+            "endpoint_destination_id": resolved.destination_id, "gateway_credential_configured": bool(resolved.api_key),
+            "endpoint_policy_denied": resolved.base_url is None}), own
     provider = config.providers.get(resolved.provider_id or DEFAULT_PROVIDER_ID)
     mapping = ModelMapping(model=resolved.model, provider_id=resolved.provider_id,
                            destination="unknown" if provider is None or provider.local else "remote")
-    return derive_for_alias(config.model_copy(update={"aliases": {**config.aliases, VIZ_ROUTER_ALIAS: mapping}}),
-                            VIZ_ROUTER_ALIAS), mapping
+    return derive_for_mapping(config, mapping), mapping
 
 
 async def read_viz_router(session: AsyncSession, settings: Settings, *, scope: Scope) -> VizRouterRead:
@@ -895,8 +989,11 @@ async def read_viz_router(session: AsyncSession, settings: Settings, *, scope: S
     resolved = await resolve_viz_router(session, settings, scope=scope)
     return VizRouterRead.model_validate({
         "configuration_revision": resolved.revision, "kind": resolved.kind, "provider_id": resolved.provider_id,
-        "model": resolved.model, "mode": resolved.mode,
+        "model": resolved.model, "mode": resolved.mode, "api": resolved.api,
         "typesafe_key_configured": bool(_viz_stored(row).get("typesafe_key_ciphertext")),
+        "openrouter_key_configured": bool(_viz_stored(row).get("openrouter_key_ciphertext")),
+        "cloudflare_key_configured": bool(_viz_stored(row).get("cloudflare_key_ciphertext")),
+        "account_id": _viz_stored(row).get("account_id"), "gateway_url": _viz_stored(row).get("gateway_url"),
         "allow_remote_visualization_routing": resolved.allow_remote, "destination_id": resolved.destination_id})
 
 
@@ -904,8 +1001,8 @@ async def save_viz_router(session: AsyncSession, update: VizRouterUpdate, settin
                           auth_sessions: tuple[AccountSessionRef, ...] = ()) -> VizRouterRead:
     """Revision-checked replace of the visualization router settings (own ``revision`` inside the JSON).
 
-    ``llm`` needs an existing provider and a model from that provider's discovered ``llm`` list; ``typesafe``
-    encrypts its key like AI credentials. Consent is stored bound to the destination chosen in this save and is
+    ``llm`` needs an existing provider and a model from that provider's discovered ``decision`` (or legacy ``llm``) list; ``typesafe``, ``openrouter`` and ``cloudflare`` encrypt their own key like AI credentials; openrouter/cloudflare also need a
+    model and key and validate their endpoint against deployment policy. Consent is stored bound to the destination chosen in this save and is
     dropped for ``internal``. Never bumps ``configuration_revision`` (that would fail in-flight AI runs).
     """
     await require_settings_scope(session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
@@ -925,19 +1022,36 @@ async def save_viz_router(session: AsyncSession, update: VizRouterUpdate, settin
         record = providers.get(pid)
         if record is None:
             raise HTTPException(status_code=422, detail="Unknown model provider")
-        if not any(m.id == update.model and m.type == "llm" for m in _models(record)):
-            raise HTTPException(status_code=422, detail="Choose a language model discovered on this provider")
+        if not any(m.id == update.model and m.type in {"decision", "llm"} for m in _models(record)):
+            raise HTTPException(status_code=422, detail="Choose a decision or language model discovered on this provider")
         stored.update(provider_id=pid, model=update.model, mode=update.mode)
-    ciphertext = previous.get("typesafe_key_ciphertext")
+    if update.kind in VIZ_KEYED_KINDS:
+        if not update.model.strip():
+            raise HTTPException(status_code=422, detail="A router model is required")
+        stored.update(model=update.model.strip(), mode=update.mode)
+        if update.kind == "openrouter" and update.api == "decisions":
+            stored["api"] = "decisions"  # only openrouter has the Decisions API; omitted => chat
+        if update.kind == "cloudflare":
+            stored.update(account_id=(update.account_id or "").strip().lower() or None,
+                          gateway_url=(update.gateway_url or "").strip() or None)
+        _viz_endpoint(stored, settings)  # 422 on bad account id / non-https / deployment endpoint policy
+    ciphertexts = {name: previous.get(f"{name}_key_ciphertext") for name in ("typesafe", *VIZ_KEYED_KINDS)}
     if update.kind == "typesafe":
-        if update.typesafe_key_action == "replaced":
-            if not update.typesafe_key:
-                raise HTTPException(status_code=422, detail="Replacement TypeSafe key is required")
-            ciphertext = _cipher(settings).encrypt(update.typesafe_key.encode()).decode()
-        elif update.typesafe_key_action == "removed":
-            ciphertext = None
-    if ciphertext:
-        stored["typesafe_key_ciphertext"] = ciphertext  # kept while another kind is selected; only "removed" drops it
+        action, value, label = update.typesafe_key_action, update.typesafe_key, "TypeSafe"
+    else:
+        action, value, label = update.api_key_action, update.api_key, update.kind
+    if update.kind in {"typesafe", *VIZ_KEYED_KINDS}:
+        if action == "replaced":
+            if not value:
+                raise HTTPException(status_code=422, detail=f"Replacement {label} key is required")
+            ciphertexts[update.kind] = _cipher(settings).encrypt(value.encode()).decode()
+        elif action == "removed":
+            ciphertexts[update.kind] = None
+    if update.kind in VIZ_KEYED_KINDS and not ciphertexts[update.kind]:
+        raise HTTPException(status_code=422, detail=f"A {label} API key is required")
+    for name, ciphertext in ciphertexts.items():
+        if ciphertext:  # per-kind: a key is never reused for another kind's host; only "removed" drops it
+            stored[f"{name}_key_ciphertext"] = ciphertext
     destination = _viz_destination(stored, providers, settings)
     if update.kind != "internal" and update.allow_remote_visualization_routing and destination:
         stored["allow_remote_visualization_routing"] = True
@@ -1049,19 +1163,19 @@ async def get_translation_settings(session: AsyncSession, *, scope: Scope, multi
 
 
 async def read_ai_policy_fingerprint(
-    session: AsyncSession, settings: Settings, redis: Redis | None, *, workspace_id: UUID, alias: str,
+    session: AsyncSession, settings: Settings, redis: Redis | None, *, workspace_id: UUID, role: str,
 ) -> str | None:
-    """Nonsecret digest of the workspace owner's AI execution policy for one alias, or None when unusable.
+    """Nonsecret digest of the workspace owner's AI execution policy for one role, or None when unusable.
 
     Members cannot read Settings, so the owner context is resolved internally. Covers endpoint identity,
-    credential fingerprint, alias mapping version, remote/privacy flags and AI settings revision.
+    credential fingerprint, role mapping version, remote/privacy flags and AI settings revision.
     """
     owner = await resolve_workspace_owner_context(
         session, workspace_id, multi_workspace_enabled=settings.multi_workspace_enabled)
     if owner is None:
         return None
-    config = derive_for_alias(await get_ai_execution_config(session, settings, redis, scope=owner), alias)
-    mapping = config.aliases.get(alias)
+    config = derive_for_role(await get_ai_execution_config(session, settings, redis, scope=owner), role)
+    mapping = config.defaults.resolve(role)
     if mapping is None or config.gateway_base_url is None or config.endpoint_policy_denied:
         return None
     destination = config.endpoint_destination_id
@@ -1071,6 +1185,6 @@ async def read_ai_policy_fingerprint(
     if not destination.startswith("local:") and not (config.gateway_credential_configured and config.privacy.allow_remote_reasoning):
         return None
     return hashlib.sha256(json.dumps(
-        (destination, _fingerprint(config.gateway_api_key), alias, mapping.model, mapping.version, mapping.destination,
+        (destination, _fingerprint(config.gateway_api_key), role, mapping.model, mapping.version, mapping.destination,
          config.privacy.model_dump(mode="json"), config.configuration_revision),
         sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()

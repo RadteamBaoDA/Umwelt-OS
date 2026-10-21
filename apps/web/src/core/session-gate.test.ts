@@ -11,10 +11,15 @@ describe('needsLoginRedirect', () => {
     for (const p of ['/', '/login', '/setup', '/invite/abc', '/invitations', '/_next/x', '/api/v1/x']) expect(needsLoginRedirect(p, false)).toBe(false);
     expect(needsLoginRedirect('/app', true)).toBe(false);
     expect(needsLoginRedirect('/loginx', false)).toBe(true);
+    for (const path of ['/privacy', '/terms', '/refunds', '/account-deletion']) expect(needsLoginRedirect(path, false)).toBe(false);
+    expect(needsLoginRedirect('/privacy-private', false)).toBe(true);
   });
   it('treats only the exact share-image paths as public', () => {
     for (const p of ['/opengraph-image', '/twitter-image']) expect(needsLoginRedirect(p, false)).toBe(false);
     for (const p of ['/opengraph-image-x', '/opengraph-image/x', '/opengraph', '/twitter-images']) expect(needsLoginRedirect(p, false)).toBe(true);
+  });
+  it('keeps public static assets available when the proxy matches all page paths', () => {
+    for (const p of ['/icon.svg', '/vendor/genui/index.js', '/fonts/umwelt.woff2']) expect(needsLoginRedirect(p, false)).toBe(false);
   });
 });
 

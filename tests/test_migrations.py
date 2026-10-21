@@ -199,7 +199,7 @@ def test_r25_chat_templates_migration() -> None:
 
 
 def test_r26_chat_provenance_migration() -> None:
-    """Verify r26 adds nullable source_response_id to todos and templates, reverses cleanly and is the single head."""
+    """Verify r26 nullable provenance is reversible and remains in the current head ancestry."""
     up = _alembic("upgrade", "r25_chat_templates:r26_chat_provenance", "--sql")
     assert up.returncode == 0, up.stderr
     assert "ALTER TABLE chat_todos ADD COLUMN source_response_id UUID" in up.stdout
@@ -207,4 +207,45 @@ def test_r26_chat_provenance_migration() -> None:
     down = _alembic("downgrade", "r26_chat_provenance:r25_chat_templates", "--sql")
     assert down.returncode == 0, down.stderr
     assert "DROP COLUMN source_response_id" in down.stdout
-    assert HEAD == "r26_chat_provenance"
+    scripts = ScriptDirectory.from_config(Config("alembic.ini"))
+    assert "r26_chat_provenance" in {revision.revision for revision in scripts.walk_revisions()}
+
+
+def test_account_deletion_schema_and_n8n_origin_migrations() -> None:
+    """Render additive deletion authority/origin schema without touching a database."""
+    up = _alembic("upgrade", "r26_chat_provenance:head", "--sql")
+    assert up.returncode == 0, up.stderr
+    assert "CREATE TABLE account_deletion_operations" in up.stdout
+    assert "ck_account_deletion_scope" in up.stdout
+    assert "uq_account_deletion_receipt" in up.stdout
+    assert "ALTER TABLE connector_provisioning ADD COLUMN n8n_service_url VARCHAR(2048)" in up.stdout
+    assert "ALTER TABLE connector_managed_credentials ADD COLUMN n8n_service_url VARCHAR(2048)" in up.stdout
+    # Mutable current settings cannot safely backfill historical endpoint ownership.
+    assert "UPDATE connector_provisioning" not in up.stdout
+    assert "UPDATE connector_managed_credentials" not in up.stdout
+    down = _alembic("downgrade", "r28_n8n_endpoint_lineage:r27_account_deletion", "--sql")
+    assert down.returncode != 0
+    assert "forward-only" in down.stderr
+
+
+def test_r29_r30_model_roles_migrations() -> None:
+    """Render the alias->role backfill and the alias-column drop; both reverse and r30 is the single head."""
+    up = _alembic("upgrade", "r28_n8n_endpoint_lineage:r29_model_roles", "--sql")
+    assert up.returncode == 0, up.stderr
+    assert "ALTER TABLE ai_settings ADD COLUMN defaults JSONB" in up.stdout
+    assert "aliases -> chat_alias" in up.stdout
+    assert "aliases -> 'reasoning-small'" in up.stdout
+    assert "configuration_revision = configuration_revision + 1" in up.stdout
+    down = _alembic("downgrade", "r29_model_roles:r28_n8n_endpoint_lineage", "--sql")
+    assert down.returncode == 0, down.stderr
+    assert "defaults -> 'background'" in down.stdout
+    assert "DROP COLUMN defaults" in down.stdout
+    drop = _alembic("upgrade", "r29_model_roles:r30_drop_model_alias_columns", "--sql")
+    assert drop.returncode == 0, drop.stderr
+    for column in ("aliases", "chat_alias", "brief_alias"):
+        assert f"ALTER TABLE ai_settings DROP COLUMN {column}" in drop.stdout
+    assert "ALTER TABLE agent_profiles DROP COLUMN model_alias" in drop.stdout
+    restore = _alembic("downgrade", "r30_drop_model_alias_columns:r29_model_roles", "--sql")
+    assert restore.returncode == 0, restore.stderr
+    assert "ALTER TABLE agent_profiles ADD COLUMN model_alias VARCHAR(64) DEFAULT 'reasoning-large' NOT NULL" in restore.stdout
+    assert _HEADS == ["r30_drop_model_alias_columns"]

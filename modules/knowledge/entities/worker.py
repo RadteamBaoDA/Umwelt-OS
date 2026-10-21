@@ -62,7 +62,7 @@ from modules.sources import public as sources
 
 logger = logging.getLogger(__name__)
 EXTRACTION_TIMEOUT_SECONDS = 35
-EXTRACTION_ALIAS = "reasoning-small"
+EXTRACTION_ROLE = "background"
 
 
 def _factory(ctx: dict[str, object]) -> async_sessionmaker[AsyncSession]:
@@ -93,15 +93,14 @@ async def _dependency_snapshot(config: AIExecutionConfig, redis: Redis, *, scope
     """
     # AIExecutionConfig is returned by the settings owner. Hash only non-secret
     # policy/model/capability metadata; never persist endpoint or credential data.
-    alias = EXTRACTION_ALIAS
-    aliases = config.aliases
-    mapping = aliases.get(alias)
+    role = EXTRACTION_ROLE
+    mapping = config.defaults.resolve(role)
     gateway_identity = config.gateway_identity
     capability_value: dict[str, object] | None = None
     key: str | None = None
     if mapping is not None:
         key = capability_key(
-            alias, mapping.model, mapping.version, "structured", gateway_identity,
+            role, mapping.model, mapping.version, "structured", gateway_identity,
             workspace_id=scope.workspace_id, actor_user_id=config.actor_user_id,
         )
         raw = await redis.get(key)
@@ -123,7 +122,7 @@ async def _dependency_snapshot(config: AIExecutionConfig, redis: Redis, *, scope
     supported = bool(
         isinstance(capability_value, dict)
         and capability_value.get("result") == "supported"
-        and capability_value.get("alias") == alias
+        and capability_value.get("role") == role
         and capability_value.get("capability") == "structured"
         and capability_value.get("gateway_identity") == gateway_identity
         and mapping is not None
@@ -164,7 +163,7 @@ def _policy_allows_extraction(config: AIExecutionConfig, mapping: ModelMapping |
         configuration_revision=config.configuration_revision,
     )
     return may_send(
-        policy, EXTRACTION_ALIAS, mapping, destination,
+        policy, EXTRACTION_ROLE, mapping, destination,
         config.gateway_credential_configured, "structured",
     )
 
@@ -432,13 +431,13 @@ async def recover_entity_extraction_work(ctx: dict[str, object]) -> int:
                     )
                     await session.commit()
                     continue
-                config = settings_public.derive_for_alias(await settings_public.get_ai_execution_config(
+                config = settings_public.derive_for_role(await settings_public.get_ai_execution_config(
                     session, cast(Settings, ctx["settings"]), cast(Redis, ctx["redis"]), scope=scope,
-                ), EXTRACTION_ALIAS)
+                ), EXTRACTION_ROLE)
                 fingerprint, capability_supported = await _dependency_snapshot(
                     config, cast(Redis, ctx["redis"]), scope=scope,
                 )
-                mapping = config.aliases.get(EXTRACTION_ALIAS)
+                mapping = config.defaults.resolve(EXTRACTION_ROLE)
                 if (
                     capability_supported
                     and _policy_allows_extraction(config, mapping, config.endpoint_destination_id, source.local_only)
@@ -584,10 +583,10 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                     scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 await session.commit()
                 return
-            alias = EXTRACTION_ALIAS
-            config = settings_public.derive_for_alias(
-                await settings_public.get_ai_execution_config(session, settings, redis, scope=scope), alias)
-            mapping = config.aliases.get(alias)
+            role = EXTRACTION_ROLE
+            config = settings_public.derive_for_role(
+                await settings_public.get_ai_execution_config(session, settings, redis, scope=scope), role)
+            mapping = config.defaults.resolve(role)
             destination = config.endpoint_destination_id
             dependency_fingerprint, _ = await _dependency_snapshot(config, redis, scope=scope)
             policy = RequestPolicy(
@@ -611,10 +610,10 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
             async def before_send() -> None:
                 """Recheck saved settings and privacy policy immediately before remote use."""
                 async with factory() as current_session:
-                    current = settings_public.derive_for_alias(await settings_public.get_ai_execution_config(
+                    current = settings_public.derive_for_role(await settings_public.get_ai_execution_config(
                         current_session, settings, redis, scope=scope,
-                    ), alias)
-                    current_mapping = current.aliases.get(alias)
+                    ), role)
+                    current_mapping = current.defaults.resolve(role)
                     current_destination = current.endpoint_destination_id
                     if (
                         current.configuration_revision != config.configuration_revision
@@ -633,7 +632,7 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                         configuration_revision=current.configuration_revision,
                     )
                     if not may_send(
-                        current_policy, alias, current_mapping, current_destination,
+                        current_policy, role, current_mapping, current_destination,
                         current.gateway_credential_configured, "structured",
                     ):
                         raise PrivacyPolicyDenied("Extraction policy denied before send")
@@ -665,7 +664,7 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
             # Release workspace, membership, Source, Document and raw-URI locks before provider I/O.
             await session.rollback()
             response = await gateway.structured(
-                alias, mapping, policy,
+                role, mapping, policy,
                 extraction_messages([(chunk.id, chunk.content) for chunk in data.chunks], resolve_prompt(config.system_prompts, "entity_extraction")),
                 response_schema(), probe=False, before_send=before_send,
             )

@@ -351,8 +351,8 @@ Each actual router prefix is resolved independently; includes14 dynamic MCP mana
 | 195 | `POST /api/v1/memories/{memory_id}/supersede` | `modules/memory/routes.py::supersede_memory` | P | A+W default+R | Actor own default workspace only; private resource lineage; actual-send/revoke fence. |
 | 196 | `PATCH /api/v1/memories/{memory_id}` | `modules/memory/routes.py::update_memory` | P | A+W default+R | Actor own default workspace only; private resource lineage; actual-send/revoke fence. |
 | 197 | `PUT /api/v1/settings/memory-privacy` | `modules/memory/routes.py::update_memory_privacy` | P | A+W default+R | Actor own default workspace only; private resource lineage; actual-send/revoke fence. |
-| 198 | `POST /api/v1/settings/models/{alias}/draft-test` | `modules/model_gateway/routes.py::probe_draft` | O | W owner+R | Owner-only reads require explicit owner check after workspace read; writes workspace-write+CSRF; every UUID/query/enrichment scoped. |
-| 199 | `POST /api/v1/settings/models/{alias}/test` | `modules/model_gateway/routes.py::probe_model` | O | W owner+R | Owner-only reads require explicit owner check after workspace read; writes workspace-write+CSRF; every UUID/query/enrichment scoped. |
+| 198 | `POST /api/v1/settings/models/draft-test` | `modules/model_gateway/routes.py::probe_draft` | O | W owner+R | Owner-only reads require explicit owner check after workspace read; writes workspace-write+CSRF; every UUID/query/enrichment scoped. |
+| 199 | `POST /api/v1/settings/models/{role}/test` | `modules/model_gateway/routes.py::probe_model` | O | W owner+R | Owner-only reads require explicit owner check after workspace read; writes workspace-write+CSRF; every UUID/query/enrichment scoped. |
 | 200 | `GET /api/v1/stories/{story_id}` | `modules/news/routes.py::get_story_route` | N | W+R projected | Owner workspace or member authorized-document projection before title/excerpt/count/rank; no hidden enrichment. |
 | 201 | `GET /api/v1/stories` | `modules/news/routes.py::list_stories_route` | N | W+R projected | Owner workspace or member authorized-document projection before title/excerpt/count/rank; no hidden enrichment. |
 | 202 | `GET /api/v1/trends` | `modules/news/routes.py::list_trends_route` | N | W owner+R | Owner-only reads require explicit owner check after workspace read; writes workspace-write+CSRF; every UUID/query/enrichment scoped. |
@@ -503,11 +503,11 @@ Includes ARQ/cron targets and public worker/index/maintenance helpers. Internal 
 
 | Concrete source/key/entrypoint | Scope | Required conversion or deliberate global exception |
 | --- | --- | --- |
-| `core/model_gateway/cache.py::capability_key`, alias/model patterns | W | Prefix workspace+configuration/privacy revision+credential/gateway identity, then alias/model/capability; same invalidation namespace. |
+| `core/model_gateway/cache.py::capability_key`, role/model patterns | W | Prefix workspace+configuration/privacy revision+credential/gateway identity, then role/model/capability; same invalidation namespace. |
 | `core/model_gateway/client.py::ModelGateway` capability read / transport before_send | W | Detached workspace execution config per call/client; repeat before_send on each retry; no shared last-request configuration. |
 | `core/model_gateway/client.py` capacity-slot Redis leases | I capacity | Preserve shared host/gateway bound; token not authorization; never multiply global slots by workspace. |
-| `modules/settings/models.py::_MAPPINGS`, `legacy_aliases` | I legacy -> W | `bbd:settings:model-mappings` only imported into proven bootstrap workspace; fresh users get explicit defaults. |
-| `modules/settings/models.py::save_capability`, `list_capabilities` | W | Workspace/config/credential prefix and DTO validation; no global alias SCAN visible to workspace owner. |
+| `modules/settings/models.py::_MAPPINGS`, `legacy_aliases` (r29 migration input only) | I legacy -> W | `bbd:settings:model-mappings` only imported into proven bootstrap workspace; fresh users get explicit defaults. |
+| `modules/settings/models.py::save_capability`, `list_capabilities` | W | Workspace/config/credential prefix and DTO validation; no global role SCAN visible to workspace owner. |
 | `modules/memory/public.py::CACHE_KEY_MEMORIES_ACTIVE` | A+W | Replace `cache:memory:active` with actor/default-workspace/privacy revision; invalidate exact scope. |
 | `modules/dashboard/worker.py::HIGHLIGHT_CURSOR_KEY` | W | `dashboard:highlights:definition-cursor` per workspace; bounded fair scheduling, durable rows authoritative. |
 | `modules/dashboard/briefs.py` brief-attempt Redis key | A+W | Include workspace/day/timezone/schedule revision; Redis advisory, durable generation claim owns publication. |

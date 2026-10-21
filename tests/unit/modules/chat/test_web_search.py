@@ -12,7 +12,7 @@ import httpx
 import pytest
 from redis.exceptions import RedisError
 
-from core.model_gateway.schemas import AIExecutionConfig, PrivacySettings
+from core.model_gateway.schemas import AIExecutionConfig, ModelDefaults, PrivacySettings
 from modules.chat import web_search as ws
 
 KEY = "sk-SECRET-KEY-123"
@@ -201,8 +201,8 @@ def _config(**over: Any) -> AIExecutionConfig:
     base: dict[str, Any] = {
         "workspace_id": uuid4(), "actor_user_id": 1, "membership_revision": 1, "access_configuration_revision": 1,
         "configuration_revision": 1, "gateway_identity": "a" * 64, "endpoint_destination_id": None,
-        "gateway_base_url": None, "gateway_api_key": "", "aliases": {},
-        "privacy": PrivacySettings(allow_remote_web_search=True), "chat_alias": "a", "brief_alias": "b",
+        "gateway_base_url": None, "gateway_api_key": "", "defaults": ModelDefaults(),
+        "privacy": PrivacySettings(allow_remote_web_search=True),
         "request_timeout_seconds": 20, "web_search_provider": "tavily",
         "web_search_endpoint": "https://api.tavily.com", "web_search_api_key": KEY,
         "web_search_credential_configured": True,

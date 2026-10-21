@@ -1,3 +1,11 @@
+<!-- model-roles-status:start -->
+## Model roles replace alias routing - 2026-10-21, branch feature/fix-ui, uncommitted
+
+- Visualization router, OpenRouter kind: new `api` selector (`decisions` for new saves in the UI, absent/`chat` for existing rows) uses OpenRouter's Decisions API (alpha, `/api/alpha/decisions`) with a single choice question over the 13 categories, through `ModelGateway.decisions` (same privacy, lease, breaker and endpoint-policy fences; capability recorded as `structured` by Test routing). Owner-write `POST /api/v1/settings/viz-router/decision-models` lists Decision models (bounded to 200, ids validated). Unit-tested with mocked transport only. Unverified: live OpenRouter Decisions calls (alpha API, shape may change), browser check. Not done: suggesting `decision` type in the provider Models add row after generic discovery (needs the `/ai/discover` response to carry modalities).
+- Visualization router gained two self-contained kinds, `openrouter` (fixed openrouter.ai endpoint) and `cloudflare` (Workers AI account endpoint or https AI Gateway URL), alongside internal, llm (owner providers) and typesafe. Each has its own write-only encrypted key (per-kind ciphertext in the `viz_router` JSON, no migration), model, constraint mode, destination-bound consent and deployment endpoint policy; both reuse the OpenAI-compatible LLM adapter. Unverified: live OpenRouter and Cloudflare calls, browser check.
+- Alias routing replaced by roles (chat, brief, background, embedding, reranker, vision) via migrations `r29_model_roles` and `r30_drop_model_alias_columns`. Unverified: Docker integration tests, browser check, visualization-router probe path, and re-probe of every role after migration (r29 invalidates prior capability evidence).
+<!-- model-roles-status:end -->
+
 <!-- backup-removal-status:start -->
 ## Backup removed; delegated to cloud service - 2026-10-19, branch feature/fix-ui, uncommitted
 
@@ -1160,3 +1168,14 @@ Source review of async behavior, concurrent-use ceiling and database growth, fol
 **Not run / not proven:** Docker integration and E2E; applying `r19` to a live Postgres (offline render and unit tests only); load or capacity test (no before/after numbers; [performance-report.md](performance-report.md) stays null); restore drill; live provider receipts; GitNexus impact/detect_changes (must run before commit); manual mobile/accessibility; `pip-audit` (not installed, Python dependency audit not done).
 
 **Open:** `modules/knowledge/temporal/worker.py` `_fresh_fact_action` still holds locks across the embed and Graphiti write (needs durable intent plus reconciliation); the global privacy lock (`owner_id=1`) and global replay lock remain by design for the single-user model. Go-live items unchanged: final composed build, `alembic upgrade head` on a real database including `r19`, `AI_CREDENTIAL_ENCRYPTION_KEY`, HTTPS proxy SSE settings (both SSE paths), backup schedule and encrypted restore drill (`restore_verified=false`), 2-core/8 GiB capacity test, live provider receipts, OSS inventory, `pip-audit`, PgBouncer only if `WEB_CONCURRENCY` > 2 (connection budget 84/100).
+
+
+## Privacy/account deletion fixes and final local verification - 2026-10-21
+
+The follow-up fixes close the identified n8n in-flight/endpoint/peer races, graph destination fence/schema/timeout gaps, filesystem late-write/unlink/junction/authority gaps, Settings peer updater references, status localization/accessibility, canonical policy anchors and host bootstrap recovery. Every registered SQL table is mapped in `docs/account-erasure-coverage.md`.
+
+Current proof: 458 backend tests passed/2 real-symlink tests skipped; 25 frontend tests passed; scoped Ruff/mypy/ESLint, TypeScript and Next standalone build passed. Standalone public routes200/private `/app`307; packaged6 policies and inventory verified;419 source/986 built artifacts had0 heuristic credential candidate files. Offline migration tests pass; r27/r28 remain unapplied (current separate Models chain ends at r30).
+
+GitNexus refreshed and detect_changes included all39 new production files using a temporary independent index; actual index unchanged. Whole dirty worktree is CRITICAL/117flows because it also includes separate Models/UI changes; no whole-worktree readiness claim. Five npm HIGH development lint-chain advisories remain, with no compatible automatic downgrade. Full evidence and limitations: `docs/privacy-implementation-verification.md`.
+
+Docker integration/E2E, live providers, actual runtime erasure/recovery and deployed-asset checks remain unverified/owner-gated. No account deletion, live migration, commit, push, deploy or key rotation ran. Legal placeholders remain drafts. Legacy unknown remote endpoints and ambiguous revoke results deliberately remain failed pending operator reconciliation.

@@ -204,8 +204,9 @@ class N8nTest(BaseModel):
     api_key: str = Field(default="", max_length=4096, repr=False)
 
 
-VizRouterKind = Literal["internal", "llm", "typesafe"]
+VizRouterKind = Literal["internal", "llm", "typesafe", "openrouter", "cloudflare"]
 VizRouterMode = Literal["json_schema", "forced_tool"]
+VizRouterApi = Literal["chat", "decisions"]  # openrouter only; rows saved without it are chat
 
 
 class VizRouterRead(BaseModel):
@@ -215,7 +216,12 @@ class VizRouterRead(BaseModel):
     provider_id: str | None = None
     model: str = ""
     mode: VizRouterMode = "json_schema"
+    api: VizRouterApi = "chat"
     typesafe_key_configured: bool = False
+    openrouter_key_configured: bool = False
+    cloudflare_key_configured: bool = False
+    account_id: str | None = None
+    gateway_url: str | None = None
     allow_remote_visualization_routing: bool = False
     destination_id: str | None = None
 
@@ -233,8 +239,14 @@ class VizRouterUpdate(BaseModel):
     provider_id: str | None = Field(default=None, max_length=32)
     model: str = Field(default="", max_length=200)
     mode: VizRouterMode = "json_schema"
+    api: VizRouterApi = "chat"  # openrouter: "decisions" uses the Decisions API (alpha); ignored (stored chat) elsewhere
     typesafe_key_action: CredentialAction = "unchanged"
     typesafe_key: str | None = Field(default=None, max_length=4096, repr=False)
+    # openrouter / cloudflare: the key action applies to the selected kind's own key
+    api_key_action: CredentialAction = "unchanged"
+    api_key: str | None = Field(default=None, max_length=4096, repr=False)
+    account_id: str | None = Field(default=None, max_length=64)  # cloudflare
+    gateway_url: str | None = Field(default=None, max_length=500)  # cloudflare optional AI Gateway base URL (https)
     allow_remote_visualization_routing: bool = False
 
 
@@ -243,6 +255,26 @@ class VizRouterTestResult(BaseModel):
     ok: bool
     category: str | None = None
     mode: VizRouterMode | None = None
+    error: str | None = None
+
+
+class VizDecisionModelsRequest(BaseModel):
+    """Discovery input: an optional transient OpenRouter key; blank uses the saved key (never persisted here)."""
+    model_config = ConfigDict(extra="forbid")
+
+    api_key: str | None = Field(default=None, max_length=4096, repr=False)
+
+
+class VizDecisionModel(BaseModel):
+    """One discovered Decisions-API model."""
+    id: str = Field(max_length=200)
+    input_modalities: list[str] = Field(default_factory=list, max_length=8)
+
+
+class VizDecisionModelsResult(BaseModel):
+    """Bounded discovery outcome: ``models`` on success, a short ``error`` code (never URL/body/key) otherwise."""
+    ok: bool
+    models: list[VizDecisionModel] = Field(default_factory=list, max_length=200)
     error: str | None = None
 
 
@@ -266,6 +298,9 @@ __all__ = [
     "SystemPromptsUpdate",
     "TranslationSettingsRead",
     "TranslationSettingsUpdate",
+    "VizDecisionModel",
+    "VizDecisionModelsRequest",
+    "VizDecisionModelsResult",
     "VizRouterRead",
     "VizRouterTestResult",
     "VizRouterUpdate",

@@ -7,9 +7,8 @@ import { messages } from '@/core/messages';
 import { isChatProviderReady, MODELS_SETTINGS_HREF, ProviderGateAlert, useChatProviderReady } from './provider-gate';
 
 const base = {
-  chat_alias: 'reasoning-large',
   providers: [{ id: 'default', credential_configured: true, local: false, policy_denied: false, destination_id: 'remote:x' }],
-  aliases: { 'reasoning-large': { model: 'gpt', provider_id: null } },
+  defaults: { chat: { model: 'gpt', provider_id: null } },
   privacy: { allow_remote_reasoning: true, reasoning_destinations: ['remote:x'] },
 };
 const local = { ...base, providers: [{ id: 'ol', credential_configured: false, local: true, policy_denied: false, destination_id: null }], privacy: undefined };
@@ -39,7 +38,7 @@ describe('isChatProviderReady', () => {
     expect(isChatProviderReady(local)).toBe(true);
   });
   it('is not ready without mapping, credential, consent or when policy denies', () => {
-    expect(isChatProviderReady({ ...base, aliases: {} })).toBe(false);
+    expect(isChatProviderReady({ ...base, defaults: {} })).toBe(false);
     expect(isChatProviderReady({ ...base, providers: [{ ...base.providers[0], credential_configured: false }] })).toBe(false);
     expect(isChatProviderReady({ ...base, privacy: { allow_remote_reasoning: false } })).toBe(false);
     expect(isChatProviderReady({ ...base, providers: [{ ...base.providers[0], policy_denied: true }] })).toBe(false);
@@ -54,7 +53,7 @@ describe('isChatProviderReady', () => {
 
 describe('useChatProviderReady', () => {
   it('reports not ready when settings show no usable model', async () => {
-    stubFetch({ ...base, aliases: {} });
+    stubFetch({ ...base, defaults: {} });
     const { result } = renderHook(() => useChatProviderReady(), { wrapper: wrapper(new QueryClient()) });
     await waitFor(() => expect(result.current).toBe(false));
   });

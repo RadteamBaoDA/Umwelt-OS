@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
 from core.model_gateway.client import CapabilityUnsupported, ModelGateway, PrivacyPolicyDenied
-from core.model_gateway.schemas import RequestPolicy
+from core.model_gateway.schemas import ModelMapping, RequestPolicy
 from core.model_gateway.transport import (
     EndpointNetworkPolicyError,
     approved_web_search_transport,
@@ -73,6 +73,7 @@ from modules.chat.retrieval import (
     revalidate_context_fence,
 )
 from modules.chat.schemas import (
+    MODEL_OVERRIDE_KEY,
     WEB_SEARCH_KEY,
     WEB_SEARCH_OUTCOME_KEY,
     AnswerContextRequest,
@@ -907,9 +908,22 @@ async def run_response_generation(
             ai_config = await settings_public.get_ai_execution_config(
                 session, settings, redis, scope=owner_scope,
             )
-            alias = ai_config.chat_alias or "reasoning-large"
-            ai_config = settings_public.derive_for_alias(ai_config, alias)
-            mapping = ai_config.aliases.get(alias)
+            role = "chat"
+            # `fence_mapping` stays the role default: ensure_ai_config_unchanged compares it to live settings,
+            # and a configuration_revision bump already covers any drift of the overriding provider/model.
+            fence_mapping = ai_config.defaults.resolve(role)
+            mapping: ModelMapping | None
+            override = (raw_context_req or {}).get(MODEL_OVERRIDE_KEY) if isinstance(raw_context_req, dict) else None
+            if isinstance(override, dict) and override.get("model") and override.get("provider_id"):
+                chosen_provider = ai_config.providers.get(override["provider_id"])
+                mapping = ModelMapping(
+                    model=override["model"], provider_id=override["provider_id"],
+                    destination="unknown" if chosen_provider is None or chosen_provider.local else "remote",
+                )
+                ai_config = settings_public.derive_for_mapping(ai_config, mapping)
+            else:
+                ai_config = settings_public.derive_for_role(ai_config, role)
+                mapping = fence_mapping
 
             policy = RequestPolicy(
                 workspace_id=ai_config.workspace_id, actor_user_id=ai_config.actor_user_id,
@@ -945,7 +959,7 @@ async def run_response_generation(
                 nonlocal send_attempt_session
                 await release_send_attempt_session()
                 await ensure_ai_config_unchanged(
-                    session_factory, settings, redis, owner_scope, ai_config, alias, mapping,
+                    session_factory, settings, redis, owner_scope, ai_config, role, fence_mapping,
                 )
                 send_attempt_session = session_factory()
                 try:
@@ -1049,7 +1063,7 @@ async def run_response_generation(
                 """Create one gateway stream; request opening is lazy and fenced per attempt by the callbacks."""
                 extra: dict[str, Any] = {"tools": tools, "tool_choice": "auto"} if tools else {}
                 return gateway.stream(
-                    alias=alias,
+                    role=role,
                     mapping=mapping,
                     policy=policy,
                     messages=msgs,
@@ -1510,7 +1524,7 @@ async def run_response_generation(
                     await _privacy_cancel_locked(session, live_run, seq)
                     await session.commit()
                     return
-            model_ident = mapping.model if mapping else alias
+            model_ident = mapping.model if mapping else role
             assistant_msg = Message(
                 conversation_id=conversation_id,
                 role="assistant",
@@ -1544,7 +1558,7 @@ async def run_response_generation(
                 .values(
                     status="completed",
                     assistant_message_id=assistant_msg.id,
-                    model_alias=alias,
+                    model_alias=role,  # historical column name; stores the role
                     model_name=model_ident,
                     citations=valid_citations,
                     ephemeral=ephemeral_flag,
@@ -1720,6 +1734,8 @@ async def _external_route_decision(
         category, _ = await viz.classify_typesafe(resolved.typesafe_key, window, transport)
         return viz.decision_for(category, "typesafe")
     config, mapping = settings_public.viz_router_gateway_config(base, resolved)
+    if resolved.kind in settings_public.VIZ_KEYED_KINDS and not (resolved.api_key and resolved.base_url):
+        raise viz.VisualizationRouterError("credential_required" if not resolved.api_key else "network_denied", retryable=False)
     destination = config.endpoint_destination_id or "remote"
     policy = RequestPolicy(
         workspace_id=config.workspace_id, actor_user_id=config.actor_user_id,
@@ -1747,6 +1763,9 @@ async def _external_route_decision(
         configuration_revision=config.configuration_revision, before_send=recheck_send,
         approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers,
     )
+    if resolved.api == "decisions":
+        category = await viz.classify_decisions(gateway, mapping, policy, window, before_send=recheck_send)
+        return viz.decision_for(category, "decisions")
     category = await viz.classify_llm(
         gateway, mapping, policy, window, mode=resolved.mode, base_url=config.gateway_base_url,
         before_send=recheck_send,

@@ -89,7 +89,7 @@ function ContextPicker({ open, onOpenChange, current, onConfirm }: { open: boole
   );
 }
 
-/** Removable context badge row (`variant` picks the bordered bar or the composer's borderless badges) shared by the quick-chat drawer and the full Chat page; `onChange` enables the add-context picker. */
+/** Moves focus to the chip now at `idx` (or the add-context button) after a removal so it never falls to <body>. */
 function focusChip(bar: HTMLElement | null, idx: number) {
   setTimeout(() => {
     const btns = bar?.querySelectorAll<HTMLButtonElement>('button[data-chip-remove]');
@@ -97,10 +97,19 @@ function focusChip(bar: HTMLElement | null, idx: number) {
   }, 0);
 }
 
-export function ChatContextBar({ context, onRemove, onChange, variant = 'bar' }: { context: ChatContext | null; onRemove: () => void; onChange?: (context: ChatContext | null) => void; variant?: 'bar' | 'badges' }) {
+/**
+ * Removable context badge row (`variant` picks the bordered bar or the composer's borderless badges) shared by the
+ * quick-chat drawer and the full Chat page; `onChange` enables the add-context picker. In the `badges` variant the
+ * composer's + menu owns the trigger, so the picker's open state is controlled via `pickerOpen`/`onPickerOpenChange`
+ * and the row renders chips only (nothing at all when there are none).
+ */
+export function ChatContextBar({ context, onRemove, onChange, variant = 'bar', pickerOpen, onPickerOpenChange }: { context: ChatContext | null; onRemove: () => void; onChange?: (context: ChatContext | null) => void; variant?: 'bar' | 'badges'; pickerOpen?: boolean; onPickerOpenChange?: (open: boolean) => void }) {
   const t = useTranslations('chat');
   const label = useContextLabel(context);
-  const [open, setOpen] = React.useState(false);
+  const [ownOpen, setOwnOpen] = React.useState(false);
+  const controlled = pickerOpen !== undefined && !!onPickerOpenChange;
+  const open = controlled ? pickerOpen : ownOpen;
+  const setOpen = controlled ? onPickerOpenChange : setOwnOpen;
   const barId = React.useId();
   const [announce, setAnnounce] = React.useState('');
   const canPick = !!onChange && (!context || context.kind === 'selection');
@@ -129,14 +138,14 @@ export function ChatContextBar({ context, onRemove, onChange, variant = 'bar' }:
     focusChip(document.getElementById(barId), idx);
   };
   return (
-    <div id={barId} className={variant === 'badges' ? 'flex flex-wrap items-center gap-1.5 text-xs text-foreground' : 'flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-secondary px-4 py-2 text-xs text-foreground'}>
+    <div id={barId} className={variant === 'badges' ? (items.length > 0 || label ? 'flex flex-wrap items-center gap-1.5 text-xs text-foreground' : 'contents') : 'flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-secondary px-4 py-2 text-xs text-foreground'}>
       {label && <span className="sr-only">{t('contextLabel')}</span>}
       {canPick && items.length > 0
         ? items.map((i, idx) => chip(i.documentId, nameOf(i, idx), () => removeAt(idx)))
         : label && chip('ctx', label, onRemove)}
       <span role="status" className="sr-only">{announce}</span>
-      {canPick && (
-        <Button type="button" variant={variant === 'badges' ? 'ghost' : 'outline'} size="sm" className="min-h-11" data-add-context disabled={items.length >= MAX_ITEMS} onClick={() => setOpen(true)}>
+      {canPick && variant !== 'badges' && (
+        <Button type="button" variant="outline" size="sm" className="min-h-11" data-add-context disabled={items.length >= MAX_ITEMS} onClick={() => setOpen(true)}>
           <PlusIcon className="size-3.5" aria-hidden="true" />{t('addContext')}
         </Button>
       )}

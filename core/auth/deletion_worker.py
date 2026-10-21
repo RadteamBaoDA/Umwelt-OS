@@ -54,7 +54,8 @@ async def process_account_deletion(ctx: dict[str, Any], operation_id: UUID) -> b
 
     A dedicated connection retains only the advisory lock, never an open transaction during
     cleanup/provider I/O. Connection loss releases the lock. Owner cleanup is idempotent; each
-    committed stage is checkpointed separately and failed work retries after one minute.
+    committed stage is checkpointed separately and failed work retries after one minute. The
+    backend PID and locked operation checkpoint fence a connection lost during provider I/O.
     """
     from core.auth.deletion_cleanup import erase_account_data
 
@@ -62,10 +63,13 @@ async def process_account_deletion(ctx: dict[str, Any], operation_id: UUID) -> b
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     key = int.from_bytes(operation_id.bytes[:8], "big", signed=True)
     async with engine.connect() as connection:
+        backend_pid = await connection.scalar(text("SELECT pg_backend_pid()"))
         acquired = await connection.scalar(text("SELECT pg_try_advisory_lock(:key)"), {"key": key})
         await connection.commit()
         if not acquired:
             return False
+        phase: str | None = None
+        cursor: dict[str, Any] = {}
         try:
             async with factory() as session:
                 operation = await session.get(AccountDeletionOperation, operation_id)
@@ -73,16 +77,23 @@ async def process_account_deletion(ctx: dict[str, Any], operation_id: UUID) -> b
                     return False
                 assert operation.account_id is not None and operation.workspace_id is not None
                 scope = AccountErasureScope(operation.id, operation.account_id, operation.workspace_id)
-                await authorize_account_erasure(session, scope)
                 phase, cursor = operation.phase, dict(operation.cursor)
+                await authorize_account_erasure(session, scope)
                 operation.status = "running"
                 operation.error_code = None
                 await session.commit()
             # A cancelled/crashed stage remains durable and is picked up by the next sweep.
             progress = await erase_account_data(ctx, scope, phase, cursor)
+            # SQLAlchemy may reconnect after provider I/O; a new backend no longer owns our lock.
+            if await connection.scalar(text("SELECT pg_backend_pid()")) != backend_pid:
+                raise RuntimeError("Account deletion lock connection changed")
+            await connection.commit()
             async with factory() as session:
-                operation = await session.get(AccountDeletionOperation, operation_id)
-                assert operation is not None
+                operation = await session.scalar(select(AccountDeletionOperation).where(
+                    AccountDeletionOperation.id == operation_id,
+                ).with_for_update())
+                if operation is None or operation.phase != phase or operation.cursor != cursor or operation.status != "running":
+                    raise RuntimeError("Account deletion checkpoint changed during cleanup")
                 if progress.complete:
                     await finalize_account_erasure(session, operation)
                 else:
@@ -90,12 +101,17 @@ async def process_account_deletion(ctx: dict[str, Any], operation_id: UUID) -> b
                     operation.next_attempt_at = datetime.now(UTC)
                 await session.commit()
             return True
-        except Exception:  # noqa: BLE001 - any failure is recorded on the operation and retried
+        except Exception as exc:  # noqa: BLE001 - any failure is recorded on the operation and retried
             async with factory() as session:
                 operation = await session.get(AccountDeletionOperation, operation_id)
-                if operation is not None and operation.status != "succeeded":
+                if (operation is not None and operation.status in {"queued", "running"}
+                        and operation.phase == phase and operation.cursor == cursor):
                     operation.status = "failed"
-                    operation.error_code = "cleanup_retry_required"
+                    safe_code = getattr(exc, "safe_code", None)
+                    operation.error_code = safe_code if safe_code in {
+                        "auxiliary_cleanup_failed", "remote_cleanup_failed", "graph_cleanup_failed",
+                        "storage_cleanup_failed", "shared_cleanup_failed", "data_cleanup_failed",
+                    } else "cleanup_retry_required"
                     operation.next_attempt_at = datetime.now(UTC) + timedelta(minutes=1)
                     await session.commit()
             return False

@@ -48,6 +48,7 @@ class CatalogEntry(BaseModel):
     terms_url: str | None = None
     terms_checked_on: str | None = None
     attribution: str | None = None
+    category: Literal["news", "economy", "hazards", "space", "security", "tech"] | None = None
     hosts: tuple[str, ...] = ()
     endpoints: tuple[str, ...] = ()
     execution: Literal["supported", "experimental", "research_only"] | None = None
@@ -320,7 +321,7 @@ def _with_spec(entry: CatalogEntry, spec: FreeProviderSpec) -> CatalogEntry:
         } if fixed or scoped else None,
         "sample_output": SAMPLE_OUTPUTS.get(spec.id) if fixed or scoped else None,
         "eligibility": spec.eligibility, "terms_url": spec.terms_url, "terms_checked_on": spec.checked_on,
-        "attribution": spec.attribution, "hosts": spec.hosts, "endpoints": spec.endpoints,
+        "attribution": spec.attribution, "category": spec.category, "hosts": spec.hosts, "endpoints": spec.endpoints,
         "execution": spec.execution, "default_interval_minutes": spec.default_interval_minutes,
         "key_fields": ("api_key",) if spec.key_required else (), "endpoint_probe": spec.endpoint_probe,
         "quota_policies": spec.quota, "setup_guide": (

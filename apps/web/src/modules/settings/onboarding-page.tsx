@@ -15,9 +15,8 @@ import { getOnboardingState, saveOnboardingStep, type OnboardingStep } from './o
 type ReadinessAI = {
   providers: { base_url: string | null; credential_configured: boolean; local: boolean }[];
   endpoint_policy_denied: boolean;
-  chat_alias: string;
-  aliases: Record<string, { model: string; destination: string }>;
-  capabilities: { alias: string; capability: string; result: string; expires_at: string }[];
+  defaults: { chat?: { model: string; destination: string } | null; embedding?: { model: string; destination: string } | null };
+  capabilities: { role: string; capability: string; result: string; expires_at: string }[];
   privacy: { allow_remote_reasoning: boolean; allow_remote_embeddings: boolean };
 };
 
@@ -53,24 +52,24 @@ export function OnboardingPage() {
   const currentIndex = steps.findIndex((step) => step.id === progress.data.current_step);
   const currentStep = steps[Math.max(0, currentIndex)];
   const activeSources = sources.data?.items.filter((source) => source.status === 'active').length ?? 0;
-  const chatAlias = ai.data?.aliases[ai.data.chat_alias];
+  const chatDefault = ai.data?.defaults?.chat;
   const aiReady = Boolean(ai.data?.providers?.some((item) => item.base_url && (item.credential_configured || item.local))
     && !ai.data.endpoint_policy_denied && ai.data.privacy.allow_remote_reasoning
-    && chatAlias?.model && chatAlias.destination === 'remote');
-  const chatCapability = ai.data?.capabilities.some((capability) => capability.alias === ai.data?.chat_alias
+    && chatDefault?.model && chatDefault.destination === 'remote');
+  const chatCapability = ai.data?.capabilities.some((capability) => capability.role === 'chat'
     && capability.capability === 'chat' && capability.result === 'supported') ?? false;
   const aiUnresolved = ai.isPending || ai.isError || !ai.data;
   const indexUnresolved = index.isPending || index.isError || !index.data;
-  const embeddingAlias = ai.data?.aliases.embedding;
+  const embeddingDefault = ai.data?.defaults?.embedding;
   // SearchIndexStatus omits embedding version and gateway identity. Matching model IDs alone
   // cannot establish the execution fences checked by semantic search, so active generations
   // with a matching model remain unknown instead of being presented as usable.
   const semanticUnavailable = Boolean(ai.data && (
     !ai.data.privacy.allow_remote_embeddings || ai.data.endpoint_policy_denied
-    || !embeddingAlias?.model || embeddingAlias.destination !== 'remote'
+    || !embeddingDefault?.model || embeddingDefault.destination !== 'remote'
   )) || Boolean(index.data && (
     index.data.status !== 'active' || index.data.indexed_items === 0
-    || Boolean(embeddingAlias?.model && index.data.model_id !== embeddingAlias.model)
+    || Boolean(embeddingDefault?.model && index.data.model_id !== embeddingDefault.model)
   ));
   /** Maps the owner SearchIndexStatus state to the matching localized progress message. */
   const indexState = (state: string) => {
@@ -94,7 +93,7 @@ export function OnboardingPage() {
   const stepContent = currentStep.id === 'ai_privacy'
     ? <><h2>{t('aiTitle')}</h2><p>{t('aiText')}</p><p role="status">{status(aiReady, ai.isPending || ai.isError)} · {ai.isError && networkUnavailable(ai.error) ? t('offline') : ai.isPending || ai.isError ? t('unknown') : t(aiReady ? 'aiReady' : 'aiNeedsSetup')}</p><Button asChild variant="outline"><Link href="/settings/ai">{t('openAiSettings')}</Link></Button></>
     : currentStep.id === 'capability'
-      ? <><h2>{t('capabilityTitle')}</h2><p>{t('capabilityText')}</p><p role="status">{status(chatCapability && chatAlias?.destination === 'remote', aiUnresolved)} · {ai.isError && networkUnavailable(ai.error) ? t('offline') : aiUnresolved ? t('unknown') : chatCapability ? t('capabilityReady') : t('capabilityNeedsProbe')}</p><Button asChild variant="outline"><Link href="/settings/ai">{t('openAiSettings')}</Link></Button></>
+      ? <><h2>{t('capabilityTitle')}</h2><p>{t('capabilityText')}</p><p role="status">{status(chatCapability && chatDefault?.destination === 'remote', aiUnresolved)} · {ai.isError && networkUnavailable(ai.error) ? t('offline') : aiUnresolved ? t('unknown') : chatCapability ? t('capabilityReady') : t('capabilityNeedsProbe')}</p><Button asChild variant="outline"><Link href="/settings/ai">{t('openAiSettings')}</Link></Button></>
       : currentStep.id === 'sources'
         ? <><h2>{t('sourcesTitle')}</h2><p>{t('sourcesText')}</p><p role="status">{sources.isPending ? t('unknown') : sources.isError && networkUnavailable(sources.error) ? t('offline') : sources.isError ? t('sourceUnknown') : activeSources ? t('sourceCount', { count: activeSources }) : t('sourceNone')}</p><Button asChild variant="outline"><Link href="/sources">{t('openSources')}</Link></Button><OnboardingTopics /></>
         : currentStep.id === 'sample_or_import'

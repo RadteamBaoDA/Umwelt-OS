@@ -41,10 +41,10 @@ DEADLINE = 2.0
 
 @pytest.fixture
 async def brief_ready(ready_owner_client: AsyncClient) -> AsyncClient:
-    """Point the brief alias at the fake model with remote reasoning allowed, and probe chat."""
+    """Point the brief role at the fake model with remote reasoning allowed, and probe chat."""
     client = ready_owner_client
     await configure_fake_model(client)
-    probe = await client.post("/api/v1/settings/models/reasoning-large/test", json={"capability": "chat"})
+    probe = await client.post("/api/v1/settings/models/brief/test", json={"capability": "chat"})
     assert probe.status_code == 200 and probe.json()["result"] == "supported", probe.text
     return client
 

@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import { PasswordInput } from '@/components/ui/password-input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ApiError } from '@/core/api';
@@ -37,6 +38,7 @@ import {
   ConnectorActivation,
   getConnectorActivation,
   getConnectorCatalog,
+  listBuiltinSources,
   getProviderTerms,
   getMonotonicConnectorConfiguration,
   selectMonotonicConnectorConfiguration,
@@ -318,7 +320,10 @@ export function ConnectorEditor({
   const termsGated = freeProviders.has(provider) && Boolean(sourceId);
   const termsQuery = useQuery({ queryKey: connectorKeys.terms(sourceId), queryFn: ({ signal }) => getProviderTerms(sourceId, signal), enabled: termsGated });
   const termsBlocked = freeProviders.has(provider) && (!termsGated || termsQuery.data?.eligible !== true);
-  const catalog = catalogQuery.data ?? [];
+  // Built-ins are switched on from the Built-in sources section, not created as tiles here.
+  const builtinQuery = useQuery({ queryKey: connectorKeys.builtins, queryFn: ({ signal }) => listBuiltinSources(signal), enabled: !sourceId });
+  const builtinIds = useMemo(() => new Set((builtinQuery.data ?? []).map((item) => item.id)), [builtinQuery.data]);
+  const catalog = useMemo(() => (catalogQuery.data ?? []).filter((entry) => !builtinIds.has(entry.provider_id)), [catalogQuery.data, builtinIds]);
   const currentEntry = catalog.find((entry) => entry.provider_id === provider);
   const sourceStatus = sourceStatusOverride ?? source?.status ?? 'active';
   const visibleActivationState = activationQuery.isError ? 'unknown' : activationQuery.data?.state ?? activationState;
@@ -1048,7 +1053,7 @@ export function ConnectorEditor({
         {catalog.map((entry) => {
           const localProvider = entry.provider_id;
           const supported = ['available', 'implemented', 'requires_credentials'].includes(entry.availability) && isProvider(localProvider);
-          return <Button key={entry.provider_id} type="button" className={`source-provider${provider === localProvider ? ' is-selected' : ''}`} disabled={!supported || locked} onClick={() => { if (!supported || !isProvider(localProvider)) return; setProvider(localProvider); setConfiguration(defaultConfiguration(localProvider, entry)); if (freeProviders.has(localProvider) && !name.trim()) setName(entry.label); markDraftChanged(); }}>
+          return <Button key={entry.provider_id} type="button" variant="outline" className={`source-provider h-auto min-w-0 flex-col items-start justify-start overflow-hidden whitespace-normal break-words text-left font-normal${provider === localProvider ? ' is-selected' : ''}`} disabled={!supported || locked} onClick={() => { if (!supported || !isProvider(localProvider)) return; setProvider(localProvider); setConfiguration(defaultConfiguration(localProvider, entry)); if (freeProviders.has(localProvider) && !name.trim()) setName(entry.label); markDraftChanged(); }}>
             <strong>{t(providerKey(entry.provider_id))}</strong><span>{catalogStatus(entry)}</span>
             {!supported && <small>{t('providerUnavailableReason')}</small>}
           </Button>;
@@ -1094,14 +1099,14 @@ export function ConnectorEditor({
               : currentEntry.auth_methods.includes('oauth2') && <p className="text-muted-foreground">{t('connectOAuth')}</p>)}
             {provider === 'telegram' && <>
               <div className="field"><Label htmlFor="source-telegram-secret-action">{t('telegramCredentialAction')}</Label><Select value={telegramSecretAction} onValueChange={(value) => { setTelegramSecretAction(value as 'keep' | 'replace'); setSecret(''); dirtyRef.current = dirty; draftVersion.current += 1; setValidation(null); setNotice(''); }}><SelectTrigger id="source-telegram-secret-action"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="keep">{t('keepCredential')}</SelectItem><SelectItem value="replace">{t('replaceCredential')}</SelectItem></SelectContent></Select></div>
-              {telegramSecretAction === 'replace' && <div className="field"><Label htmlFor="source-telegram-token">{t('telegramBotToken')}</Label><Input id="source-telegram-token" type="password" autoComplete="new-password" maxLength={512} required value={secret} onChange={(event) => { setSecret(event.target.value); dirtyRef.current = true; setDirty(true); draftVersion.current += 1; setValidation(null); setNotice(''); }} /><small className="text-muted-foreground">{t('secretHelp')}</small></div>}
+              {telegramSecretAction === 'replace' && <div className="field"><Label htmlFor="source-telegram-token">{t('telegramBotToken')}</Label><PasswordInput id="source-telegram-token" autoComplete="new-password" maxLength={512} required value={secret} onChange={(event) => { setSecret(event.target.value); dirtyRef.current = true; setDirty(true); draftVersion.current += 1; setValidation(null); setNotice(''); }} /><small className="text-muted-foreground">{t('secretHelp')}</small></div>}
             </>}
-            {(provider === 'alpha_vantage' || (provider === 'coingecko' && (backendChoice ?? 'native') === 'native')) && <div className="field"><Label htmlFor="source-provider-key">{t(provider === 'coingecko' ? 'coingeckoKey' : 'alphaVantageKey')}</Label><Input id="source-provider-key" type="password" autoComplete="new-password" maxLength={256} required={!providerCredentialConfigured} value={secret} onChange={(event) => { setSecret(event.target.value); dirtyRef.current = true; setDirty(true); draftVersion.current += 1; setValidation(null); setNotice(''); }} /><small className="text-muted-foreground">{providerCredentialConfigured ? t('credentialSavedWriteOnly') : t('secretHelp')}</small>{provider === 'coingecko' && keyNeeded(visibleActivationError) && <small className="error" role="alert">{t('providerKeyNeeded')}</small>}</div>}
+            {(provider === 'alpha_vantage' || (provider === 'coingecko' && (backendChoice ?? 'native') === 'native')) && <div className="field"><Label htmlFor="source-provider-key">{t(provider === 'coingecko' ? 'coingeckoKey' : 'alphaVantageKey')}</Label><PasswordInput id="source-provider-key" autoComplete="new-password" maxLength={256} required={!providerCredentialConfigured} value={secret} onChange={(event) => { setSecret(event.target.value); dirtyRef.current = true; setDirty(true); draftVersion.current += 1; setValidation(null); setNotice(''); }} /><small className="text-muted-foreground">{providerCredentialConfigured ? t('credentialSavedWriteOnly') : t('secretHelp')}</small>{provider === 'coingecko' && keyNeeded(visibleActivationError) && <small className="error" role="alert">{t('providerKeyNeeded')}</small>}</div>}
           {provider === 'rest' && <>
             <div className="field"><Label htmlFor="source-auth-method">{t('auth')}</Label><Select value={authMethod} onValueChange={(value) => { setAuthMethod(value as typeof authMethod); markDraftChanged(); setValidation(null); }}><SelectTrigger id="source-auth-method"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">{t('noAuthentication')}</SelectItem><SelectItem value="http_header">{t('headerAuthentication')}</SelectItem></SelectContent></Select></div>
             {authMethod === 'http_header' && <>
               <div className="field"><Label htmlFor="source-header-name">{t('headerName')}</Label><Input id="source-header-name" maxLength={128} value={authHeaderName} onChange={(event) => { setAuthHeaderName(event.target.value); markDraftChanged(); setValidation(null); }} /></div>
-              <div className="field"><Label htmlFor="source-provider-secret">{t('providerSecret')}</Label><Input id="source-provider-secret" type="password" autoComplete="new-password" value={secret} onChange={(event) => { setSecret(event.target.value); dirtyRef.current = dirty || Boolean(event.target.value); draftVersion.current += 1; setValidation(null); }} /><small className="text-muted-foreground">{t('secretHelp')}</small></div>
+              <div className="field"><Label htmlFor="source-provider-secret">{t('providerSecret')}</Label><PasswordInput id="source-provider-secret" autoComplete="new-password" value={secret} onChange={(event) => { setSecret(event.target.value); dirtyRef.current = dirty || Boolean(event.target.value); draftVersion.current += 1; setValidation(null); }} /><small className="text-muted-foreground">{t('secretHelp')}</small></div>
             </>}
           </>}
             <div className="form-actions"><Button variant="outline" disabled={locked} onClick={validateDraft}>{busyAction === 'validate' ? t('validating') : t('validateDraft')}</Button></div>

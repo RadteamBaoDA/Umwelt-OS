@@ -5,13 +5,16 @@ LOCAL_DESTINATION_PREFIX = "local:"
 
 def may_send(
     policy: RequestPolicy,
-    alias: str,
+    role: str,
     mapping: ModelMapping | None,
     destination_id: str,
     credential_configured: bool,
     capability: str,
 ) -> bool:
     """Decide whether a configured capability may be sent under destination, credential, and privacy policy.
+
+    ``role`` is the model role (chat, brief, ...) the call serves; it carries no policy of its own: local-only
+    handling is the ``local:`` destination gate plus ``policy.local_only``.
 
     ``local:`` destinations (Ollama/LM Studio) stay on the owner's network: no credential, remote marker or
     consent is required, but they must still be permitted and never serve ``local_only`` sources.
@@ -24,7 +27,6 @@ def may_send(
         return capability not in {"web_search", "search"}
     if (
         not credential_configured
-        or alias == "local-private"
         or mapping.destination != "remote"
     ):
         return False

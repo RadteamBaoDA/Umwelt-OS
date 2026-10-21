@@ -11,7 +11,7 @@ import pytest
 from pydantic import SecretStr
 
 from core.model_gateway.client import CapabilityUnsupported
-from core.model_gateway.schemas import ModelMapping, PrivacySettings
+from core.model_gateway.schemas import ModelDefaults, ModelMapping, PrivacySettings
 from modules.chat import schemas, worker
 from modules.chat.generative_ui import finalize_generative_ui
 from modules.chat.generative_ui.external_router import VisualizationRouterError
@@ -345,7 +345,7 @@ def test_read_path_returns_every_part_and_falls_back_to_legacy_single_widget() -
 
 def _media_config(enabled: bool) -> Any:
     """Execution config whose privacy flag allows (or not) remote widget media."""
-    return _config(aliases={}, privacy=PrivacySettings(
+    return _config(defaults=ModelDefaults(), privacy=PrivacySettings(
         allow_remote_embeddings=True, allow_remote_reasoning=True, reasoning_destinations=["omniroute"],
         embedding_destinations=["omniroute"], allow_widget_remote_media=enabled,
     ))
@@ -401,7 +401,7 @@ def _router(monkeypatch: pytest.MonkeyPatch, **resolved: Any) -> AsyncMock:
     monkeypatch.setattr(worker.settings_public, "resolve_viz_router", AsyncMock(
         return_value=VizRouterResolved(**{"kind": "llm", "allow_remote": True, "model": "m", **resolved})))
     monkeypatch.setattr(worker.settings_public, "viz_router_gateway_config",
-                        lambda base, r: (_config(aliases={}), ModelMapping(model="m", destination="remote")))
+                        lambda base, r: (_config(defaults=ModelDefaults()), ModelMapping(model="m", destination="remote")))
     classify = AsyncMock(return_value="table")
     monkeypatch.setattr(worker.viz, "classify_llm", classify)
     return classify
@@ -527,7 +527,7 @@ async def test_local_only_turn_still_fails_the_external_router(monkeypatch: pyte
     gen = _UIGen(monkeypatch, [["RAISE_CAPABILITY"], [_text("Alpha: 40 Beta: 60")]], prompt="Show a pie chart")
     classify = _router(monkeypatch)
     monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config(
-        aliases={}, privacy=PrivacySettings(allow_remote_reasoning=False),
+        defaults=ModelDefaults(), privacy=PrivacySettings(allow_remote_reasoning=False),
     )))
     await gen.run()
     classify.assert_not_awaited()
@@ -697,7 +697,7 @@ async def test_external_router_refused_for_local_only_before_any_model_request(m
     gen = _UIGen(monkeypatch, [_table_round()])
     classify = _router(monkeypatch)
     monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config(
-        aliases={}, privacy=PrivacySettings(allow_remote_reasoning=False),
+        defaults=ModelDefaults(), privacy=PrivacySettings(allow_remote_reasoning=False),
     )))
     await gen.run()
     classify.assert_not_awaited()

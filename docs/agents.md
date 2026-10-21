@@ -6,7 +6,7 @@ Scope: Phase 7. Management UI is reached from full Chat and Settings > AI (advan
 
 Supervisor, Knowledge, Research, Personal, Project, News and Planning share one LangGraph harness
 (`modules/agents/harness.py`). Automation stays disabled until Phase 10. Each profile has an editable
-prompt, model alias, exact registered tool permissions (name, version, fingerprint) and source scope;
+prompt, exact registered tool permissions (name, version, fingerprint) and source scope;
 saves are optimistic (`expected_revision`). Capabilities that depend on unregistered tools (Phase 8 tasks
 and goals, browser) are shown as unavailable with a reason, never faked.
 
@@ -47,7 +47,7 @@ the final answer is revalidated against them.
 - It shares the parent's run row, claim, PostgreSQL lease and active-time clock. Every step, tool call and second the
   specialist uses counts against the parent's 20 steps, 10 tool calls and 300 s, and its token usage is added to the
   parent's. Parent cancel, session expiry, lease loss or limit stops it at the next fence.
-- The specialist uses its own model alias, prompt, tools and source scope, intersected with the Supervisor's sources.
+- The specialist uses the chat model (per-agent model choice was removed), its own prompt, tools and source scope, intersected with the Supervisor's sources.
   A disabled, unconfigured or tool-less specialist is refused (`tool_unavailable`) with no fallback.
 - Effects are not offered to the specialist: `webhook.send` and `browser.read` are excluded, so no approval can be
   bypassed or left pending inside a handoff. Run the effect-capable specialist directly to get the approval card.

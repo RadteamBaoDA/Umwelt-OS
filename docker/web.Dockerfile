@@ -23,6 +23,9 @@ WORKDIR /app
 RUN addgroup -S -g 10001 bbd && adduser -S -u 10001 -G bbd bbd
 COPY --from=build --chown=bbd:bbd /app/apps/web/.next/standalone ./
 COPY --from=build --chown=bbd:bbd /app/apps/web/.next/static ./apps/web/.next/static
+# The public policy loader reads canonical Markdown at runtime, including standalone starts from /app.
+COPY --from=build --chown=bbd:bbd /app/docs/legal ./docs/legal
+COPY --from=build --chown=bbd:bbd /app/docs/third-party-services.md ./docs/third-party-services.md
 # Standalone output omits public/: the vendored Generative UI modules (/vendor/genui/) live there.
 COPY --from=build --chown=bbd:bbd /app/apps/web/public ./apps/web/public
 USER bbd

@@ -208,7 +208,7 @@ class TestContextBudgetAndReranking:
         gateway.rerank = fake_rerank
         config = MagicMock()
         config.endpoint_policy_denied = False
-        config.aliases = {"reranker": MagicMock(model="m")}
+        config.defaults.resolve.return_value = MagicMock(model="m")
         evidence = [
             EvidenceItem(
                 source_id=uuid4(), source_generation=1, local_only=False, document_id=uuid4(),
@@ -218,7 +218,7 @@ class TestContextBudgetAndReranking:
         ]
         with (
             patch.object(retrieval.settings_public, "get_ai_execution_config", AsyncMock(return_value=config)),
-            patch.object(retrieval.settings_public, "derive_for_alias", lambda c, _a: c),
+            patch.object(retrieval.settings_public, "derive_for_role", lambda c, _a: c),
             patch.object(retrieval, "RequestPolicy", lambda **k: MagicMock()),
             patch.object(retrieval, "may_send", lambda *a, **k: True),
             patch.object(retrieval, "ModelGateway", lambda **k: gateway),

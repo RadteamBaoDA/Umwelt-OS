@@ -41,7 +41,7 @@ Use shadcn primitives rather than hand-built substitutes. Business components su
 - Only New chat, user/assistant messages, composer with send/stop, and close are visible. An accessible Sheet title/description may be visually hidden.
 - History, thread selector, model/context controls, attachment management and web-search controls belong on the full Chat page. Main Chat navigation opens the current thread without clearing its draft or restarting generation.
 - Body scrolls independently; composer stays at the bottom. Preserve focus trapping, Escape/close, accessible naming and return focus from Sheet primitives. Do not disable these behaviors to imitate a screenshot.
-- Port the requested AnythingLLM chat source into this repository while adapting it to these components and the existing Umwelt-OS thread/permissions/API contracts. AI calls use the server-side OpenAI SDK against the configured per-alias providers (cloud or local such as Ollama/LM Studio).
+- Port the requested AnythingLLM chat source into this repository while adapting it to these components and the existing Umwelt-OS thread/permissions/API contracts. AI calls use the server-side OpenAI SDK against the configured chat-role provider (cloud or local such as Ollama/LM Studio).
 
 ## 3. Semantic tokens and visual rules
 

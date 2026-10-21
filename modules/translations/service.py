@@ -28,7 +28,7 @@ from modules.translations.protection import (
 )
 from modules.translations.schemas import TranslationInput
 
-ALIAS = "reasoning-small"
+ROLE = "background"
 MAX_TITLE, MAX_EXCERPT, MAX_BRIEF = 500, 4000, 40_000
 SEGMENT_CHARS, MAX_SEGMENTS = 2000, 20
 _SYSTEM = (
@@ -99,7 +99,7 @@ async def _ask(
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
     try:
         response = await asyncio.wait_for(gateway.structured(
-            ALIAS, config.aliases.get(ALIAS), policy, messages, schema,
+            ROLE, config.defaults.resolve(ROLE), policy, messages, schema,
             max_tokens=4096, temperature=0, before_send=before_send), remaining)
         data = json.loads(response["choices"][0]["message"]["content"])
         usage = response.get("usage") if isinstance(response, dict) else None

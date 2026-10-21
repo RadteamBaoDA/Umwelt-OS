@@ -2,10 +2,8 @@
 
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
-import { FileTextIcon, LockIcon, PaperclipIcon, XIcon } from 'lucide-react';
+import { FileTextIcon, LockIcon, XIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Label } from '@/components/ui/label';
 import { ApiError } from '@/core/api';
 import {
   ATTACHMENT_ACCEPT,
@@ -34,6 +32,8 @@ export interface AttachmentEntry {
 export const SELECTION_LOCAL_ONLY = 'selection_local_only';
 /** Element id of the attachment status line; the composer's Send button references it when blocked. */
 export const ATTACHMENT_STATUS_ID = 'chat-attachment-status';
+/** Element id of the composer's + menu trigger; focus lands here when the last attachment chip is removed. */
+export const COMPOSER_MENU_ID = 'chat-composer-menu';
 const POLL_MS = 1500;
 /** Consecutive non-404 polling errors tolerated (with exponential backoff) before giving up. */
 const MAX_POLL_FAILURES = 5;
@@ -175,20 +175,26 @@ export function withAttachments(context: ChatContext | null, items: Item[]): Cha
   return { kind: 'selection', items: merged };
 }
 
-/** Attach button, cloud-sharing opt-in and status chips for the full Chat composer. */
-export function ChatAttachmentBar({ state, disabled }: { state: ReturnType<typeof useChatAttachments>; disabled?: boolean }) {
+/**
+ * Hidden file input, attachment chips and the live status line for the full Chat composer. The Attach
+ * and cloud-sharing controls live in the composer's + menu, which opens the picker through `inputRef`.
+ *
+ * @param state - Attachment state from `useChatAttachments`.
+ * @param disabled - Disables chip removal side effects such as the re-attach button.
+ * @param inputRef - Ref to the hidden file input, shared with the + menu's Attach item.
+ * @returns The chips row (only when entries exist) and the status line (only when it has text).
+ */
+export function ChatAttachmentBar({ state, disabled, inputRef }: { state: ReturnType<typeof useChatAttachments>; disabled?: boolean; inputRef: React.RefObject<HTMLInputElement | null> }) {
   const t = useTranslations('chat');
-  const inputRef = React.useRef<HTMLInputElement>(null);
-  const attachRef = React.useRef<HTMLButtonElement>(null);
   const rootRef = React.useRef<HTMLDivElement>(null);
   const [removedNote, setRemovedNote] = React.useState('');
-  /** Removes an entry, announces it, and moves focus to a neighbouring remove button (or Attach) so it never falls to <body>. */
+  /** Removes an entry, announces it, and moves focus to a neighbouring remove button (or the + menu) so it never falls to <body>. */
   const removeEntry = (key: string, name: string, idx: number) => {
     state.remove(key);
     setRemovedNote(t('attachmentRemoved', { name }));
     setTimeout(() => {
       const btns = rootRef.current?.querySelectorAll<HTMLButtonElement>('button[data-attachment-remove]');
-      (btns && btns.length ? btns[Math.min(idx, btns.length - 1)] : attachRef.current)?.focus();
+      (btns && btns.length ? btns[Math.min(idx, btns.length - 1)] : document.getElementById(COMPOSER_MENU_ID))?.focus();
     }, 0);
   };
   const statusText = (e: AttachmentEntry) => {
@@ -202,61 +208,53 @@ export function ChatAttachmentBar({ state, disabled }: { state: ReturnType<typeo
   const note = state.dropped > 0
     ? t('attachmentDropped', { max: MAX_ATTACHMENTS })
     : state.entries.length ? t('attachmentNote', { max: MAX_ATTACHMENTS }) : '';
+  const statusLine = state.sendBlock ?? note;
   return (
-    <div ref={rootRef} className="flex flex-col gap-2 px-1">
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          ref={inputRef}
-          type="file"
-          multiple
-          accept={ATTACHMENT_ACCEPT}
-          className="sr-only"
-          tabIndex={-1}
-          aria-hidden="true"
-          onChange={(e) => { state.add(Array.from(e.target.files ?? [])); e.target.value = ''; }}
-        />
-        <Button ref={attachRef} type="button" variant="outline" size="sm" className="min-h-11" disabled={disabled || state.full} onClick={() => inputRef.current?.click()}>
-          <PaperclipIcon className="size-3.5" aria-hidden="true" />{t('attach')}
-        </Button>
-        <div className="flex items-center gap-2">
-          <Checkbox
-            id="chat-attachment-share"
-            checked={state.shareWithModel}
-            disabled={disabled}
-            onCheckedChange={(checked) => state.setShareWithModel(checked === true)}
-            aria-describedby="chat-attachment-share-help"
-          />
-          <Label htmlFor="chat-attachment-share" className="text-xs text-foreground">{t('attachmentShareToggle')}</Label>
+    <div ref={rootRef} className="contents">
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        accept={ATTACHMENT_ACCEPT}
+        className="sr-only"
+        tabIndex={-1}
+        aria-hidden="true"
+        onChange={(e) => { state.add(Array.from(e.target.files ?? [])); e.target.value = ''; }}
+      />
+      {state.entries.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          {state.entries.map((e, idx) => {
+            const problem = e.state === 'rejected' || e.state === 'failed' || e.state === 'too_large';
+            return (
+              <span key={e.key} className={`inline-flex min-h-8 max-w-full items-center gap-1 rounded-full border bg-background py-1 pl-2 pr-0 text-xs ${problem ? 'border-destructive' : 'border-border'}`}>
+                {e.doc?.local_only && e.state === 'ready'
+                  ? <LockIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  : <FileTextIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />}
+                <span className="truncate text-foreground">{e.name}</span>
+                <span className={problem ? 'text-destructive' : 'text-muted-foreground'}>· {statusText(e)}</span>
+                {/* 44px hit area; the negative margin keeps the chip's visual height. */}
+                <Button type="button" variant="ghost" size="icon" className="-my-1.5 rounded-full text-muted-foreground" data-attachment-remove onClick={() => removeEntry(e.key, e.name, idx)} title={t('attachmentRemove', { name: e.name })} aria-label={t('attachmentRemove', { name: e.name })}>
+                  <XIcon className="size-3.5" aria-hidden="true" />
+                </Button>
+              </span>
+            );
+          })}
         </div>
-        {state.entries.map((e, idx) => {
-          const problem = e.state === 'rejected' || e.state === 'failed' || e.state === 'too_large';
-          return (
-            <span key={e.key} className={`inline-flex min-h-8 max-w-full items-center gap-1 rounded-full border bg-background py-1 pl-2 pr-0 text-xs ${problem ? 'border-destructive' : 'border-border'}`}>
-              {e.doc?.local_only && e.state === 'ready'
-                ? <LockIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
-                : <FileTextIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />}
-              <span className="truncate text-foreground">{e.name}</span>
-              <span className={problem ? 'text-destructive' : 'text-muted-foreground'}>· {statusText(e)}</span>
-              {/* 44px hit area; the negative margin keeps the chip's visual height. */}
-              <Button type="button" variant="ghost" size="icon" className="-my-1.5 rounded-full text-muted-foreground" data-attachment-remove onClick={() => removeEntry(e.key, e.name, idx)} title={t('attachmentRemove', { name: e.name })} aria-label={t('attachmentRemove', { name: e.name })}>
-                <XIcon className="size-3.5" aria-hidden="true" />
-              </Button>
-            </span>
-          );
-        })}
-      </div>
-      <p id="chat-attachment-share-help" className="text-xs text-muted-foreground">{t('attachmentShareHelp')}</p>
-      <div className="flex flex-wrap items-center gap-2">
-        <span role="status" className="sr-only">{removedNote}</span>
-        <p id={ATTACHMENT_STATUS_ID} role="status" aria-live="polite" className="text-xs text-muted-foreground">
-          {state.sendBlock ?? note}
-        </p>
-        {state.showReattach && (
-          <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={state.reattachShared}>
-            {t('attachmentReattachShared')}
-          </Button>
-        )}
-      </div>
+      )}
+      <span role="status" className="sr-only">{removedNote}</span>
+      {/* Rendered only with text; Send's aria-describedby points here only while a block is active, so the id exists then. */}
+      {(statusLine || state.showReattach) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {statusLine && (
+            <p id={ATTACHMENT_STATUS_ID} role="status" aria-live="polite" className="text-xs text-muted-foreground">{statusLine}</p>
+          )}
+          {state.showReattach && (
+            <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={state.reattachShared}>
+              {t('attachmentReattachShared')}
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

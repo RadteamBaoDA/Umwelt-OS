@@ -1,39 +1,43 @@
-# Th?ng b?o quy?n ri?ng t?
+# Thông báo quyền riêng tư
 
-B?n nh?p ng?y 19 th?ng 10 n?m 2026. ??n v? v?n h?nh: **[LEGAL NAME]**. Li?n h?: **[CONTACT EMAIL]**. Khu v?c ph?p l?: **[JURISDICTION]**. C?n ho?n thi?n th?ng tin v? r? so?t ph?p l? tr??c khi cung c?p cho ng??i kh?c.
+Bản nháp ngày 19 tháng 10 năm 2026. Đơn vị vận hành: **[LEGAL NAME]**. Liên hệ: **[CONTACT EMAIL]**. Khu vực pháp lý: **[JURISDICTION]**. Cần hoàn thiện các thông tin này và rà soát pháp lý trước khi cung cấp bản triển khai cho người khác.
 
-## Ai ki?m so?t b?n tri?n khai
+## Ai kiểm soát bản triển khai
 
-Umwelt-OS l? ph?n m?m t? l?u tr?. C? nh?n ho?c t? ch?c v?n h?nh quy?t ??nh m?c ??ch x? l?, h? t?ng, quy?n truy c?p, t?ch h?p v? th?i h?n l?u tr?. D? ?n ph?n m?m kh?ng m?c nhi?n v?n h?nh b?n tri?n khai c?a b?n. ??n v? v?n h?nh ph?i c?ng b? c? s? ph?p l?, v? tr? l?u tr?, vi?c chuy?n d? li?u ra n??c ngo?i, quy?n theo lu?t, c? ch? khi?u n?i v? xin s? ??ng ? khi c?n.
+Umwelt-OS là phần mềm tự lưu trữ. Cá nhân hoặc tổ chức vận hành bản triển khai quyết định mục đích xử lý, hạ tầng, quyền truy cập, tích hợp và thời hạn lưu trữ. Dự án phần mềm không mặc nhiên là đơn vị vận hành bản triển khai của bạn. Hãy hỏi đơn vị vận hành về cơ sở pháp lý, quyền theo luật, việc chuyển dữ liệu ra nước ngoài, vị trí lưu trữ và cơ quan tiếp nhận khiếu nại. Đơn vị vận hành phải cung cấp thông báo riêng theo khu vực pháp lý và xin sự đồng ý khi luật yêu cầu.
 
-## D? li?u trong kh?ng gian l?m vi?c
+## Dữ liệu trong không gian làm việc
 
-H? th?ng l?u ??nh danh t?i kho?n, m?t kh?u ?? b?m, phi?n ??ng nh?p, t?y ch?n, th?nh vi?n v? l?i m?i. ??ng nh?p Google t?y ch?n l?u nh? ph?t h?nh ??nh danh, m? ch? th? v? email. H? th?ng x? l? n?i dung nh?p v? ngu?n g?c, t?p g?c, v?n b?n tr?ch xu?t, ?o?n v?n, embedding, th?c th? v? quan h?, ch? m?c t?m ki?m, tr? chuy?n, t?p ??nh k?m, k?t qu? AI, b?n d?ch, b?n tin, ghi ch?, t?c v?, t? ??ng h?a, c?u h?nh ngu?n, tr?ng th?i k?t n?i v? h? s? v?n h?nh. Ch? nh?p d? li?u m? b?n c? quy?n x? l?, k? c? d? li?u v? ng??i kh?c.
+Bản triển khai lưu mã định danh tài khoản, mật khẩu đã băm, phiên đăng nhập, tùy chọn, tư cách thành viên và lời mời. Nếu bật đăng nhập Google, hệ thống lưu nhà phát hành định danh, mã chủ thể và email; đăng nhập này không cấp quyền đọc nội dung Google. Hệ thống xử lý nội dung và nguồn gốc được nhập, tệp gốc, văn bản trích xuất, đoạn văn, vector nhúng, thực thể và quan hệ, chỉ mục tìm kiếm, cuộc trò chuyện, tệp đính kèm, kết quả AI, bản dịch, bản tin, ghi chú, tác vụ, tự động hóa, cấu hình nguồn, trạng thái kết nối và hồ sơ vận hành. Một số nguồn có thể chứa dữ liệu của người khác. Chỉ nhập dữ liệu mà bạn có quyền xử lý.
 
-D? li?u ph?c v? x?c th?c, nh?p li?u, t?m ki?m, tr?ch d?n, AI, ph?n quy?n v? v?n h?nh. D? li?u d?n xu?t c? th? ch?a l?i n?i dung g?c. Nh?t k? v? si?u d? li?u v?n c? th? ch?a ??nh danh; c? ch? che th?ng tin kh?ng b?o ??m m?i nh?t k? c?a m?y ch? ??u kh?ng c? d? li?u c? nh?n.
+Dữ liệu này phục vụ xác thực, thu thập, tìm kiếm, trích dẫn, hỗ trợ AI, tính năng không gian làm việc, phân quyền và vận hành. Dữ liệu dẫn xuất có thể chứa lại nội dung gốc. Nhật ký và siêu dữ liệu có thể chứa mã định danh; việc che thông tin không bảo đảm mọi nhật ký của máy chủ đều không có dữ liệu cá nhân.
 
-## Cookie, tr?nh duy?t v? th?ng tin x?c th?c
+## Cookie và trình duyệt
 
-Cookie ph?c v? phi?n ??ng nh?p v? ch?ng gi? m?o y?u c?u. B? nh? tr?nh duy?t l?u giao di?n/ng?n ng? v? c? th? l?u b? ??m, b?n nh?p, n?i dung kh?ng gian l?m vi?c. Kho m? n?y kh?ng th?m cookie qu?ng c?o hay SDK ph?n t?ch qu?ng c?o. M?y ch?, proxy ho?c ti?n ?ch tr?nh duy?t c? th? x? l? th?m; ??n v? v?n h?nh ph?i c?ng b? ri?ng. ??ng xu?t ho?c x?a t?i kho?n kh?ng x?a ???c ?nh ch?p m?n h?nh, l?ch s?, t?p t?i v? hay b?n xu?t c?a ng??i kh?c. H?y ki?m tra b? nh? trang v? t?p t?i v? tr?n thi?t b? d?ng chung.
+Cookie phục vụ phiên đăng nhập và chống giả mạo yêu cầu. Bộ nhớ trình duyệt lưu tùy chọn giao diện/ngôn ngữ và có thể giữ bộ đệm ứng dụng, bản nháp và nội dung không gian làm việc. Kho mã này không thêm cookie quảng cáo hay SDK phân tích quảng cáo. Máy chủ, proxy hoặc tiện ích trình duyệt có thể xử lý thêm dữ liệu; đơn vị vận hành phải công bố riêng. Đăng xuất hoặc xóa tài khoản không xóa được ảnh chụp màn hình, lịch sử trình duyệt, tệp tải xuống hoặc bản xuất của người khác. Hãy kiểm tra bộ nhớ trang và tệp tải xuống trên thiết bị dùng chung.
 
-Kh?a API, th?ng tin OAuth, token k?t n?i v? b? m?t h? t?ng ???c d?nh cho c?u h?nh m?y ch? ho?c l?u tr? backend ???c b?o v?. Nh?p kh?a trong bi?u m?u s? g?i kh?a ??n b?n tri?n khai. ??n v? v?n h?nh ch?u tr?ch nhi?m b? m?t, kh?a m? h?a, TLS, quy?n truy c?p, c?p nh?t v? nh?t k?. Kh?ng c? b?o ??m an to?n tuy?t ??i. Kh?ng ??a b? m?t v?o prompt, URL c?ng khai ho?c t?i li?u nh?p.
+## Thông tin xác thực và bảo mật
 
-## T?ch h?p t?y ch?n v? b?n nh?n
+Khóa API của nhà cung cấp, thông tin OAuth, token kết nối và bí mật hạ tầng được dùng trong cấu hình máy chủ hoặc nơi lưu trữ backend được bảo vệ. Khi bạn nhập khóa qua biểu mẫu, khóa được gửi đến bản triển khai. Đơn vị vận hành chịu trách nhiệm về bí mật triển khai, khóa mã hóa, quyền truy cập, TLS, bản vá và nhật ký. Không phần mềm nào bảo đảm an toàn tuyệt đối. Không đưa bí mật vào prompt, URL công khai hoặc tài liệu nhập.
 
-AI c? th? nh?n prompt, l?ch s? ???c ch?n, ng? c?nh truy xu?t, t?i li?u/v?n b?n ?? t?o embedding, l??c ?? c?ng c? v? tham s? sinh n?i dung. C?ng c? c? th? g?i tham s? ho?c n?i dung trong ph?m vi ???c y?u c?u. T?m ki?m web g?i t? kh?a v? t?y ch?n. B? thu th?p g?i ??nh danh ngu?n, b? l?c, URL v? th?ng tin x?c th?c c?n thi?t. ??ng nh?p Google trao ??i d? li?u ?y quy?n v?i Google. SEC EDGAR nh?n email li?n h? do ??n v? v?n h?nh nh?p trong User-Agent.
+## Tích hợp tùy chọn và bên nhận dữ liệu
 
-Langfuse t?y ch?n ch? xu?t si?u d? li?u gi?i h?n c?a l?n g?i m? h?nh: t?n m? h?nh, s? token, th?i gian v? m? t??ng quan; b? xu?t n?y kh?ng g?i n?i dung prompt/t?i li?u/k?t qu?. C?n c? b?t ch?c n?ng v? ph? duy?t g?i ra ngo?i. Ri?ng v?i m?i k?t n?i m?ng, b?n nh?n c? th? th?y IP, th?i gian, header v? si?u d? li?u y?u c?u. M? h?nh c?c b? ch? th?c s? c?c b? khi c?u h?nh m?ng v? endpoint gi? d? li?u t?i ch?.
+Khi bật nhà cung cấp AI, endpoint đó có thể nhận prompt, lịch sử trò chuyện và trích đoạn nguồn được chọn, đầu vào/kết quả công cụ trong tin nhắn, văn bản tạo vector nhúng, truy vấn/tài liệu để xếp hạng lại, lược đồ công cụ và tham số sinh nội dung, tùy tính năng được bật. Cổng trung gian và đơn vị vận hành mô hình phía sau là các bên nhận riêng; đơn vị vận hành phải xác định cả hai. Công cụ và tích hợp có thể gửi tham số hoặc nội dung trong phạm vi yêu cầu. Tìm kiếm web gửi nguyên văn truy vấn và tùy chọn; một máy chủ SearXNG có thể chuyển tiếp đến các công cụ tìm kiếm được chọn trong cấu hình riêng của máy chủ đó. Bộ thu thập gửi mã nguồn, bộ lọc, URL và thông tin xác thực cần thiết. Đăng nhập Google trao đổi dữ liệu ủy quyền với Google, không cấp quyền thu thập Gmail, Calendar hay Drive. Yêu cầu đến SEC EDGAR chứa email liên hệ do đơn vị vận hành nhập trong User-Agent.
 
-M? **D?ch v? v? lu?ng d? li?u** b?n d??i ?? ??c danh m?c tri?n khai b?ng ti?ng Anh. C? m? tri?n khai kh?ng ??ng ngh?a ?? c?u h?nh ho?c ?ang ho?t ??ng. Hosting, DNS, ch?ng th? TLS, tunnel v? sao l?u t?y ??n v? v?n h?nh. Docker ?i k?m t?t telemetry Next.js v? ch?n ?o?n/c? nh?n h?a n8n; m?i tr??ng kh?c c? th? kh?c.
+Nếu bật Langfuse và cho phép gửi dữ liệu ra ngoài, bộ xuất này gửi siêu dữ liệu có giới hạn của lần gọi mô hình (tên mô hình, số token, thời gian và mã đối chiếu), không gửi nội dung prompt, tài liệu hay câu trả lời qua bộ xuất đó. Mỗi bên nhận kết nối mạng cũng có thể thấy IP nguồn, thời điểm, header và siêu dữ liệu yêu cầu; đó là dữ liệu tách biệt với nội dung ứng dụng gửi đi. Endpoint mô hình được gọi là cục bộ chỉ thực sự ở tại chỗ nếu cấu hình mạng và endpoint của bạn giữ dữ liệu tại chỗ.
 
-## L?u tr?, xu?t v? x?a
+Mở **Dịch vụ và luồng dữ liệu** bên dưới để xem danh mục triển khai bằng tiếng Anh. Có mã triển khai không có nghĩa dịch vụ đã được cấu hình hoặc đang hoạt động. Hosting, DNS, chứng chỉ TLS, tunnel và sao lưu tùy thuộc đơn vị vận hành. Cấu hình Docker đi kèm tắt telemetry Next.js và chẩn đoán/cá nhân hóa n8n; công cụ phát triển hoặc cách triển khai khác có thể khác.
 
-N?i dung v? d? li?u d?n xu?t t?n t?i ??n khi ???c x?a qua ch?c n?ng h? tr?, quy tr?nh x?a t?i kho?n ho?c ch?nh s?ch c?a ??n v? v?n h?nh. Kh?ng c? m?t th?i h?n chung ?? ???c thi?t l?p cho m?i lo?i d? li?u. Ch?c n?ng xu?t ch? cung c?p d? li?u ???c h? tr?; b?n xu?t c? th? ch?a d? li?u nh?y c?m, b?n ph?i t? b?o v? v? x?a c?c b?n sao.
+## Lưu trữ, xuất và xóa
 
-X?a t?i kho?n c?n x?c minh danh t?nh v? ?i?u ki?n, v? hi?u h?a truy c?p th?ng th??ng, thu h?i phi?n r?i d?n d?p b?t ??ng b?. Bi?n nh?n tr?ng th?i hi?n th? ti?n ?? ho?c l?i; kh?ng ???c coi l? ho?n t?t n?u b??c b?t bu?c th?t b?i. Gi? k?n bi?n nh?n. M?t bi?n nh?n c?n h? tr? t? m?y ch?. D? li?u chia s? v? d? li?u t?i kho?n kh?c ???c x? l? theo quy?n s? h?u; kh?ng x?a to?n b? d? li?u ng??i kh?c. T?i kho?n kh?i t?o c? th? ?? l?i d?u k? thu?t ?? v? hi?u h?a, kh?ng ch?a d? li?u c? nh?n. Bi?n nh?n t?n t?i b?y ng?y sau khi ho?n t?t.
+Nội dung và dữ liệu dẫn xuất được giữ đến khi xóa qua chức năng được hỗ trợ, quy trình xóa tài khoản hoặc quy trình lưu trữ của đơn vị vận hành. Chưa có thời hạn chung cho mọi loại dữ liệu. Bạn có thể xuất dữ liệu hiện được hỗ trợ; bản xuất có thể chứa dữ liệu gốc và dữ liệu dẫn xuất nhạy cảm. Bạn tự bảo vệ và xóa các bản xuất của mình.
 
-Vi?c x?a ?p d?ng cho kho d? li?u ?ang ho?t ??ng ???c h? tr? v? d?n b? nh? ?ng d?ng trong tr?nh duy?t. B?n sao l?u, snapshot, nh?t k? ngo?i ?ng d?ng, b? m?t m?i tr??ng, t?p t?i/xu?t v? d? li?u ? nh? cung c?p ngo?i c?n thao t?c ri?ng. Kh?i ph?c b?n sao c? c? th? ??a d? li?u ?? x?a tr? l?i; ??n v? v?n h?nh ph?i ?p d?ng l?i quy?t ??nh x?a. Kh?ng cam k?t x?a t?i nh? cung c?p, lo?i tr? hu?n luy?n AI hay th?i h?n l?u tr? c?a h?. H?y ??c ?i?u kho?n v? c?u h?nh c?a t?ng b?n tr??c khi b?t t?ch h?p.
+Xóa tài khoản cần xác minh danh tính và điều kiện được phép, sau đó vô hiệu hóa truy cập thông thường, thu hồi phiên và dọn dẹp bất đồng bộ. Biên nhận trạng thái cho biết tiến độ hoặc lỗi; không được coi là xóa xong nếu bước bắt buộc thất bại. Giữ kín biên nhận. Nếu mất biên nhận, đơn vị vận hành có thể xem tiến độ đã ẩn thông tin và chạy lại bước lỗi, nhưng không thể tạo lại quyền xem bằng cookie biên nhận trong trình duyệt. Dữ liệu của không gian làm việc chung và tài khoản khác cần xử lý theo quyền sở hữu, không xóa toàn bộ dữ liệu của họ. Tài khoản khởi tạo để lại dấu kỹ thuật đã làm sạch và vô hiệu hóa để giữ cổng thiết lập công khai đóng. Người có quyền quản trị máy chủ có thể tạo quyền quản trị mới với không gian làm việc rỗng sau khi xóa hoàn tất; thao tác này không khôi phục nội dung hoặc phiên cũ. Biên nhận tồn tại bảy ngày sau khi hoàn tất.
 
-## L?a ch?n v? quy?n
+Kho đồ thị giữ vĩnh viễn một dấu xóa kỹ thuật chỉ gồm mã phân vùng không mang nội dung và cờ đã xóa, không có nội dung nguồn hay liên kết đến tài khoản/không gian làm việc. Kho tệp gốc cũng giữ khóa/dấu xóa một byte vĩnh viễn, chỉ định danh bằng UUID không gian làm việc, không chứa thông tin tài khoản hay nội dung nguồn. Các dấu này ngăn yêu cầu đến trễ tạo lại nội dung đã xóa; bỏ dấu sẽ làm mất cơ chế bảo vệ đó.
 
-B?n c? th? tr?nh t?ch h?p t?y ch?n, gi?i h?n ngu?n v? quy?n c?ng c?, ch?n m? h?nh c?c b? ph? h?p, xu?t ho?c y?u c?u x?a d? li?u. Li?n h? **[CONTACT EMAIL]** ?? y?u c?u truy c?p, s?a, ph?n ??i, h?n ch?, chuy?n d? li?u, x?a v? c?c quy?n theo lu?t. ??n v? v?n h?nh ph?i gi?i th?ch ngo?i l? h?p ph?p v? th?i h?n tr? l?i ?p d?ng; b?n nh?p kh?ng t? ??t th?i h?n hay t? b? quy?n b?t bu?c.
+Việc xóa áp dụng cho kho dữ liệu đang hoạt động được ứng dụng hỗ trợ và dọn bộ nhớ ứng dụng trong trình duyệt. Bản sao lưu, snapshot, nhật ký ngoài phạm vi ứng dụng, bí mật môi trường, tệp tải/xuất và dữ liệu ở nhà cung cấp ngoài cần xử lý riêng. Khôi phục bản sao cũ có thể đưa dữ liệu đã xóa trở lại; đơn vị vận hành phải áp dụng lại quyết định xóa khi khôi phục. Không có cam kết về xóa tại nhà cung cấp ngoài, loại trừ dữ liệu khỏi huấn luyện AI hoặc thời hạn lưu trữ của họ. Hãy xem điều khoản và cấu hình của từng bên trước khi bật tích hợp.
+
+## Lựa chọn và quyền của bạn
+
+Bạn có thể tránh tích hợp tùy chọn, giới hạn nguồn và quyền công cụ, chọn mô hình cục bộ phù hợp, xuất dữ liệu hoặc yêu cầu xóa. Liên hệ **[CONTACT EMAIL]** để yêu cầu truy cập, chỉnh sửa, phản đối, hạn chế, chuyển dữ liệu, xóa và các quyền theo luật khác. Đơn vị vận hành phải giải thích ngoại lệ hợp pháp và thời hạn phản hồi áp dụng; bản nháp này không tự đặt thời hạn hay từ bỏ quyền bắt buộc.

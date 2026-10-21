@@ -628,6 +628,7 @@ class TestConnectorLifecycleStateTransitions:
             # Claim step
             claimed = await claim_workflow_step(
                 session, source_id, original_operation=copy.deepcopy(op), access_fence=ACCESS, **FLAG,
+                service_url="http://n8n:5678",
             )
             assert claimed is not None
             assert row.workflow_operation["step"]["state"] == "dispatched"

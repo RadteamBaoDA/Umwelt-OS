@@ -478,7 +478,7 @@ async def _settle_credential_delete(
 
 async def _delete_credential(
     session: AsyncSession,
-    client: N8nCredentials,
+    settings: Settings,
     source_id: UUID,
     slot: str,
     operation_id: UUID,
@@ -491,8 +491,11 @@ async def _delete_credential(
     dispatch barrier before any network call and holds no lock afterwards. Every settlement then
     reuses that ORIGINAL scope and fence and the claimed envelope as the immutable operation
     (see ``_settle_credential_delete``), so later Source or configuration changes only permit this
-    exact cleanup result and never a new send.
+    exact cleanup result and never a new send. Resolve URL/key only from that admitted
+    workspace; an instance-wide client must never receive another workspace's credentials.
     """
+    from modules.settings.public import resolve_n8n
+
     envelope = await session.scalar(select(ConnectorManagedCredential.operation_envelope).where(
         ConnectorManagedCredential.source_id == source_id, ConnectorManagedCredential.slot == slot,
         ConnectorManagedCredential.operation_id == operation_id,
@@ -503,8 +506,14 @@ async def _delete_credential(
     if admitted is None:
         return False
     scope, fence = admitted
+    n8n = await resolve_n8n(session, settings, workspace_id=scope.workspace_id)
+    await session.rollback()
+    if not n8n.api_key:
+        return False
+    client = N8nCredentials(n8n.service_url, n8n.api_key)
     claimed = await provisioning.claim_credential_operation(
         session, source_id, slot, operation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        service_url=client.service_url,
     )
     if claimed is None:
         await session.rollback()
@@ -537,8 +546,6 @@ async def _delete_credential(
 async def _resume_activation(
     session: AsyncSession,
     source_id: UUID,
-    api: N8nApi,
-    credentials: N8nCredentials,
     settings: Settings,
 ) -> bool:
     """Resume a persisted activation under the principal and fence recorded in its intent.
@@ -547,9 +554,10 @@ async def _resume_activation(
     generation are admitted exactly (no current-owner fallback), the connectors module must be
     enabled for that workspace (otherwise the durable work is left untouched), and SQL is released
     before ``drive_activation`` reacquires its own ordered locks and does all provider I/O.
+    Clients and kill switch are resolved only from this original workspace's settings.
     """
     from modules.connectors.activation import drive_activation
-    from modules.settings.public import module_is_enabled
+    from modules.settings.public import module_is_enabled, resolve_n8n
 
     flag = settings.multi_workspace_enabled
     intent = await session.scalar(select(ConnectorProvisioning.activation_intent).where(
@@ -562,7 +570,12 @@ async def _resume_activation(
     if not await module_is_enabled(session, "connectors", scope=scope, multi_workspace_enabled=flag):
         await session.rollback()
         return False
+    n8n = await resolve_n8n(session, settings, workspace_id=scope.workspace_id)
     await session.rollback()
+    if not n8n.enabled or not n8n.api_key:
+        return False
+    api = N8nApi(n8n.service_url, n8n.api_key, settings)
+    credentials = N8nCredentials(n8n.service_url, n8n.api_key)
     return await drive_activation(
         session, source_id, api, credentials,
         settings.connector_credential_encryption_key.get_secret_value(),
@@ -570,21 +583,22 @@ async def _resume_activation(
     )
 
 
-async def _drive_workflow(session: AsyncSession, api: N8nApi, source_id: UUID, *, flag: bool) -> int:
+async def _drive_workflow(session: AsyncSession, settings: Settings, source_id: UUID, *, flag: bool) -> int:
     """Drive one prepared workflow step under the envelope's recorded principal and fence.
 
     Non-delete steps additionally require the connectors module to be enabled for that
     workspace. The immutable envelope copy is the operation identity for every claim/send/result
     inside ``drive_workflow_operation``, which releases SQL before network calls.
+    Resolve clients and the kill switch from the original admitted workspace only.
     """
-    from modules.settings.public import module_is_enabled
+    from modules.settings.public import module_is_enabled, resolve_n8n
 
     envelope = await session.scalar(select(ConnectorProvisioning.workflow_operation).where(
         ConnectorProvisioning.source_id == source_id,
     ).execution_options(populate_existing=True))
     original = copy.deepcopy(envelope) if isinstance(envelope, dict) else None
     step = original.get("step") if original is not None else None
-    if not isinstance(step, dict) or step.get("state") != "prepared":
+    if original is None or not isinstance(step, dict) or step.get("state") != "prepared":
         await session.rollback()
         return 0
     admitted = await _admit_lineage(session, source_id, original, multi_workspace_enabled=flag)
@@ -596,7 +610,11 @@ async def _drive_workflow(session: AsyncSession, api: N8nApi, source_id: UUID, *
     ):
         await session.rollback()
         return 0
+    n8n = await resolve_n8n(session, settings, workspace_id=scope.workspace_id)
     await session.rollback()
+    if not n8n.api_key or (not n8n.enabled and original.get("kind") != "deactivate"):
+        return 0
+    api = N8nApi(n8n.service_url, n8n.api_key, settings)
     return int(await provisioning.drive_workflow_operation(
         session, source_id, api, scope=scope, multi_workspace_enabled=flag,
         original_operation=cast(dict[str, object], original), access_fence=fence,
@@ -604,7 +622,7 @@ async def _drive_workflow(session: AsyncSession, api: N8nApi, source_id: UUID, *
 
 
 async def _recover_unknown_create(
-    factory: async_sessionmaker[AsyncSession], api: N8nApi, source_id: UUID, *, flag: bool,
+    factory: async_sessionmaker[AsyncSession], settings: Settings, source_id: UUID, *, flag: bool,
 ) -> int:
     """Look up an uncertain workflow create and attach its single exact match, or defer it later.
 
@@ -613,7 +631,11 @@ async def _recover_unknown_create(
     admission, retained Source anchor and provisioning rows and commits through
     ``commit_retained_connector_effect``. If the original access is gone, the discovered remote
     workflow ID is journaled (never silently dropped). The create is never repeated.
+    Unknown legacy origins or a different client endpoint cannot be reconciled by lookup.
+    Resolve URL/key and the kill switch only for the admitted original workspace.
     """
+    from modules.settings.public import resolve_n8n
+
     async with factory() as session:
         stored = await session.scalar(select(ConnectorProvisioning.workflow_operation).where(
             ConnectorProvisioning.source_id == source_id,
@@ -628,6 +650,19 @@ async def _recover_unknown_create(
             return 0
         admitted = await _admit_lineage(session, source_id, original, multi_workspace_enabled=flag)
         if admitted is None:
+            return 0
+        n8n = await resolve_n8n(session, settings, workspace_id=admitted[0].workspace_id)
+        if not n8n.enabled or not n8n.api_key:
+            await session.rollback()
+            return 0
+        api = N8nApi(n8n.service_url, n8n.api_key, settings)
+        from modules.connectors.n8n import n8n_service_identity
+
+        endpoint = await session.scalar(select(ConnectorProvisioning.n8n_service_url).where(
+            ConnectorProvisioning.source_id == source_id,
+        ))
+        if not isinstance(endpoint, str) or n8n_service_identity(endpoint) != api.service_url:
+            await session.rollback()
             return 0
         await session.rollback()
     scope, fence = admitted
@@ -709,10 +744,6 @@ async def _advance_transitions(
 
     flag = settings.multi_workspace_enabled
     async with factory() as session:
-        n8n = await resolve_n8n(session, settings)
-        await session.rollback()
-    api = N8nApi(n8n.service_url, n8n.api_key, settings) if n8n.api_key else None
-    async with factory() as session:
         ids = list((await session.scalars(_page(
             select(ConnectorProvisioning.source_id), ConnectorProvisioning.source_id,
             await _read_cursor(state, "connectors_transitions"),
@@ -744,7 +775,9 @@ async def _advance_transitions(
                     await session.rollback()
                     continue
                 fence = await read_access_fence(session, scope=scope, multi_workspace_enabled=flag)
+                n8n = await resolve_n8n(session, settings, workspace_id=scope.workspace_id)
                 await session.rollback()
+                api = N8nApi(n8n.service_url, n8n.api_key, settings) if n8n.api_key else None
                 await provisioning.advance_backend_transition(
                     session, source_id, api, scope=scope, multi_workspace_enabled=flag, access_fence=fence)
                 advanced += 1
@@ -766,25 +799,14 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
     cannot starve later subjects because the cursor advances past every discovered page.
     When the owner disabled n8n, create/update/activate/lookup work is skipped (left durable for
     re-enable) while credential deletes and workflow deactivations still run so cleanup finishes.
+    Discovery is deployment-wide; each admitted operation resolves its own URL/key/kill switch.
     """
-    from modules.settings.public import resolve_n8n
-
     settings = cast(Settings, ctx["settings"])
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     flag = settings.multi_workspace_enabled
     state = _cursor_ctx(ctx)
     completed = await dispatch_github_webhooks(ctx)
     completed += await _advance_transitions(factory, settings, state)
-    async with factory() as session:
-        n8n = await resolve_n8n(session, settings)
-        await session.rollback()
-    api_key = n8n.api_key
-    if not api_key:
-        return completed
-    # Kill switch: only cleanup (deactivate workflows, delete credentials) keeps running.
-    cleanup_only = not n8n.enabled
-    credentials = N8nCredentials(n8n.service_url, api_key)
-    api = N8nApi(n8n.service_url, api_key, settings)
     credential_after = _read_slot_cursor(state, "connectors_credentials")
     async with factory() as session:
         credential_rows: list[Any] = list((await session.execute(_page(
@@ -801,15 +823,14 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
             select(ConnectorProvisioning.source_id), ConnectorProvisioning.source_id,
             await _read_cursor(state, "connectors_workflows"),
             ConnectorProvisioning.workflow_operation["step"]["state"].astext == "prepared",
-            *((ConnectorProvisioning.workflow_operation["kind"].astext == "deactivate",) if cleanup_only else ()),
         ))).all())
-        unknown_create_ids = [] if cleanup_only else list((await session.scalars(_page(
+        unknown_create_ids = list((await session.scalars(_page(
             select(ConnectorProvisioning.source_id), ConnectorProvisioning.source_id,
             await _read_cursor(state, "connectors_unknown_create"),
             ConnectorProvisioning.workflow_operation["step"]["state"].astext == "unknown",
             ConnectorProvisioning.workflow_operation["step"]["kind"].astext == "create",
         ))).all())
-        activation_ids = [] if cleanup_only else list((await session.scalars(_page(
+        activation_ids = list((await session.scalars(_page(
             select(ConnectorProvisioning.source_id), ConnectorProvisioning.source_id,
             await _read_cursor(state, "connectors_activation"),
             ConnectorProvisioning.desired_enabled.is_(True),
@@ -832,7 +853,7 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
         async with factory() as session:
             try:
                 completed += await _delete_credential(
-                    session, credentials, source_id, slot, operation_id, multi_workspace_enabled=flag,
+                    session, settings, source_id, slot, operation_id, multi_workspace_enabled=flag,
                 )
             except HTTPException as exc:
                 await session.rollback()
@@ -842,7 +863,7 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
     for source_id in workflow_ids:
         async with factory() as session:
             try:
-                completed += await _drive_workflow(session, api, source_id, flag=flag)
+                completed += await _drive_workflow(session, settings, source_id, flag=flag)
             except HTTPException as exc:
                 await session.rollback()
                 if exc.status_code not in _DENIED:
@@ -850,7 +871,7 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
 
     for source_id in unknown_create_ids:
         try:
-            completed += await _recover_unknown_create(factory, api, source_id, flag=flag)
+            completed += await _recover_unknown_create(factory, settings, source_id, flag=flag)
         except HTTPException as exc:
             if exc.status_code not in _DENIED:
                 raise
@@ -858,7 +879,7 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
     for source_id in activation_ids:
         async with factory() as session:
             try:
-                completed += await _resume_activation(session, source_id, api, credentials, settings)
+                completed += await _resume_activation(session, source_id, settings)
             except HTTPException as exc:
                 await session.rollback()
                 if exc.status_code not in _DENIED:

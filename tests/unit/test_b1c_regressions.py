@@ -22,7 +22,12 @@ from fastapi import HTTPException
 from pydantic import SecretStr
 
 from core.model_gateway.client import ModelGateway
-from core.model_gateway.schemas import AIExecutionConfig, ModelMapping, PrivacySettings
+from core.model_gateway.schemas import (
+    AIExecutionConfig,
+    ModelDefaults,
+    ModelMapping,
+    PrivacySettings,
+)
 from core.workspaces.schemas import InternalJobScope, WorkspaceContext
 from modules.chat.schemas import AnswerContext, AnswerContextRequest, EvidenceItem
 
@@ -37,12 +42,12 @@ def _config(**overrides: Any) -> AIExecutionConfig:
         "endpoint_destination_id": "omniroute",
         "gateway_base_url": "http://localhost:8000", "gateway_api_key": "key",
         "gateway_credential_configured": True,
-        "aliases": {"reranker": ModelMapping(model="rr", destination="remote")},
+        "defaults": ModelDefaults(reranker=ModelMapping(model="rr", destination="remote")),
         "privacy": PrivacySettings(
             allow_remote_embeddings=True, allow_remote_reasoning=True,
             reasoning_destinations=["omniroute"], embedding_destinations=["omniroute"],
         ),
-        "chat_alias": "reasoning-large", "brief_alias": "fast", "request_timeout_seconds": 5,
+        "request_timeout_seconds": 5,
         "web_search_provider": "none", "web_search_endpoint": None, "web_search_api_key": "",
     }
     values.update(overrides)
@@ -369,7 +374,7 @@ async def test_chat_completion_persists_message_with_citations(monkeypatch: pyte
     monkeypatch.setattr(worker, "_next_event_seq", AsyncMock(side_effect=lambda *a, **k: next(seq)))
     monkeypatch.setattr(worker, "build_context", AsyncMock(return_value=context))
     monkeypatch.setattr(worker, "_admit_job", AsyncMock(return_value=(OWNER, MagicMock())))
-    monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config(aliases={})))
+    monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config(defaults=ModelDefaults())))
     monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
     failed = AsyncMock()
     monkeypatch.setattr(worker, "_mark_failed", failed)
@@ -428,7 +433,7 @@ async def test_chat_completion_uncited_answer_emits_no_citations(monkeypatch: py
     monkeypatch.setattr(worker, "_next_event_seq", AsyncMock(side_effect=lambda *a, **k: next(seq)))
     monkeypatch.setattr(worker, "build_context", AsyncMock(return_value=context))
     monkeypatch.setattr(worker, "_admit_job", AsyncMock(return_value=(OWNER, MagicMock())))
-    monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config(aliases={})))
+    monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config(defaults=ModelDefaults())))
     monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
     monkeypatch.setattr(worker, "_mark_failed", AsyncMock())
 
@@ -477,7 +482,7 @@ async def _run_chat_with_answer(
     monkeypatch.setattr(worker, "_next_event_seq", AsyncMock(side_effect=lambda *a, **k: next(seq)))
     monkeypatch.setattr(worker, "build_context", AsyncMock(return_value=context))
     monkeypatch.setattr(worker, "_admit_job", AsyncMock(return_value=(OWNER, MagicMock())))
-    monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config(aliases={})))
+    monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config(defaults=ModelDefaults())))
     monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
     monkeypatch.setattr(worker, "_mark_failed", AsyncMock())
     await worker.run_response_generation(
@@ -547,9 +552,9 @@ async def test_notification_emit_returns_false_when_evidence_source_purged(monke
 
 
 async def test_timeline_dependency_snapshot_cold_capability_cache_is_unsupported() -> None:
-    from modules.timeline.worker import ALIAS, _dependency_snapshot
+    from modules.timeline.worker import ROLE, _dependency_snapshot
 
-    config = _config(aliases={ALIAS: ModelMapping(model="m", destination="remote")})
+    config = _config(defaults=ModelDefaults(**{ROLE: ModelMapping(model="m", destination="remote")}))
     redis = MagicMock()
     redis.get = AsyncMock(return_value=None)  # capability cache miss: the normal cold-start case
     fingerprint, supported = await _dependency_snapshot(config, redis, scope=OWNER)
@@ -557,9 +562,9 @@ async def test_timeline_dependency_snapshot_cold_capability_cache_is_unsupported
 
 
 async def test_entity_dependency_snapshot_builds_actor_scoped_capability_key() -> None:
-    from modules.knowledge.entities.worker import EXTRACTION_ALIAS, _dependency_snapshot
+    from modules.knowledge.entities.worker import EXTRACTION_ROLE, _dependency_snapshot
 
-    config = _config(aliases={EXTRACTION_ALIAS: ModelMapping(model="m", destination="remote")})
+    config = _config(defaults=ModelDefaults(**{EXTRACTION_ROLE: ModelMapping(model="m", destination="remote")}))
     redis = MagicMock()
     redis.get = AsyncMock(return_value=None)
     fingerprint, supported = await _dependency_snapshot(config, redis, scope=OWNER)

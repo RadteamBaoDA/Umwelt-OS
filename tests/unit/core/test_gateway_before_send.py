@@ -21,10 +21,10 @@ from tests.unit.core.test_model_gateway import (
 async def test_missing_before_send_raises(op: str) -> None:
     gw = _loopback_gateway("https://x")
     calls = {
-        "chat": lambda: gw.chat("fast", _MAPPING, _POLICY, []),
-        "embed": lambda: gw.embed("fast", _MAPPING, _POLICY, ["x"]),
-        "structured": lambda: gw.structured("fast", _MAPPING, _POLICY, [], {}),
-        "tools": lambda: gw.tools("fast", _MAPPING, _POLICY, [], []),
+        "chat": lambda: gw.chat("chat", _MAPPING, _POLICY, []),
+        "embed": lambda: gw.embed("chat", _MAPPING, _POLICY, ["x"]),
+        "structured": lambda: gw.structured("chat", _MAPPING, _POLICY, [], {}),
+        "tools": lambda: gw.tools("chat", _MAPPING, _POLICY, [], []),
         "rerank": lambda: gw.rerank("reranker", _MAPPING, _POLICY, "q", ["d"]),
     }
     with pytest.raises(ValueError, match="before_send_required"):
@@ -46,5 +46,5 @@ async def test_retry_calls_before_send_twice() -> None:
     gw = _loopback_gateway("https://x")
     with patch("core.model_gateway.client.AsyncOpenAI", side_effect=_fake_openai_with(create)), \
          patch.object(ModelGateway, "_http_client", return_value=MagicMock()):
-        assert await gw.chat("fast", _MAPPING, _POLICY, [], before_send=before) == {"ok": True}
+        assert await gw.chat("chat", _MAPPING, _POLICY, [], before_send=before) == {"ok": True}
     assert attempts == 2 and before.await_count == 2

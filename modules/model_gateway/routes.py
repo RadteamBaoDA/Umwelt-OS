@@ -59,16 +59,17 @@ def _capability_proved(capability: str, response: object) -> bool:
 
 
 
-@router.post("/{alias}/draft-test", dependencies=[Depends(require_budget("model_probe", 10, 60))])
+@router.post("/draft-test", dependencies=[Depends(require_budget("model_probe", 10, 60))])
 async def probe_draft(
     request: Request, session: Session, _owner: OwnerWrite,
-    alias: Annotated[str, Path(pattern=r"^(reasoning-large|reasoning-small|fast|embedding|reranker|vision|local-private)$")],
     body: DraftProbeRequest,
 ) -> dict[str, object]:
     """Probe an unsaved remote draft with synthetic input and transient authorization.
 
-    A supported ``embeddings`` probe also returns ``dimensions``, the length of the returned vector.
+    A supported ``embeddings`` probe also returns ``dimensions``, the length of the returned vector. The optional
+    body ``role`` only labels telemetry; a draft never selects or stores a saved role mapping.
     """
+    role = body.role or "chat"
     settings: Settings = request.app.state.settings
     redis: Redis = request.app.state.redis
     endpoint = ai_settings.validate_endpoint(str(body.base_url), settings)
@@ -114,13 +115,13 @@ async def probe_draft(
     message = [{"role": "user", "content": "Reply with the word ready."}]
     try:
         if body.capability == "embeddings":
-            response = await client.embed(alias, mapping, policy, ["Synthetic capability probe."], probe=True)
+            response = await client.embed(role, mapping, policy, ["Synthetic capability probe."], probe=True)
         elif body.capability == "reranking":
-            response = await client.rerank(alias, mapping, policy, "synthetic probe", ["synthetic probe document"], probe=True)
+            response = await client.rerank(role, mapping, policy, "synthetic probe", ["synthetic probe document"], probe=True)
         elif body.capability == "streaming":
             chunks, total = "", 0
             # aclosing (stream() is an async generator at runtime, typed AsyncIterator): a `break` must close the generator now, or the model slot lease is held until GC.
-            async with aclosing(cast("AsyncGenerator[str, None]", client.stream(alias, mapping, policy, message, probe=True))) as lines:
+            async with aclosing(cast("AsyncGenerator[str, None]", client.stream(role, mapping, policy, message, probe=True))) as lines:
                 async for line in lines:
                     total += len(line)
                     if line.startswith("data:"):
@@ -140,11 +141,11 @@ async def probe_draft(
                         break
             response = {"streamed": chunks}
         elif body.capability == "structured":
-            response = await client.structured(alias, mapping, policy, message, {"name": "probe", "schema": {"type": "object"}}, probe=True)
+            response = await client.structured(role, mapping, policy, message, {"name": "probe", "schema": {"type": "object"}}, probe=True)
         elif body.capability == "tools":
-            response = await client.tools(alias, mapping, policy, [{"role": "user", "content": "Call the probe tool now."}], [{"type": "function", "function": {"name": "probe", "description": "Return a synthetic readiness signal.", "parameters": {"type": "object", "properties": {}}}}], probe=True)
+            response = await client.tools(role, mapping, policy, [{"role": "user", "content": "Call the probe tool now."}], [{"type": "function", "function": {"name": "probe", "description": "Return a synthetic readiness signal.", "parameters": {"type": "object", "properties": {}}}}], probe=True)
         else:
-            response = await client.chat(alias, mapping, policy, message, probe=True)
+            response = await client.chat(role, mapping, policy, message, probe=True)
         result = "supported" if _capability_proved(body.capability, response) else "unsupported"
     except PrivacyPolicyDenied as exc:
         raise HTTPException(status_code=403, detail="Probe denied by privacy policy") from exc
@@ -153,7 +154,7 @@ async def probe_draft(
     except (ModelGatewayError, ValueError):  # unparseable gateway reply: truthful failure, not a 500
         result = "failed"
     await recheck_send()
-    out: dict[str, object] = {"alias": alias, "model": mapping.model, "version": mapping.version,
+    out: dict[str, object] = {"role": role, "model": mapping.model, "version": mapping.version,
                               "gateway_identity": identity, "configuration_revision": 0,
                               "capability": body.capability, "result": result}
     if body.capability == "embeddings" and result == "supported":
@@ -161,20 +162,20 @@ async def probe_draft(
     return out
 
 
-@router.post("/{alias}/test", dependencies=[Depends(require_budget("model_probe", 10, 60))])
+@router.post("/{role}/test", dependencies=[Depends(require_budget("model_probe", 10, 60))])
 async def probe_model(
     request: Request, session: Session, _owner: OwnerWrite,
-    alias: Annotated[str, Path(pattern=r"^(reasoning-large|reasoning-small|fast|embedding|reranker|vision|local-private)$")],
+    role: Annotated[str, Path(pattern=r"^(chat|brief|background|embedding|reranker|vision)$")],
     body: ProbeRequest,
 ) -> dict[str, object]:
-    """Probe a configured alias under current privacy policy and persist its capability result."""
+    """Probe a configured role default under current privacy policy and persist its capability result."""
     settings: Settings = request.app.state.settings
     redis: Redis = request.app.state.redis
-    config = ai_settings.derive_for_alias(
-        await ai_settings.get_ai_execution_config(session, settings, redis, scope=_owner), alias)
-    mapping = config.aliases.get(alias)
+    config = ai_settings.derive_for_role(
+        await ai_settings.get_ai_execution_config(session, settings, redis, scope=_owner), role)
+    mapping = config.defaults.resolve(role)
     if mapping is None:
-        raise HTTPException(status_code=409, detail="Configure this model alias first")
+        raise HTTPException(status_code=409, detail="Configure this model role first")
     destination = config.endpoint_destination_id
     policy = RequestPolicy(
         workspace_id=config.workspace_id, actor_user_id=config.actor_user_id, membership_revision=config.membership_revision,
@@ -200,7 +201,7 @@ async def probe_model(
         try:
             await ai_settings.check_ai_execution_config(session, settings, redis, scope=_owner,
                                                         expected=config, auth_sessions=(session_ref,))
-            if not may_send(policy, alias, mapping, destination or "remote", bool(config.gateway_api_key), body.capability):
+            if not may_send(policy, role, mapping, destination or "remote", bool(config.gateway_api_key), body.capability):
                 raise PrivacyPolicyDenied("Probe denied by current settings")
         finally:
             await session.rollback()
@@ -215,12 +216,12 @@ async def probe_model(
     message = [{"role": "user", "content": "Reply with the word ready."}]
     try:
         if body.capability == "embeddings":
-            response = await client.embed(alias, mapping, policy, ["Synthetic capability probe."], probe=True)
+            response = await client.embed(role, mapping, policy, ["Synthetic capability probe."], probe=True)
         elif body.capability == "reranking":
-            response = await client.rerank(alias, mapping, policy, "synthetic probe", ["synthetic probe document"], probe=True)
+            response = await client.rerank(role, mapping, policy, "synthetic probe", ["synthetic probe document"], probe=True)
         elif body.capability == "streaming":
             text, total = "", 0
-            async with aclosing(cast("AsyncGenerator[str, None]", client.stream(alias, mapping, policy, message, probe=True))) as lines:
+            async with aclosing(cast("AsyncGenerator[str, None]", client.stream(role, mapping, policy, message, probe=True))) as lines:
                 async for line in lines:
                     total += len(line)
                     if line.startswith("data:"):
@@ -240,18 +241,18 @@ async def probe_model(
                         break
             response = {"streamed": text}
         elif body.capability == "structured":
-            response = await client.structured(alias, mapping, policy, message, {"name": "probe", "schema": {"type": "object"}}, probe=True)
+            response = await client.structured(role, mapping, policy, message, {"name": "probe", "schema": {"type": "object"}}, probe=True)
         elif body.capability == "tools":
-            response = await client.tools(alias, mapping, policy, [{"role": "user", "content": "Call the probe tool now."}], [{"type": "function", "function": {"name": "probe", "description": "Return a synthetic readiness signal.", "parameters": {"type": "object", "properties": {}}}}], probe=True)
+            response = await client.tools(role, mapping, policy, [{"role": "user", "content": "Call the probe tool now."}], [{"type": "function", "function": {"name": "probe", "description": "Return a synthetic readiness signal.", "parameters": {"type": "object", "properties": {}}}}], probe=True)
         else:
-            response = await client.chat(alias, mapping, policy, message, probe=True)
-        result = ai_settings.new_capability_result(alias, mapping, body.capability, "supported" if _capability_proved(body.capability, response) else "unsupported", config=config, scope=_owner, multi_workspace_enabled=settings.multi_workspace_enabled)
+            response = await client.chat(role, mapping, policy, message, probe=True)
+        result = ai_settings.new_capability_result(role, mapping, body.capability, "supported" if _capability_proved(body.capability, response) else "unsupported", config=config, scope=_owner, multi_workspace_enabled=settings.multi_workspace_enabled)
     except PrivacyPolicyDenied as exc:
         raise HTTPException(status_code=403, detail="Probe denied by privacy policy") from exc
     except CapabilityUnsupported:
-        result = ai_settings.new_capability_result(alias, mapping, body.capability, "unsupported", config=config, scope=_owner, multi_workspace_enabled=settings.multi_workspace_enabled)
+        result = ai_settings.new_capability_result(role, mapping, body.capability, "unsupported", config=config, scope=_owner, multi_workspace_enabled=settings.multi_workspace_enabled)
     except (ModelGatewayError, ValueError):  # unparseable gateway reply: failed, not a 500
-        result = ai_settings.new_capability_result(alias, mapping, body.capability, "failed", config=config, scope=_owner, multi_workspace_enabled=settings.multi_workspace_enabled)
+        result = ai_settings.new_capability_result(role, mapping, body.capability, "failed", config=config, scope=_owner, multi_workspace_enabled=settings.multi_workspace_enabled)
     except RedisError as exc:
         raise HTTPException(status_code=503, detail="Model capability storage is unavailable") from exc
     try:

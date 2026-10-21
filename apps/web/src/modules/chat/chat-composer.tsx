@@ -5,11 +5,23 @@
 
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
-import { SendIcon, SquareIcon } from 'lucide-react';
+import { ArrowUpIcon, FileTextIcon, PaperclipIcon, PlusIcon, SendIcon, SquareIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Label } from '@/components/ui/label';
-import { Badge } from '@/components/ui/badge';
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { COMPOSER_MENU_ID } from '@/modules/chat/chat-attachments';
+import { ModelPicker, type ChatModelPicker } from '@/modules/chat/model-picker';
+
+/** Actions behind the full composer's + menu; the session owns the picker dialog and file input they drive. */
+export interface ComposerMenuProps {
+  /** Opens the context picker dialog; the item is omitted when context cannot be picked. */
+  onAddContext?: () => void;
+  /** Opens the native file chooser. */
+  onAttach: () => void;
+  /** Disables Attach (attachments unavailable, busy, or at the limit). */
+  attachDisabled: boolean;
+  /** Opt-in letting cloud models read files attached next. */
+  share: { checked: boolean; disabled: boolean; onChange: (checked: boolean) => void };
+}
 
 export interface ChatComposerProps {
   /** Current in-memory draft string. */
@@ -30,8 +42,6 @@ export interface ChatComposerProps {
   modelLabel?: string | null;
   /** Number of distinct sources cited by the latest assistant answer. */
   sourcesCount?: number;
-  /** Full page shows the truthful web search and attachment availability note. */
-  showCapabilityNote?: boolean;
   /** Per-message web search opt-in; passed only by the full Chat page. */
   webSearch?: { available: boolean; profileBlocked?: boolean; provider?: string; enabled: boolean; onChange: (enabled: boolean) => void };
   /** Attachment controls rendered above the input (full Chat page only). */
@@ -46,6 +56,10 @@ export interface ChatComposerProps {
   onAttachFiles?: (files: File[]) => void;
   /** Whether attachment upload or ingestion is currently busy/disabled, blocking clipboard file paste. */
   attachmentBusy?: boolean;
+  /** Full-page + menu actions (context, attach, share); omitted in the drawer. */
+  menu?: ComposerMenuProps;
+  /** Per-chat model dropdown (full and drawer); omitted while no chat model is configured. */
+  modelPicker?: ChatModelPicker;
 }
 
 /**
@@ -66,7 +80,6 @@ export function ChatComposer({
   placeholder,
   modelLabel = null,
   sourcesCount = 0,
-  showCapabilityNote = false,
   webSearch,
   attachments,
   sendBlockedBy = null,
@@ -74,6 +87,8 @@ export function ChatComposer({
   attachmentBusy = false,
   mode = 'drawer',
   contextBar,
+  menu,
+  modelPicker,
 }: ChatComposerProps) {
   const t = useTranslations('chat');
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
@@ -149,7 +164,10 @@ export function ChatComposer({
       placeholder={placeholder ?? t('composerPlaceholder')}
       disabled={disabled}
       rows={2}
-      className="block max-h-[200px] min-h-14 w-full resize-none overflow-y-auto rounded-lg border border-border bg-background p-3 text-base text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 sm:text-[15px]"
+      className={isFull
+        // Full layout: the surrounding box owns the border and focus ring, so the field itself is borderless.
+        ? 'block max-h-[200px] min-h-14 w-full resize-none overflow-y-auto bg-transparent px-1 py-1 text-base text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-50 sm:text-[15px]'
+        : 'block max-h-[200px] min-h-14 w-full resize-none overflow-y-auto rounded-lg border border-border bg-background p-3 text-base text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 sm:text-[15px]'}
       aria-label={t('composerPlaceholder')}
     />
   );
@@ -185,41 +203,90 @@ export function ChatComposer({
     return (
       <div className="relative flex items-end gap-2 border-t border-border bg-surface p-4 shrink-0 pb-[max(1rem,env(safe-area-inset-bottom))]">
         <div className="min-w-0 flex-1">{textarea}</div>
+        {modelPicker && <ModelPicker picker={modelPicker} disabled={isStreaming || disabled} />}
         {isStreaming ? stopButton : sendButton}
       </div>
     );
   }
 
+  // Round icon-only controls for the full layout; the aria-labels keep them named for assistive tech.
+  const roundStop = (
+    <Button type="button" variant="outline" size="icon" onClick={onStop} className="rounded-full border-destructive text-destructive hover:text-destructive" aria-label={t('stopGenerating')}>
+      <SquareIcon className="size-3.5 fill-current" aria-hidden="true" />
+    </Button>
+  );
+  const roundSend = (
+    <Button
+      type="button"
+      size="icon"
+      onClick={handleSend}
+      aria-disabled={!canSend}
+      className="rounded-full aria-disabled:cursor-not-allowed aria-disabled:opacity-40"
+      aria-label={t('send')}
+      aria-describedby={sendBlockedBy ?? undefined}
+    >
+      <ArrowUpIcon className="size-4" aria-hidden="true" />
+    </Button>
+  );
+  const modelText = modelLabel ? t('modelLine', { model: modelLabel }) : t('modelNotReported');
+  const webSearchChecked = !!webSearch && webSearch.available && !webSearch.profileBlocked && webSearch.enabled;
+
   return (
-    <div className="relative flex flex-col gap-2.5 border-t border-border bg-surface px-3 py-3 sm:px-5 sm:py-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] shrink-0">
-      {contextBar}
-      {textarea}
-      {attachments}
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge variant="outline" className="min-h-11 px-3 text-sm font-semibold">
-          {modelLabel ? t('modelLine', { model: modelLabel }) : t('modelNotReported')}{sourcesCount > 0 ? ` · ${t('sourcesCount', { count: sourcesCount })}` : ''}
-        </Badge>
-        {webSearch && (
-          <div className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-border px-3">
-            <Checkbox
-              id="chat-web-search"
-              checked={webSearch.available && !webSearch.profileBlocked && webSearch.enabled}
-              disabled={!webSearch.available || webSearch.profileBlocked || isStreaming || disabled}
-              onCheckedChange={(checked) => webSearch.onChange(checked === true)}
-              aria-describedby="chat-web-search-help"
-            />
-            <Label htmlFor="chat-web-search" className="text-sm font-semibold text-foreground">{t('webSearchToggle')}</Label>
-          </div>
-        )}
-        {webSearch && <span className="text-xs text-muted-foreground sm:ml-auto">{t('webSearchPersonalNote')}</span>}
-        <div className={webSearch ? '' : 'ml-auto'}>{isStreaming ? stopButton : sendButton}</div>
+    <div className="relative shrink-0 border-t border-border bg-surface px-3 py-3 sm:px-5 sm:py-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+      <div className="flex flex-col gap-2 rounded-2xl border border-border bg-background p-3 focus-within:ring-2 focus-within:ring-ring">
+        {contextBar}
+        {attachments}
+        {textarea}
+        <div className="flex items-center gap-2">
+          {menu && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button id={COMPOSER_MENU_ID} type="button" variant="ghost" size="icon" className="rounded-full text-muted-foreground" aria-label={t('composerMenu')} disabled={disabled}>
+                  <PlusIcon className="size-4" aria-hidden="true" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" side="top">
+                {menu.onAddContext && (
+                  <DropdownMenuItem onSelect={menu.onAddContext}>
+                    <FileTextIcon aria-hidden="true" />{t('addContext')}
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem disabled={menu.attachDisabled} onSelect={menu.onAttach}>
+                  <PaperclipIcon aria-hidden="true" />{t('attach')}
+                </DropdownMenuItem>
+                <DropdownMenuCheckboxItem
+                  checked={menu.share.checked}
+                  disabled={menu.share.disabled}
+                  // Keep the menu open so the owner sees the toggle change before attaching.
+                  onSelect={(e) => e.preventDefault()}
+                  onCheckedChange={(checked) => menu.share.onChange(checked === true)}
+                >
+                  {t('attachmentShareToggle')}
+                </DropdownMenuCheckboxItem>
+                {webSearch && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuCheckboxItem
+                      id="chat-web-search"
+                      checked={webSearchChecked}
+                      disabled={!webSearch.available || webSearch.profileBlocked || isStreaming || disabled}
+                      onSelect={(e) => e.preventDefault()}
+                      onCheckedChange={(checked) => webSearch.onChange(checked === true)}
+                    >
+                      {t('webSearchToggle')}
+                    </DropdownMenuCheckboxItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+          <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+            {modelText}{sourcesCount > 0 ? ` · ${t('sourcesCount', { count: sourcesCount })}` : ''}
+          </span>
+          {modelPicker && <ModelPicker picker={modelPicker} disabled={isStreaming || disabled} />}
+          {isStreaming ? roundStop : roundSend}
+        </div>
       </div>
-      {webSearch && (
-        <p id="chat-web-search-help" className="px-1 text-xs text-muted-foreground">
-          {!webSearch.available ? t('webSearchDisabledHelp') : webSearch.profileBlocked ? t('webSearchProfileHelp') : webSearch.enabled ? t('webSearchEnabledHelp', { provider: webSearch.provider ?? '' }) : t('webSearchIdleHelp')}
-        </p>
-      )}
-      {showCapabilityNote && <p className="px-1 text-xs text-muted-foreground">{t('composerNote')}</p>}
     </div>
   );
 }

@@ -13,7 +13,6 @@ export interface AgentProfile {
   title: string;
   enabled: boolean;
   revision: number;
-  model_alias: string;
   prompt: string;
   allowed_tools: AgentProfileTool[];
   available_tools: AgentProfileTool[];
@@ -61,7 +60,6 @@ export function updateAgentProfile(
     body: JSON.stringify({
       expected_revision: profile.revision,
       enabled: profile.enabled,
-      model_alias: profile.model_alias,
       prompt: profile.prompt,
       allowed_tools: profile.allowed_tools,
       source_ids: profile.source_ids,

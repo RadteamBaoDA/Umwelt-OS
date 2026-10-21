@@ -407,17 +407,20 @@ Use OmniRoute as the model gateway through its OpenAI-compatible API. Do not dep
 
 The application must only call configured LLMs through the model gateway.
 
-Define logical model aliases:
+Providers list models `{id, type, vision}`. Type is `chat`, `embedding`, `reranker`, `decision` or `background`; `vision`, `asr` and `tts` remain read-only legacy types. Define role defaults, each `{provider_id, model, version?, destination, dimensions?}` (dimensions for embedding only):
 
 ```text
-reasoning-large
-reasoning-small
-fast
+chat
+brief
+background
 embedding
 reranker
 vision
-local-private
 ```
+
+Chat and brief accept chat-type models; vision accepts a chat-type model with the vision flag; background accepts a background- or chat-type model and falls back to brief, then chat, when unset; embedding requires probed dimensions and a reindex on change; reranker is optional. Decision models feed the visualization router, which has separate settings. Agents always use the chat model. Users never see aliases.
+
+Visualization router (opt-in external): the `openrouter` kind defaults to OpenRouter's Decisions API (alpha, `POST /api/alpha/decisions`) with a Decision-type model: one `choice` question whose criteria keys are the 13 router categories, state = the bounded conversation window as one text item (newest 8,000 characters). The answer must name one of the 13 categories; anything else is an error and there is no fallback or guess. Rows saved without the `api` field keep the chat-completions path, and `mode` (json_schema / forced_tool) applies to chat only. An owner-write, CSRF-protected, rate-limited endpoint lists Decision models (`GET /api/v1/models?output_modalities=decisions`) through the endpoint-policy-checked gateway, bounded to 200 validated ids.
 
 Do not scatter provider-specific model names in application code.
 
@@ -1844,7 +1847,7 @@ Route:
 /settings/models
 ```
 
-Show logical aliases and map them to configured OmniRoute model identifiers. Verify capabilities per alias rather than assuming all providers support tools, streaming, structured outputs, vision, or embeddings.
+Show one Models table (Provider, Model, Type, Vision, Test/Delete actions) with an Add row, plus a Defaults block mapping roles to configured models. Verify capabilities per role rather than assuming all providers support tools, streaming, structured outputs, vision, or embeddings.
 
 Include provider connectivity test.
 
@@ -2662,7 +2665,7 @@ remove connector + imported data
 ```text
 retry
 ↓
-fallback alias
+fallback role
 ↓
 local model if configured and permitted
 ↓
@@ -3684,16 +3687,9 @@ Future output channels:
 
 **Purpose:** Decouple the application from specific AI providers.
 
-Use logical aliases:
-- reasoning-large
-- reasoning-small
-- fast
-- embedding
-- reranker
-- vision
-- local-private
+Use logical roles: chat, brief, background, embedding, reranker, vision.
 
-Provider mappings should be configurable.
+Provider and model mappings per role should be configurable.
 
 ---
 
@@ -4465,7 +4461,7 @@ Reuse libraries and workflow templates, but implement Umwelt-OS-specific contrac
 
 # 157. MODEL GATEWAY AND PRIVACY
 
-- Configure a OmniRoute base URL, server-side API key, and mappings for the logical aliases in section 8. The gateway can run locally or on another host. Do not hardcode localhost in containers or assume the user's gateway location.
+- Configure a OmniRoute base URL, server-side API key, and role defaults for the logical roles in section 8. The gateway can run locally or on another host. Do not hardcode localhost in containers or assume the user's gateway location.
 - Validate chat, streaming, tool calling, structured outputs, and embeddings separately for the models actually configured. Test tool-call formatting and stream behavior through the selected OmniRoute release.
 - Persist the model identity returned for each run when available. Token/cost values unavailable from the provider must remain unknown rather than being reported as zero.
 - Pin the embedding model and dimensions per index generation. Reindex on a model change; never mix vectors from different embedding models or silently switch embedding providers/models during fallback.
@@ -4502,7 +4498,7 @@ request + permissions + budgets
   → continue / finish / fail / cancel
 ```
 
-Tools register input/output schemas, risk, timeout, and authorization policy. Retrieved content cannot grant permissions. Specialists share the harness, differing by prompt, tool access, and model alias; start with sequential orchestration.
+Tools register input/output schemas, risk, timeout, and authorization policy. Retrieved content cannot grant permissions. Specialists share the harness, differing by prompt and tool access (all use the chat model); start with sequential orchestration.
 
 Approval binds to a specific immutable action and its arguments, with expiry and resolution status. An interrupted run releases its worker capacity. Approval creates a resume job; revalidate permissions and approval state at execution. Never replay a completed external side effect merely because an agent resumed. Use provider idempotency keys or reconciliation where available; unresolved timeout outcomes require review before retry.
 
@@ -4545,7 +4541,7 @@ Prefer the cheapest collection mode that satisfies the source:
 
 Use these libraries in a dedicated browser-capable worker deployment when needed. n8n submits a Umwelt-OS crawl job and receives a run ID; poll a protected status endpoint or receive an authenticated completion callback. Long browser runs must not hold an ingestion HTTP request open.
 
-Crawl4AI and Browserless are alternatives, not additional default services. Do not deploy every crawler discussed. A browser-use task uses the configured OmniRoute alias only after capability testing; compatible chat HTTP alone does not prove browser-agent compatibility.
+Crawl4AI and Browserless are alternatives, not additional default services. Do not deploy every crawler discussed. A browser-use task uses the configured chat model only after capability testing; compatible chat HTTP alone does not prove browser-agent compatibility.
 
 Start with one browser task at a time. Bound URLs, depth, page count, downloaded bytes, action steps, and wall time. Close browser contexts after work; preserve login state only in protected source-specific storage. Avoid concurrent browser and heavy document parsing on the target host.
 

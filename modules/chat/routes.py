@@ -35,6 +35,7 @@ from modules.chat.models import (
     StreamEvent,
 )
 from modules.chat.schemas import (
+    MODEL_OVERRIDE_KEY,
     WEB_SEARCH_KEY,
     WEB_SEARCH_OUTCOME_KEY,
     CancelResponse,
@@ -175,14 +176,45 @@ async def _dispatch_response_run(request: Request, response_id: UUID) -> None:
         logger.warning("Failed to enqueue chat response %s (%s)", response_id, type(exc).__name__)
 
 
-def _run_context(inherited: dict[str, Any] | None, privacy: Any, web_search: bool) -> dict[str, Any]:
+def _run_context(
+    inherited: dict[str, Any] | None, privacy: Any, web_search: bool, model_override: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Build a run's retrieval context: client-visible keys kept, every server-private "_" key rewritten.
 
     Stale "_" keys (old privacy fence, web opt-in, web outcome) are never inherited, so each send,
     regenerate and edit carries only its own fence and its own explicit web-search choice.
     """
     kept = {k: v for k, v in (inherited or {}).items() if not k.startswith("_")}
-    return {**kept, "_chat_privacy_fence": _privacy_fence(privacy), WEB_SEARCH_KEY: {"requested": web_search}}
+    context = {**kept, "_chat_privacy_fence": _privacy_fence(privacy), WEB_SEARCH_KEY: {"requested": web_search}}
+    if model_override:
+        context[MODEL_OVERRIDE_KEY] = model_override
+    return context
+
+
+async def _validated_model_override(
+    request: Request, session: AsyncSession, scope: Any, payload: SendMessageRequest,
+) -> dict[str, str] | None:
+    """Return the validated per-send chat model override, or None when the owner's default applies.
+
+    The provider must exist and not be policy-denied, and the model must be one of its configured models
+    that the `chat` role accepts (type `llm`). Anything else is a 422 so a stale picker never silently
+    falls back to a different model.
+
+    Raises:
+        HTTPException: 422 when the provider or model is unknown, denied, or not a chat-capable model.
+    """
+    if payload.model is None or payload.provider_id is None:
+        return None
+    from modules.settings import public as settings_public
+
+    config = await settings_public.get_ai_execution_config(
+        session, request.app.state.settings, request.app.state.redis, scope=scope,
+    )
+    provider = config.providers.get(payload.provider_id)
+    chosen = next((m for m in provider.models if m.id == payload.model), None) if provider else None
+    if provider is None or provider.policy_denied or chosen is None or not settings_public.role_accepts("chat", chosen):
+        raise HTTPException(status_code=422, detail="Selected chat model is not available")
+    return {"provider_id": payload.provider_id, "model": payload.model}
 
 
 def _message_mutation_digest(
@@ -758,6 +790,8 @@ async def send_message(
         )
 
     await _reject_active_response(session, conversation_id)
+    # Validated after the idempotent replay return so a replay never depends on current settings.
+    model_override = await _validated_model_override(request, session, scope, payload)
 
     # Persist user message and pending response run before dispatch
     user_msg = Message(
@@ -782,7 +816,7 @@ async def send_message(
         user_message_id=user_msg.id,
         client_request_id=payload.client_request_id,
         status="pending",
-        retrieval_context=_run_context(resolved_context, privacy, payload.web_search),
+        retrieval_context=_run_context(resolved_context, privacy, payload.web_search, model_override),
         ephemeral=conv.ephemeral,
         expires_at=conv.expires_at,
     )

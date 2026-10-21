@@ -99,7 +99,7 @@ async def start_run(
 async def read_profiles(
     request: Request, session: Session, owner: OwnerRead, scope: WorkspaceRead,
 ) -> list[AgentProfileRead]:
-    """List the fixed roster with current registry, model alias, and unavailable-capability metadata."""
+    """List the fixed roster with current registry, chat model availability, and unavailable-capability metadata."""
     config = await settings_public.get_ai_execution_config(
         session, request.app.state.settings, request.app.state.redis, scope=scope,
     )

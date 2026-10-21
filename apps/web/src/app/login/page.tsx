@@ -14,6 +14,7 @@ import { assignAuthorizationUrl } from '@/core/safe-url';
 import { UmweltLogo } from '@/components/brand/umwelt-mark';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { PasswordInput } from '@/components/ui/password-input';
 import { Label } from '@/components/ui/label';
 import { LegalLinks } from '@/modules/legal/legal-links';
 import { AppearanceControl } from '@/modules/account/appearance-control';
@@ -118,7 +119,7 @@ export default function LoginPage() {
           </div>}
           <div className="field">
             <Label htmlFor="password">{t('password')}</Label>
-            <Input id="password" type="password" autoComplete="current-password" autoFocus={!emailMode} placeholder={t('passwordPlaceholder')}
+            <PasswordInput id="password" autoComplete="current-password" autoFocus={!emailMode} placeholder={t('passwordPlaceholder')}
               aria-invalid={passwordError || undefined} aria-describedby={`password-help${login.error ? ' login-error' : ''}`} {...form.register('password')} />
             {form.formState.errors.password && <span className="error" role="alert">{t('enterPassword')}</span>}
             <p id="password-help" className="text-muted-foreground text-xs">{t('passwordHelp')}</p>

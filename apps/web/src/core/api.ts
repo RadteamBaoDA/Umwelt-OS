@@ -50,6 +50,17 @@ export function workspaceHeaders(target: WorkspaceTarget = 'selected'): HeadersI
   return id ? { 'X-Workspace-ID': id } : {};
 }
 
+/**
+ * Logs a failed (4xx/5xx) API response to the browser console for diagnosis.
+ * Records method, path, status, request id and the parsed error body when present; never logs request headers or bodies.
+ */
+function logApiFailure(method: string | undefined, path: string, response: Response, body?: unknown): void {
+  console.error(
+    `[api] ${(method ?? 'GET').toUpperCase()} ${path} -> ${response.status} ${response.statusText}`,
+    { requestId: response.headers.get('X-Request-ID'), body },
+  );
+}
+
 type Session = { authenticated: true; csrfToken: string };
 let sessionRefresh: Promise<Session> | null = null;
 
@@ -111,6 +122,7 @@ export async function apiRequest<T>(
     parsed = await response.json();
   } catch {
     if (isStale()) throw new StaleWorkspaceError();
+    if (!response.ok) logApiFailure(options.method, path, response);
     throw new ApiError(response.status, response.ok ? 'Invalid response' : 'Request failed');
   }
   const body = parsed as { error?: { message?: string; code?: string; details?: unknown; [key: string]: unknown }; detail?: string | { message?: string; code?: string; details?: unknown; [key: string]: unknown } } & T;
@@ -125,6 +137,7 @@ export async function apiRequest<T>(
     }
     const detail = typeof body.detail === 'object' && body.detail !== null ? body.detail : undefined;
     const message = body.error?.message ?? detail?.message ?? (typeof body.detail === 'string' ? body.detail : 'Request failed');
+    logApiFailure(options.method, path, response, parsed);
     throw new ApiError(response.status, message, body.error ?? detail);
   }
   return body;

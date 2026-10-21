@@ -148,7 +148,6 @@ class TestToolSlotAndActivitySchemas:
         patch = AgentProfilePatch(
             expected_revision=1,
             enabled=True,
-            model_alias="reasoning",
             prompt="You are a helpful specialist.",
             allowed_tools=[tool],
             source_ids=[uuid4()],

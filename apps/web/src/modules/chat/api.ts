@@ -145,6 +145,9 @@ export interface SendMessagePayload {
   context?: ChatContext | Record<string, unknown>;
   /** Per-message opt-in; omit (never send false-by-default state) unless the user ticked it. */
   web_search?: boolean;
+  /** Optional per-message chat model override; both are sent together or not at all. */
+  provider_id?: string;
+  model?: string;
 }
 
 /**

@@ -53,6 +53,7 @@ class FreeProviderSpec:
     runtime_verified: bool = False
     checked_on: str = CHECKED_ON
     secret_location: Literal["header", "query"] | None = None
+    category: Literal["news", "economy", "hazards", "space", "security", "tech"] = "news"
 
 
 # Providers the shared executor can actually dispatch (collection.ADAPTERS). CoinGecko requires an
@@ -76,78 +77,78 @@ def _day(limit: int, kind: str = "provider", unit: str = "http_calls", cost: int
     return QuotaWindowPolicy(key, kind, "day", unit, limit, cost)  # type: ignore[arg-type]
 
 
-def _spec(id_: str, label: str, hosts: tuple[str, ...], kind: str, interval: int, terms_url: str,
+def _spec(id_: str, label: str, category: str, hosts: tuple[str, ...], kind: str, interval: int, terms_url: str,
           eligibility: str, attribution: str, endpoints: tuple[str, ...], quota: tuple[QuotaWindowPolicy, ...],
           execution: str = "supported", key: bool = False, secret: str | None = None,
           implemented: bool = False) -> FreeProviderSpec:
     return FreeProviderSpec(
         id=id_, hosts=hosts, data_kind=kind, key_required=key, default_interval_minutes=interval,  # type: ignore[arg-type]
         terms_url=terms_url, eligibility=eligibility, attribution=attribution, execution=execution,  # type: ignore[arg-type]
-        label=label, endpoints=endpoints, quota=quota, secret_location=secret,  # type: ignore[arg-type]
+        label=label, category=category, endpoints=endpoints, quota=quota, secret_location=secret,  # type: ignore[arg-type]
         code_implemented=implemented or id_ in DISPATCHABLE,
     )
 
 
 FREE_PROVIDER_SPECS: tuple[FreeProviderSpec, ...] = (
-    _spec("bbc_world", "BBC World News", ("feeds.bbci.co.uk",), "news", 30,
+    _spec("bbc_world", "BBC World News", "news", ("feeds.bbci.co.uk",), "news", 30,
           "https://www.bbc.co.uk/usingthebbc/terms/", "review",
           "Display BBC as publisher with a link to the original article; feed-only title, summary and link.",
           ("/news/world/rss.xml",), (_day(96), _unknown())),
-    _spec("vnexpress_business", "VnExpress Business", ("vnexpress.net",), "news", 30,
+    _spec("vnexpress_business", "VnExpress Business", "news", ("vnexpress.net",), "news", 30,
           "https://vnexpress.net/rss", "noncommercial",
           "Identify VnExpress clearly and link the original article; feed-only scope.",
           ("/rss/kinh-doanh.rss",), (_day(96), _unknown())),
-    _spec("tuoitre_news", "Tuổi Trẻ News", ("tuoitre.vn",), "news", 30,
+    _spec("tuoitre_news", "Tuổi Trẻ News", "news", ("tuoitre.vn",), "news", 30,
           "https://tuoitre.vn/rss.htm", "noncommercial",
           "Display Tuổi Trẻ clearly as source and link the original article",
           ("/home.rss",), (_day(96), _unknown())),
-    _spec("thanhnien_news", "Báo Thanh Niên", ("thanhnien.vn",), "news", 30,
+    _spec("thanhnien_news", "Báo Thanh Niên", "news", ("thanhnien.vn",), "news", 30,
           "https://thanhnien.vn/rss.html", "noncommercial",
           'Credit "Báo Thanh Niên" or "Theo Báo Thanh Niên" and link the original article',
           ("/rss/home.rss",), (_day(96), _unknown())),
-    _spec("dantri_news", "Dân trí News", ("dantri.com.vn",), "news", 30,
+    _spec("dantri_news", "Dân trí News", "news", ("dantri.com.vn",), "news", 30,
           "https://dantri.com.vn/rss.htm", "noncommercial",
           "Credit Dân trí as the source and link the original article; feed-only title, summary and link.",
           ("/rss/home.rss",), (_day(96), _unknown())),
     # Unofficial RSS search endpoint: Google publishes no API contract for it. Interval and pilot cap
     # mirror the other 30-minute news feeds (docs/free-data-provider-policy.md quota table); no official quota is claimed.
-    _spec("google_news", "Google News RSS", ("news.google.com",), "news", 30,
+    _spec("google_news", "Google News RSS", "news", ("news.google.com",), "news", 30,
           "https://policies.google.com/terms", "review",
           "Google News RSS / publisher: show the item's publisher and link to the original article; feed-only title, summary and link.",
           ("/rss/search",), (_day(96), _unknown())),
     # SEC fair access: max 10 requests/second and a declared User-Agent with contact details (owner email in scope).
-    _spec("sec_edgar", "SEC EDGAR filings", ("data.sec.gov",), "event", 360,
+    _spec("sec_edgar", "SEC EDGAR filings", "economy", ("data.sec.gov",), "event", 360,
           "https://www.sec.gov/privacy.htm#security", "open", "Source: U.S. SEC EDGAR",
           ("/submissions/CIK##########.json",), (_day(96), _unknown())),
     # OpenAlex works search: data is CC0 (help.openalex.org); basic use needs no key (a free key only raises the
     # daily budget). The 100 req/s cap is far above the one daily send; the local pilot cap stays small.
-    _spec("openalex", "OpenAlex works search", ("api.openalex.org",), "event", 1440,
+    _spec("openalex", "OpenAlex works search", "tech", ("api.openalex.org",), "event", 1440,
           "https://help.openalex.org/how-to-use-the-api/api-overview", "open",
           "Credit OpenAlex; data is CC0. Link the work's OpenAlex id and DOI; abstracts are rebuilt from the inverted index.",
           ("/works",), (_day(8), _unknown())),
-    _spec("hn_top", "Hacker News top stories", ("hacker-news.firebaseio.com",), "news", 60,
+    _spec("hn_top", "Hacker News top stories", "tech", ("hacker-news.firebaseio.com",), "news", 60,
           "https://github.com/HackerNews/API", "review",
           "Attribute Hacker News plus the item and publisher URL; the API license does not license linked articles.",
           ("/v0/topstories.json", "/v0/item/{id}.json"),
           (_day(528), QuotaWindowPolicy("pilot_calls_utc_minute", "provider", "minute", "http_calls", 12))),
-    _spec("gdelt_economy", "GDELT economy articles", ("api.gdeltproject.org",), "news", 60,
+    _spec("gdelt_economy", "GDELT economy articles", "news", ("api.gdeltproject.org",), "news", 60,
           "https://gdeltproject.org/about.html", "review",
           "Cite the GDELT Project and the publisher URL; article metadata is not republication permission.",
           ("/api/v2/doc/doc?query=economy&mode=artlist&format=json&maxrecords=5&timespan=24h",),
           (_day(48), _unknown()), execution="experimental"),
-    _spec("world_bank", "World Bank annual GDP (Vietnam)", ("api.worldbank.org",), "measurement", 1440,
+    _spec("world_bank", "World Bank annual GDP (Vietnam)", "economy", ("api.worldbank.org",), "measurement", 1440,
           "https://datacatalog.worldbank.org/public-licenses", "open",
           "Credit the World Bank and the original indicator; retain the dataset license and changed notice.",
           ("/v2/country/VN/indicator/NY.GDP.MKTP.CD?format=json&per_page=3",), (_day(32), _unknown())),
-    _spec("frankfurter", "Frankfurter USD/VND", ("api.frankfurter.dev",), "measurement", 1440,
+    _spec("frankfurter", "Frankfurter USD/VND", "economy", ("api.frankfurter.dev",), "measurement", 1440,
           "https://frankfurter.dev/license/", "open",
           "Credit Frankfurter and contributing providers; the default rate is a blended rate, not a single-bank rate.",
           ("/v2/rate/usd/vnd",), (_day(8), _unknown())),
-    _spec("ecb", "ECB euro reference rates", ("www.ecb.europa.eu",), "measurement", 1440,
+    _spec("ecb", "ECB euro reference rates", "economy", ("www.ecb.europa.eu",), "measurement", 1440,
           "https://www.ecb.europa.eu/services/using-our-site/disclaimer/html/index.en.html", "open",
           "Credit the ECB; preserve the rate date and identify transformations.",
           ("/stats/eurofxref/eurofxref-daily.xml",), (_day(8), _unknown())),
-    _spec("binance", "Binance BTCUSDT price", ("data-api.binance.vision",), "measurement", 15,
+    _spec("binance", "Binance BTCUSDT price", "economy", ("data-api.binance.vision",), "measurement", 15,
           "https://developers.binance.com/en/docs/products/spot/rest-api", "review",
           "Credit Binance; BTCUSDT market, USDT quote. No trading endpoints or keys.",
           ("/api/v3/ticker/price?symbol=BTCUSDT",),
@@ -155,31 +156,31 @@ FREE_PROVIDER_SPECS: tuple[FreeProviderSpec, ...] = (
            QuotaWindowPolicy("pilot_request_weight_utc_minute", "provider", "minute", "request_weight", 4, 2),
            QuotaWindowPolicy("official_request_weight_unknown", "ip", "minute", "request_weight", None, 2,
                              "official_unknown"))),
-    _spec("alternative_me", "Alternative.me Fear and Greed", ("api.alternative.me",), "measurement", 1440,
+    _spec("alternative_me", "Alternative.me Fear and Greed", "economy", ("api.alternative.me",), "measurement", 1440,
           "https://alternative.me/crypto/fear-and-greed-index/", "open",
           "Display Alternative.me with a link adjacent to the index, including translated output.",
           ("/fng/?limit=2",), (_day(8), _unknown())),
-    _spec("usgs", "USGS M4.5+ earthquakes (day)", ("earthquake.usgs.gov",), "event", 60,
+    _spec("usgs", "USGS M4.5+ earthquakes (day)", "hazards", ("earthquake.usgs.gov",), "event", 60,
           "https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits", "open",
           "Credit the U.S. Geological Survey with the event citation; do not fetch detail URLs automatically.",
           ("/earthquakes/feed/v1.0/summary/4.5_day.geojson",), (_day(48), _unknown())),
     # EONET publishes only a visualization/general-information disclaimer, no license or key/rate-limit terms.
-    _spec("nasa_eonet", "NASA EONET open natural events", ("eonet.gsfc.nasa.gov",), "event", 60,
+    _spec("nasa_eonet", "NASA EONET open natural events", "hazards", ("eonet.gsfc.nasa.gov",), "event", 60,
           "https://eonet.gsfc.nasa.gov/what-is-eonet#disclaimer", "review",
           "Credit NASA EONET and the event's listed sources; data is for visualization and general information only, not official extents.",
           ("/api/v3/events?status=open&limit=50",), (_day(48), _unknown())),
-    _spec("cisa_kev", "CISA Known Exploited Vulnerabilities", ("www.cisa.gov",), "event", 1440,
+    _spec("cisa_kev", "CISA Known Exploited Vulnerabilities", "security", ("www.cisa.gov",), "event", 1440,
           "https://www.cisa.gov/known-exploited-vulnerabilities-catalog", "open",
           "Credit CISA Known Exploited Vulnerabilities Catalog (official feed, CC0).",
           ("/sites/default/files/feeds/known_exploited_vulnerabilities.json",), (_day(8), _unknown())),
-    _spec("coinpaprika", "CoinPaprika BTC ticker", ("api.coinpaprika.com",), "measurement", 15,
+    _spec("coinpaprika", "CoinPaprika BTC ticker", "economy", ("api.coinpaprika.com",), "measurement", 15,
           "https://docs.coinpaprika.com/api-plans", "personal",
           "Credit CoinPaprika; free use is personal with no redistribution.",
           ("/v1/tickers/btc-bitcoin",),
           (_day(192), QuotaWindowPolicy("pilot_calls_utc_second", "provider", "second", "http_calls", 1),
            QuotaWindowPolicy("official_calls_per_second", "ip", "second", "http_calls", 10, 1, "official_documented"),
            QuotaWindowPolicy("official_calls_per_month", "ip", "month", "http_calls", 20_000, 1, "official_documented"))),
-    _spec("coingecko", "CoinGecko BTC price (Demo)", ("api.coingecko.com",), "measurement", 15,
+    _spec("coingecko", "CoinGecko BTC price (Demo)", "economy", ("api.coingecko.com",), "measurement", 15,
           "https://www.coingecko.com/en/api_terms", "review",
           "Show Powered by CoinGecko with a link per the API terms and brand guide.",
           ("/api/v3/simple/price?ids=bitcoin&vs_currencies=usd",),
@@ -192,7 +193,7 @@ FREE_PROVIDER_SPECS: tuple[FreeProviderSpec, ...] = (
           key=True, secret="header"),
     # Existing C1 adapter. 12/UTC-day is the conservative pilot cap until the provider reset
     # anchor is evidenced; the official 25/day fact is recorded separately.
-    _spec("alpha_vantage", "Alpha Vantage daily equities", ("www.alphavantage.co",), "measurement", 1440,
+    _spec("alpha_vantage", "Alpha Vantage daily equities", "economy", ("www.alphavantage.co",), "measurement", 1440,
           "https://www.alphavantage.co/terms_of_service/", "personal",
           "Credit Alpha Vantage with symbol and day; no free realtime entitlement.",
           ("/query?function=TIME_SERIES_DAILY&symbol={symbol}&outputsize=compact",),
@@ -262,3 +263,14 @@ def evaluate_terms(
         return TermsDecision(False, "operator_review_required")
     ok = declared_use in _USE_RANK and _USE_RANK[declared_use] <= _USE_RANK[review.allowed_use]
     return TermsDecision(ok, "ok" if ok else "use_incompatible")
+
+
+# Presets the owner can switch on with one toggle: fixed endpoint (no owner scope), no API key, and an
+# adapter exists. Derived (not listed) so a new fixed-scope spec is exposed automatically. backends has no
+# connector imports, so this module-level import is cycle-safe.
+from modules.connectors.backends import FIXED_SCOPE_PROVIDERS
+
+BUILTIN_PROVIDERS: frozenset[str] = frozenset(
+    spec.id for spec in FREE_PROVIDER_SPECS
+    if spec.id in FIXED_SCOPE_PROVIDERS and not spec.key_required and spec.code_implemented
+)

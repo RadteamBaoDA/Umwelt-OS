@@ -7,24 +7,37 @@ import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { AgentSettingsWorkspace } from '@/modules/agents/agent-settings';
-import { CheckboxField, FieldGrid, SettingsActions, SettingsPageHeader, SettingsSection } from './settings-layout';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { CheckboxField, SettingsActions, SettingsPageHeader, SettingsSection } from './settings-layout';
 import { AutomationSettings } from '@/modules/automations/rule-list';
-import { aliasProviderId, mergeDiscovered, modelIdsForAlias, parseDraftSnapshot, ProviderEditor, type ProviderRead, type ProviderSecret } from './provider-editor';
+import { mappingFor, ModelDefaults, ModelsPanel, pruneDefaults, type DefaultSlot, type Defaults, type Mapping } from './models-section';
+import { modelTestKey, parseDraftSnapshot, ProviderEditor, testRoleByType, type ModelTestState, type ProviderModel, type ProviderRead, type ProviderSecret } from './provider-editor';
 
-type Mapping = { model: string; version: string | null; destination: 'unknown' | 'remote'; provider_id?: string | null; dimensions?: number | null };
 type Privacy = { allow_remote_reasoning: boolean; allow_remote_embeddings: boolean; allow_remote_web_search: boolean; allow_widget_remote_media: boolean; reasoning_destinations: string[]; embedding_destinations: string[]; web_search_destinations: string[] };
-type Capability = { alias: string; capability: string; result: string; expires_at: string; dimensions?: number };
-type AISettings = { configuration_revision: number; providers: ProviderRead[]; web_search_provider: 'none' | 'tavily' | 'brave' | 'searxng'; web_search_endpoint: string | null; web_search_credential_configured: boolean; chat_alias: string; brief_alias: string; aliases: Record<string, Mapping>; capabilities: Capability[]; privacy: Privacy; request_timeout_seconds: number };
-// vision and local-private have no runtime consumer yet; the API keeps them so stored mappings round-trip unchanged.
-const aliases = ['reasoning-large', 'reasoning-small', 'fast', 'embedding', 'reranker'];
-const chatAliases = ['reasoning-large', 'reasoning-small', 'fast'];
-const capabilityTypes = ['chat', 'streaming', 'embeddings', 'structured', 'tools', 'reranking'];
+type Capability = { role: string; capability: string; result: string; expires_at: string; dimensions?: number };
+type AISettings = { configuration_revision: number; providers: ProviderRead[]; web_search_provider: 'none' | 'tavily' | 'brave' | 'searxng'; web_search_endpoint: string | null; web_search_credential_configured: boolean; defaults: Defaults; capabilities: Capability[]; privacy: Privacy; request_timeout_seconds: number };
+
+/**
+ * Draft-only default auto-fill: the first Chat model newly present in `next` fills an empty chat and brief
+ * default, and a vision-flagged one also fills an empty vision default. Never touches embedding/reranker
+ * (embedding needs a dimensions probe), background (it falls back on its own) or defaults already set.
+ */
+export function autoFillDefaults(prev: ProviderRead[], next: ProviderRead[], current: Defaults): Defaults {
+  const out = { ...current };
+  for (const provider of next) {
+    const before = new Set((prev.find((item) => item.id === provider.id)?.models ?? []).map((model) => model.id));
+    for (const model of (provider.models ?? []).filter((item) => item.type === 'llm' && !before.has(item.id))) {
+      const mapping = mappingFor(provider, model.id);
+      for (const role of model.vision ? (['chat', 'brief', 'vision'] as const) : (['chat', 'brief'] as const)) {
+        if (!out[role]?.model) out[role] = mapping;
+      }
+    }
+  }
+  return out;
+}
 const draftStorageKey = 'bbd:settings:ai:draft:v2';
 const defaultPrivacy: Privacy = { allow_remote_reasoning: false, allow_remote_embeddings: false, allow_remote_web_search: false, allow_widget_remote_media: false, reasoning_destinations: [], embedding_destinations: [], web_search_destinations: [] };
 
@@ -38,7 +51,8 @@ export function AISettingsWorkspace() {
   const [secrets, setSecrets] = useState<Record<string, ProviderSecret>>({});
   const [discoveringId, setDiscoveringId] = useState<string | null>(null);
   const [discoverError, setDiscoverError] = useState<{ id: string; text: string } | null>(null);
-  const [probeTypes, setProbeTypes] = useState<Record<string, string>>({});
+  const [discovered, setDiscovered] = useState<Record<string, string[]>>({});
+  const [modelTests, setModelTests] = useState<Record<string, ModelTestState>>({});
   const allowNavigation = useRef(false);
   const [restoredDraft, setRestoredDraft] = useState(false);
   const [restoredSecret, setRestoredSecret] = useState(false);
@@ -46,7 +60,7 @@ export function AISettingsWorkspace() {
   const saved = base ? { ...base, providers: base.providers ?? [] } : undefined;
   const secretList = Object.values(secrets);
   const dirty = Boolean(query.data && (JSON.stringify(draft ?? query.data) !== JSON.stringify(query.data) || secretList.some((item) => item.key || item.action !== 'unchanged')));
-  const save = useMutation({ mutationFn: (value: AISettings) => apiRequest<AISettings>('/api/v1/settings/ai', { method: 'PUT', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ expected_revision: value.configuration_revision, providers: value.providers.map((item) => ({ id: item.id, kind: item.kind, label: item.label, base_url: item.base_url || null, models: item.models ?? [], credential_action: secrets[item.id]?.action ?? 'unchanged', api_key: secrets[item.id]?.key || null })), web_search_provider: value.web_search_provider, web_search_endpoint: value.web_search_endpoint || null, web_search_credential_action: 'unchanged', web_search_api_key: null, chat_alias: value.chat_alias, brief_alias: value.brief_alias, aliases: value.aliases, privacy: value.privacy, request_timeout_seconds: value.request_timeout_seconds }) }), onSuccess: (value) => { setDraft(null); setSecrets({}); client.setQueryData(['ai-settings'], value); } });
+  const save = useMutation({ mutationFn: (value: AISettings) => apiRequest<AISettings>('/api/v1/settings/ai', { method: 'PUT', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ expected_revision: value.configuration_revision, providers: value.providers.map((item) => ({ id: item.id, kind: item.kind, label: item.label, base_url: item.base_url || null, models: item.models ?? [], credential_action: secrets[item.id]?.action ?? 'unchanged', api_key: secrets[item.id]?.key || null })), web_search_provider: value.web_search_provider, web_search_endpoint: value.web_search_endpoint || null, web_search_credential_action: 'unchanged', web_search_api_key: null, defaults: value.defaults ?? {}, privacy: value.privacy, request_timeout_seconds: value.request_timeout_seconds }) }), onSuccess: (value) => { setDraft(null); setSecrets({}); client.setQueryData(['ai-settings'], value); } });
   if (query.data && !restoredDraft) {
     // Restores a same-revision draft once, during render, before the persistence effect runs.
     setRestoredDraft(true);
@@ -138,28 +152,42 @@ export function AISettingsWorkspace() {
   const discover = useMutation({
     mutationFn: (provider: ProviderRead) => apiRequest<{ model_ids: string[] }>('/api/v1/settings/ai/discover', { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ provider_id: savedIds.includes(provider.id) ? provider.id : undefined, base_url: provider.base_url, kind: provider.kind, api_key: secrets[provider.id]?.key ?? '' }) }),
     onMutate: (provider) => { setDiscoveringId(provider.id); setDiscoverError(null); },
-    onSuccess: (data, provider) => setDraft((current) => { const from = current ?? query.data; return from ? { ...from, providers: (from.providers ?? []).map((item) => (item.id === provider.id ? { ...item, models: mergeDiscovered(item.models, data.model_ids) } : item)) } : current; }),
+    // Discovery only fills the transient picker list; models join the draft via the Add row.
+    onSuccess: (data, provider) => setDiscovered((current) => ({ ...current, [provider.id]: data.model_ids })),
     onError: (error, provider) => setDiscoverError({ id: provider.id, text: describeError(error, t, 'discoveryFailed') }),
     onSettled: () => setDiscoveringId(null),
   });
-  const draftProbe = useMutation({ mutationFn: ({ alias, mapping, capability, provider }: { alias: string; mapping: Mapping; capability: string; provider: ProviderRead | undefined }) => apiRequest<Capability>(`/api/v1/settings/models/${alias}/draft-test`, { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ provider_id: provider && savedIds.includes(provider.id) ? provider.id : undefined, base_url: provider?.base_url, kind: provider?.kind, api_key: provider ? secrets[provider.id]?.key ?? '' : '', model: mapping.model, version: mapping.version, capability }) }),
-    // A supported embeddings probe records the vector size on the embedding slot draft.
-    onSuccess: (data, { alias, mapping }) => { if (data.capability === 'embeddings' && data.result === 'supported' && typeof data.dimensions === 'number') setDraft((current) => { const from = current ?? query.data; return from ? { ...from, aliases: { ...from.aliases, [alias]: { ...(from.aliases[alias] ?? mapping), dimensions: data.dimensions } } } : current; }); } });
-  const probe = useMutation({ mutationFn: ({ alias, capability }: { alias: string; capability: string }) => apiRequest<Capability>(`/api/v1/settings/models/${alias}/test`, { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ capability }) }), onSuccess: () => client.invalidateQueries({ queryKey: ['ai-settings'] }) });
+  const draftProbe = useMutation({ mutationFn: ({ role, mapping, capability, provider }: { role: DefaultSlot; mapping: Mapping; capability: string; provider: ProviderRead | undefined }) => apiRequest<Capability>('/api/v1/settings/models/draft-test', { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ role, provider_id: provider && savedIds.includes(provider.id) ? provider.id : undefined, base_url: provider?.base_url, kind: provider?.kind, api_key: provider ? secrets[provider.id]?.key ?? '' : '', model: mapping.model, version: mapping.version, capability }) }),
+    // A supported embeddings probe records the vector size on the embedding default draft.
+    onSuccess: (data, { role, mapping }) => { if (data.capability === 'embeddings' && data.result === 'supported' && typeof data.dimensions === 'number') setDraft((current) => { const from = current ?? query.data; // Ignore a late probe for a model the owner has since replaced.
+      const picked = from?.defaults?.[role];
+      return from && picked?.model === mapping.model ? { ...from, defaults: { ...from.defaults, [role]: { ...picked, dimensions: data.dimensions } } } : current; }); } });
+  /** Runs the draft-test request for one provider model using the role that matches its type. */
+  const testModel = useMutation({
+    mutationFn: ({ provider, model }: { provider: ProviderRead; model: ProviderModel }) => {
+      const slot = testRoleByType[model.type];
+      if (!slot) return Promise.reject(new Error('untestable'));
+      return apiRequest<Capability>('/api/v1/settings/models/draft-test', { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ role: slot.role, provider_id: savedIds.includes(provider.id) ? provider.id : undefined, base_url: provider.base_url, kind: provider.kind, api_key: secrets[provider.id]?.key ?? '', model: model.id, version: null, capability: slot.capability }) });
+    },
+    onMutate: ({ provider, model }) => setModelTests((current) => ({ ...current, [modelTestKey(provider.id, model.id)]: 'pending' })),
+    onSuccess: (data, { provider, model }) => setModelTests((current) => ({ ...current, [modelTestKey(provider.id, model.id)]: data.result as ModelTestState })),
+    onError: (_error, { provider, model }) => setModelTests((current) => ({ ...current, [modelTestKey(provider.id, model.id)]: 'failed' })),
+  });
   if (query.isPending) return <section className="rounded-xl border bg-card p-6 skeleton" aria-label={t('loading')} />;
   if (query.isError || !saved) return <section className="rounded-xl border bg-card p-6"><h1>{t('unavailable')}</h1><p className="error">{describeError(query.error, t, 'loadFailed')}</p><Button variant="outline" onClick={() => query.refetch()}>{t('retry')}</Button></section>;
   /** Applies a partial update to the AI settings draft. */
   const set = (patch: Partial<AISettings>) => setDraft({ ...saved, ...patch });
   /** Merges a partial privacy update into the current AI settings draft. */
   const setPrivacy = (patch: Partial<Privacy>) => set({ privacy: { ...defaultPrivacy, ...saved.privacy, ...patch } });
-  /** Latest recorded probe result for one alias and capability, or null when never checked. */
-  const capabilityStatus = (alias: string, capability: string) => {
+  const defaults: Defaults = saved.defaults ?? {};
+  /** Latest recorded probe result for one role and capability, or null when never checked. */
+  const capabilityStatus = (role: string, capability: string) => {
     // Results belong to the persisted mapping; a changed draft mapping is unchecked.
-    if (JSON.stringify(saved.aliases[alias]) !== JSON.stringify(query.data?.aliases[alias])) return null;
-    const found = (query.data?.capabilities ?? saved.capabilities).filter((item) => item.alias === alias && item.capability === capability).at(-1);
+    if (JSON.stringify(defaults[role as DefaultSlot] ?? null) !== JSON.stringify(query.data?.defaults?.[role as DefaultSlot] ?? null)) return null;
+    const found = (query.data?.capabilities ?? saved.capabilities).filter((item) => item.role === role && item.capability === capability).at(-1);
     return found?.result ?? null;
   };
-  const embeddingMapping = saved.aliases.embedding;
+  const embeddingMapping = defaults.embedding;
   const embeddingsAvailable = Boolean(embeddingMapping?.model && embeddingMapping.destination === 'remote' && saved.privacy.allow_remote_embeddings);
   /** Clears every local change after the owner confirms discarding the draft. */
   const cancelChanges = () => {
@@ -167,27 +195,17 @@ export function AISettingsWorkspace() {
     try { sessionStorage.removeItem(draftStorageKey); } catch { /* storage unavailable */ } setDraft(null); setSecrets({}); setRestoredSecret(false); save.reset(); draftProbe.reset(); discover.reset(); setDiscoverError(null);
   };
   const capabilityLabel = (kind: string) => t(`capability${kind[0].toUpperCase()}${kind.slice(1)}` as 'capabilityChat');
-  /** Renders the model mapping fields and probe actions for one alias inside the Model details group. */
-  const probeRow = (alias: string, value: Mapping) => {
-    const providerId = aliasProviderId(value.provider_id, saved.providers);
-    const provider = saved.providers.find((item) => item.id === providerId);
-    const hints = modelIdsForAlias(alias, provider ? [provider] : []);
-    const savedDimensions = query.data?.aliases[alias]?.dimensions ?? null;
-    return <div className="rounded-lg border border-border p-4" key={alias}>
-    <h3 className="m-0 mb-3 text-base font-bold">{alias}</h3>
-    <FieldGrid>
-      <label className="field"><span className="label">{t('aliasProvider')}</span><Select disabled={save.isPending || saved.providers.length === 0} value={providerId} onValueChange={(next) => set({ aliases: { ...saved.aliases, [alias]: { ...value, provider_id: next, model: '', dimensions: null } } })}><SelectTrigger aria-label={t('aliasProvider')}><SelectValue placeholder={t('noProviders')} /></SelectTrigger><SelectContent>{saved.providers.map((item) => <SelectItem key={item.id} value={item.id}>{item.label || item.id}</SelectItem>)}</SelectContent></Select></label>
-      <label className="field"><span className="label">{t('modelId')}</span><Select disabled={save.isPending || hints.length === 0} value={value.model} onValueChange={(next) => set({ aliases: { ...saved.aliases, [alias]: { ...value, model: next, dimensions: null } } })}><SelectTrigger aria-label={t('modelId')}><SelectValue placeholder={hints.length === 0 ? t('discoverFirst') : t('selectModel')} /></SelectTrigger><SelectContent>{hints.map((id) => <SelectItem key={id} value={id}>{id}</SelectItem>)}</SelectContent></Select>{hints.length === 0 && <span className="text-muted-foreground text-xs">{t('discoverFirst')}</span>}</label>
-      <label className="field"><span className="label">{t('modelVersion')}</span><Input value={value.version ?? ''} maxLength={200} onChange={(event) => set({ aliases: { ...saved.aliases, [alias]: { ...value, version: event.target.value || null } } })} /></label>
-      <label className="field"><span className="label">{t('destination')}</span><Select value={value.destination} onValueChange={(destination) => set({ aliases: { ...saved.aliases, [alias]: { ...value, destination: destination as Mapping['destination'] } } })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="unknown">{t('unknownDenied')}</SelectItem><SelectItem value="remote">{t('remote')}</SelectItem></SelectContent></Select></label>
-      <label className="field"><span className="label">{t('probeCapability', { alias })}</span><Select value={probeTypes[alias] ?? 'chat'} onValueChange={(next) => setProbeTypes({ ...probeTypes, [alias]: next })}><SelectTrigger aria-label={t('probeCapability', { alias })}><SelectValue /></SelectTrigger><SelectContent>{capabilityTypes.map((kind) => <SelectItem key={kind} value={kind}>{capabilityLabel(kind)}</SelectItem>)}</SelectContent></Select></label>
-    </FieldGrid>
-    {alias === 'embedding' && <div className="mt-3 text-sm">
-      <p className="m-0"><span className="label">{t('embeddingDimensions')}</span>: {value.dimensions ?? t('dimensionsProbeRequired')}</p>
-      {value.dimensions != null && savedDimensions != null && value.dimensions !== savedDimensions && <p className="error m-0" role="status">{t('dimensionsChangedWarning')}</p>}
-    </div>}
-    <div className="mt-3 flex flex-wrap gap-2"><Button type="button" variant="outline" disabled={!value.model || (value.destination !== 'remote' && !provider?.local) || probe.isPending || JSON.stringify(value) !== JSON.stringify(query.data?.aliases[alias])} onClick={() => probe.mutate({ alias, capability: probeTypes[alias] ?? 'chat' })}>{t('probeSaved')}</Button><Button type="button" variant="outline" disabled={!provider?.base_url || !value.model || (value.destination !== 'remote' && !provider.local) || draftProbe.isPending} onClick={() => draftProbe.mutate({ alias, mapping: value, capability: probeTypes[alias] ?? 'chat', provider })}>{t('probeDraft')}</Button></div>
-  </div>;
+  // The backend requires embedding dimensions, so a chosen embedding model blocks Save until its probe supplies them.
+  const embeddingStatus: 'idle' | 'checking' | 'error' = !embeddingMapping?.model || embeddingMapping.dimensions != null ? 'idle' : draftProbe.isPending ? 'checking' : 'error';
+  const savedDimensions = query.data?.defaults?.embedding?.dimensions ?? null;
+  const embeddingDimsChanged = embeddingMapping?.dimensions != null && savedDimensions != null && embeddingMapping.dimensions !== savedDimensions;
+  /** Applies a models-list edit: fills empty defaults for new Chat models and clears defaults whose model was removed. */
+  const changeModels = (providers: ProviderRead[]) => set({ providers, defaults: pruneDefaults(saved.providers, providers, autoFillDefaults(saved.providers, providers, defaults)) });
+  /** Writes one role default directly; an embedding pick also starts the dimensions probe and stays unsavable until it reports them. */
+  const pickDefault = (role: DefaultSlot, provider: ProviderRead | null, model: string) => {
+    const mapping: Mapping | null = provider && model ? mappingFor(provider, model) : null;
+    set({ defaults: { ...defaults, [role]: mapping && role === 'embedding' ? { ...mapping, dimensions: null } : mapping } });
+    if (role === 'embedding' && mapping && provider) draftProbe.mutate({ role, mapping, capability: 'embeddings', provider });
   };
   const advancedClass = 'rounded-lg border border-border bg-card';
   const summaryClass = 'flex min-h-[52px] cursor-pointer items-center px-5 font-bold';
@@ -196,22 +214,14 @@ export function AISettingsWorkspace() {
     <form className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); save.mutate(saved); }}>
       <SettingsSection title={t('providersSection')}>
         <p className="text-muted-foreground m-0 text-xs">{t('providersHelp')}</p>
-        <ProviderEditor providers={saved.providers} savedIds={savedIds} secrets={secrets} disabled={save.isPending} discoveringId={discoveringId} discoverError={discoverError} t={t as never}
+        <ProviderEditor providers={saved.providers} savedIds={savedIds} secrets={secrets} disabled={save.isPending} discoveringId={discoveringId} discoverError={discoverError} discovered={discovered} t={t as never}
           onChange={(providers) => set({ providers })} onSecret={(id, secret) => setSecrets({ ...secrets, [id]: secret })} onDiscover={(provider) => discover.mutate(provider)} />
       </SettingsSection>
       <SettingsSection title={t('modelsSection')}>
-        <FieldGrid>
-          <label className="field"><span className="label">{t('chatModel')}</span><Select disabled={save.isPending} value={saved.chat_alias} onValueChange={(value) => set({ chat_alias: value as AISettings['chat_alias'] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{chatAliases.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}</SelectContent></Select></label>
-          <label className="field"><span className="label">{t('briefModel')}</span><Select disabled={save.isPending} value={saved.brief_alias} onValueChange={(value) => set({ brief_alias: value as AISettings['brief_alias'] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{chatAliases.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}</SelectContent></Select></label>
-        </FieldGrid>
-        <p className="text-muted-foreground m-0 text-xs">{t('modelNotListed')}</p>
-        <Table aria-label={t('capabilityTable')}>
-          <TableHeader><TableRow><TableHead>{t('aliasColumn')}</TableHead>{capabilityTypes.map((kind) => <TableHead key={kind}>{capabilityLabel(kind)}</TableHead>)}</TableRow></TableHeader>
-          <TableBody>{aliases.map((alias) => <TableRow key={alias}><TableCell className="font-semibold">{alias}</TableCell>{capabilityTypes.map((kind) => <TableCell key={kind}><CapabilityChip status={capabilityStatus(alias, kind)} label="" t={t} /></TableCell>)}</TableRow>)}</TableBody>
-        </Table>
-        <details className={advancedClass}><summary className={summaryClass}>{t('modelDetails')}</summary>
-          <div className="flex flex-col gap-4 px-5 pb-5">{aliases.map((alias) => probeRow(alias, saved.aliases[alias] ?? { model: '', version: null, destination: 'unknown' as const }))}</div>
-        </details>
+        <p className="text-muted-foreground m-0 text-xs">{t('modelsHelp')}</p>
+        <ModelsPanel providers={saved.providers} discovered={discovered} modelTests={modelTests} disabled={save.isPending} onChange={changeModels} onTestModel={(provider, model) => testModel.mutate({ provider, model })} t={t as never} />
+        <ModelDefaults providers={saved.providers} defaults={defaults} disabled={save.isPending} embeddingStatus={embeddingStatus} onPick={pickDefault} t={t as never} />
+        {embeddingDimsChanged && <p className="error m-0 text-xs" role="status">{t('dimensionsChangedWarning')}</p>}
       </SettingsSection>
       <details className={advancedClass}><summary className={summaryClass}>{t('embeddingsTitle')}</summary>
         <div className="flex flex-col gap-3 px-5 pb-5">{embeddingsAvailable
@@ -235,9 +245,11 @@ export function AISettingsWorkspace() {
         </div>
       </details>
       {restoredSecret && <p className="error m-0" role="status">{t('restoredDraft')}</p>}
-      {save.error && <p className="error m-0" role="alert">{describeError(save.error, t, 'saveFailed')}</p>}{probe.error && <p className="error m-0" role="alert">{describeError(probe.error, t, 'probeFailed')}</p>}{draftProbe.data && <p className="text-muted-foreground m-0" role="status">{t('draftProbe')} {draftProbe.data.capability} {draftProbe.data.result}; {t('draftProbeUnstored')}</p>}{draftProbe.error && <p className="error m-0" role="alert">{describeError(draftProbe.error, t, 'draftProbeFailed')}</p>}
+      {save.error && <p className="error m-0" role="alert">{describeError(save.error, t, 'saveFailed')}</p>}
+      {/* Success stays visible next to the (now disabled) button until the next edit makes the form dirty again. */}
+      {save.isSuccess && !dirty && <p className="m-0 text-sm text-accent" role="status">{t('saveSuccess')}</p>}
       <SettingsActions>
-        <Button type="button" variant="outline" disabled={save.isPending || !dirty} onClick={cancelChanges}>{t('cancelChanges')}</Button><Button type="submit" disabled={save.isPending || !dirty}>{t('saveButton')}</Button>
+        <Button type="button" variant="outline" disabled={save.isPending || !dirty} onClick={cancelChanges}>{t('cancelChanges')}</Button><Button type="submit" disabled={save.isPending || !dirty || embeddingStatus !== 'idle'}>{t('saveButton')}</Button>
       </SettingsActions>
     </form>
     <details className={advancedClass}><summary className={summaryClass}>{t('agentsAutomations')}</summary><div className="px-5 pb-5"><AgentSettingsWorkspace /><AutomationSettings /></div></details>

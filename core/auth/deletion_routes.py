@@ -92,7 +92,7 @@ async def accept_account_deletion(
     if existing is not None:
         raise HTTPException(status_code=409, detail={"code": "deletion_preview_required"})
     operation = AccountDeletionOperation(receipt_hash=_hash(token), account_id=owner.id,
-                                         workspace_id=workspace_id, status="queued", phase="external", cursor={},
+                                         workspace_id=workspace_id, status="queued", phase="queued", cursor={},
                                          next_attempt_at=datetime.now(UTC))
     session.add(operation)
     owner.account_state = "disabled"

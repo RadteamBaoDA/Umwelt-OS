@@ -8,7 +8,7 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from core.model_gateway.schemas import AIExecutionConfig, PrivacySettings
+from core.model_gateway.schemas import AIExecutionConfig, ModelDefaults, PrivacySettings
 from modules.chat import media
 from modules.chat.generative_ui.prompt import build_generative_ui_system_prompt
 from modules.chat.generative_ui.tool_specs import TOOL_TRIP_IMAGES, build_chat_tool_specs
@@ -22,8 +22,8 @@ def _config(flag: bool = True) -> AIExecutionConfig:
     return AIExecutionConfig(
         workspace_id=uuid4(), actor_user_id=1, membership_revision=1, access_configuration_revision=1,
         configuration_revision=1, gateway_identity="a" * 64, endpoint_destination_id=None, gateway_base_url=None,
-        gateway_api_key="", aliases={}, privacy=PrivacySettings(allow_widget_remote_media=flag), chat_alias="a",
-        brief_alias="b", request_timeout_seconds=20, web_search_provider="none", web_search_endpoint=None,
+        gateway_api_key="", defaults=ModelDefaults(), privacy=PrivacySettings(allow_widget_remote_media=flag),
+        request_timeout_seconds=20, web_search_provider="none", web_search_endpoint=None,
         web_search_api_key="",
     )
 

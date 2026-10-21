@@ -29,6 +29,7 @@ KW: dict[str, Any] = {"scope": SCOPE, "multi_workspace_enabled": False}
 def _request(max_bytes: int = 1024) -> Any:
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
         settings=SimpleNamespace(upload_max_bytes=max_bytes, data_dir="unused", multi_workspace_enabled=False),
+        session_factory=MagicMock(),
     )))
 
 
@@ -106,9 +107,26 @@ def _intake_session(monkeypatch: pytest.MonkeyPatch, status: str = "active") -> 
     monkeypatch.setattr(routes.sources, "lock_source_set", AsyncMock(
         return_value=SimpleNamespace(fences=[fence], access_fence=access)))
     monkeypatch.setattr(routes.sources, "get_source_fence", AsyncMock(return_value=fence))
+    lease = MagicMock()
+    lease.return_value.__aenter__ = AsyncMock(return_value=MagicMock())
+    monkeypatch.setattr(routes, "workspace_storage_lease", lease)
+    writer = MagicMock()
+    writer.return_value.__aenter__ = AsyncMock(return_value=SimpleNamespace(rollback=AsyncMock()))
+    monkeypatch.setattr(routes, "AsyncSession", writer)
     session = MagicMock()
     session.rollback = AsyncMock()
     return session
+
+
+async def test_upload_disabled_during_validation_cannot_publish_late_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = _intake_session(monkeypatch)
+    routes.lock_access_fence.side_effect = [SimpleNamespace(name="first"), HTTPException(status_code=401)]
+    save = AsyncMock()
+    monkeypatch.setattr(routes, "save_upload", save)
+    with pytest.raises(HTTPException) as caught:
+        await routes._intake_upload(_request(), session, SCOPE, uuid4(), _upload("a.txt", b"hi", "text/plain"))
+    assert caught.value.status_code == 401
+    save.assert_not_awaited()
 
 
 async def test_intake_rejects_oversized_upload_with_413(monkeypatch: pytest.MonkeyPatch) -> None:

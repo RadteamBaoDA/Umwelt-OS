@@ -14,6 +14,7 @@ import { timelineMessages } from './messages/timeline';
 import { preferencesMessages } from './messages/preferences';
 import { loginMessages } from './messages/login';
 import { accountMessages } from './messages/account';
+import { accountDeletionMessages } from './messages/account-deletion';
 import { commonMessages } from './messages/common';
 import { sourcesMessages } from './messages/sources';
 import { chatMessages } from './messages/chat';
@@ -52,6 +53,7 @@ export const messages = {
     preferences: preferencesMessages['en-us'],
     login: loginMessages['en-us'],
     account: accountMessages['en-us'],
+    accountDeletion: accountDeletionMessages['en-us'],
     common: commonMessages['en-us'],
     sources: sourcesMessages['en-us'],
     chat: chatMessages['en-us'],
@@ -94,6 +96,7 @@ export const messages = {
     preferences: preferencesMessages['vi-vi'],
     login: loginMessages['vi-vi'],
     account: accountMessages['vi-vi'],
+    accountDeletion: accountDeletionMessages['vi-vi'],
     common: commonMessages['vi-vi'],
     sources: sourcesMessages['vi-vi'],
     chat: chatMessages['vi-vi'],

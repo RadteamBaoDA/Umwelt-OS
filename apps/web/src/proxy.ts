@@ -10,6 +10,6 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // Skip static assets (anything with a file extension) and Next internals.
-  matcher: ['/((?!_next/|api/|.*\.[^/]+$).*)'],
+  // Next 16 loses the escaped dot from negative-lookahead matchers, skipping every page path.
+  matcher: ['/((?!_next/|api/).*)'],
 };

@@ -1,0 +1,20 @@
+# Frontend credential review
+
+Review date: 21 October 2026. Scope: checked-in `apps/web/src` TypeScript/JavaScript, public policy surfaces, credential forms, browser storage and the current local production build. This is a static review; it does not prove that a deployed bundle, browser session or network trace is free of secrets.
+
+## Findings
+
+- A pattern scan over 419 current frontend source files found **zero files** containing common OpenAI, GitHub, Google API or PEM private-key shapes. A fresh scan of 986 local `.next/static`, `.next/server` and `public` JavaScript, map and JSON artifacts found zero matching files. These patterns are heuristic, not a complete credential detector; do not treat zero matches as proof. No candidate credential value is reproduced here.
+- Model and web-search keys are entered in password fields and sent through same-origin API requests to the backend. The settings API returns configured status, not the saved secret. `apps/web/src/modules/settings/ai-settings.tsx`, `apps/web/src/modules/settings/provider-editor.tsx` and `apps/web/src/modules/settings/web-search-settings.tsx` show this path. Unsaved model keys live in component memory. The saved session-storage draft records provider actions and a `hadSecret` flag, not the key itself.
+- Test fixtures use illustrative credential strings, including a CoinGecko request body assertion in `apps/web/src/modules/sources/coingecko-credential.test.ts`; these are test values and do not establish a production secret. Visible example/password copy is likewise not a credential finding.
+- Browser storage also contains non-credential account/workspace state and can contain user-created template content: `apps/web/src/core/workspace-context.tsx`, `apps/web/src/modules/chat/generative-ui/templates/template-store.ts`, and the one-hop Google invitation token in `apps/web/src/app/invite/invite-accept.tsx`. A token in browser session storage is sensitive until consumed/cleared. Account deletion and sign-out flows must clear their applicable browser state; browser history, downloads and other users' copies remain outside the application's control.
+- `apps/web/src/core/api.ts` uses same-origin requests with cookies and CSRF headers. `apps/web/src/modules/chat/chat-session.tsx` and chat parsing paths can log error objects/messages to the browser console. Those paths should not be described as proving that all browser logs are free of sensitive content; avoid entering credentials in chat and review live logs separately.
+- Supplied Docker build/runtime sets `NEXT_TELEMETRY_DISABLED=1` in `docker/web.Dockerfile`; supplied Compose disables n8n diagnostics and personalization in `docker-compose.base.yml` and `docker-compose.connectors.yml`. These flags do not cover a developer's local Next tooling or a differently configured deployment. The app's CSP and same-origin page code do not by themselves establish that optional backend providers are inactive.
+
+## Required deployment check
+
+Before publishing, inspect the exact deployed frontend artifacts, browser network requests, host/proxy logs and environment configuration for the target deployment without copying secret values into an audit report. Confirm credentials are absent from public JavaScript, source maps and static assets; confirm selected providers and diagnostics match the operator's policy. The local artifact scan does not verify deployment configuration or live traffic.
+
+## Tooling dependency caveat
+
+The current Next 16 / ESLint 9 lint setup requires compatible `eslint-config-next` 16 rules. `npm audit` reports five HIGH advisory entries in its development-only `braces` / `micromatch` / `fast-glob` chain (including parent packages). The offered downgrade to Next lint 14 conflicts with ESLint 9 and the installed flat config; it was not retained as a security fix. These advisories are separate from the frontend credential scan and are not claimed resolved. Review the upstream fix before running lint against untrusted patterns. No forced dependency downgrade was accepted.

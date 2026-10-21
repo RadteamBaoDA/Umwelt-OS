@@ -3,7 +3,7 @@
 import hashlib
 import json
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -24,6 +24,9 @@ from modules.agents.internal_writes import (
 from modules.agents.models import AgentProfile, AgentProfileRevision
 from modules.agents.schemas import AgentProfilePatch, AgentProfileRead
 from modules.settings import public as settings_public
+
+# Agents have no per-profile model choice: every profile runs on the owner's chat role default.
+AGENT_MODEL_ROLE = "chat"
 
 PROFILE_TITLES = {
     "supervisor": "Supervisor", "knowledge": "Knowledge", "research": "Research",
@@ -112,7 +115,6 @@ def _snapshot(
     return {
         "id": profile_id, "title": PROFILE_TITLES[profile_id], "enabled": profile_enabled,
         "revision": row.revision if row is not None else 0,
-        "model_alias": row.model_alias if row is not None else "reasoning-large",
         "prompt": row.prompt if row is not None else DEFAULT_PROMPTS[profile_id],
         "allowed_tools": valid_tools,
         "available_tools": [item for name, item in sorted(contracts.items())
@@ -124,6 +126,22 @@ def _snapshot(
         "capability": capability, "unavailable_reasons": sorted(set(unavailable)),
         "limits": PROFILE_LIMITS,
     }
+
+
+def _apply_model_availability(value: dict[str, object], config: AIExecutionConfig) -> None:
+    """Mark a profile snapshot unavailable when the chat role has no model; otherwise flag the unverified tool capability.
+
+    Agents have no per-profile model choice: they always run on the owner's ``chat`` role default.
+    """
+    mapping = config.defaults.resolve(AGENT_MODEL_ROLE)
+    reasons = cast("list[str]", value["unavailable_reasons"])
+    if mapping is None or not mapping.model:
+        value["unavailable_reasons"] = sorted({*reasons, "model_role_unconfigured"})
+        value["capability"] = "unavailable"
+    else:
+        value["unavailable_reasons"] = sorted({*reasons, "model_tool_capability_unverified"})
+        if value["capability"] == "available":
+            value["capability"] = "partial"
 
 
 def _read_profile(value: dict[str, object]) -> AgentProfileRead:
@@ -140,7 +158,7 @@ async def list_profiles(
     session: AsyncSession, registry: ToolRegistry, config: AIExecutionConfig,
     *, scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[AgentProfileRead, ...]:
-    """List the fixed specialist roster of the admitted workspace and mark unavailable aliases or adapters.
+    """List the fixed specialist roster of the admitted workspace and mark unavailable model roles or adapters.
 
     Owner admission precedes the query; profile rows are bound to ``scope.workspace_id``.
     """
@@ -153,14 +171,7 @@ async def list_profiles(
     profiles = []
     for profile_id in PROFILE_TITLES:
         value = _snapshot(by_id.get(profile_id), profile_id, registry, scope.workspace_id, modules)
-        alias = value["model_alias"]
-        if alias not in config.aliases or not config.aliases[alias].model:
-            value["unavailable_reasons"] = sorted({*value["unavailable_reasons"], "model_alias_unconfigured"})
-            value["capability"] = "unavailable"
-        else:
-            value["unavailable_reasons"] = sorted({*value["unavailable_reasons"], "model_tool_capability_unverified"})
-            if value["capability"] == "available":
-                value["capability"] = "partial"
+        _apply_model_availability(value, config)
         profiles.append(_read_profile(value))
     return tuple(profiles)
 
@@ -182,14 +193,7 @@ async def get_profile(
         AgentProfile.workspace_id == scope.workspace_id, AgentProfile.profile_id == profile_id,
     ))
     value = _snapshot(row, profile_id, registry, scope.workspace_id, modules)
-    alias = value["model_alias"]
-    if alias not in config.aliases or not config.aliases[alias].model:
-        value["unavailable_reasons"] = sorted({*value["unavailable_reasons"], "model_alias_unconfigured"})
-        value["capability"] = "unavailable"
-    else:
-        value["unavailable_reasons"] = sorted({*value["unavailable_reasons"], "model_tool_capability_unverified"})
-        if value["capability"] == "available":
-            value["capability"] = "partial"
+    _apply_model_availability(value, config)
     return _read_profile(value)
 
 
@@ -222,8 +226,6 @@ async def update_profile_in_uow(
         raise HTTPException(status_code=409, detail="Agent profile changed; reload before saving")
     if len(patch.prompt.encode("utf-8")) > 32_000:
         raise HTTPException(status_code=413, detail="Agent prompt exceeds the size limit")
-    if patch.model_alias not in config.aliases:
-        raise HTTPException(status_code=422, detail="Model alias is not configured")
     contracts = _tool_contracts(registry, scope.workspace_id, modules)
     chosen = [item.model_dump(mode="json") for item in patch.allowed_tools]
     if len({item["name"] for item in chosen}) != len(chosen) or any(contracts.get(item["name"]) != item for item in chosen):
@@ -252,7 +254,6 @@ async def update_profile_in_uow(
         row = AgentProfile(workspace_id=workspace_id, profile_id=profile_id, owner_id=owner_id)
         session.add(row)
     row.enabled = patch.enabled
-    row.model_alias = patch.model_alias
     row.prompt = patch.prompt
     row.allowed_tools = chosen
     row.source_ids = [str(item) for item in patch.source_ids]
@@ -291,16 +292,16 @@ async def resolve_profile_snapshot(
     snapshot["profile_revision_hash"] = digest
     if not snapshot["allowed_tools"] or any(contracts.get(item["name"]) != item for item in snapshot["allowed_tools"]):
         raise HTTPException(status_code=503, detail="Agent profile tools are unavailable")
-    config = settings_public.derive_for_alias(config, profile.model_alias)
-    mapping = config.aliases.get(profile.model_alias)
+    config = settings_public.derive_for_role(config, AGENT_MODEL_ROLE)
+    mapping = config.defaults.resolve(AGENT_MODEL_ROLE)
     if mapping is None or not mapping.model:
-        raise HTTPException(status_code=503, detail="Agent profile model alias is unavailable")
+        raise HTTPException(status_code=503, detail="Agent chat model is unavailable")
     # Pin only identity and policy metadata; the gateway secret never enters the run snapshot.
     snapshot["gateway"] = {
         "configuration_revision": config.configuration_revision,
         "gateway_identity": config.gateway_identity,
         "destination_id": config.endpoint_destination_id,
-        "model_alias": profile.model_alias,
+        "model_role": AGENT_MODEL_ROLE,
         "model": mapping.model,
         "model_version": mapping.version,
         "model_destination": mapping.destination,

@@ -31,9 +31,9 @@ export function UsagePanel() {
     {modelCalls.length ? <div className="overflow-x-auto"><table className="w-full text-sm"><caption className="sr-only">{t('modelUsage')}</caption><thead><tr><th scope="col" className="text-left">{t('model')}</th><th scope="col" className="text-right">{t('calls')}</th><th scope="col" className="text-right">{t('latency')}</th></tr></thead><tbody>
       {modelCalls.map((row) => {
         const capability = row.labels.capability ?? t('unknown');
-        const alias = row.labels.alias ?? t('unknown');
-        const matching = latency.find((item) => item.labels.capability === row.labels.capability && item.labels.alias === row.labels.alias && item.labels.outcome === row.labels.outcome);
-        return <tr key={`${capability}:${alias}:${row.labels.outcome ?? 'all'}`} className="border-t border-border"><th scope="row" className="py-2 text-left font-normal">{capability} · {alias} · {row.labels.outcome ?? t('all')}</th><td className="text-right">{row.value}</td><td className="text-right">{matching?.p95_ms == null ? t('unknown') : `${matching.p95_ms} ms`}</td></tr>;
+        const role = row.labels.role ?? t('unknown');
+        const matching = latency.find((item) => item.labels.capability === row.labels.capability && item.labels.role === row.labels.role && item.labels.outcome === row.labels.outcome);
+        return <tr key={`${capability}:${role}:${row.labels.outcome ?? 'all'}`} className="border-t border-border"><th scope="row" className="py-2 text-left font-normal">{capability} · {role} · {row.labels.outcome ?? t('all')}</th><td className="text-right">{row.value}</td><td className="text-right">{matching?.p95_ms == null ? t('unknown') : `${matching.p95_ms} ms`}</td></tr>;
       })}
     </tbody></table></div> : <p className="text-muted-foreground">{t('noUsage')}</p>}
     <p className="text-muted-foreground">{t('usageEstimateCaveat')}</p>

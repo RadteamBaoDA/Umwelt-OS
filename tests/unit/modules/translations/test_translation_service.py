@@ -21,7 +21,7 @@ def _src(rtype="news_story", fields=None, local_only=False):
 
 def _cfg(remote=True):
     return SimpleNamespace(
-        privacy=SimpleNamespace(allow_remote_reasoning=remote), aliases={"reasoning-small": object()}, system_prompts={}, endpoint_destination_id=None)
+        privacy=SimpleNamespace(allow_remote_reasoning=remote), defaults=SimpleNamespace(resolve=lambda _role: object()), system_prompts={}, endpoint_destination_id=None)
 
 
 def _reply(content):

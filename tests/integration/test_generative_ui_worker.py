@@ -22,7 +22,7 @@ async def tools_ready(ready_owner_client: AsyncClient) -> AsyncClient:
     client = ready_owner_client
     await configure_fake_model(client)
     for capability in ("streaming", "tools"):
-        probe = await client.post("/api/v1/settings/models/reasoning-large/test", json={"capability": capability})
+        probe = await client.post("/api/v1/settings/models/chat/test", json={"capability": capability})
         assert probe.status_code == 200 and probe.json()["result"] == "supported", (capability, probe.text)
     return client
 

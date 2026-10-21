@@ -205,6 +205,13 @@ class N8nCredentials:
         self._base_url = service_url.rstrip("/")
         self._headers = {"X-N8N-API-KEY": api_key}
 
+    @property
+    def service_url(self) -> str:
+        """Expose the credential-free actual endpoint used to scope durable credential IDs."""
+        from modules.connectors.n8n import n8n_service_identity
+
+        return n8n_service_identity(self._base_url)
+
     async def create_http_header(self, name: str, header_name: str, value: str) -> str:
         """Create an HTTP-header credential and distinguish rejected from unknown outcomes."""
         try:
