@@ -104,6 +104,10 @@ class Settings(BaseSettings):
     github_app_webhook_secret: SecretStr = Field(default=SecretStr(""), validation_alias="GITHUB_APP_WEBHOOK_SECRET", repr=False)
     github_webhook_receiver_revision: str = Field(default="1", min_length=1, max_length=64, validation_alias="GITHUB_WEBHOOK_RECEIVER_REVISION")
     model_gateway_slots: int = Field(default=24, ge=1, le=1000, validation_alias="MODEL_GATEWAY_SLOTS")
+    # Per-call ModelGateway timeout for background entity/timeline extraction.
+    background_llm_timeout_seconds: int = Field(default=60, ge=5, le=600, validation_alias="BACKGROUND_LLM_TIMEOUT_SECONDS")
+    # arq job_timeout of the dedicated model worker (extraction + translation).
+    model_worker_job_timeout_seconds: int = Field(default=900, ge=60, le=3600, validation_alias="MODEL_WORKER_JOB_TIMEOUT_SECONDS")
     ai_credential_encryption_key: SecretStr = Field(
         default=SecretStr(""), validation_alias="AI_CREDENTIAL_ENCRYPTION_KEY", repr=False
     )

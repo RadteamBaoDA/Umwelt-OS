@@ -14,6 +14,7 @@ Boundaries kept deliberately narrow:
 """
 
 import asyncio
+import logging
 import secrets
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -122,6 +123,8 @@ class Run:
 
 
 Adapter = Callable[[Run], Awaitable[None]]
+logger = logging.getLogger(__name__)
+
 ADAPTERS: dict[str, Adapter] = {}  # provider id -> explicit adapter (HN and later free providers register here)
 
 
@@ -294,11 +297,17 @@ async def _load_attempt(
                     continue
                 denied = scheduler.denial_code(exc)
                 break
+        # Copy every ORM field used below before the rollback: rollback expires the rows and the session
+        # closes on exit, so a later attribute read raises DetachedInstanceError (seen as executor_error).
+        provisioned = None if row is None else (
+            row.desired_revision, row.backend_revision, (row.desired_configuration or {}).get("auth_method"))
+        credential_revision = request.credential_revision
         await session.rollback()
-    if source is None or source_fence is None or access_fence is None or row is None:
+    if source is None or source_fence is None or access_fence is None or provisioned is None:
         await _settle(factory, admission, outcome="cancelled", error_code=denied)
         return None
-    current: Snapshot = (source.generation, row.desired_revision, row.backend_revision)
+    desired_revision, backend_revision, auth_method = provisioned
+    current: Snapshot = (source.generation, desired_revision, backend_revision)
     if not snapshot_matches(captured, current) or (
         access_revision is not None and access_revision != access_fence.configuration_revision
     ):
@@ -307,9 +316,9 @@ async def _load_attempt(
     return Attempt(
         ref=CollectionRequestRef(request_id=admission.request_id, admission_token=admission.admission_token),
         attempt=admission.attempt, scope=scope, multi=multi, source=source, access_fence=access_fence,
-        source_fence=source_fence, terms_revision=terms_revision, connector_revision=row.desired_revision,
-        authenticated=(row.desired_configuration or {}).get("auth_method") not in (None, "none"),
-        credential_revision=request.credential_revision,
+        source_fence=source_fence, terms_revision=terms_revision, connector_revision=desired_revision,
+        authenticated=auth_method not in (None, "none"),
+        credential_revision=credential_revision,
     )
 
 
@@ -1234,8 +1243,12 @@ async def execute_collection(ctx: dict[str, object], admission: CollectionAdmiss
             await _record_rate_limit(run, exc.next_eligible_at)
         settle = {"outcome": "failed", "error_code": "provider_rate_limited", "retryable": True,
                   "provider_deadline": exc.next_eligible_at}
-    except Exception as exc:  # noqa: BLE001  # deliberate boundary: every failure must settle the request
+    except Exception as exc:  # deliberate boundary: every failure must settle the request
         settle = _classify(exc)
+        if settle["error_code"] == "executor_error":
+            # Unclassified failure: the settled code alone hides the cause, so keep the traceback (no response body).
+            logger.exception("Collection adapter failed; provider=%s request_id=%s",
+                             attempt.source.provider, admission.request_id)
     finally:
         beat.cancel()
         with suppress(asyncio.CancelledError):

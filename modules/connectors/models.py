@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
@@ -23,6 +23,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
 from core.database import Base
+from core.ids import uuid7
 
 
 class ConnectorProvisioning(Base):
@@ -327,7 +328,7 @@ class GithubSyncReset(Base):
         CheckConstraint("length(scope_sha256) = 64 AND scope_sha256 !~ '[^0-9a-f]'", name="ck_github_sync_reset_scope_digest"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), nullable=False)
     source_generation: Mapped[int] = mapped_column(Integer, nullable=False)
     connector_revision: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -359,7 +360,7 @@ class GithubWebhookDelivery(Base):
         Index("ix_github_webhook_delivery_retention", "detail_expires_at"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     receiver_revision: Mapped[str] = mapped_column(String(64), nullable=False)
     delivery_id: Mapped[str] = mapped_column(String(128), nullable=False)
     raw_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -386,7 +387,7 @@ class GithubWebhookOutbox(Base):
         Index("ix_github_webhook_outbox_due", "state", "next_attempt_at"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     delivery_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, unique=True)
     binding_cursor: Mapped[str | None] = mapped_column(String(512))
     # Nonsecret frozen bindings and source/target admissions survive retries until cursor CAS succeeds.
@@ -410,7 +411,7 @@ class GithubSourceHint(Base):
         Index("ix_github_source_hint_source", "source_id", "state", "updated_at"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), nullable=False)
     source_generation: Mapped[int] = mapped_column(Integer, nullable=False)
     connector_revision: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -548,7 +549,7 @@ class ConnectorCollectionRequest(Base):
         ),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)

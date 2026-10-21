@@ -12,10 +12,8 @@ import {
 } from '@/components/ui/dialog';
 import type { AppLocaleId } from '@/core/i18n';
 import { genUiCopy, resolveWidgetLocale } from '../copy';
-import { DemoGallery } from './demo-gallery';
 import { GALLERY_DEMOS, STARTER_DEMO_IDS } from './gallery-demos';
 import { TemplateChip } from './template-chip';
-import { TemplateLibrary } from './template-library';
 
 const TIP_KEY = 'umwelt.genui.desktopTipDismissed';
 
@@ -90,22 +88,15 @@ export function StarterSuggestions({ onSendPrompt, locale }: { onSendPrompt: (pr
 }
 
 /**
- * Toolbar for the full Chat page: template library and demo gallery drawers plus the
- * small-screen desktop tip.
+ * Toolbar row for the full Chat page; currently only the small-screen desktop tip.
+ * Template library and demo gallery were removed from the chat surface.
  *
- * @param props - Send callback, optional locale, CSRF token and conversation id.
+ * @param props - Optional locale.
  * @returns Toolbar row.
  */
-export function ChatShellTools({ onSendPrompt, locale, csrfToken, conversationId }: {
-  onSendPrompt: (prompt: string) => void;
-  locale?: AppLocaleId;
-  csrfToken?: string;
-  conversationId?: string | null;
-}) {
+export function ChatShellTools({ locale }: { locale?: AppLocaleId }) {
   return (
     <div className="flex items-center justify-end gap-2" data-testid="chat-shell-tools">
-      <TemplateLibrary onSendPrompt={onSendPrompt} locale={locale} csrfToken={csrfToken} conversationId={conversationId} />
-      <DemoGallery onSendPrompt={onSendPrompt} locale={locale} />
       <DesktopTipModal locale={locale} />
     </div>
   );

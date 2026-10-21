@@ -8,7 +8,9 @@ toggle is the terms acknowledgement; for review-class providers the single-user 
 additionally records the operator review evidence. Nothing here performs network I/O.
 """
 
-from typing import Annotated, Literal
+import copy
+from dataclasses import dataclass
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
@@ -67,6 +69,9 @@ class BuiltinEnableRequest(BaseModel):
     """Owner input for the enable toggle: the deployment use declared with the terms acknowledgement."""
     model_config = ConfigDict(extra="forbid")
     declared_use: Literal["personal", "noncommercial", "commercial", "unknown"] = "personal"
+    # Optional owner switches; None keeps the Source's current value (new Sources default to on).
+    graph_enabled: bool | None = None
+    rag_index_enabled: bool | None = None
 
 
 _DEFAULT_ENABLE = BuiltinEnableRequest()  # body is optional; the model is never mutated
@@ -96,6 +101,32 @@ def _is_enabled(source: ConnectorSource, row: object | None) -> bool:
         and getattr(row, "desired_enabled", False) and getattr(row, "applied_revision", -1) == getattr(row, "desired_revision", -2)
         and getattr(row, "source_generation", -1) == source.generation
     )
+
+
+@dataclass(frozen=True)
+class _RowSnapshot:
+    """Detached copy of the provisioning fields the toggle reads.
+
+    ``session.rollback()`` expires every ORM row; reading an expired attribute triggers a synchronous
+    lazy load, which raises MissingGreenlet under asyncio. The enable sequence rolls back between steps,
+    so it never keeps the ORM row itself across a step, only this snapshot.
+    """
+    state: str
+    desired_enabled: bool
+    applied_revision: int
+    desired_revision: int
+    source_generation: int
+    desired_configuration: dict[str, Any] | None
+
+
+def _snapshot(row: Any) -> _RowSnapshot | None:
+    """Copy a freshly loaded provisioning row into a ``_RowSnapshot`` (None stays None); read before any rollback."""
+    if row is None:
+        return None
+    return _RowSnapshot(
+        state=row.state, desired_enabled=row.desired_enabled, applied_revision=row.applied_revision,
+        desired_revision=row.desired_revision, source_generation=row.source_generation,
+        desired_configuration=copy.deepcopy(row.desired_configuration))
 
 
 async def _oldest_source(session: AsyncSession, provider: str, *, scope: WorkspaceContext, gate: bool):  # type: ignore[no-untyped-def]
@@ -147,6 +178,8 @@ async def enable_builtin(
     spec = _spec(provider)
     scope, gate = _owner, request.app.state.settings.multi_workspace_enabled
     use = payload.declared_use
+    # Read before the first rollback: later rollbacks expire the auth ORM row, and reading it then raises MissingGreenlet.
+    reviewer_user_id = request.state.auth_session.owner_id
     review_class = spec.eligibility == "review"
     # Reject before creating anything so a refused toggle leaves no half-built Source behind.
     if review_class:
@@ -161,14 +194,27 @@ async def enable_builtin(
     # 1-2. Source: reuse the oldest one, un-pause it, else create it.
     found = await _oldest_source(session, provider, scope=scope, gate=gate)
     await session.rollback()
+    if found is not None:
+        # rollback expires the ORM row; reload explicitly, since lazy attribute IO is illegal under asyncio.
+        await session.refresh(found)
     if found is None:
         found = await sources.create_source(
-            session, SourceCreate(type=PROVIDER_SOURCE_TYPES[provider], name=spec.label, provider=provider),
+            session, SourceCreate(
+                type=PROVIDER_SOURCE_TYPES[provider], name=spec.label, provider=provider,
+                graph_enabled=payload.graph_enabled is not False,
+                rag_index_enabled=payload.rag_index_enabled is not False),
             scope=scope, multi_workspace_enabled=gate, expected_access_fence=fence)
-    elif found.status == "paused":
-        await sources.update_source(
-            session, found, SourcePatch(status="active"), scope=scope, multi_workspace_enabled=gate,
-            expected_access_fence=fence)
+    else:
+        # Re-enabling an existing Source: un-pause it and apply any explicitly sent switches in one patch.
+        patch: dict[str, Any] = {"status": "active"} if found.status == "paused" else {}
+        for flag in ("graph_enabled", "rag_index_enabled"):
+            wanted = getattr(payload, flag)
+            if wanted is not None and wanted != getattr(found, flag):
+                patch[flag] = wanted
+        if patch:
+            await sources.update_source(
+                session, found, SourcePatch(**patch), scope=scope, multi_workspace_enabled=gate,
+                expected_access_fence=fence)
     source = await sources.get_connector_source(session, found.id, scope=scope, multi_workspace_enabled=gate)
     if source is None or source.status != "active":
         raise HTTPException(status_code=409, detail="Source is inactive; it cannot be enabled")
@@ -184,7 +230,7 @@ async def enable_builtin(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="Provider configuration is invalid") from exc
     desired = {**source_configuration, "auth_method": "none"}
-    row = await provisioning.activation_status(session, source.id, scope=scope, multi_workspace_enabled=gate)
+    row = _snapshot(await provisioning.activation_status(session, source.id, scope=scope, multi_workspace_enabled=gate))
     if row is None or row.desired_configuration != desired or row.source_generation != source.generation:
         await session.rollback()
         fence = await _owner_access(session, request, scope, expected=fence)
@@ -193,11 +239,11 @@ async def enable_builtin(
             scope=scope, multi_workspace_enabled=gate)
         if saved is None:
             raise HTTPException(status_code=409, detail="Source or connector revision changed while saving")
-        saved_source, row = saved
-        row.state = "saved_not_active"
+        saved_source, saved_row = saved
+        saved_row.state = "saved_not_active"
         await commit_with_replay(session, [
             make_source_change(saved_source.id, saved_source.generation, saved_source.status,
-                               connector_state=row.state, scope=scope),
+                               connector_state="saved_not_active", scope=scope),
         ], access_fence=fence, multi_workspace_enabled=gate, scope=scope)
         source = await sources.get_connector_source(session, source.id, scope=scope, multi_workspace_enabled=gate)
         if source is None:
@@ -211,7 +257,7 @@ async def enable_builtin(
     if review_class and not terms.eligible:
         terms = await provider_terms.record_operator_review(
             session, workspace_id=scope.workspace_id, source_id=source.id,
-            reviewer_user_id=request.state.auth_session.owner_id,
+            reviewer_user_id=reviewer_user_id,
             body=provider_terms.OperatorTermsReview(
                 state="approved", allowed_use=use,
                 evidence_ref=f"builtin-toggle:{spec.id}:{spec.terms_url}@{spec.checked_on}",
@@ -222,7 +268,7 @@ async def enable_builtin(
     await session.commit()
 
     # 6. Activate natively unless it is already on at the current revision.
-    row = await provisioning.activation_status(session, source.id, scope=scope, multi_workspace_enabled=gate)
+    row = _snapshot(await provisioning.activation_status(session, source.id, scope=scope, multi_workspace_enabled=gate))
     if row is None:
         raise HTTPException(status_code=409, detail="No connector provisioning state exists")
     if not _is_enabled(source, row):

@@ -11,7 +11,7 @@ vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => 
 const read = { configuration_revision: 1, kind: 'internal', provider_id: null, model: '', mode: 'json_schema', api: 'chat', typesafe_key_configured: false, openrouter_key_configured: false, cloudflare_key_configured: false, account_id: null, gateway_url: null, allow_remote_visualization_routing: false, destination_id: null };
 const ai = { providers: [{ id: 'default', label: 'Gateway', local: false, models: [{ id: 'gpt-x', type: 'llm' }, { id: 'emb', type: 'embedding' }, { id: 'dec-1', type: 'decision' }] }] };
 const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
-const mount = () => render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><VizRouterCard /></QueryClientProvider></NextIntlClientProvider>);
+const mount = (locale: 'en-us' | 'vi-vi' = 'en-us', onError?: (error: unknown) => void) => render(<NextIntlClientProvider locale={locale === 'en-us' ? 'en-US' : 'vi-VN'} messages={messages[locale]} onError={onError}><QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><VizRouterCard /></QueryClientProvider></NextIntlClientProvider>);
 
 describe('visualization router card', () => {
   const fetchMock = vi.fn();
@@ -57,6 +57,29 @@ describe('visualization router card', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Test routing' }));
     expect(await screen.findByText('The provider rejected the credentials.')).toBeTruthy();
     expect((screen.getByLabelText('TypeSafe API key') as HTMLInputElement).value).toBe('');
+  });
+
+  it.each([
+    ['en-us', 401, 'Please sign in again to continue.'],
+    ['en-us', 403, 'This action is not allowed for this account.'],
+    ['en-us', 409, 'Settings changed elsewhere. Reload and try again.'],
+    ['en-us', 500, 'The service is unavailable. Try again shortly.'],
+    ['en-us', 400, 'The request failed.'],
+    ['vi-vi', 401, 'Hãy đăng nhập lại để tiếp tục.'],
+    ['vi-vi', 403, 'Tài khoản này không được phép thực hiện thao tác này.'],
+    ['vi-vi', 409, 'Cài đặt đã thay đổi ở nơi khác. Hãy tải lại và thử lại.'],
+    ['vi-vi', 500, 'Dịch vụ không khả dụng. Hãy thử lại sau.'],
+    ['vi-vi', 400, 'Yêu cầu thất bại.'],
+  ] as const)('localizes %s HTTP %i test failures without missing messages', async (locale, status, expected) => {
+    const typesafe = { ...read, kind: 'typesafe', typesafe_key_configured: true, allow_remote_visualization_routing: true };
+    fetchMock.mockImplementation((url: string) => String(url).endsWith('/viz-router/test')
+      ? Promise.resolve(new Response(JSON.stringify({ detail: 'Request failed' }), { status, headers: { 'Content-Type': 'application/json' } }))
+      : json(String(url).includes('viz-router') ? typesafe : ai));
+    const onError = vi.fn();
+    mount(locale, onError);
+    await userEvent.click(await screen.findByRole('button', { name: messages[locale].vizRouter.test }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(expected);
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it('saves OpenRouter with its own write-only key and validates required fields', async () => {

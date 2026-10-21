@@ -148,7 +148,7 @@ Keyless endpoints were fetched once each with a plain GET on 2026-10-21 to confi
 | `gdacs_events` | JSON 200 on `geteventlist/SEARCH` (the `MAP` form returns 400 `Eventtype is required`) | As `gdacs_rss`. Times are zone-less UTC. |
 | `nws_alerts` | GeoJSON 200, `features[].properties` | weather.gov disclaimer; `open`. Needs a User-Agent (central default). |
 | `emsc_quakes` | JSON 200, FDSN `features[].properties` | EMSC asks for acknowledgement; `open`. No dedicated terms page was reachable (site root used). |
-| `launch_library` | JSON 200, `results[]` in `mode=list` | Free tier is non-commercial, 15 requests/hour documented by the provider; interval 120 min. |
+| `launch_library` | JSON 200, `results[]` in `mode=list` | Free tier is non-commercial, 15 requests/hour documented by the provider; interval 360 min (schedules allow 15/30/60/360/1440; 360 keeps the 12-call daily pilot cap). |
 | `wikipedia_mostread` | JSON 200 on `api.wikimedia.org/feed/v1/.../featured/YYYY/MM/DD`, `mostread.articles` | Wikimedia Terms of Use, CC BY-SA; previous UTC day. |
 | `wikipedia_top_views` | JSON 200 on `wikimedia.org/api/rest_v1/metrics/pageviews/top/...`, `items[0].articles` | Pageviews data; previous UTC day; non-content pages skipped. |
 | `bmkg_quakes` | JSON 200, `Infogempa.gempa[]` | BMKG data portal; credit BMKG, `open`. |

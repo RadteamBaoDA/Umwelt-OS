@@ -94,12 +94,12 @@ Notes on specific rows:
 | `gdacs_events` | `implemented` | open | supported | yes | no | 60 | 2026-10-21 |
 | `nws_alerts` | `implemented` | open | supported | yes | no | 15 | 2026-10-21 |
 | `emsc_quakes` | `implemented` | open | supported | yes | no | 30 | 2026-10-21 |
-| `launch_library` | `implemented` | noncommercial | supported | yes | no | 120 | 2026-10-21 |
+| `launch_library` | `implemented` | noncommercial | supported | yes | no | 360 | 2026-10-21 |
 | `wikipedia_mostread` | `implemented` | open | supported | yes | no | 1440 | 2026-10-21 |
 | `wikipedia_top_views` | `implemented` | open | supported | yes | no | 1440 | 2026-10-21 |
 | `bmkg_quakes` | `implemented` | open | supported | yes | no | 30 | 2026-10-21 |
-| `satnogs_observations` | `implemented` | open | supported | yes | no | 120 | 2026-10-21 |
-| `noaa_kp` | `implemented` | open | supported | yes | no | 180 | 2026-10-21 |
+| `satnogs_observations` | `implemented` | open | supported | yes | no | 360 | 2026-10-21 |
+| `noaa_kp` | `implemented` | open | supported | yes | no | 360 | 2026-10-21 |
 | `open_er_api` | `implemented` | review | supported | yes | no | 1440 | 2026-10-21 |
 | `oecd_cli` | `implemented` | open | supported | yes | no | 1440 | 2026-10-21 |
 | `iss_position` | `implemented` | noncommercial | supported | yes | no | 15 | 2026-10-21 |

@@ -7,7 +7,7 @@ from contextlib import aclosing
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urljoin, urlsplit
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import httpx
 from bs4 import BeautifulSoup  # type: ignore[import-not-found]  # optional extra
@@ -16,6 +16,7 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
 from core.config import Settings
+from core.ids import uuid7
 from modules.connectors.n8n import read_rss
 from modules.connectors.public import CrawlRequest, RSSRequest, validate_public_url
 from modules.connectors.registry import normalize
@@ -23,7 +24,7 @@ from modules.connectors.registry import normalize
 MAX_BYTES = 25 * 1024 * 1024
 _job_lock = asyncio.Lock()
 app = FastAPI(title="BBD-OS bounded browser collector")
-_SERVICE_INSTANCE_ID = str(uuid4())
+_SERVICE_INSTANCE_ID = str(uuid7())
 _agent_read_tasks: dict[UUID, tuple[AgentReadRequest, asyncio.Task[list[dict[str, object]]]]] = {}
 _BROWSER_CONTROL_URL = "http://172.29.250.10:8000/api/v1/browser-control"
 

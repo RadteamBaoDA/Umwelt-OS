@@ -168,12 +168,33 @@ async def probe_model(
     role: Annotated[str, Path(pattern=r"^(chat|brief|background|embedding|reranker|vision)$")],
     body: ProbeRequest,
 ) -> dict[str, object]:
-    """Probe a configured role default under current privacy policy and persist its capability result."""
+    """Probe a configured role default, or a saved provider's model, and persist its capability result.
+
+    With body ``provider_id`` + ``model`` (chat role only) the model must be an ``llm`` model listed on that
+    saved provider; the probe then targets that provider's endpoint and stores evidence under the same mapping
+    the chat worker builds for a composer override. Authorized by the owner write dependency; evidence is
+    saved only after the real provider call and the post-I/O configuration recheck.
+    Raises 409 when the role is unconfigured, 404 for an unknown provider/model, 422 for a non-chat override.
+    """
     settings: Settings = request.app.state.settings
     redis: Redis = request.app.state.redis
-    config = ai_settings.derive_for_role(
-        await ai_settings.get_ai_execution_config(session, settings, redis, scope=_owner), role)
-    mapping = config.defaults.resolve(role)
+    base_config = await ai_settings.get_ai_execution_config(session, settings, redis, scope=_owner)
+    configured_mapping: ModelMapping | None = None
+    if body.provider_id is not None and body.model is not None:
+        if role != "chat":
+            raise HTTPException(status_code=422, detail="Provider model probes support the chat role only")
+        provider = base_config.providers.get(body.provider_id)
+        entry = next((m for m in provider.models if m.id == body.model), None) if provider else None
+        if entry is None:
+            raise HTTPException(status_code=404, detail="Model is not configured on this provider")
+        if entry.type != "llm":
+            raise HTTPException(status_code=409, detail="Only chat (llm) models can be probed for chat")
+        configured_mapping = ai_settings.mapping_for_override(base_config, body.provider_id, body.model)
+        config = ai_settings.derive_for_mapping(base_config, configured_mapping)
+        mapping: ModelMapping | None = configured_mapping
+    else:
+        config = ai_settings.derive_for_role(base_config, role)
+        mapping = config.defaults.resolve(role)
     if mapping is None:
         raise HTTPException(status_code=409, detail="Configure this model role first")
     destination = config.endpoint_destination_id
@@ -258,7 +279,8 @@ async def probe_model(
     try:
         await ai_settings.check_ai_execution_config(session, settings, redis, scope=_owner,
                                                     expected=config, auth_sessions=(session_ref,))
-        await ai_settings.save_capability(redis, result, config=config, scope=_owner, multi_workspace_enabled=settings.multi_workspace_enabled)
+        await ai_settings.save_capability(redis, result, config=config, scope=_owner,
+                                          multi_workspace_enabled=settings.multi_workspace_enabled, configured_mapping=configured_mapping)
     except RedisError as exc:
         raise HTTPException(status_code=503, detail="Model capability storage is unavailable") from exc
     finally:

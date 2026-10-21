@@ -46,6 +46,8 @@ def _make_source(
         status=status,
         generation=generation,
         local_only=local_only,
+        graph_enabled=True,
+        rag_index_enabled=True,
         configuration=configuration or {},
         created_at=now,
         updated_at=now,

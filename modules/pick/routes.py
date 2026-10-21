@@ -1,4 +1,4 @@
-"""Phone prompt picker routes. Disabled (404) unless PICK_ENABLED=true.
+"""Phone prompt picker routes. Disabled (404) unless PICK_ENABLED=true; ``/status`` always answers the owner.
 
 Desktop routes need an authenticated session (writes also CSRF). Phone routes are anonymous by design but
 accept only the 128-bit session id, are rate limited per client IP, and take an option index, never text.
@@ -21,12 +21,14 @@ async def _enabled(request: Request) -> None:
         raise HTTPException(status_code=404, detail="Not found")
 
 
-router = APIRouter(prefix="/api/v1/pick", tags=["pick"], dependencies=[Depends(_enabled)])
+router = APIRouter(prefix="/api/v1/pick", tags=["pick"])
 OwnerRead = Annotated[AuthSession, Depends(require_account)]
 OwnerWrite = Annotated[AuthSession, Depends(require_account_write)]
 # Phone routes are unauthenticated: key on the client IP only (cookies/Authorization are attacker-chosen).
 phone_budget = Depends(require_budget("pick_phone", 30, 60, anonymous=True))
 create_budget = Depends(require_budget("pick_create", 20, 60))
+# Every feature route sits behind the flag; only /status is ungated so the desktop can probe without a 404.
+enabled = Depends(_enabled)
 
 
 class PickChoice(BaseModel):
@@ -42,12 +44,12 @@ def _gone() -> HTTPException:
 
 
 @router.get("/status")
-async def pick_status(owner: OwnerRead) -> dict[str, bool]:
-    """Tell the signed-in desktop that the feature is on (the router already 404s when it is off)."""
-    return {"enabled": True}
+async def pick_status(request: Request, owner: OwnerRead) -> dict[str, bool]:
+    """Tell the signed-in desktop whether PICK_ENABLED is on; always 200 so the probe never logs a 404."""
+    return {"enabled": bool(request.app.state.settings.pick_enabled)}
 
 
-@router.post("/sessions", dependencies=[create_budget])
+@router.post("/sessions", dependencies=[enabled, create_budget])
 async def create_pick_session(request: Request, response: Response, owner: OwnerWrite) -> dict[str, object]:
     """Create a QR session; returns its id, lifetime and the host LAN IPv4 (only ever to this authenticated caller)."""
     response.headers["Cache-Control"] = "private, no-store"
@@ -55,7 +57,7 @@ async def create_pick_session(request: Request, response: Response, owner: Owner
     return {"session_id": session_id, "expires_in": public.PICK_TTL_SECONDS, "lan_ip": public.lan_ipv4()}
 
 
-@router.get("/sessions/{session_id}")
+@router.get("/sessions/{session_id}", dependencies=[enabled])
 async def poll_pick_session(session_id: str, request: Request, response: Response, owner: OwnerRead) -> dict[str, object]:
     """Desktop poll; a picked prompt is delivered exactly once."""
     response.headers["Cache-Control"] = "private, no-store"
@@ -65,7 +67,7 @@ async def poll_pick_session(session_id: str, request: Request, response: Respons
         raise _gone() from exc
 
 
-@router.put("/phone/{session_id}", dependencies=[phone_budget])
+@router.put("/phone/{session_id}", dependencies=[enabled, phone_budget])
 async def scan_pick_session(session_id: str, request: Request, response: Response) -> dict[str, object]:
     """Phone opened the link: mark scanned and return the 3 offered options."""
     response.headers["Cache-Control"] = "no-store"
@@ -75,7 +77,7 @@ async def scan_pick_session(session_id: str, request: Request, response: Respons
         raise _gone() from exc
 
 
-@router.post("/phone/{session_id}", status_code=204, dependencies=[phone_budget])
+@router.post("/phone/{session_id}", status_code=204, dependencies=[enabled, phone_budget])
 async def submit_pick(session_id: str, payload: PickChoice, request: Request) -> Response:
     """Phone submits its chosen option index."""
     try:

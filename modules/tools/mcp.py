@@ -6,11 +6,11 @@ import logging
 import os
 from typing import Any, Literal
 from urllib.parse import urlsplit
-from uuid import uuid4
 
 import httpx
 from pydantic import BaseModel, Field
 
+from core.ids import uuid7
 from core.tools.schemas import ToolDefinition, ToolResult, ToolRisk
 
 logger = logging.getLogger(__name__)
@@ -289,7 +289,7 @@ class MCPClientAdapter:
             if proc.stdin is None or proc.stdout is None:
                 raise RuntimeError(f"Process pipes unavailable for stdio MCP server '{config.id}'")
 
-            request_id = str(uuid4())
+            request_id = str(uuid7())
             payload = {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -404,7 +404,7 @@ class MCPClientAdapter:
 
         payload = {
             "jsonrpc": "2.0",
-            "id": str(uuid4()),
+            "id": str(uuid7()),
             "method": method,
             "params": params,
         }

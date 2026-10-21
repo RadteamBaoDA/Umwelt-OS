@@ -28,7 +28,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
-from uuid import UUID, uuid4, uuid5
+from uuid import UUID, uuid5
 from zoneinfo import ZoneInfo
 
 from arq.connections import ArqRedis
@@ -40,6 +40,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.ids import uuid7
 from core.realtime import commit_with_replay
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
@@ -185,7 +186,7 @@ async def enqueue_trigger(
         stored["hook"] = hook
     result = await session.execute(
         insert(AutomationTrigger).values(
-            id=uuid4(), workspace_id=scope.workspace_id, owner_id=_actor(scope), trigger_type=trigger_type,
+            id=uuid7(), workspace_id=scope.workspace_id, owner_id=_actor(scope), trigger_type=trigger_type,
             event_key=event_key, payload=stored,
             document_id=document_id, document_version_id=document_version_id,
             depth=depth, origin_automation_id=origin_automation_id, origin_run_id=origin_run_id, status="pending")
@@ -313,7 +314,7 @@ async def plan_run(
         return None
     now = datetime.now(UTC)
     reason, run_at = await _admission(session, rev, trigger_type, depth, origin_automation_id, now, scope=scope)
-    run_id = uuid4()
+    run_id = uuid7()
     result = await session.execute(
         insert(AutomationRun).values(
             id=run_id, workspace_id=scope.workspace_id, owner_id=_actor(scope),
@@ -329,7 +330,7 @@ async def plan_run(
         return None
     if not reason:
         session.add_all(
-            AutomationRunAction(id=uuid4(), run_id=run_id, ordinal=i, action_type=a["type"], status="pending", attempts=0)
+            AutomationRunAction(id=uuid7(), run_id=run_id, ordinal=i, action_type=a["type"], status="pending", attempts=0)
             for i, a in enumerate(rev.actions[:MAX_ACTIONS], start=1))
     return run_id
 

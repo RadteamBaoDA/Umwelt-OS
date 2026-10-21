@@ -2,13 +2,13 @@ import * as React from 'react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { PasswordInput } from '@/components/ui/password-input';
 
-/** Page header for a settings screen: eyebrow, h1 title, muted description and an optional right-aligned status slot. */
-export function SettingsPageHeader({ eyebrow, title, description, status }: { eyebrow: React.ReactNode; title: React.ReactNode; description?: React.ReactNode; status?: React.ReactNode }) {
+/** Page header for a settings screen: h1 title, optional eyebrow and description, plus an optional right-aligned status slot. */
+export function SettingsPageHeader({ eyebrow, title, description, status }: { eyebrow?: React.ReactNode; title: React.ReactNode; description?: React.ReactNode; status?: React.ReactNode }) {
   return (
     <header className="flex flex-wrap items-start justify-between gap-4">
       <div className="min-w-0">
-        <p className="text-[13px] font-bold uppercase tracking-[.12em] text-primary">{eyebrow}</p>
-        <h1 className="mt-2 mb-0 text-[30px] font-bold tracking-[-.04em]">{title}</h1>
+        {eyebrow ? <p className="text-[13px] font-bold uppercase tracking-[.12em] text-primary">{eyebrow}</p> : null}
+        <h1 className={`${eyebrow ? 'mt-2' : 'mt-0'} mb-0 text-[30px] font-bold tracking-[-.04em]`}>{title}</h1>
         {description ? <p className="mt-2 mb-0 text-muted-foreground">{description}</p> : null}
       </div>
       {status ? <div className="shrink-0">{status}</div> : null}

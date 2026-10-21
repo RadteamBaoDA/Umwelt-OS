@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit, urlunsplit
-from uuid import UUID, uuid4, uuid5
+from uuid import UUID, uuid5
 
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.chunking import chunk_text
 from core.events import DomainEvent
 from core.heavy_work import to_thread_joined
+from core.ids import uuid7
 from core.pagination import decode_cursor, encode_cursor
 from core.realtime import ReplayDraft, commit_with_replay, make_knowledge_change
 from core.tools.schemas import ToolDestination, ToolOutputFence
@@ -2173,6 +2174,8 @@ async def capture_document_cleanup_evidence(session: AsyncSession, operation: Do
     does not create an unbounded Python snapshot. They write the receipt's NOT NULL workspace
     and are qualified through the workspace Document. The child identities intentionally have no
     foreign keys back to evidence rows and remain readable until the cleanup receipt is removed.
+    Row ids come from the in-database ``uuid_generate_v7()`` (one id per selected row; a bound Python
+    ``uuid7()`` would repeat across rows).
     """
     # DB-recorded bound for legacy brief coverage; read before the canonical rows are deleted.
     operation.earliest_version_created_at = await session.scalar(
@@ -2183,7 +2186,7 @@ async def capture_document_cleanup_evidence(session: AsyncSession, operation: Do
     await session.execute(insert(DocumentCleanupEvidenceReference).from_select(
         identity_columns,
         select(
-            func.gen_random_uuid(), literal(operation.workspace_id), literal(operation.id), DocumentVersion.id,
+            func.uuid_generate_v7(), literal(operation.workspace_id), literal(operation.id), DocumentVersion.id,
             literal(None), literal("version"),
         ).join(Document, Document.id == DocumentVersion.document_id)
         .where(DocumentVersion.document_id == operation.document_id, Document.workspace_id == operation.workspace_id),
@@ -2191,7 +2194,7 @@ async def capture_document_cleanup_evidence(session: AsyncSession, operation: Do
     await session.execute(insert(DocumentCleanupEvidenceReference).from_select(
         identity_columns,
         select(
-            func.gen_random_uuid(), literal(operation.workspace_id), literal(operation.id),
+            func.uuid_generate_v7(), literal(operation.workspace_id), literal(operation.id),
             DocumentChunk.document_version_id, DocumentChunk.id, literal("chunk"),
         ).join(DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id)
         .join(Document, Document.id == DocumentVersion.document_id)
@@ -3230,12 +3233,12 @@ async def _apply_normalized_document(
     # All provider/content errors above precede the first owner mutation.
     created_identity_id, created_document_id = None, None
     if identity is None:
-        created_identity_id = uuid4()
+        created_identity_id = uuid7()
         identity = NormalizedDocumentIdentity(id=created_identity_id, workspace_id=workspace_id,
                                               source_id=payload.source_id, external_id=payload.provider_id)
         session.add(identity)
     if document is None:
-        created_document_id = uuid4()
+        created_document_id = uuid7()
         document = Document(
             id=created_document_id, workspace_id=workspace_id, source_id=payload.source_id, external_id=payload.provider_id,
             title=payload.title, content_type=payload.content_type,
@@ -3825,7 +3828,7 @@ async def _publish_extraction_ready(
                "version_number": version.version_number}
     for event_type in ("document.version.ready", "news.document.ready"):
         await ingestion.publish_event(session, DomainEvent(
-            id=uuid4(), type=event_type, version=1, occurred_at=datetime.now(UTC),
+            id=uuid7(), type=event_type, version=1, occurred_at=datetime.now(UTC),
             producer="modules.knowledge.documents", payload=payload,
         ), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
@@ -4300,6 +4303,7 @@ async def _capture_source_document_cleanup(
     Owner-local INSERT SELECT statements write the NOT NULL workspace/actor identity and the
     captured membership/configuration/Source-generation epochs, so versions, chunks and URIs are
     never assembled into an unbounded Python snapshot. Child events commit with the canonical cascade.
+    Receipt and child ids use the in-database ``uuid_generate_v7()`` so each selected row gets its own UUIDv7.
     """
     workspace_id = scope.workspace_id
     await session.execute(insert(DocumentCleanupOperation).from_select(
@@ -4310,7 +4314,7 @@ async def _capture_source_document_cleanup(
             "copied_status", "chat_status", "status", "earliest_version_created_at",
         ],
         select(
-            func.gen_random_uuid(), literal(capture.workspace_id), literal(capture.actor_user_id),
+            func.uuid_generate_v7(), literal(capture.workspace_id), literal(capture.actor_user_id),
             literal(capture.membership_revision), literal(capture.configuration_revision),
             literal(capture.source_generation), Document.source_id, Document.id,
             literal(source_purge_operation_id), Document.raw_uri,
@@ -4331,14 +4335,14 @@ async def _capture_source_document_cleanup(
     await session.execute(insert(DocumentCleanupEvidenceReference).from_select(
         columns,
         select(
-            func.gen_random_uuid(), DocumentCleanupOperation.workspace_id, DocumentCleanupOperation.id,
+            func.uuid_generate_v7(), DocumentCleanupOperation.workspace_id, DocumentCleanupOperation.id,
             DocumentVersion.id, literal(None), literal("version"),
         ).join(DocumentCleanupOperation, receipt_scope),
     ))
     await session.execute(insert(DocumentCleanupEvidenceReference).from_select(
         columns,
         select(
-            func.gen_random_uuid(), DocumentCleanupOperation.workspace_id, DocumentCleanupOperation.id,
+            func.uuid_generate_v7(), DocumentCleanupOperation.workspace_id, DocumentCleanupOperation.id,
             DocumentChunk.document_version_id, DocumentChunk.id, literal("chunk"),
         ).join(DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id)
         .join(DocumentCleanupOperation, receipt_scope),

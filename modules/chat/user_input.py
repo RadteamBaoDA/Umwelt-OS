@@ -28,11 +28,12 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from core.ids import uuid7
 from modules.chat.generative_ui.tool_specs import INPUT_DECLINE, RequestUserInputArgs
 from modules.chat.models import Conversation, ResponseRun, StreamEvent
 from modules.chat.stream import make_event_id
@@ -171,7 +172,7 @@ async def create_input_request(
     if run.status != "streaming":
         raise InputRequestError(409, "run_not_streaming")
     request = {
-        "request_id": uuid4().hex,
+        "request_id": uuid7().hex,
         "kind": args.kind,
         "prompt": args.prompt,
         "options": [o.model_dump() for o in args.options],

@@ -52,16 +52,29 @@ function DialogOverlay({
   )
 }
 
-/** Renders the dialog content UI wrapper and forwards its typed props to the underlying control. */
+/** Classes for the default centered card and the full-screen variant; `full` fills the dynamic viewport and scrolls its own body. */
+const dialogSizeClass = {
+  default:
+    "top-[50%] left-[50%] max-h-[calc(100dvh-2rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] rounded-lg border p-6 sm:max-w-lg",
+  full:
+    "inset-0 h-dvh max-h-dvh w-screen max-w-none translate-x-0 translate-y-0 rounded-none border-0 p-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] sm:p-6",
+} as const
+
+/**
+ * Renders the dialog content UI wrapper and forwards its typed props to the underlying control.
+ * `size="full"` makes the dialog cover the whole viewport (safe-area aware, body scrolls) for multi-step flows.
+ */
 function DialogContent({
   className,
   children,
   showCloseButton = true,
   closeLabel = "Close",
+  size = "default",
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
   closeLabel?: string
+  size?: "default" | "full"
 }) {
   return (
     <DialogPortal data-slot="dialog-portal">
@@ -69,7 +82,9 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "fixed top-[50%] left-[50%] z-50 grid max-h-[calc(100dvh-2rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto overscroll-contain rounded-lg border bg-background p-6 shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
+          "fixed z-50 grid gap-4 overflow-y-auto overscroll-contain bg-background shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
+          dialogSizeClass[size],
+          size === "default" && "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
           className
         )}
         {...props}

@@ -11,6 +11,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { createGoal, getGoal, updateGoal } from './api';
 import type { Goal, GoalCreate, GoalStatus, Milestone } from './types';
+import { uuid7 } from '@/core/uuid7';
 
 const GOAL_STATUSES: GoalStatus[] = ['active', 'completed', 'paused', 'cancelled'];
 
@@ -73,7 +74,7 @@ export function GoalForm({ goal, csrfToken, onSuccess, onCancel, canSave = true,
   const addMilestone = () => {
     const value = newMilestone.trim();
     if (!value || milestones.length >= 100) return;
-    setMilestones((items) => [...items, { id: crypto.randomUUID(), title: value, completed: false, due_date: null, order: items.length, task_id: null }]);
+    setMilestones((items) => [...items, { id: uuid7(), title: value, completed: false, due_date: null, order: items.length, task_id: null }]);
     setNewMilestone('');
   };
 

@@ -159,9 +159,14 @@ def authenticated_session_ref(request: Request) -> AccountSessionRef:
     """
     current = getattr(request.state, "auth_session", None)
     account = getattr(request.state, "account", None)
-    if not isinstance(current, AuthSession) or not isinstance(account, AccountRead) or current.owner_id != account.id:
+    # Prefer the values captured at authentication: callers often roll back before re-taking a fence, which
+    # expires the ORM row. Requests assembled without require_account fall back to the live row.
+    ids = getattr(request.state, "auth_session_ids", None)
+    if ids is None and isinstance(current, AuthSession):
+        ids = (current.owner_id, current.token_hash)
+    if not isinstance(current, AuthSession) or not isinstance(account, AccountRead) or ids is None or ids[0] != account.id:
         raise HTTPException(status_code=401, detail="Authentication required")
-    return AccountSessionRef(account_id=account.id, token_hash=current.token_hash)
+    return AccountSessionRef(account_id=account.id, token_hash=ids[1])
 
 
 async def lock_account_admission(

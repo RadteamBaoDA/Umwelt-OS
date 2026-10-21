@@ -1,3 +1,5 @@
+import { uuid7 } from '@/core/uuid7';
+
 /** Same-origin signal carrying no identity or bearer data. */
 const ERASURE_SIGNAL = 'umwelt:account-erasure';
 const ERASURE_EVENT = 'bbd:account-erased';
@@ -25,7 +27,7 @@ export function announceAccountErasure(): void {
     }
   } catch { /* Storage events provide the other-tab fallback. */ }
   try {
-    localStorage.setItem(ERASURE_SIGNAL, crypto.randomUUID());
+    localStorage.setItem(ERASURE_SIGNAL, uuid7());
     localStorage.removeItem(ERASURE_SIGNAL);
   } catch { /* The current tab must still erase when storage is blocked. */ }
   window.dispatchEvent(new Event(ERASURE_EVENT));

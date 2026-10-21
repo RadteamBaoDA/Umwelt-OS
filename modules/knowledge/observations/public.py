@@ -6,12 +6,13 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import Table, and_, func, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.ids import uuid7
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.connectors import public as connectors
@@ -662,7 +663,7 @@ async def _apply_ingestion_observation(
     is_current = current is None or (accepted_utc, str(ingestion_observation_id)) > (
         current.accepted_at.astimezone(UTC), str(current.ingestion_observation_id),
     )
-    row_id = uuid4()
+    row_id = uuid7()
     row = Observation(
         id=row_id, workspace_id=workspace_id, source_id=source_id, external_id=external_id, provider=normalized.provider,
         provider_scope_discriminator=provider_scope_discriminator, provider_version=provider_version,

@@ -6,11 +6,13 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import wraps
 from typing import ParamSpec, TypeVar, cast
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from arq import Retry
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from core.ids import uuid7
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -76,7 +78,7 @@ async def heavy_job_slot(
     if not 0 < timeout_seconds <= MAX_OPERATION_SECONDS:
         raise ValueError("Heavy operation timeout must be within 150 seconds")
     deadline = asyncio.get_running_loop().time() + timeout_seconds
-    lease = HeavyLease(uuid4(), deadline)
+    lease = HeavyLease(uuid7(), deadline)
     async with factory() as session:
         async with asyncio.timeout_at(deadline):
             async with asyncio.timeout(5):

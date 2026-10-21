@@ -4,7 +4,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any, cast
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import httpx
 from fastapi import HTTPException
@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.sql.elements import ColumnElement
 
 from core.config import Settings
+from core.ids import uuid7
 from core.realtime import commit_with_replay
 from core.worker_cursors import STATE_KEY, read_cursor, write_cursor
 from core.workspaces.public import read_access_fence
@@ -370,7 +371,7 @@ async def revoke_deleted_source_github_grants(
                     except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
                         token = None
                     if token is not None:
-                        claim = uuid4()
+                        claim = uuid7()
                         coordinator.state, coordinator.operation_id = "revoking", claim
                         coordinator.error_code = _DELETED_SOURCE_REVOKE
                 await commit_with_replay(session, scope=scope, multi_workspace_enabled=flag, access_fence=fence)
@@ -1282,7 +1283,8 @@ async def process_collection_request(ctx: dict[str, object], request_id: str) ->
         return "deferred"
     try:
         await cast(Any, executor)(ctx, admission)
-    except Exception:  # noqa: BLE001 - any executor failure must settle the admission as failed
+    except Exception:  # any executor failure must settle the admission as failed
+        logger.exception("Collection executor raised; request_id=%s", admission.request_id)
         async with factory() as session:
             await scheduler.settle_admission(
                 session, admission.request_id, admission.admission_token,

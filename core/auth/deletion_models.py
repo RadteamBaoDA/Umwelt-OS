@@ -1,12 +1,13 @@
 """Durable deletion receipts contain no content and survive identity removal."""
 from datetime import datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import JSON, CheckConstraint, DateTime, Index, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.database import Base
+from core.ids import uuid7
 
 
 class AccountDeletionOperation(Base):
@@ -22,7 +23,7 @@ class AccountDeletionOperation(Base):
         Index("uq_account_deletion_account", "account_id", unique=True),
         Index("ix_account_deletion_due", "status", "next_attempt_at"),
     )
-    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid7)
     receipt_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     account_id: Mapped[int | None] = mapped_column(Integer)
     workspace_id: Mapped[UUID | None] = mapped_column()

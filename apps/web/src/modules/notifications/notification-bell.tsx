@@ -11,9 +11,10 @@ import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { listNotifications, type AppNotification, notificationKeys, setNotificationRead } from './api';
 
-/** Accepts only relative in-app paths so a stored link can never navigate off-site. */
+/** Accepts only relative in-app paths and maps legacy dashboard links to the current default route. */
 function safeLink(link: string | null): string {
-  return link && link.startsWith('/') && !link.startsWith('//') && !link.includes(String.fromCharCode(92)) ? link : '/app';
+  if (!link || !link.startsWith('/') || link.startsWith('//') || link.includes(String.fromCharCode(92))) return '/dashboard';
+  return link === '/app' ? '/dashboard' : link;
 }
 
 /**

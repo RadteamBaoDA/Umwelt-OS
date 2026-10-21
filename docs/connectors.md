@@ -87,6 +87,17 @@ chooses active collection grants already reviewed for that exact source, supplie
 activates its bounded schedule. MCP connections and grant review remain in MCP settings. Runtime n8n credential
 provisioning and provider acceptance remain deferred validation gates.
 
+## Per-source processing switches
+
+Every Source has two owner switches, set when it is added (connector, manual or built-in wizard) and editable later in the connector editor (`PATCH /api/v1/sources/{id}`; `POST /api/v1/connectors/builtins/{provider}/enable` accepts the same optional booleans):
+
+- `graph_enabled` (default on): build knowledge-graph enrichment (entity extraction, timeline extraction, temporal graph operations). It uses the background AI model.
+- `rag_index_enabled` (default on): embed the Source's chunks for RAG search and chat Q&A. It uses the embedding model.
+
+Collection itself never depends on either switch or on any AI model. Turning a switch off schedules no new work for that Source: ready documents are not queued for extraction, and its chunks are skipped by the indexer; work already queued is parked quietly (`graph_disabled`) or dropped when the worker next sees it. Turning a switch back on applies to documents collected afterwards; the recovery sweeps also pick up ready documents that have no work row. Already-extracted graph data and already-embedded vectors are kept, not purged. Changing a switch does not bump the Source generation.
+
+Entity/timeline extraction and translation run on a dedicated `model-worker` (queue `arq:model`), so slow provider calls cannot starve embedding on the main worker; see `docs/deployment.md`.
+
 ## Optional services (native-first)
 
 Native sources need no n8n or browser service. The browser sidecar lives in `docker-compose.browser.yml`; `docker-compose.connectors.yml` adds n8n and includes the browser overlay (Compose >= 2.20), so the existing command is unchanged. See [native-and-n8n.md](connectors/native-and-n8n.md).

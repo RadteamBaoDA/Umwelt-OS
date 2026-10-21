@@ -10,7 +10,7 @@ import pytest
 from fastapi import HTTPException
 
 from modules.connectors import builtins
-from modules.connectors.backends import FIXED_SCOPE_PROVIDERS
+from modules.connectors.backends import FIXED_SCOPE_PROVIDERS, PROVIDER_SOURCE_TYPES
 from modules.connectors.provider_specs import (
     BUILTIN_PROVIDERS,
     FREE_PROVIDER_SPECS,
@@ -30,7 +30,7 @@ def _request(operator: bool = True) -> Any:
 
 def _source(provider: str, status: str = "active", generation: int = 1) -> ConnectorSource:
     return ConnectorSource(
-        id=uuid4(), workspace_id=WORKSPACE, type="rss" if provider == "bbc_world" else "api", status=status,
+        id=uuid4(), workspace_id=WORKSPACE, type=PROVIDER_SOURCE_TYPES[provider], status=status,
         generation=generation, configuration={}, local_only=False, provider=provider)
 
 
@@ -106,7 +106,7 @@ class _World:
 
 
 def _session() -> Any:
-    return SimpleNamespace(rollback=AsyncMock(), commit=AsyncMock())
+    return SimpleNamespace(rollback=AsyncMock(), commit=AsyncMock(), refresh=AsyncMock())
 
 
 async def _enable(provider: str, use: str = "personal", operator: bool = True) -> Any:
@@ -187,3 +187,74 @@ async def test_list_reports_every_builtin_with_off_state_before_first_enable() -
         rows = await builtins.list_builtins(_session(), _request(), SCOPE)  # type: ignore[arg-type]
     assert {r.id for r in rows} == BUILTIN_PROVIDERS
     assert all(r.source_id is None and not r.enabled for r in rows)
+
+
+def test_every_builtin_schedule_is_accepted_by_connector_config() -> None:
+    """Each built-in's default interval must satisfy ConnectorConfig; otherwise enable fails after the Source is created."""
+    from modules.connectors.public import ConnectorConfig
+
+    for provider in sorted(BUILTIN_PROVIDERS):
+        spec = get_provider_spec(provider)
+        assert spec is not None
+        # Raises pydantic ValidationError for an interval outside {15, 30, 60, 360, 1440}.
+        ConnectorConfig(
+            timeout_seconds=30, history_mode="returned_snapshot", schedule_interval_minutes=spec.default_interval_minutes)
+
+
+@pytest.mark.parametrize("provider", sorted(BUILTIN_PROVIDERS))
+async def test_every_builtin_enables_end_to_end(provider: str) -> None:
+    """Audit: each built-in reaches an active state through the same enable sequence (review-class via the instance operator)."""
+    with _World(provider) as world:
+        read = await _enable(provider)
+    assert read.enabled, f"{provider} did not activate"
+    assert world.source is not None and read.source_id == world.source.id
+
+
+
+class _ExpiringRow:
+    """Provisioning-row stand-in that fails loudly when read after a rollback expired it, like a real ORM row under asyncio."""
+
+    def __init__(self, **values: Any) -> None:
+        object.__setattr__(self, "_values", values)
+        object.__setattr__(self, "expired", False)
+
+    def __getattr__(self, name: str) -> Any:
+        if object.__getattribute__(self, "expired"):
+            raise AssertionError(f"read expired ORM attribute {name!r} after rollback")
+        return object.__getattribute__(self, "_values")[name]
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if object.__getattribute__(self, "expired"):
+            raise AssertionError(f"wrote expired ORM attribute {name!r} after rollback")
+        object.__getattribute__(self, "_values")[name] = value
+
+
+@pytest.mark.parametrize("stale_row", [False, True])
+async def test_enable_never_reads_provisioning_row_after_rollback(stale_row: bool) -> None:
+    """Regression for MissingGreenlet: each rollback expires loaded rows, so the toggle must use snapshots only."""
+    with _World("bbc_world") as world:
+        if stale_row:
+            await _enable("bbc_world")  # leaves a provisioning row behind
+            world.row.desired_configuration = {}  # force step 3 to re-save from an existing row
+            world.row.state = "saved_not_active"
+        loaded: list[_ExpiringRow] = []
+        listed = builtins.provisioning.activation_status
+
+        async def fresh(*a: Any, **k: Any) -> Any:
+            row = await listed(*a, **k)
+            if row is None:
+                return None
+            wrapped = _ExpiringRow(**vars(row))
+            loaded.append(wrapped)
+            return wrapped
+
+        async def rollback() -> None:
+            for row in loaded:
+                object.__setattr__(row, "expired", True)
+
+        session = _session()
+        session.rollback = AsyncMock(side_effect=rollback)
+        with patch.object(builtins.provisioning, "activation_status", AsyncMock(side_effect=fresh)):
+            read = await builtins.enable_builtin(
+                "bbc_world", session, _request(), SCOPE, builtins.BuiltinEnableRequest())  # type: ignore[arg-type]
+    assert read.enabled

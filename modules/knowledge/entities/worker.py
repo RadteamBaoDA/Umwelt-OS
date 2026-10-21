@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
 from datetime import UTC, datetime
 from difflib import SequenceMatcher
 from typing import cast
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from arq.connections import ArqRedis
 from fastapi import HTTPException
@@ -15,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
-from core.heavy_work import bounded_heavy_work
+from core.ids import uuid7
 from core.job_denial import (
     PERMISSION_LOST,
     STALE_SCOPE,
@@ -29,16 +30,17 @@ from core.model_gateway.client import (
     ModelGateway,
     ModelGatewayError,
     PrivacyPolicyDenied,
+    structured_evidence,
 )
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import (
     AIExecutionConfig,
-    CapabilityResult,
     ModelMapping,
     RequestPolicy,
 )
 from core.realtime import commit_with_replay, make_graph_change
 from core.worker_cursors import STATE_KEY, read_cursor, write_cursor
+from core.worker_queues import queue_for
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import InternalJobScope, Scope
 from modules.ingestion import public as ingestion
@@ -61,7 +63,6 @@ from modules.settings.prompts import resolve_prompt
 from modules.sources import public as sources
 
 logger = logging.getLogger(__name__)
-EXTRACTION_TIMEOUT_SECONDS = 35
 EXTRACTION_ROLE = "background"
 
 
@@ -96,41 +97,18 @@ async def _dependency_snapshot(config: AIExecutionConfig, redis: Redis, *, scope
     role = EXTRACTION_ROLE
     mapping = config.defaults.resolve(role)
     gateway_identity = config.gateway_identity
-    capability_value: dict[str, object] | None = None
-    key: str | None = None
-    if mapping is not None:
-        key = capability_key(
-            role, mapping.model, mapping.version, "structured", gateway_identity,
-            workspace_id=scope.workspace_id, actor_user_id=config.actor_user_id,
-        )
-        raw = await redis.get(key)
-        if isinstance(raw, bytes):
-            raw = raw.decode("utf-8", errors="replace")
-        try:
-            parsed = json.loads(raw) if isinstance(raw, str) else None
-            validated = CapabilityResult.model_validate(parsed) if isinstance(parsed, dict) else None
-            capability_value = validated.model_dump(mode="json") if validated is not None else None
-        except (json.JSONDecodeError, ValueError):
-            capability_value = None
-    try:
-        capability_fresh = bool(
-            capability_value and isinstance(capability_value.get("expires_at"), str)
-            and datetime.fromisoformat(str(capability_value["expires_at"])) > datetime.now(UTC)
-        )
-    except ValueError:
-        capability_fresh = False
-    supported = bool(
-        isinstance(capability_value, dict)
-        and capability_value.get("result") == "supported"
-        and capability_value.get("role") == role
-        and capability_value.get("capability") == "structured"
-        and capability_value.get("gateway_identity") == gateway_identity
-        and mapping is not None
-        and capability_value.get("model") == mapping.model
-        and capability_value.get("version") == mapping.version
-        and capability_value.get("configuration_revision") == config.configuration_revision
-        and capability_fresh
+    key = capability_key(
+        role, mapping.model, mapping.version, "structured", gateway_identity,
+        workspace_id=scope.workspace_id, actor_user_id=config.actor_user_id,
+    ) if mapping is not None else None
+    # Native structured evidence, or chat evidence for the gateway's prompted-JSON fallback.
+    evidence = await structured_evidence(
+        redis, role, mapping, gateway_identity=gateway_identity,
+        configuration_revision=config.configuration_revision,
+        workspace_id=scope.workspace_id, actor_user_id=config.actor_user_id,
     )
+    capability_value = evidence.model_dump(mode="json") if evidence is not None else None
+    supported = evidence is not None
     privacy = config.privacy
     snapshot = {
         "revision": config.configuration_revision,
@@ -253,6 +231,18 @@ async def process_document_ready(ctx: dict[str, object], event_id: str) -> None:
             )
             await session.commit()
             return
+        if not source.graph_enabled:
+            # Owner switched the knowledge graph off for this Source: schedule no entity/timeline/
+            # temporal work. The deterministic GitHub mapper needs no model, so it still runs.
+            from modules.connectors import public as connectors
+            await connectors.map_github_version(
+                session, ready, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            await ingestion.mark_event_delivered(
+                session, event_uuid, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            await session.commit()
+            return
         work = await entities.schedule_extraction_work(
             session, version_id, ready.source_generation, EXTRACTOR_VERSION, PROMPT_VERSION,
             scope=scope, multi_workspace_enabled=multi_workspace_enabled,
@@ -287,10 +277,20 @@ async def process_document_ready(ctx: dict[str, object], event_id: str) -> None:
         await session.commit()
     if ready.local_only:
         return
-    await process_entity_extraction_work(ctx, str(work_id))
-    if not ready.local_only:
-        from modules.timeline.worker import process_timeline_extraction_work
-        await process_timeline_extraction_work(ctx, str(timeline_work_id))
+    # Remote model calls run on the dedicated model worker, never inline on this (main) worker; the
+    # job ids match recovery's, so a lost enqueue is re-enqueued by recover_*_extraction_work.
+    redis = cast(ArqRedis, ctx["redis"])
+    with contextlib.suppress(Exception):
+        await redis.enqueue_job(
+            "process_entity_extraction_work", str(work_id), _job_id=f"entity-extraction:{work_id}",
+            _queue_name=queue_for("process_entity_extraction_work"),
+        )
+    with contextlib.suppress(Exception):
+        await redis.enqueue_job(
+            "process_timeline_extraction_work", str(timeline_work_id),
+            _job_id=f"timeline-extraction:{timeline_work_id}",
+            _queue_name=queue_for("process_timeline_extraction_work"),
+        )
 
 
 _WORKSPACE_CURSOR_KEY = "bbd:entity-extraction:workspace-cursor"
@@ -365,11 +365,11 @@ async def recover_entity_extraction_work(ctx: dict[str, object]) -> int:
                 ):
                     await session.commit()
                     continue
-                work = await entities.schedule_extraction_work(
+                work = None if not source.graph_enabled else await entities.schedule_extraction_work(
                     session, ref.document_version_id, source.generation, EXTRACTOR_VERSION,
                     PROMPT_VERSION, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
                 )
-                if current.local_only and work.status != "succeeded" and not (
+                if work is not None and current.local_only and work.status != "succeeded" and not (
                     work.status == "running" and work.lease_expires_at is not None
                     and work.lease_expires_at > datetime.now(UTC)
                 ):
@@ -461,16 +461,16 @@ async def recover_entity_extraction_work(ctx: dict[str, object]) -> int:
             await redis.enqueue_job(
                 "process_entity_extraction_work", str(work_id),
                 _job_id=f"entity-extraction:{work_id}",
+                _queue_name=queue_for("process_entity_extraction_work"),
             )
             enqueued += 1
     return enqueued
 
 
-@bounded_heavy_work
 async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: str) -> None:
     """Run one lease-owned extraction job and publish only fenced graph changes.
 
-    Commits the 110-second work claim, locks source/document only to capture plain
+    Commits the work claim (lease = background LLM timeout + 75 s, at least 110 s), locks source/document only to capture plain
     DTOs, then releases every lock before the provider request so chat's access
     fence is never blocked. Privacy policy and the access fence are rechecked on
     an independent session immediately before send; after the response the worker
@@ -508,6 +508,7 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
             return job_scope, await entities.claim_extraction_work(
                 session, work_id, lease_owner, datetime.now(UTC), scope=job_scope,
                 multi_workspace_enabled=multi_workspace_enabled,
+                lease_seconds=max(110, settings.background_llm_timeout_seconds + 75),
             )
 
         try:
@@ -572,6 +573,13 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                 return
             if source.local_only:
                 await entities.set_extraction_work_error(session, work_id, lease_owner, "local_only_source", blocked=True,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+                await session.commit()
+                return
+            if not source.graph_enabled:
+                # Switch flipped after scheduling: park quietly (blocked, no fingerprint so dependency
+                # recovery ignores it); intentional owner choice, not an error to log.
+                await entities.set_extraction_work_error(session, work_id, lease_owner, "graph_disabled", blocked=True,
                     scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 await session.commit()
                 return
@@ -655,7 +663,7 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
 
             gateway = ModelGateway(
                 redis=redis, base_url=config.gateway_base_url, api_key=config.gateway_api_key,
-                destination_id=cast(str, destination), timeout_seconds=min(config.request_timeout_seconds, EXTRACTION_TIMEOUT_SECONDS),
+                destination_id=cast(str, destination), timeout_seconds=settings.background_llm_timeout_seconds,
                 scope=scope, gateway_identity=config.gateway_identity,
                 configuration_revision=config.configuration_revision, before_send=before_send,
                 approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
@@ -900,7 +908,7 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                     candidate_key = hashlib.sha256(f"{candidate.type}:{candidate.key}".encode()).hexdigest()
                     fingerprint = match_fingerprints[candidate.key]
                     snapshot = {
-                        "kind": "entity", "candidate_id": str(uuid4()),
+                        "kind": "entity", "candidate_id": str(uuid7()),
                         "candidate_type": candidate.type, "candidate_name": candidate.name,
                         "candidate_key": candidate_key, "match_fingerprint": fingerprint,
                         "chunk_ids": [str(identifier) for identifier in candidate.chunk_ids],
@@ -948,7 +956,7 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                 source_candidate = candidate_by_key[relation.source_key]
                 target_candidate = candidate_by_key[relation.target_key]
                 snapshot = {
-                    "kind": "relationship", "candidate_id": str(uuid4()),
+                    "kind": "relationship", "candidate_id": str(uuid7()),
                     "candidate_name": relation.type, "relationship_type": relation.type,
                     "source_candidate_key": hashlib.sha256(f"{source_candidate.type}:{source_candidate.key}".encode()).hexdigest(),
                     "target_candidate_key": hashlib.sha256(f"{target_candidate.type}:{target_candidate.key}".encode()).hexdigest(),
@@ -1010,7 +1018,10 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                 scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
             await session.commit()
-        logger.warning("Entity extraction deferred work_id=%s error_code=%s", work_id, error_code)
+        # A blocked capability is a configuration state that repeats for every queued item until the model
+        # settings change, so it stays out of the warning stream; transport failures are still warnings.
+        (logger.debug if blocked else logger.warning)(
+            "Entity extraction deferred work_id=%s error_code=%s", work_id, error_code)
     except Exception as exc:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         if isinstance(exc, HTTPException) and exc.status_code != 409:
             # Lost permission mid-run is terminal; a 409 keeps the attempt-budgeted retry (re-resolved at next claim).

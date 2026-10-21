@@ -119,8 +119,7 @@ async def test_disabled_module_leaves_work_untouched() -> None:
         patch.object(worker.settings_public, "module_is_enabled", AsyncMock(return_value=False)) as gate,
         patch.object(worker.timeline, "claim_extraction_work", AsyncMock()) as claim,
     ):
-        # unwrap the heavy-slot guard: it needs a live Redis-backed slot, the gate runs before it matters
-        await worker.process_timeline_extraction_work.__wrapped__(ctx, str(uuid4()))
+        await worker.process_timeline_extraction_work(ctx, str(uuid4()))
     gate.assert_awaited_once()
     claim.assert_not_called()
 

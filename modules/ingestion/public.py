@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 from typing import cast as typing_cast
-from uuid import UUID, uuid4, uuid5
+from uuid import UUID, uuid5
 
 from fastapi import HTTPException
 from sqlalchemy import String, and_, case, cast, delete, func, not_, or_, select, tuple_, update
@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from core.events import DomainEvent
+from core.ids import uuid7
 from core.pagination import decode_cursor, encode_cursor
 from core.realtime import (
     ReplayDraft,
@@ -800,7 +801,7 @@ async def schedule_normalization(
         session.add(stage)
         await session.flush()
         event = DomainEvent(
-            id=uuid4(), type="ingestion.normalize.requested", version=1,
+            id=uuid7(), type="ingestion.normalize.requested", version=1,
             occurred_at=received_at, producer="modules.ingestion",
             payload={
                 "run_id": str(run.id), "stage_id": str(stage.id),
@@ -1447,7 +1448,7 @@ async def _settle_request(
     receipt_id = await session.scalar(select(CollectionReceipt.id).where(CollectionReceipt.request_id == request_ref.request_id))
     if receipt_id is None:
         now = datetime.now(UTC)
-        receipt_id = uuid4()
+        receipt_id = uuid7()
         state_update = state_update or CollectionStateUpdate()
         session.add(CollectionReceipt(
             id=receipt_id, request_id=request_ref.request_id, workspace_id=scope.workspace_id, source_id=source_id,
@@ -1650,7 +1651,7 @@ async def acquire_connector_collection(
         raise HTTPException(status_code=409, detail="Source collection ownership state is invalid")
     if state.lease_expires_at is not None and state.lease_expires_at > now:
         raise HTTPException(status_code=409, detail="Source collection is already in progress")
-    token = uuid4()
+    token = uuid7()
     expires_at = now + COLLECTION_LEASE
     state.lease_run_id = None
     state.collection_lease_token = token
@@ -2263,7 +2264,7 @@ async def accept_native_collection(
     changes: list[ReplayDraft] = [make_source_change(source.id, source.generation, source.status, scope=scope)]
     if provider_records:
         event = DomainEvent(
-            id=uuid4(), type="ingestion.stage.requested", version=1,
+            id=uuid7(), type="ingestion.stage.requested", version=1,
             occurred_at=now, producer="modules.ingestion",
             payload={
                 "run_id": str(run.id), "stage_id": str(receive_stage.id),
@@ -2460,7 +2461,7 @@ async def receive_batch(
     session.add(stage)
     await session.flush()
     event = DomainEvent(
-        id=uuid4(),
+        id=uuid7(),
         type="ingestion.stage.requested",
         version=1,
         occurred_at=now,
@@ -2685,7 +2686,7 @@ async def queue_connector_crawl(
     session.add(stage)
     await session.flush()
     event = DomainEvent(
-        id=uuid4(),
+        id=uuid7(),
         type="connector.crawl.requested",
         version=1,
         occurred_at=now,
@@ -2802,7 +2803,7 @@ async def receive_file(
         access_fence=access_fence, source_fence=source_fence,
     )
     event = DomainEvent(
-        id=uuid4(),
+        id=uuid7(),
         type="document.file.uploaded",
         version=1,
         occurred_at=now,
@@ -2928,9 +2929,10 @@ async def list_source_runs(
     source_id: UUID,
     *,
     limit: int = 20,
-    cursor: str | None = None, scope: Scope, multi_workspace_enabled: bool,
+    cursor: str | None = None, status: Literal["queued", "running", "succeeded", "needs_ocr", "failed"] | None = None,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> SourceIngestionRead | None:
-    """Return detached current and bounded recent runs after source-owner existence check."""
+    """Return detached source history, optionally status-filtered, with a scoped cursor."""
     access_fence = await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     from modules.ingestion.schemas import SourceIngestionRead
 
@@ -2939,8 +2941,13 @@ async def list_source_runs(
         return None
     if not 1 <= limit <= 100:
         raise ValueError("Ingestion history page size must be between 1 and 100")
-    binding = _cursor_binding(scope, access_fence, f"history:{source.id}:{source.generation}", limit)
+    kind = f"history:{source.id}:{source.generation}"
+    if status is not None:
+        kind = f"{kind}:status:{status}"
+    binding = _cursor_binding(scope, access_fence, kind, limit)
     statement = select(IngestionRun).where(IngestionRun.source_id == source_id, *_run_scope(scope))
+    if status is not None:
+        statement = statement.where(IngestionRun.status == status)
     if cursor:
         created_at, identifier = _decode_history_cursor(cursor, binding)
         statement = statement.where(
@@ -3080,7 +3087,7 @@ async def retry_run(
     run.status = "queued"
     run.error_code = None
     event = DomainEvent(
-        id=uuid4(),
+        id=uuid7(),
         type=prior_event.type,
         version=1,
         occurred_at=datetime.now(UTC),

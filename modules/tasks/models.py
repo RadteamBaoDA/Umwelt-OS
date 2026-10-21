@@ -1,7 +1,7 @@
 """Private SQLAlchemy persistence models for task management."""
 
 from datetime import date, datetime
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
@@ -20,6 +20,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
 from core.database import Base
+from core.ids import uuid7
 
 
 class Task(Base):
@@ -66,7 +67,7 @@ class Task(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     owner_id: Mapped[int] = mapped_column(
         ForeignKey("owner.id", ondelete="CASCADE"), nullable=False
     )

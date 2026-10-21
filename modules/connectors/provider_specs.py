@@ -258,7 +258,7 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
           "Credit EMSC (Euro-Mediterranean Seismological Centre); magnitudes are preliminary.",
           ("/fdsnws/event/1/query?limit=50&format=json&minmag=4",), (_day(96), _unknown())),
     # Launch Library free tier: documented 15 requests/hour, non-commercial. 120-minute interval stays far below it.
-    _spec("launch_library", "Launch Library upcoming launches", "space", ("ll.thespacedevs.com",), "event", 120,
+    _spec("launch_library", "Launch Library upcoming launches", "space", ("ll.thespacedevs.com",), "event", 360,
           "https://thespacedevs.com/llapi", "noncommercial",
           "Credit The Space Devs Launch Library; free tier is non-commercial with a 15 requests/hour limit.",
           ("/2.2.0/launch/upcoming/?limit=10&mode=list",),
@@ -275,12 +275,12 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
           "https://data.bmkg.go.id/", "open",
           "Source: BMKG (Badan Meteorologi, Klimatologi, dan Geofisika); state any processing.",
           ("/DataMKG/TEWS/gempaterkini.json",), (_day(96), _unknown())),
-    _spec("satnogs_observations", "SatNOGS recent observations", "space", ("network.satnogs.org",), "event", 120,
+    _spec("satnogs_observations", "SatNOGS recent observations", "space", ("network.satnogs.org",), "event", 360,
           "https://db.satnogs.org/about", "open",
           "Credit SatNOGS Network (CC BY-SA 4.0); station observations are community-contributed.",
           ("/api/observations/?format=json&status=good",), (_day(12), _unknown())),
     # ---- Bespoke keyless mappers. Endpoint shapes probed 2026-10-21.
-    _spec("noaa_kp", "NOAA planetary Kp index", "space", ("services.swpc.noaa.gov",), "measurement", 180,
+    _spec("noaa_kp", "NOAA planetary Kp index", "space", ("services.swpc.noaa.gov",), "measurement", 360,
           "https://www.weather.gov/disclaimer", "open",
           "Credit NOAA Space Weather Prediction Center; Kp is a 3-hour planetary index (0-9).",
           ("/products/noaa-planetary-k-index.json",), (_day(16), _unknown())),

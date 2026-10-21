@@ -6,7 +6,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -24,6 +24,7 @@ from core.auth.models import AuthSession
 from core.auth.public import authenticated_session_ref
 from core.config import Settings
 from core.database import get_session
+from core.ids import uuid7
 from core.realtime import commit_with_replay
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.public import lock_access_fence, read_access_fence
@@ -338,7 +339,7 @@ async def start_github_authorization(
     settings: Settings = request.app.state.settings
     key = settings.connector_credential_encryption_key.get_secret_value()
     state, verifier, browser_nonce = oauth.new_pkce_pair()
-    attempt_id = uuid4()
+    attempt_id = uuid7()
     grant = await session.get(GithubOAuthGrant, parsed_id)
     token_revision = grant.token_revision if grant else 0
     encrypted = oauth._token_cipher(key, parsed_id, attempt_id, source.generation, revision, {"verifier": verifier})
@@ -571,7 +572,7 @@ async def refresh_github_authorization(
     refresh_token = opened.get("refresh_token")
     if not isinstance(refresh_token, str) or not refresh_token:
         raise HTTPException(status_code=409, detail="GitHub grant requires reconnection")
-    operation_id = uuid4()
+    operation_id = uuid7()
     expected_token_revision = grant.token_revision
     expected_grant_operation = grant.operation_id
     coordinator.state, coordinator.operation_id = "refreshing", operation_id
@@ -768,7 +769,7 @@ async def complete_github_authorization(
         await session.rollback()
         await _mark_github_reconciliation(session, request, scope, fence, source_id, attempt_id, "authorization_outcome_unknown")
         raise
-    operation_id = uuid4()
+    operation_id = uuid7()
     encrypted_tokens = oauth._token_cipher(key, source_id, operation_id, attempt.source_generation, attempt.configuration_revision, tokens)
     if grant is None:
         grant = GithubOAuthGrant(source_id=source_id, operation_id=operation_id, github_user_id=identity["github_user_id"], repository_id=identity["repository_id"], installation_id=identity["installation_id"], app_id=identity["app_id"], binding_revision=1, source_generation=attempt.source_generation, configuration_revision=attempt.configuration_revision, token_revision=1, encrypted_tokens=encrypted_tokens, state="ready", expires_at=tokens["access_expires_at"], validated_at=datetime.now(UTC))
@@ -941,7 +942,7 @@ async def revoke_github_grant(
         raise HTTPException(status_code=409, detail="GitHub grant peers changed; review the current affected sources")
     coordinator.state = "revoking"
     coordinator.error_code = "provider_revoke_pending"
-    revocation_operation = coordinator.operation_id if explicit_revoke_retry else uuid4()
+    revocation_operation = coordinator.operation_id if explicit_revoke_retry else uuid7()
     coordinator.operation_id = revocation_operation
     operation = await session.scalar(select(GithubOAuthOperation).where(
         GithubOAuthOperation.operation_id == revocation_operation,

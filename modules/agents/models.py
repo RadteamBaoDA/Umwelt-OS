@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
@@ -22,6 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
 from core.database import Base
+from core.ids import uuid7
 
 
 class AgentRun(Base):
@@ -70,7 +71,7 @@ class AgentRun(Base):
     configuration_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     owner_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("owner.id", ondelete="CASCADE"), nullable=False
     )
@@ -144,7 +145,7 @@ class AgentToolCall(Base):
         Index("ix_agent_tool_calls_input_fences_gin", "input_source_fences", postgresql_using="gin"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     run_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False
     )
@@ -188,7 +189,7 @@ class AgentApproval(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     action_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, unique=True)
     run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     owner_id: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -231,7 +232,7 @@ class AgentEvidenceCleanup(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     operation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     run_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), nullable=False,
@@ -336,7 +337,7 @@ class AgentProfileRevision(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     profile_id: Mapped[str] = mapped_column(String(24), nullable=False)
     owner_id: Mapped[int] = mapped_column(Integer, nullable=False)
     revision: Mapped[int] = mapped_column(Integer, nullable=False)

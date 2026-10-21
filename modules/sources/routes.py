@@ -74,11 +74,21 @@ async def list_sources(
 async def create_source(
     payload: SourceCreate, session: Session, request: Request, scope: WorkspaceWrite,
 ) -> SourceRead:
-    """Create in the selected owner workspace after CSRF/module write admission."""
+    """Create in the selected owner workspace after CSRF/module write admission.
+
+    A built-in provider (``BUILTIN_PROVIDERS``) may have one non-archived Source per workspace; a
+    second create is rejected with 409 ``builtin_already_added`` (archive first to re-add).
+    """
     _require_source_owner(scope)
+    multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
+    from modules.connectors import public as connectors
+
+    if payload.provider in connectors.BUILTIN_PROVIDERS and await public.list_provider_sources(
+        session, frozenset({payload.provider}), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ):
+        raise HTTPException(status_code=409, detail="builtin_already_added")
     source = await public.create_source(
-        session, payload, scope=scope,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        session, payload, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     return SourceRead.model_validate(source, from_attributes=True)
 

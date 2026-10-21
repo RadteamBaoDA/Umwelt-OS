@@ -6,7 +6,7 @@ written only by the T3 worker; T1 creates rows ``pending`` and reads them.
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
@@ -26,6 +26,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
 from core.database import Base
+from core.ids import uuid7
 
 RETENTION_DAYS = 30
 STATUSES = ("pending", "ready", "unchanged", "blocked", "failed")
@@ -60,7 +61,7 @@ class ContentTranslation(Base):
         Index("ix_content_translations_resource", "workspace_id", "resource_type", "resource_id"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     actor_user_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
     resource_type: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -99,7 +100,7 @@ class TranslationBatch(Base):
         Index("ix_translation_batches_expiry", "expires_at"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     actor_user_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
     target_language: Mapped[str] = mapped_column(String(2), nullable=False)

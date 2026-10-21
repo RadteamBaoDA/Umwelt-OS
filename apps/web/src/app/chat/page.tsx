@@ -6,6 +6,7 @@ import { WorkspaceShell } from '@/core/app-shell/workspace-shell';
 import { ChatSession } from '@/modules/chat/chat-session';
 import { ChatHistory, type ChatHistoryActions } from '@/modules/chat/chat-history';
 import { Button } from '@/components/ui/button';
+import { PanelLeftOpen, Plus } from 'lucide-react';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { ChatSideRail, ChatSourcesSheet } from '@/modules/chat/chat-side-rail';
 import { chatKeys, getConversation, type Citation } from '@/modules/chat/api';
@@ -14,13 +15,14 @@ import { useQuery } from '@tanstack/react-query';
 /**
  * Inner Chat page content consuming ChatController and filling the WorkspaceShell's scrollable main region.
  *
- * @returns Responsive two-column chat workspace.
+ * @returns Responsive chat workspace with independently collapsible history and evidence sidebars.
  */
 function ChatPageContent() {
   const t = useTranslations('chat');
   const chatCtrl = useChatController();
   const historyActions = React.useRef<ChatHistoryActions | null>(null);
   const [mobileView, setMobileView] = React.useState<'history' | 'chat'>('chat');
+  const [historyCollapsed, setHistoryCollapsed] = React.useState(true);
 
   const handleSelectConversation = React.useCallback(
     (id: string) => {
@@ -55,17 +57,30 @@ function ChatPageContent() {
     <div className="flex min-h-0 flex-1 shrink! basis-0 w-full min-w-0 rounded-[18px] border border-border bg-surface overflow-hidden">
       {/* Sidebar history on desktop; toggleable on mobile */}
       <div
+        id="chat-history-sidebar"
         className={`${
-          mobileView === 'history' ? 'flex w-full' : 'hidden md:flex md:w-[260px]'
+          mobileView === 'history' ? 'flex w-full' : historyCollapsed ? 'hidden md:flex md:w-12' : 'hidden md:flex md:w-[260px]'
         } shrink-0 border-r border-border h-full`}
       >
-        <ChatHistory
-          activeConversationId={chatCtrl.activeConversationId}
-          onSelectConversation={handleSelectConversation}
-          onNewConversation={handleNewConversation}
-          className="w-full"
-          actionsRef={historyActions}
-        />
+        {historyCollapsed && mobileView !== 'history' ? (
+          <div className="mx-auto flex flex-col">
+            <Button type="button" variant="ghost" size="icon" className="size-11 shrink-0" onClick={handleNewConversation} aria-label={t('newChat')}>
+              <Plus aria-hidden="true" />
+            </Button>
+            <Button type="button" variant="ghost" size="icon" className="size-11 shrink-0" onClick={() => setHistoryCollapsed(false)} aria-label={t('expandHistory')} aria-expanded="false" aria-controls="chat-history-sidebar">
+              <PanelLeftOpen aria-hidden="true" />
+            </Button>
+          </div>
+        ) : (
+          <ChatHistory
+            activeConversationId={chatCtrl.activeConversationId}
+            onSelectConversation={handleSelectConversation}
+            onNewConversation={handleNewConversation}
+            className="w-full"
+            actionsRef={historyActions}
+            onCollapse={mobileView === 'history' ? undefined : () => setHistoryCollapsed(true)}
+          />
+        )}
       </div>
 
       {/* Main chat session area */}

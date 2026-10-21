@@ -108,6 +108,76 @@ def _retryable_status(status: int) -> bool:
     return status in {408, 425, 429} or status >= 500
 
 
+_CHAT_EVIDENCE = ("chat", "streaming", "tools")  # any proves the model answers plain chat completions
+_THINK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL | re.IGNORECASE)
+
+
+async def structured_evidence(
+    redis: Redis, role: str, mapping: ModelMapping | None, *, gateway_identity: str, configuration_revision: int,
+    workspace_id: Any, actor_user_id: int,
+) -> CapabilityResult | None:
+    """Return the fresh verified result that lets ``ModelGateway.structured`` run for this role mapping.
+
+    Native ``structured`` evidence wins; otherwise chat-completion evidence qualifies, because ``structured``
+    then sends prompted JSON and the caller validates it. None when nothing current, matching and supported exists.
+    Workers fingerprint the returned result, so new evidence re-queues work they parked as unsupported.
+    """
+    if mapping is None:
+        return None
+    for capability in ("structured", *_CHAT_EVIDENCE):
+        raw = await redis.get(capability_key(role, mapping.model, mapping.version, capability, gateway_identity,
+                                             workspace_id=workspace_id, actor_user_id=actor_user_id))
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="replace")
+        try:
+            result = CapabilityResult.model_validate_json(raw) if isinstance(raw, str) else None
+            fresh = result is not None and datetime.fromisoformat(result.expires_at) > datetime.now(UTC)
+        except (ValueError, TypeError):
+            continue
+        if (result is not None and fresh and result.result == "supported" and result.role == role
+                and result.capability == capability and result.gateway_identity == gateway_identity
+                and result.model == mapping.model and result.version == mapping.version
+                and result.configuration_revision == configuration_revision):
+            return result
+    return None
+
+
+def _json_instruction(schema: dict[str, Any]) -> dict[str, str]:
+    """System message asking for exactly one JSON value matching ``schema`` (the json_schema ``schema`` field if present)."""
+    body = schema.get("schema", schema) if isinstance(schema, dict) else schema
+    return {"role": "system", "content": (
+        "Reply with exactly one JSON value that validates against this JSON Schema. "
+        "No prose, no markdown, no code fences. JSON Schema: " + json.dumps(body, separators=(",", ":")))}
+
+
+def _extract_json(text: str) -> str:
+    """Strip reasoning tags and code fences, then cut to the outermost JSON object/array; unparseable text is returned as-is."""
+    cleaned = _THINK.sub("", text).strip()
+    fenced = _FENCE.match(cleaned)
+    if fenced:
+        cleaned = fenced.group(1).strip()
+    for opener, closer in (("{", "}"), ("[", "]")):
+        start, end = cleaned.find(opener), cleaned.rfind(closer)
+        if start != -1 and end > start:
+            candidate = cleaned[start:end + 1]
+            try:
+                json.loads(candidate)
+            except ValueError:
+                continue
+            return candidate
+    return cleaned
+
+
+def _with_extracted_json(response: Any) -> Any:
+    """Replace the first choice's text content with its extracted JSON; other shapes pass through for caller validation."""
+    choices = response.get("choices") if isinstance(response, dict) else None
+    message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
+    if isinstance(message, dict) and isinstance(message.get("content"), str):
+        message["content"] = _extract_json(message["content"])
+    return response
+
+
 class ModelGatewayError(RuntimeError):
     """Base exception for unavailable, rejected, or invalid model gateway operations."""
 
@@ -351,15 +421,21 @@ class ModelGateway:
         probe: bool = False,
         before_send: Callable[[], Awaitable[None]] | None = None,
         after_send: Callable[[], Awaitable[None]] | None = None,
+        *,
+        evidence: str | None = None,
     ) -> Any:
-        """Check policy and cached capability before sending a bounded, retried gateway request; map transport and provider errors."""
+        """Check policy and cached capability before sending a bounded, retried gateway request; map transport and provider errors.
+
+        Privacy is always decided for ``capability``. ``evidence`` names a different verified capability that
+        proves this request can be served (the structured JSON fallback rides on chat-completion evidence).
+        """
         if not probe and before_send is None:
             raise ValueError("before_send_required")  # fail closed: every non-probe call needs a per-call fence
         if not self._policy_matches(policy) or not may_send(policy, role, mapping, self.destination_id, bool(self.api_key), capability):
             raise PrivacyPolicyDenied("Model request denied by privacy policy")
         if self.base_url is None or mapping is None:
             raise ModelGatewayError("Model gateway is not configured")
-        if not probe and not await self._capability_supported(role, mapping, policy, capability):
+        if not probe and not await self._capability_supported(role, mapping, policy, evidence or capability):
             raise ModelGatewayError("Model capability is not supported")
         if not probe:
             # Probes must be able to reach a tripped upstream, otherwise it could never be re-verified.
@@ -709,6 +785,17 @@ class ModelGateway:
             payload["temperature"] = temperature
         if extra_body:
             payload["extra_body"] = extra_body
+        if not probe and mapping is not None and not await self._capability_supported(role, mapping, policy, "structured"):
+            # Native json_schema is unproven for this model: ask for JSON in the prompt over a plain chat completion
+            # and extract it app-side. Callers still json.loads + schema-validate the content, so nothing loosens.
+            for evidence in _CHAT_EVIDENCE:
+                if await self._capability_supported(role, mapping, policy, evidence):
+                    fallback = {key: value for key, value in payload.items() if key != "response_format"}
+                    fallback["messages"] = [_json_instruction(schema), *messages]
+                    response = await self._request(
+                        role, mapping, policy, "structured", "chat/completions", fallback, probe, before_send,
+                        evidence=evidence)
+                    return _with_extracted_json(response)
         return await self._request(
             role, mapping, policy, "structured", "chat/completions", payload, probe, before_send
         )

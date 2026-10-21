@@ -51,12 +51,12 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 | `gdacs_events` | www.gdacs.org | event | 60 | open | none | supported | registered | [terms](https://www.gdacs.org/About/overview.aspx) | hazards |
 | `nws_alerts` | api.weather.gov | event | 15 | open | none | supported | registered | [terms](https://www.weather.gov/disclaimer) | hazards |
 | `emsc_quakes` | www.seismicportal.eu | event | 30 | open | none | supported | registered | [terms](https://www.emsc-csem.org/) | hazards |
-| `launch_library` | ll.thespacedevs.com | event | 120 | noncommercial | none | supported | registered | [terms](https://thespacedevs.com/llapi) | space |
+| `launch_library` | ll.thespacedevs.com | event | 360 | noncommercial | none | supported | registered | [terms](https://thespacedevs.com/llapi) | space |
 | `wikipedia_mostread` | api.wikimedia.org | news | 1440 | open | none | supported | registered | [terms](https://foundation.wikimedia.org/wiki/Policy:Terms_of_Use) | tech |
 | `wikipedia_top_views` | wikimedia.org | news | 1440 | open | none | supported | registered | [terms](https://foundation.wikimedia.org/wiki/Policy:Terms_of_Use) | tech |
 | `bmkg_quakes` | data.bmkg.go.id | event | 30 | open | none | supported | registered | [terms](https://data.bmkg.go.id/) | hazards |
-| `satnogs_observations` | network.satnogs.org | event | 120 | open | none | supported | registered | [terms](https://db.satnogs.org/about) | space |
-| `noaa_kp` | services.swpc.noaa.gov | measurement | 180 | open | none | supported | registered | [terms](https://www.weather.gov/disclaimer) | space |
+| `satnogs_observations` | network.satnogs.org | event | 360 | open | none | supported | registered | [terms](https://db.satnogs.org/about) | space |
+| `noaa_kp` | services.swpc.noaa.gov | measurement | 360 | open | none | supported | registered | [terms](https://www.weather.gov/disclaimer) | space |
 | `open_er_api` | open.er-api.com | measurement | 1440 | review | none | supported | registered | [terms](https://www.exchangerate-api.com/terms) | economy |
 | `oecd_cli` | sdmx.oecd.org | measurement | 1440 | open | none | supported | registered | [terms](https://www.oecd.org/en/about/terms-conditions.html) | economy |
 | `iss_position` | api.wheretheiss.at | measurement | 15 | noncommercial | none | supported | registered | [terms](https://wheretheiss.at/w/developer) | space |

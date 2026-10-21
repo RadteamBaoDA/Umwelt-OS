@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { MAX_TODOS, listTodos, patchTodo, replaceTodos, todosKey, type ChatTodo } from './api';
+import { uuid7 } from '@/core/uuid7';
 
 /** Props of {@link TodosPanel}. */
 export interface TodosPanelProps {
@@ -80,7 +81,7 @@ export function TodosPanel({ conversationId, isStreaming = false }: TodosPanelPr
     const title = draft.trim();
     if (!title || todos.length >= MAX_TODOS) return;
     setDraft('');
-    const created: ChatTodo = { id: `tmp-${crypto.randomUUID()}`, title, description: '', emoji: '', status: 'pending', position: todos.length };
+    const created: ChatTodo = { id: `tmp-${uuid7()}`, title, description: '', emoji: '', status: 'pending', position: todos.length };
     void mutate([...todos, created], () => replaceTodos(conversationId, [...todos.map(input), { title, description: '', emoji: '', status: 'pending' }], session.csrfToken));
   };
   const saveEdit = () => {

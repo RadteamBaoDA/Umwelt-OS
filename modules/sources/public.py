@@ -7,7 +7,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import (
@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
 from core.events import DomainEvent
+from core.ids import uuid7
 from core.pagination import decode_cursor, encode_cursor
 from core.realtime import commit_with_replay, make_source_change
 from core.tools.schemas import ToolDestination
@@ -252,6 +253,7 @@ def _source_export_columns() -> tuple[InstrumentedAttribute[Any], ...]:
     """Return only credential-free fields supported by the current SourceRead DTO."""
     return (
         Source.id, Source.type, Source.name, Source.provider, Source.status, Source.local_only,
+        Source.graph_enabled, Source.rag_index_enabled,
         Source.last_sync_at, Source.last_success_at, Source.last_error_at, Source.last_error_code,
         Source.collected_at, Source.indexed_at, Source.collection_error_code,
         Source.processing_error_code, Source.generation, Source.retired_at,
@@ -443,6 +445,8 @@ async def create_source(session: AsyncSession, payload: SourceCreate, *, scope: 
         name=payload.name,
         provider=payload.provider,
         local_only=payload.type == "manual",
+        graph_enabled=payload.graph_enabled,
+        rag_index_enabled=payload.rag_index_enabled,
     )
     session.add(source)
     await session.flush()
@@ -641,6 +645,8 @@ def _connector_source(source: Source) -> ConnectorSource:
         configuration=deepcopy(source.configuration or {}),
         local_only=source.local_only,
         provider=source.provider,
+        graph_enabled=source.graph_enabled,
+        rag_index_enabled=source.rag_index_enabled,
     )
 
 
@@ -691,7 +697,8 @@ async def get_source_fence(session: AsyncSession, source_id: UUID, *, scope: Sco
     if source is None:
         return None
     return SourceFence(
-        id=source.id, workspace_id=source.workspace_id, status=source.status, generation=source.generation, local_only=source.local_only
+        id=source.id, workspace_id=source.workspace_id, status=source.status, generation=source.generation, local_only=source.local_only,
+        graph_enabled=source.graph_enabled, rag_index_enabled=source.rag_index_enabled,
     )
 
 
@@ -772,7 +779,8 @@ async def lock_source(session: AsyncSession, source_id: UUID, *, scope: Scope, m
     if source is None:
         return None
     return SourceFence(
-        id=source.id, workspace_id=source.workspace_id, status=source.status, generation=source.generation, local_only=source.local_only
+        id=source.id, workspace_id=source.workspace_id, status=source.status, generation=source.generation, local_only=source.local_only,
+        graph_enabled=source.graph_enabled, rag_index_enabled=source.rag_index_enabled,
     )
 
 
@@ -818,6 +826,7 @@ async def _lock_source_fence_rows(
     return tuple(SourceFence(
         id=source.id, workspace_id=source.workspace_id, status=source.status,
         generation=source.generation, local_only=source.local_only,
+        graph_enabled=source.graph_enabled, rag_index_enabled=source.rag_index_enabled,
     ) for source in rows)
 
 
@@ -1251,6 +1260,7 @@ async def update_source(
 ) -> Source | None:
     """Apply an admitted Source patch with ordered inactive cleanup or active hint rearm.
 
+    ``graph_enabled`` / ``rag_index_enabled`` are plain owner switches applied without a generation bump.
     Pausing or archiving fences collection before pending hints are terminalized in this same
     transaction. Explicit reactivation rearms only hints whose current grant and provisioning
     binding match the new source generation; it never resumes a stale OAuth binding.
@@ -1287,6 +1297,13 @@ async def update_source(
                 await _reconcile_github_hint_lifecycle(
                     session, source, active=next_status == "active", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
                 )
+    # Toggle changes are not lifecycle transitions: no generation bump (that would fence in-flight
+    # collection); the change event alone lets clients refresh. Workers re-read the flags per job.
+    for flag in ("graph_enabled", "rag_index_enabled"):
+        if flag in payload.model_fields_set and getattr(payload, flag) is not None:
+            flag_value = bool(getattr(payload, flag))
+            changed = changed or getattr(source, flag) != flag_value
+            setattr(source, flag, flag_value)
     drafts = [make_source_change(source.id, source.generation, source.status, scope=scope)] if changed else []
     await commit_with_replay(
         session, drafts, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
@@ -1496,7 +1513,7 @@ async def start_source_purge(
     )
     now = datetime.now(UTC)
     event = DomainEvent(
-        id=uuid4(), type="source.purge.requested", version=1, occurred_at=now,
+        id=uuid7(), type="source.purge.requested", version=1, occurred_at=now,
         producer="modules.sources", payload={
             "operation_id": str(operation.id), "workspace_id": str(operation.workspace_id),
             "actor_user_id": operation.actor_user_id, "membership_revision": operation.membership_revision,

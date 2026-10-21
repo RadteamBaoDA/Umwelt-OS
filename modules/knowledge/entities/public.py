@@ -1768,9 +1768,9 @@ async def schedule_extraction_work(
 
 async def claim_extraction_work(
     session: AsyncSession, work_id: UUID, lease_owner: str, now: datetime, *, scope: Scope,
-    multi_workspace_enabled: bool,
+    multi_workspace_enabled: bool, lease_seconds: int = 110,
 ) -> EntityExtractionWork | None:
-    """Claim due work under a lease, enforcing expiry and the five-attempt ceiling."""
+    """Claim due work under a lease of ``lease_seconds`` (callers pass one that outlives the model call), enforcing expiry and the five-attempt ceiling."""
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     work = await session.scalar(select(EntityExtractionWork).where(
         EntityExtractionWork.id == work_id, EntityExtractionWork.workspace_id == scope.workspace_id,
@@ -1791,7 +1791,7 @@ async def claim_extraction_work(
     work.attempt += 1
     work.status = "running"
     work.lease_owner = lease_owner
-    work.lease_expires_at = now + timedelta(seconds=110)
+    work.lease_expires_at = now + timedelta(seconds=lease_seconds)
     work.error_code = None
     await session.flush()
     return work

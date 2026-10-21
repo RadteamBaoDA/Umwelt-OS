@@ -1,4 +1,4 @@
-"""P12 release acceptance: every P12 migration round-trips on a fresh disposable database."""
+"""Migration acceptance: the 0001_init baseline applies, seeds and round-trips on a fresh disposable database."""
 
 import os
 import subprocess
@@ -7,12 +7,8 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
-from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
-
-from core.auth.public import provision_bootstrap_account_in_uow
+from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
 pytestmark = pytest.mark.skipif(
     os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
@@ -21,30 +17,7 @@ pytestmark = pytest.mark.skipif(
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _p12_revisions() -> tuple[str, list[str]]:
-    """Return the pre-P12 parent and P12 revision ids (newest first), skipping any later revisions."""
-    script = ScriptDirectory.from_config(Config(str(REPOSITORY_ROOT / "alembic.ini")))
-    head = script.get_current_head()
-    assert head is not None
-    chain: list[str] = []
-    revision = script.get_revision(head)
-    # Skip later (non-P12) revisions above the P12 chain so new heads do not break collection.
-    while revision is not None and not revision.revision.startswith("p12_"):
-        parent = revision.down_revision
-        assert isinstance(parent, str), "revisions above P12 form a linear chain"
-        revision = script.get_revision(parent)
-    while revision is not None and revision.revision.startswith("p12_"):
-        chain.append(revision.revision)
-        parent = revision.down_revision
-        assert isinstance(parent, str), "P12 revisions form a linear chain"
-        revision = script.get_revision(parent)
-    assert revision is not None
-    return revision.revision, chain
-
-
-PRE_P12, P12_CHAIN = _p12_revisions()
-HEAD = str(ScriptDirectory.from_config(Config(str(REPOSITORY_ROOT / "alembic.ini"))).get_current_head())
-R15_PARENT = str(ScriptDirectory.from_config(Config(str(REPOSITORY_ROOT / "alembic.ini"))).get_revision("r15_document_language_backfill").down_revision)
+HEAD = "0001_init"
 
 
 def _alembic(database_url: str, *arguments: str) -> str:
@@ -126,85 +99,21 @@ async def _version(database_url: str) -> list[str]:
         await engine.dispose()
 
 
-def _run_demo_seed(database_url: str) -> None:
-    result = subprocess.run(
-        [sys.executable, "-m", "modules.knowledge.documents.seed"], cwd=REPOSITORY_ROOT,
-        env={**os.environ, "DATABASE_URL": database_url, "REDIS_URL": "redis://127.0.0.1:1/0"},
-        capture_output=True, text=True, check=False, timeout=300,
-    )
-    assert result.returncode == 0, result.stderr[-2000:]
-
-
-async def _seed_rows(url: str) -> dict[str, int]:
-    """Create owner-scoped demo data plus rows in P12-added tables; return pre-P12 table row counts."""
-    engine = create_async_engine(url)
-    try:
-        async with AsyncSession(engine) as session, session.begin():
-            await provision_bootstrap_account_in_uow(session, "not-a-real-hash")  # account + default workspace
-        _run_demo_seed(url)
-        async with engine.begin() as connection:
-            await connection.execute(text(
-                "INSERT INTO document_cleanup_operations (id, source_id, document_id, workspace_id, actor_user_id) "
-                "SELECT gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), id, owner_user_id "
-                "FROM workspaces LIMIT 1"
-            ))
-            await connection.execute(text(
-                "INSERT INTO onboarding_state (owner_id) SELECT id FROM owner LIMIT 1"
-            ))
-            return {
-                table: int(await connection.scalar(text(f"SELECT count(*) FROM {table}")) or 0)
-                for table in ("documents", "document_versions", "goals", "sources")
-            }
-    finally:
-        await engine.dispose()
-
-
-async def test_all_p12_revisions_downgrade_and_reupgrade_to_identical_schema(
-    scratch_database: Callable[[], Awaitable[str]],
-) -> None:
-    assert len(P12_CHAIN) == 10, P12_CHAIN  # every P12 revision is in scope, none silently skipped
-    url = await scratch_database()
-    _alembic(url, "upgrade", "head")
-    assert await _version(url) == [HEAD]
-    at_head = await _schema(url)
-
-    _alembic(url, "downgrade", PRE_P12)
-    assert await _version(url) == [PRE_P12]
-    downgraded = await _schema(url)
-    # The downgrade must really remove schema, otherwise the round trip proves nothing.
-    assert downgraded != at_head
-    assert "document_cleanup_operations" in at_head["tables"]  # type: ignore[operator]
-    assert "document_cleanup_operations" not in downgraded["tables"]  # type: ignore[operator]
-
-    _alembic(url, "upgrade", "head")
-    assert await _version(url) == [HEAD]
-    assert await _schema(url) == at_head
-
-
-async def test_all_p12_revisions_round_trip_preserves_existing_data(
+async def test_init_upgrade_creates_seed_rows_and_v7_function(
     scratch_database: Callable[[], Awaitable[str]],
 ) -> None:
     url = await scratch_database()
     _alembic(url, "upgrade", "head")
-    before = await _seed_rows(url)
-    assert before["documents"] > 0 and before["goals"] > 0, before
-    at_head = await _schema(url)
-
-    _alembic(url, "downgrade", PRE_P12)
+    assert await _version(url) == [HEAD]
     engine = create_async_engine(url)
     try:
         async with engine.connect() as connection:
-            retained = {
-                table: int(await connection.scalar(text(f"SELECT count(*) FROM {table}")) or 0)
-                for table in before
-            }
+            assert await connection.scalar(text("SELECT count(*) FROM connector_admission_slots")) == 2
+            assert await connection.scalar(text("SELECT count(*) FROM translation_admission_slots")) == 1
+            assert await connection.scalar(text("SELECT count(*) FROM github_webhook_capacity")) == 1
+            assert await connection.scalar(text("SELECT substr(uuid_generate_v7()::text, 15, 1) = '7'")) is True
     finally:
         await engine.dispose()
-    assert retained == before  # data of pre-P12 tables survives the P12 downgrade
-
-    _alembic(url, "upgrade", "head")
-    assert await _version(url) == [HEAD]
-    assert await _schema(url) == at_head
 
 
 async def test_repeated_upgrade_head_is_idempotent(
@@ -218,25 +127,13 @@ async def test_repeated_upgrade_head_is_idempotent(
     assert await _schema(url) == first
 
 
-async def test_r15_language_backfill_round_trip_with_seeded_documents(
+async def test_downgrade_wipes_schema_and_reupgrade_restores_identical_schema(
     scratch_database: Callable[[], Awaitable[str]],
 ) -> None:
     url = await scratch_database()
     _alembic(url, "upgrade", "head")
-    before = await _seed_rows(url)  # demo documents have NULL language, so the backfill UPDATE really runs
     at_head = await _schema(url)
-
-    _alembic(url, "downgrade", R15_PARENT)
-    assert await _version(url) == [R15_PARENT]
+    _alembic(url, "downgrade", "base")
+    assert "owner" not in (await _schema(url))["tables"]  # type: ignore[operator]
     _alembic(url, "upgrade", "head")
-    assert await _version(url) == [HEAD]
     assert await _schema(url) == at_head
-    engine = create_async_engine(url)
-    try:
-        async with engine.connect() as connection:
-            assert await connection.scalar(text("SELECT count(*) FROM documents")) == before["documents"]
-            assert await connection.scalar(text(
-                "SELECT indisvalid FROM pg_index WHERE indexrelid = 'ix_documents_workspace_language_created_at_id'::regclass"
-            ))
-    finally:
-        await engine.dispose()

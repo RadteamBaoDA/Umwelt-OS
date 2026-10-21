@@ -66,7 +66,7 @@ export default function LoginPage() {
         body: JSON.stringify({ password: values.password, ...(emailMode && values.identifier?.trim() ? { identifier: values.identifier.trim() } : {}) }),
       });
     },
-    onSuccess: () => router.replace('/app'),
+    onSuccess: () => router.replace('/dashboard'),
   });
 
   const unavailable = (googleStatus.error !== null && !(googleStatus.error instanceof ApiError)) || isUnreachable(login.error);

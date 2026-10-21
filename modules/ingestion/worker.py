@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import cast
 from urllib.parse import urlsplit
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import httpx
 from arq import Retry
@@ -24,6 +24,7 @@ from core.chunking import chunk_text
 from core.config import Settings
 from core.events import DomainEvent
 from core.heavy_work import bounded_heavy_work, to_thread_joined
+from core.ids import uuid7
 from core.realtime import (
     ReplayDraft,
     commit_with_replay,
@@ -1242,7 +1243,7 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                     progress.chunk_count = result.chunk_count if result.created_version else 0
                     if result.created_version and result.chunk_count:
                         ready = DomainEvent(
-                            id=uuid4(), type="document.version.ready", version=1,
+                            id=uuid7(), type="document.version.ready", version=1,
                             occurred_at=datetime.now(UTC), producer="modules.ingestion",
                             payload={
                                 "workspace_id": str(work.scope.workspace_id),

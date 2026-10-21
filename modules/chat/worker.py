@@ -18,7 +18,12 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
-from core.model_gateway.client import CapabilityUnsupported, ModelGateway, PrivacyPolicyDenied
+from core.model_gateway.client import (
+    CapabilityUnsupported,
+    ModelGateway,
+    ModelGatewayError,
+    PrivacyPolicyDenied,
+)
 from core.model_gateway.schemas import ModelMapping, RequestPolicy
 from core.model_gateway.transport import (
     EndpointNetworkPolicyError,
@@ -915,11 +920,7 @@ async def run_response_generation(
             mapping: ModelMapping | None
             override = (raw_context_req or {}).get(MODEL_OVERRIDE_KEY) if isinstance(raw_context_req, dict) else None
             if isinstance(override, dict) and override.get("model") and override.get("provider_id"):
-                chosen_provider = ai_config.providers.get(override["provider_id"])
-                mapping = ModelMapping(
-                    model=override["model"], provider_id=override["provider_id"],
-                    destination="unknown" if chosen_provider is None or chosen_provider.local else "remote",
-                )
+                mapping = settings_public.mapping_for_override(ai_config, override["provider_id"], override["model"])
                 ai_config = settings_public.derive_for_mapping(ai_config, mapping)
             else:
                 ai_config = settings_public.derive_for_role(ai_config, role)
@@ -1076,10 +1077,16 @@ async def run_response_generation(
 
         # 3b. Opt-in external visualization routing: classify ONCE per turn before the first model request (tool
         # continuation rounds reuse `route_decision`), outside the locked block so no lock spans provider egress.
-        # Errors propagate as a failed turn; None (no external router) leaves the request byte-identical.
-        route_decision = await _external_route_decision(
-            session_factory, settings, redis, job_scope, user_prompt, prior_messages, local_only=local_only_turn,
-        )
+        # A router failure (consent, key, endpoint, timeout, bad answer) falls back to the internal local rules: the
+        # internal router never leaves the host, so the turn still answers. Only the safe error code is logged.
+        # None (no external router) leaves the request byte-identical.
+        try:
+            route_decision = await _external_route_decision(
+                session_factory, settings, redis, job_scope, user_prompt, prior_messages, local_only=local_only_turn,
+            )
+        except viz.VisualizationRouterError as exc:
+            logger.warning("Visualization router failed for run %s (%s); using internal routing", response_id, exc.code)
+            route_decision = None
         if route_decision is not None:
             ui_tools = viz.filter_tool_specs(ui_tools or [], route_decision)
             ui_system_text += viz.decision_note(route_decision, remote_media=trip_images_on)
@@ -1629,7 +1636,12 @@ async def run_response_generation(
             logger.warning("Chat run shutdown release failed for %s (%s)", response_id, type(exc).__name__)
         raise
     except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
-        logger.error("Response generation failed for run %s: %s", response_id, type(exc).__name__)
+        # Router failures carry a safe code (never a URL, body or key); logging it names the setting to fix.
+        # ModelGatewayError messages are fixed strings (HTTP status, capability, policy), so they are safe to log and
+        # say why the model failed; other exception text may carry payloads, so it stays out of the log.
+        code = getattr(exc, "code", None)
+        reason = f" [{exc}]" if isinstance(exc, ModelGatewayError) else ""
+        logger.error("Response generation failed for run %s: %s%s%s", response_id, type(exc).__name__, f" ({code})" if code else "", reason)
         await _mark_failed(response_id, session_factory, seq, privacy_fence, exc, scope=job_scope)
 
 
@@ -1711,8 +1723,8 @@ async def _external_route_decision(
     Returns None when no external router is configured (the caller keeps the internal local rules, unchanged).
     Otherwise consent and the local-only fence are enforced first, the input is the bounded window (last 4
     user/assistant messages, 6000 chars each) and exactly one adapter call is made. Any failure is raised as
-    ``VisualizationRouterError`` (a retryable turn failure upstream): there is deliberately no fallback to the
-    internal router once an external one is configured. Session locks are released before any egress.
+    ``VisualizationRouterError``; the caller falls back to the internal router, so a failure never blocks the turn
+    and never sends data anywhere new. Session locks are released before any egress.
     """
     async with session_factory() as session:
         resolved = await settings_public.resolve_viz_router(session, settings, scope=scope)

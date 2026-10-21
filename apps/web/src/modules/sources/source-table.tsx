@@ -6,7 +6,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { Source } from './api';
 
 export type SourceRowState = 'active' | 'paused' | 'archived' | 'savedNotActive' | 'error' | 'reconnect';
-export type SourceFilter = 'all' | 'active' | 'paused' | 'attention';
+export type SourceFilter = 'all' | 'active' | 'paused' | 'attention' | 'archived';
 
 /**
  * Derives the visible row state from owner-reported data only.
@@ -24,9 +24,10 @@ export function sourceRowState(source: Source, activation?: { state: string; err
 
 /** Returns whether a row state belongs to the selected filter tab. */
 export function matchesFilter(state: SourceRowState, filter: SourceFilter): boolean {
-  if (filter === 'all') return true;
+  if (filter === 'all') return state !== 'archived';
   if (filter === 'active') return state === 'active';
   if (filter === 'paused') return state === 'paused';
+  if (filter === 'archived') return state === 'archived';
   return state === 'error' || state === 'reconnect' || state === 'savedNotActive';
 }
 
@@ -38,7 +39,7 @@ export function SourcesTable({ filter, counts, onFilterChange, children }: {
   children: ReactNode;
 }) {
   const t = useTranslations('sources');
-  const labels: Record<SourceFilter, string> = { all: t('filterAll'), active: t('filterActive'), paused: t('filterPaused'), attention: t('filterAttention') };
+  const labels: Record<SourceFilter, string> = { all: t('filterAll'), active: t('filterActive'), paused: t('filterPaused'), attention: t('filterAttention'), archived: t('filterArchived') };
   return <div className="grid gap-3">
     <Tabs value={filter} onValueChange={(value) => onFilterChange(value as SourceFilter)}>
       <TabsList aria-label={t('filterLabel')} className="h-auto max-w-full flex-wrap">

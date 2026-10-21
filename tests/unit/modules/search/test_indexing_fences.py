@@ -599,7 +599,7 @@ async def _prepared(
 
 
 def _source(**kw: Any) -> Any:
-    return SimpleNamespace(**{"status": "active", "local_only": False, "generation": 3, **kw})
+    return SimpleNamespace(**{"status": "active", "local_only": False, "rag_index_enabled": True, "generation": 3, **kw})
 
 
 async def test_recheck_prepared_live_and_locks_document_on_publication(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -607,10 +607,13 @@ async def test_recheck_prepared_live_and_locks_document_on_publication(monkeypat
     assert live and generation == 3 and len(locked) == 1
 
 
-@pytest.mark.parametrize("case", ["source_gone", "archived", "local_only", "generation_moved", "content_changed"])
+@pytest.mark.parametrize(
+    "case", ["source_gone", "archived", "local_only", "rag_off", "generation_moved", "content_changed"],
+)
 async def test_recheck_prepared_reports_stale_source(monkeypatch: pytest.MonkeyPatch, case: str) -> None:
     source: Any = {
         "source_gone": None, "archived": _source(status="archived"), "local_only": _source(local_only=True),
+        "rag_off": _source(rag_index_enabled=False),
         "generation_moved": _source(generation=4), "content_changed": _source(),
     }[case]
     (_f, live, _g), _ = await _prepared(

@@ -126,6 +126,9 @@ async def _account_session(request: Request, session: AsyncSession, token: str |
         raise HTTPException(status_code=401, detail="Authentication required")
     request.state.account = account
     request.state.auth_session = row
+    # Plain copy for later fence checks: a route that rolls back expires `row`, and reading its attributes
+    # then is a synchronous lazy load that raises MissingGreenlet under asyncio.
+    request.state.auth_session_ids = (row.owner_id, row.token_hash)
     return row
 
 

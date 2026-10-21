@@ -1,4 +1,5 @@
 import { apiRequest, csrfHeaders } from '@/core/api';
+import type { SourceAiOptions } from './source-ai-toggles';
 
 export type Source = {
   id: string;
@@ -7,6 +8,8 @@ export type Source = {
   provider: string | null;
   status: 'active' | 'paused' | 'archived';
   local_only: boolean;
+  graph_enabled: boolean;
+  rag_index_enabled: boolean;
   last_sync_at: string | null;
   last_success_at: string | null;
   last_error_at: string | null;
@@ -32,6 +35,7 @@ export type IngestionRun = {
   created_at: string;
   updated_at: string;
 };
+export type IngestionRunStatus = IngestionRun['status'];
 export type ConnectorConfig = {
   url?: string;
   feed_url?: string;
@@ -202,8 +206,8 @@ export function getSourceImpact(id: string, signal?: AbortSignal) { return apiRe
 export function getSource(id: string) { return apiRequest<Source>(`/api/v1/sources/${id}`); }
 
 /** Creates a manual source with the supplied name and CSRF token. */
-export function createManualSource(name: string, csrfToken: string) {
-  return apiRequest<Source>('/api/v1/sources', { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ type: 'manual', name }) });
+export function createManualSource(name: string, csrfToken: string, options?: SourceAiOptions) {
+  return apiRequest<Source>('/api/v1/sources', { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ type: 'manual', name, ...options }) });
 }
 
 /** Archives a source through the source DELETE endpoint using CSRF protection. */
@@ -221,14 +225,19 @@ export function updateSourceStatus(id: string, status: 'active' | 'paused', csrf
   return apiRequest<Source>(`/api/v1/sources/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ status }), signal });
 }
 
+/** Patches the owner's graph/RAG switches on an existing source; both are optional and only sent keys change. */
+export function updateSourceAiOptions(id: string, options: Partial<SourceAiOptions>, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<Source>(`/api/v1/sources/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify(options), signal });
+}
+
 /** Fetches the connector catalog and forwards an optional abort signal. */
 export function getConnectorCatalog(signal?: AbortSignal) {
   return apiRequest<ConnectorCatalogEntry[]>('/api/v1/connectors/catalog', { signal });
 }
 
 /** Creates a connector with its immutable native provider identity, if any, using the source owner route. */
-export function createConnectorSource(type: 'rss' | 'web' | 'api' | 'mcp', name: string, csrfToken: string, signal?: AbortSignal, provider?: string) {
-  return apiRequest<Source>('/api/v1/sources', { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ type, name, ...(provider ? { provider } : {}) }), signal });
+export function createConnectorSource(type: 'rss' | 'web' | 'api' | 'mcp', name: string, csrfToken: string, signal?: AbortSignal, provider?: string, options?: SourceAiOptions) {
+  return apiRequest<Source>('/api/v1/sources', { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ type, name, ...(provider ? { provider } : {}), ...options }), signal });
 }
 
 /** Fetches the connector configuration and forwards an optional abort signal. */
@@ -403,8 +412,11 @@ export function getCollectionRequest(id: string, requestId: string, signal?: Abo
 export function getRun(id: string) { return apiRequest<IngestionRun>(`/api/v1/ingestion/runs/${id}`); }
 
 /** Lists a source’s ingestion runs in pages of 20 using the optional cursor. */
-export function getSourceIngestion(id: string, cursor?: string) {
-  return apiRequest<SourceIngestion>(`/api/v1/ingestion/sources/${id}/runs?limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+export function getSourceIngestion(id: string, cursor?: string, status?: IngestionRunStatus, signal?: AbortSignal) {
+  const params = new URLSearchParams({ limit: '20' });
+  if (cursor) params.set('cursor', cursor);
+  if (status) params.set('status', status);
+  return apiRequest<SourceIngestion>(`/api/v1/ingestion/sources/${id}/runs?${params}`, { signal });
 }
 
 /** Retries the selected ingestion stage using CSRF protection. */
@@ -425,12 +437,12 @@ export type ProviderTerms = {
 
 /** Owner read of the provider terms state; null when nothing has been acknowledged yet. */
 export function getProviderTerms(id: string, signal?: AbortSignal) {
-  return apiRequest<ProviderTerms | null>(`/api/v1/connectors/${id}/terms`, { signal });
+  return apiRequest<ProviderTerms | null>(`/api/v1/connectors/sources/${id}/terms`, { signal });
 }
 
 /** Owner declares deployment use and acknowledges one terms version. */
 export function acknowledgeProviderTerms(id: string, declaredUse: DeclaredUse, termsVersion: string, csrfToken: string, signal?: AbortSignal) {
-  return apiRequest<ProviderTerms>(`/api/v1/connectors/${id}/terms`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ declared_use: declaredUse, terms_version: termsVersion }), signal });
+  return apiRequest<ProviderTerms>(`/api/v1/connectors/sources/${id}/terms`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ declared_use: declaredUse, terms_version: termsVersion }), signal });
 }
 
 /** One built-in preset with the owner's toggle state; `source_id` stays null until it is first enabled. */
@@ -446,8 +458,8 @@ export function listBuiltinSources(signal?: AbortSignal) {
 }
 
 /** Turns a built-in on; the server creates the source, records the terms acknowledgement (and operator review where required) and activates it. */
-export function enableBuiltinSource(provider: string, declaredUse: DeclaredUse, csrfToken: string, signal?: AbortSignal) {
-  return apiRequest<BuiltinSource>(`/api/v1/connectors/builtins/${encodeURIComponent(provider)}/enable`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ declared_use: declaredUse }), signal });
+export function enableBuiltinSource(provider: string, declaredUse: DeclaredUse, csrfToken: string, signal?: AbortSignal, options?: SourceAiOptions) {
+  return apiRequest<BuiltinSource>(`/api/v1/connectors/builtins/${encodeURIComponent(provider)}/enable`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ declared_use: declaredUse, ...options }), signal });
 }
 
 /** Turns a built-in off by pausing its source; the source, terms and history are kept. */

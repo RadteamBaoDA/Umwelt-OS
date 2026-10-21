@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast, overload
-from uuid import UUID, uuid4, uuid5
+from uuid import UUID, uuid5
 
 from arq import Retry
 from arq.connections import ArqRedis
@@ -28,6 +28,7 @@ from core.heavy_work import (
     RemoteHeavyWorkBlocked,
     heavy_job_slot,
 )
+from core.ids import uuid7
 from core.job_denial import admit_retry_stale, denial_code, terminalize
 from core.model_gateway.client import ModelGateway, PrivacyPolicyDenied
 from core.model_gateway.schemas import ModelMapping, RequestPolicy
@@ -327,7 +328,7 @@ async def _claim(factory: async_sessionmaker[AsyncSession], adm: _Admission, ope
                 mapping.status, mapping.error_code = "failed", "attempts_exhausted"
             await _commit(session, adm, [await public.graph_status_change(session, mapping.id, scope=adm.scope)])
             return None
-        token = uuid4()
+        token = uuid7()
         partition.lease_token, partition.lease_expires_at = token, now + timedelta(seconds=LEASE_SECONDS)
         operation.lease_owner, operation.lease_expires_at = token, partition.lease_expires_at
         assert operation is not None

@@ -15,7 +15,7 @@ type GateSettings = {
 };
 
 /** Settings route where providers and chat model mappings are configured. */
-export const MODELS_SETTINGS_HREF = '/settings/ai';
+export const MODELS_SETTINGS_HREF = '/settings/models';
 /** Readiness is cached this long; a settings save writes the shared query so it refreshes at once. */
 export const PROVIDER_READY_STALE_MS = 30_000;
 

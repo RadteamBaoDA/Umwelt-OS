@@ -124,6 +124,37 @@ services:
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
 
+  model-worker:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    command: ["arq", "apps.worker.main.ModelWorkerSettings"]
+    env_file: .env
+    healthcheck:
+      test: ["CMD", "arq", "--check", "apps.worker.main.ModelWorkerSettings"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    init: true
+    volumes:
+      - app-data:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    cpu_shares: 512
+    deploy:
+      resources:
+        limits: {memory: 768M}
+        reservations: {memory: 256M}
+    stop_grace_period: 30s
+    restart: unless-stopped
+    logging: *default-logging
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
   web:
     build:
       context: .

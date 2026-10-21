@@ -10,7 +10,7 @@ from ipaddress import ip_address
 from socket import getaddrinfo
 from typing import TYPE_CHECKING, Literal, TypeGuard
 from urllib.parse import urlsplit
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import HTTPException
 from pydantic import (
@@ -26,6 +26,7 @@ from pydantic import (
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.ids import uuid7
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.connectors.backends import (
@@ -48,6 +49,9 @@ from modules.connectors.models import (
     GithubWebhookCapacity,
     GithubWebhookDelivery,
     GithubWebhookOutbox,
+)
+from modules.connectors.provider_specs import (
+    BUILTIN_PROVIDERS as BUILTIN_PROVIDERS,  # noqa: PLC0414 - public re-export
 )
 from modules.connectors.providers.cii import CiiProjection
 from modules.ingestion.schemas import IngestionRecord, TelegramRawDelivery
@@ -1797,7 +1801,7 @@ async def persist_verified_github_delivery(session: AsyncSession, delivery: "Ver
     if capacity.digest_count >= 100_000 or pending and capacity.pending_count >= 100_000:
         await session.rollback()
         raise HTTPException(status_code=503, detail="GitHub webhook capacity is exhausted")
-    receipt_id = uuid4()
+    receipt_id = uuid7()
     received_at = normalized.received_at
     session.add(GithubWebhookDelivery(
         id=receipt_id, receiver_revision=normalized.receiver_revision,
@@ -1810,7 +1814,7 @@ async def persist_verified_github_delivery(session: AsyncSession, delivery: "Ver
     ))
     if pending:
         session.add(GithubWebhookOutbox(
-            id=uuid4(), delivery_id=receipt_id, binding_cursor=None,
+            id=uuid7(), delivery_id=receipt_id, binding_cursor=None,
             state="pending", attempts=0, next_attempt_at=received_at,
         ))
         capacity.pending_count += 1
@@ -2120,7 +2124,7 @@ async def enqueue_github_hint(
             raise HTTPException(status_code=409, detail="GitHub visibility Source changed during cleanup")
         if visibility_hint is None:
             session.add(GithubSourceHint(
-                id=uuid4(), source_id=binding.source_id,
+                id=uuid7(), source_id=binding.source_id,
                 source_generation=paused.generation,
                 connector_revision=binding.connector_revision,
                 repository_id=binding.repository_id, binding_revision=binding.binding_revision,
@@ -2220,7 +2224,7 @@ async def enqueue_github_hint(
         await session.rollback()
         return GitHubHintEnqueueResult(workspace_id=scope.workspace_id, source_id=binding.source_id, disposition="capacity_exhausted")
     hint = GithubSourceHint(
-        id=uuid4(), source_id=binding.source_id,
+        id=uuid7(), source_id=binding.source_id,
         source_generation=binding.source_generation,
         connector_revision=binding.connector_revision,
         repository_id=binding.repository_id,
@@ -2302,7 +2306,7 @@ async def claim_github_hint(
         capacity.pending_count += 1
         hint.capacity_reserved = True
         hint.state = "pending"
-    token = uuid4()
+    token = uuid7()
     expires = now + timedelta(seconds=60)
     hint.claim_token = token
     hint.claimed_revision = hint.dirty_revision

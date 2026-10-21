@@ -1147,9 +1147,9 @@ async def schedule_extraction_work(
 
 async def claim_extraction_work(
     session: AsyncSession, work_id: UUID, lease_owner: str, now: datetime, *, scope: Scope,
-    multi_workspace_enabled: bool,
+    multi_workspace_enabled: bool, lease_seconds: int = 110,
 ) -> Any | None:
-    """Claim due work or terminalize an exhausted expired lease; flush without committing."""
+    """Claim due work for ``lease_seconds`` (must outlive the model call) or terminalize an exhausted expired lease; flush without committing."""
     from datetime import timedelta
 
     from modules.timeline.models import TimelineExtractionWork
@@ -1168,7 +1168,7 @@ async def claim_extraction_work(
         await session.flush()
         return None
     work.status, work.attempt = "running", work.attempt + 1
-    work.lease_owner, work.lease_expires_at = lease_owner, now + timedelta(seconds=110)
+    work.lease_owner, work.lease_expires_at = lease_owner, now + timedelta(seconds=lease_seconds)
     work.error_code = None
     await session.flush()
     return work

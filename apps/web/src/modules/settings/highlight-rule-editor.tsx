@@ -19,6 +19,7 @@ import {
 import { fetchAllTopics } from '@/modules/news/api';
 import { parseKeywordList } from './gadget-library';
 import { CheckboxField, FieldGrid } from './settings-layout';
+import { uuid7 } from '@/core/uuid7';
 
 type Severity = HighlightRule['severity'];
 type SourceMode = 'any' | 'only' | 'exclude';
@@ -119,7 +120,7 @@ function RuleList({ def, onRuleDeleted }: { def: GadgetDefinition; onRuleDeleted
     const sourceModes: Record<string, SourceMode> = {};
     rule?.source_ids?.forEach((id) => { sourceModes[id] = 'only'; });
     rule?.exclude_source_ids?.forEach((id) => { sourceModes[id] = 'exclude'; });
-    setEditing(rule ? { id: rule.id, keywords: rule.keywords.join(', '), severity: rule.severity, notify: rule.notify, topicIds: rule.topic_ids ?? [], sourceModes, cooldown: String(rule.cooldown_minutes ?? 0), expires: toLocalInput(rule.expires_at), quietStart: rule.quiet_start ?? '', quietEnd: rule.quiet_end ?? '' } : { id: crypto.randomUUID(), keywords: '', severity: 'info', notify: false, topicIds: [], sourceModes, cooldown: '0', expires: '', quietStart: '', quietEnd: '' });
+    setEditing(rule ? { id: rule.id, keywords: rule.keywords.join(', '), severity: rule.severity, notify: rule.notify, topicIds: rule.topic_ids ?? [], sourceModes, cooldown: String(rule.cooldown_minutes ?? 0), expires: toLocalInput(rule.expires_at), quietStart: rule.quiet_start ?? '', quietEnd: rule.quiet_end ?? '' } : { id: uuid7(), keywords: '', severity: 'info', notify: false, topicIds: [], sourceModes, cooldown: '0', expires: '', quietStart: '', quietEnd: '' });
   };
   return <div className="space-y-4">
     <div className="flex items-center justify-between gap-2">

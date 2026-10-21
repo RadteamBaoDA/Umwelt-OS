@@ -11,12 +11,13 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import and_, exists, func, or_, select, text, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from core.ids import uuid7
 from core.pagination import decode_cursor, encode_cursor
 from core.realtime import commit_with_replay
 from core.telemetry import RunMeta as _RunMeta
@@ -442,7 +443,7 @@ async def create_profile_run_in_uow(
                  for item in snapshot["allowed_tools"]}
     profile_id_value = snapshot["id"]
     run = AgentRun(
-        id=uuid4(), workspace_id=scope.workspace_id, owner_id=owner_id,
+        id=uuid7(), workspace_id=scope.workspace_id, owner_id=owner_id,
         membership_revision=fence.membership_revision,
         configuration_revision=fence.configuration_revision,
         auth_session_hash=auth_session_hash,
@@ -450,7 +451,7 @@ async def create_profile_run_in_uow(
         workflow_version=SPECIALIST_WORKFLOW_VERSION,
         prompt_version=SPECIALIST_PROMPT_VERSION,
         checkpoint_schema_version=SPECIALIST_CHECKPOINT_SCHEMA_VERSION,
-        checkpoint_thread_id=str(uuid4()), prompt=request.prompt,
+        checkpoint_thread_id=str(uuid7()), prompt=request.prompt,
         profile_snapshot=snapshot, profile_revision_hash=snapshot_hash,
         client_request_id=request.client_request_id, request_hash=request_hash,
         allowed_tools=allowed, tool_contracts=contracts,
@@ -582,13 +583,13 @@ async def create_run(
     if not allowed:
         raise HTTPException(status_code=503, detail="Agent tools are unavailable")
     run = AgentRun(
-        id=uuid4(), workspace_id=scope.workspace_id, owner_id=owner_id,
+        id=uuid7(), workspace_id=scope.workspace_id, owner_id=owner_id,
         membership_revision=fence.membership_revision,
         configuration_revision=fence.configuration_revision,
         auth_session_hash=auth_session_hash,
         agent_id="assistant", workflow_version=APPROVAL_WORKFLOW_VERSION,
         prompt_version=APPROVAL_PROMPT_VERSION, checkpoint_schema_version=CHECKPOINT_SCHEMA_VERSION,
-        checkpoint_thread_id=str(uuid4()), prompt=request.prompt,
+        checkpoint_thread_id=str(uuid7()), prompt=request.prompt,
         allowed_tools=allowed,
         tool_contracts={name: {"version": item.version, "fingerprint": item.schema_fingerprint}
                         for name, item in definitions.items()},

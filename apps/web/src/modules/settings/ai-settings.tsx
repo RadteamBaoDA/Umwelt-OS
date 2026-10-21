@@ -162,12 +162,31 @@ export function AISettingsWorkspace() {
     onSuccess: (data, { role, mapping }) => { if (data.capability === 'embeddings' && data.result === 'supported' && typeof data.dimensions === 'number') setDraft((current) => { const from = current ?? query.data; // Ignore a late probe for a model the owner has since replaced.
       const picked = from?.defaults?.[role];
       return from && picked?.model === mapping.model ? { ...from, defaults: { ...from.defaults, [role]: { ...picked, dimensions: data.dimensions } } } : current; }); } });
-  /** Runs the draft-test request for one provider model using the role that matches its type. */
+  /**
+   * Tests one provider model. A saved provider's saved chat (llm) model is probed through the role endpoint so the
+   * streaming (and best-effort tools) evidence the chat run requires is stored; everything else uses the transient
+   * draft-test. Resolves to the capability result shown in the table; a tools failure never changes it.
+   */
   const testModel = useMutation({
-    mutationFn: ({ provider, model }: { provider: ProviderRead; model: ProviderModel }) => {
+    mutationFn: async ({ provider, model }: { provider: ProviderRead; model: ProviderModel }): Promise<Capability> => {
       const slot = testRoleByType[model.type];
       if (!slot) return Promise.reject(new Error('untestable'));
-      return apiRequest<Capability>('/api/v1/settings/models/draft-test', { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ role: slot.role, provider_id: savedIds.includes(provider.id) ? provider.id : undefined, base_url: provider.base_url, kind: provider.kind, api_key: secrets[provider.id]?.key ?? '', model: model.id, version: null, capability: slot.capability }) });
+      const post = (path: string, body: object) => apiRequest<Capability>(path, { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      // Evidence is stored server-side, so the provider and model must exist there and use the stored key.
+      const persisted = query.data?.providers.find((item) => item.id === provider.id)?.models.some((item) => item.id === model.id && item.type === 'llm');
+      if (model.type === 'llm' && persisted && !secrets[provider.id]?.key) {
+        const target = { provider_id: provider.id, model: model.id };
+        const streaming = await post('/api/v1/settings/models/chat/test', { capability: 'streaming', ...target });
+        // Tools support is optional (text-only fallback), so its outcome must not mark the model unhealthy.
+        if (streaming.result === 'supported') await post('/api/v1/settings/models/chat/test', { capability: 'tools', ...target }).catch(() => undefined);
+        // Background jobs (entity/timeline extraction) use the background role, which has no test of its own: refresh
+        // its chat evidence (enables the app-side JSON fallback) and try native structured output. Best effort.
+        if (streaming.result === 'supported') {
+          for (const capability of ['chat', 'structured']) await post('/api/v1/settings/models/background/test', { capability }).catch(() => undefined);
+        }
+        return streaming;
+      }
+      return post('/api/v1/settings/models/draft-test', { role: slot.role, provider_id: savedIds.includes(provider.id) ? provider.id : undefined, base_url: provider.base_url, kind: provider.kind, api_key: secrets[provider.id]?.key ?? '', model: model.id, version: null, capability: slot.capability });
     },
     onMutate: ({ provider, model }) => setModelTests((current) => ({ ...current, [modelTestKey(provider.id, model.id)]: 'pending' })),
     onSuccess: (data, { provider, model }) => setModelTests((current) => ({ ...current, [modelTestKey(provider.id, model.id)]: data.result as ModelTestState })),
@@ -178,7 +197,19 @@ export function AISettingsWorkspace() {
   /** Applies a partial update to the AI settings draft. */
   const set = (patch: Partial<AISettings>) => setDraft({ ...saved, ...patch });
   /** Merges a partial privacy update into the current AI settings draft. */
-  const setPrivacy = (patch: Partial<Privacy>) => set({ privacy: { ...defaultPrivacy, ...saved.privacy, ...patch } });
+  /**
+   * Merges a privacy patch and binds remote consent to the provider destinations. The backend only keeps a
+   * grant when `allow_*` is true AND the provider's destination id is listed, so the toggle must send the list.
+   */
+  const setPrivacy = (patch: Partial<Privacy>) => {
+    const remoteDestinations = saved.providers
+      .filter((p) => !p.local && !p.policy_denied && p.destination_id)
+      .map((p) => p.destination_id as string);
+    const next: Privacy = { ...defaultPrivacy, ...saved.privacy, ...patch };
+    if (patch.allow_remote_reasoning !== undefined) next.reasoning_destinations = patch.allow_remote_reasoning ? remoteDestinations : [];
+    if (patch.allow_remote_embeddings !== undefined) next.embedding_destinations = patch.allow_remote_embeddings ? remoteDestinations : [];
+    set({ privacy: next });
+  };
   const defaults: Defaults = saved.defaults ?? {};
   /** Latest recorded probe result for one role and capability, or null when never checked. */
   const capabilityStatus = (role: string, capability: string) => {

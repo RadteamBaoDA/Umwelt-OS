@@ -29,8 +29,8 @@ describe("member navigation", () => {
   it("limits members to read-only translation settings and hides owner settings", () => {
     const groups = (role: "owner" | "member") => settingsGroups.filter((d) => destinationForRole(d, role)).map((d) => d.href);
     expect(groups("member")).toEqual(["/settings/translation"]);
-    expect(groups("owner")).toEqual(expect.arrayContaining(["/settings/ai", "/settings/sources", "/settings/translation"]));
-    expect(commandDestinations.filter((d) => destinationForRole(d, "member")).map((d) => d.href)).not.toContain("/settings/ai");
+    expect(groups("owner")).toEqual(expect.arrayContaining(["/settings/models", "/settings/sources", "/settings/translation"]));
+    expect(commandDestinations.filter((d) => destinationForRole(d, "member")).map((d) => d.href)).not.toContain("/settings/models");
   });
 
   it("limits an administrator viewer to shared data destinations and excludes private surfaces", () => {

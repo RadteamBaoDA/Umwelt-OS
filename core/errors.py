@@ -1,7 +1,6 @@
 import logging
 import time
 from typing import Any
-from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -11,6 +10,7 @@ from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from core.ids import uuid7
 from core.telemetry import bind_trace, count, observe_ms
 
 logger = logging.getLogger("bbd.api")
@@ -52,7 +52,7 @@ class _RequestIdMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        request_id_value = str(uuid4())
+        request_id_value = str(uuid7())
         scope.setdefault("state", {})["request_id"] = request_id_value
         started = time.perf_counter()
         recorded = False

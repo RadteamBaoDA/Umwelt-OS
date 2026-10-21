@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import (
     CheckConstraint,
@@ -18,6 +18,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import UserDefinedType, Uuid
 
 from core.database import Base
+from core.ids import uuid7
 
 
 class Vector(UserDefinedType[Any]):
@@ -46,7 +47,7 @@ class IndexGeneration(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     model_id: Mapped[str] = mapped_column(String(200), nullable=False)
     model_version: Mapped[str | None] = mapped_column(String(200))
     gateway_identity: Mapped[str | None] = mapped_column(String(64))
@@ -69,7 +70,7 @@ class SearchIndexItem(Base):
         Index("ix_search_index_items_chunk_id", "chunk_id"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     generation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("search_index_generations.id", ondelete="CASCADE"), nullable=False)
     chunk_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("document_chunks.id", ondelete="CASCADE"), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")

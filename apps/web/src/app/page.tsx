@@ -9,7 +9,7 @@ import { apiRequest } from '@/core/api';
 type SetupStatus = { setupRequired: boolean };
 type Session = { authenticated: true; csrfToken: string };
 
-/** Routes the initial visit to setup, the application, or sign-in from live status checks. */
+/** Routes the initial visit to setup, the dashboard, or sign-in from live status checks. */
 export default function HomePage() {
   const ts = useTranslations('uiSweep');
   const router = useRouter();
@@ -22,7 +22,7 @@ export default function HomePage() {
 
   useEffect(() => {
     if (setup.data?.setupRequired) router.replace('/setup');
-    else if (setup.data && session.data?.authenticated) router.replace('/app');
+    else if (setup.data && session.data?.authenticated) router.replace('/dashboard');
     else if (setup.data && session.isError) router.replace('/login');
   }, [router, setup.data, session.data, session.isError]);
 

@@ -11,6 +11,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import Link from 'next/link';
+import { usePathname, useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, useLayoutEffect } from 'react';
 import {
@@ -273,11 +274,13 @@ function projectMobilePlacements(
 /**
  * Main dashboard container view for BBD-OS, keeping dashboard controls visible while its content scrolls.
  * Supports owner-scoped desktop/mobile drafts and administrator read-only views, plus mobile reading,
- * geometry history, dashboard switching, and dirty navigation guarding.
+ * geometry history, dashboard switching, and dirty navigation guarding. The route parameter selects
+ * the dashboard; `/dashboard` resolves to the first available dashboard.
  *
+ * @param dashboardId Dashboard identity from the canonical dashboard route, when present.
  * @returns Authenticated dashboard view component.
  */
-export function DashboardPage() {
+export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
   const t = useTranslations('dashboard');
   const ts = useTranslations('uiSweep');
   const session = useWorkspaceSession();
@@ -285,9 +288,10 @@ export function DashboardPage() {
   const queryClient = useQueryClient();
   const guardedNavigation = useGuardedNavigation();
   const display = useDisplayPreferences();
+  const pathname = usePathname();
+  const router = useRouter();
 
   // Active dashboard selection
-  const [chosenDashboardId, setSelectedDashboardId] = useState<string | null>(null);
   const [isEditMode, setIsEditMode] = useState<boolean>(false);
   const [activeGroupId, setActiveGroupId] = useState<string>('all');
 
@@ -340,8 +344,25 @@ export function DashboardPage() {
 
   const dashboards = dashboardsQuery.data ?? [];
 
-  // Fall back to the first dashboard until the owner picks one
-  const selectedDashboardId = chosenDashboardId ?? dashboards[0]?.id ?? null;
+  // The route owns dashboard selection; /dashboard resolves to the workspace's first dashboard.
+  const selectedDashboardId = dashboardId ?? dashboards[0]?.id ?? null;
+
+  useEffect(() => {
+    if (!dashboardsQuery.isSuccess) return;
+    const firstDashboardId = dashboards[0]?.id;
+    if (dashboardId && !dashboards.some((dashboard) => dashboard.id === dashboardId)) {
+      router.replace(firstDashboardId ? `/dashboard/${encodeURIComponent(firstDashboardId)}` : '/dashboard');
+    } else if (pathname === '/dashboard' && firstDashboardId) {
+      router.replace(`/dashboard/${encodeURIComponent(firstDashboardId)}`);
+    }
+  }, [dashboardId, dashboards, dashboardsQuery.isSuccess, pathname, router]);
+
+  /** Navigates to a dashboard's canonical URL after the caller's dirty-state guard succeeds. */
+  const navigateToDashboard = useCallback((id: string, replace = false) => {
+    const href = `/dashboard/${encodeURIComponent(id)}`;
+    if (replace) router.replace(href);
+    else router.push(href);
+  }, [router]);
 
   // Fetch active dashboard details
   const activeDashboardQuery = useQuery({
@@ -351,6 +372,11 @@ export function DashboardPage() {
   });
 
   const activeDashboard = activeDashboardQuery.data ?? null;
+  const requestedDashboardExists = !dashboardId || dashboards.some((dashboard) => dashboard.id === dashboardId);
+  const dashboardRouteReady = dashboardsQuery.isError || (dashboardsQuery.isSuccess && (
+    dashboards.length === 0
+    || requestedDashboardExists && (!selectedDashboardId || activeDashboardQuery.isSuccess || activeDashboardQuery.isError)
+  ));
 
   // Stale sources: sources this dashboard reads whose latest error is newer than the latest success.
   const sourcesQuery = useQuery({
@@ -648,11 +674,11 @@ export function DashboardPage() {
         pendingDashboardSwitchRef.current = newId;
         setDirtyModalOpen(true);
       } else {
-        setSelectedDashboardId(newId);
+        navigateToDashboard(newId);
         setActiveGroupId('all');
       }
     },
-    [isDirty, layoutOperationPending, selectedDashboardId],
+    [isDirty, layoutOperationPending, navigateToDashboard, selectedDashboardId],
   );
 
   /** Resolves the dirty modal selection: save, discard, or stay. */
@@ -686,7 +712,7 @@ export function DashboardPage() {
           return;
         }
         if (pendingDashboardSwitchRef.current) {
-          setSelectedDashboardId(pendingDashboardSwitchRef.current);
+          navigateToDashboard(pendingDashboardSwitchRef.current);
           pendingDashboardSwitchRef.current = null;
           setActiveGroupId('all');
         }
@@ -716,7 +742,7 @@ export function DashboardPage() {
             return;
           }
           if (pendingDashboardSwitchRef.current) {
-            setSelectedDashboardId(pendingDashboardSwitchRef.current);
+            navigateToDashboard(pendingDashboardSwitchRef.current);
             pendingDashboardSwitchRef.current = null;
             setActiveGroupId('all');
           }
@@ -736,7 +762,7 @@ export function DashboardPage() {
         }
       }
     },
-    [captureLayoutSaveRequest, guardedNavigation, saveLayoutMutation, savedPlacements],
+    [captureLayoutSaveRequest, guardedNavigation, navigateToDashboard, saveLayoutMutation, savedPlacements],
   );
 
   // Dashboard creation mutation
@@ -746,7 +772,7 @@ export function DashboardPage() {
     },
     onSuccess: (newDash) => {
       void queryClient.invalidateQueries({ queryKey: dashboardKeys.all });
-      setSelectedDashboardId(newDash.id);
+      navigateToDashboard(newDash.id, true);
       setCreateDashboardOpen(false);
       setNewDashboardName('');
     },
@@ -782,7 +808,9 @@ export function DashboardPage() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: dashboardKeys.all });
       setDeleteDialogOpen(false);
-      setSelectedDashboardId(null);
+      const fallback = dashboards.find((dashboard) => dashboard.id !== activeDashboard?.id);
+      if (fallback) navigateToDashboard(fallback.id, true);
+      else router.replace('/dashboard');
     },
   });
 
@@ -971,7 +999,7 @@ export function DashboardPage() {
   }, []);
 
   return (
-    <section className="flex w-full flex-col gap-6">
+    <section className="flex w-full flex-col gap-6" data-dashboard-ready={dashboardRouteReady}>
       {/* Page header (Dashboard artboard): eyebrow, switcher-as-title, meta and actions */}
       <div className="flex flex-wrap items-end gap-3">
         <div className="mr-auto flex min-w-0 flex-col gap-0.5">
@@ -1243,7 +1271,7 @@ export function DashboardPage() {
         currentDashboardRevision={activeDashboard?.revision}
         currentDashboardName={activeDashboard?.name}
         onPresetApplied={(applied) => {
-          setSelectedDashboardId(applied.id);
+          navigateToDashboard(applied.id, true);
           setActiveGroupId('all');
           setIsDirty(false);
           setIsEditMode(false);

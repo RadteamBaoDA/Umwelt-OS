@@ -7,10 +7,11 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi.encoders import jsonable_encoder
 
+from core.ids import uuid7
 from core.telemetry import bind_trace, count, observe_ms
 from core.tools.policy import ToolPolicy
 from core.tools.schemas import ToolDefinition, ToolExecutionPrincipal, ToolResult, ToolRisk
@@ -164,7 +165,7 @@ class ToolRegistry:
         """Dispatch via ``_invoke_tool`` and record tool duration/outcome (label: registered tool name only)."""
         started = time.perf_counter()
         # Single dispatch point: bind a per-call ID (caller-supplied or fresh), reset on exit.
-        call_id = str((context or {}).get("tool_call_id") or uuid4())
+        call_id = str((context or {}).get("tool_call_id") or uuid7())
         with bind_trace(tool_call_id=call_id):
             result = await self._invoke_tool(name, args, principal, version=version, context=context)
         # Unknown names fold to one label so callers cannot inflate cardinality.

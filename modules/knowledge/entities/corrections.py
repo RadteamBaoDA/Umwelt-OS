@@ -4,12 +4,13 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.ids import uuid7
 from core.realtime import ReplayDraft, commit_with_replay, make_graph_change
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
@@ -1022,7 +1023,7 @@ async def split_entity(
     await _temporal_before_relationships(
         session, closure.relationship_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     selected_ids = set(payload.evidence_ids)
-    new_id = uuid4()
+    new_id = uuid7()
     new_entity = Entity(
         workspace_id=scope.workspace_id, id=new_id, type=payload.new_entity.type, name=payload.new_entity.name,
         canonical_name=canonicalize_name(payload.new_entity.name), description=payload.new_entity.description,

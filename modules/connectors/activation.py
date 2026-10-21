@@ -1,10 +1,11 @@
 import copy
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.ids import uuid7
 from core.workspaces.schemas import AccessFence, Scope
 from modules.connectors import provider_terms, provisioning, scheduler
 from modules.connectors.credentials import (
@@ -75,7 +76,7 @@ def prepare_credential_assignment(
         # Exact fingerprint and binding equality avoids a needless provider mutation.
         return ({"binding": expected, "credential_id": existing.credential_id}, None)
 
-    operation_id = uuid4()
+    operation_id = uuid7()
     target_id = existing.credential_id if existing is not None else None
     request: dict[str, object] = {
         "name": credential_name,
@@ -253,7 +254,7 @@ async def drive_activation(
         if source is None:
             await session.rollback()
             return False
-        operation_id = uuid4()
+        operation_id = uuid7()
         name = (
             row.workflow_name if row.workflow_id and row.workflow_name
             else workflow_name(source_id, operation_id)

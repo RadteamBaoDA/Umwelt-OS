@@ -9,9 +9,11 @@ import re
 import time
 from typing import Any
 from urllib.parse import urlsplit
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import httpx
+
+from core.ids import uuid7
 
 logger = logging.getLogger("bbd.telemetry.langfuse")
 _QUEUE_LIMIT = 32
@@ -64,9 +66,9 @@ def _span(
     correlation_keys = ("request_id", "agent_run_id", "ingestion_run_id", "tool_call_id")
     correlation_id = next((trace.get(key) for key in correlation_keys if trace.get(key)), None)
     try:
-        trace_id = UUID(str(correlation_id)).hex if correlation_id else uuid4().hex
+        trace_id = UUID(str(correlation_id)).hex if correlation_id else uuid7().hex
     except ValueError:
-        trace_id = uuid4().hex
+        trace_id = uuid7().hex
 
     attrs = [
         _attribute("langfuse.observation.type", "generation"),
@@ -94,7 +96,7 @@ def _span(
     elapsed_ns = max(0, int((time.perf_counter() - started) * 1_000_000_000))
     span = {
         "traceId": trace_id,
-        "spanId": uuid4().hex[:16],
+        "spanId": uuid7().hex[-16:],
         "name": "model_call",
         "kind": 3,
         "startTimeUnixNano": str(max(0, end_ns - elapsed_ns)),

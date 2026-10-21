@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 from typing import Annotated, Literal, cast
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
+from core.ids import uuid7
 from core.realtime import commit_with_replay, make_source_change
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.public import lock_access_fence
@@ -29,6 +30,7 @@ from modules.connectors.activation import (
     drive_activation,
     prepare_credential_assignment,
 )
+from modules.connectors.backends import native_dispatch_supported
 from modules.connectors.credentials import (
     CredentialEncryptionUnavailable,
     N8nCredentials,
@@ -627,15 +629,17 @@ async def get_activation(
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     await _owner_access(session, request, scope)
-    await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
     row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
     if row is None:
+        # No row yet: report the backend a first save would pick (mirrors public.py), not a fixed n8n default.
         return ActivationRead(
             workspace_id=scope.workspace_id, source_id=source_id,
             desired_revision=0,
             applied_revision=0,
             state="saved_not_active",
             error_code=None,
+            execution_backend="native" if native_dispatch_supported(source.type, source.provider) else "n8n",
         )
     return await _activation_read(session, source_id, row, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
 
@@ -703,7 +707,7 @@ async def activate_source(
     except CredentialEncryptionUnavailable as exc:
         raise HTTPException(status_code=503, detail="Connector credential encryption is not configured") from exc
 
-    activation_id = uuid4()
+    activation_id = uuid7()
     native_bot_id: str | None = None
     if source.provider == "telegram":
         from modules.connectors.providers.telegram import validate_telegram_scope
@@ -1259,7 +1263,7 @@ async def reenter_native_rest_credential(
         except ProviderPayloadError as exc:
             raise HTTPException(status_code=422, detail="The API key is not acceptable for this provider") from exc
     header_name = keyed_header or str(desired["auth_header_name"])
-    operation_id = uuid4()
+    operation_id = uuid7()
     try:
         ciphertext = encrypt_rest_secret(
             key, source_id=source_id, operation_id=operation_id, source_generation=source.generation,

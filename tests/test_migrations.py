@@ -5,26 +5,7 @@ import sys
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
-# Derive the head so later additive revisions (provider terms/quota, translation) never hardcode here.
-# While r22 and r24 are unchained siblings there are two heads; the integrator re-chains them, so tolerate that here.
-_HEADS = ScriptDirectory.from_config(Config("alembic.ini")).get_heads()
-HEAD = _HEADS[0] if len(_HEADS) == 1 else "|".join(sorted(_HEADS))
-
-
-def test_empty_database_migration_emits_single_owner_and_session_schema() -> None:
-    result = subprocess.run(
-        [sys.executable, "-m", "alembic", "upgrade", "head", "--sql"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr
-    assert "CREATE TABLE owner" in result.stdout
-    assert "CONSTRAINT ck_owner_singleton CHECK (id = 1)" in result.stdout
-    assert "CREATE TABLE auth_session" in result.stdout
-    assert "ix_auth_session_expires_at" in result.stdout
-    assert "version_num VARCHAR(255)" in result.stdout
-    assert "VARCHAR(32)" not in result.stdout.split("CREATE TABLE owner")[0]
+HEAD = "0001_init"
 
 
 def _alembic(*args: str) -> subprocess.CompletedProcess[str]:
@@ -34,218 +15,64 @@ def _alembic(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_single_head_matches_script_directory() -> None:
+def _upgrade_sql() -> str:
+    result = _alembic("upgrade", "base:head", "--sql")
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def test_single_head_is_the_init_baseline() -> None:
+    script = ScriptDirectory.from_config(Config("alembic.ini"))
+    assert script.get_heads() == [HEAD]
+    assert script.get_revision(HEAD).down_revision is None  # type: ignore[union-attr]
     result = _alembic("heads")
     assert result.returncode == 0, result.stderr
     assert result.stdout.split() == [HEAD, "(head)"]
 
 
-def test_offline_upgrade_renders_collection_receipts() -> None:
-    result = _alembic("upgrade", "p14_provider_terms_quota:p14_collection_receipts", "--sql")
-    assert result.returncode == 0, result.stderr
-    assert "ingestion_collection_receipts" in result.stdout
-    assert "continuation_state" in result.stdout
-
-
-def test_offline_base_to_head_renders_cleanup_authority_checks() -> None:
-    result = _alembic("upgrade", "base:head", "--sql")
-    assert result.returncode == 0, result.stderr
-    assert "ck_document_cleanup_original_epoch" in result.stdout
-    assert "ck_source_purge_operations_configuration_revision" in result.stdout
-
-
-def test_offline_upgrade_removes_empty_replay_head_and_guards_populated_database() -> None:
-    result = _alembic("upgrade", "base:head", "--sql")
-    assert result.returncode == 0, result.stderr
-    assert "DELETE FROM realtime_replay_head WHERE id = 1" in result.stdout
-    assert "p14_workspace_scope offline script requires an empty database" in result.stdout
-
-
-def test_offline_downgrade_refuses_cleanly() -> None:
-    result = _alembic("downgrade", "r20_search_tsv_and_trgm_indexes:base", "--sql")
-    assert result.returncode != 0
-    assert "run it online" in result.stderr
-    assert "get_bind" not in result.stderr
-
-def test_offline_head_renders_provider_terms_and_quota_ledger() -> None:
-    result = _alembic("upgrade", "p14_cleanup_authority:head", "--sql")
-    assert result.returncode == 0, result.stderr
+def test_offline_upgrade_renders_schema_extensions_and_wide_version_column() -> None:
+    sql = _upgrade_sql()
+    assert "version_num VARCHAR(255)" in sql
+    assert "CREATE EXTENSION IF NOT EXISTS vector" in sql
+    assert "CREATE EXTENSION IF NOT EXISTS pg_trgm" in sql
+    # pg_stat_statements stays behind the shared_preload_libraries guard.
+    assert "shared_preload_libraries" in sql and "pg_stat_statements" in sql
     for fragment in (
-        "CREATE TABLE connector_provider_terms", "ck_connector_provider_terms_review_fields",
-        "CREATE TABLE connector_quota_windows", "CREATE TABLE connector_provider_sends",
-        "uq_connector_provider_sends_sequence", "CREATE TABLE connector_quota_debits",
-        "fk_connector_quota_debits_window",
+        "CREATE TABLE owner", "CREATE TABLE auth_session", "CREATE TABLE workspaces", "CREATE TABLE sources",
+        "CREATE TABLE chat_todos", "CREATE TABLE chat_templates", "CREATE TABLE account_deletion_operations",
+        "CREATE TABLE connector_provider_terms", "CREATE TABLE content_translations",
+        "CREATE UNIQUE INDEX uq_owner_email", "CREATE INDEX ix_w2_documents_scope",
+        "ck_document_cleanup_original_epoch", "ck_source_purge_operations_configuration_revision",
+        "CREATE TRIGGER trg_agent_runs_purge_checkpoints",
     ):
-        assert fragment in result.stdout
+        assert fragment in sql, fragment
 
 
-def test_dismissed_migration_downgrade_sql_drops_dismissed_only_rows() -> None:
-    result = _alembic("downgrade", "r15_document_dismissed:r15_document_language_backfill", "--sql")
+def test_offline_upgrade_final_state_has_no_retired_objects_or_v4_dependencies() -> None:
+    sql = _upgrade_sql()
+    assert "p12_backup" not in sql
+    for column in ("chat_alias", "brief_alias"):
+        assert column not in sql  # ai_settings alias columns were replaced by ai_settings.defaults
+    assert "aliases JSONB" not in sql
+    assert "graph_enabled BOOLEAN DEFAULT true NOT NULL" in sql
+    assert "rag_index_enabled BOOLEAN DEFAULT true NOT NULL" in sql
+    assert "DEFAULT gen_random_uuid()" not in sql  # ids come from the application (UUIDv7)
+    assert "CONCURRENTLY" not in sql  # the baseline runs in one transaction
+    assert "CREATE FUNCTION uuid_generate_v7()" in sql
+
+
+def test_offline_upgrade_inserts_required_seed_rows() -> None:
+    sql = _upgrade_sql()
+    assert "INSERT INTO connector_admission_slots (slot_id) VALUES (1), (2)" in sql
+    assert "INSERT INTO translation_admission_slots (id, translation_id, fencing_token, expires_at) VALUES (1, NULL, 0, NULL)" in sql
+    assert "INSERT INTO github_webhook_capacity (id, digest_count, pending_count) VALUES (1, 0, 0)" in sql
+    assert "INSERT INTO checkpoint_migrations (v) VALUES (8)" in sql
+
+
+def test_downgrade_is_destructive_and_documented() -> None:
+    result = _alembic("downgrade", f"{HEAD}:base", "--sql")
     assert result.returncode == 0, result.stderr
-    out = result.stdout
-    delete = out.index("DELETE FROM document_interactions WHERE read_at IS NULL AND bookmarked_at IS NULL")
-    assert delete < out.index("DROP COLUMN dismissed_at")
-    assert "read_at IS NOT NULL OR bookmarked_at IS NOT NULL)" in out
-
-
-def test_rule_delivery_migration_adds_and_drops_rule_last_notified() -> None:
-    up = _alembic("upgrade", "r15_document_dismissed:r15_highlight_rule_delivery", "--sql")
-    assert up.returncode == 0, up.stderr
-    assert "ALTER TABLE gadget_highlight_progress ADD COLUMN rule_last_notified JSONB DEFAULT '{}' NOT NULL" in up.stdout
-    down = _alembic("downgrade", "r15_highlight_rule_delivery:r15_document_dismissed", "--sql")
-    assert down.returncode == 0, down.stderr
-    assert "DROP COLUMN rule_last_notified" in down.stdout
-
-
-def test_language_index_is_workspace_first_and_drops_legacy_name() -> None:
-    up = _alembic("upgrade", "p14_backend_activation:r15_document_language_backfill", "--sql")
-    assert up.returncode == 0, up.stderr
-    assert "ix_documents_workspace_language_created_at_id ON documents (workspace_id, language, created_at, id)" in up.stdout
-    assert "DROP INDEX CONCURRENTLY IF EXISTS ix_documents_language_created_at_id" in up.stdout
-
-
-def test_workspace_shares_migration_renders_and_guards_downgrade() -> None:
-    up = _alembic("upgrade", "r15_highlight_rule_delivery:p14_workspace_shares", "--sql")
-    assert up.returncode == 0, up.stderr
-    for fragment in ("CREATE TABLE workspace_shares", "fk_workspace_shares_member", "fk_workspace_shares_matching_owner",
-                     "ck_workspace_shares_not_self", "ix_workspace_shares_member_active", "WHERE revoked_at IS NULL"):
-        assert fragment in up.stdout
-    down = _alembic("downgrade", "p14_workspace_shares:r15_highlight_rule_delivery", "--sql")
-    assert down.returncode == 0, down.stderr
-    assert "DROP TABLE workspace_shares" in down.stdout
-
-
-def test_translation_runtime_migration_renders_slot_and_purge_index() -> None:
-    up = _alembic("upgrade", "p14_workspace_shares:p14_translation_runtime", "--sql")
-    assert up.returncode == 0, up.stderr
-    for fragment in ("CREATE TABLE translation_admission_slots", "ck_translation_admission_slots_singleton",
-                     "(translation_id IS NULL) = (expires_at IS NULL)", "VALUES (1, NULL, 0, NULL)",
-                     "ix_content_translations_resource"):
-        assert fragment in up.stdout
-    assert "REFERENCES content_translations" not in up.stdout.split("CREATE TABLE translation_admission_slots")[1]
-    down = _alembic("downgrade", "p14_translation_runtime:p14_workspace_shares", "--sql")
-    assert down.returncode == 0, down.stderr
-    assert "DROP TABLE translation_admission_slots" in down.stdout
-
-
-def test_r20_search_tsv_and_trgm_indexes_migration() -> None:
-    """Verify r20 migration emits concurrent GIN FTS and trigram indexes and drops them cleanly on downgrade."""
-    up = _alembic("upgrade", "r19_db_indexes_and_tuning:r20_search_tsv_and_trgm_indexes", "--sql")
-    assert up.returncode == 0, up.stderr
-    assert "CREATE EXTENSION IF NOT EXISTS pg_trgm" in up.stdout
-    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_document_chunks_content_tsv ON document_chunks USING gin (to_tsvector('simple', content))" in up.stdout
-    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_entities_canonical_name_trgm ON entities USING gin (canonical_name gin_trgm_ops)" in up.stdout
-    down = _alembic("downgrade", "r20_search_tsv_and_trgm_indexes:r19_db_indexes_and_tuning", "--sql")
-    assert down.returncode == 0, down.stderr
-    assert "DROP INDEX CONCURRENTLY IF EXISTS ix_entities_canonical_name_trgm" in down.stdout
-    assert "DROP INDEX CONCURRENTLY IF EXISTS ix_document_chunks_content_tsv" in down.stdout
-
-
-
-def test_r21_drop_backup_control_migration() -> None:
-    """Verify r21 drops the removed backup tables in FK order and refuses downgrade."""
-    up = _alembic("upgrade", "r20_search_tsv_and_trgm_indexes:r21_drop_backup_control", "--sql")
-    assert up.returncode == 0, up.stderr
-    for table in ("p12_backup_activity", "p12_backup_control", "p12_backup_operations"):
-        assert f"DROP TABLE IF EXISTS {table}" in up.stdout
-    assert up.stdout.index("DROP TABLE IF EXISTS p12_backup_control") < up.stdout.index("DROP TABLE IF EXISTS p12_backup_operations")
-    assert _alembic("downgrade", "r21_drop_backup_control:r20_search_tsv_and_trgm_indexes", "--sql").returncode != 0
-
-
-
-
-def test_r22_chat_todos_migration() -> None:
-    """Verify r22 creates chat_todos with checks and a cascading conversation FK, and drops it on downgrade."""
-    up = _alembic("upgrade", "r21_drop_backup_control:r22_chat_todos", "--sql")
-    assert up.returncode == 0, up.stderr
-    for fragment in ("CREATE TABLE chat_todos", "ck_chat_todos_status", "fk_chat_todos_conversation",
-                     "ON DELETE CASCADE", "ix_chat_todos_conversation_position"):
-        assert fragment in up.stdout
-    assert "DROP TABLE chat_todos" in _alembic("downgrade", "r22_chat_todos:r21_drop_backup_control", "--sql").stdout
-
-
-def test_r23_chat_run_awaiting_input_migration() -> None:
-    """Verify r23 widens the run status CHECK, adds input_request, and downgrade fails parked runs first."""
-    up = _alembic("upgrade", "r22_chat_todos:r23_chat_run_awaiting_input", "--sql")
-    assert up.returncode == 0, up.stderr
-    assert "ALTER TABLE chat_response_runs ADD COLUMN input_request JSONB" in up.stdout
-    assert "awaiting_input" in up.stdout
-    assert "ck_chat_response_runs_status" in up.stdout
-    down = _alembic("downgrade", "r23_chat_run_awaiting_input:r22_chat_todos", "--sql")
-    assert down.returncode == 0, down.stderr
-    assert down.stdout.index("SET status = 'failed'") < down.stdout.index("DROP COLUMN input_request")
-
-
-def test_r24_viz_router_settings_migration() -> None:
-    """Verify r24 adds and drops the viz_router JSONB column and is the single head."""
-    up = _alembic("upgrade", "r23_chat_run_awaiting_input:r24_viz_router_settings", "--sql")
-    assert up.returncode == 0, up.stderr
-    assert "ALTER TABLE ai_settings ADD COLUMN viz_router JSONB" in up.stdout
-    down = _alembic("downgrade", "r24_viz_router_settings:r23_chat_run_awaiting_input", "--sql")
-    assert down.returncode == 0, down.stderr
-    assert "DROP COLUMN viz_router" in down.stdout
-
-
-def test_r25_chat_templates_migration() -> None:
-    """Verify r25 creates chat_templates plus the pending pointer, reverses cleanly and is the single head."""
-    up = _alembic("upgrade", "r24_viz_router_settings:r25_chat_templates", "--sql")
-    assert up.returncode == 0, up.stderr
-    assert "CREATE TABLE chat_templates" in up.stdout
-    assert "fk_chat_templates_principal" in up.stdout
-    assert "ALTER TABLE chat_conversations ADD COLUMN pending_template VARCHAR(64)" in up.stdout
-    down = _alembic("downgrade", "r25_chat_templates:r24_viz_router_settings", "--sql")
-    assert down.returncode == 0, down.stderr
-    assert "DROP TABLE chat_templates" in down.stdout
-
-
-def test_r26_chat_provenance_migration() -> None:
-    """Verify r26 nullable provenance is reversible and remains in the current head ancestry."""
-    up = _alembic("upgrade", "r25_chat_templates:r26_chat_provenance", "--sql")
-    assert up.returncode == 0, up.stderr
-    assert "ALTER TABLE chat_todos ADD COLUMN source_response_id UUID" in up.stdout
-    assert "ALTER TABLE chat_templates ADD COLUMN source_response_id UUID" in up.stdout
-    down = _alembic("downgrade", "r26_chat_provenance:r25_chat_templates", "--sql")
-    assert down.returncode == 0, down.stderr
-    assert "DROP COLUMN source_response_id" in down.stdout
-    scripts = ScriptDirectory.from_config(Config("alembic.ini"))
-    assert "r26_chat_provenance" in {revision.revision for revision in scripts.walk_revisions()}
-
-
-def test_account_deletion_schema_and_n8n_origin_migrations() -> None:
-    """Render additive deletion authority/origin schema without touching a database."""
-    up = _alembic("upgrade", "r26_chat_provenance:head", "--sql")
-    assert up.returncode == 0, up.stderr
-    assert "CREATE TABLE account_deletion_operations" in up.stdout
-    assert "ck_account_deletion_scope" in up.stdout
-    assert "uq_account_deletion_receipt" in up.stdout
-    assert "ALTER TABLE connector_provisioning ADD COLUMN n8n_service_url VARCHAR(2048)" in up.stdout
-    assert "ALTER TABLE connector_managed_credentials ADD COLUMN n8n_service_url VARCHAR(2048)" in up.stdout
-    # Mutable current settings cannot safely backfill historical endpoint ownership.
-    assert "UPDATE connector_provisioning" not in up.stdout
-    assert "UPDATE connector_managed_credentials" not in up.stdout
-    down = _alembic("downgrade", "r28_n8n_endpoint_lineage:r27_account_deletion", "--sql")
-    assert down.returncode != 0
-    assert "forward-only" in down.stderr
-
-
-def test_r29_r30_model_roles_migrations() -> None:
-    """Render the alias->role backfill and the alias-column drop; both reverse and r30 is the single head."""
-    up = _alembic("upgrade", "r28_n8n_endpoint_lineage:r29_model_roles", "--sql")
-    assert up.returncode == 0, up.stderr
-    assert "ALTER TABLE ai_settings ADD COLUMN defaults JSONB" in up.stdout
-    assert "aliases -> chat_alias" in up.stdout
-    assert "aliases -> 'reasoning-small'" in up.stdout
-    assert "configuration_revision = configuration_revision + 1" in up.stdout
-    down = _alembic("downgrade", "r29_model_roles:r28_n8n_endpoint_lineage", "--sql")
-    assert down.returncode == 0, down.stderr
-    assert "defaults -> 'background'" in down.stdout
-    assert "DROP COLUMN defaults" in down.stdout
-    drop = _alembic("upgrade", "r29_model_roles:r30_drop_model_alias_columns", "--sql")
-    assert drop.returncode == 0, drop.stderr
-    for column in ("aliases", "chat_alias", "brief_alias"):
-        assert f"ALTER TABLE ai_settings DROP COLUMN {column}" in drop.stdout
-    assert "ALTER TABLE agent_profiles DROP COLUMN model_alias" in drop.stdout
-    restore = _alembic("downgrade", "r30_drop_model_alias_columns:r29_model_roles", "--sql")
-    assert restore.returncode == 0, restore.stderr
-    assert "ALTER TABLE agent_profiles ADD COLUMN model_alias VARCHAR(64) DEFAULT 'reasoning-large' NOT NULL" in restore.stdout
-    assert _HEADS == ["r30_drop_model_alias_columns"]
+    assert "DROP SCHEMA public CASCADE" in result.stdout
+    assert "CREATE SCHEMA public" in result.stdout
+    doc = ScriptDirectory.from_config(Config("alembic.ini")).get_revision(HEAD).module.downgrade.__doc__  # type: ignore[union-attr]
+    assert doc is not None and "DESTRUCTIVE" in doc

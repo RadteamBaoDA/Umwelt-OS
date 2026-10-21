@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
@@ -21,6 +21,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
 from core.database import Base, CreatedAtMixin
+from core.ids import uuid7
 
 
 class GraphAllocation(Base):
@@ -61,7 +62,7 @@ class GraphPartition(Base, CreatedAtMixin):
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
-    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid7)
     source_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), index=True)
     generation: Mapped[int] = mapped_column(Integer)
     ordinal: Mapped[int] = mapped_column(Integer)
@@ -93,8 +94,8 @@ class GraphMapping(Base, CreatedAtMixin):
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
-    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
-    episode_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), unique=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid7)
+    episode_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), unique=True, default=uuid7)
     partition_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), index=True)
     source_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), index=True)
     source_generation: Mapped[int] = mapped_column(Integer)
@@ -152,13 +153,13 @@ class GraphOperation(Base, CreatedAtMixin):
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
-    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid7)
     mapping_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), index=True)
     partition_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), index=True)
     kind: Mapped[str] = mapped_column(String(16))
     desired_revision: Mapped[int] = mapped_column(Integer)
     desired_digest: Mapped[str] = mapped_column(String(64))
-    receipt_token: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), default=uuid4)
+    receipt_token: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), default=uuid7)
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
     phase: Mapped[str] = mapped_column(String(40), default="intent_committed")
     attempts: Mapped[int] = mapped_column(Integer, default=0)
@@ -276,7 +277,7 @@ class GraphReconcileRun(Base, CreatedAtMixin):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid7)
     scope: Mapped[dict[str, Any]] = mapped_column(JSONB)
     upper_mapping_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     cursor: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))

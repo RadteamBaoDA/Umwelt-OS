@@ -45,7 +45,7 @@ def _session() -> MagicMock:
 
 
 def _ctx(session: Any) -> dict[str, Any]:
-    return {"session_factory": _Factory(session), "settings": SimpleNamespace(multi_workspace_enabled=False),
+    return {"session_factory": _Factory(session), "settings": SimpleNamespace(multi_workspace_enabled=False, background_llm_timeout_seconds=60),
             "redis": MagicMock()}
 
 

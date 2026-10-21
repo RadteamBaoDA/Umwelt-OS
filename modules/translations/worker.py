@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import HTTPException
 from redis.asyncio import Redis
@@ -22,9 +22,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
 from core.config import Settings
+from core.ids import uuid7
 from core.model_gateway.client import ModelGateway, ModelGatewayError
 from core.model_gateway.schemas import AIExecutionConfig, RequestPolicy
 from core.telemetry import count, observe_ms
+from core.worker_queues import queue_for
 from core.workspaces.public import (
     lock_access_fence,
     resolve_workspace_context,
@@ -112,7 +114,7 @@ async def claim_next(session: AsyncSession, now: datetime | None = None) -> Clai
         .limit(1).with_for_update(skip_locked=True).execution_options(populate_existing=True))
     if row is None:
         return None
-    token = uuid4()
+    token = uuid7()
     row.lease_token, row.lease_expires_at = token, now + timedelta(seconds=LEASE_SECONDS)
     row.attempt_count += 1
     await session.flush()
@@ -406,7 +408,9 @@ async def recover_translation_jobs(ctx: dict[str, object]) -> int:
     redis = cast(Any, ctx["redis"])
     for translation_id in ids:
         with contextlib.suppress(Exception):
-            await redis.enqueue_job("translate_content", str(translation_id), _job_id=f"translation:{translation_id}")
+            await redis.enqueue_job(
+                "translate_content", str(translation_id), _job_id=f"translation:{translation_id}",
+                _queue_name=queue_for("translate_content"))
     return len(ids)
 
 

@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
@@ -22,6 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
 from core.database import Base
+from core.ids import uuid7
 
 # 15 minutes exceeds five 120s attempts plus their maximum 30s backoff; expiry releases abandoned runs.
 COLLECTION_LEASE = timedelta(minutes=15)
@@ -34,7 +35,7 @@ class IngestionBatch(Base):
     __tablename__ = "ingestion_batches"
     __table_args__ = (UniqueConstraint("source_id", "batch_key", name="uq_ingestion_batches_source_key"),)
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="RESTRICT"), nullable=False)
     batch_key: Mapped[str] = mapped_column(String(255), nullable=False)
     payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -67,7 +68,7 @@ class IngestionRun(Base):
     membership_revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     batch_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("ingestion_batches.id", ondelete="CASCADE"), unique=True, nullable=False)
     source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
@@ -86,7 +87,7 @@ class IngestionStage(Base):
         Index("ix_ingestion_stages_pending", "status", "next_attempt_at"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="CASCADE"), nullable=False)
     stage_key: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
@@ -110,7 +111,7 @@ class SourceObservation(Base):
         Index("ix_source_observations_source_provider_record", "source_id", "provider_id", "record_hash"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="RESTRICT"), nullable=False)
     batch_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("ingestion_batches.id", ondelete="CASCADE"), nullable=False)
     provider_id: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -145,7 +146,7 @@ class ObservationNormalization(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     observation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("source_observations.id", ondelete="CASCADE"), nullable=False)
     source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
@@ -205,7 +206,7 @@ class CollectionReceipt(Base):
         Index("ix_ingestion_collection_receipts_retain", "retain_until"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     request_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, unique=True)
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
@@ -264,7 +265,7 @@ class EventOutbox(Base):
     membership_revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     type: Mapped[str] = mapped_column(String(128), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

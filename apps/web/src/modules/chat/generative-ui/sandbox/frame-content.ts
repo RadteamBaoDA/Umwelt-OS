@@ -15,6 +15,7 @@ import {
 import { IDIOMORPH_INLINE_SCRIPT } from './idiomorph-inline';
 import { processPartialHtml } from './process-partial-html';
 import { TRIP_ANIMATOR_SCRIPT } from './trip-animator';
+import { uuid7 } from '@/core/uuid7';
 
 /** Message type emitted by the sandboxed iframe when its content height changes. */
 export const RESIZE_MESSAGE_TYPE = 'umwelt:resize';
@@ -406,7 +407,7 @@ export interface FrameDocumentOptions {
  * @returns A random UUID string safe to embed in an inline script literal.
  */
 export function createFrameNonce(): string {
-  return globalThis.crypto.randomUUID();
+  return uuid7();
 }
 
 /**

@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { normalizeFormattingLocale } from '@/core/i18n';
 import { getSourceImpact } from './api';
@@ -27,12 +28,13 @@ const shownWith = (format: Intl.NumberFormat) => (n: number) => (n >= 1000 ? '10
  * Confirms disconnecting a source with explicit consequence copy for keeping or deleting collected data.
  * Archived sources can only be purged. Impact counts load when the dialog opens; if the call fails the generic text is shown.
  */
-export function DisconnectDialog({ sourceId, name, archived, disabled, trigger, onConfirm, onCloseAutoFocus }: {
+export function DisconnectDialog({ sourceId, name, archived, disabled, trigger, triggerLabel, onConfirm, onCloseAutoFocus }: {
   sourceId: string;
   name: string;
   archived: boolean;
   disabled?: boolean;
   trigger: ReactNode;
+  triggerLabel?: string;
   onConfirm: (deleteData: boolean) => void;
   /** Lets the owner redirect focus when the trigger is busy or unmounted after the action. */
   onCloseAutoFocus?: (event: Event) => void;
@@ -46,7 +48,10 @@ export function DisconnectDialog({ sourceId, name, archived, disabled, trigger, 
   const queryClient = useQueryClient();
   const impact = useQuery({ queryKey: ['sources', sourceId, 'impact'], queryFn: ({ signal }) => getSourceImpact(sourceId, signal), enabled: open, retry: false });
   return <AlertDialog open={open} onOpenChange={(next) => { if (next && disabled) return; setOpen(next); if (!next) void queryClient.cancelQueries({ queryKey: ['sources', sourceId, 'impact'] }); if (next) setChoice(archived ? 'delete' : 'keep'); }}>
-    <AlertDialogTrigger asChild>{trigger}</AlertDialogTrigger>
+    {triggerLabel ? <Tooltip>
+      <AlertDialogTrigger asChild><TooltipTrigger asChild>{trigger}</TooltipTrigger></AlertDialogTrigger>
+      <TooltipContent>{triggerLabel}</TooltipContent>
+    </Tooltip> : <AlertDialogTrigger asChild>{trigger}</AlertDialogTrigger>}
     <AlertDialogContent onCloseAutoFocus={onCloseAutoFocus}>
       <AlertDialogHeader>
         <AlertDialogTitle>{t(archived ? 'disconnectDeleteTitle' : 'disconnectTitle', { name })}</AlertDialogTitle>

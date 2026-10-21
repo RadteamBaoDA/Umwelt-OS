@@ -1,7 +1,7 @@
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
 
 Capability = Literal["chat", "streaming", "embeddings", "structured", "tools", "reranking"]
 ProviderKind = Literal["openai", "openrouter", "groq", "gemini", "anthropic", "ollama", "lmstudio", "custom"]
@@ -243,9 +243,22 @@ class AISettingsRead(BaseModel):
 
 
 class ProbeRequest(BaseModel):
-    """Selects the capability to probe for a configured model mapping."""
+    """Selects the capability to probe for a configured model mapping.
+
+    ``provider_id`` and ``model`` together select a non-default model configured on a saved provider
+    (chat role only); both or neither must be given.
+    """
     model_config = ConfigDict(extra="forbid")
     capability: Capability
+    provider_id: ProviderId | None = None
+    model: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def _both_or_neither(self) -> "ProbeRequest":
+        """Reject a provider without a model (or the reverse) so the probe target is unambiguous."""
+        if (self.provider_id is None) != (self.model is None):
+            raise ValueError("provider_id and model must be provided together")
+        return self
 
 
 class ModelSettingsRead(BaseModel):

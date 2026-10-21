@@ -11,6 +11,7 @@ from core.auth.dependencies import require_account_write
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
 from core.rate_limit import require_budget
+from core.worker_queues import queue_for
 from core.workspaces.dependencies import require_workspace_read
 from core.workspaces.schemas import WorkspaceContext
 from modules.translations import (
@@ -46,7 +47,8 @@ async def create_batch(
     for translation_id in result.enqueue_ids:  # best effort: recover_translation_jobs covers a lost enqueue
         with contextlib.suppress(Exception):
             await request.app.state.redis.enqueue_job(
-                "translate_content", str(translation_id), _job_id=f"translation:{translation_id}")
+                "translate_content", str(translation_id), _job_id=f"translation:{translation_id}",
+                _queue_name=queue_for("translate_content"))
     return result
 
 

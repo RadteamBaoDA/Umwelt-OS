@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
@@ -20,6 +20,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
 from core.database import Base
+from core.ids import uuid7
 
 
 class Source(Base):
@@ -42,12 +43,15 @@ class Source(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     type: Mapped[str] = mapped_column(String(32), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     provider: Mapped[str | None] = mapped_column(String(120))
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="active")
     local_only: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    # Owner switches: knowledge-graph enrichment (entities/timeline/temporal) and RAG chunk embedding.
+    graph_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    rag_index_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -123,7 +127,7 @@ class SourcePurgeOperation(Base):
     configuration_revision: Mapped[int | None] = mapped_column(BigInteger)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     generation: Mapped[int] = mapped_column(Integer, nullable=False)
     # The legacy URI JSON remains for compatibility repair; new work never populates it.

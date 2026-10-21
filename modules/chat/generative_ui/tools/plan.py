@@ -1,11 +1,12 @@
 """Plan schemas and evidence-derived plan builder for Generative UI."""
 
 import re
-import uuid
 from collections.abc import Sequence
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from core.ids import uuid7
 
 
 class PlanStep(BaseModel):
@@ -13,7 +14,7 @@ class PlanStep(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    id: str = Field(default_factory=lambda: str(uuid7()))
     title: str = Field(min_length=1, max_length=300)
     description: str = Field(default="", max_length=1000)
     emoji: str = Field(default="🔹", max_length=16)

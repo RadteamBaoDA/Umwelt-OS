@@ -11,7 +11,7 @@ vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 't' }) }));
 vi.mock('@/core/guarded-navigation', () => ({ useGuardedNavigation: () => ({ ensureSourcesDocument: () => true }) }));
 vi.mock('./connector-editor', () => ({
-  ConnectorEditor: ({ source, onClose }: { source: Source | null; onClose: () => void }) => {
+  ConnectorEditor: ({ source, onClose }: { source: Source | null; onClose: () => void; [key: string]: unknown }) => {
     editorMounts(source?.id);
     return <div data-testid="editor">{source?.id}<button onClick={onClose}>close-editor</button></div>;
   },
@@ -19,7 +19,7 @@ vi.mock('./connector-editor', () => ({
 vi.mock('./api', async (original) => ({
   ...(await original<typeof import('./api')>()),
   listSources: vi.fn(async () => ({ items: [{ id: 's1', type: 'manual', name: 'One', status: 'active' }, { id: 's2', type: 'manual', name: 'Two', status: 'active' }], next_cursor: null })),
-  getGitHubWebhookStatus: vi.fn(async () => null),
+  listBuiltinSources: vi.fn(async () => []),
 }));
 
 import { SourceList } from './source-list';
@@ -37,6 +37,7 @@ describe('SourceList ?source deep link', () => {
     window.history.replaceState(null, '', '/?source=s2');
     renderList();
     expect((await screen.findByTestId('editor')).textContent).toContain('s2');
+    expect(screen.getByRole('dialog')).toBeTruthy();
     expect(new Set(editorMounts.mock.calls.map((c) => c[0]))).toEqual(new Set(['s2']));
   });
 

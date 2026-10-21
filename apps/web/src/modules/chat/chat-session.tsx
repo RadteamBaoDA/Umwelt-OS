@@ -45,6 +45,7 @@ import { AgentRunDetail } from '@/modules/agents/run-detail';
 import { PromptBridgeProvider } from './generative-ui/bridge';
 import { UserInputRequest, type InputRequestState } from './generative-ui/components/user-input-request';
 import { settleWidgetPrompt } from './generative-ui/bridge/widget-prompt';
+import { uuid7 } from '@/core/uuid7';
 
 const profileTitleKeys: Record<string, 'agentProfileSupervisor' | 'agentProfileKnowledge' | 'agentProfileResearch' | 'agentProfilePersonal' | 'agentProfileProject' | 'agentProfileNews' | 'agentProfilePlanning' | 'agentProfileAutomation'> = {
   supervisor: 'agentProfileSupervisor', knowledge: 'agentProfileKnowledge', research: 'agentProfileResearch',
@@ -225,10 +226,12 @@ export function ChatSession({
   const webSearchUsable = WEB_SEARCH_SEND_ENABLED && webSearchAvailable && !webSearchProfileBlocked;
 
   const profiles = useQuery({ queryKey: ['agent-profiles'], queryFn: getAgentProfiles, enabled: mode === 'full' });
+  // Plain Q&A (Assistant, no run pending) shows no agent or task chrome; only a specialist selection does.
+  const agentMode = mode === 'full' && (selectedProfileId !== 'assistant' || Boolean(pendingProfileRun));
   const agentRuns = useQuery({
     queryKey: ['agent-runs', 'conversation', conversationId],
     queryFn: () => listAgentRuns({ conversation_id: conversationId!, limit: 25 }),
-    enabled: mode === 'full' && Boolean(conversationId),
+    enabled: agentMode && Boolean(conversationId),
     refetchInterval: (query) => query.state.data?.items.some((run) => ['queued', 'running', 'waiting_approval'].includes(run.status)) ? 3000 : false,
   });
   const activeAgentRun = useQuery({
@@ -355,6 +358,21 @@ export function ChatSession({
             setInputRequest((prev) => (prev && prev.state === 'pending' ? { ...prev, state: 'cancelled' } : prev));
             setActiveResponseId(null);
             setError(t('cancelled'));
+          }
+          void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(responseConversationId) });
+          void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
+        } else if (statusVal === 'failed') {
+          // Terminal error event from _mark_failed: without this branch the stream stayed on "Generating response…".
+          if (isCurrentView()) {
+            setIsStreaming(false);
+            setIsPending(false);
+            setStreamingText('');
+            setStreamingCitations([]);
+            setStreamingWebSearch(null);
+            setStreamingUi([]);
+            setInputRequest((prev) => (prev && prev.state === 'pending' ? { ...prev, state: 'cancelled' } : prev));
+            setActiveResponseId(null);
+            setError(t('responseFailed'));
           }
           void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(responseConversationId) });
           void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
@@ -629,6 +647,8 @@ export function ChatSession({
             else chatCtrl.setActiveConversationId(targetId);
             viewGeneration = nextGeneration;
             viewConversationId = targetId;
+            // Update the ref now: the controller change only re-renders later, and the draft clear below must see this view as current.
+            selectionRef.current = { conversationId: targetId, generation: nextGeneration };
           }
           void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
         }
@@ -641,8 +661,8 @@ export function ChatSession({
             profileId: profile!.id,
             profileRevision: profile!.revision,
             conversationId: targetId!,
-            clientRequestId: typeof crypto !== 'undefined' && crypto.randomUUID
-              ? crypto.randomUUID()
+            clientRequestId: typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function'
+              ? uuid7()
               : `req-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
           };
           // Keep this immutable envelope in shared memory before awaiting a response that may be lost.
@@ -668,8 +688,8 @@ export function ChatSession({
         if (canUpdateCurrentView()) chatCtrl.setDraft('');
 
         // Generate deterministic client_request_id for idempotency
-        const clientRequestId = typeof crypto !== 'undefined' && crypto.randomUUID
-          ? crypto.randomUUID()
+        const clientRequestId = typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function'
+          ? uuid7()
           : `req-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
         const responseConversationId = targetId;
 
@@ -696,6 +716,8 @@ export function ChatSession({
           return true;
         }
 
+        // The user message is persisted server-side; refetch so its bubble shows even if the run later fails.
+        void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(responseConversationId) });
         setActiveResponseId(responseRun.response_id);
         setIsPending(false);
         setIsStreaming(true);
@@ -885,12 +907,12 @@ export function ChatSession({
         ) : null}
 
         <ConversationAgentActivity conversationId={conversationId} csrfToken={session.csrfToken} />
-        {mode === 'full' && activeAgentRun.data && (
+        {agentMode && activeAgentRun.data && (
           <div className="shrink-0 border-b border-border p-3">
             <AgentRunDetail run={activeAgentRun.data} onCancel={() => cancelAgent.mutate()} cancelling={cancelAgent.isPending} />
           </div>
         )}
-        {mode === 'full' && agentRuns.data?.items.length ? (
+        {agentMode && agentRuns.data?.items.length ? (
           <details className="shrink-0 border-b border-border px-4 py-2">
             <summary className="cursor-pointer text-xs font-medium text-muted-foreground">{tAgents('agentHistory')} ({agentRuns.data.items.length})</summary>
             <div className="mt-2 flex flex-wrap gap-2">
@@ -964,7 +986,7 @@ export function ChatSession({
           }}
         />
 
-        {mode === 'full' && <TodosPanel conversationId={conversationId} isStreaming={isStreaming} />}
+        {agentMode && <TodosPanel conversationId={conversationId} isStreaming={isStreaming} />}
         {inputRequest && (
           <div className="shrink-0 px-4">
             <UserInputRequest

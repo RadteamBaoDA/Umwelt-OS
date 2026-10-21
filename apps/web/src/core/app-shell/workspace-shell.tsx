@@ -194,10 +194,10 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   // A member deep-linking to an owner settings page is sent to the first settings group they may see.
   const memberSettingsRedirect = role === 'member' && pathname.startsWith('/settings') && !visibleSettingsGroups.some((g) => groupActive(pathname, g.href)) ? visibleSettingsGroups[0]?.href : undefined;
   const adminViewerSettingsRedirect = role === 'admin_viewer' && pathname.startsWith('/settings') && pathname !== '/settings/global'
-    ? session.data?.isInstanceAdmin ? '/settings/global' : '/app'
+    ? session.data?.isInstanceAdmin ? '/settings/global' : '/dashboard'
     : undefined;
   const adminViewerPrivateRedirect = role === 'admin_viewer' && (pathname === '/chat' || pathname.startsWith('/chat/') || pathname.startsWith('/knowledge/memory'))
-    ? '/app'
+    ? '/dashboard'
     : undefined;
   useEffect(() => {
     const redirect = memberSettingsRedirect ?? adminViewerSettingsRedirect ?? adminViewerPrivateRedirect;
@@ -230,7 +230,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
     && (item.id !== 'settings' || visibleSettingsGroups.length > 0 || session.data.isInstanceAdmin));
   const settingsActive = pathname.startsWith('/settings');
   // A member deep-linking to an owner settings page is sent to the first group they may see.
-  const active = visibleMainNavigation.find((item) => item.id !== 'settings' && (pathname === item.href || pathname.startsWith(`${item.href}/`)))?.id ?? (settingsActive ? 'settings' : '');
+  const active = visibleMainNavigation.find((item) => item.id !== 'settings' && ((item.id === 'dashboard' && pathname.startsWith('/dashboard/')) || pathname === item.href || pathname.startsWith(`${item.href}/`)))?.id ?? (settingsActive ? 'settings' : '');
   /** Returns focus to the triggering menu control after a dialog closes. */
   const restoreMenuFocus = (event: Event) => {
     event.preventDefault();
@@ -240,20 +240,11 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   return <SessionContext.Provider value={session.data}>
       <div className="shell">
         <a href="#main-content" className="skip-link">{t('skipToContent')}</a>
-        <header className="topbar">
-          <Link href="/app" className="brand-name" aria-label="Umwelt-OS"><UmweltLogo /></Link>
-          <div className="top-actions">
-            {visibleMainNavigation.some((item) => item.id === 'chat') && <ChatTriggerButton />}
-            <CommandPalette />
-            <NotificationBell />
-            <WorkspaceSwitcher />
-            <UserMenu triggerRef={menuTriggerRef} onOpenPreferences={() => setPreferencesOpen(true)} onOpenAccount={() => setAccountOpen(true)} onOpenChangePassword={() => setPasswordOpen(true)} onSignOut={() => logout.mutate()} signOutPending={logout.isPending} />
-          </div>
-        </header>
         <div className="workspace" data-nav-collapsed={sidebarCollapsed}>
           <TooltipProvider delayDuration={300}>
             <nav id="workspace-nav" className="workspace-nav" aria-label={t('mainNavigation')}>
               <div className="workspace-nav-header">
+                <Link href="/dashboard" className="brand-name workspace-brand" aria-label="Umwelt-OS"><UmweltLogo /></Link>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
@@ -277,7 +268,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
                   const Icon = navigationIcons[item.id];
                   const link = <Link
                     key={item.id}
-                    href={item.id === 'settings' && role === 'admin_viewer' ? '/settings/global' : item.id === 'settings' && role === 'member' ? visibleSettingsGroups[0].href : item.href}
+                    href={item.id === 'dashboard' && pathname.startsWith('/dashboard/') ? pathname : item.id === 'settings' && role === 'admin_viewer' ? '/settings/global' : item.id === 'settings' && role === 'member' ? visibleSettingsGroups[0].href : item.href}
                     aria-current={active === item.id ? 'page' : undefined}
                     className="workspace-nav-link"
                   >
@@ -292,9 +283,20 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
               </div>
             </nav>
           </TooltipProvider>
+          <div className="workspace-column">
+          <header className="topbar">
+            <div className="top-actions">
+              {pathname.startsWith('/dashboard/') && visibleMainNavigation.some((item) => item.id === 'chat') && <ChatTriggerButton />}
+              <CommandPalette />
+              <NotificationBell />
+              <WorkspaceSwitcher />
+              <UserMenu triggerRef={menuTriggerRef} onOpenPreferences={() => setPreferencesOpen(true)} onOpenAccount={() => setAccountOpen(true)} onOpenChangePassword={() => setPasswordOpen(true)} onSignOut={() => logout.mutate()} signOutPending={logout.isPending} />
+            </div>
+          </header>
           <main id="main-content" tabIndex={-1} className="workspace-main" data-workspace-readonly={role === 'admin_viewer' || undefined}>{memberSettingsRedirect || adminViewerSettingsRedirect ? null : settingsActive
             ? <SettingsPanel links={[...visibleSettingsGroups, ...settingsExtraLinks.filter((item) => item.adminOnly ? session.data.isInstanceAdmin : destinationForRole(item, role))]} pathname={pathname}>{pathname.startsWith('/settings/sources') && <SourcesSubNav pathname={pathname} />}{children}</SettingsPanel>
             : children}</main>
+          </div>
         </div>
         <ConnectionFooter
           apiStatus={!online ? 'clientOffline' : apiHealth.isFetching && apiHealth.isError ? 'reconnecting' : apiHealth.isPending ? 'connecting' : apiHealth.isError ? 'unavailable' : 'connected'}

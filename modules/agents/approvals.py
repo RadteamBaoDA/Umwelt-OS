@@ -4,13 +4,14 @@ from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import UUID, uuid4, uuid5
+from uuid import UUID, uuid5
 
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.public import revalidate_account_session
+from core.ids import uuid7
 from core.realtime import commit_with_replay
 from core.tools.schemas import ToolDefinition, ToolExecutionPrincipal, compute_argument_hash
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
@@ -81,7 +82,7 @@ async def create_pending_approval(
             raise HTTPException(status_code=409, detail="Owner session or Chat link is no longer live")
         if row is None:
             row = AgentApproval(
-                id=uuid4(), action_id=action_id, workspace_id=scope.workspace_id,
+                id=uuid7(), action_id=action_id, workspace_id=scope.workspace_id,
                 run_id=run_id, owner_id=owner_id, auth_session_hash=auth_session_hash,
                 ordinal=ordinal, tool_name=definition.name, tool_version=definition.version,
                 schema_fingerprint=definition.schema_fingerprint, arguments=arguments,

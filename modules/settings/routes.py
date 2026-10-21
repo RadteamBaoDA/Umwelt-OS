@@ -347,7 +347,9 @@ async def test_viz_router(session: Session, request: Request, _owner: OwnerWrite
 
     Requires saved consent (or a local provider). For the LLM, OpenRouter and Cloudflare classifiers the configured mode is tried first, then
     the other one; the mode that works is returned and recorded as a supported gateway capability so real turns can
-    use it. No user data is sent. The result carries a short error code, never a URL, body or key.
+    use it. Evidence uses the independent router mapping/identity; session, base settings and router revision are
+    rechecked before send and publication (409 on drift). No user data is sent. The result carries a short error
+    code, never a URL, body or key.
     """
     settings = request.app.state.settings
     redis = request.app.state.redis
@@ -383,11 +385,18 @@ async def test_viz_router(session: Session, request: Request, _owner: OwnerWrite
         configuration_revision=config.configuration_revision)
     session_ref = authenticated_session_ref(request)
 
+    async def recheck_config() -> None:
+        """Hold the authenticated settings fence and reject a changed router before send/publication."""
+        await public.check_ai_execution_config(session, settings, redis, scope=_owner, expected=base,
+                                               auth_sessions=(session_ref,))
+        current = await public.resolve_viz_router(session, settings, scope=_owner)
+        if current.revision != resolved.revision:
+            raise HTTPException(status_code=409, detail="Visualization router settings changed; test again")
+
     async def recheck_send() -> None:
-        """Recheck session, workspace and settings identity each attempt; roll back before provider network."""
+        """Recheck session, workspace, settings and router identity each attempt; release SQL before egress."""
         try:
-            await public.check_ai_execution_config(session, settings, redis, scope=_owner, expected=base,
-                                                   auth_sessions=(session_ref,))
+            await recheck_config()
         finally:
             await session.rollback()
 
@@ -415,12 +424,11 @@ async def test_viz_router(session: Session, request: Request, _owner: OwnerWrite
             return VizRouterTestResult(ok=False, error=exc.code)
         capability = "tools" if mode == "forced_tool" else "structured"
         result = public.new_capability_result(
-            public.VIZ_ROUTER_ROLE, mapping, capability, "supported", config=base, scope=_owner,
+            public.VIZ_ROUTER_ROLE, mapping, capability, "supported", config=config, scope=_owner,
             multi_workspace_enabled=settings.multi_workspace_enabled)
         try:
-            await public.check_ai_execution_config(session, settings, redis, scope=_owner, expected=base,
-                                                   auth_sessions=(session_ref,))
-            await public.save_capability(redis, result, config=base, scope=_owner,
+            await recheck_config()
+            await public.save_capability(redis, result, config=config, configured_mapping=mapping, scope=_owner,
                                          multi_workspace_enabled=settings.multi_workspace_enabled)
         except RedisError as exc:
             raise HTTPException(status_code=503, detail="Model capability storage is unavailable") from exc

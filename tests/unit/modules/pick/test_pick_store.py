@@ -7,6 +7,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from core.auth.dependencies import require_account
 from modules.pick import public
 from modules.pick.routes import router
 
@@ -107,7 +108,9 @@ def test_routes_404_when_flag_off_and_phone_routes_carry_budget() -> None:
     app.include_router(router)
     client = TestClient(app)
     assert client.put("/api/v1/pick/phone/" + "A" * 22).status_code == 404
-    assert client.get("/api/v1/pick/status").status_code == 404
+    app.dependency_overrides[require_account] = lambda: None
+    status = client.get("/api/v1/pick/status")
+    assert (status.status_code, status.json()) == (200, {"enabled": False})
     phone = [r for r in router.routes if "/phone/" in r.path]
     assert phone and all(any(d.dependency.__qualname__.startswith("require_budget") for d in r.dependencies) for r in phone)
 

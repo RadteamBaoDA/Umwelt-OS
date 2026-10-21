@@ -224,9 +224,9 @@ async def test_failed_row_with_same_fingerprint_is_not_retried_on_resubmit(monke
 
 
 def test_jobs_and_crons_are_registered():
-    from apps.worker.main import WorkerSettings
+    from apps.worker.main import ModelWorkerSettings, WorkerSettings
 
-    names = {getattr(f, "name", getattr(f, "__name__", "")) for f in WorkerSettings.functions}
+    names = {getattr(f, "name", getattr(f, "__name__", "")) for f in ModelWorkerSettings.functions}
     assert "translate_content" in names
     cron_names = {getattr(c, "name", "") for c in WorkerSettings.cron_jobs}
     assert any("recover_translation_jobs" in n for n in cron_names)

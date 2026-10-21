@@ -3,18 +3,18 @@
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
 import type { ChatContext, Citation } from '@/modules/chat/api';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
-import { BookOpenIcon } from 'lucide-react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { BookOpenIcon, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { CitationPanel } from './citation-panel';
 import { useContextLabel } from './chat-context-bar';
 
 /**
- * Sources, Activity and Context tabs built from already-loaded conversation data; shared by the desktop rail and the mobile sheet.
+ * Sources, Activity and Context tabs built from loaded conversation data; shared by the desktop rail and mobile sheet.
  *
  * @param props - Citations and context to display.
- * @returns Tabs element.
+ * @returns Evidence tabs element.
  */
 function RailTabs({ citations, context }: { citations: Citation[]; context: ChatContext | null }) {
   const t = useTranslations('chat');
@@ -35,18 +35,27 @@ function RailTabs({ citations, context }: { citations: Citation[]; context: Chat
   );
 }
 
-/** Evidence rail for the full Chat page (desktop, lg and up). */
+/**
+ * Evidence sidebar for the full Chat page; it starts collapsed and toggles the full Sources, Activity, and Context panel at desktop widths.
+ *
+ * @param props - Current conversation citations and attached context.
+ * @returns Collapsible desktop evidence sidebar.
+ */
 export function ChatSideRail({ citations, context }: { citations: Citation[]; context: ChatContext | null }) {
   const t = useTranslations('chat');
+  const [collapsed, setCollapsed] = React.useState(true);
   return (
-    <aside aria-label={t('railLabel')} className="hidden w-[300px] shrink-0 flex-col overflow-y-auto border-l border-border bg-surface p-3 lg:flex">
-      <RailTabs citations={citations} context={context} />
+    <aside id="chat-evidence-rail" aria-label={t('railLabel')} className={`hidden shrink-0 flex-col overflow-y-auto border-l border-border bg-surface lg:flex ${collapsed ? 'w-12 items-center p-0' : 'w-[300px] p-3'}`}>
+      <Button type="button" variant="ghost" size="icon" className="size-11 shrink-0" onClick={() => setCollapsed((value) => !value)} aria-label={collapsed ? t('expandRail') : t('collapseRail')} aria-expanded={!collapsed} aria-controls="chat-evidence-rail">
+        {collapsed ? <PanelRightOpen aria-hidden="true" /> : <PanelRightClose aria-hidden="true" />}
+      </Button>
+      {!collapsed && <RailTabs citations={citations} context={context} />}
     </aside>
   );
 }
 
 /**
- * Below-lg entry point to the evidence rail: a 44px trigger opening the same tabs in a right-side Sheet.
+ * Below-lg entry point to the evidence rail: a 44px trigger opening the same Sources, Activity, and Context tabs in a right-side Sheet.
  *
  * @param props - Citations and context to display.
  * @returns Trigger plus sheet; the trigger is hidden at lg where the rail is inline.

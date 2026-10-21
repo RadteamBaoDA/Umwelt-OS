@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
@@ -23,6 +23,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
 from core.database import Base
+from core.ids import uuid7
 
 
 class BrowserReadJob(Base):
@@ -62,7 +63,7 @@ class BrowserReadJob(Base):
     configuration_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     operation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, unique=True)
     owner_id: Mapped[int] = mapped_column(Integer, nullable=False)
     run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
@@ -108,7 +109,7 @@ class BrowserPageEvidence(Base):
         UniqueConstraint("job_id", "page_number", name="uq_browser_page_evidence_job_page"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     job_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("browser_read_jobs.id", ondelete="CASCADE"), nullable=False)
     page_number: Mapped[int] = mapped_column(Integer, nullable=False)
     requested_url: Mapped[str] = mapped_column(String(2048), nullable=False)

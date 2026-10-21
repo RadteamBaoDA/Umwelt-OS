@@ -1,7 +1,7 @@
 """Workspace identity persistence; lifecycle callers must use the public contract."""
 
 from datetime import datetime
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
@@ -20,6 +20,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.database import Base
+from core.ids import uuid7
 
 
 class Workspace(Base):
@@ -34,7 +35,7 @@ class Workspace(Base):
         CheckConstraint("length(btrim(name)) > 0", name="ck_workspaces_name"),
     )
 
-    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid7)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     owner_user_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="RESTRICT"), nullable=False)
     is_default: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"), nullable=False)
@@ -98,7 +99,7 @@ class WorkspaceInvitation(Base):
         Index("ix_workspace_invitations_workspace_id", "workspace_id"),
     )
 
-    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid7)
     workspace_id: Mapped[UUID] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
     invited_by_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     email: Mapped[str] = mapped_column(String(320), nullable=False)

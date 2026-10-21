@@ -13,7 +13,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
-from core.heavy_work import bounded_heavy_work
 from core.job_denial import (
     PERMISSION_LOST,
     STALE_SCOPE,
@@ -21,22 +20,22 @@ from core.job_denial import (
     denial_code,
     terminalize,
 )
-from core.model_gateway.cache import capability_key
 from core.model_gateway.client import (
     CapabilityUnsupported,
     ModelGateway,
     ModelGatewayError,
     PrivacyPolicyDenied,
+    structured_evidence,
 )
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import (
     AIExecutionConfig,
-    CapabilityResult,
     ModelMapping,
     RequestPolicy,
 )
 from core.realtime import commit_with_replay, make_timeline_change
 from core.worker_cursors import STATE_KEY, read_cursor, write_cursor
+from core.worker_queues import queue_for
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import InternalJobScope, Scope
 from modules.knowledge.documents import public as documents
@@ -55,7 +54,6 @@ from modules.timeline.extraction import (
 from modules.timeline.models import Event, TimelineExtractionWork
 
 ROLE = "background"
-TIMEOUT_SECONDS = 35
 
 
 def _factory(ctx: dict[str, object]) -> async_sessionmaker[AsyncSession]:
@@ -81,28 +79,13 @@ async def _workspace_job_scope(
 async def _dependency_snapshot(config: AIExecutionConfig, redis: Redis, *, scope: Scope) -> tuple[str, bool]:
     """Fingerprint nonsecret extraction policy and verify a current structured capability result."""
     mapping = config.defaults.resolve(ROLE)
-    key = capability_key(ROLE, mapping.model, mapping.version, "structured", config.gateway_identity,
-                         workspace_id=scope.workspace_id, actor_user_id=config.actor_user_id) if mapping else None
-    raw = await redis.get(key) if key else None
-    if isinstance(raw, bytes):
-        raw = raw.decode("utf-8", errors="replace")
-    try:
-        parsed = json.loads(raw) if isinstance(raw, str) else None
-        capability = CapabilityResult.model_validate(parsed) if isinstance(parsed, dict) else None
-    except (json.JSONDecodeError, ValueError):
-        capability = None
-    try:
-        expires_at = datetime.fromisoformat(capability.expires_at) if capability else None
-        fresh = bool(expires_at and expires_at > datetime.now(UTC))
-    except ValueError:
-        fresh = False
-    supported = bool(
-        capability is not None and fresh and capability.result == "supported" and capability.role == ROLE
-        and capability.capability == "structured" and capability.gateway_identity == config.gateway_identity
-        and mapping is not None and capability.model == mapping.model
-        and capability.version == mapping.version
-        and capability.configuration_revision == config.configuration_revision
+    # Native structured evidence, or chat evidence for the gateway's prompted-JSON fallback.
+    capability = await structured_evidence(
+        redis, ROLE, mapping, gateway_identity=config.gateway_identity,
+        configuration_revision=config.configuration_revision,
+        workspace_id=scope.workspace_id, actor_user_id=config.actor_user_id,
     )
+    supported = capability is not None
     privacy = config.privacy
     values = {
         "revision": config.configuration_revision,
@@ -143,7 +126,6 @@ def _allowed(config: AIExecutionConfig, mapping: ModelMapping | None, destinatio
     )
 
 
-@bounded_heavy_work
 async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value: str) -> None:
     """Run one durable extraction lease: lock -> release -> infer -> re-lock-and-compare -> publish.
 
@@ -185,6 +167,7 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
             return job_scope, await timeline.claim_extraction_work(
                 session, work_id, lease_owner, datetime.now(UTC), scope=job_scope,
                 multi_workspace_enabled=multi_workspace_enabled,
+                lease_seconds=max(110, settings.background_llm_timeout_seconds + 75),
             )
 
         try:
@@ -242,6 +225,12 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                 return
             if source.local_only:
                 await timeline.set_extraction_work_error(session, work_id, lease_owner, "local_only_source", blocked=True,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+                await session.commit()
+                return
+            if not source.graph_enabled:
+                # Switch flipped after scheduling: park quietly; intentional owner choice, not an error.
+                await timeline.set_extraction_work_error(session, work_id, lease_owner, "graph_disabled", blocked=True,
                     scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 await session.commit()
                 return
@@ -321,7 +310,7 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
 
             gateway = ModelGateway(
                 redis=redis, base_url=config.gateway_base_url, api_key=config.gateway_api_key,
-                destination_id=cast(str, destination), timeout_seconds=min(config.request_timeout_seconds, TIMEOUT_SECONDS),
+                destination_id=cast(str, destination), timeout_seconds=settings.background_llm_timeout_seconds,
                 scope=scope, gateway_identity=config.gateway_identity,
                 configuration_revision=config.configuration_revision, before_send=before_send,
                 approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
@@ -519,6 +508,9 @@ async def recover_timeline_extraction_work(ctx: dict[str, object]) -> int:
                 if current is None or current.source_generation != source.generation:
                     await session.commit()
                     continue
+                if not source.graph_enabled:
+                    await session.commit()
+                    continue  # owner switched the knowledge graph off for this Source
                 work_id = await timeline.schedule_extraction_work(
                     session, current, EXTRACTOR_VERSION, PROMPT_VERSION, scope=scope,
                     multi_workspace_enabled=multi_workspace_enabled,
@@ -599,6 +591,7 @@ async def recover_timeline_extraction_work(ctx: dict[str, object]) -> int:
         await redis.enqueue_job(
             "process_timeline_extraction_work", str(work_id),
             _job_id=f"timeline-extraction:{work_id}",
+            _queue_name=queue_for("process_timeline_extraction_work"),
         )
         count += 1
     return count

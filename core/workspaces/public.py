@@ -5,12 +5,13 @@ from hashlib import sha256
 from hmac import compare_digest
 from secrets import token_urlsafe
 from typing import Literal, cast
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import Select, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.ids import uuid7
 from core.workspaces.access import (
     authorize_internal_job as authorize_internal_job,  # noqa: PLC0414  # deliberate public re-export for mypy/ruff
 )
@@ -63,7 +64,7 @@ async def provision_default_workspace_in_uow(session: AsyncSession, user_id: int
     the caller must set that pointer and commit the entire identity unit atomically. Unique
     owner and composite-FK constraints reject duplicate or mismatched provisioning.
     """
-    workspace_id = uuid4()
+    workspace_id = uuid7()
     session.add(Workspace(id=workspace_id, name="Private workspace", owner_user_id=user_id))
     await session.flush()
     session.add(WorkspaceMembership(
@@ -315,7 +316,7 @@ async def create_invitation_in_uow(
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid invitation email") from None
     secret, digest = new_invitation_secret()
-    invitation_id, now = uuid4(), datetime.now(UTC)
+    invitation_id, now = uuid7(), datetime.now(UTC)
     expiry = now + timedelta(days=7)
     session.add(WorkspaceInvitation(
         id=invitation_id, workspace_id=workspace_id, invited_by_user_id=user_id,

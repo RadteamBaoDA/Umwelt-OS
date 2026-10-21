@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import (
     CheckConstraint,
@@ -22,6 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
 from core.database import Base
+from core.ids import uuid7
 
 
 class Event(Base):
@@ -57,7 +58,7 @@ class Event(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     source_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="SET NULL"))
     type: Mapped[str] = mapped_column(String(64), nullable=False)
     subtype: Mapped[str | None] = mapped_column(String(64))
@@ -94,7 +95,7 @@ class EventParticipant(Base):
         CheckConstraint("origin IN ('manual', 'derived')", name="ck_timeline_participant_origin"),
         Index("ix_timeline_participant_entity", "entity_id", "event_id"),
     )
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     event_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("timeline_events.id", ondelete="CASCADE"), nullable=False)
     entity_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("entities.id", ondelete="RESTRICT"), nullable=False)
     role: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -123,7 +124,7 @@ class EventEvidence(Base):
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     event_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     source_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="SET NULL"))
     document_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"))
@@ -148,7 +149,7 @@ class ParticipantEvidence(Base):
     """Bind a derived participant role to its exact event evidence chunk."""
     __tablename__ = "timeline_participant_evidence"
     __table_args__ = (UniqueConstraint("participant_id", "event_evidence_id", name="uq_timeline_participant_evidence"),)
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     participant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("timeline_event_participants.id", ondelete="CASCADE"), nullable=False)
     event_evidence_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("timeline_event_evidence.id", ondelete="CASCADE"), nullable=False)
 
@@ -170,7 +171,7 @@ class EventAudit(Base):
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     event_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     actor_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
     reason: Mapped[str] = mapped_column(String(300), nullable=False)
@@ -196,7 +197,7 @@ class EventSuppression(Base):
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     document_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     document_version_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     source_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
@@ -226,7 +227,7 @@ class TimelineExtractionWork(Base):
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     document_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     document_version_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("document_versions.id", ondelete="CASCADE"), nullable=False)
     source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
@@ -249,7 +250,7 @@ class TimelineExtractionResult(Base):
     """Retain bounded proposals, exact support IDs, and skipped-refresh fields, never raw chunks."""
     __tablename__ = "timeline_extraction_results"
     __table_args__ = (UniqueConstraint("work_id", name="uq_timeline_extraction_result_work"),)
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     work_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("timeline_extraction_work.id", ondelete="CASCADE"), nullable=False)
     model: Mapped[str | None] = mapped_column(String(200))
     proposals_json: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)

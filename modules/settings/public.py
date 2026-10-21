@@ -336,6 +336,23 @@ def derive_for_mapping(config: AIExecutionConfig, mapping: ModelMapping | None) 
         "endpoint_policy_denied": provider.policy_denied})
 
 
+def mapping_for_override(config: AIExecutionConfig, provider_id: str, model: str) -> ModelMapping:
+    """Build the chat mapping for a per-request provider/model override.
+
+    Pure. Shared by the chat worker and the capability probe so both derive the identical capability
+    cache key. ``version`` is carried only when the override is the chat role default (same provider
+    and model); other overrides are version-less. Does not check the model is configured.
+    """
+    provider = config.providers.get(provider_id)
+    default = config.defaults.resolve("chat")
+    same_default = (default is not None and default.model == model
+                    and (default.provider_id or DEFAULT_PROVIDER_ID) == provider_id)
+    return ModelMapping(
+        model=model, provider_id=provider_id, version=default.version if same_default and default else None,
+        destination="unknown" if provider is None or provider.local else "remote",
+    )
+
+
 def derive_for_role(config: AIExecutionConfig, role: str) -> AIExecutionConfig:
     """Return the config pointed at the provider serving ``role`` (``background`` falls back to brief, then chat).
 
@@ -968,7 +985,14 @@ def viz_router_gateway_config(config: AIExecutionConfig, resolved: VizRouterReso
 
     ``derive_for_mapping`` selects the router provider's endpoint, key and destination; remote providers are
     marked ``destination="remote"`` for the gateway privacy policy. The router has no role slot in the defaults.
+    Probe and runtime share a nonsecret cache identity bound to the base configuration and router selection,
+    revision, API, endpoint and credential fingerprint; changing the router invalidates only its evidence.
     """
+    # Router saves deliberately leave the base AI revision unchanged, so its evidence needs a separate identity.
+    identity = _fingerprint(json.dumps((
+        config.gateway_identity, resolved.model_dump(exclude={"typesafe_key", "api_key"}), _fingerprint(resolved.api_key),
+    ), sort_keys=True, separators=(",", ":")))
+    config = config.model_copy(update={"gateway_identity": identity})
     if resolved.kind in VIZ_KEYED_KINDS:
         # Self-contained kind: its own validated endpoint and key replace the provider's; never the owner's providers.
         own = ModelMapping(model=resolved.model, destination="remote")

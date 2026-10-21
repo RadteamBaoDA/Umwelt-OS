@@ -26,6 +26,8 @@ export const vizRouterMessages = {
     testError_auth_error: 'The provider rejected the credentials.', testError_timeout: 'The provider did not respond in time.',
     testError_invalid_category: 'The provider returned an answer outside the 13 categories.', testError_mode_unsupported: 'The endpoint rejected both constraint modes.',
     testError_provider_error: 'The provider returned an error.', testError_privacy_denied: 'Blocked by privacy policy.', testError_unknown: 'The test failed.',
+    unauthorized: 'Please sign in again to continue.', forbidden: 'This action is not allowed for this account.',
+    conflict: 'Settings changed elsewhere. Reload and try again.', serviceUnavailable: 'The service is unavailable. Try again shortly.',
     requestFailed: 'The request failed.',
   },
   'vi-vi': {
@@ -54,6 +56,8 @@ export const vizRouterMessages = {
     testError_auth_error: 'Nhà cung cấp từ chối thông tin xác thực.', testError_timeout: 'Nhà cung cấp không phản hồi kịp thời.',
     testError_invalid_category: 'Nhà cung cấp trả về câu trả lời nằm ngoài 13 danh mục.', testError_mode_unsupported: 'Điểm cuối từ chối cả hai chế độ ràng buộc.',
     testError_provider_error: 'Nhà cung cấp trả về lỗi.', testError_privacy_denied: 'Bị chính sách quyền riêng tư chặn.', testError_unknown: 'Kiểm tra thất bại.',
+    unauthorized: 'Hãy đăng nhập lại để tiếp tục.', forbidden: 'Tài khoản này không được phép thực hiện thao tác này.',
+    conflict: 'Cài đặt đã thay đổi ở nơi khác. Hãy tải lại và thử lại.', serviceUnavailable: 'Dịch vụ không khả dụng. Hãy thử lại sau.',
     requestFailed: 'Yêu cầu thất bại.',
   },
 };

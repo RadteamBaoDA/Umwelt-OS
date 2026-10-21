@@ -257,7 +257,7 @@ async def capture_authority(
 
 
 def eligible_chunks(*, workspace_id: UUID) -> Select[UUID, str, UUID]:
-    """Select one workspace's active-source chunks from ready current versions."""
+    """Select one workspace's active-source chunks from ready current versions, skipping Sources whose owner turned RAG indexing off."""
     return (
         select(DocumentChunk.id, DocumentChunk.content, Source.id)
         .join(DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id)
@@ -267,7 +267,7 @@ def eligible_chunks(*, workspace_id: UUID) -> Select[UUID, str, UUID]:
             Document.current_version == DocumentVersion.version_number,
             Document.workspace_id == workspace_id, Source.workspace_id == workspace_id,
             Document.extraction_status.in_(("ready", "succeeded")),
-            Source.status == "active", Source.local_only.is_(False),
+            Source.status == "active", Source.local_only.is_(False), Source.rag_index_enabled.is_(True),
         )
     )
 
@@ -569,6 +569,7 @@ async def _recheck_prepared(
     )
     generation = source.generation if source is not None else None
     live = (source is not None and source.status == "active" and not source.local_only
+            and source.rag_index_enabled
             and current == content
             and (source_generation is None or generation == source_generation))
     config, mapping, policy = await configured_embedding(session, settings, redis, scope=scope)
@@ -721,7 +722,7 @@ async def _index_generation(
                         "WHERE c.id = i.chunk_id AND v.version_number = d.current_version "
                         "AND d.workspace_id = :workspace_id AND s.workspace_id = :workspace_id "
                         "AND d.extraction_status IN ('ready', 'succeeded') "
-                        "AND s.status = 'active' AND s.local_only = false)"
+                        "AND s.status = 'active' AND s.local_only = false AND s.rag_index_enabled = true)"
                     ), {"generation_id": generation_id, "workspace_id": workspace_id_str})
                     failed = await session.scalar(select(func.count()).select_from(SearchIndexItem).where(
                         SearchIndexItem.generation_id == generation_id, SearchIndexItem.status != "succeeded",

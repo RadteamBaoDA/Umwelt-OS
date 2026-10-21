@@ -3,8 +3,11 @@
 import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Download, History, Pause, Play, RefreshCw, Settings2, Trash2, Unplug } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { AppLocaleId, normalizeFormattingLocale } from '@/core/i18n';
@@ -14,21 +17,38 @@ import {
   ConnectorConfiguration,
   getConnectorCatalog,
   getConnectorActivation,
-  getGitHubWebhookStatus,
   getMonotonicConnectorConfiguration,
   getOperation,
+  listBuiltinSources,
   listSources,
   Source,
   sourceKeys,
   triggerCollection,
 } from './api';
-import { BuiltinSources } from './builtin-sources';
-import { ConnectorEditor } from './connector-editor';
+import { BuiltinResumeList, BuiltinWizard } from './builtin-sources';
 import { DisconnectDialog } from './disconnect-dialog';
 import { useSourceActions } from './use-source-actions';
-import { SourceForm } from './source-form';
+import { SourceWizard } from './source-wizard';
 import { matchesFilter, SourceFilter, SourceRowState, sourceRowState, SourcesTable } from './source-table';
 import { SyncHistory } from './sync-history';
+
+/** Renders an accessible icon-only source action with the same translated name in its tooltip and accessible label. */
+function SourceAction({ label, icon, onClick, disabled = false, expanded }: {
+  label: string;
+  icon: React.ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  expanded?: boolean;
+}) {
+  return <Tooltip>
+    <TooltipTrigger asChild>
+      <Button type="button" size="icon" variant="outline" aria-label={label} aria-expanded={expanded} disabled={disabled} onClick={onClick}>
+        {icon}
+      </Button>
+    </TooltipTrigger>
+    <TooltipContent>{label}</TooltipContent>
+  </Tooltip>;
+}
 
 /** Formats an optional ISO timestamp with the supplied application locale and time zone, returning the supplied fallback when absent. */
 function formatDate(value: string | null, locale: AppLocaleId, timezone: string, fallback: string): string {
@@ -183,7 +203,7 @@ function SourceEntry({
   const chipKey: Record<SourceRowState, 'statusActive' | 'statusPaused' | 'statusArchived' | 'stateSavedNotActive' | 'stateError' | 'stateReconnect'> = {
     active: 'statusActive', paused: 'statusPaused', archived: 'statusArchived', savedNotActive: 'stateSavedNotActive', error: 'stateError', reconnect: 'stateReconnect',
   };
-  const hasDetail = Boolean(collectResult || operationId || (historyOpen && connector) || error || collect.error || activation.isError);
+  const hasDetail = Boolean(collectResult || operationId || error || collect.error || activation.isError);
   const cell = 'px-3 py-3 align-top text-sm max-[720px]:block max-[720px]:px-0 max-[720px]:py-1';
   const mobileLabel = (key: 'colSchedule' | 'colCollected' | 'colIndexed') => <span className="text-muted-foreground mr-1 min-[721px]:hidden">{t(key)}:</span>;
   return <>
@@ -202,47 +222,60 @@ function SourceEntry({
       <td className={cell}>{mobileLabel('colCollected')}{formatDate(source.collected_at, display.locale, display.timezone, t('never'))}</td>
       <td className={cell}>{mobileLabel('colIndexed')}{formatDate(source.indexed_at, display.locale, display.timezone, t('never'))}</td>
       <td className={cell}>
+        <TooltipProvider delayDuration={300}>
         <div className="flex flex-wrap gap-2" role="group" aria-label={t('sourceActions', { name: source.name })}>
-          {connector && rowState === 'savedNotActive' && source.status !== 'archived' && <Button disabled={busy} onClick={() => onEdit(source)}>{t('retryActivation')}</Button>}
-          {connector && source.status !== 'archived' && <Button variant="outline" onClick={() => onEdit(source)}>{t('configure')}</Button>}
-          {connector && source.status === 'active' && activation.data?.state === 'active' && <Button variant="outline" disabled={collect.isPending || busy} onClick={() => collect.mutate()}>{collect.isPending ? t('collecting') : t('collectNow')}</Button>}
-          {!editedHere && source.status !== 'archived' && <Button variant="outline" disabled={busy} onClick={toggleStatus}>{busy ? t(source.status === 'paused' ? 'resuming' : 'pausing') : t(source.status === 'paused' ? 'resume' : 'pause')}</Button>}
-          {!editedHere && !purged && <DisconnectDialog sourceId={source.id} name={source.name} archived={source.status === 'archived'} disabled={busy} onConfirm={(deleteData) => { confirmedRef.current = true; everConfirmedRef.current = true; void disconnect(deleteData); }}
+          {connector && rowState === 'savedNotActive' && source.status !== 'archived' && <SourceAction label={t('retryActivation')} icon={<RefreshCw size={16} />} disabled={busy} onClick={() => onEdit(source)} />}
+          {connector && source.status !== 'archived' && <SourceAction label={t('configure')} icon={<Settings2 size={16} />} onClick={() => onEdit(source)} />}
+          {connector && source.status === 'active' && activation.data?.state === 'active' && <SourceAction label={collect.isPending ? t('collecting') : t('collectNow')} icon={<Download size={16} />} disabled={collect.isPending || busy} onClick={() => collect.mutate()} />}
+          {!editedHere && source.status !== 'archived' && <SourceAction label={busy ? t(source.status === 'paused' ? 'resuming' : 'pausing') : t(source.status === 'paused' ? 'resume' : 'pause')} icon={source.status === 'paused' ? <Play size={16} /> : <Pause size={16} />} disabled={busy} onClick={toggleStatus} />}
+          {!editedHere && !purged && <DisconnectDialog sourceId={source.id} name={source.name} archived={source.status === 'archived'} disabled={busy} triggerLabel={busy ? t('disconnecting') : t(source.status === 'archived' ? 'disconnectDelete' : 'disconnectAction')} onConfirm={(deleteData) => { confirmedRef.current = true; everConfirmedRef.current = true; void disconnect(deleteData); }}
             onCloseAutoFocus={(event) => { if (!confirmedRef.current) return; confirmedRef.current = false; event.preventDefault(); nameCellRef.current?.focus(); }}
-            trigger={<Button variant="outline" aria-disabled={busy}>{busy ? t('disconnecting') : t(source.status === 'archived' ? 'disconnectDelete' : 'disconnectAction')}</Button>} />}
-          {connector && <Button variant="outline" aria-expanded={historyOpen} onClick={() => setHistoryOpen((open) => !open)}>{t(historyOpen ? 'hideHistory' : 'showHistory')}</Button>}
+            trigger={<Button type="button" size="icon" variant="outline" aria-label={busy ? t('disconnecting') : t(source.status === 'archived' ? 'disconnectDelete' : 'disconnectAction')} disabled={busy}><span aria-hidden="true">{source.status === 'archived' ? <Trash2 size={16} /> : <Unplug size={16} />}</span></Button>} />}
+          {connector && <SourceAction label={t('showHistory')} icon={<History size={16} />} expanded={historyOpen} onClick={() => setHistoryOpen(true)} />}
         </div>
+        </TooltipProvider>
       </td>
     </tr>
     {hasDetail && <tr className="max-[720px]:block"><td colSpan={6} className="px-3 pb-4 max-[720px]:block max-[720px]:px-0">
       {collectResult && <p className="text-muted-foreground" role="status">{t('collectResult', { status: collectResult.status })}{!collectResult.hasRun ? ` ${t('noRunId')}` : ''}</p>}
       {operationId && <PurgeProgress operationId={operationId} onSucceeded={onPurgeFinished} />}
-      {historyOpen && connector && <SyncHistory source={source} />}
       {(error || collect.error || activation.isError) && <p className="error" role="alert">{t('actionFailed')}{activation.isError && ` · ${t('stateUnknown')}`}</p>}
     </td></tr>}
+    {connector && <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
+      <DialogContent className="w-[80vw] max-w-[80vw] sm:max-w-[80vw]">
+        <DialogHeader>
+          <DialogTitle>{t('runHistoryTitle')} · {source.name}</DialogTitle>
+          <DialogDescription>{t('recentRuns')}</DialogDescription>
+        </DialogHeader>
+        <SyncHistory source={source} />
+      </DialogContent>
+    </Dialog>}
   </>;
 }
 
-/** Loads sources and connector configuration, and coordinates selection changes with the active unsaved-draft guard. */
-/** Loads sources and shows the owner's secret-free GitHub receiver and backlog status. */
+/** Which add/edit dialog is open on the sources page; null when only the table is shown. */
+type DialogState = { kind: 'builtin' } | { kind: 'connector' } | { kind: 'manual' } | { kind: 'edit'; source: Source } | null;
+
+/**
+ * Sources page header and table, with add actions beside the title and paused built-ins above the list.
+ * Every add and edit flow runs in a full-screen wizard dialog; closing it goes through the active dirty-draft guard.
+ * `?source=<id>` opens that source's edit dialog once the list has loaded.
+ */
 export function SourceList() {
   const t = useTranslations('sources');
-  const display = useDisplayPreferences();
   const queryClient = useQueryClient();
   const { ensureSourcesDocument } = useGuardedNavigation();
   const headingRef = useRef<HTMLHeadingElement>(null);
-  const [adding, setAdding] = useState(false);
-  const [editing, setEditing] = useState<Source | null | undefined>(undefined);
+  const [dialog, setDialog] = useState<DialogState>(null);
   const [editSession, setEditSession] = useState(0);
   const transitionGuard = useRef<(() => boolean) | null>(null);
-  /** Coordinates editor changes and confirms leaving a dirty connector draft before changing selection. */
-  const transition = useCallback((next: Source | null | undefined, manual = false) => {
-    if (next !== undefined && !ensureSourcesDocument()) return;
+  /** Opens, switches or closes the dialog, first confirming that a dirty connector draft may be discarded. */
+  const transition = useCallback((next: DialogState) => {
+    if (next !== null && !ensureSourcesDocument()) return;
     if (transitionGuard.current && !transitionGuard.current()) return;
     transitionGuard.current = null;
     setEditSession((value) => value + 1);
-    setAdding(manual);
-    setEditing(next);
+    setDialog(next);
   }, [ensureSourcesDocument]);
   const sources = useInfiniteQuery({
     queryKey: sourceKeys.list,
@@ -251,11 +284,9 @@ export function SourceList() {
     getNextPageParam: (last) => last.next_cursor ?? undefined,
   });
   const items = useMemo(() => sources.data?.pages.flatMap((page) => page.items) ?? [], [sources.data]);
-  const githubWebhook = useQuery({
-    queryKey: ['github-webhook-status'],
-    queryFn: ({ signal }) => getGitHubWebhookStatus(signal),
-    refetchInterval: 30_000,
-  });
+  const builtins = useQuery({ queryKey: connectorKeys.builtins, queryFn: ({ signal }) => listBuiltinSources(signal) });
+  // One source per built-in: with every built-in already added there is nothing left to pick.
+  const allBuiltinsAdded = Boolean(builtins.data?.length) && builtins.data!.every((item) => item.source_id !== null);
   const connectors = items.filter((source) => ['rss', 'web', 'api'].includes(source.type));
   const configurations = useQueries({ queries: connectors.map((source) => ({
     queryKey: connectorKeys.configuration(source.id),
@@ -273,9 +304,12 @@ export function SourceList() {
   })) });
   const activationBySourceId = new Map(connectors.map((source, index) => [source.id, activations[index]?.data]));
   const states = new Map(items.map((source) => [source.id, sourceRowState(source, activationBySourceId.get(source.id))]));
-  const counts: Record<SourceFilter, number> = { all: items.length, active: 0, paused: 0, attention: 0 };
-  for (const state of states.values()) { counts.active += matchesFilter(state, 'active') ? 1 : 0; counts.paused += matchesFilter(state, 'paused') ? 1 : 0; counts.attention += matchesFilter(state, 'attention') ? 1 : 0; }
-  const visible = items.filter((source) => Boolean(operations[source.id]) || matchesFilter(states.get(source.id) ?? 'active', filter));
+  const counts: Record<SourceFilter, number> = { all: 0, active: 0, paused: 0, attention: 0, archived: 0 };
+  for (const state of states.values()) for (const key of Object.keys(counts) as SourceFilter[]) counts[key] += matchesFilter(state, key) ? 1 : 0;
+  const visible = items.filter((source) => {
+    const state = states.get(source.id) ?? 'active';
+    return (state !== 'archived' && Boolean(operations[source.id])) || matchesFilter(state, filter);
+  });
   const configurationBySourceId = new Map(connectors.map((source, index) => [source.id, configurations[index]]));
   /** Invalidates the source list query after a source mutation. */
   const refresh = () => queryClient.invalidateQueries({ queryKey: sourceKeys.all });
@@ -288,7 +322,7 @@ export function SourceList() {
     const target = items.find((source) => source.id === id);
     if (!target) return;
     deepLinkHandled.current = true;
-    transition(target);
+    transition({ kind: 'edit', source: target });
   }, [items, sources.isSuccess, transition]);
   // Prune finished-purge entries only after the row has left the list.
   useEffect(() => {
@@ -302,34 +336,29 @@ export function SourceList() {
     setPurged((current) => drop(current) as Record<string, boolean>);
   }, [items, purged, sources.isSuccess, sources.isFetching]);
 
+  const closeDialog = () => transition(null);
   return <div className="sources-list">
-    <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-5" aria-labelledby="github-webhook-heading">
-      <h2 id="github-webhook-heading">{t('githubWebhookStatus')}</h2>
-      {githubWebhook.isPending && <p className="text-muted-foreground">{t('loading')}</p>}
-      {githubWebhook.isError && <p className="error" role="alert">{t('githubWebhookUnavailable')} <Button variant="outline" onClick={() => githubWebhook.refetch()}>{t('retry')}</Button></p>}
-      {githubWebhook.data && <>
-        <p role="status">{t(githubWebhook.data.receiver_configured ? 'githubWebhookReady' : 'githubWebhookNotConfigured')} · {t('githubWebhookRevision', { revision: githubWebhook.data.receiver_revision })}</p>
-        <p className="text-muted-foreground">{t('githubWebhookBacklog', { pending: githubWebhook.data.pending_count, deliveries: githubWebhook.data.pending_deliveries, hints: githubWebhook.data.pending_hints, capacity: 100000 })}</p>
-        <p className="text-muted-foreground">{t('githubWebhookAttention', { count: githubWebhook.data.needs_attention })}</p>
-        {githubWebhook.data.oldest_pending_at && <p className="text-muted-foreground">{t('githubWebhookOldest', { time: formatDate(githubWebhook.data.oldest_pending_at, display.locale, display.timezone, t('never')) })}</p>}
-      </>}
-    </section>
-    <BuiltinSources />
-    <div className="form-actions source-list-actions">
-      <Button onClick={() => transition(null)}>{t('addConnector')}</Button>
-      <Button variant="outline" onClick={() => transition(undefined, !adding)}>{t('addManual')}</Button>
-    </div>
-    {adding && <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-5"><h2 className="m-0 text-lg font-bold">{t('manualTitle')}</h2><SourceForm onSaved={() => { setAdding(false); void refresh(); }} /></section>}
-    {editing !== undefined && <nav aria-label={t('backToSources')}><Button type="button" variant="ghost" onClick={() => transition(undefined)}>← {t('backToSources')}</Button></nav>}
-    {editing !== undefined && <ConnectorEditor key={`${editing?.id ?? 'new'}:${editSession}`} source={editing} registerTransitionGuard={(guard) => { transitionGuard.current = guard; }} onChanged={() => { void refresh(); }} onPurgeStarted={(id) => editing && setOperations((current) => ({ ...current, [editing.id]: id }))} onClose={() => transition(undefined)} />}
+    <header className="sources-page-header">
+      <div className="min-w-0">
+        <h1 ref={headingRef} tabIndex={-1} className="m-0 text-[30px] font-bold tracking-[-.04em] outline-none focus-visible:ring-2 focus-visible:ring-ring">{t('title')}</h1>
+        <p className="mt-2 mb-0 text-muted-foreground">{t('description')}</p>
+      </div>
+      <div className="form-actions source-list-actions" role="group" aria-label={t('tableToolbar')}>
+        <Button size="sm" disabled={allBuiltinsAdded} title={allBuiltinsAdded ? t('addBuiltinAllAdded') : undefined} onClick={() => transition({ kind: 'builtin' })}>{t('addBuiltin')}</Button>
+        <Button size="sm" variant="outline" onClick={() => transition({ kind: 'connector' })}>{t('addConnector')}</Button>
+        <Button size="sm" variant="outline" onClick={() => transition({ kind: 'manual' })}>{t('addManual')}</Button>
+      </div>
+    </header>
+    <BuiltinResumeList onChanged={() => { void refresh(); }} />
+    {dialog?.kind === 'builtin' && <BuiltinWizard key={editSession} onClose={closeDialog} onChanged={() => { void refresh(); }} />}
+    {dialog && dialog.kind !== 'builtin' && <SourceWizard key={editSession} request={dialog} registerTransitionGuard={(guard) => { transitionGuard.current = guard; }} onChanged={() => { void refresh(); }} onClose={closeDialog} />}
     {sources.isPending && <div className="skeleton" aria-label={t('loading')} />}
     {sources.isError && <p className="error" role="alert">{t('loadFailed')} <Button variant="outline" onClick={() => sources.refetch()}>{t('retry')}</Button></p>}
     {sources.isSuccess && items.length === 0 && <p className="empty-state">{t('empty')}</p>}
-    {items.length > 0 && <h2 ref={headingRef} tabIndex={-1} className="text-base font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring">{t('tableCaption')}</h2>}
     {items.length > 0 && <SourcesTable filter={filter} counts={counts} onFilterChange={setFilter}>
       {visible.map((source) => {
         const configuration = configurationBySourceId.get(source.id);
-        return <SourceEntry key={source.id} source={source} schedule={configuration?.data ? scheduleLabel(configuration.data.configuration.schedule_interval_minutes, t) : t('scheduleUnknown')} timezone={configuration?.data?.configuration.timezone ?? null} operationId={operations[source.id] ?? ''} editingId={editing?.id ?? null} onPurgeStarted={(id) => setOperations((current) => ({ ...current, [source.id]: id }))} purged={Boolean(purged[source.id])} onPurgeFinished={() => { if (purged[source.id]) return; setPurged((current) => ({ ...current, [source.id]: true })); void refresh(); }} onEdit={(value) => transition(value)} onChanged={() => { void refresh(); }} onRemoved={() => headingRef.current?.focus()} />;
+        return <SourceEntry key={source.id} source={source} schedule={configuration?.data ? scheduleLabel(configuration.data.configuration.schedule_interval_minutes, t) : t('scheduleUnknown')} timezone={configuration?.data?.configuration.timezone ?? null} operationId={operations[source.id] ?? ''} editingId={dialog?.kind === 'edit' ? dialog.source.id : null} onPurgeStarted={(id) => setOperations((current) => ({ ...current, [source.id]: id }))} purged={Boolean(purged[source.id])} onPurgeFinished={() => { if (purged[source.id]) return; setPurged((current) => ({ ...current, [source.id]: true })); void refresh(); }} onEdit={(value) => transition({ kind: 'edit', source: value })} onChanged={() => { void refresh(); }} onRemoved={() => headingRef.current?.focus()} />;
       })}
     </SourcesTable>}
     {items.length > 0 && visible.length === 0 && <p className="empty-state">{t('emptyFiltered')}</p>}

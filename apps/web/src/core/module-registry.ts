@@ -58,14 +58,14 @@ export function destinationEnabled(destination: NavigationDestination, state?: M
 }
 
 export const mainNavigation: NavigationDestination[] = [
-  { id: 'dashboard', href: '/app', messageKey: 'dashboard', members: true },
+  { id: 'dashboard', href: '/dashboard', messageKey: 'dashboard', members: true },
   { id: 'chat', href: '/chat', messageKey: 'chat', members: true },
   { id: 'settings', href: '/settings/sources', messageKey: 'settings', members: true },
 ];
 
 export const settingsGroups: NavigationDestination[] = [
   { id: 'data-sources', href: '/settings/sources', messageKey: 'dataSources' },
-  { id: 'ai-router', href: '/settings/ai', messageKey: 'aiRouter' },
+  { id: 'ai-router', href: '/settings/models', messageKey: 'aiRouter' },
   { id: 'system-prompts', href: '/settings/prompts', messageKey: 'systemPrompts' },
   { id: 'dashboard-gadgets', href: '/settings/dashboard', messageKey: 'dashboardGadgets' },
   { id: 'workspace-members', href: '/settings/workspace', messageKey: 'workspaceMembers' },

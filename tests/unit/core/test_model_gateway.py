@@ -621,6 +621,34 @@ class TestModelGatewayCapacityAndTimeouts:
         assert redis.keys == {}
 
 
+class TestStreamingEvidenceGate:
+    """Chat streaming stays fail-closed: it needs saved evidence for the exact role/model/version."""
+
+    @staticmethod
+    async def _drain(redis_get: Any, mapping: ModelMapping) -> None:
+        redis = _LeaseRedis()
+        redis.get = redis_get
+        gw = _lease_gateway(redis)
+        policy = _policy(reasoning_allowed=True, permitted_destinations=frozenset({"d"}))
+        [x async for x in gw.stream("chat", mapping, policy, [])]
+
+    @pytest.mark.asyncio
+    async def test_unverified_streaming_raises(self) -> None:
+        with pytest.raises(ModelGatewayError, match="Streaming capability has not been verified"):
+            await self._drain(AsyncMock(return_value=None), ModelMapping(model="general-free", provider_id="local", destination="remote"))
+
+    @pytest.mark.asyncio
+    async def test_verified_streaming_with_non_default_mapping_passes_the_gate(self) -> None:
+        mapping = ModelMapping(model="general-free", provider_id="local", destination="remote")
+        key = capability_key("chat", "general-free", None, "streaming", GATEWAY_IDENTITY, workspace_id=WORKSPACE_ID, actor_user_id=7)
+        evidence = json.loads(_cap_json("chat", "streaming")) | {"model": "general-free", "version": None}
+        get = AsyncMock(side_effect=lambda k: json.dumps(evidence) if k == key else None)
+        # Past the gate the stub client fails; the verification error must not be what surfaces.
+        with patch("core.model_gateway.client.AsyncOpenAI", side_effect=RuntimeError("past gate")),              patch.object(ModelGateway, "_http_client", return_value=MagicMock()),              pytest.raises(Exception) as exc:
+            await self._drain(get, mapping)
+        assert "has not been verified" not in str(exc.value)
+
+
 class _SlowModelServer:
     """Real HTTP/1.1 server on 127.0.0.1: reads the full Content-Length body, waits, then answers.
 

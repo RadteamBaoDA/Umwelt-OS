@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import (
     Boolean,
@@ -23,6 +23,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import Uuid
 
 from core.database import Base
+from core.ids import uuid7
 
 
 class Conversation(Base):
@@ -47,7 +48,7 @@ class Conversation(Base):
     actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     title: Mapped[str] = mapped_column(String(255), nullable=False, default="New conversation")
     context_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
     context_resource_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
@@ -87,7 +88,7 @@ class Message(Base):
         CheckConstraint("role IN ('user', 'assistant', 'system')", name="ck_chat_messages_role"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     conversation_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False
     )
@@ -140,7 +141,7 @@ class ResponseRun(Base):
     actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     conversation_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), nullable=False
     )
@@ -189,7 +190,7 @@ class MessageMutationReceipt(Base):
         Index("ix_chat_message_mutation_receipts_result_user_message_id", "result_user_message_id"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     conversation_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False
     )
@@ -218,7 +219,7 @@ class StreamEvent(Base):
         CheckConstraint("seq >= 1", name="ck_chat_stream_events_seq_positive"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     response_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("chat_response_runs.id", ondelete="CASCADE"), nullable=False
     )
@@ -253,7 +254,7 @@ class AgentActivityLink(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     conversation_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), nullable=False
     )
@@ -288,7 +289,7 @@ class ChatTodo(Base):
         Index("ix_chat_todos_conversation_position", "conversation_id", "position"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     conversation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
@@ -323,7 +324,7 @@ class ChatTemplate(Base):
         Index("ix_chat_templates_owner_created", "workspace_id", "actor_user_id", "created_at"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     name: Mapped[str] = mapped_column(String(120), nullable=False)

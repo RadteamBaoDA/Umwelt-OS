@@ -7,7 +7,7 @@ export type PickCreated = { session_id: string; expires_in: number; lan_ip: stri
 /** One option offered to the phone; only `index` ever travels back. */
 export type PickOption = { index: number; label: string };
 
-/** Asks whether the feature is enabled (404 while PICK_ENABLED is off). */
+/** Asks whether the feature is enabled; always 200 with `enabled` mirroring PICK_ENABLED. */
 export function pickEnabled(signal?: AbortSignal): Promise<{ enabled: boolean }> {
   return apiRequest('/api/v1/pick/status', { signal });
 }

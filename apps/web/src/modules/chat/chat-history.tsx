@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { PencilIcon, PlusIcon, SearchIcon, Trash2Icon } from 'lucide-react';
+import { PanelLeftClose, PencilIcon, PlusIcon, SearchIcon, Trash2Icon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -45,6 +45,8 @@ export interface ChatHistoryProps {
   onNewConversation: () => void;
   /** Optional custom CSS classes. */
   className?: string;
+  /** Optional callback that collapses the containing conversation-history sidebar. */
+  onCollapse?: () => void;
   /** Optional handle filled with rename/delete openers so the conversation header can reuse this component's dialogs. */
   actionsRef?: React.MutableRefObject<ChatHistoryActions | null>;
 }
@@ -58,8 +60,7 @@ export interface ChatHistoryActions {
 }
 
 /**
- * Conversation sidebar history component displaying past threads grouped by day, search filtering,
- * thread switching, rename, and deletion with accessible confirmation modal.
+ * Conversation history sidebar showing searchable, grouped threads with switching, rename, deletion, and an optional collapse action.
  *
  * @param props - ChatHistoryProps interface.
  * @returns Accessible conversation list sidebar.
@@ -70,6 +71,7 @@ export function ChatHistory({
   onNewConversation,
   className = '',
   actionsRef,
+  onCollapse,
 }: ChatHistoryProps) {
   const t = useTranslations('chat');
   const session = useWorkspaceSession();
@@ -146,14 +148,21 @@ export function ChatHistory({
       aria-label={t('history')}
     >
       <div className="p-3 border-b border-border flex flex-col gap-2">
-        <Button
-          type="button"
-          onClick={onNewConversation}
-          className="flex min-h-11 w-full items-center justify-center gap-2 text-sm font-semibold"
-        >
-          <PlusIcon className="size-4" aria-hidden="true" />
-          <span>{t('newChat')}</span>
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            onClick={onNewConversation}
+            className="flex min-h-11 min-w-0 flex-1 items-center justify-center gap-2 text-sm font-semibold"
+          >
+            <PlusIcon className="size-4" aria-hidden="true" />
+            <span>{t('newChat')}</span>
+          </Button>
+          {onCollapse && (
+            <Button type="button" variant="outline" size="icon" className="size-11 shrink-0" onClick={onCollapse} aria-label={t('collapseHistory')} aria-expanded="true" aria-controls="chat-history-sidebar">
+              <PanelLeftClose aria-hidden="true" />
+            </Button>
+          )}
+        </div>
 
         <div className="relative">
           <SearchIcon className="absolute left-2.5 top-3.5 size-4 text-muted-foreground pointer-events-none" aria-hidden="true" />

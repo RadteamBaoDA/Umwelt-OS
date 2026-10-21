@@ -19,6 +19,8 @@ class SourceCreate(BaseModel):
     type: SourceType
     name: str = Field(min_length=1, max_length=200)
     provider: str | None = Field(default=None, max_length=120)
+    graph_enabled: bool = True
+    rag_index_enabled: bool = True
 
     @model_validator(mode="after")
     def validate_provider_type(self) -> "SourceCreate":
@@ -79,6 +81,8 @@ class SourcePatch(BaseModel):
 
     name: str | None = Field(default=None, min_length=1, max_length=200)
     status: SourceStatus | None = None
+    graph_enabled: bool | None = None
+    rag_index_enabled: bool | None = None
 
 
 class SourceRead(BaseModel):
@@ -91,6 +95,8 @@ class SourceRead(BaseModel):
     provider: str | None
     status: str
     local_only: bool
+    graph_enabled: bool = True
+    rag_index_enabled: bool = True
     last_sync_at: datetime | None
     last_success_at: datetime | None
     last_error_at: datetime | None
@@ -118,6 +124,8 @@ class SourceFence(BaseModel):
     status: str
     generation: int
     local_only: bool
+    graph_enabled: bool = True
+    rag_index_enabled: bool = True
 
 
 class SourceExportFence(BaseModel):
@@ -224,6 +232,8 @@ class ConnectorSource(BaseModel):
     configuration: dict[str, object]
     local_only: bool
     provider: str | None = None
+    graph_enabled: bool = True
+    rag_index_enabled: bool = True
 
 
 class SourceList(BaseModel):

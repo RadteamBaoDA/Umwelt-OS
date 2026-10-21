@@ -16,7 +16,7 @@ import json
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from typing import cast as typing_cast
-from uuid import UUID, uuid4, uuid5
+from uuid import UUID, uuid5
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import HTTPException
@@ -24,6 +24,7 @@ from sqlalchemy import ColumnElement, DateTime, cast, func, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.models import Owner
+from core.ids import uuid7
 from core.pagination import decode_cursor, encode_cursor
 from core.realtime import commit_with_replay
 from core.workspaces import public as workspaces
@@ -304,7 +305,7 @@ async def create_task_in_uow(
         )) is not None:
             raise TaskConflict("task_id_conflict", "Server-generated accepted task ID is already occupied")
     else:
-        task_id = uuid4()
+        task_id = uuid7()
     task = Task(
         id=task_id, workspace_id=scope.workspace_id, owner_id=_actor(scope), title=payload.title,
         description=payload.description, status=payload.status,

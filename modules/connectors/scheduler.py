@@ -11,7 +11,7 @@ per workspace, not cancellation of remote HTTP already sent by an expired attemp
 
 from datetime import UTC, datetime, timedelta
 from typing import Literal, cast
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import delete, exists, func, or_, select, text, update
@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core import telemetry
 from core.config import Settings
+from core.ids import uuid7
 from core.workspaces.models import WorkspaceMembership
 from core.workspaces.schemas import InternalJobScope, Scope
 from modules.connectors import provider_terms, provisioning
@@ -184,7 +185,7 @@ async def _open_request(
     if schedule is not None and schedule.next_eligible_at is not None and schedule.next_eligible_at > now:
         raise HTTPException(status_code=429, detail="Provider asked to retry later")
     request = ConnectorCollectionRequest(
-        id=uuid4(), workspace_id=scope.workspace_id,
+        id=uuid7(), workspace_id=scope.workspace_id,
         source_id=source_id, actor_user_id=connectors._connector_actor(scope),
         membership_revision=scope.membership_revision, trigger=trigger,
         source_generation=source.generation, connector_revision=row.desired_revision,
@@ -352,7 +353,7 @@ async def admit_collection_request(
         await session.rollback()
         await _defer(session, request_id, BUSY_DEFER)
         return None
-    token = uuid4()
+    token = uuid7()
     slot.occupied_request_id = request.id
     slot.workspace_id = request.workspace_id
     slot.admission_token = token
@@ -742,7 +743,7 @@ async def _enqueue_queued(ctx: dict[str, object], factory: async_sessionmaker[As
     A failed or lost enqueue leaves the durable queued row; its claim expires and enqueue_next_at
     brings it back. n8n requests are excluded: the managed template owns their delivery.
     """
-    claim = uuid4()
+    claim = uuid7()
     async with factory() as session:
         due = (
             select(ConnectorCollectionRequest.id)

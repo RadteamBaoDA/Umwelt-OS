@@ -3,7 +3,8 @@
 import { CheckboxField, FieldGrid, SettingsActions, SettingsSection } from '@/modules/settings/settings-layout';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -15,7 +16,8 @@ import { ApiError } from '@/core/api';
 import { assignAuthorizationUrl } from '@/core/safe-url';
 import { DisconnectDialog } from './disconnect-dialog';
 import { SyncHistory } from './sync-history';
-import { pollCollectionRequest, useSourceActions } from './use-source-actions';
+import { SourceAiToggles, type SourceAiOptions } from './source-ai-toggles';
+import { collectAndWait, useSourceActions, waitForActivation } from './use-source-actions';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { AppLocaleId, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
@@ -27,7 +29,6 @@ import { McpCollectionEditor } from './mcp-collection-editor';
 import {
   activateConnector,
   ExecutionBackend,
-  getCollectionRequest,
   ConnectorCatalogEntry,
   ConnectorConfig,
   ConnectorConfiguration,
@@ -48,6 +49,7 @@ import {
   saveConnectorConfiguration,
   Source,
   sourceKeys,
+  updateSourceAiOptions,
   updateSourceStatus,
   validateDraftConnector,
   disconnectGitHubOAuth,
@@ -57,7 +59,7 @@ import {
   resetGitHubSync,
   refreshGitHubOAuth,
   startGitHubOAuth,
-  triggerCollection,
+  type CollectionRequest,
   type GitHubPeer,
 } from './api';
 
@@ -144,6 +146,7 @@ function formatDate(value: string, locale: AppLocaleId, timezone: string): strin
 
 /** Converts a request or validation failure into the editor’s supported error message key. */
 function errorText(error: unknown): string {
+  if (error instanceof ApiError && error.status === 409 && (error.code === 'builtin_already_added' || error.message === 'builtin_already_added')) return 'builtinAlreadyAdded';
   if (error instanceof ApiError && error.status === 409) return 'conflict';
   if (error instanceof ApiError && error.status === 422) return 'configurationInvalid';
   if (error instanceof ApiError && error.status === 503) return 'serviceUnavailable';
@@ -174,6 +177,25 @@ function EditorSourceActions({ source, activation, disabled, onChanged, onPurgeS
   </>;
 }
 
+/** Wizard step an embedded editor renders; every other section stays mounted but hidden so the draft survives step changes. */
+export type EditorStep = 'provider' | 'connect' | 'choose' | 'collect' | 'verify';
+/** Progress of the final "save and test fetch" run. */
+export type VerifyState = { phase: 'idle' | 'saving' | 'activating' | 'collecting' | 'succeeded' | 'no_changes' | 'failed'; code?: string | null; runId?: string | null };
+/** Read-only editor state the wizard shell uses to gate navigation. */
+export type EditorSnapshot = { sourceId: string; provider: string; busy: boolean; providerOk: boolean; connectOk: boolean; chooseOk: boolean; verify: VerifyState };
+/** Imperative actions the wizard shell triggers on the editor. */
+export type EditorActions = {
+  /** Creates the source for the chosen provider and name; resolves its id or null on failure. */
+  createSource: () => Promise<string | null>;
+  /** Runs work a step needs before the shell advances; resolves false to stay on the step. */
+  prepareNext: (step: EditorStep) => Promise<boolean>;
+  /** Saves, enables, waits for activation and runs one real collection, reporting through the snapshot. */
+  verify: () => Promise<void>;
+};
+const IDLE_VERIFY: VerifyState = { phase: 'idle' };
+const ACTIVATION_TIMEOUT_MS = 60_000;
+const ACTIVATION_POLL_MS = 2_000;
+
 /** Edit and activate a connector using owner APIs; show uncertain GitHub visibility, actual source status, and retained owner history separately. */
 export function ConnectorEditor({
   source,
@@ -181,12 +203,21 @@ export function ConnectorEditor({
   onChanged,
   onPurgeStarted,
   registerTransitionGuard,
+  step,
+  actionsRef,
+  onSnapshot,
 }: {
   source?: Source | null;
   onClose: () => void;
   onChanged: () => void;
   onPurgeStarted?: (operationId: string) => void;
   registerTransitionGuard: (guard: (() => boolean) | null) => void;
+  /** When set the editor is embedded in the wizard: it shows only this step and hides its own header, stepper and footer. */
+  step?: EditorStep;
+  /** Receives the editor's imperative actions (re-assigned every render). */
+  actionsRef?: MutableRefObject<EditorActions | null>;
+  /** Called whenever the gating snapshot changes. */
+  onSnapshot?: (snapshot: EditorSnapshot) => void;
 }) {
   const t = useTranslations('sources');
   const { csrfToken } = useWorkspaceSession();
@@ -196,6 +227,8 @@ export function ConnectorEditor({
   const initialProvider = source?.provider && isProvider(source.provider) ? source.provider : source?.type === 'mcp' ? 'mcp' : source?.type === 'rss' ? 'rss' : source?.type === 'web' ? 'web' : 'rest';
   const [provider, setProvider] = useState<Provider>(initialProvider);
   const [name, setName] = useState(source?.name ?? '');
+  const [aiOptions, setAiOptions] = useState<SourceAiOptions>({ graph_enabled: source?.graph_enabled ?? true, rag_index_enabled: source?.rag_index_enabled ?? true });
+  const [aiOptionsError, setAiOptionsError] = useState(false);
   const [sourceId, setSourceId] = useState(source?.id ?? '');
   const providerRef = useRef(provider);
   const nameRef = useRef(name);
@@ -229,6 +262,8 @@ export function ConnectorEditor({
   const [error, setError] = useState('');
   const [conflict, setConflict] = useState(false);
   const [notice, setNotice] = useState('');
+  const [verify, setVerify] = useState<VerifyState>(IDLE_VERIFY);
+  const verifyController = useRef<AbortController | null>(null);
   const [githubPeers, setGithubPeers] = useState<GitHubPeer[]>([]);
   const [githubDisconnectOpen, setGithubDisconnectOpen] = useState(false);
   const [githubRecoveryReview, setGithubRecoveryReview] = useState<{ operationId: string; kind: 'authorization' | 'refresh'; originSourceId: string; originGeneration: number; originRevision: number; sourceId: string; generation: number; revision: number } | null>(null);
@@ -330,10 +365,15 @@ export function ConnectorEditor({
   const termsQuery = useQuery({ queryKey: connectorKeys.terms(sourceId), queryFn: ({ signal }) => getProviderTerms(sourceId, signal), enabled: termsGated });
   const termsBlocked = freeProviders.has(provider) && (!termsGated || termsQuery.data?.eligible !== true);
   // Built-ins are switched on from the Built-in sources section, not created as tiles here.
-  const builtinQuery = useQuery({ queryKey: connectorKeys.builtins, queryFn: ({ signal }) => listBuiltinSources(signal), enabled: !sourceId });
+  // Also loaded in edit mode: a built-in's review-class terms are settled by its Resume action, not this form.
+  const builtinQuery = useQuery({ queryKey: connectorKeys.builtins, queryFn: ({ signal }) => listBuiltinSources(signal) });
   const builtinIds = useMemo(() => new Set((builtinQuery.data ?? []).map((item) => item.id)), [builtinQuery.data]);
+  const builtinReview = (builtinQuery.data ?? []).some((item) => item.id === provider && item.eligibility === 'review');
+  // One source per built-in: a provider whose built-in already has a source cannot be created again from the catalog.
+  const addedBuiltinIds = useMemo(() => new Set((builtinQuery.data ?? []).filter((item) => item.source_id !== null).map((item) => item.id)), [builtinQuery.data]);
   const catalog = useMemo(() => (catalogQuery.data ?? []).filter((entry) => !builtinIds.has(entry.provider_id)), [catalogQuery.data, builtinIds]);
-  const currentEntry = catalog.find((entry) => entry.provider_id === provider);
+  // Built-ins are dropped from the add grid (`catalog`) but edit mode still needs their guide and terms panel.
+  const currentEntry = (catalogQuery.data ?? []).find((entry) => entry.provider_id === provider);
   const sourceStatus = sourceStatusOverride ?? source?.status ?? 'active';
   const visibleActivationState = activationQuery.isError ? 'unknown' : activationQuery.data?.state ?? activationState;
   const visibleActivationError = activationQuery.isError ? null : activationQuery.data?.error_code ?? activationError;
@@ -403,6 +443,7 @@ export function ConnectorEditor({
   useEffect(() => () => {
     requestGeneration.current += 1;
     requestController.current?.abort();
+    verifyController.current?.abort();
   }, []);
 
   const settings = useMemo<ConnectorSettings>(() => ({
@@ -425,6 +466,8 @@ export function ConnectorEditor({
     draftVersion.current += 1;
     dirtyRef.current = true;
     setDirty(true);
+    // A finished test fetch no longer describes the edited draft.
+    setVerify((current) => (current.phase === 'idle' ? current : IDLE_VERIFY));
   }
 
   type RequestToken = { generation: number; editorGeneration: string; sourceId: string | null; authGeneration: number; controller: AbortController; draftVersion: number };
@@ -486,27 +529,24 @@ export function ConnectorEditor({
     }
   }
 
-  /** Starts one collection run for an active source and reports the accepted status. */
-  async function collectNow() {
+  /** Starts one collection run for an active source, reports its progress, and resolves the final collection request (null when aborted, rejected or not started). */
+  async function collectNow(): Promise<CollectionRequest | null> {
     const id = sourceId;
-    if (!id) return;
+    if (!id) return null;
     const token = beginRequest('collect');
-    if (!token) return;
+    if (!token) return null;
     setError('');
     setNotice('');
+    let outcome: CollectionRequest | null = null;
     try {
-      const result = await triggerCollection(id, csrfToken);
-      if (!requestIsCurrent(token)) return;
-      setNotice(t('collectResult', { status: result.status }));
-      if (result.request_id) {
-        const requestId = result.request_id;
-        const final = await pollCollectionRequest((signal) => getCollectionRequest(id, requestId, signal), {
-          signal: token.controller.signal,
-          onUpdate: (update) => { if (requestIsCurrent(token)) setNotice(t('collectResult', { status: update.status })); },
-        });
-        if (!final || !requestIsCurrent(token)) return;
-        if (final.status === 'failed' || final.status === 'cancelled') { setError('actionFailed'); setNotice(t('collectFailedCode', { code: final.error_code ?? final.status })); }
-      }
+      const final = await collectAndWait(id, csrfToken, {
+        signal: token.controller.signal,
+        onAccepted: (result) => { if (requestIsCurrent(token)) setNotice(t('collectResult', { status: result.status })); },
+        onUpdate: (update) => { if (requestIsCurrent(token)) setNotice(t('collectResult', { status: update.status })); },
+      });
+      if (!final || !requestIsCurrent(token)) return null;
+      outcome = final;
+      if (final.status === 'failed' || final.status === 'cancelled') { setError('actionFailed'); setNotice(t('collectFailedCode', { code: final.error_code ?? final.status })); }
       await queryClient.invalidateQueries({ queryKey: connectorKeys.ingestion(id) });
       await queryClient.invalidateQueries({ queryKey: sourceKeys.all });
     } catch (cause) {
@@ -514,6 +554,7 @@ export function ConnectorEditor({
     } finally {
       endRequest(token);
     }
+    return outcome;
   }
 
   /** Reloads server-owned connector and activation state while preserving newer local drafts and rejecting stale revisions. */
@@ -596,11 +637,29 @@ export function ConnectorEditor({
     }
   }
 
+  /** Edit mode: applies one toggle immediately with a PATCH and rolls the checkbox back if the save fails. */
+  async function changeAiOptions(next: SourceAiOptions) {
+    const previous = aiOptions;
+    setAiOptions(next);
+    setAiOptionsError(false);
+    if (!source) return; // create flow: the values are sent with the create request
+    try {
+      const patch: Partial<SourceAiOptions> = {};
+      if (next.graph_enabled !== previous.graph_enabled) patch.graph_enabled = next.graph_enabled;
+      if (next.rag_index_enabled !== previous.rag_index_enabled) patch.rag_index_enabled = next.rag_index_enabled;
+      await updateSourceAiOptions(source.id, patch, csrfToken);
+      onChanged();
+    } catch {
+      setAiOptions(previous);
+      setAiOptionsError(true);
+    }
+  }
+
   /** Creates a connector source on first save when necessary and returns its source identifier. */
   async function ensureSource(token: RequestToken): Promise<string> {
     if (sourceId) return sourceId;
     if (!name.trim()) throw new Error('source_name_required');
-    const created = await createConnectorSource(sourceTypes[provider], name.trim(), csrfToken, token.controller.signal, nativeProviders.has(provider) ? provider : undefined);
+    const created = await createConnectorSource(sourceTypes[provider], name.trim(), csrfToken, token.controller.signal, nativeProviders.has(provider) ? provider : undefined, aiOptions);
     if (!requestIsCurrent(token)) throw new DOMException('editor_closed', 'AbortError');
     sourceGenerationRef.current = created.generation;
     setSourceGeneration(created.generation);
@@ -706,10 +765,10 @@ export function ConnectorEditor({
     }
   }
 
-  /** Saves pending connector settings before activation and refreshes owner state after success or failure. */
-  async function saveAndEnable() {
+  /** Saves pending connector settings before activation and refreshes owner state after success or failure; resolves the accepted activation (state may still be queued) or null when nothing was activated. */
+  async function saveAndEnable(): Promise<{ id: string; state: string; errorCode: string | null } | null> {
     const token = beginRequest('save_enable');
-    if (!token) return;
+    if (!token) return null;
     let actionSourceId: string | null = sourceId || null;
     // Save persists scope first; only the following activation request may carry replacement secret bytes.
     const activationDraft = { authMethod, secret, telegramSecretAction };
@@ -719,21 +778,21 @@ export function ConnectorEditor({
     try {
       if (dirty || revision === 0) {
         const saved = await saveConfiguration(token);
-        if (saved === null || !requestIsCurrent(token)) return;
+        if (saved === null || !requestIsCurrent(token)) return null;
         actionSourceId = saved.id;
         nextRevision = saved.revision;
       }
       const id = actionSourceId;
-      if (!id || !requestIsCurrent(token)) return;
+      if (!id || !requestIsCurrent(token)) return null;
       const replacingWorldKey = provider === 'alpha_vantage' && Boolean(activationDraft.secret);
       if (provider === 'alpha_vantage' && !replacingWorldKey && !providerCredentialConfigured) {
         setError('providerSecretRequired');
-        return;
+        return null;
       }
       const replacingNativeKey = keyedProviders.has(provider) && Boolean(activationDraft.secret);
       if (keyedProviders.has(provider) && !replacingNativeKey && !providerCredentialConfigured) {
         setError('providerSecretRequired');
-        return;
+        return null;
       }
       if (replacingNativeKey) {
         await saveNativeRestCredential(id, nextRevision, activationDraft.secret, csrfToken, token.controller.signal);
@@ -743,7 +802,7 @@ export function ConnectorEditor({
       }
       const replacingSecret = provider === 'alpha_vantage' || keyedProviders.has(provider) ? false : activationDraft.authMethod === 'telegram_bot_token' ? activationDraft.telegramSecretAction === 'replace' : Boolean(activationDraft.secret);
       const result = await activateConnector(id, nextRevision, replacingSecret ? 'replace' : 'keep', replacingSecret ? activationDraft.secret : undefined, csrfToken, token.controller.signal, backendChoice ?? undefined);
-      if (!requestIsCurrent(token)) return;
+      if (!requestIsCurrent(token)) return null;
       setActivationState(result.state);
       setActivationError(result.error_code);
       setProviderCredentialConfigured(replacingWorldKey || replacingNativeKey || activationDraft.authMethod === 'http_header' || activationDraft.authMethod === 'telegram_bot_token' || providerCredentialConfigured);
@@ -755,22 +814,24 @@ export function ConnectorEditor({
       }
       queryClient.setQueryData(connectorKeys.activation(id), result);
       await queryClient.invalidateQueries({ queryKey: connectorKeys.activation(id) });
-      if (!requestIsCurrent(token)) return;
+      if (!requestIsCurrent(token)) return null;
       await queryClient.invalidateQueries({ queryKey: connectorKeys.configuration(id) });
-      if (!requestIsCurrent(token)) return;
+      if (!requestIsCurrent(token)) return null;
       await queryClient.invalidateQueries({ queryKey: sourceKeys.all });
-      if (!requestIsCurrent(token)) return;
+      if (!requestIsCurrent(token)) return null;
       onChanged();
       if (result.state !== 'active') setNotice(t('savedInactive'));
+      return { id, state: result.state, errorCode: result.error_code };
     } catch (cause) {
-      if (!requestIsCurrent(token)) return;
+      if (!requestIsCurrent(token)) return null;
       setError(errorText(cause));
       setNotice(t('savedInactive'));
       if (actionSourceId) await refreshOwnerState(actionSourceId, token);
-      if (!requestIsCurrent(token)) return;
+      if (!requestIsCurrent(token)) return null;
       await queryClient.invalidateQueries({ queryKey: sourceKeys.all });
-      if (!requestIsCurrent(token)) return;
+      if (!requestIsCurrent(token)) return null;
       onChanged();
+      return null;
     } finally {
       endRequest(token);
     }
@@ -1026,18 +1087,64 @@ export function ConnectorEditor({
     }
   }
 
-  /** Creates the connector source from the current provider and name, then advances the editor to that source. */
-  async function createSource() {
+  /** Creates the connector source from the current provider and name, then advances the editor to that source; resolves the new id or null on failure. */
+  async function createSource(): Promise<string | null> {
     const token = beginRequest('create');
-    if (!token) return;
+    if (!token) return null;
     setError('');
     try {
-      await ensureSource(token);
+      return await ensureSource(token);
     } catch (cause) {
       if (requestIsCurrent(token)) setError(errorText(cause));
+      return null;
     } finally {
       endRequest(token);
     }
+  }
+
+  /**
+   * Saves and enables the source, waits for activation to become active, then runs one real collection.
+   * Progress and the terminal outcome are published through `verify`; failures keep the dialog open with an error code.
+   * MCP sources are activated by their own editor, so only the activation wait and collection run here.
+   */
+  async function runVerify() {
+    verifyController.current?.abort();
+    const controller = new AbortController();
+    verifyController.current = controller;
+    const stillCurrent = () => verifyController.current === controller && !controller.signal.aborted;
+    const fail = (code: string) => { if (stillCurrent()) setVerify({ phase: 'failed', code }); };
+    setVerify({ phase: 'saving' });
+    try {
+      let id = sourceId;
+      if (provider !== 'mcp') {
+        const saved = await saveAndEnable();
+        if (!stillCurrent()) return;
+        if (!saved) { fail('save_failed'); return; }
+        id = saved.id;
+      }
+      if (!id) { fail('source_missing'); return; }
+      setVerify({ phase: 'activating' });
+      // Activation is asynchronous (queued/provisioning); poll the owner state until active, a hard failure, or timeout.
+      const activation = await waitForActivation(id, controller.signal, { timeoutMs: ACTIVATION_TIMEOUT_MS, intervalMs: ACTIVATION_POLL_MS });
+      if (!activation || !stillCurrent()) return;
+      if (!activation.ok) { fail(activation.code ?? 'activation_failed'); return; }
+      setVerify({ phase: 'collecting' });
+      const final = await collectAndWait(id, csrfToken, { signal: controller.signal });
+      if (!final || !stillCurrent()) return;
+      void queryClient.invalidateQueries({ queryKey: connectorKeys.ingestion(id) });
+      void queryClient.invalidateQueries({ queryKey: sourceKeys.all });
+      onChanged();
+      if (final.status === 'succeeded' || final.status === 'no_changes') setVerify({ phase: final.status, runId: final.ingestion_run_id });
+      else fail(final.error_code ?? final.status);
+    } catch (cause) {
+      fail(cause instanceof ApiError ? cause.message || `http_${cause.status}` : 'request_failed');
+    }
+  }
+
+  /** Performs step-specific work before the wizard advances; GitHub must persist its draft so OAuth (which needs a saved revision) can start. */
+  async function prepareNext(from: EditorStep): Promise<boolean> {
+    if (from === 'connect' && provider === 'github' && revision === 0) return (await saveConfiguration()) !== null;
+    return true;
   }
 
   const locked = busyAction !== '' || actionsBusy;
@@ -1049,31 +1156,52 @@ export function ConnectorEditor({
     { id: 'collect', title: t('stepCollect'), status: t('everyMinutes', { minutes: configuration.schedule_interval_minutes }) },
   ] as const;
 
+  const embedded = step !== undefined;
+  /** True when the section tagged with one of these wizard steps should be visible (always true outside the wizard). */
+  const showStep = (...visible: EditorStep[]) => !embedded || visible.includes(step);
+  const urlOk = provider === 'rss' ? Boolean(configuration.feed_url?.trim()) : provider === 'web' || provider === 'rest' ? Boolean(configuration.url?.trim()) : true;
+  const keyedOrAlpha = provider === 'alpha_vantage' || (keyedProviders.has(provider) && (backendChoice ?? 'native') === 'native');
+  // Credentialed providers must prove the credential (validation) or provide the key before the wizard moves on.
+  const connectOk = provider === 'telegram' || (provider === 'rest' && authMethod === 'http_header') ? Boolean(validation) : keyedOrAlpha ? Boolean(secret) || providerCredentialConfigured : true;
+  const providerOk = Boolean(name.trim() && currentEntry && ['available', 'implemented', 'requires_credentials'].includes(currentEntry.availability));
+  const chooseOk = !termsBlocked && urlOk;
+  const snapshot = useMemo<EditorSnapshot>(() => ({ sourceId, provider, busy: locked, providerOk, connectOk, chooseOk, verify }),
+    [sourceId, provider, locked, providerOk, connectOk, chooseOk, verify]);
+  useEffect(() => { onSnapshot?.(snapshot); }, [snapshot, onSnapshot]);
+  // Re-assigned each render so the wizard always calls closures over the latest draft.
+  useLayoutEffect(() => { if (actionsRef) actionsRef.current = { createSource, prepareNext, verify: runVerify }; });
+  const verifyBusy = verify.phase === 'saving' || verify.phase === 'activating' || verify.phase === 'collecting';
+
   /** Formats provider availability and unsupported-operation information for the connector catalog. */
   const catalogStatus = (entry: ConnectorCatalogEntry) => entry.availability === 'available' || entry.availability === 'implemented'
     ? t('available') : entry.availability === 'requires_credentials' ? t('credentialsRequired') : entry.availability === 'planned' ? t('planned') : t('unavailable');
 
-  return <section className="source-editor flex flex-col gap-4 rounded-lg border border-border bg-card p-5" aria-label={sourceId ? t('editTitle') : t('setupTitle')}>
-    {!sourceId ? <>
-      <header className="section-heading"><div><h2>{t('setupTitle')}</h2><p className="text-muted-foreground">{t('stepConnect')}</p></div></header>
+  return <section className={embedded ? 'source-editor flex flex-col gap-4' : 'source-editor flex flex-col gap-4 rounded-lg border border-border bg-card p-5'} aria-label={sourceId ? t('editTitle') : t('setupTitle')}>
+    {(!sourceId || embedded) && <div hidden={embedded && step !== 'provider'} className="flex flex-col gap-4">
+      {!embedded && <header className="section-heading"><div><h2>{t('setupTitle')}</h2><p className="text-muted-foreground">{t('stepConnect')}</p></div></header>}
       {catalogQuery.isPending && <p className="text-muted-foreground">{t('loading')}</p>}
       {catalogQuery.isError && <p className="error" role="alert">{t('loadFailed')} <Button variant="outline" onClick={() => catalogQuery.refetch()}>{t('retry')}</Button></p>}
       {catalog.length > 0 && <div className="source-provider-grid" role="group" aria-label={t('provider')}>
         {catalog.map((entry) => {
           const localProvider = entry.provider_id;
           const supported = ['available', 'implemented', 'requires_credentials'].includes(entry.availability) && isProvider(localProvider);
-          return <Button key={entry.provider_id} type="button" variant="outline" className={`source-provider h-auto min-w-0 flex-col items-start justify-start overflow-hidden whitespace-normal break-words text-left font-normal${provider === localProvider ? ' is-selected' : ''}`} disabled={!supported || locked} onClick={() => { if (!supported || !isProvider(localProvider)) return; setProvider(localProvider); setConfiguration(defaultConfiguration(localProvider, entry)); if (freeProviders.has(localProvider) && !name.trim()) setName(entry.label); markDraftChanged(); }}>
+          const added = addedBuiltinIds.has(localProvider);
+          return <Button key={entry.provider_id} type="button" variant="outline" className={`source-provider h-auto min-w-0 flex-col items-start justify-start overflow-hidden whitespace-normal break-words text-left font-normal${provider === localProvider ? ' is-selected' : ''}`} disabled={!supported || locked || added || Boolean(sourceId)} onClick={() => { if (!supported || !isProvider(localProvider)) return; setProvider(localProvider); setConfiguration(defaultConfiguration(localProvider, entry)); if (freeProviders.has(localProvider) && !name.trim()) setName(entry.label); markDraftChanged(); }}>
             <strong>{providerKey(entry.provider_id) === 'provider' ? entry.label : t(providerKey(entry.provider_id))}</strong><span>{catalogStatus(entry)}</span>
+            {added && <Badge variant="secondary">{t('builtinAdded')}</Badge>}
             {!supported && <small>{t('providerUnavailableReason')}</small>}
           </Button>;
         })}
       </div>}
       <div className="form source-editor-form">
-        <div className="field"><Label htmlFor="new-source-name">{t('sourceName')}</Label><Input id="new-source-name" maxLength={200} disabled={locked} value={name} onChange={(event) => { setName(event.target.value); markDraftChanged(); }} /></div>
-        <div className="form-actions"><Button disabled={locked || !name.trim() || !currentEntry || !['available', 'implemented', 'requires_credentials'].includes(currentEntry.availability)} onClick={createSource}>{busyAction === 'create' ? t('saving') : t('createAndContinue')}</Button><Button variant="outline" onClick={closeEditor}>{t('cancel')}</Button></div>
+        <div className="field"><Label htmlFor="new-source-name">{t('sourceName')}</Label><Input id="new-source-name" maxLength={200} disabled={locked || Boolean(sourceId)} value={name} onChange={(event) => { setName(event.target.value); markDraftChanged(); }} /></div>
+        {!source && <SourceAiToggles idPrefix="new-source" value={aiOptions} onChange={(next) => void changeAiOptions(next)} disabled={locked || Boolean(sourceId)} />}
+        {!sourceId && error && <p className="error" role="alert">{t(error as 'conflict' | 'configurationInvalid' | 'serviceUnavailable' | 'sourceNameRequired' | 'actionFailed' | 'builtinAlreadyAdded')}</p>}
+        {!embedded && <div className="form-actions"><Button disabled={locked || !providerOk} onClick={() => void createSource()}>{busyAction === 'create' ? t('saving') : t('createAndContinue')}</Button><Button variant="outline" onClick={closeEditor}>{t('cancel')}</Button></div>}
       </div>
-    </> : <>
-      <header className="section-heading">
+    </div>}
+    {sourceId && <>
+      {!embedded && <header className="section-heading">
         <div>
           <h2>{name || source?.name || t('editTitle')}</h2>
           <p className="text-muted-foreground"><span className="badge">{sourceStatus === 'paused' ? t('statusPaused') : activationLabel}</span> {revision > 0 ? t('editorRevision', { revision }) : t('editorRevisionNew')}{(dirty || secret) ? ` · ${t('editorUnsaved')}` : ''}</p>
@@ -1084,25 +1212,26 @@ export function ConnectorEditor({
           {source && <EditorSourceActions source={{ ...source, status: sourceStatus }} activation={activationQuery.data} disabled={locked || dirty || Boolean(secret)} onChanged={onChanged} onPurgeStarted={onPurgeStarted} onClose={onClose} onBusyChange={setActionsBusy} />}
           <Button variant="outline" onClick={closeEditor}>{t('close')}</Button>
         </div>
-      </header>
+      </header>}
+      {source && showStep('connect') && <div className="flex flex-col gap-2"><SourceAiToggles idPrefix="edit-source" value={aiOptions} onChange={(next) => void changeAiOptions(next)} disabled={locked} />{aiOptionsError && <p className="error" role="alert">{t('aiOptionsSaveFailed')}</p>}</div>}
       {configurationQuery.isPending && <p className="text-muted-foreground">{t('loading')}</p>}
       {configurationQuery.isError && <div className="error" role="alert">{t(errorText(configurationQuery.error) as 'conflict' | 'configurationInvalid' | 'serviceUnavailable' | 'sourceNameRequired' | 'actionFailed')} <Button variant="outline" onClick={() => configurationQuery.refetch()}>{t('retry')}</Button></div>}
       {configurationQuery.isSuccess && <>
-        {provider === 'mcp' ? <McpCollectionEditor sourceId={sourceId} sourceStatus={sourceStatus} onDraftChange={setDirty} onChanged={() => { void queryClient.invalidateQueries({ queryKey: connectorKeys.configuration(sourceId) }); void queryClient.invalidateQueries({ queryKey: connectorKeys.activation(sourceId) }); onChanged(); }} /> : <>
-        {revision > 0 && (visibleActivationState === 'saved_not_active' || visibleActivationState === 'reconciliation_required' || Boolean(visibleActivationError)) && <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive p-4" role="status">
+        {provider === 'mcp' ? <div hidden={!showStep('connect')}><McpCollectionEditor sourceId={sourceId} sourceStatus={sourceStatus} onDraftChange={setDirty} onChanged={() => { void queryClient.invalidateQueries({ queryKey: connectorKeys.configuration(sourceId) }); void queryClient.invalidateQueries({ queryKey: connectorKeys.activation(sourceId) }); onChanged(); }} /></div> : <>
+        {showStep('verify') && revision > 0 && (visibleActivationState === 'saved_not_active' || visibleActivationState === 'reconciliation_required' || Boolean(visibleActivationError)) && <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive p-4" role="status">
           <p><strong>{t('activationIssueTitle')}</strong> {t('savedInactive')}{visibleActivationError ? ` ${t('activationError')}: ${visibleActivationError}` : ''}</p>
           {!dirty && <Button variant="outline" disabled={locked || termsBlocked} onClick={retryActivation}>{busyAction === 'activate' ? t('enabling') : t('retryActivation')}</Button>}
         </div>}
-        <ol aria-label={t('stepperLabel')} className="m-0 grid list-none grid-cols-3 gap-3 p-0 max-[720px]:grid-cols-1">
+        {!embedded && <ol aria-label={t('stepperLabel')} className="m-0 grid list-none grid-cols-3 gap-3 p-0 max-[720px]:grid-cols-1">
           {steps.map((step) => <li key={step.id}>
             <a href={`#source-step-${step.id}`} aria-current={currentStep === step.id ? 'step' : undefined} className={`flex min-h-11 flex-col rounded-lg border p-3 no-underline ${currentStep === step.id ? 'border-primary' : 'border-border'}`}>
               <strong>{step.title}</strong><span className="text-muted-foreground text-sm">{step.status}</span>
             </a>
           </li>)}
-        </ol>
+        </ol>}
         <fieldset className="source-editor-fields" disabled={locked}>
         <div className="form source-editor-form">
-          <div id="source-step-connect" className="scroll-mt-4"><SettingsSection title={t('stepConnect')}>
+          <div id="source-step-connect" hidden={!showStep('connect')} className="scroll-mt-4"><SettingsSection title={t('stepConnect')}>
             {!['telegram', 'alpha_vantage', 'rest'].includes(provider) && !keyedProviders.has(provider) && currentEntry && (currentEntry.auth_methods.every((method) => method === 'none')
               ? <p className="text-muted-foreground">{t('connectNoCredential')}</p>
               : currentEntry.auth_methods.includes('oauth2') && <p className="text-muted-foreground">{t('connectOAuth')}</p>)}
@@ -1121,10 +1250,10 @@ export function ConnectorEditor({
             <div className="form-actions"><Button variant="outline" disabled={locked} onClick={validateDraft}>{busyAction === 'validate' ? t('validating') : t('validateDraft')}</Button></div>
             {validation && <p className="status-panel" role="status">{t('validationPassed', { time: formatDate(validation.at, display.locale, display.timezone) })}{validation.verifiedBotId ? ` ${t('verifiedBot')}: ${validation.verifiedBotId}` : ''}{validation.scopeVerified ? ` · ${t('scopeVerified')}` : ''}</p>}
           </SettingsSection></div>
-          <div id="source-step-choose" className="scroll-mt-4"><SettingsSection title={t('stepChooseData')}>
+          <div id="source-step-choose" hidden={!showStep('choose')} className="scroll-mt-4"><SettingsSection title={t('stepChooseData')}>
           {currentEntry && <ProviderGuide entry={currentEntry} source={source ? { ...source, status: sourceStatus } : null} onTest={sourceId ? validateDraft : undefined} testBusy={locked} testPassed={Boolean(validation)} />}
           {freeProviders.has(provider) && currentEntry && (sourceId
-            ? <ProviderTerms sourceId={sourceId} entry={currentEntry} csrfToken={csrfToken} disabled={locked} />
+            ? builtinReview ? <p className="text-muted-foreground" role="status">{t('builtinUseToggle')}</p> : <ProviderTerms sourceId={sourceId} entry={currentEntry} csrfToken={csrfToken} disabled={locked} />
             : <p className="text-muted-foreground" role="status">{t('termsRequired')}</p>)}
           {freeProviders.has(provider) && !scopedFreeProviders.has(provider) ? <p className="text-muted-foreground">{t('fixedScope')}</p> : nativeProviders.has(provider)
             ? <ProviderScope key={`${sourceId}:${provider}:${revision}:${sourceGeneration}:${scopeResetEpoch}`} provider={provider as NativeProvider} configuration={configuration} disabled={locked} resetEpoch={scopeResetEpoch} onChange={changeConfiguration} />
@@ -1137,7 +1266,7 @@ export function ConnectorEditor({
             <div className="field"><Label htmlFor="source-updated-field">{t('updatedField')}</Label><Input id="source-updated-field" maxLength={128} value={configuration.updated_field ?? ''} onChange={(event) => changeConfiguration('updated_field', event.target.value)} /></div>
           </FieldGrid>}
           </SettingsSection></div>
-          <div id="source-step-collect" className="scroll-mt-4"><SettingsSection title={t('stepCollect')}>
+          <div id="source-step-collect" hidden={!showStep('collect')} className="scroll-mt-4"><SettingsSection title={t('stepCollect')}>
           <FieldGrid>
           <div className="field"><Label htmlFor="source-schedule">{t('schedule')}</Label><Select value={String(configuration.schedule_interval_minutes)} onValueChange={(value) => changeConfiguration('schedule_interval_minutes', Number(value) as ConnectorConfig['schedule_interval_minutes'])}><SelectTrigger id="source-schedule"><SelectValue /></SelectTrigger><SelectContent>{(provider === 'alpha_vantage' ? [1440] : intervals).map((minutes) => <SelectItem key={minutes} value={String(minutes)}>{t('everyMinutes', { minutes })}</SelectItem>)}</SelectContent></Select></div>
           <div className="field"><Label htmlFor="source-timezone">{t('timezone')}</Label><Input id="source-timezone" value={configuration.timezone} onChange={(event) => changeConfiguration('timezone', event.target.value)} /></div>
@@ -1146,7 +1275,7 @@ export function ConnectorEditor({
             <div className="field"><Label htmlFor="source-history-mode">{t('historyMode')}</Label><Input id="source-history-mode" readOnly aria-readonly="true" value={t(provider === 'telegram' ? 'pendingUpdatesOnly' : 'returnedSnapshot')} /></div>
             </>}
           </SettingsSection></div>
-          {(provider === 'web' || nativeProviders.has(provider)) && <details className="rounded-lg border border-border p-4">
+          {(provider === 'web' || nativeProviders.has(provider)) && <details hidden={!showStep('collect')} className="rounded-lg border border-border p-4">
             <summary className="cursor-pointer font-semibold">{t('advancedTitle')}</summary>
             <div className="mt-3"><FieldGrid>
               {provider === 'web' && <>
@@ -1162,9 +1291,9 @@ export function ConnectorEditor({
           </details>}
         </div>
         </fieldset>
-        {historyDescription && <div className="source-capability"><strong>{t('history')}</strong><p>{historyDescription}</p>{nativeProviders.has(provider) && <p>{t('providerHistoryCaveat')}</p>}</div>}
-        {provider === 'open_meteo' && <div className="source-capability"><strong>{t('providerTerms')}</strong><p>{t('openMeteoTerms')}</p></div>}
-        {provider === 'github' && <section className="source-capability" aria-live="polite">
+        {showStep('choose') && historyDescription && <div className="source-capability"><strong>{t('history')}</strong><p>{historyDescription}</p>{nativeProviders.has(provider) && <p>{t('providerHistoryCaveat')}</p>}</div>}
+        {showStep('choose') && provider === 'open_meteo' && <div className="source-capability"><strong>{t('providerTerms')}</strong><p>{t('openMeteoTerms')}</p></div>}
+        {showStep('connect', 'verify') && provider === 'github' && <section className="source-capability" aria-live="polite">
           <strong>{githubStatusQuery.data?.state === 'ready' ? t('githubConnected') : t('githubNotConnected')}</strong>
           {githubStatusQuery.data?.expires_at && <p>{t('githubExpires')}: {formatDate(githubStatusQuery.data.expires_at, display.locale, display.timezone)}</p>}
           {githubStatusQuery.data && <p>{t('githubScanWindow', { days: githubStatusQuery.data.sync.history_days })}</p>}
@@ -1200,10 +1329,10 @@ export function ConnectorEditor({
               : <Button variant="outline" disabled={locked || dirty || sourceStatus !== 'active' || revision < 1} onClick={connectGitHub}>{busyAction === 'github-connect' ? t('loading') : t('githubConnect')}</Button>}
           </div>
         </section>}
-        {currentEntry?.quota_limits && <div className="source-capability"><strong>{t('quota')}</strong><p>{Object.entries(currentEntry.quota_limits).map(([key, value]) => `${key}: ${value}`).join(' · ')}</p></div>}
-        {error && <p className="error" role="alert">{t(error as 'conflict' | 'configurationInvalid' | 'serviceUnavailable' | 'validationOutcomeUnknown' | 'sourceNameRequired' | 'actionFailed' | 'reloadFailed')}</p>}
+        {showStep('choose') && currentEntry?.quota_limits && <div className="source-capability"><strong>{t('quota')}</strong><p>{Object.entries(currentEntry.quota_limits).map(([key, value]) => `${key}: ${value}`).join(' · ')}</p></div>}
+        {error && <p className="error" role="alert">{t(error as 'conflict' | 'configurationInvalid' | 'serviceUnavailable' | 'validationOutcomeUnknown' | 'sourceNameRequired' | 'actionFailed' | 'reloadFailed' | 'builtinAlreadyAdded')}</p>}
         {notice && <p className="text-muted-foreground" role="status">{notice}</p>}
-        {workspace.isOwner && <details className="rounded-lg border border-border p-4">
+        {showStep('collect') && workspace.isOwner && <details className="rounded-lg border border-border p-4">
           <summary className="cursor-pointer font-semibold">{t('backendAdvanced')}</summary>
           <div className="mt-3 grid gap-3">
             <div className="field"><Label htmlFor="source-backend">{t('backendLabel')}</Label>
@@ -1218,12 +1347,12 @@ export function ConnectorEditor({
           <p className="error">{t('conflict')}</p>
           <Button variant="outline" disabled={locked} onClick={reloadServerConfiguration}>{t('reloadDiscard')}</Button>
         </div>}
-        {(termsBlocked || visibleActivationError === 'terms_not_accepted') && <p className="error" role="status">{t('termsActivationBlocked')}</p>}
-        <SettingsActions>
+        {showStep('choose', 'verify') && (termsBlocked || visibleActivationError === 'terms_not_accepted') && <p className="error" role="status">{t('termsActivationBlocked')}</p>}
+        {!embedded && <SettingsActions>
           <Button variant="outline" onClick={closeEditor}>{t('cancel')}</Button>
           <Button variant="outline" disabled={locked || sourceStatus !== 'active'} onClick={() => saveConfiguration()}>{busyAction === 'save' ? t('saving') : t('save')}</Button>
-          <Button disabled={locked || sourceStatus !== 'active' || termsBlocked} onClick={saveAndEnable}>{busyAction === 'activate' ? t('enabling') : t('saveEnable')}</Button>
-        </SettingsActions>
+          <Button disabled={locked || sourceStatus !== 'active' || termsBlocked} onClick={() => void saveAndEnable()}>{busyAction === 'activate' ? t('enabling') : t('saveEnable')}</Button>
+        </SettingsActions>}
         <AlertDialog open={githubDisconnectOpen} onOpenChange={setGithubDisconnectOpen}>
           <AlertDialogContent>
             <AlertDialogHeader>
@@ -1255,7 +1384,7 @@ export function ConnectorEditor({
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
-        {revision > 0 && <section className="source-activation" aria-live="polite">
+        {showStep('verify') && revision > 0 && <section className="source-activation" aria-live="polite">
           <strong>{t('activationState')}: {t(({ queued: 'stateQueued', provisioning: 'stateProvisioning', saved_not_active: 'stateSavedNotActive', reconciliation_required: 'stateReconciliationRequired', disabled: 'stateDisabled', active: 'active' } as Record<string, string>)[visibleActivationState] ?? 'stateUnknown')}</strong>
           {activationQuery.isError && <p className="error">{t('activationRefreshFailed')}</p>}
           {visibleActivationError && <p className="error">{t('activationError')}: {visibleActivationError}</p>}
@@ -1263,8 +1392,20 @@ export function ConnectorEditor({
           {visibleActivationError === 'credential_delete_pending' && <p className="text-muted-foreground" role="status">{t('credentialPending')}</p>}
           {providerCredentialConfigured && sourceStatus === 'paused' && visibleActivationError !== 'deactivation_pending' && visibleActivationError !== 'credential_delete_pending' && <Button variant="outline" disabled={locked || dirty || Boolean(secret)} onClick={removeCredential}>{busyAction === 'remove' ? t('saving') : t('removeCredential')}</Button>}
         </section>}
-        {source && <SyncHistory source={{ ...source, status: sourceStatus }} intervalMinutes={configuration.schedule_interval_minutes} />}
+        {!embedded && source && <SyncHistory source={{ ...source, status: sourceStatus }} intervalMinutes={configuration.schedule_interval_minutes} />}
         </>}
+        {step === 'verify' && <section className="flex flex-col gap-3 rounded-lg border border-border p-4" aria-live="polite" aria-labelledby="source-verify-title">
+          <h3 id="source-verify-title" className="m-0 text-base font-semibold">{t('verifyTitle')}</h3>
+          <p className="text-muted-foreground">{t('verifyIntro')}</p>
+          <div><Button disabled={locked || verifyBusy || sourceStatus !== 'active' || termsBlocked} onClick={() => void runVerify()}>{verify.phase === 'failed' ? t('verifyRetry') : t('verifyRun')}</Button></div>
+          {verify.phase === 'saving' && <p role="status">{t('saving')}</p>}
+          {verify.phase === 'activating' && <p role="status">{t('verifyWaitingActivation')}</p>}
+          {verify.phase === 'collecting' && <p role="status">{t('verifyCollecting')}</p>}
+          {verify.phase === 'succeeded' && <p role="status">{t('verifySucceeded')}</p>}
+          {verify.phase === 'no_changes' && <p role="status">{t('verifyNoChanges')}</p>}
+          {verify.phase === 'failed' && <p className="error" role="alert">{t('verifyFailed', { code: verify.code ?? 'unknown' })}</p>}
+          {verify.runId && <p className="text-muted-foreground">{t('verifyRunId', { id: verify.runId })}</p>}
+        </section>}
       </>}
     </>}
   </section>;

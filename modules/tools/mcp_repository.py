@@ -6,13 +6,14 @@ import secrets
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import cast as typing_cast
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import Text, bindparam, cast, func, or_, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.ids import uuid7
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.tools.mcp_credentials import (
@@ -206,7 +207,7 @@ async def save_connection(
             McpConnection.owner_id == owner_id).limit(100))).all()
         if len(owner_connection_ids) >= 100:
             raise McpConflict("MCP supports at most 100 connections")
-        row = McpConnection(id=uuid4(), workspace_id=scope.workspace_id, owner_id=owner_id, name=draft.name,
+        row = McpConnection(id=uuid7(), workspace_id=scope.workspace_id, owner_id=owner_id, name=draft.name,
                             transport=draft.transport.value, endpoint=draft.endpoint,
                             deployment_profile_id=draft.deployment_profile_id,
                             deployment_profile_hash=deployment_profile_hash,
@@ -393,7 +394,7 @@ async def persist_discovery(session: AsyncSession, connection_id: UUID, payload:
     if ((largest_descriptor_bytes or 0) > 65_536 or
             (rendered_array_bytes or 0) > 1_000_000):
         raise ValueError("Discovery exceeds PostgreSQL JSONB storage byte limits")
-    row = McpDiscovery(id=uuid4(), workspace_id=scope.workspace_id, connection_id=connection_id,
+    row = McpDiscovery(id=uuid7(), workspace_id=scope.workspace_id, connection_id=connection_id,
                        connection_revision=connection.revision,
                        negotiated_protocol=payload.protocol,
                        server_info=payload.server_info,
@@ -405,7 +406,7 @@ async def persist_discovery(session: AsyncSession, connection_id: UUID, payload:
     items = []
     for descriptor in payload.capabilities:
         items.append(McpCapability(
-            id=uuid4(), discovery_id=row.id, kind=descriptor.kind,
+            id=uuid7(), discovery_id=row.id, kind=descriptor.kind,
             remote_key=descriptor.remote_key, descriptor=descriptor.descriptor,
             descriptor_hash=descriptor.descriptor_hash))
     session.add_all(items)
@@ -474,7 +475,7 @@ async def replace_connection_grants(session: AsyncSession, connection_id: UUID, 
     added = []
     for choice in selections:
         added.append(McpCapabilityGrant(
-            id=uuid4(), workspace_id=scope.workspace_id, connection_id=connection_id,
+            id=uuid7(), workspace_id=scope.workspace_id, connection_id=connection_id,
             capability_id=choice.capability_id,
             descriptor_hash=choice.descriptor_hash, reviewed_connection_revision=connection.revision,
             reviewed_profile_hash=discovery.deployment_profile_hash,
@@ -577,7 +578,7 @@ async def create_inbound_client(session: AsyncSession, data: InboundClientCreate
     _require_owner(scope)
     raw, digest, prefix = issue_inbound_token()
     row = McpInboundClient(
-        id=uuid4(), workspace_id=scope.workspace_id, owner_id=_actor(scope), name=data.name, token_hash=digest,
+        id=uuid7(), workspace_id=scope.workspace_id, owner_id=_actor(scope), name=data.name, token_hash=digest,
         token_prefix=prefix, audience=data.audience,
         bindings=[binding.model_dump(mode="json") for binding in data.tool_bindings],
         source_ids=[str(value) for value in data.source_ids],
@@ -602,7 +603,7 @@ async def rotate_inbound_client(session: AsyncSession, client_id: UUID, expected
     old.revoked_at = datetime.now(UTC)
     old.revision += 1
     replacement = McpInboundClient(
-        id=uuid4(), workspace_id=scope.workspace_id, owner_id=_actor(scope), name=old.name, token_hash=digest,
+        id=uuid7(), workspace_id=scope.workspace_id, owner_id=_actor(scope), name=old.name, token_hash=digest,
         token_prefix=prefix, audience=old.audience, bindings=old.bindings,
         source_ids=old.source_ids, capabilities=old.capabilities,
         expires_at=old.expires_at, revision=1)

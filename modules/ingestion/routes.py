@@ -1,6 +1,6 @@
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Annotated, Literal
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import (
     APIRouter,
@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
 from core.heavy_work import to_thread_joined
+from core.ids import uuid7
 from core.rate_limit import require_budget
 from core.storage import save_upload, storage_path
 from core.storage_admission import WorkspaceStorageBusy, workspace_storage_lease
@@ -157,13 +158,14 @@ async def list_source_runs(
     request: Request,
     limit: int = Query(default=20, ge=1, le=50),
     cursor: str | None = Query(default=None, max_length=512),
+    status: Literal["queued", "running", "succeeded", "needs_ocr", "failed"] | None = Query(default=None),
 ) -> SourceIngestionRead:
-    """Return bounded scoped owner history with principal/config-bound pagination.
+    """Return bounded owner history filtered by status with principal/config-bound pagination.
 
     Members fail before content; Source absence/foreign identity404. Owner query applies
     lineage and cursor admission before counts/order/limit and commits nothing here.
     """
-    result = await public.list_source_runs(session, source_id, limit=limit, cursor=cursor,
+    result = await public.list_source_runs(session, source_id, limit=limit, cursor=cursor, status=status,
         scope=_owner_scope(_owner), multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     if result is None:
         raise HTTPException(status_code=404, detail="Source not found")
@@ -218,7 +220,7 @@ async def _intake_upload(
             validate_upload, upload.filename, upload.content_type, upload.file
         )
         await session.rollback()
-        document_id = uuid4()
+        document_id = uuid7()
         async with workspace_storage_lease(request.app.state.session_factory, scope.workspace_id) as connection:
             # Use the lease's connection for revalidation: a burst of uploads must not hold
             # every pool slot and then deadlock waiting for a second SQL connection each.

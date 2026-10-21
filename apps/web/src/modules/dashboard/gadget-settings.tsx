@@ -40,6 +40,7 @@ import {
   type GadgetInstance,
   type HighlightRule,
 } from './api';
+import { uuid7 } from '@/core/uuid7';
 
 /** Props for the GadgetSettings modal dialog. */
 export interface GadgetSettingsProps {
@@ -228,7 +229,7 @@ export function GadgetSettings({
     if (parsed.length === 0) return;
 
     const rule: HighlightRule = {
-      id: crypto.randomUUID(),
+      id: uuid7(),
       keywords: parsed,
       severity: newRuleSeverity,
       notify: newRuleNotify,

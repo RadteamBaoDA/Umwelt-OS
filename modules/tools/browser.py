@@ -89,9 +89,9 @@ async def _handle_browser_read(arguments: dict[str, Any], context: dict[str, Any
         args_digest = compute_argument_hash({"source_id": source_id, "max_pages": pages})
         token_secret = settings.browser_shared_token.get_secret_value()
         # Operation identity is fresh for this proposed slot; an existing row wins on exact retry.
-        from uuid import uuid4
+        from core.ids import uuid7
 
-        operation_id = uuid4()
+        operation_id = uuid7()
         service_token = derive_browser_job_token(token_secret, operation_id, claim)
         async with heavy_job_slot(factory, timeout_seconds=remaining) as lease:
             async with factory() as session:

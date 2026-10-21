@@ -194,11 +194,16 @@ class TranslationSettingsRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
-async def save_capability(redis: Redis, result: CapabilityResult, *, config: AIExecutionConfig, scope: Scope, multi_workspace_enabled: bool) -> None:
+async def save_capability(redis: Redis, result: CapabilityResult, *, config: AIExecutionConfig, scope: Scope,
+                          multi_workspace_enabled: bool, configured_mapping: ModelMapping | None = None) -> None:
     """Cache only exact scoped configuration evidence after caller's locked publication fence.
 
     Expired results are discarded; TTL max24h and exact namespace leave old workspace
     configuration entries unreachable without deleting any other workspace's cache.
+    Non-default roles require the caller's freshly verified configured mapping (e.g. the
+    visualization router). A standard role may also be proven for a non-default model, but only when
+    ``configured_mapping`` names a model listed on its provider in ``config.providers`` (chat
+    composer overrides); anything else raises ValueError. Identity/model mismatches raise ValueError.
     """
     validate_capability_scope(config, scope, multi_workspace_enabled)
     if (result.workspace_id != config.workspace_id or result.actor_user_id != config.actor_user_id
@@ -206,7 +211,12 @@ async def save_capability(redis: Redis, result: CapabilityResult, *, config: AIE
             or result.gateway_identity != config.gateway_identity
             or result.configuration_revision != config.configuration_revision):
         raise ValueError("Capability evidence does not match execution identity")
-    mapping = config.defaults.resolve(result.role)
+    mapping = config.defaults.resolve(result.role) if result.role in MODEL_ROLES else configured_mapping
+    if result.role in MODEL_ROLES and configured_mapping is not None:
+        # Per-request model override: evidence is allowed only for a model the owner configured on that provider.
+        provider = config.providers.get(configured_mapping.provider_id or "default")
+        if provider is not None and any(m.id == configured_mapping.model for m in provider.models):
+            mapping = configured_mapping
     if mapping is None or mapping.model != result.model or mapping.version != result.version:
         raise ValueError("Capability evidence does not match configured model")
     ttl = int((datetime.fromisoformat(result.expires_at) - datetime.now(UTC)).total_seconds())

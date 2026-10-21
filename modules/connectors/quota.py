@@ -10,12 +10,13 @@ deployment-keyed HMAC fingerprint shared across workspaces.
 import hashlib
 import hmac
 from datetime import UTC, datetime, timedelta
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import and_, func, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.ids import uuid7
 from modules.connectors.models import (
     ConnectorProviderSend,
     ConnectorQuotaDebit,
@@ -107,7 +108,7 @@ async def debit_send(
     """
     now = now or datetime.now(UTC)
     plan = _plan(provider_id, now, credential, egress)
-    send_id = uuid4()
+    send_id = uuid7()
     async with session.begin_nested():
         inserted = (await session.execute(
             pg_insert(ConnectorProviderSend).values(

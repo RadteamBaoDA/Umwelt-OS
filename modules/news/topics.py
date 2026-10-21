@@ -8,7 +8,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, NoReturn
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -35,6 +35,7 @@ from sqlalchemy.types import Uuid
 from core.auth.dependencies import require_account, require_account_write
 from core.auth.models import AuthSession
 from core.database import Base, get_session
+from core.ids import uuid7
 from core.realtime import commit_with_replay
 from core.workspaces import public as workspaces
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
@@ -94,7 +95,7 @@ class Topic(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000), nullable=True)

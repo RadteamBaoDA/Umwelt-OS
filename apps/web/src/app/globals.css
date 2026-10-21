@@ -113,21 +113,25 @@ html.dark {
   .button:not([data-slot='button']):disabled { opacity: .65; cursor: progress; }
   .error { color: var(--danger); font-size: 14px; }
   .shell { height: 100vh; height: 100dvh; overflow: hidden; display: flex; flex-direction: column; }
-  .topbar { position: sticky; top: 0; z-index: 30; width: 100%; height: 64px; padding: 0 24px; display: flex; flex: 0 0 auto; justify-content: space-between; align-items: center; gap: 14px; background: var(--surface); border-bottom: 1px solid var(--line); }
+  .topbar { position: sticky; top: 0; z-index: 30; width: 100%; height: 64px; padding: 0 24px; display: flex; flex: 0 0 auto; justify-content: flex-end; align-items: center; gap: 14px; background: var(--surface); border-bottom: 1px solid var(--line); }
   .brand-name { font-weight: 800; letter-spacing: -.03em; }
   .top-actions { display: flex; gap: 9px; }
-  .workspace { width: 100%; flex: 1 1 0; min-height: 0; overflow: hidden; display: flex; align-items: stretch; gap: 24px; padding: 24px; }
-  .workspace-nav { flex: 0 0 180px; display: flex; flex-direction: column; gap: 5px; overflow-y: auto; }
+  .workspace { width: 100%; flex: 1 1 0; min-height: 0; overflow: hidden; display: flex; align-items: stretch; }
+  .workspace-nav { flex: 0 0 240px; display: flex; flex-direction: column; gap: 5px; overflow-y: auto; padding: 16px 12px; border-right: 1px solid var(--line); }
   .workspace[data-nav-collapsed='true'] .workspace-nav { flex-basis: 64px; }
-  .workspace-nav-header { display: flex; justify-content: flex-end; }
+  .workspace-nav-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; margin-bottom: 12px; }
   .workspace[data-nav-collapsed='true'] .workspace-nav-header { justify-content: center; }
-  .workspace-nav-toggle { flex: 0 0 44px; }
+  /* Collapsed sidebar keeps only the toggle; the lockup needs the expanded width. */
+  .workspace[data-nav-collapsed='true'] .workspace-brand { display: none; }
+  .workspace-column { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+  .workspace-nav-toggle { flex: 0 0 32px; width: 32px; height: 32px; color: var(--muted); }
+  .workspace-nav-header .workspace-nav-toggle:hover { color: var(--text); }
   .workspace-nav-links { display: flex; flex-direction: column; gap: 5px; }
   .workspace-nav-link { min-height: 44px; display: flex; align-items: center; gap: 12px; padding: 0 13px; border-radius: 9px; text-decoration: none; font-weight: 650; }
   .workspace[data-nav-collapsed='true'] .workspace-nav-link { justify-content: center; padding: 0; }
   .workspace[data-nav-collapsed='true'] .workspace-nav-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   .workspace-nav a[aria-current='page'] { background: var(--surface); color: var(--text); border: 1px solid var(--line); }
-  .workspace-main { flex: 1 1 0; min-width: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+  .workspace-main { flex: 1 1 0; min-width: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; padding: 24px; }
   /* Children keep their natural height so overflow scrolls .workspace-main instead of shrinking/clipping them. */
   .workspace-main > * { flex-shrink: 0; }
   .settings-panel { display: flex; min-height: 200px; overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: 18px; }
@@ -210,7 +214,9 @@ html.dark {
   .settings-group-heading { margin-bottom: 18px; }
   .settings-group-heading h1 { margin-top: 7px; }
   .sources-list { min-width: 0; }
-  .source-list-actions { justify-content: flex-end; margin: 18px 0; }
+  .sources-page-header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+  .source-list-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: min(100%, 540px); margin: 0 0 0 auto; }
+  .source-list-actions > button { width: 100%; }
   .source-editor { background: var(--bg); }
   .source-editor .section-heading { margin-bottom: 20px; }
   .source-editor-form { grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); align-items: start; }
@@ -286,11 +292,14 @@ html.dark {
 
 /* Narrow: nav becomes a fixed horizontal strip above the scrolling body. */
 @media (max-width: 840px) {
-  .workspace { flex-direction: column; gap: 12px; }
-  .workspace-nav { flex: 0 0 auto; flex-direction: row; overflow-x: auto; overflow-y: visible; }
+  .workspace { flex-direction: column; }
+  .workspace-nav { flex: 0 0 auto; overflow-y: visible; padding: 12px 16px 8px; border-right: 0; border-bottom: 1px solid var(--line); }
   .workspace[data-nav-collapsed='true'] .workspace-nav { flex-basis: auto; }
-  .workspace-nav-header { display: none; }
-  .workspace-nav-links { flex-direction: row; gap: 6px; }
+  .workspace-nav-header { margin-bottom: 4px; }
+  .workspace-nav-toggle, .workspace[data-nav-collapsed='true'] .workspace-nav-toggle { display: none; }
+  .workspace-brand, .workspace[data-nav-collapsed='true'] .workspace-brand { display: inline-flex; }
+  .workspace-nav-links { flex-direction: row; gap: 6px; overflow-x: auto; }
+  .workspace-column { min-height: 0; }
   .workspace-nav-link, .workspace[data-nav-collapsed='true'] .workspace-nav-link { flex: 0 0 auto; justify-content: center; padding: 0 8px; white-space: nowrap; }
   .workspace[data-nav-collapsed='true'] .workspace-nav-label { position: static; width: auto; height: auto; padding: 0; margin: 0; overflow: visible; clip: auto; white-space: nowrap; }
   .workspace-nav-tooltip { display: none; }
@@ -301,7 +310,7 @@ html.dark {
 @media (max-width: 720px) {
   html, body { max-width: 100%; overflow-x: clip; }
   .topbar { min-height: 56px; }
-  .workspace { padding: 16px max(16px, env(safe-area-inset-right)) 16px max(16px, env(safe-area-inset-left)); }
+  .workspace-main { padding: 16px max(16px, env(safe-area-inset-right)) 16px max(16px, env(safe-area-inset-left)); }
   .settings-body { padding: 16px; }
   .settings-body table, .content-panel table { display: block; max-width: 100%; overflow-x: auto; }
   .workspace-main, .settings-body, .content-panel { min-width: 0; max-width: 100%; }
@@ -314,4 +323,6 @@ html.dark {
   [data-slot='sheet-content'] { padding-top: env(safe-area-inset-top); max-width: 100vw; }
   [data-slot='dialog-content'] { max-width: calc(100vw - 32px); }
   .settings-section-select button, .settings-section-select [role='combobox'] { min-height: 44px; width: 100%; }
+  .sources-page-header { align-items: stretch; flex-direction: column; }
+  .source-list-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; margin-left: 0; }
 }

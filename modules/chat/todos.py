@@ -16,12 +16,13 @@ import json
 import logging
 from collections.abc import Sequence
 from typing import Any, Literal
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.ids import uuid7
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat.models import ChatTodo, Conversation
 
@@ -160,7 +161,7 @@ async def replace_todos(session: AsyncSession, scope: WorkspaceContext, conversa
     kept: dict[UUID, ChatTodo] = {}
     for position, (item, uid) in enumerate(zip(items, wanted, strict=True)):
         if uid is None or uid in kept or uid in foreign:
-            uid = uuid4()
+            uid = uuid7()
         row = existing.get(uid)
         if row is None:
             row = ChatTodo(id=uid, workspace_id=conversation.workspace_id, actor_user_id=conversation.actor_user_id,

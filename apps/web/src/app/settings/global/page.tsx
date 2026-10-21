@@ -74,7 +74,7 @@ function GlobalSettingsContent() {
   /** Switches the selected workspace and opens its read-only or owner dashboard. */
   const openWorkspace = (id: string) => {
     selectWorkspace(id);
-    router.push('/app');
+    router.push('/dashboard');
   };
 
   return <div className="flex flex-col gap-5">

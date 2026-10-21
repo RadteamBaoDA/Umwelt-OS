@@ -9,9 +9,9 @@ import { Loader2Icon } from 'lucide-react';
 /** Poll interval and number of consecutive "nothing loading" polls required before the overlay closes; lets lazy chunks and effect-started queries begin first. */
 const POLL_MS = 100;
 const STABLE_POLLS = 4;
-/** Anything still showing a skeleton, busy state or spinner outside the overlay means the page is not finished rendering. */
-const BUSY_SELECTOR = '.skeleton, [aria-busy="true"]:not([data-route-loader]), .animate-spin:not([data-route-loader] *)';
-/** Hard cap after the new route arrived so a stuck or endlessly refetching query can never trap the owner behind the overlay. */
+/** Any skeleton, busy state, pending dashboard marker, or page spinner means rendering is incomplete. */
+const BUSY_SELECTOR = '.skeleton, [aria-busy="true"]:not([data-route-loader]), [data-dashboard-ready="false"], .animate-spin:not([data-route-loader] *)';
+/** Hard cap for non-dashboard routes so a stuck query cannot trap the owner behind the overlay. */
 const MAX_BLOCK_MS = 10_000;
 /** A click that never changes the pathname (cancelled by a leave guard, hash-only, failed navigation) releases the overlay after this. */
 const NO_ARRIVAL_MS = 3_000;
@@ -23,12 +23,14 @@ const BACKGROUND_KEYS = new Set(['shell-api-health']);
  *
  * Opens on a click to a same-origin link with a different pathname (before the route even resolves) or on any pathname
  * change (programmatic navigation), and closes only after the new route has arrived and no tracked react-query fetch is
- * in flight and no skeleton/spinner remains in the DOM for STABLE_POLLS consecutive polls. Also covers the initial document load.
+ * in flight and no skeleton/spinner remains in the DOM for STABLE_POLLS consecutive polls. Dashboard routes also wait
+ * for the selected dashboard's explicit readiness marker and skip the general timeout cap. Also covers initial loads.
  *
  * @returns The overlay while a route transition is loading, otherwise null.
  */
 export function RouteLoader() {
   const pathname = usePathname();
+  const isDashboardRoute = pathname === '/dashboard' || pathname.startsWith('/dashboard/');
   /**
    * Pathname the transition started from; null when idle. The route has arrived once `pathname` differs from it.
    * Starts as '' (already "arrived") so full document loads — first visit, refresh, and the source routes that
@@ -62,9 +64,11 @@ export function RouteLoader() {
 
   useEffect(() => {
     if (from === null) return;
+    // Dashboard pages own an explicit readiness marker, so the general cap cannot hide them mid-load.
+    if (arrived && isDashboardRoute) return;
     const cap = window.setTimeout(() => setFrom(null), arrived ? MAX_BLOCK_MS : NO_ARRIVAL_MS);
     return () => window.clearTimeout(cap);
-  }, [from, arrived]);
+  }, [from, arrived, isDashboardRoute]);
 
   useEffect(() => {
     if (!arrived || fetching > 0) return;

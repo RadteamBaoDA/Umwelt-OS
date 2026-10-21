@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { ChatContext } from '@/modules/chat/api';
+import { uuid7 } from '@/core/uuid7';
 
 /** Immutable request identity retained until the server acknowledges a message revision. */
 export interface PendingMessageMutation {
@@ -160,8 +161,8 @@ export function ChatControllerProvider({ children }: { children: ReactNode }) {
       if (matches) return existing;
       throw new PendingMessageMutationConflictError();
     }
-    const clientRequestId = typeof crypto !== 'undefined' && crypto.randomUUID
-      ? crypto.randomUUID()
+    const clientRequestId = typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function'
+      ? uuid7()
       : `mutation-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
     const mutation = { ...input, clientRequestId };
     const next = { ...pendingMessageMutationsRef.current, [conversationId]: mutation };

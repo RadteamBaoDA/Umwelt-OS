@@ -4,12 +4,12 @@ import { needsLoginRedirect } from '@/core/session-gate';
 
 describe('needsLoginRedirect', () => {
   it('redirects protected pages without a session', () => {
-    expect(needsLoginRedirect('/app', false)).toBe(true);
+    expect(needsLoginRedirect('/dashboard', false)).toBe(true);
     expect(needsLoginRedirect('/settings/x', false)).toBe(true);
   });
   it('allows public paths and authenticated requests', () => {
     for (const p of ['/', '/login', '/setup', '/invite/abc', '/invitations', '/_next/x', '/api/v1/x']) expect(needsLoginRedirect(p, false)).toBe(false);
-    expect(needsLoginRedirect('/app', true)).toBe(false);
+    expect(needsLoginRedirect('/dashboard', true)).toBe(false);
     expect(needsLoginRedirect('/loginx', false)).toBe(true);
     for (const path of ['/privacy', '/terms', '/refunds', '/account-deletion']) expect(needsLoginRedirect(path, false)).toBe(false);
     expect(needsLoginRedirect('/privacy-private', false)).toBe(true);

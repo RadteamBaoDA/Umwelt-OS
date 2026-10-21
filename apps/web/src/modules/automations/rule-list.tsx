@@ -9,6 +9,7 @@ import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { deleteAutomation, errorMessageKey, listAutomations, patchAutomation, runAutomation, type Automation } from './api';
 import { RuleEditor } from './rule-editor';
 import { RunDetail } from './run-detail';
+import { uuid7 } from '@/core/uuid7';
 
 type View = { kind: 'list' } | { kind: 'edit'; rule?: Automation } | { kind: 'runs'; ruleId: string };
 
@@ -31,7 +32,7 @@ export function AutomationSettings() {
     onSuccess: () => { setNotice(null); refresh(); }, onError: fail,
   });
   const runNow = useMutation({
-    mutationFn: (rule: Automation) => runAutomation(rule.id, rule.revision, crypto.randomUUID(), csrfToken),
+    mutationFn: (rule: Automation) => runAutomation(rule.id, rule.revision, uuid7(), csrfToken),
     onSuccess: (_run, rule) => { setNotice(t('runQueued')); setView({ kind: 'runs', ruleId: rule.id }); }, onError: fail,
   });
   const remove = useMutation({

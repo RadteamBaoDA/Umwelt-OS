@@ -4,7 +4,6 @@ from collections.abc import Callable
 from datetime import timedelta
 from functools import wraps
 from typing import Any, ClassVar, cast
-from uuid import uuid4
 
 from arq.connections import RedisSettings
 from arq.cron import cron as _cron
@@ -23,9 +22,11 @@ from core.auth.models import AuthSession
 from core.config import Settings
 from core.database import make_session_factory
 from core.heavy_work import HEAVY_JOB_MAX_TRIES
+from core.ids import uuid7
 from core.modules import effective_modules, register_modules, scheduled_job_owners
 from core.system.health import ARQ_WORKER_GENERATION_KEY, ARQ_WORKER_HEALTH_KEY
 from core.telemetry import install_log_redaction, instrument_job, set_process_role
+from core.worker_queues import MODEL_QUEUE
 from modules.agents.worker import (
     compose_agent_registry,
     process_agent_run,
@@ -112,10 +113,7 @@ def cron(function: Callable[..., Any], *args: Any, **kwargs: Any) -> object:
     """Attach the fresh owner-module availability check to worker schedules."""
     return _cron(_gate_module_job(function), *args, **kwargs)
 
-HEAVY_SLOT_JOBS = frozenset({
-    "process_uploaded_file", "process_entity_extraction_work", "process_timeline_extraction_work",
-    "process_graph_operation",
-})
+HEAVY_SLOT_JOBS = frozenset({"process_uploaded_file", "process_graph_operation"})
 
 
 def _arq_options(name: str) -> dict[str, Any]:
@@ -165,7 +163,7 @@ async def startup(ctx: dict[str, object]) -> None:
         ctx["agent_tool_registry"] = registry
         ctx["agent_mcp_admission"] = admission
         ctx["agent_mcp_runtime"] = runtime
-        await cast(Redis, ctx["redis"]).set(ARQ_WORKER_GENERATION_KEY, uuid4().hex)
+        await cast(Redis, ctx["redis"]).set(ARQ_WORKER_GENERATION_KEY, uuid7().hex)
     except Exception:
         await engine.dispose()
         raise
@@ -186,6 +184,27 @@ async def chat_startup(ctx: dict[str, object]) -> None:
         pool_size=CHAT_DB_POOL[0],
         max_overflow=CHAT_DB_POOL[1],
         statement_timeout_ms=settings.db_statement_timeout_ms,
+        idle_tx_timeout_ms=settings.db_idle_tx_timeout_ms,
+    )
+    ctx["session_factory"] = factory
+    ctx["db_engine"] = engine
+
+
+MODEL_DB_POOL = (4 + 1, 5)  # (pool_size = ModelWorkerSettings.max_jobs + 1, max_overflow); counted as 10 in docs/deployment.md
+
+
+async def model_startup(ctx: dict[str, object]) -> None:
+    """Minimal model-worker startup: bounded DB pool only (no agent registry, no worker-generation key)."""
+    _silence_cron_logs()
+    settings = Settings()
+    ctx["settings"] = settings
+    install_log_redaction()
+    set_process_role("model-worker")
+    engine, factory = make_session_factory(
+        settings.database_url,
+        pool_size=MODEL_DB_POOL[0],
+        max_overflow=MODEL_DB_POOL[1],
+        statement_timeout_ms=0,  # long model calls hold no DB statement; mirrors the main worker
         idle_tx_timeout_ms=settings.db_idle_tx_timeout_ms,
     )
     ctx["session_factory"] = factory
@@ -237,11 +256,9 @@ class WorkerSettings:
         process_source_memory_coverage, process_document_cleanup,
         reconcile_connectors, dispatch_due_collections, process_collection_request,
         instrument_job(process_document_ready, success_return_outcome="returned"),
-        instrument_job(process_entity_extraction_work),
-        instrument_job(process_timeline_extraction_work), instrument_job(process_graph_operation),
+        instrument_job(process_graph_operation),
         instrument_job(process_news_document_ready), purge_expired_chat_runs,
         instrument_job(process_agent_run, run_id_kind="agent_run_id"), instrument_job(process_automation_run),
-        instrument_job(translate_content),
     ]
     functions = [_gate_module_job(function) for function in functions]
     # Outbox consumers are re-enqueued under the fixed id `ingestion:{event.id}` per continuation; a
@@ -281,10 +298,11 @@ class WorkerSettings:
     ]
     redis_settings = RedisSettings.from_dsn(Settings().redis_url)
 
-    # Heavy local work (parsing, embedding, extraction, graph, browser reads) is serialized across
+    # Heavy local work (parsing, embedding, graph, browser reads) is serialized across
     # processes by `core.heavy_work.heavy_job_slot` and retries on contention, so extra slots only
-    # let light jobs (cron polls, cleanup stages, chat/agent/model calls bounded by ModelGateway's
-    # own slots) run beside a long job instead of queueing behind it. Heavy jobs that lose the slot
+    # let light jobs (cron polls, cleanup stages, agent/model calls bounded by ModelGateway's
+    # own slots) run beside a long job instead of queueing behind it. Entity/timeline extraction
+    # and translation run on ModelWorkerSettings (queue arq:model), not here. Heavy jobs that lose the slot
     # retry under HEAVY_JOB_MAX_TRIES. Six keeps the DB pool bounded (pool_size = max_jobs + 1).
     max_jobs = 6
     max_tries = 5
@@ -294,6 +312,30 @@ class WorkerSettings:
     health_check_key = ARQ_WORKER_HEALTH_KEY
     health_check_interval = 15
     on_startup = startup
+    on_shutdown = shutdown
+
+
+class ModelWorkerSettings:
+    """Dedicated arq worker for remote-model background jobs (entity/timeline extraction, translation).
+
+    Isolated from the main worker so slow provider calls never hold its job slots or the
+    cross-process heavy slot that chunk embedding needs. Recovery crons stay on WorkerSettings and
+    only enqueue onto this queue.
+    """
+    functions: ClassVar[list[Any]] = [
+        process_entity_extraction_work, process_timeline_extraction_work, translate_content,
+    ]
+    functions = [_gate_module_job(instrument_job(function)) for function in functions]
+    functions = [_arq_func(function, **_arq_options(function.__name__)) if _arq_options(function.__name__)
+                 else function for function in functions]
+    redis_settings = RedisSettings.from_dsn(Settings().redis_url)
+    queue_name = MODEL_QUEUE
+    max_jobs = 4
+    job_timeout = Settings().model_worker_job_timeout_seconds
+    max_tries = 5
+    health_check_key = "arq:model:health-check"
+    health_check_interval = 15
+    on_startup = model_startup
     on_shutdown = shutdown
 
 

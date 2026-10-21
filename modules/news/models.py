@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import (
     CheckConstraint,
@@ -21,6 +21,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
 from core.database import Base
+from core.ids import uuid7
 
 
 class NewsStory(Base):
@@ -44,7 +45,7 @@ class NewsStory(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     identity_key: Mapped[str] = mapped_column(String(512), nullable=False)
     identity_kind: Mapped[str] = mapped_column(String(16), nullable=False)
     algorithm_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
@@ -71,7 +72,7 @@ class NewsStoryIdentity(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     story_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     identity_key: Mapped[str] = mapped_column(String(512), nullable=False)
     identity_kind: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -104,7 +105,7 @@ class NewsObservation(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     story_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     document_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     document_version_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("document_versions.id", ondelete="CASCADE"), nullable=False)

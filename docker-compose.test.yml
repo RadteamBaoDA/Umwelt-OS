@@ -85,6 +85,21 @@ services:
       AI_ALLOWED_ENDPOINT_CIDRS: '["172.16.0.0/12","192.168.0.0/16","10.0.0.0/8"]'
       AI_CREDENTIAL_ENCRYPTION_KEY: ${TEST_AI_CREDENTIAL_ENCRYPTION_KEY:-ZmFrZS1tb2RlbC10ZXN0LWtleS0wMDAwMDAwMDAwMDA=}
 
+  model-worker:
+    # Never read a developer's real .env into the disposable test stack.
+    env_file: !reset []
+    environment:
+      DATABASE_URL: postgresql+asyncpg://bbd_test:bbd-os-test-db-only@postgres:5432/bbd_test
+      REDIS_URL: redis://redis:6379/0
+      ENVIRONMENT: test
+      SETUP_TOKEN: bbd-os-disposable-test-token
+      CSRF_SIGNING_SECRET: bbd-os-disposable-test-csrf-secret
+      POSTGRES_PASSWORD: bbd-os-test-db-only
+      AI_ALLOWED_ENDPOINT_HOSTS: '["fake-model:8000"]'
+      # Docker default bridge pools; the host allowlist above pins the authority to the fake model.
+      AI_ALLOWED_ENDPOINT_CIDRS: '["172.16.0.0/12","192.168.0.0/16","10.0.0.0/8"]'
+      AI_CREDENTIAL_ENCRYPTION_KEY: ${TEST_AI_CREDENTIAL_ENCRYPTION_KEY:-ZmFrZS1tb2RlbC10ZXN0LWtleS0wMDAwMDAwMDAwMDA=}
+
   fake-model:
     # Minimal OpenAI-compatible streaming server for chat acceptance tests.
     build:

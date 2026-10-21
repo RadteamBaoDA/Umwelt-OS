@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import (
     CheckConstraint,
@@ -19,6 +19,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
 from core.database import Base
+from core.ids import uuid7
 
 
 class Entity(Base):
@@ -44,7 +45,7 @@ class Entity(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     type: Mapped[str] = mapped_column(String(32), nullable=False)
     name: Mapped[str | None] = mapped_column(String(300))
     canonical_name: Mapped[str | None] = mapped_column(String(300))
@@ -68,7 +69,7 @@ class EntityAlias(Base):
         Index("ix_entity_aliases_normalized", "normalized_alias"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     entity_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False)
     alias: Mapped[str] = mapped_column(String(300), nullable=False)
     normalized_alias: Mapped[str] = mapped_column(String(300), nullable=False)
@@ -105,7 +106,7 @@ class EntityEvidenceMembership(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     entity_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     document_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
@@ -128,7 +129,7 @@ class EntityAliasEvidence(Base):
         CheckConstraint("confidence >= 0 AND confidence <= 1", name="ck_entity_alias_evidence_confidence"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     alias_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("entity_aliases.id", ondelete="CASCADE"), nullable=False)
     membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("entity_evidence_memberships.id", ondelete="CASCADE"), nullable=False)
     confidence: Mapped[float] = mapped_column(nullable=False)
@@ -148,7 +149,7 @@ class EntityFieldEvidence(Base):
         Index("ix_entity_field_evidence_membership", "membership_id"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     entity_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False)
     field_name: Mapped[str] = mapped_column(String(16), nullable=False)
     value_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -175,7 +176,7 @@ class EntityOwnerAction(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     actor_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
     operation: Mapped[str] = mapped_column(String(32), nullable=False)
     reason: Mapped[str] = mapped_column(String(300), nullable=False)
@@ -235,7 +236,7 @@ class EntityCorrectionDecision(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     decision: Mapped[str] = mapped_column(String(16), nullable=False)
     scope: Mapped[str] = mapped_column(String(16), nullable=False)
     entity_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), )
@@ -268,7 +269,7 @@ class EntityExtractionWork(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     document_version_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("document_versions.id", ondelete="CASCADE"), nullable=False)
     source_generation: Mapped[int] = mapped_column(Integer, nullable=False)
     extractor_version: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -290,7 +291,7 @@ class EntityExtractionResult(Base):
     __tablename__ = "entity_extraction_results"
     __table_args__ = (UniqueConstraint("work_id", name="uq_entity_extraction_results_work"),)
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     work_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("entity_extraction_work.id", ondelete="CASCADE"), nullable=False)
     model: Mapped[str | None] = mapped_column(String(200))
     usage_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB)

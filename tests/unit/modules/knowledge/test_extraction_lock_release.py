@@ -47,6 +47,7 @@ class _Gateway:
 
     def __init__(self, **kwargs: Any) -> None:
         self.before_send = kwargs["before_send"]
+        self.kwargs = kwargs
         _Gateway.instance = self
 
     async def structured(self, *_a: Any, **_k: Any) -> dict[str, Any]:
@@ -71,7 +72,7 @@ def _harness(monkeypatch: pytest.MonkeyPatch, name: str) -> SimpleNamespace:
         document_id=DOC, source_id=SRC, source_generation=1, raw_uri="raw", mime_type="text/plain", local_only=False,
     )
     data = SimpleNamespace(document_id=DOC, source_id=SRC, source_generation=1, chunks=[], observed_at=None)
-    fresh = SimpleNamespace(id=SRC, status="active", generation=1, local_only=False)
+    fresh = SimpleNamespace(id=SRC, status="active", generation=1, local_only=False, graph_enabled=True)
     m = SimpleNamespace(
         factory=factory, ready=ready, fence=["f1"], ready_sessions=[],
         lock_source=AsyncMock(return_value=fresh),
@@ -90,8 +91,8 @@ def _harness(monkeypatch: pytest.MonkeyPatch, name: str) -> SimpleNamespace:
     monkeypatch.setattr(mod.settings_public, "module_is_enabled", AsyncMock(return_value=True))
     monkeypatch.setattr(mod.settings_public, "get_ai_execution_config", AsyncMock(return_value=config))
     monkeypatch.setattr(mod.settings_public, "derive_for_role", lambda cfg, _role: cfg)
-    monkeypatch.setattr(target, "claim_extraction_work",
-                        AsyncMock(return_value=SimpleNamespace(document_version_id=uuid4(), source_generation=1)))
+    m.claim = AsyncMock(return_value=SimpleNamespace(document_version_id=uuid4(), source_generation=1))
+    monkeypatch.setattr(target, "claim_extraction_work", m.claim)
     monkeypatch.setattr(target, "set_extraction_work_error", m.set_error)
     monkeypatch.setattr(mod.workspaces, "read_access_fence", fence)
     monkeypatch.setattr(mod.documents, "get_ready_version_ref", get_ready)
@@ -120,7 +121,7 @@ def _harness(monkeypatch: pytest.MonkeyPatch, name: str) -> SimpleNamespace:
     entry = (timeline_worker.process_timeline_extraction_work if timeline
              else entities_worker.process_entity_extraction_work)
     entry = getattr(entry, "__wrapped__", entry)
-    ctx = {"session_factory": factory, "settings": SimpleNamespace(multi_workspace_enabled=False), "redis": MagicMock()}
+    ctx = {"session_factory": factory, "settings": SimpleNamespace(multi_workspace_enabled=False, background_llm_timeout_seconds=120), "redis": MagicMock()}
 
     async def run() -> None:
         await entry(ctx, str(uuid4()))
@@ -131,6 +132,30 @@ def _harness(monkeypatch: pytest.MonkeyPatch, name: str) -> SimpleNamespace:
 
 
 NAMES = ["timeline", "entities"]
+
+
+@pytest.mark.parametrize("name", NAMES)
+async def test_graph_disabled_source_parks_work_without_model_call(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    """A switch flipped after scheduling parks the work as graph_disabled and never reaches the provider."""
+    m = _harness(monkeypatch, name)
+    m.lock_source.return_value = SimpleNamespace(
+        id=SRC, status="active", generation=1, local_only=False, graph_enabled=False)
+    _Gateway.instance = None
+    await m.run()
+    assert m.set_error.await_args.args[3] == "graph_disabled"
+    assert m.set_error.await_args.kwargs["blocked"] is True
+    assert _Gateway.instance is None
+    m.publish.assert_not_awaited()
+
+
+@pytest.mark.parametrize("name", NAMES)
+async def test_env_timeout_drives_gateway_call_and_lease(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    """background_llm_timeout_seconds (120) is the gateway timeout and the claim lease outlives it (120 + 75)."""
+    m = _harness(monkeypatch, name)
+    await m.run()
+    assert _Gateway.instance is not None
+    assert _Gateway.instance.kwargs["timeout_seconds"] == 120
+    assert m.claim.await_args.kwargs["lease_seconds"] == 195
 
 
 @pytest.mark.parametrize("name", NAMES)
@@ -158,7 +183,7 @@ async def test_rollback_precedes_inference_and_before_send_uses_own_session(
 @pytest.mark.parametrize("name", NAMES)
 async def test_relock_generation_change_aborts_without_publish(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
     m = _harness(monkeypatch, name)
-    stale = SimpleNamespace(id=SRC, status="active", generation=2, local_only=False)
+    stale = SimpleNamespace(id=SRC, status="active", generation=2, local_only=False, graph_enabled=True)
     m.lock_source.side_effect = [m.lock_source.return_value, stale]
     await m.run()
     m.publish.assert_not_awaited()

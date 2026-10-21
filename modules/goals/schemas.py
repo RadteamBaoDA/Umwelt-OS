@@ -2,10 +2,11 @@
 
 from datetime import date, datetime
 from typing import Literal
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from core.ids import uuid7
 from modules.tasks.schemas import TaskRead, TaskStatus
 
 GoalStatus = Literal["active", "completed", "paused", "cancelled"]
@@ -16,7 +17,7 @@ class MilestoneSchema(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: UUID = Field(default_factory=uuid4)
+    id: UUID = Field(default_factory=uuid7)
     title: str = Field(min_length=1, max_length=500)
     completed: bool = False
     due_date: date | None = None

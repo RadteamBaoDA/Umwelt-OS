@@ -31,6 +31,18 @@ describe('AI settings models', () => {
     await waitFor(() => expect((screen.getByRole('button', { name: 'Save AI settings' }) as HTMLButtonElement).disabled).toBe(false));
   });
 
+  it('tests a saved chat model through the role endpoint (streaming then tools) so chat evidence is stored', async () => {
+    fetchMock.mockImplementation((url: string) => json(String(url).includes('/models/chat/test') ? { role: 'chat', capability: 'streaming', result: 'supported' } : read));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><QueryClientProvider client={client}><AISettingsWorkspace /></QueryClientProvider></NextIntlClientProvider>);
+    await screen.findByRole('table', { name: 'Models' });
+    await userEvent.click(screen.getByRole('button', { name: 'Test model llama3' }));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/models/chat/test')).length).toBe(2));
+    const bodies = fetchMock.mock.calls.filter(([url]) => String(url).includes('/models/chat/test')).map(([, init]) => JSON.parse(String(init.body)));
+    expect(bodies).toEqual([{ capability: 'streaming', provider_id: 'ol', model: 'llama3' }, { capability: 'tools', provider_id: 'ol', model: 'llama3' }]);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('draft-test'))).toBe(false);
+  });
+
   it('auto-fills only empty chat/brief defaults (and vision when flagged) for a new Chat model', () => {
     const base = { ...provider, kind: 'ollama' as const };
     const prev = [{ ...base, models: [] }];

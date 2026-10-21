@@ -3,7 +3,7 @@ import secrets
 from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal, TypeVar, cast
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -15,6 +15,7 @@ from core.auth.dependencies import is_instance_operator, require_owner, require_
 from core.auth.models import AuthSession
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
+from core.ids import uuid7
 from core.rate_limit import require_budget
 from core.realtime import commit_with_replay, make_source_change
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
@@ -192,7 +193,7 @@ async def save_world_provider_credential(
         raise HTTPException(status_code=503, detail="Provider credential encryption is unavailable")
     from modules.connectors.credentials import encrypt_credential_input, secret_fingerprint
 
-    operation_id = uuid4()
+    operation_id = uuid7()
     ciphertext = encrypt_credential_input(
         key, source_id=source.id, slot="native:alpha_vantage", operation_id=operation_id,
         request={"api_key": payload.api_key},

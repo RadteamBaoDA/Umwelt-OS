@@ -197,9 +197,10 @@ export function ChatTranscript({
       aria-live="polite"
       aria-label={t('title')}
     >
-      {mode === 'full' && onSendPrompt && <ChatShellTools onSendPrompt={onSendPrompt} locale={locale} csrfToken={csrfToken} conversationId={conversationId} />}
+      {mode === 'full' && onSendPrompt && <ChatShellTools locale={locale} />}
 
-      {messages.length === 0 && !streamingText && streamingUi.length === 0 && !isPending && (
+      {/* Starter gallery is only for a brand-new view: once a conversation exists it never reappears between turns. */}
+      {!conversationId && messages.length === 0 && !streamingText && streamingUi.length === 0 && !isPending && (
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground my-auto gap-6">
           <div className="flex flex-col items-center">
             <div className="size-12 rounded-full bg-primary/10 text-primary flex items-center justify-center mb-3">

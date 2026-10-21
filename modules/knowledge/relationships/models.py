@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
@@ -19,6 +19,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
 from core.database import Base
+from core.ids import uuid7
 
 
 class RelationshipSnapshotHistory(Base):
@@ -72,7 +73,7 @@ class Relationship(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     source_entity_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     target_entity_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     type: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -102,7 +103,7 @@ class RelationshipEvidence(Base):
         Index("ix_relationship_evidence_document_id", "document_id"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     relationship_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("relationships.id", ondelete="CASCADE"), nullable=False)
     document_version_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("document_versions.id", ondelete="CASCADE"), nullable=False)
     chunk_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("document_chunks.id", ondelete="CASCADE"), nullable=False)

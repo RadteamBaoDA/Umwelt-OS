@@ -4,12 +4,13 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.ids import uuid7
 from core.realtime import ReplayDraft, commit_with_replay, make_source_change
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
 from modules.connectors.backends import CURRENT_TEMPLATE_REVISION, backend_admits
@@ -965,7 +966,7 @@ async def revoke_native_credential_in_uow(
         return
     native.source_generation = source_generation
     native.configuration_revision = connector_revision
-    native.operation_id = uuid4()
+    native.operation_id = uuid7()
     native.encrypted_token = None
     native.token_fingerprint = None
     native.validated_at = None
@@ -1194,7 +1195,7 @@ def _step(
 ) -> dict[str, object]:
     """Build a durable prepared step with a unique ID and empty history."""
     return {
-        "id": str(uuid4()),
+        "id": str(uuid7()),
         "kind": kind,
         "target": target,
         "request": copy.deepcopy(request or {}),
@@ -1244,7 +1245,7 @@ def _new_deactivation(row: ConnectorProvisioning, generation: int, *, scope: Sco
     """Build cleanup work for the known workflow, or None when no workflow exists."""
     if not row.workflow_id:
         return None
-    operation_id = uuid4()
+    operation_id = uuid7()
     return new_workflow_operation(
         operation_id=operation_id,
         kind="deactivate",
@@ -1471,7 +1472,7 @@ async def begin_enable_in_uow(
         or not _required_credentials_match(required_credentials or {}, slots)
     ):
         return None
-    operation_id = operation_id or uuid4()
+    operation_id = operation_id or uuid7()
     row.desired_enabled = True
     row.state = "provisioning"
     row.error_code = None
@@ -1738,7 +1739,7 @@ async def _clear_retired_source_credentials_held(
     if any(item is not None and item.source_id != source_id for item in (native, grant)):
         raise HTTPException(status_code=409, detail="Retired Source credential identity changed")
     if native is not None and (native.state != "revoked" or native.verified_bot_id is not None):
-        native.operation_id = uuid4()
+        native.operation_id = uuid7()
         native.encrypted_token = None
         native.token_fingerprint = None
         native.validated_at = None
@@ -2403,7 +2404,7 @@ async def create_delete_intent_in_uow(
         or row.state in {"dispatching", "reconciliation_required", "delete_pending"}
     ):
         return None
-    operation_id = uuid4()
+    operation_id = uuid7()
     row.operation_id = operation_id
     row.operation_revision = expected_revision
     row.source_generation = source.generation
@@ -3100,7 +3101,7 @@ async def begin_backend_transition_in_uow(
     row.backend_revision += 1
     row.target_backend = target_backend
     row.transition_phase = "draining"
-    row.transition_operation_id = uuid4()
+    row.transition_operation_id = uuid7()
     row.old_workflow_id = row.workflow_id if row.execution_backend == "n8n" else None
     row.desired_enabled = False
     row.state = "saved_not_active"

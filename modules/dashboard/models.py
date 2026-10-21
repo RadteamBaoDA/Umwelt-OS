@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
@@ -24,6 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
 from core.database import Base
+from core.ids import uuid7
 
 
 class Dashboard(Base):
@@ -44,7 +45,7 @@ class Dashboard(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     owner_id: Mapped[int] = mapped_column(
         ForeignKey("owner.id", ondelete="CASCADE"), nullable=False
     )
@@ -68,7 +69,7 @@ class DashboardGroup(Base):
         UniqueConstraint("id", "dashboard_id", name="uq_dashboard_groups_id_dashboard"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     dashboard_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("dashboards.id", ondelete="CASCADE"), nullable=False
     )
@@ -95,7 +96,7 @@ class GadgetDefinition(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     owner_id: Mapped[int] = mapped_column(
         ForeignKey("owner.id", ondelete="CASCADE"), nullable=False
     )
@@ -184,7 +185,7 @@ class GadgetInstance(Base):
         ),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     dashboard_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("dashboards.id", ondelete="CASCADE"), nullable=False
     )
@@ -273,7 +274,7 @@ class DailyBrief(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
     brief_date: Mapped[date] = mapped_column(Date, nullable=False)
     timezone: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -312,7 +313,7 @@ class DailyBriefEvidence(Base):
         Index("ix_daily_brief_evidence_document_brief", "document_id", "brief_id"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     brief_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("daily_briefs.id", ondelete="CASCADE"), nullable=False,
     )

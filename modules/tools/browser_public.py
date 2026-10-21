@@ -9,7 +9,7 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, cast
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.ids import uuid7
 from core.realtime import commit_with_replay
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
@@ -250,7 +251,7 @@ async def submit_browser_read_in_uow(
             raise ValueError("Browser tool slot was already used with different arguments")
         return _read(existing)
     row = BrowserReadJob(
-        id=uuid4(), operation_id=budget.operation_id, workspace_id=scope.workspace_id,
+        id=uuid7(), operation_id=budget.operation_id, workspace_id=scope.workspace_id,
         owner_id=_actor(scope), membership_revision=access_fence.membership_revision,
         configuration_revision=access_fence.configuration_revision, run_id=run_id,
         tool_slot=tool_slot, auth_session_hash=auth_session_hash,
@@ -579,7 +580,7 @@ async def execute_browser_read(
             digest = hashlib.sha256(raw).hexdigest()
             if item.get("content_digest") != digest:
                 raise ValueError("Browser page digest does not match its raw bytes")
-            page_id = uuid4()
+            page_id = uuid7()
             page = BrowserPageEvidence(
                 id=page_id, job_id=job_id, page_number=index,
                 requested_url=str(item.get("requested_url", "")),

@@ -420,23 +420,25 @@ async def test_external_router_decides_the_no_tools_fallback(monkeypatch: pytest
     assert done.data["kind"] == "table" and done.data["part_id"] == "part-1"
 
 
-async def test_external_router_failure_fails_the_turn_without_internal_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_external_router_failure_falls_back_to_internal_routing(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Router failure must not fail the turn: the internal local rules pick the chart and the answer completes.
     gen = _UIGen(monkeypatch, [["RAISE_CAPABILITY"], [_text("Alpha: 40 Beta: 60")]], prompt="Show a pie chart of the split")
     classify = _router(monkeypatch)
     classify.side_effect = VisualizationRouterError("timeout")
     await gen.run()
-    gen.failed.assert_awaited_once()
-    error = gen.failed.await_args.args[4]
-    assert isinstance(error, VisualizationRouterError) and error.retryable
-    assert gen.events("message.ui.done") == [] and not any(isinstance(m, Message) for m in gen.added)
+    gen.failed.assert_not_awaited()
+    classify.assert_awaited_once()
+    assert gen.events("message.ui.done")
 
 
 async def test_external_router_requires_consent(monkeypatch: pytest.MonkeyPatch) -> None:
+    # No consent: no egress, and the turn falls back to the internal router instead of failing.
     gen = _UIGen(monkeypatch, [["RAISE_CAPABILITY"], [_text("Alpha: 40 Beta: 60")]], prompt="Show a pie chart")
     classify = _router(monkeypatch, allow_remote=False)
     await gen.run()
     classify.assert_not_awaited()
-    assert gen.failed.await_args.args[4].code == "consent_required"
+    gen.failed.assert_not_awaited()
+    assert gen.events("message.ui.done")
 
 
 async def test_internal_router_unchanged_when_external_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -523,7 +525,8 @@ async def test_form_part_flows_alongside_other_parts(monkeypatch: pytest.MonkeyP
     assert [(d.data["part_id"], d.data["kind"]) for d in gen.events("message.ui.done")] == [("f", "form"), ("t", "table")]
 
 
-async def test_local_only_turn_still_fails_the_external_router(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_local_only_turn_skips_the_external_router(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Local-only turns never reach the external router; the internal router answers without egress.
     gen = _UIGen(monkeypatch, [["RAISE_CAPABILITY"], [_text("Alpha: 40 Beta: 60")]], prompt="Show a pie chart")
     classify = _router(monkeypatch)
     monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config(
@@ -531,7 +534,8 @@ async def test_local_only_turn_still_fails_the_external_router(monkeypatch: pyte
     )))
     await gen.run()
     classify.assert_not_awaited()
-    assert gen.failed.await_args.args[4].code == "local_only_turn"
+    gen.failed.assert_not_awaited()
+    assert gen.events("message.ui.done")
 
 
 async def test_todo_tools_are_offered_and_run_inside_the_loop(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -684,13 +688,13 @@ async def test_unconfigured_router_sends_the_full_unchanged_tool_set(monkeypatch
     assert not message.metadata_json or "viz_decision" not in message.metadata_json
 
 
-async def test_external_router_error_fails_the_turn_before_any_model_request(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_external_router_error_falls_back_before_the_first_model_request(monkeypatch: pytest.MonkeyPatch) -> None:
     gen = _UIGen(monkeypatch, [_table_round()])
     _router(monkeypatch).side_effect = VisualizationRouterError("timeout")
     await gen.run()
-    assert gen.requests == []
-    error = gen.failed.await_args.args[4]
-    assert isinstance(error, VisualizationRouterError) and error.retryable
+    gen.failed.assert_not_awaited()
+    assert gen.requests
+    assert "CRITICAL: Presentation decision" not in gen.requests[0]["messages"][0]["content"]
 
 
 async def test_external_router_refused_for_local_only_before_any_model_request(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -701,4 +705,5 @@ async def test_external_router_refused_for_local_only_before_any_model_request(m
     )))
     await gen.run()
     classify.assert_not_awaited()
-    assert gen.requests == [] and gen.failed.await_args.args[4].code == "local_only_turn"
+    gen.failed.assert_not_awaited()
+    assert gen.requests

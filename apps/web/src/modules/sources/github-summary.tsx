@@ -4,7 +4,8 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { getGitHubSummary } from './api';
+import { Button } from '@/components/ui/button';
+import { getGitHubSummary, getGitHubWebhookStatus } from './api';
 
 /**
  * Shows collected GitHub record counts for one saved source in Settings / Data sources.
@@ -57,4 +58,29 @@ export function GitHubSummary({ sourceId }: { sourceId: string }) {
       {data && !data.live_verified && <p className="text-xs text-muted-foreground">{t('liveNotVerified')}</p>}
     </section>
   );
+}
+
+/**
+ * Shows the owner's secret-free GitHub receiver and delivery-backlog status (refreshed every 30 seconds).
+ * Rendered inside the source dialog for GitHub sources; the endpoint is owner-wide, not per source.
+ */
+export function GitHubWebhookStatus() {
+  const t = useTranslations('sources');
+  const display = useDisplayPreferences();
+  const webhook = useQuery({
+    queryKey: ['github-webhook-status'],
+    queryFn: ({ signal }) => getGitHubWebhookStatus(signal),
+    refetchInterval: 30_000,
+  });
+  return <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4" aria-labelledby="github-webhook-heading">
+    <h3 id="github-webhook-heading" className="m-0 text-base font-semibold">{t('githubWebhookStatus')}</h3>
+    {webhook.isPending && <p className="text-muted-foreground">{t('loading')}</p>}
+    {webhook.isError && <p className="error" role="alert">{t('githubWebhookUnavailable')} <Button variant="outline" onClick={() => webhook.refetch()}>{t('retry')}</Button></p>}
+    {webhook.data && <>
+      <p role="status">{t(webhook.data.receiver_configured ? 'githubWebhookReady' : 'githubWebhookNotConfigured')} · {t('githubWebhookRevision', { revision: webhook.data.receiver_revision })}</p>
+      <p className="text-muted-foreground">{t('githubWebhookBacklog', { pending: webhook.data.pending_count, deliveries: webhook.data.pending_deliveries, hints: webhook.data.pending_hints, capacity: 100000 })}</p>
+      <p className="text-muted-foreground">{t('githubWebhookAttention', { count: webhook.data.needs_attention })}</p>
+      {webhook.data.oldest_pending_at && <p className="text-muted-foreground">{t('githubWebhookOldest', { time: formatDateTime(webhook.data.oldest_pending_at, display.locale, display.timezone) })}</p>}
+    </>}
+  </section>;
 }
