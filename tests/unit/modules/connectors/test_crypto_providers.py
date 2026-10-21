@@ -150,11 +150,17 @@ def test_body_dispatch_and_urls_match_catalog():
 
     assert map_pure_provider_body("binance", fixture("binance_btcusdt.json"), NOW)[0].provider_id == "binance:BTCUSDT:price"
     assert BINANCE_URL.startswith("https://data-api.binance.vision/")
-    assert set(PURE_ADAPTERS) == {"world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika", "coingecko", "nasa_eonet", "cisa_kev"}
+    from modules.connectors.providers.json_feed import JSON_FEEDS
+
+    assert set(PURE_ADAPTERS) == {"world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika", "coingecko", "nasa_eonet", "cisa_kev"} | set(JSON_FEEDS) | {
+        "noaa_kp", "open_er_api", "oecd_cli", "iss_position", "disease_sh", "ioda", "nvd",
+    }
     for provider, adapter in PURE_ADAPTERS.items():
         spec = get_provider_spec(provider)
         request = adapter.request("key") if provider == "coingecko" else adapter.request()
         parts = urlsplit(request.url)
         assert request.method == "GET" and parts.scheme == "https" and parts.hostname in spec.hosts
-        assert parts.path + ("?" + parts.query if parts.query else "") in spec.endpoints
+        target = parts.path + ("?" + parts.query if parts.query else "")
+        # Date-addressed rows (Wikimedia) declare a ``{yyyy}/{mm}/{dd}`` template: match on its fixed prefix.
+        assert target in spec.endpoints or any("{" in e and target.startswith(e.split("{")[0]) for e in spec.endpoints)
         assert not parts.username and not parts.password
