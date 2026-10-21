@@ -4743,6 +4743,8 @@ The catalog includes RSS/Atom, Google News feeds, GDELT/government sources, perm
 
 Reuse the existing validate/sync/normalize/health contracts. A generic REST connector does not replace provider-specific behavior. Preserve original record identity, versions, timestamps and provenance through deduplication and indexing. Prevent overlapping source syncs and advance cursors only after durable receipt. One collector serves many gadgets; gadgets never own polling, credentials or source ingestion.
 
+**Built-in presets (single-user note).** Fixed-endpoint, keyless presets that have a registered adapter are offered as pre-built sources the owner switches on and off; the first switch creates the source and records the terms acknowledgement. Because the owner of a single-user instance is also its operator, the same switch records the operator review required by `review`-class terms, with the evidence reference kept on the record; it does not waive the terms-eligibility check. Scoped and keyed providers stay in the manual flow with a bilingual in-app setup guide.
+
 ## 166.3. All connector management inside Umwelt-OS
 
 **Settings → Data sources** is the only normal connector-administration UI. Do not require users to open n8n, AnythingLLM, Airbyte or another administration app to connect, scope, schedule or operate a supported source. n8n remains an internal execution component rather than a user-facing configuration dependency.
@@ -4756,6 +4758,8 @@ Umwelt-OS owns source identity, desired settings, cursor and public run/health s
 Record desired configuration revision and actual activation status. Make create/update/enable operations idempotent and recoverable across partial failures. If settings are saved but workflow activation fails, show **Saved, not active** with an actionable retry. Disabling a source must fence new work even while external schedule deactivation is being reconciled. Validate supported operations against the pinned n8n release; an unsupported credential/provisioning operation requires an implemented compatible adapter before the provider is advertised as fully supported.
 
 OAuth begins in Umwelt-OS and returns to its callback. The provider's own login/consent screen may still be required; it is not a third-party connector administration screen. Deployment administrators may need a provider developer console to register an OAuth application and redirect URI once. Document that prerequisite rather than promising consent or application registration can be bypassed.
+
+**Built-in sources section.** Settings → Data sources lists the built-in presets grouped by category with an enable switch, the provider attribution and terms link, and an experimental badge where applicable. Enabling asks the owner to confirm the declared use once; disabling pauses the source and keeps its history.
 
 ## 166.4. MCP integration
 

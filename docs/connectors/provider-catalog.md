@@ -8,7 +8,7 @@ Free presets (BBC, VnExpress, Google News RSS search, Hacker News top stories, G
 
 ## Inventory
 
-Generated from `modules/connectors/catalog.py` and `modules/connectors/provider_specs.py` (free-provider facts checked on 2026-10-07, policy revision 1). Read the table as follows:
+Generated from `modules/connectors/catalog.py` and `modules/connectors/provider_specs.py` (free-provider facts checked on 2026-10-07, the built-in expansion on 2026-10-21; policy revision 1). Read the table as follows:
 
 - **Availability** is the catalog's own value and governs source selection. `implemented` means a collection adapter is registered; it does not mean the provider works live.
 - **Code registered** means the shared executor has an adapter for the provider. It is not a runtime, licence or deployment acceptance.
@@ -83,6 +83,35 @@ Notes on specific rows:
 | `cisa_kev` | `implemented` | open | supported | yes | no | 1440 | 2026-10-07 |
 | `coinpaprika` | `implemented` | personal | supported | yes | no | 15 | 2026-10-07 |
 | `coingecko` | `implemented` | review | supported | yes | no | 15 | 2026-10-07 |
+| `aljazeera_world` | `implemented` | review | supported | yes | no | 30 | 2026-10-07 |
+| `npr_news` | `implemented` | noncommercial | supported | yes | no | 30 | 2026-10-21 |
+| `fed_press` | `implemented` | open | supported | yes | no | 60 | 2026-10-21 |
+| `gdacs_rss` | `implemented` | open | supported | yes | no | 60 | 2026-10-21 |
+| `lobsters` | `implemented` | review | supported | yes | no | 60 | 2026-10-21 |
+| `us_travel_advisories` | `implemented` | open | supported | yes | no | 360 | 2026-10-21 |
+| `noaa_tsunami` | `implemented` | open | supported | yes | no | 30 | 2026-10-21 |
+| `jma_eqvol` | `implemented` | open | supported | yes | no | 30 | 2026-10-21 |
+| `gdacs_events` | `implemented` | open | supported | yes | no | 60 | 2026-10-21 |
+| `nws_alerts` | `implemented` | open | supported | yes | no | 15 | 2026-10-21 |
+| `emsc_quakes` | `implemented` | open | supported | yes | no | 30 | 2026-10-21 |
+| `launch_library` | `implemented` | noncommercial | supported | yes | no | 120 | 2026-10-21 |
+| `wikipedia_mostread` | `implemented` | open | supported | yes | no | 1440 | 2026-10-21 |
+| `wikipedia_top_views` | `implemented` | open | supported | yes | no | 1440 | 2026-10-21 |
+| `bmkg_quakes` | `implemented` | open | supported | yes | no | 30 | 2026-10-21 |
+| `satnogs_observations` | `implemented` | open | supported | yes | no | 120 | 2026-10-21 |
+| `noaa_kp` | `implemented` | open | supported | yes | no | 180 | 2026-10-21 |
+| `open_er_api` | `implemented` | review | supported | yes | no | 1440 | 2026-10-21 |
+| `oecd_cli` | `implemented` | open | supported | yes | no | 1440 | 2026-10-21 |
+| `iss_position` | `implemented` | noncommercial | supported | yes | no | 15 | 2026-10-21 |
+| `disease_sh` | `implemented` | review | supported | yes | no | 1440 | 2026-10-21 |
+| `ioda` | `implemented` | noncommercial | supported | yes | no | 60 | 2026-10-21 |
+| `nvd` | `implemented` | open | supported | yes | no | 360 | 2026-10-21 |
+| `fred` | `implemented` | review | supported | yes | no | 1440 | 2026-10-21 |
+| `finnhub_news` | `implemented` | personal | supported | yes | no | 60 | 2026-10-21 |
+| `newsapi` | `implemented` | review | supported | yes | no | 120 | 2026-10-21 |
+| `openweathermap` | `implemented` | open | supported | yes | no | 60 | 2026-10-21 |
+| `openaq` | `implemented` | open | supported | yes | no | 60 | 2026-10-21 |
+| `nasa_firms` | `implemented` | open | supported | yes | no | 180 | 2026-10-21 |
 
 
 ## World and news sources

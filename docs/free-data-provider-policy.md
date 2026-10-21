@@ -128,3 +128,45 @@ Freshness: feeds/quotes stale after2configured polling intervals; explicitly sho
 5. P1/C2 schema and P2/P3 implementation require integration/source review; this report verifies only documented public-policy facts and source/brief seams. Prior HTTP200s are not end-to-end acceptance. No current data, runtime, quota exhaustion, key validity or ingestion acceptance verified.
 
 Out of this P1/P2/P3 adapter set: existing `open_meteo` remains owned by C1 and its own terms policy; do not assign it these new open-provider defaults. SEC/FRED/TwelveData/VNstock/Yahoo/SSI/RSSHub/OpenBB/CCXT remain research-only/unavailable or reuse references according to the approved plan; no new adapters/services were authorized here.
+
+## 7. Built-in expansion evidence (2026-10-21)
+
+Evidence rule for the single-user built-in toggle: owner terms acknowledgement (declared use plus the catalog terms version) and, for `review` presets, operator review evidence are recorded by the same enable action, with `evidence_ref = builtin-toggle:<provider>:<terms_url>@<terms_version>`. The owner is the bootstrap operator; a non-operator gets `403 operator_required`. This is a record of the owner's own decision, not independent legal review.
+
+Keyless endpoints were fetched once each with a plain GET on 2026-10-21 to confirm shape; no keyed endpoint was called. A successful probe is shape evidence only: not runtime acceptance, quota, licence or ingestion proof.
+
+| Provider | Probe result | Terms and eligibility rationale |
+| --- | --- | --- |
+| `aljazeera_world` | RSS 200, `application/rss+xml`, 25 items | Terms page reachable; no explicit syndication licence found, so class `review`. |
+| `npr_news` | RSS 200, 10 items | NPR terms permit personal, noncommercial RSS use, so `noncommercial`. |
+| `fed_press` | RSS 200 (UTF-8 BOM, handled), 20 items | Federal Reserve disclaimer; US government content, `open` with credit. |
+| `gdacs_rss` | RSS 200, 249 items, 763 KB (under the 1 MiB feed cap) | GDACS overview page; reuse with credit, `open`. |
+| `lobsters` | RSS 200, 25 items | No explicit feed licence; `review`. |
+| `us_travel_advisories` | RSS 200, 223 items, 602 KB | State Department copyright page; US government, `open`. |
+| `noaa_tsunami` | Atom 200, 1 entry with `geo:lat/long` | tsunami.gov; US government, `open`. Not an official warning channel. |
+| `jma_eqvol` | Atom 200, 27 entries (entry links carry no `rel`) | JMA copyright page (government standard terms), `open` with source credit. |
+| `gdacs_events` | JSON 200 on `geteventlist/SEARCH` (the `MAP` form returns 400 `Eventtype is required`) | As `gdacs_rss`. Times are zone-less UTC. |
+| `nws_alerts` | GeoJSON 200, `features[].properties` | weather.gov disclaimer; `open`. Needs a User-Agent (central default). |
+| `emsc_quakes` | JSON 200, FDSN `features[].properties` | EMSC asks for acknowledgement; `open`. No dedicated terms page was reachable (site root used). |
+| `launch_library` | JSON 200, `results[]` in `mode=list` | Free tier is non-commercial, 15 requests/hour documented by the provider; interval 120 min. |
+| `wikipedia_mostread` | JSON 200 on `api.wikimedia.org/feed/v1/.../featured/YYYY/MM/DD`, `mostread.articles` | Wikimedia Terms of Use, CC BY-SA; previous UTC day. |
+| `wikipedia_top_views` | JSON 200 on `wikimedia.org/api/rest_v1/metrics/pageviews/top/...`, `items[0].articles` | Pageviews data; previous UTC day; non-content pages skipped. |
+| `bmkg_quakes` | JSON 200, `Infogempa.gempa[]` | BMKG data portal; credit BMKG, `open`. |
+| `satnogs_observations` | JSON 200, root array (357 KB) | SatNOGS DB about page; CC BY-SA, `open`. |
+| `noaa_kp` | JSON 200, array of `{time_tag, Kp, a_running, station_count}` | NOAA/NWS disclaimer; `open`. `time_tag` is UTC without a zone. |
+| `open_er_api` | JSON 200, `result`, `rates`, `time_last_update_unix` | Free plan requires attribution and links to exchangerate-api.com; `review`. |
+| `oecd_cli` | SDMX-JSON 2.0 200 with `AllDimensions` (6 areas, latest month) | OECD terms (CC BY 4.0); anonymous access is rate limited (about 20 queries/hour documented by the provider), one daily send. |
+| `iss_position` | JSON 200 (`api.wheretheiss.at`; `api.open-notify.org` is http-only and was rejected) | Non-commercial, about 1 request/second documented by the provider. |
+| `disease_sh` | JSON 200, global totals (`updated` is the provider's own clock) | Upstream sources (JHU CSSE and others); `review`. Data may be stale. |
+| `ioda` | JSON 200 with unix `from`/`until` (a relative `from=-1d` returns 400) | Georgia Tech research service, all rights reserved notice; `noncommercial`. |
+| `nvd` | JSON 200, `vulnerabilities[].cve`, zone-less UTC times | NVD FAQ; keyless limit 5 requests per rolling 30 s; one page per 6 h. |
+| `fred` | not probed (key required) | FRED terms; some series carry third-party copyright, `review`. Documented 120 requests/minute. |
+| `finnhub_news` | not probed (key required) | Free plan is personal use, `personal`. Documented 60 calls/minute. |
+| `newsapi` | not probed (key required) | Developer plan is development-only, 100 requests/day, `review`. |
+| `openweathermap` | not probed (key required) | CC BY-SA 4.0 with credit, `open`. Documented 60 calls/minute. |
+| `openaq` | not probed (key required); `X-API-Key` header and the sensor `latest` shape confirmed from docs.openaq.org | Licences vary per upstream provider (mostly CC BY 4.0), `open` with credit; rate limit not recorded. |
+| `nasa_firms` | not probed (key required) | NASA open data policy, `open`. `MAP_KEY` travels in the URL path. |
+
+Quota rows for these providers (pilot ceilings, documented official limits where the provider states them) are listed in `docs/connectors/free-sources.md` under Quota windows. A documented official limit is recorded with basis `official_documented`; an undocumented one stays `official_unknown` and is counted, not invented.
+
+Dropped after probing: `reliefweb_updates` (HTTP 202 empty challenge), `gvp_volcano_weekly` (HTTP 403 bot verification), `ransomware_live` (v2 paths 404), `safecast` (stale unordered list). Deferred for OAuth token exchange: `acled`, `opensky`; deferred for scope: `un_comtrade`.
