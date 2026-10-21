@@ -66,6 +66,11 @@ export type ConnectorConfig = {
   weather_metrics?: string[];
   news_query?: string;
   scholarly_query?: string;
+  fred_series_id?: string;
+  owm_latitude?: number;
+  owm_longitude?: number;
+  openaq_location_id?: number;
+  firms_country?: string;
   news_site?: 'any' | 'reuters.com' | 'apnews.com' | 'bbc.com' | 'vnexpress.net';
   news_locale?: 'vi-VN' | 'en-US';
   sec_cik?: string;

@@ -39,6 +39,22 @@ describe('ProviderGuide', () => {
     expect(screen.getByRole('status').textContent).toMatch(/Stale/);
     expect(screen.getByRole('alert').textContent).toMatch(/provider_unavailable · showing the last good data/);
   });
+  it('lists the provider guide steps in order and falls back to the generic keyed or manual guide', () => {
+    const { unmount } = view(entry({ provider_id: 'fred', key_fields: ['api_key'] }));
+    const steps = screen.getByTestId('guide-steps').querySelectorAll('li');
+    expect(steps.length).toBe(4);
+    expect(steps[0].textContent).toMatch(/fredaccount\.stlouisfed\.org/);
+    unmount();
+    view(entry({ provider_id: 'unlisted_keyed', key_fields: ['api_key'] }));
+    expect(screen.getByTestId('guide-steps').textContent).toMatch(/generate an API key/);
+  });
+  it('has the same guide providers and step counts in en-us and vi-vi', () => {
+    const guides = (loc: 'en-us' | 'vi-vi') => Object.fromEntries(Object.entries(sourcesMessages[loc].guideSteps).map(([id, steps]) => [id, Object.keys(steps).length]));
+    expect(guides('vi-vi')).toEqual(guides('en-us'));
+    for (const id of ['rss', 'rest', 'web', 'mcp', 'fred', 'finnhub_news', 'newsapi', 'openweathermap', 'openaq', 'nasa_firms', 'coingecko', 'alpha_vantage']) {
+      expect(guides('en-us')[id]).toBeGreaterThan(0);
+    }
+  });
   it('renders nothing for entries without free-provider facts', () => {
     const { container } = view(entry({ terms_url: null, attribution: null }));
     expect(container.textContent).toBe('');

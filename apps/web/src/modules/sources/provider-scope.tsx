@@ -15,7 +15,7 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { acknowledgeProviderTerms, connectorKeys, getProviderTerms, type ConnectorCatalogEntry, type ConnectorConfig, type DeclaredUse, type Source } from './api';
 import { isStale, periodKind } from './freshness';
 
-export type NativeProvider = 'youtube' | 'arxiv' | 'huggingface' | 'github' | 'github_releases' | 'telegram' | 'alpha_vantage' | 'open_meteo' | 'google_news' | 'sec_edgar' | 'openalex';
+export type NativeProvider = 'youtube' | 'arxiv' | 'huggingface' | 'github' | 'github_releases' | 'telegram' | 'alpha_vantage' | 'open_meteo' | 'google_news' | 'sec_edgar' | 'openalex' | 'fred' | 'openweathermap' | 'openaq' | 'nasa_firms';
 
 /** Renders fixed native-provider scope controls; GitHub resource flags and bounded history horizon remain in the owning revision-fenced draft. */
 export function ProviderScope({
@@ -90,6 +90,13 @@ export function ProviderScope({
     {field('scholarly_query', t('scholarlyQuery'), configuration.scholarly_query ?? '', (value) => onChange('scholarly_query', value), { maxLength: 200 })}
     <small className="text-muted-foreground">{t('scholarlyHelp')}</small>
   </>;
+  if (provider === 'fred') return field('fred_series_id', t('fredSeriesId'), configuration.fred_series_id ?? '', (value) => onChange('fred_series_id', value.toUpperCase()), { maxLength: 25, pattern: '[A-Z0-9_]{1,25}' });
+  if (provider === 'openweathermap') return <>
+    {field('owm_latitude', t('weatherLatitude'), String(configuration.owm_latitude ?? ''), (value) => onChange('owm_latitude', value === '' ? undefined : Number(value)), { maxLength: 24, pattern: '-?[0-9]{1,2}(\\.[0-9]+)?' })}
+    {field('owm_longitude', t('weatherLongitude'), String(configuration.owm_longitude ?? ''), (value) => onChange('owm_longitude', value === '' ? undefined : Number(value)), { maxLength: 24, pattern: '-?[0-9]{1,3}(\\.[0-9]+)?' })}
+  </>;
+  if (provider === 'openaq') return field('openaq_location_id', t('openaqLocationId'), String(configuration.openaq_location_id ?? ''), (value) => onChange('openaq_location_id', value === '' ? undefined : Number(value)), { maxLength: 10, pattern: '[0-9]{1,10}' });
+  if (provider === 'nasa_firms') return field('firms_country', t('firmsCountry'), configuration.firms_country ?? '', (value) => onChange('firms_country', value.toUpperCase()), { maxLength: 3, pattern: '[A-Z]{3}' });
   if (provider === 'youtube') return <>{field('youtube_channel_id', t('youtubeChannelId'), configuration.youtube_channel_id ?? '', (value) => onChange('youtube_channel_id', value), { maxLength: 24, pattern: 'UC[A-Za-z0-9_-]{22}' })}</>;
   if (provider === 'arxiv') return <>{field('arxiv_category', t('arxivCategory'), configuration.arxiv_category ?? '', (value) => onChange('arxiv_category', value), { maxLength: 64, pattern: '[A-Za-z][A-Za-z0-9.-]{0,63}' })}</>;
   if (provider === 'huggingface') return <>{field('huggingface_author', t('huggingfaceAuthor'), configuration.huggingface_author ?? '', (value) => onChange('huggingface_author', value), { maxLength: 96, pattern: '[A-Za-z0-9][A-Za-z0-9_-]{0,95}' })}</>;
@@ -132,6 +139,25 @@ export function ProviderScope({
   </div>;
 }
 
+const GUIDE_MAX_STEPS = 8;
+
+/**
+ * Resolves the ordered message keys of a provider's setup steps.
+ * Falls back from the provider's own guide to its generic source type (`rss`, `rest`, `web`, `mcp` are their own ids)
+ * and finally to the generic manual or keyed guide, so every manually configured source shows steps.
+ * @param t Translator for the `sources` namespace (only `has` is used).
+ * @param providerId Catalog provider id.
+ * @param keyed Whether the provider needs an owner-entered key.
+ * @returns Message keys `guideSteps.<id>.s1..sN` in order; empty when no guide exists.
+ */
+function guideStepKeys(t: { has(key: string): boolean }, providerId: string, keyed: boolean): string[] {
+  const id = [providerId, keyed ? 'genericKeyed' : 'generic'].find((candidate) => t.has(`guideSteps.${candidate}.s1`));
+  if (!id) return [];
+  const keys: string[] = [];
+  for (let n = 1; n <= GUIDE_MAX_STEPS && t.has(`guideSteps.${id}.s${n}`); n += 1) keys.push(`guideSteps.${id}.s${n}`);
+  return keys;
+}
+
 /** Setup guide for a catalog provider. Shows only catalog facts: no invented quotas, terms or sample output. */
 export function ProviderGuide({ entry, source, now, onTest, testBusy, testPassed }: {
   entry: ConnectorCatalogEntry; source?: Source | null; now?: Date;
@@ -147,9 +173,12 @@ export function ProviderGuide({ entry, source, now, onTest, testBusy, testPassed
   const period = periodKind(entry.provider_id);
   const keyed = (entry.key_fields ?? []).length > 0;
   const quotas = (entry.quota_policies ?? []).map((q) => (q.limit_units === null ? t('guideQuotaUnknown', { window: q.window }) : t('guideQuota', { limit: q.limit_units, unit: q.unit, window: q.window })));
+  const steps = guideStepKeys(t, entry.provider_id, keyed);
   const row = (label: string, body: React.ReactNode) => <div className="grid gap-1 sm:grid-cols-[10rem_1fr]"><dt className="font-medium">{label}</dt><dd className="text-muted-foreground">{body}</dd></div>;
   return <section aria-label={t('guideTitle')} className="grid gap-2 rounded-lg border border-border bg-surface p-3 text-sm">
     <h4 className="font-semibold">{t('guideTitle')}</h4>
+    {steps.length > 0 && <div className="grid gap-1" data-testid="guide-steps"><strong>{t('guideStepsTitle')}</strong>
+      <ol className="ml-5 list-decimal text-muted-foreground">{steps.map((key) => <li key={key}>{t(key as 'guideTitle')}</li>)}</ol></div>}
     <dl className="grid gap-2">
       {row(t('guideData'), [...(entry.hosts ?? []), ...(entry.endpoints ?? [])].join(' · ') || t('guideNone'))}
       {period && row(t('guidePeriod'), t(period === 'referenceDate' ? 'guideReferenceDate' : 'guideAnnualPeriod'))}

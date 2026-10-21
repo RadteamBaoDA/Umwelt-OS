@@ -62,11 +62,15 @@ import {
 } from './api';
 
 const intervals = [15, 30, 60, 360, 1440] as const;
-const sourceTypes = { rss: 'rss', web: 'web', rest: 'api', mcp: 'mcp', youtube: 'rss', arxiv: 'rss', huggingface: 'api', github: 'api', github_releases: 'api', telegram: 'api', alpha_vantage: 'api', open_meteo: 'api', coingecko: 'api',
+const sourceTypes = { rss: 'rss', web: 'web', rest: 'api', mcp: 'mcp', youtube: 'rss', arxiv: 'rss', huggingface: 'api', github: 'api', github_releases: 'api', telegram: 'api', alpha_vantage: 'api', open_meteo: 'api', coingecko: 'api', fred: 'api', finnhub_news: 'api', newsapi: 'api', openweathermap: 'api', openaq: 'api', nasa_firms: 'api',
   bbc_world: 'rss', vnexpress_business: 'rss', dantri_news: 'rss', thanhnien_news: 'rss', tuoitre_news: 'rss', hn_top: 'api', gdelt_economy: 'api', world_bank: 'api', frankfurter: 'api', ecb: 'api', binance: 'api', alternative_me: 'api', usgs: 'api', coinpaprika: 'api', google_news: 'rss', openalex: 'api', sec_edgar: 'api', cisa_kev: 'api', nasa_eonet: 'api' } as const;
 type Provider = keyof typeof sourceTypes;
 /** Fixed-endpoint catalog providers: no owner scope, terms-gated, collected only by the scheduler. */
-const freeProviders = new Set<Provider>(['bbc_world', 'vnexpress_business', 'dantri_news', 'thanhnien_news', 'tuoitre_news', 'hn_top', 'gdelt_economy', 'world_bank', 'frankfurter', 'ecb', 'binance', 'alternative_me', 'usgs', 'coinpaprika', 'google_news', 'openalex', 'sec_edgar', 'cisa_kev', 'nasa_eonet']);
+const freeProviders = new Set<Provider>(['bbc_world', 'vnexpress_business', 'dantri_news', 'thanhnien_news', 'tuoitre_news', 'hn_top', 'gdelt_economy', 'world_bank', 'frankfurter', 'ecb', 'binance', 'alternative_me', 'usgs', 'coinpaprika', 'google_news', 'openalex', 'sec_edgar', 'cisa_kev', 'nasa_eonet', 'fred', 'finnhub_news', 'newsapi', 'openweathermap', 'openaq', 'nasa_firms']);
+/** Keyed presets whose owner key is saved through the native REST credential slot (CoinGecko plus the keyed world-data presets). */
+const keyedProviders = new Set<Provider>(['coingecko', 'fred', 'finnhub_news', 'newsapi', 'openweathermap', 'openaq', 'nasa_firms']);
+/** Terms-gated presets that still need owner scope fields (everything else in `freeProviders` has a fixed endpoint). */
+const scopedFreeProviders = new Set<Provider>(['google_news', 'sec_edgar', 'openalex', 'fred', 'openweathermap', 'openaq', 'nasa_firms']);
 const nativeProviders = new Set<Provider>(['youtube', 'arxiv', 'huggingface', 'github', 'github_releases', 'telegram', 'alpha_vantage', 'open_meteo', 'coingecko', ...freeProviders]);
 
 /** True when the schedule/activation gate asks the owner to (re)enter a provider key. */
@@ -106,6 +110,11 @@ function defaultConfiguration(provider: Provider, entry?: ConnectorCatalogEntry)
   // sec_edgar is scoped: the owner supplies their own CIK and contact email, so the example values are not preselected.
   if (provider === 'sec_edgar' && entry?.example_config) return { ...(entry.example_config as ConnectorConfig), sec_cik: '', sec_contact_email: '' };
   if (provider === 'openalex' && entry?.example_config) return { ...(entry.example_config as ConnectorConfig), scholarly_query: '' };
+  // Keyed scoped presets: the owner supplies the scope, so the catalog example values are cleared.
+  if (provider === 'fred' && entry?.example_config) return { ...(entry.example_config as ConnectorConfig), fred_series_id: '' };
+  if (provider === 'openweathermap' && entry?.example_config) return { ...(entry.example_config as ConnectorConfig), owm_latitude: undefined, owm_longitude: undefined };
+  if (provider === 'openaq' && entry?.example_config) return { ...(entry.example_config as ConnectorConfig), openaq_location_id: undefined };
+  if (provider === 'nasa_firms' && entry?.example_config) return { ...(entry.example_config as ConnectorConfig), firms_country: '' };
   if (freeProviders.has(provider) && entry?.example_config) return entry.example_config as ConnectorConfig;
   if (nativeProviders.has(provider)) return {
     timeout_seconds: 30,
@@ -721,8 +730,8 @@ export function ConnectorEditor({
         setError('providerSecretRequired');
         return;
       }
-      const replacingNativeKey = provider === 'coingecko' && Boolean(activationDraft.secret);
-      if (provider === 'coingecko' && !replacingNativeKey && !providerCredentialConfigured) {
+      const replacingNativeKey = keyedProviders.has(provider) && Boolean(activationDraft.secret);
+      if (keyedProviders.has(provider) && !replacingNativeKey && !providerCredentialConfigured) {
         setError('providerSecretRequired');
         return;
       }
@@ -732,7 +741,7 @@ export function ConnectorEditor({
       if (replacingWorldKey) {
         await saveWorldProviderCredential(id, sourceGenerationRef.current, nextRevision, activationDraft.secret, csrfToken, token.controller.signal);
       }
-      const replacingSecret = provider === 'alpha_vantage' || provider === 'coingecko' ? false : activationDraft.authMethod === 'telegram_bot_token' ? activationDraft.telegramSecretAction === 'replace' : Boolean(activationDraft.secret);
+      const replacingSecret = provider === 'alpha_vantage' || keyedProviders.has(provider) ? false : activationDraft.authMethod === 'telegram_bot_token' ? activationDraft.telegramSecretAction === 'replace' : Boolean(activationDraft.secret);
       const result = await activateConnector(id, nextRevision, replacingSecret ? 'replace' : 'keep', replacingSecret ? activationDraft.secret : undefined, csrfToken, token.controller.signal, backendChoice ?? undefined);
       if (!requestIsCurrent(token)) return;
       setActivationState(result.state);
@@ -1054,7 +1063,7 @@ export function ConnectorEditor({
           const localProvider = entry.provider_id;
           const supported = ['available', 'implemented', 'requires_credentials'].includes(entry.availability) && isProvider(localProvider);
           return <Button key={entry.provider_id} type="button" variant="outline" className={`source-provider h-auto min-w-0 flex-col items-start justify-start overflow-hidden whitespace-normal break-words text-left font-normal${provider === localProvider ? ' is-selected' : ''}`} disabled={!supported || locked} onClick={() => { if (!supported || !isProvider(localProvider)) return; setProvider(localProvider); setConfiguration(defaultConfiguration(localProvider, entry)); if (freeProviders.has(localProvider) && !name.trim()) setName(entry.label); markDraftChanged(); }}>
-            <strong>{t(providerKey(entry.provider_id))}</strong><span>{catalogStatus(entry)}</span>
+            <strong>{providerKey(entry.provider_id) === 'provider' ? entry.label : t(providerKey(entry.provider_id))}</strong><span>{catalogStatus(entry)}</span>
             {!supported && <small>{t('providerUnavailableReason')}</small>}
           </Button>;
         })}
@@ -1094,14 +1103,14 @@ export function ConnectorEditor({
         <fieldset className="source-editor-fields" disabled={locked}>
         <div className="form source-editor-form">
           <div id="source-step-connect" className="scroll-mt-4"><SettingsSection title={t('stepConnect')}>
-            {!['telegram', 'alpha_vantage', 'coingecko', 'rest'].includes(provider) && currentEntry && (currentEntry.auth_methods.every((method) => method === 'none')
+            {!['telegram', 'alpha_vantage', 'rest'].includes(provider) && !keyedProviders.has(provider) && currentEntry && (currentEntry.auth_methods.every((method) => method === 'none')
               ? <p className="text-muted-foreground">{t('connectNoCredential')}</p>
               : currentEntry.auth_methods.includes('oauth2') && <p className="text-muted-foreground">{t('connectOAuth')}</p>)}
             {provider === 'telegram' && <>
               <div className="field"><Label htmlFor="source-telegram-secret-action">{t('telegramCredentialAction')}</Label><Select value={telegramSecretAction} onValueChange={(value) => { setTelegramSecretAction(value as 'keep' | 'replace'); setSecret(''); dirtyRef.current = dirty; draftVersion.current += 1; setValidation(null); setNotice(''); }}><SelectTrigger id="source-telegram-secret-action"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="keep">{t('keepCredential')}</SelectItem><SelectItem value="replace">{t('replaceCredential')}</SelectItem></SelectContent></Select></div>
               {telegramSecretAction === 'replace' && <div className="field"><Label htmlFor="source-telegram-token">{t('telegramBotToken')}</Label><PasswordInput id="source-telegram-token" autoComplete="new-password" maxLength={512} required value={secret} onChange={(event) => { setSecret(event.target.value); dirtyRef.current = true; setDirty(true); draftVersion.current += 1; setValidation(null); setNotice(''); }} /><small className="text-muted-foreground">{t('secretHelp')}</small></div>}
             </>}
-            {(provider === 'alpha_vantage' || (provider === 'coingecko' && (backendChoice ?? 'native') === 'native')) && <div className="field"><Label htmlFor="source-provider-key">{t(provider === 'coingecko' ? 'coingeckoKey' : 'alphaVantageKey')}</Label><PasswordInput id="source-provider-key" autoComplete="new-password" maxLength={256} required={!providerCredentialConfigured} value={secret} onChange={(event) => { setSecret(event.target.value); dirtyRef.current = true; setDirty(true); draftVersion.current += 1; setValidation(null); setNotice(''); }} /><small className="text-muted-foreground">{providerCredentialConfigured ? t('credentialSavedWriteOnly') : t('secretHelp')}</small>{provider === 'coingecko' && keyNeeded(visibleActivationError) && <small className="error" role="alert">{t('providerKeyNeeded')}</small>}</div>}
+            {(provider === 'alpha_vantage' || (keyedProviders.has(provider) && (backendChoice ?? 'native') === 'native')) && <div className="field"><Label htmlFor="source-provider-key">{t(provider === 'coingecko' ? 'coingeckoKey' : provider === 'alpha_vantage' ? 'alphaVantageKey' : 'providerKey')}</Label><PasswordInput id="source-provider-key" autoComplete="new-password" maxLength={256} required={!providerCredentialConfigured} value={secret} onChange={(event) => { setSecret(event.target.value); dirtyRef.current = true; setDirty(true); draftVersion.current += 1; setValidation(null); setNotice(''); }} /><small className="text-muted-foreground">{providerCredentialConfigured ? t('credentialSavedWriteOnly') : t('secretHelp')}</small>{keyedProviders.has(provider) && keyNeeded(visibleActivationError) && <small className="error" role="alert">{t('providerKeyNeeded')}</small>}</div>}
           {provider === 'rest' && <>
             <div className="field"><Label htmlFor="source-auth-method">{t('auth')}</Label><Select value={authMethod} onValueChange={(value) => { setAuthMethod(value as typeof authMethod); markDraftChanged(); setValidation(null); }}><SelectTrigger id="source-auth-method"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">{t('noAuthentication')}</SelectItem><SelectItem value="http_header">{t('headerAuthentication')}</SelectItem></SelectContent></Select></div>
             {authMethod === 'http_header' && <>
@@ -1117,7 +1126,7 @@ export function ConnectorEditor({
           {freeProviders.has(provider) && currentEntry && (sourceId
             ? <ProviderTerms sourceId={sourceId} entry={currentEntry} csrfToken={csrfToken} disabled={locked} />
             : <p className="text-muted-foreground" role="status">{t('termsRequired')}</p>)}
-          {freeProviders.has(provider) && provider !== 'google_news' && provider !== 'sec_edgar' && provider !== 'openalex' ? <p className="text-muted-foreground">{t('fixedScope')}</p> : nativeProviders.has(provider)
+          {freeProviders.has(provider) && !scopedFreeProviders.has(provider) ? <p className="text-muted-foreground">{t('fixedScope')}</p> : nativeProviders.has(provider)
             ? <ProviderScope key={`${sourceId}:${provider}:${revision}:${sourceGeneration}:${scopeResetEpoch}`} provider={provider as NativeProvider} configuration={configuration} disabled={locked} resetEpoch={scopeResetEpoch} onChange={changeConfiguration} />
             : provider === 'rss' ? <div className="field"><Label htmlFor="source-feed-url">{t('sourceUrl')}</Label><Input id="source-feed-url" type="url" value={configuration.feed_url ?? ''} onChange={(event) => changeConfiguration('feed_url', event.target.value)} /></div> : <div className="field"><Label htmlFor="source-config-url">{provider === 'rest' ? t('apiUrl') : t('pageUrl')}</Label><Input id="source-config-url" type="url" value={configuration.url ?? ''} onChange={(event) => changeConfiguration('url', event.target.value)} /></div>}
           {provider === 'rest' && <FieldGrid>

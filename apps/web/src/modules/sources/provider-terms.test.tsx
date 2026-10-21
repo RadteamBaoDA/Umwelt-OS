@@ -74,7 +74,7 @@ describe('SyncHistory schedule', () => {
 describe('messages', () => {
   it('keeps en and vi keys in parity', () => {
     const en = Object.keys(sourcesMessages['en-us']).sort();
-    const vi_ = Object.keys((sourcesMessages as Record<string, Record<string, string>>)['vi-vi'] ?? {}).sort();
+    const vi_ = Object.keys((sourcesMessages as unknown as Record<string, Record<string, unknown>>)['vi-vi'] ?? {}).sort();
     expect(vi_).toEqual(en);
   });
 });
