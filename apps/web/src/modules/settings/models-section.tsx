@@ -32,10 +32,10 @@ export function pruneDefaults(prev: ProviderRead[], next: ProviderRead[], defaul
   return Object.fromEntries(Object.entries(defaults).map(([role, m]) => [role, m?.model && gone.has(modelTestKey(mappingProviderId(m.provider_id, prev), m.model)) ? null : m]));
 }
 
-type ModelsProps = { providers: ProviderRead[]; discovered: Record<string, string[]>; modelTests: Record<string, ModelTestState>; disabled: boolean; onChange: (providers: ProviderRead[]) => void; onTestModel: (provider: ProviderRead, model: ProviderModel) => void; t: Translate };
+type ModelsProps = { providers: ProviderRead[]; discovered: Record<string, string[]>; modelTests: Record<string, ModelTestState>; checkedAt?: Record<string, string>; disabled: boolean; onChange: (providers: ProviderRead[]) => void; onTestModel: (provider: ProviderRead, model: ProviderModel) => void; t: Translate };
 
 /** The single Models area: add row (provider, discovered model, type, vision) and one table of every added model. */
-export function ModelsPanel({ providers, discovered, modelTests, disabled, onChange, onTestModel, t }: ModelsProps) {
+export function ModelsPanel({ providers, discovered, modelTests, checkedAt = {}, disabled, onChange, onTestModel, t }: ModelsProps) {
   const [providerId, setProviderId] = useState('');
   const [pending, setPending] = useState('');
   const [type, setType] = useState<ModelType>('llm');
@@ -74,6 +74,7 @@ export function ModelsPanel({ providers, discovered, modelTests, disabled, onCha
             <Button type="button" variant="outline" disabled={disabled || state === 'pending' || !testRoleByType[model.type] || !owner.base_url} aria-label={t('modelTestAria', { id: model.id })} onClick={() => onTestModel(owner, model)}>{t('modelTest')}</Button>
             <Button type="button" variant="outline" disabled={disabled} aria-label={t('modelRemove', { id: model.id })} onClick={() => patch(owner.id, (owner.models ?? []).filter((item) => item.id !== model.id))}><Trash2 className="size-4" aria-hidden="true" /></Button>
             <ModelTestChip state={state} t={t} />
+            {state && state !== 'pending' && checkedAt[modelTestKey(owner.id, model.id)] && <span className="text-muted-foreground text-xs">{t('modelCheckedAt', { time: new Date(checkedAt[modelTestKey(owner.id, model.id)]).toLocaleString() })}</span>}
           </div></TableCell>
         </TableRow>;
       })}</TableBody>

@@ -16,6 +16,7 @@ from . import models as _models
 
 ERASURE_TABLES: tuple[str, ...] = (
     "ai_settings",
+    "model_test_results",
     "module_lifecycle_settings",
     "onboarding_state",
     "owner_preferences",

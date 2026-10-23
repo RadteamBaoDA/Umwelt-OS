@@ -15,8 +15,10 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    select,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, insert
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
@@ -192,6 +194,44 @@ class TranslationSettingsRecord(Base):
     updated_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("owner.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class ModelTestResultRecord(Base):
+    """Last Test-button outcome of one provider model, so the Models table survives reloads.
+
+    Display-only evidence (never consulted by the gateway); capability evidence stays in Redis.
+    """
+
+    __tablename__ = "model_test_results"
+    __table_args__ = (
+        CheckConstraint("result IN ('supported', 'failed', 'unsupported')", name="ck_model_test_results_result"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_model_test_results_workspace", ondelete="RESTRICT"),
+    )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    provider_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    model_id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    result: Mapped[str] = mapped_column(String(16), nullable=False)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+async def save_model_test_result(session: AsyncSession, *, workspace_id: UUID, provider_id: str, model_id: str, result: str) -> ModelTestResultRecord:
+    """Upsert the latest test outcome for one model and stamp ``checked_at``; caller commits."""
+    stmt = insert(ModelTestResultRecord).values(workspace_id=workspace_id, provider_id=provider_id, model_id=model_id, result=result)
+    await session.execute(stmt.on_conflict_do_update(
+        index_elements=["workspace_id", "provider_id", "model_id"],
+        set_={"result": result, "checked_at": func.now()}))
+    row = await session.scalar(select(ModelTestResultRecord).where(
+        ModelTestResultRecord.workspace_id == workspace_id, ModelTestResultRecord.provider_id == provider_id,
+        ModelTestResultRecord.model_id == model_id).execution_options(populate_existing=True))
+    assert row is not None  # just upserted in this transaction
+    return row
+
+
+async def list_model_test_results(session: AsyncSession, *, workspace_id: UUID) -> list[ModelTestResultRecord]:
+    """Return every stored model test outcome for the workspace (bounded by the 8-provider cap)."""
+    return list((await session.scalars(select(ModelTestResultRecord).where(
+        ModelTestResultRecord.workspace_id == workspace_id).limit(1000))).all())
 
 
 async def save_capability(redis: Redis, result: CapabilityResult, *, config: AIExecutionConfig, scope: Scope,

@@ -6,7 +6,8 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 
 BASE = "0001_init"
-HEAD = "0002_observations_provider_ids"
+SECOND = "0002_observations_provider_ids"
+HEAD = "0003_model_test_results"
 
 
 def _alembic(*args: str) -> subprocess.CompletedProcess[str]:
@@ -26,7 +27,8 @@ def test_single_head_follows_the_init_baseline() -> None:
     script = ScriptDirectory.from_config(Config("alembic.ini"))
     assert script.get_heads() == [HEAD]
     assert script.get_revision(BASE).down_revision is None  # type: ignore[union-attr]
-    assert script.get_revision(HEAD).down_revision == BASE  # type: ignore[union-attr]
+    assert script.get_revision(SECOND).down_revision == BASE  # type: ignore[union-attr]
+    assert script.get_revision(HEAD).down_revision == SECOND  # type: ignore[union-attr]
     result = _alembic("heads")
     assert result.returncode == 0, result.stderr
     assert result.stdout.split() == [HEAD, "(head)"]
@@ -83,7 +85,7 @@ def test_downgrade_is_destructive_and_documented() -> None:
 def test_observations_provider_ids_match_application_constant() -> None:
     from modules.knowledge.documents.schemas import MEASUREMENT_PROVIDER_IDS
 
-    module = ScriptDirectory.from_config(Config("alembic.ini")).get_revision(HEAD).module  # type: ignore[union-attr]
+    module = ScriptDirectory.from_config(Config("alembic.ini")).get_revision(SECOND).module  # type: ignore[union-attr]
     assert list(module._PROVIDER_IDS) == sorted(MEASUREMENT_PROVIDER_IDS)
     assert "ck_observations_provider CHECK (provider IN ('alpha_vantage', 'alternative_me'" in _upgrade_sql()
     doc = module.downgrade.__doc__

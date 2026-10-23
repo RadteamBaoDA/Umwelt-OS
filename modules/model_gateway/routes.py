@@ -2,9 +2,10 @@ import hashlib
 import json
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
-from typing import Annotated, cast
+from typing import Annotated, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
+from pydantic import BaseModel, Field
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,12 +22,13 @@ from core.model_gateway.client import (
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import DraftProbeRequest, ModelMapping, ProbeRequest, RequestPolicy
 from core.rate_limit import require_budget
-from core.workspaces.dependencies import require_workspace_write
+from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.schemas import WorkspaceContext
 from modules.settings import public as ai_settings
 
 router = APIRouter(prefix="/api/v1/settings/models", tags=["models"])
 OwnerWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
+OwnerRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 Session = Annotated[AsyncSession, Depends(get_session)]
 
 
@@ -57,6 +59,31 @@ def _capability_proved(capability: str, response: object) -> bool:
             return False
     return isinstance(message.get("content"), str)
 
+
+
+class ModelTestResultBody(BaseModel):
+    """One finished per-model test outcome reported by the Models table."""
+
+    provider_id: str = Field(min_length=1, max_length=64)
+    model: str = Field(min_length=1, max_length=256)
+    result: Literal["supported", "failed", "unsupported"]
+
+
+@router.get("/test-results")
+async def list_test_results(session: Session, _owner: OwnerRead) -> list[dict[str, object]]:
+    """Return the stored last test outcome (with ``checked_at``) of every tested provider model."""
+    rows = await ai_settings.list_model_test_results(session, workspace_id=_owner.workspace_id)
+    return [{"provider_id": r.provider_id, "model": r.model_id, "result": r.result, "checked_at": r.checked_at.isoformat()} for r in rows]
+
+
+@router.put("/test-results")
+async def save_test_result(body: ModelTestResultBody, session: Session, _owner: OwnerWrite) -> dict[str, object]:
+    """Persist the latest test outcome of one model so the next visit shows it with its check time."""
+    row = await ai_settings.save_model_test_result(
+        session, workspace_id=_owner.workspace_id, provider_id=body.provider_id, model_id=body.model, result=body.result)
+    out: dict[str, object] = {"provider_id": row.provider_id, "model": row.model_id, "result": row.result, "checked_at": row.checked_at.isoformat()}
+    await session.commit()
+    return out
 
 
 @router.post("/draft-test", dependencies=[Depends(require_budget("model_probe", 10, 60))])

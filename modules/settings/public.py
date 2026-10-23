@@ -48,8 +48,14 @@ from modules.settings.models import AISettingsRecord, OwnerPreferencesRecord
 
 # Re-exported for the model_gateway routes (strict mypy forbids implicit re-export, hence the aliases).
 from modules.settings.models import list_capabilities as list_capabilities  # noqa: PLC0414
+from modules.settings.models import (
+    list_model_test_results as list_model_test_results,  # noqa: PLC0414
+)
 from modules.settings.models import new_capability_result as new_capability_result  # noqa: PLC0414
 from modules.settings.models import save_capability as save_capability  # noqa: PLC0414
+from modules.settings.models import (
+    save_model_test_result as save_model_test_result,  # noqa: PLC0414
+)
 from modules.settings.prompts import DEFAULT_SYSTEM_PROMPTS, MAX_PROMPT_CHARS
 from modules.settings.schemas import (
     ModuleLifecycleRead,

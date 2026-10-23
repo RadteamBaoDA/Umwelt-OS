@@ -53,6 +53,11 @@ export function AISettingsWorkspace() {
   const [discoverError, setDiscoverError] = useState<{ id: string; text: string } | null>(null);
   const [discovered, setDiscovered] = useState<Record<string, string[]>>({});
   const [modelTests, setModelTests] = useState<Record<string, ModelTestState>>({});
+  // Last stored test outcome per model (DB), shown after reload until a fresh test in this session overrides it.
+  const storedTests = useQuery({ queryKey: ['model-test-results'], queryFn: () => apiRequest<{ provider_id: string; model: string; result: ModelTestState; checked_at: string }[]>('/api/v1/settings/models/test-results') });
+  const storedByKey = Object.fromEntries((Array.isArray(storedTests.data) ? storedTests.data : []).map((row) => [modelTestKey(row.provider_id, row.model), row]));
+  const shownTests: Record<string, ModelTestState> = { ...Object.fromEntries(Object.entries(storedByKey).map(([key, row]) => [key, row.result])), ...modelTests };
+  const checkedAt = Object.fromEntries(Object.entries(storedByKey).map(([key, row]) => [key, row.checked_at]));
   const allowNavigation = useRef(false);
   const [restoredDraft, setRestoredDraft] = useState(false);
   const [restoredSecret, setRestoredSecret] = useState(false);
@@ -189,9 +194,18 @@ export function AISettingsWorkspace() {
       return post('/api/v1/settings/models/draft-test', { role: slot.role, provider_id: savedIds.includes(provider.id) ? provider.id : undefined, base_url: provider.base_url, kind: provider.kind, api_key: secrets[provider.id]?.key ?? '', model: model.id, version: null, capability: slot.capability });
     },
     onMutate: ({ provider, model }) => setModelTests((current) => ({ ...current, [modelTestKey(provider.id, model.id)]: 'pending' })),
-    onSuccess: (data, { provider, model }) => setModelTests((current) => ({ ...current, [modelTestKey(provider.id, model.id)]: data.result as ModelTestState })),
-    onError: (_error, { provider, model }) => setModelTests((current) => ({ ...current, [modelTestKey(provider.id, model.id)]: 'failed' })),
+    onSuccess: (data, { provider, model }) => finishTest(provider, model, data.result as ModelTestState),
+    onError: (_error, { provider, model }) => finishTest(provider, model, 'failed'),
   });
+  /** Shows a finished test at once, then stores it (with server time) and lets the stored row take over; keeps the local value if saving fails. */
+  function finishTest(provider: ProviderRead, model: ProviderModel, result: ModelTestState) {
+    const key = modelTestKey(provider.id, model.id);
+    setModelTests((current) => ({ ...current, [key]: result }));
+    apiRequest('/api/v1/settings/models/test-results', { method: 'PUT', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ provider_id: provider.id, model: model.id, result }) })
+      .then(() => client.invalidateQueries({ queryKey: ['model-test-results'] }))
+      .then(() => setModelTests((current) => { const { [key]: _done, ...rest } = current; return rest; }))
+      .catch(() => undefined);
+  }
   if (query.isPending) return <section className="rounded-xl border bg-card p-6 skeleton" aria-label={t('loading')} />;
   if (query.isError || !saved) return <section className="rounded-xl border bg-card p-6"><h1>{t('unavailable')}</h1><p className="error">{describeError(query.error, t, 'loadFailed')}</p><Button variant="outline" onClick={() => query.refetch()}>{t('retry')}</Button></section>;
   /** Applies a partial update to the AI settings draft. */
@@ -250,7 +264,7 @@ export function AISettingsWorkspace() {
       </SettingsSection>
       <SettingsSection title={t('modelsSection')}>
         <p className="text-muted-foreground m-0 text-xs">{t('modelsHelp')}</p>
-        <ModelsPanel providers={saved.providers} discovered={discovered} modelTests={modelTests} disabled={save.isPending} onChange={changeModels} onTestModel={(provider, model) => testModel.mutate({ provider, model })} t={t as never} />
+        <ModelsPanel providers={saved.providers} discovered={discovered} modelTests={shownTests} checkedAt={checkedAt} disabled={save.isPending} onChange={changeModels} onTestModel={(provider, model) => testModel.mutate({ provider, model })} t={t as never} />
         <ModelDefaults providers={saved.providers} defaults={defaults} disabled={save.isPending} embeddingStatus={embeddingStatus} onPick={pickDefault} t={t as never} />
         {embeddingDimsChanged && <p className="error m-0 text-xs" role="status">{t('dimensionsChangedWarning')}</p>}
       </SettingsSection>
