@@ -5,7 +5,8 @@ import sys
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
-HEAD = "0001_init"
+BASE = "0001_init"
+HEAD = "0002_observations_provider_ids"
 
 
 def _alembic(*args: str) -> subprocess.CompletedProcess[str]:
@@ -21,10 +22,11 @@ def _upgrade_sql() -> str:
     return result.stdout
 
 
-def test_single_head_is_the_init_baseline() -> None:
+def test_single_head_follows_the_init_baseline() -> None:
     script = ScriptDirectory.from_config(Config("alembic.ini"))
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision is None  # type: ignore[union-attr]
+    assert script.get_revision(BASE).down_revision is None  # type: ignore[union-attr]
+    assert script.get_revision(HEAD).down_revision == BASE  # type: ignore[union-attr]
     result = _alembic("heads")
     assert result.returncode == 0, result.stderr
     assert result.stdout.split() == [HEAD, "(head)"]
@@ -70,9 +72,19 @@ def test_offline_upgrade_inserts_required_seed_rows() -> None:
 
 
 def test_downgrade_is_destructive_and_documented() -> None:
-    result = _alembic("downgrade", f"{HEAD}:base", "--sql")
+    result = _alembic("downgrade", f"{BASE}:base", "--sql")
     assert result.returncode == 0, result.stderr
     assert "DROP SCHEMA public CASCADE" in result.stdout
     assert "CREATE SCHEMA public" in result.stdout
-    doc = ScriptDirectory.from_config(Config("alembic.ini")).get_revision(HEAD).module.downgrade.__doc__  # type: ignore[union-attr]
+    doc = ScriptDirectory.from_config(Config("alembic.ini")).get_revision(BASE).module.downgrade.__doc__  # type: ignore[union-attr]
     assert doc is not None and "DESTRUCTIVE" in doc
+
+
+def test_observations_provider_ids_match_application_constant() -> None:
+    from modules.knowledge.documents.schemas import MEASUREMENT_PROVIDER_IDS
+
+    module = ScriptDirectory.from_config(Config("alembic.ini")).get_revision(HEAD).module  # type: ignore[union-attr]
+    assert list(module._PROVIDER_IDS) == sorted(MEASUREMENT_PROVIDER_IDS)
+    assert "ck_observations_provider CHECK (provider IN ('alpha_vantage', 'alternative_me'" in _upgrade_sql()
+    doc = module.downgrade.__doc__
+    assert doc is not None and "raises" in doc

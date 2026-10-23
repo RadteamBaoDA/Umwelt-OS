@@ -218,10 +218,13 @@ class GroupPatch(StrictConfiguration):
 
 
 class InstanceCreate(StrictConfiguration):
-    """Validate a dashboard placement reference without accepting renderer payloads."""
+    """Validate a dashboard placement reference without accepting renderer payloads.
+
+    A missing ``group_id`` asks the server to use (or create) the dashboard's default group.
+    """
 
     expected_revision: Revision
-    group_id: UUID
+    group_id: UUID | None = None
     definition_id: UUID
     title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)] | None = None
     position: Annotated[StrictInt, Field(ge=0, le=2_147_483_647)] = 0
@@ -498,6 +501,19 @@ class RendererRead(StrictConfiguration):
     minimum_height: int
     runtime_state: Literal["planned", "available"]
     capability_keys: list[str]
+    source_mode: Literal["none", "single", "multi"] = "none"
+    source_providers: list[str] | None = None
+
+
+class GadgetTemplateRead(StrictConfiguration):
+    """Describe one built-in gadget template; display text is localized by the client from ``id``."""
+
+    id: str
+    renderer: str
+    source_mode: Literal["none", "single", "multi"]
+    providers: list[str]
+    scope: GadgetScope
+    filters: GadgetFilters
 
 
 class PresetSlotRead(StrictConfiguration):

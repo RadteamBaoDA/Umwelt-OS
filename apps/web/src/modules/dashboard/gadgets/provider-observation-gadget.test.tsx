@@ -66,4 +66,12 @@ describe('latestPerSeries', () => {
     ] as never[];
     expect(latestPerSeries(rows).map((r: { id: string }) => r.id)).toEqual(['b']);
   });
+
+  it('lets the observation row wrap so a long value and attribution do not overlap the symbol', async () => {
+    api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: [{ ...base, id: 'o1', provider: 'frankfurter', metric: 'fx_reference_rate', symbol: 'USD/VND', value: 25831.15, unit: 'VND per USD', observed_at: '2026-10-08T00:00:00Z' }] });
+    view();
+    expect(await screen.findByText('USD/VND')).toBeTruthy();
+    expect(screen.getByText('25831.15 VND per USD')).toBeTruthy();
+    expect(screen.getByTestId('observation-row').className).toContain('flex-wrap');
+  });
 });

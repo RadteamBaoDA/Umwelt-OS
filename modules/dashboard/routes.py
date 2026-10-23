@@ -38,6 +38,7 @@ from modules.dashboard.schemas import (
     GadgetDefinitionPatch,
     GadgetDefinitionRead,
     GadgetDefinitionUsageRead,
+    GadgetTemplateRead,
     GroupCreate,
     GroupPatch,
     HighlightPreviewRead,
@@ -271,6 +272,13 @@ async def list_renderers(response: Response) -> list[RendererRead]:
     """Return renderer adapter metadata and minimum geometry without runtime acceptance claims."""
     _no_store(response)
     return public.renderer_reads()
+
+
+@router.get("/gadget-templates", response_model=list[GadgetTemplateRead])
+async def list_gadget_templates(response: Response) -> list[GadgetTemplateRead]:
+    """Return the static built-in gadget template catalog; names are localized client-side."""
+    _no_store(response)
+    return public.list_templates()
 
 
 @router.get("/gadget-sources", response_model=GadgetSourceSelectionPage)

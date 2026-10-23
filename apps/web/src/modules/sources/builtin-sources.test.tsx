@@ -13,7 +13,7 @@ vi.mock('./api', async (original) => ({ ...(await original<typeof import('./api'
 const actions = vi.hoisted(() => ({ waitForActivation: vi.fn(), collectAndWait: vi.fn() }));
 vi.mock('./use-source-actions', async (original) => ({ ...(await original<typeof import('./use-source-actions')>()), ...actions }));
 
-import { BuiltinWizard } from './builtin-sources';
+import { BuiltinWizard, builtinEnableErrorKey } from './builtin-sources';
 
 const row = (over: Partial<BuiltinSource>): BuiltinSource => ({
   id: 'world_bank', label: 'World Bank GDP', category: 'economy', eligibility: 'open', terms_url: 'https://example.org/terms',
@@ -102,5 +102,14 @@ describe('BuiltinWizard', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Next' }));
     expect((await screen.findByRole('alert')).textContent).toContain('Only the instance operator');
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe('builtinEnableErrorKey', () => {
+  it('maps operator, terms and duplicate failures and falls back to the generic message', () => {
+    expect(builtinEnableErrorKey(new ApiError(403, 'operator_required'))).toBe('builtinErrorOperator');
+    expect(builtinEnableErrorKey(new ApiError(403, 'provider_terms_ineligible'))).toBe('builtinErrorTerms');
+    expect(builtinEnableErrorKey(new ApiError(409, 'conflict', { code: 'builtin_already_added' }))).toBe('builtinAlreadyAdded');
+    expect(builtinEnableErrorKey(new Error('boom'))).toBe('builtinErrorGeneric');
   });
 });

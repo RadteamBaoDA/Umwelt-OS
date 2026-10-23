@@ -69,6 +69,46 @@ function groupByCategory(items: BuiltinSource[]): [BuiltinCategory, BuiltinSourc
     .filter(([, rows]) => rows.length > 0);
 }
 
+/** Message key (in the `sources` namespace) for a failed built-in enable; 403 operator/terms codes get specific text. */
+export function builtinEnableErrorKey(cause: unknown): 'builtinErrorOperator' | 'builtinErrorTerms' | 'builtinAlreadyAdded' | 'builtinErrorGeneric' {
+  const message = cause instanceof ApiError ? cause.message : '';
+  const code = cause instanceof ApiError ? cause.code : null;
+  if (message === 'operator_required') return 'builtinErrorOperator';
+  if (message === 'provider_terms_ineligible') return 'builtinErrorTerms';
+  if (message === 'builtin_already_added' || code === 'builtin_already_added') return 'builtinAlreadyAdded';
+  return 'builtinErrorGeneric';
+}
+
+/**
+ * Terms and declared-use step for enabling one built-in: attribution, terms link, operator-review note,
+ * deployment-use select and AI toggles. Controlled by the caller; shared by the wizard and the gadget editor dialog.
+ * An `error` (already localized) renders as a role=alert line below the fields.
+ */
+export function BuiltinTermsFields({ builtin, use, onUseChange, aiOptions, onAiOptionsChange, error }: {
+  builtin: BuiltinSource;
+  use: DeclaredUse;
+  onUseChange: (use: DeclaredUse) => void;
+  aiOptions: SourceAiOptions;
+  onAiOptionsChange: (options: SourceAiOptions) => void;
+  error?: string | null;
+}) {
+  const t = useTranslations('sources');
+  return <section className="grid gap-3 text-sm" aria-label={t('builtinDialogTitle', { name: builtin.label })}>
+    <h3 className="m-0 text-base font-semibold">{t('builtinDialogTitle', { name: builtin.label })}</h3>
+    <p className="text-muted-foreground">{t('builtinTermsHint')}</p>
+    <p><strong>{t('guideAttribution')}:</strong> {builtin.attribution}</p>
+    <p><a className="text-accent underline" href={safeHttpUrl(builtin.terms_url)} target="_blank" rel="noopener noreferrer">{t('providerTerms')}</a> · {t('termsVersion')}: {builtin.terms_checked_on}</p>
+    {builtin.eligibility === 'review' && <p role="note">{t('builtinOperatorNote')}</p>}
+    <div className="field"><Label htmlFor="builtin-declared-use">{t('termsDeclaredUse')}</Label>
+      <Select value={use} onValueChange={(value) => onUseChange(value as DeclaredUse)}>
+        <SelectTrigger id="builtin-declared-use"><SelectValue /></SelectTrigger>
+        <SelectContent>{USES.map(([value, label]) => <SelectItem key={value} value={value}>{t(label)}</SelectItem>)}</SelectContent>
+      </Select></div>
+    <SourceAiToggles idPrefix="builtin-source" value={aiOptions} onChange={onAiOptionsChange} />
+    {error && <p className="text-danger" role="alert">{error}</p>}
+  </section>;
+}
+
 type TestState = { phase: 'idle' | 'activating' | 'collecting' | 'succeeded' | 'no_changes' | 'failed'; code?: string | null; runId?: string | null };
 
 /**
@@ -101,12 +141,7 @@ export function BuiltinWizard({ onClose, onChanged }: { onClose: () => void; onC
     onChanged();
   };
   /** Maps a failed enable to the most specific localized message. */
-  const fail = (cause: unknown) => {
-    const message = cause instanceof ApiError ? cause.message : '';
-    const code = cause instanceof ApiError ? cause.code : null;
-    setError(message === 'operator_required' ? t('builtinErrorOperator') : message === 'provider_terms_ineligible' ? t('builtinErrorTerms')
-      : message === 'builtin_already_added' || code === 'builtin_already_added' ? t('builtinAlreadyAdded') : t('builtinErrorGeneric'));
-  };
+  const fail = (cause: unknown) => setError(t(builtinEnableErrorKey(cause)));
 
   /** Waits for activation, runs one real collection and records the outcome; failures keep the dialog open for retry or discard. */
   async function runTest(sourceId: string) {
@@ -187,20 +222,7 @@ export function BuiltinWizard({ onClose, onChanged }: { onClose: () => void; onC
         })}
       </div>)}
     </section>}
-    {index === 1 && selected && <section className="grid gap-3 text-sm" aria-label={t('builtinDialogTitle', { name: selected.label })}>
-      <h3 className="m-0 text-base font-semibold">{t('builtinDialogTitle', { name: selected.label })}</h3>
-      <p className="text-muted-foreground">{t('builtinTermsHint')}</p>
-      <p><strong>{t('guideAttribution')}:</strong> {selected.attribution}</p>
-      <p><a className="text-accent underline" href={safeHttpUrl(selected.terms_url)} target="_blank" rel="noopener noreferrer">{t('providerTerms')}</a> · {t('termsVersion')}: {selected.terms_checked_on}</p>
-      {selected.eligibility === 'review' && <p role="note">{t('builtinOperatorNote')}</p>}
-      <div className="field"><Label htmlFor="builtin-declared-use">{t('termsDeclaredUse')}</Label>
-        <Select value={use} onValueChange={(value) => setUse(value as DeclaredUse)}>
-          <SelectTrigger id="builtin-declared-use"><SelectValue /></SelectTrigger>
-          <SelectContent>{USES.map(([value, label]) => <SelectItem key={value} value={value}>{t(label)}</SelectItem>)}</SelectContent>
-        </Select></div>
-      <SourceAiToggles idPrefix="builtin-source" value={aiOptions} onChange={setAiOptions} />
-      {error && <p className="text-danger" role="alert">{error}</p>}
-    </section>}
+    {index === 1 && selected && <BuiltinTermsFields builtin={selected} use={use} onUseChange={setUse} aiOptions={aiOptions} onAiOptionsChange={setAiOptions} error={error} />}
     {index === 2 && <section className="flex flex-col gap-3" aria-live="polite" aria-label={t('verifyTitle')}>
       <h3 className="m-0 text-base font-semibold">{t('verifyTitle')}</h3>
       {test.phase === 'activating' && <p role="status">{t('verifyWaitingActivation')}</p>}

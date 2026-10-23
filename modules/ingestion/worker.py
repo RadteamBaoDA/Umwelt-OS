@@ -1358,6 +1358,9 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                 count("ingestion_documents_total", failed_documents, outcome="failed")
     except (OperationalError, IntegrityError, RuntimeError) as exc:
         # The failed factory context has exited/rolled back before this fresh transaction.
+        # Without this the retry loop below fails silently (e.g. a CHECK violation retried until exhausted).
+        logger.warning("Normalize attempt failed event_id=%s run_id=%s stage_id=%s error_type=%s", event_id,
+            getattr(claim, "run_id", None), getattr(claim, "stage_id", None), type(exc).__name__, exc_info=True)
         if isinstance(exc, NormalizationPreparationConflict):
             if claim is None:
                 claim = exc.claim

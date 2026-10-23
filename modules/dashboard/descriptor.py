@@ -29,6 +29,7 @@ class DashboardDescriptor:
         "/api/v1/gadget-definitions/{id}",
         "/api/v1/gadget-definitions/{definition_id}/highlights",
         "/api/v1/gadget-renderers",
+        "/api/v1/gadget-templates",
         "/api/v1/gadget-sources",
         "/api/v1/dashboard-presets",
         "/api/v1/dashboard-presets/{preset_id}/preview",

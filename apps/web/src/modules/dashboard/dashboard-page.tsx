@@ -835,13 +835,17 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
     },
   });
 
-  /** Captures owner identity before membership creation; late results cannot rebind another layout. */
+  /**
+   * Captures owner identity before membership creation; late results cannot rebind another layout.
+   * Resolves true only when the instance was created and applied to the draft; false on every stale,
+   * no-space or failed path (failures also set the page banner) so callers can compensate.
+   */
   const handleAddGadgetInstance = useCallback(
-    async (params: { definitionId: string; groupId: string; title?: string; renderer: string }, reservationId: string) => {
+    async (params: { definitionId: string; groupId?: string; title?: string; renderer: string }, reservationId: string): Promise<boolean> => {
       const reservation = addReservationsRef.current.get(reservationId);
       if (!reservation || reservation.renderer !== params.renderer) {
         releaseAddReservation(reservationId);
-        return;
+        return false;
       }
       try {
         const live = liveLayoutRef.current;
@@ -852,18 +856,18 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
           || preflightIdentity.breakpoint !== reservation.breakpoint
           || preflightIdentity.columns !== reservation.columns
           || preflightIdentity.baseRevision !== reservation.baseRevision
-          || live.activeDashboard.revision !== reservation.baseRevision) return;
+          || live.activeDashboard.revision !== reservation.baseRevision) return false;
         // Recheck live occupancy after asynchronous definition creation, immediately before POST.
         const coords = findFreeCoordinates(live.draftPlacements, reservation.width, reservation.height, reservation.columns);
         if (!coords) {
           setSaveError(t('noFreeDashboardSpace'));
-          return;
+          return false;
         }
         const updatedDashboard = await createGadgetInstance(
           reservation.dashboardId,
           {
             expected_revision: reservation.baseRevision,
-            group_id: params.groupId,
+            group_id: params.groupId || undefined,
             definition_id: params.definitionId,
             title: params.title,
           },
@@ -877,7 +881,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
           || responseIdentity.breakpoint !== reservation.breakpoint
           || responseIdentity.columns !== reservation.columns
           || (responseIdentity.baseRevision !== reservation.baseRevision
-            && responseIdentity.baseRevision !== updatedDashboard.revision)) return;
+            && responseIdentity.baseRevision !== updatedDashboard.revision)) return false;
         // Find newly added instance
         const newInstance = updatedDashboard.instances.find(
           (inst) => !live.activeDashboard!.instances.some((old) => old.id === inst.id),
@@ -898,7 +902,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
             : { placements: updatedDashboard.layouts.desktop.items, unavailable: false };
           if (serverSnapshot.unavailable) {
             setSaveError(t('mobileLayoutUnavailable'));
-            return;
+            return false;
           }
           const origin: LayoutEditOrigin = {
             dashboardId: updatedDashboard.id,
@@ -914,8 +918,10 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
           setIsDirty(dirty);
           setEditOrigin(dirty ? origin : null);
         }
+        return true;
       } catch (err) {
         setSaveError(err instanceof Error ? err.message : t('saveFailed'));
+        return false;
       } finally {
         releaseAddReservation(reservationId);
       }

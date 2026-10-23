@@ -1,3 +1,11 @@
+<!-- gadget-templates-status:start -->
+## Gadget templates and unified editor - 2026-10-23, branch feature/fix-ui, uncommitted
+
+- 13 built-in gadget templates (`GET /api/v1/gadget-templates`) and per-renderer datasource rules (`source_mode`, `source_providers` on `GET /gadget-renderers`), validated on definition create/patch (patch only when `source_ids` or the renderer change) and on preset apply. One `GadgetEditor` serves Settings > Gadget library, the Dashboard Add dialog and the Configure modal; the datasource picker lists enabled sources plus not-yet-enabled built-ins and enables them inline. `POST .../instances` no longer requires `group_id` (default group "General" is used or created). Add flow deletes the just-created definition when the instance cannot be created.
+- Migration `0002_observations_provider_ids` widens `observations.provider` CHECK to the 23 measurement providers (previously only `alpha_vantage`, `open_meteo`, so other measurement sources never normalized). A warning is now logged when a normalize attempt fails.
+- Verified in a real browser on the native dev stack: template grid, inline enable of USGS (live call), Earthquakes gadget rendering real data, Configure modal, Settings library. Unverified: `vi-vi` text in the browser, inline enable of operator-approval built-ins (403 path is unit-tested only), Fear & Greed gadget with data (first run failed before the migration; same-day data deduplicates), Docker integration/e2e. The `DO $$` guard in the 0002 downgrade has not run against PostgreSQL.
+<!-- gadget-templates-status:end -->
+
 <!-- model-roles-status:start -->
 ## Model roles replace alias routing - 2026-10-21, branch feature/fix-ui, uncommitted
 

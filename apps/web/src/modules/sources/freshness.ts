@@ -12,7 +12,7 @@ export function isStale(lastSuccessAt: string | null | undefined, intervalMinute
 /** Which dataset time a provider's value is anchored to: FX shows a reference date, annual macro data its period. */
 export type PeriodKind = 'referenceDate' | 'annualPeriod' | null;
 
-const PERIOD_KIND: Record<string, PeriodKind> = { frankfurter: 'referenceDate', ecb: 'referenceDate', world_bank: 'annualPeriod' };
+const PERIOD_KIND: Record<string, PeriodKind> = { frankfurter: 'referenceDate', ecb: 'referenceDate', open_er_api: 'referenceDate', world_bank: 'annualPeriod' };
 
 export function periodKind(provider: string | null | undefined): PeriodKind {
   return (provider && PERIOD_KIND[provider]) || null;

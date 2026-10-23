@@ -79,6 +79,7 @@ from modules.dashboard.schemas import (
     GadgetDefinitionUsageRead,
     GadgetFilters,
     GadgetScope,
+    GadgetTemplateRead,
     GroupCreate,
     GroupPatch,
     HighlightPreviewRead,
@@ -1530,6 +1531,8 @@ async def create_definition(session: AsyncSession, payload: GadgetDefinitionCrea
     )
     await _lock_selected_sources(session, payload.source_ids, require_active=True, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
+    await _validate_selected_sources(session, payload.renderer, payload.source_ids, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled)
     await validate_highlight_rules(session, payload.source_ids, configuration.highlight_rules, scope=scope)
     count = await session.scalar(select(func.count()).select_from(GadgetDefinition).where(
         GadgetDefinition.workspace_id == scope.workspace_id, GadgetDefinition.owner_id == owner_id)) or 0
@@ -1591,6 +1594,10 @@ async def patch_definition(session: AsyncSession, definition_id: UUID, payload: 
         highlight_rules=candidate["highlight_rules"] if candidate["highlight_rules"] is not None else [HighlightRule.model_validate(item) for item in row.highlight_rules],
     )
     gadgets.validate_renderer_configuration(candidate["renderer"], config)
+    # Only re-check datasource compatibility when the binding changes, so older saved definitions keep saving.
+    if payload.source_ids is not None or (payload.renderer is not None and payload.renderer != row.renderer):
+        await _validate_selected_sources(session, candidate["renderer"], candidate["source_ids"], scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled)
     stored_topics = {UUID(str(topic)) for item in row.highlight_rules for topic in item.get("topic_ids", [])}
     await validate_highlight_rules(
         session, candidate["source_ids"], config.highlight_rules, scope=scope, known_topic_ids=stored_topics,
@@ -1622,24 +1629,47 @@ async def delete_definition(session: AsyncSession, definition_id: UUID, expected
         scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
 
 
+async def _resolve_instance_group(
+    session: AsyncSession, dashboard: Dashboard, group_id: UUID | None, *, scope: Scope,
+) -> DashboardGroup:
+    """Return the target group for a new instance under the caller's dashboard lock.
+
+    An explicit ``group_id`` must belong to the dashboard (else ``DashboardMissing``). When it is
+    ``None`` the lowest-position group (id as tiebreak) is used; a dashboard with no groups gets a
+    "General" group at position 0 added to the session. The caller owns the single revision bump
+    and commit, so creating the group here adds no extra revision.
+    """
+    query = select(DashboardGroup).join(Dashboard, Dashboard.id == DashboardGroup.dashboard_id).where(
+        DashboardGroup.dashboard_id == dashboard.id, Dashboard.workspace_id == scope.workspace_id)
+    if group_id is not None:
+        group = await session.scalar(query.where(DashboardGroup.id == group_id))
+        if group is None:
+            raise DashboardMissing
+        return group
+    group = await session.scalar(query.order_by(DashboardGroup.position, DashboardGroup.id).limit(1))
+    if group is None:
+        group = DashboardGroup(dashboard_id=dashboard.id, name="General", position=0)
+        session.add(group)
+        await session.flush()
+    return group
+
+
 async def create_instance(session: AsyncSession, dashboard_id: UUID, payload: InstanceCreate, *, scope: Scope, multi_workspace_enabled: bool) -> DashboardDetail:
-    """Create a cross-checked instance and both default placements under definition-before-dashboard locks."""
+    """Create a cross-checked instance and both default placements under definition-before-dashboard locks.
+
+    An omitted ``group_id`` falls back to the dashboard's first group, creating "General" if none exists.
+    """
     fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
     definition = await _lock_definition(session, payload.definition_id, scope=scope)
     dashboard = await _lock_dashboard(session, dashboard_id, scope=scope)
     _check_revision(dashboard, payload.expected_revision)
-    group = await session.scalar(select(DashboardGroup).join(Dashboard, Dashboard.id == DashboardGroup.dashboard_id).where(
-        DashboardGroup.id == payload.group_id, DashboardGroup.dashboard_id == dashboard_id,
-        Dashboard.workspace_id == scope.workspace_id,
-    ))
-    if group is None:
-        raise DashboardMissing
+    group = await _resolve_instance_group(session, dashboard, payload.group_id, scope=scope)
     count = await session.scalar(select(func.count()).select_from(GadgetInstance).join(
         Dashboard, Dashboard.id == GadgetInstance.dashboard_id,
     ).where(GadgetInstance.dashboard_id == dashboard_id, Dashboard.workspace_id == scope.workspace_id)) or 0
     if count >= MAX_INSTANCES_PER_DASHBOARD:
         raise DashboardConflict("instance_limit", "Instance limit reached", dashboard.revision)
-    instance = GadgetInstance(dashboard_id=dashboard_id, group_id=payload.group_id, definition_id=definition.id, title=payload.title, position=payload.position)
+    instance = GadgetInstance(dashboard_id=dashboard_id, group_id=group.id, definition_id=definition.id, title=payload.title, position=payload.position)
     session.add(instance)
     await session.flush()
     descriptor = gadgets.renderer_descriptor(definition.renderer)
@@ -1790,7 +1820,29 @@ def renderer_reads() -> list[RendererRead]:
     """Project static renderer state and geometry without asserting runtime/provider acceptance."""
     return [RendererRead.model_validate({"id": row.id, "config_version": row.config_version, "minimum_width": row.minimum_width,
              "minimum_height": row.minimum_height, "runtime_state": row.runtime_state,
-             "capability_keys": list(row.capability_keys)}) for row in gadgets.RENDERERS]
+             "capability_keys": list(row.capability_keys), "source_mode": row.source_mode,
+             "source_providers": list(row.source_providers) if row.source_providers is not None else None})
+            for row in gadgets.RENDERERS]
+
+
+def list_templates() -> list[GadgetTemplateRead]:
+    """Project the static built-in gadget templates with their renderer's datasource mode."""
+    return [GadgetTemplateRead.model_validate({
+        "id": row.id, "renderer": row.renderer, "providers": list(row.providers), "scope": row.scope,
+        "filters": row.filters, "source_mode": gadgets.renderer_descriptor(row.renderer).source_mode,
+    }) for row in gadgets.TEMPLATES]
+
+
+async def _validate_selected_sources(
+    session: AsyncSession, renderer: str, source_ids: Sequence[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+) -> None:
+    """Check selected sources' providers against the renderer's datasource rule (ValueError on mismatch).
+
+    Missing/foreign IDs are skipped here; lifecycle checks in ``_lock_selected_sources`` own those errors.
+    """
+    rows = await sources.get_gadget_sources(
+        session, tuple(dict.fromkeys(source_ids)), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    gadgets.validate_renderer_sources(renderer, [row.provider for row in rows])
 
 
 async def list_gadget_sources(
@@ -1879,6 +1931,10 @@ async def apply_preset(
     gadgets.dashboard_preset(preset_id)
     await _lock_selected_sources(session, [source_id for values in payload.slot_sources.values() for source_id in values],
         require_active=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
+    # Slot sources must satisfy each slot renderer's datasource rule, like direct definition creation.
+    for slot in gadgets.dashboard_preset(preset_id).slots:
+        await _validate_selected_sources(session, slot.renderer, payload.slot_sources.get(slot.slot_id, ()), scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled)
     target_dashboard_id = payload.target_dashboard_id
     if payload.mode == "replace":
         assert target_dashboard_id is not None and payload.expected_revision is not None  # replace mode requires both

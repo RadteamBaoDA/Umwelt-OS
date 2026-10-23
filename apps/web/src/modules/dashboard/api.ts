@@ -146,6 +146,20 @@ export type GadgetRenderer = {
   minimum_height: number;
   runtime_state: 'planned' | 'available';
   capability_keys: string[];
+  /** How many configured sources the renderer reads: none, exactly one, or many. */
+  source_mode: 'none' | 'single' | 'multi';
+  /** Providers the renderer accepts; null means any provider. */
+  source_providers: string[] | null;
+};
+
+/** Named gadget starting point; pre-fills renderer, provider choices, scope and filters only. */
+export type GadgetTemplate = {
+  id: string;
+  renderer: string;
+  source_mode: 'none' | 'single' | 'multi';
+  providers: string[];
+  scope: GadgetScope;
+  filters: GadgetFilters;
 };
 
 /** Static dashboard preset catalog entry with stable renderer slot identities. */
@@ -211,6 +225,7 @@ export const dashboardKeys = {
   /** Builds the identifier-specific definition key within the library invalidation family. */
   definition: (id: string) => ['gadget-definition', id] as const,
   renderers: ['gadget-renderers'] as const,
+  templates: ['gadget-templates'] as const,
   sources: ['gadget-sources'] as const,
   presets: ['dashboard-presets'] as const,
   presetPreview: ['dashboard-preset-preview'] as const,
@@ -280,7 +295,7 @@ export function deleteDashboardGroup(dashboardId: string, groupId: string, expec
 }
 
 /** Adds a definition-backed instance and returns the committed dashboard projection. */
-export function createGadgetInstance(dashboardId: string, payload: { expected_revision: number; group_id: string; definition_id: string; title?: string | null; position?: number }, csrfToken: string, signal?: AbortSignal) {
+export function createGadgetInstance(dashboardId: string, payload: { expected_revision: number; group_id?: string; definition_id: string; title?: string | null; position?: number }, csrfToken: string, signal?: AbortSignal) {
   return apiRequest<Dashboard>(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/instances`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
     body: JSON.stringify(payload), signal,
@@ -348,6 +363,11 @@ export function deleteGadgetDefinition(id: string, expectedRevision: number, csr
 /** Lists fixed renderer configuration metadata and minimum geometry, not runtime implementations. */
 export function listGadgetRenderers(signal?: AbortSignal) {
   return apiRequest<GadgetRenderer[]>('/api/v1/gadget-renderers', { signal });
+}
+
+/** Lists the fixed catalog of named gadget templates; display text is localized by template id. */
+export function listGadgetTemplates(signal?: AbortSignal) {
+  return apiRequest<GadgetTemplate[]>('/api/v1/gadget-templates', { signal });
 }
 
 /** Lists bounded source identity and lifecycle metadata for explicit gadget selection. */

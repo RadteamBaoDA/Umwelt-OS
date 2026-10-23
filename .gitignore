@@ -20,3 +20,6 @@ data/
 # Git worktrees
 .worktrees/
 apps/web/public/vendor/genui/
+
+# Local native-dev data directory (DATA_DIR=./.data)
+.data/
