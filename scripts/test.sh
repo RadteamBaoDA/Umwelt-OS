@@ -54,7 +54,7 @@ if [[ -z "$pytest_target" || -n "$e2e_target" ]]; then
   [[ "$project" =~ ^bbd-os-test-[0-9a-f]{10}$ ]]
   e2e_reset() {
     "${compose[@]}" exec -T postgres psql -U bbd_test -d bbd_test -v ON_ERROR_STOP=1 -c "$(tr -d '\r' < "$(dirname "${BASH_SOURCE[0]}")/sql/e2e-reset.sql" | tr '\n' ' ')"
-    "${compose[@]}" exec -T redis redis-cli FLUSHALL >/dev/null
+    "${compose[@]}" exec -T redis sh -c "unset REDISCLI_AUTH; redis-cli FLUSHALL" >/dev/null
   }
   export E2E_SETUP_TOKEN=bbd-os-disposable-test-token
   export PLAYWRIGHT_BASE_URL="http://localhost:${WEB_PORT}"

@@ -77,8 +77,10 @@ test.describe('web search toggle', () => {
     await page.getByRole('button', { name: 'Add context, files or options' }).click();
     await page.getByRole('menuitemcheckbox', { name: 'Search the web for this message' }).click();
     await page.keyboard.press('Escape');
-    await page.getByRole('textbox', { name: /Ask a question about your knowledge/ }).fill('q1');
-    await page.keyboard.press('Enter');
+    // The checkbox item keeps the + menu open (and focused); press Enter on the composer itself, not the menu.
+    const composer = page.getByRole('textbox', { name: /Ask a question about your knowledge/ });
+    await composer.fill('q1');
+    await composer.press('Enter');
     await expect.poll(() => bodies.length).toBe(1);
     expect(bodies[0].web_search).toBe(true);
   });

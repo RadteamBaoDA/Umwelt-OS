@@ -188,7 +188,7 @@ N8N_ENCRYPTION_KEY=$(New-Secret)
           $reset = (Get-Content -Raw (Join-Path $PSScriptRoot 'sql/e2e-reset.sql')) -replace '\r?\n', ' '
           $resetE2e = {
             Invoke-Checked 'docker' ($compose + @('exec', '-T', 'postgres', 'psql', '-U', 'bbd_test', '-d', 'bbd_test', '-v', 'ON_ERROR_STOP=1', '-c', $reset))
-            Invoke-Checked 'docker' ($compose + @('exec', '-T', 'redis', 'redis-cli', 'FLUSHALL'))
+            Invoke-Checked 'docker' ($compose + @('exec', '-T', 'redis', 'sh', '-c', 'unset REDISCLI_AUTH; redis-cli FLUSHALL'))
           }
           & $resetE2e
           $env:E2E_SETUP_TOKEN = 'bbd-os-disposable-test-token'
@@ -211,6 +211,10 @@ N8N_ENCRYPTION_KEY=$(New-Secret)
           }
         }
       } finally {
+        # Keep the disposable stack's logs: `down` destroys the only evidence of a container that died mid-run.
+        New-Item -ItemType Directory -Force -Path 'test-results' | Out-Null
+        & docker @($compose + @('ps', '-a')) *> 'test-results/compose-ps.txt'
+        & docker @($compose + @('logs', '--no-color', '--timestamps', '--tail', '400')) *> 'test-results/compose-logs.txt'
         & docker @($compose + @('down', '--volumes', '--remove-orphans'))
         if ($null -eq $previousWebPort) { Remove-Item Env:WEB_PORT -ErrorAction SilentlyContinue }
         else { $env:WEB_PORT = $previousWebPort }

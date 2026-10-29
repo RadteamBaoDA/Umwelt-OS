@@ -396,3 +396,69 @@ async def test_rotation_retry_requests_share_owner_lock(monkeypatch) -> None:
     monkeypatch.setattr(auth_routes, "_lock_owner_session", fake)
     await auth_routes._lock_owner_session_retrying(None, None, AuthSession(token_hash="h", owner_id=1))  # type: ignore[arg-type]
     assert seen["share_owner"] is True
+
+
+@pytest.mark.asyncio
+async def test_owner_lock_wait_uses_lock_timeout_instead_of_nowait() -> None:
+    """A positive wait sets a transaction-local lock_timeout and drops NOWAIT, so brief contention succeeds."""
+    from sqlalchemy.dialects import postgresql
+
+    executed: list[tuple[str, dict]] = []
+    compiled: list[str] = []
+
+    class FakeSession:
+        async def execute(self, stmt, params):
+            executed.append((str(stmt), params))
+
+        async def scalar(self, stmt):
+            compiled.append(str(stmt.compile(dialect=postgresql.dialect())))
+
+    await auth_routes._lock_owner(FakeSession(), 1, wait_seconds=3)  # type: ignore[arg-type]
+    assert executed == [("SELECT set_config('lock_timeout', :ms, true)", {"ms": "3000"})]
+    assert compiled[0].endswith("FOR UPDATE") and "NOWAIT" not in compiled[0]
+
+
+@pytest.mark.asyncio
+async def test_login_lock_timeout_is_retryable_503_not_401(monkeypatch) -> None:
+    """A correct password that cannot get the owner row within the wait is 503 + Retry-After, never 401."""
+    async def busy(*_a, **_k):
+        raise HTTPException(status_code=409, detail="busy")  # what _lock_owner raises on 55P03
+
+    class Sess:
+        async def scalar(self, _stmt):
+            return "hash"
+
+    monkeypatch.setattr(auth_routes, "_lock_owner", busy)
+    monkeypatch.setattr(auth_routes, "verify_login_password", lambda _h, _p: True)
+    body = SimpleNamespace(identifier=None, password="p")
+    with pytest.raises(HTTPException) as exc:
+        await auth_routes._login_verify(None, None, body, Sess(), None)  # type: ignore[arg-type]
+    assert exc.value.status_code == 503 and exc.value.headers == {"Retry-After": "1"}
+
+
+@pytest.mark.asyncio
+async def test_login_contention_is_not_recorded_as_failed_attempt(monkeypatch) -> None:
+    """Only a 401 counts toward the login throttle; the 503 contention response must not."""
+    recorded: list[bool] = []
+
+    async def noop(*_a, **_k):
+        return None
+
+    async def record(_r, _redis, _ident, *, success):
+        recorded.append(success)
+
+    async def busy(*_a, **_k):
+        raise HTTPException(status_code=503, detail="busy", headers={"Retry-After": "1"})
+
+    monkeypatch.setattr(auth_routes, "_allow_attempt", noop)
+    monkeypatch.setattr(auth_routes, "_login_precheck", noop)
+    monkeypatch.setattr(auth_routes, "_login_record", record)
+    monkeypatch.setattr(auth_routes, "_login_verify", busy)
+    monkeypatch.setattr(auth_routes, "_valid_csrf", lambda *_a: True)
+    monkeypatch.setattr(auth_routes, "_origin_allowed", lambda *_a: True)
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(settings=SimpleNamespace())), cookies={}, headers={}, client=None,
+    )
+    with pytest.raises(HTTPException) as exc:
+        await auth_routes.login(request, None, SimpleNamespace(identifier=None, password="p"), None, None)  # type: ignore[arg-type]
+    assert exc.value.status_code == 503 and recorded == []

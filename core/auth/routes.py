@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from joserfc.errors import JoseError
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -61,6 +61,8 @@ from core.telemetry import log_event
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 logger = logging.getLogger("bbd.auth")
 # Machine code lets the client branch without parsing English text.
+# Bounded wait for the owner row on login/password change (seconds) before a retryable error.
+OWNER_LOCK_WAIT_SECONDS = 3.0
 _PASSWORD_INCORRECT = {"message": "Password is incorrect", "code": "password_incorrect"}
 
 
@@ -307,8 +309,10 @@ async def _login_verify(
 ) -> tuple[AuthState, int]:
     """Verify credentials outside the exclusive owner lock, then lock the owner row to issue the session.
 
-    Running Argon2id verification before acquiring ``FOR UPDATE NOWAIT`` prevents CPU-bound password
-    hashing from blocking concurrent ``FOR SHARE`` admission reads or causing 409 lock conflicts.
+    Running Argon2id verification before acquiring the exclusive lock prevents CPU-bound password
+    hashing from blocking concurrent ``FOR SHARE`` admission reads. The lock waits up to
+    ``OWNER_LOCK_WAIT_SECONDS``; if still busy a correct password gets 503 + ``Retry-After`` (retryable),
+    never 401, and ``login`` does not count it as a failed attempt (only 401 is recorded).
     Returns the CSRF state and the authenticated account id (for audit).
     """
     account_id: int | None
@@ -337,9 +341,15 @@ async def _login_verify(
         raise HTTPException(status_code=401, detail="Email or password is incorrect")
 
     try:
-        owner = await _lock_owner(session, account_id)
-    except HTTPException:
-        raise HTTPException(status_code=401, detail="Email or password is incorrect") from None
+        owner = await _lock_owner(session, account_id, wait_seconds=OWNER_LOCK_WAIT_SECONDS)
+    except HTTPException as exc:
+        if exc.status_code != 409:
+            raise
+        # Credentials already verified: contention is retryable, never a 401 (not a failed attempt).
+        raise HTTPException(
+            status_code=503, detail="Sign-in is temporarily busy; retry shortly",
+            headers={"Retry-After": "1"},
+        ) from None
 
     if owner is not None and owner.password_hash != unlocked_hash:
         password_matches = await asyncio.to_thread(verify_login_password, owner.password_hash, body.password)
@@ -390,19 +400,28 @@ def _raise_if_owner_lock_busy(exc: DBAPIError) -> None:
 
 
 async def _lock_owner(
-    session: AsyncSession, owner_id: int, *, share: bool = False
+    session: AsyncSession, owner_id: int, *, share: bool = False, wait_seconds: float = 0.0
 ) -> Owner | None:
-    """Lock the owner row with NOWAIT and map lock contention to the API conflict response.
+    """Lock the owner row and map lock contention to the API conflict response.
+
+    ``wait_seconds == 0`` (default) is ``NOWAIT``. A positive value instead waits for the lock up to
+    that long via a transaction-local ``lock_timeout`` (reset at commit/rollback), so a correct
+    credential is not rejected just because a request/worker briefly holds the row. Timeout is the same
+    ``55P03`` as NOWAIT and maps to the same 409; callers needing a different status re-map it.
 
     Default is ``FOR UPDATE``. ``share=True`` takes ``FOR SHARE`` instead, which coexists with the
     ``FOR SHARE`` admission locks held by concurrent collection/request work (so it is not starved)
     but still conflicts with every account-state writer's ``FOR UPDATE``.
     """
     try:
+        if wait_seconds > 0:
+            await session.execute(
+                text("SELECT set_config('lock_timeout', :ms, true)"), {"ms": str(int(wait_seconds * 1000))}
+            )
         return await session.scalar(
             select(Owner)
             .where(Owner.id == owner_id)
-            .with_for_update(read=share, nowait=True)
+            .with_for_update(read=share, nowait=wait_seconds <= 0)
             .execution_options(populate_existing=True)
         )
     except DBAPIError as exc:
@@ -441,6 +460,7 @@ async def _lock_owner_session(
     *,
     check_csrf: bool = True,
     share_owner: bool = False,
+    owner_wait_seconds: float = 0.0,
 ) -> tuple[Owner, AuthSession]:
     """Lock account then session, rechecking complete active identity, feature gate and current CSRF.
 
@@ -450,8 +470,11 @@ async def _lock_owner_session(
     Reauthentication, logout and rotation share this ordered lock/reload. Inactive, incomplete
     or gate-denied accounts return401 even when an earlier dependency admitted the session.
     This grants account lifecycle authority only, never legacy operator/domain access.
+    ``owner_wait_seconds`` > 0 waits (bounded) for the owner row instead of failing NOWAIT with 409.
     """
-    owner = await _lock_owner(session, stale_session.owner_id, share=share_owner)
+    owner = await _lock_owner(
+        session, stale_session.owner_id, share=share_owner, wait_seconds=owner_wait_seconds
+    )
     if owner is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     auth_session = await _lock_auth_session(
@@ -585,11 +608,16 @@ async def change_password(
     redis: Annotated[Redis, Depends(get_auth_redis)],
     csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
 ) -> AuthState:
-    """Verify the current password, store the new hash, revoke every owner session, and issue a fresh one."""
+    """Verify the current password, store the new hash, revoke every owner session, and issue a fresh one.
+
+    The owner lock waits up to ``OWNER_LOCK_WAIT_SECONDS``; still busy afterwards is a retryable 409.
+    """
     settings: Settings = request.app.state.settings
     # Same bucket as reauthenticate: both are password-guess oracles for a stolen session.
     await _allow_attempt(request, redis, "reauthenticate")
-    owner, auth_session = await _lock_owner_session(request, session, auth_session, csrf_token)
+    owner, auth_session = await _lock_owner_session(
+        request, session, auth_session, csrf_token, owner_wait_seconds=OWNER_LOCK_WAIT_SECONDS
+    )
     if not await asyncio.to_thread(verify_password, owner.password_hash, body.currentPassword):
         raise HTTPException(status_code=403, detail=_PASSWORD_INCORRECT)
     if await asyncio.to_thread(verify_password, owner.password_hash, body.newPassword):

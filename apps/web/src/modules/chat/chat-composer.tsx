@@ -286,7 +286,8 @@ export function ChatComposer({
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-          <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+          {/* Below sm the picker already names the model; a truncated "Mo…" line only steals width. */}
+          <span className={`min-w-0 flex-1 truncate text-xs text-muted-foreground ${modelPicker ? 'max-sm:invisible' : ''}`}>
             {modelText}{sourcesCount > 0 ? ` · ${t('sourcesCount', { count: sourcesCount })}` : ''}
           </span>
           {modelPicker && <ModelPicker picker={modelPicker} disabled={isStreaming || disabled} />}

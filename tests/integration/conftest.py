@@ -136,13 +136,8 @@ async def post_after_throttle(client: AsyncClient, url: str, **kwargs: Any) -> R
 
 
 async def login_after_throttle(client: AsyncClient, **kwargs: Any) -> Response:
-    """Fixture login: also retry the generic 401 a login gets when it loses the NOWAIT owner-row lock to a worker."""
-    for _ in range(6):
-        response = await post_after_throttle(client, "/api/v1/auth/login", **kwargs)
-        if response.status_code != 401:
-            break
-        await asyncio.sleep(1)
-    return response
+    """Fixture login: wait out the per-minute throttle window (owner-row contention is waited out server-side)."""
+    return await post_after_throttle(client, "/api/v1/auth/login", **kwargs)
 
 
 @pytest.fixture

@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
 import errno
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import socket
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
+from pathlib import Path
 from urllib.parse import quote
 
 if os.name == "nt":
@@ -61,7 +61,7 @@ def _fingerprint(project: str, web_port: int) -> str:
         )
     except (OSError, subprocess.CalledProcessError) as exc:
         raise RuntimeError("could not resolve the named workspace Compose configuration") from exc
-    material = f"{REPOSITORY}\n{project}\n{result.stdout}".encode("utf-8")
+    material = f"{REPOSITORY}\n{project}\n{result.stdout}".encode()
     return hashlib.sha256(material).hexdigest()
 
 
@@ -180,7 +180,7 @@ def _read_registration(project: str) -> dict[str, object]:
     except (OSError, json.JSONDecodeError) as exc:
         raise RuntimeError("workspace is not registered by this checkout; refusing operation") from exc
     if not isinstance(value, dict):
-        raise RuntimeError("workspace registration is invalid; refusing operation")
+        raise RuntimeError("workspace registration is invalid; refusing operation")  # noqa: TRY004
     if value.get("project") != project or value.get("repository") != str(REPOSITORY):
         raise RuntimeError("workspace registration does not belong to this checkout; refusing operation")
     if value.get("daemon_id") != _daemon_identity():
@@ -259,7 +259,7 @@ def _verify_target(project: str, web_port: int) -> None:
             labels = json.loads(inspected.stdout)
             config_label = labels.get("com.docker.compose.project.config_files") if isinstance(labels, dict) else None
             if not isinstance(config_label, str):
-                raise ValueError("Compose config label is unavailable")
+                raise ValueError("Compose config label is unavailable")  # noqa: TRY004
             config_files = {
                 str(Path(value).resolve()).casefold()
                 for value in config_label.split(",")

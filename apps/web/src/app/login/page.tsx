@@ -67,6 +67,9 @@ export default function LoginPage() {
       });
     },
     onSuccess: () => router.replace('/dashboard'),
+    // 503 + Retry-After means the owner row was briefly busy with a correct password: retry once, shortly.
+    retry: (failureCount, error) => failureCount < 1 && error instanceof ApiError && error.status === 503,
+    retryDelay: 1000,
   });
 
   const unavailable = (googleStatus.error !== null && !(googleStatus.error instanceof ApiError)) || isUnreachable(login.error);

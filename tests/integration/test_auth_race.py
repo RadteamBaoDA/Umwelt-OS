@@ -76,12 +76,16 @@ async def test_password_change_revokes_other_session_and_old_password() -> None:
         finally:
             if rotated_csrf is not None:
                 # Restore the shared fixture password through the client holding the rotated session.
-                restored = await post_after_throttle(
-                    first,
-                    "/api/v1/auth/password",
-                    headers={"Origin": origin, "X-CSRF-Token": rotated_csrf},
-                    json={"currentPassword": new, "newPassword": old},
-                )
+                for _ in range(6):  # 409 = owner row still locked after the bounded wait; keep the shared fixture password restorable
+                    restored = await post_after_throttle(
+                        first,
+                        "/api/v1/auth/password",
+                        headers={"Origin": origin, "X-CSRF-Token": rotated_csrf},
+                        json={"currentPassword": new, "newPassword": old},
+                    )
+                    if restored.status_code != 409:
+                        break
+                    await asyncio.sleep(1)
                 assert restored.status_code == 200
 
 
@@ -92,6 +96,7 @@ async def test_password_change_concurrent_with_login_leaves_consistent_state() -
     old, new = "test-owner-password-42", "raced-owner-password-44"
 
     async def login(client: AsyncClient, password: str, *, throttled: bool = True):
+        # Login waits briefly for the owner row, so a correct password never gets 401 from lock contention.
         csrf = (await client.get("/api/v1/auth/csrf")).json()["csrfToken"]
         post = post_after_throttle if throttled else (lambda c, u, **kw: c.post(u, **kw))
         return await post(
@@ -116,7 +121,7 @@ async def test_password_change_concurrent_with_login_leaves_consistent_state() -
                 login(racer, old, throttled=False),
             )
             assert change.status_code in (200, 409)
-            assert raced.status_code in (200, 401, 409)
+            assert raced.status_code in (200, 401, 503)
             if change.status_code == 200:
                 rotated_csrf = change.json()["csrfToken"]
                 # Committed change: the rotated cookie works, the old password never does, raced sessions are revoked.
@@ -129,10 +134,14 @@ async def test_password_change_concurrent_with_login_leaves_consistent_state() -
                 assert (await login(racer, old)).status_code == 200
         finally:
             if rotated_csrf is not None:
-                restored = await post_after_throttle(
-                    owner,
-                    "/api/v1/auth/password",
-                    headers={"Origin": origin, "X-CSRF-Token": rotated_csrf},
-                    json={"currentPassword": new, "newPassword": old},
-                )
+                for _ in range(6):  # 409 = owner row still locked after the bounded wait; keep the shared fixture password restorable
+                    restored = await post_after_throttle(
+                        owner,
+                        "/api/v1/auth/password",
+                        headers={"Origin": origin, "X-CSRF-Token": rotated_csrf},
+                        json={"currentPassword": new, "newPassword": old},
+                    )
+                    if restored.status_code != 409:
+                        break
+                    await asyncio.sleep(1)
                 assert restored.status_code == 200
