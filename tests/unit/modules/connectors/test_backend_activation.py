@@ -310,7 +310,7 @@ async def test_native_activation_persists_applied_state_and_schedule_without_wor
 @pytest.mark.asyncio
 async def test_native_activation_refusals_change_nothing():
     cases = [
-        ({"local_only": True}, "source_inactive"),
+        ({"local_only": True}, "local_only_source"),
         ({"supported": False}, "native_unsupported"),
         ({"terms": [HTTPException(status_code=409, detail="provider_terms_ineligible")]}, "terms_not_accepted"),
     ]
@@ -521,3 +521,11 @@ async def test_credential_gate_lifts_only_at_a_newer_credential_revision():
         session.get = AsyncMock(return_value=schedule)
         assert await scheduler.clear_collection_block(session, SOURCE_ID, credential_revision=revision) is lifted
         assert (schedule.blocked_error_code is None) is lifted
+
+
+def test_local_only_refusal_has_a_stable_api_code():
+    """Local-only activation refusal surfaces as 409 with the stable ``local_only_source`` code the wizard localizes."""
+    from modules.connectors.provisioning_routes import _NATIVE_ERRORS
+
+    status, detail = _NATIVE_ERRORS["local_only_source"]
+    assert status == 409 and detail["code"] == "local_only_source"

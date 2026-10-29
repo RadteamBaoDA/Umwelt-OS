@@ -1,7 +1,9 @@
 """Executor wiring for the P2/P3 fixed-endpoint providers: fakes only (no DB, no network)."""
 
 import json
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -51,9 +53,39 @@ def make_run(provider, gate, monkeypatch, state=None, connector_revision=2, conf
 
 
 def test_every_dispatchable_provider_has_an_adapter_and_spec():
-    assert set(DISPATCHABLE) <= set(collection.ADAPTERS)
-    assert "coingecko" in collection.ADAPTERS  # key-bearing: needs the owner credential slot
+    from modules.connectors.backends import PROVIDER_SOURCE_TYPES
+
+    assert all(collection._adapter_for(SimpleNamespace(
+        provider=provider, type=PROVIDER_SOURCE_TYPES[provider])) is not None for provider in DISPATCHABLE)
+    assert "coingecko" in DISPATCHABLE  # key-bearing: needs the owner credential slot
     assert all(get_provider_spec(p) is not None for p in DISPATCHABLE)
+
+
+async def test_bluesky_dispatch_commits_adapter_cursor_with_the_native_receipt(monkeypatch):
+    from modules.connectors.providers import social_feeds
+
+    lease = SimpleNamespace(token=uuid4(), cursor_before='{"v":1,"actor":"alice.bsky.social","page":"old"}')
+    page = SimpleNamespace(records=(), coverage="truncated", cursor_after='{"page":"next"}')
+    collect = AsyncMock(return_value=page)
+    accept = AsyncMock()
+    monkeypatch.setattr(collection, "_lease", AsyncMock(return_value=lease))
+    monkeypatch.setattr(collection, "_accept_native", accept)
+    monkeypatch.setattr(collection, "_credential_fence", AsyncMock())
+    monkeypatch.setattr(social_feeds, "collect_bluesky_profile", collect)
+
+    @asynccontextmanager
+    async def factory():
+        yield object()
+
+    source = SimpleNamespace(provider="bluesky", configuration={"bluesky_actor": "alice.bsky.social"})
+    run = SimpleNamespace(
+        attempt=SimpleNamespace(source=source, connector_revision=2),
+        gate=SimpleNamespace(fetch_bytes=AsyncMock()), extras={}, factory=factory,
+    )
+    await collection._run_native(run)
+
+    assert collect.await_args.kwargs["cursor"] == lease.cursor_before
+    assert accept.await_args.kwargs["cursor_after"] == page.cursor_after
 
 
 @pytest.mark.parametrize("provider, name, max_bytes", [
@@ -124,7 +156,7 @@ async def test_gdelt_uses_8_second_timeout_and_timeout_accepts_nothing(monkeypat
     gate = Gate({"*": rest.Fetched(fixture("gdelt_artlist.json"))})
     run, accepted = make_run("gdelt_economy", gate, monkeypatch)
     await collection._run_gdelt(run)
-    assert gate.calls[0][1]["timeout"] == GDELT_TIMEOUT_SECONDS == 8 and accepted[0][0]
+    assert gate.calls[0][1]["timeout"] == GDELT_TIMEOUT_SECONDS == 30 and accepted[0][0]
     slow, kept = make_run("gdelt_economy", Gate({"*": TimeoutError()}), monkeypatch)
     with pytest.raises(TimeoutError):
         await collection._run_gdelt(slow)
@@ -158,6 +190,17 @@ def test_registration_agrees_across_registry_sources_and_scope_validators(provid
     source_type = PROVIDER_SOURCE_TYPES[provider]
     SourceCreate(type=source_type, name="n", provider=provider)  # sources schema map agrees
     scope = {
+        "bluesky": {"bluesky_actor": "example.bsky.social"},
+        "reddit": {"reddit_subreddit": "python"},
+        "mastodon": {"mastodon_instance_url": "https://mastodon.social", "mastodon_account": "alice@mastodon.social"},
+        "x": {"x_account": "example"},
+        "google_mail": {"google_mail_label_ids": ["INBOX"]},
+        "google_calendar": {"google_calendar_ids": ["primary"]},
+        "google_drive": {"google_drive_ids": ["file-id"]},
+        "health": {"fhir_base_url": "http://127.0.0.1:8080/fhir", "fhir_patient_id": "patient-1"},
+        "home_assistant": {"ha_base_url": "http://127.0.0.1:8123", "ha_entity_ids": ["sensor.temperature"]},
+        "notion": {"notion_page_ids": ["a1234567-b123-c123-d123-e123456789ab"]},
+        "slack": {"slack_channel_ids": ["C012ABCDEF"]},
         "google_news": {"news_query": "economy", "news_site": "any", "news_locale": "en-US"},
         "sec_edgar": {"sec_cik": "0000320193", "sec_contact_email": "owner@example.com"},
         "openalex": {"scholarly_query": "economy"},

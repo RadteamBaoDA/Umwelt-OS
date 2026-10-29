@@ -253,7 +253,7 @@ export function GadgetFrame({
         tabIndex={0}
         aria-label={t('gadgetScrollRegionLabel', { title: displayTitle })}
         onClick={isEditMode ? onSelect : undefined}
-        className={`dashboard-gadget group relative h-full w-full gap-0 rounded-lg py-0 shadow-xs transition-shadow overflow-x-hidden overflow-y-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+        className={`dashboard-gadget group relative h-full w-full gap-0 rounded-lg py-0 shadow-xs transition-shadow overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
           isSelected ? 'ring-2 ring-primary border-primary' : 'border-border'
         } ${isDragging ? 'opacity-40 shadow-lg scale-[0.99]' : ''} ${
           isResizing ? 'ring-1 ring-primary/60' : ''
@@ -288,9 +288,11 @@ export function GadgetFrame({
               ref={expandTriggerRef}
               onClick={toggleExpanded}
               aria-label={t('expand')}
-              className="min-h-11 min-w-11 rounded-md text-muted-foreground hover:text-foreground hover:bg-primary/10 transition-colors"
+              variant="ghost"
+              size="icon"
+              className="size-9 min-h-9 min-w-9 rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground"
             >
-              <Maximize2 className="w-3.5 h-3.5" />
+              <Maximize2 className="size-4" aria-hidden="true" />
             </Button>
 
             {/* Edit mode configuration and removal actions */}
@@ -300,9 +302,11 @@ export function GadgetFrame({
                   <Button
                     type="button"
                     aria-label={t('configureGadget')}
-                    className="min-h-11 min-w-11 rounded-md text-muted-foreground hover:text-foreground hover:bg-primary/10 transition-colors"
+                    variant="ghost"
+              size="icon"
+              className="size-9 min-h-9 min-w-9 rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground"
                   >
-                    <MoreVertical className="w-3.5 h-3.5" />
+                    <MoreVertical className="size-4" aria-hidden="true" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-44">
@@ -330,7 +334,7 @@ export function GadgetFrame({
           </div>
         </header>
 
-        <div ref={inlineScrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain" style={{ minHeight: bodyFloor }}>
+        <div ref={inlineScrollRef} className="dashboard-gadget-body min-h-0 flex-1 overflow-auto overscroll-contain" style={{ minHeight: bodyFloor }}>
         {/* Queue controls scroll inside this fixed-floor body and never change the grid geometry. */}
         {readingQueueCount > 0 && onApplyReadingQueue && (
           <div className="px-3 py-1.5 bg-primary/10 border-b border-primary/20 text-primary text-xs flex items-center justify-between">
@@ -347,7 +351,7 @@ export function GadgetFrame({
           </div>
         )}
 
-        <div ref={inlineHostRef} className="min-h-full min-w-0 overflow-x-auto" />
+        <div ref={inlineHostRef} className="h-full min-h-full min-w-0" />
         </div>
       </Card>
 

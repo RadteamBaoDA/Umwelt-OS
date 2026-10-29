@@ -25,7 +25,7 @@ async def test_template_tool_runs_inside_the_loop(monkeypatch: pytest.MonkeyPatc
     runner.assert_awaited_once()
     assert runner.await_args.args[0] == "list_templates"
     names = {t["function"]["name"] for t in gen.requests[0]["tools"]}
-    assert {"save_template", "apply_template", "set_theme"} <= names
+    assert {"apply_template", "set_theme"} <= names and "save_template" not in names
     (tool_msg,) = _tool_messages(gen)[:1]
     assert tool_msg["tool_call_id"] == "lt" and tool_msg["content"] == '{"templates": [], "pending_template": null}'
     assert [d.data["kind"] for d in gen.events("message.ui.done")] == ["table"]

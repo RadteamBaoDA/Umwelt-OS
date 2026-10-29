@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { CheckboxField, FieldGrid, SettingsActions } from '@/modules/settings/settings-layout';
+import { CheckboxField, FieldGrid, SettingsActions, SettingsSection } from '@/modules/settings/settings-layout';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -107,9 +107,7 @@ export function McpCollectionEditor({ sourceId, sourceStatus, onChanged, onDraft
     finally { setBusy(false); }
   }
 
-  return <section className="flex flex-col gap-4 rounded-lg border border-border p-4" aria-labelledby="mcp-collection-title">
-    <h3 id="mcp-collection-title">{t('mcpCollectionTitle')}</h3>
-    <p className="text-muted-foreground">{t('mcpCollectionHelp')}</p>
+  return <SettingsSection title={t('mcpCollectionTitle')} description={t('mcpCollectionHelp')}>
     {loading ? <p className="text-muted-foreground">{t('loading')}</p> : connections.length === 0 ? <p className="error">{t('mcpNoConnection')}</p> : <>
       <div className="field"><Label htmlFor="mcp-collection-connection">{t('mcpConnection')}</Label><Select disabled={busy} value={connectionId} onValueChange={(value) => { setConnectionId(value); setGrants([]); setGrantIds([]); onDraftChange(true); }}><SelectTrigger id="mcp-collection-connection"><SelectValue /></SelectTrigger><SelectContent>{connections.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent></Select></div>
       <div role="group" aria-label={t('mcpCollectionGrants')} className="flex flex-col gap-2"><h4 className="m-0 text-sm font-semibold">{t('mcpCollectionGrants')}</h4>
@@ -122,5 +120,5 @@ export function McpCollectionEditor({ sourceId, sourceStatus, onChanged, onDraft
       <SettingsActions><Button variant="outline" disabled={busy || error === 'staleConflict' || !grantIds.length || sourceStatus !== 'active'} onClick={() => void save(false)}>{busy ? t('saving') : t('save')}</Button><Button disabled={busy || error === 'staleConflict' || !grantIds.length || sourceStatus !== 'active'} onClick={() => void save(true)}>{busy ? t('enabling') : t('saveEnable')}</Button></SettingsActions>
     </>}
     {error && error !== 'staleConflict' && <p className="error" role="alert">{t(error === 'argumentsInvalid' ? 'mcpArgumentsInvalid' : 'mcpCollectionSaveFailed')}</p>}
-  </section>;
+  </SettingsSection>;
 }

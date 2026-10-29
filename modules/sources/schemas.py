@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 from core.workspaces.schemas import AccessFence
+from modules.connectors.backends import PROVIDER_SOURCE_TYPES
 
 SourceType = Literal[
     "rss", "web", "file", "github", "calendar", "email", "api", "mcp", "manual", "other"
@@ -24,50 +25,8 @@ class SourceCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_provider_type(self) -> "SourceCreate":
-        """Require each registered provider to use its one supported source type."""
-        expected = {
-            "youtube": "rss",
-            "arxiv": "rss",
-            "huggingface": "api",
-            "github_releases": "api",
-            "github": "api",
-            "telegram": "api",
-            "alpha_vantage": "api",
-            "open_meteo": "api",
-            "bbc_world": "rss",
-            "vnexpress_business": "rss",
-            "tuoitre_news": "rss",
-            "thanhnien_news": "rss",
-            "dantri_news": "rss",
-            "hn_top": "api",
-            "gdelt_economy": "api",
-            "world_bank": "api",
-            "frankfurter": "api",
-            "ecb": "api",
-            "binance": "api",
-            "alternative_me": "api",
-            "usgs": "api",
-            "cisa_kev": "api",
-            "coinpaprika": "api",
-            "coingecko": "api",
-            "nasa_eonet": "api",
-            "google_news": "rss",
-            "sec_edgar": "api",
-            "openalex": "api",
-            **dict.fromkeys((  # built-in RSS/Atom feeds; keep in step with connectors.backends
-                "aljazeera_world", "npr_news", "fed_press", "gdacs_rss", "lobsters", "us_travel_advisories",
-                "noaa_tsunami", "jma_eqvol",
-            ), "rss"),
-            **dict.fromkeys((
-                "gdacs_events", "nws_alerts", "emsc_quakes", "launch_library", "wikipedia_mostread", "wikipedia_top_views", "bmkg_quakes", "satnogs_observations",
-            ), "api"),
-            **dict.fromkeys((  # keyed free-tier presets
-                "finnhub_news", "newsapi", "fred", "openweathermap", "openaq", "nasa_firms",
-            ), "api"),
-            **dict.fromkeys((
-                "noaa_kp", "open_er_api", "oecd_cli", "iss_position", "disease_sh", "ioda", "nvd",
-            ), "api"),
-        }.get(self.provider or "")
+        """Require a registered provider to use the source type owned by Connectors."""
+        expected = PROVIDER_SOURCE_TYPES.get(self.provider or "")
         if self.provider is not None and expected is None:
             raise ValueError("Provider is not registered")
         if expected is not None and self.type != expected:

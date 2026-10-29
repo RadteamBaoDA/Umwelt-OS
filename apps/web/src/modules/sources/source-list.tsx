@@ -169,7 +169,7 @@ function SourceEntry({
   const queryClient = useQueryClient();
   const [historyOpen, setHistoryOpen] = useState(false);
   const [collectResult, setCollectResult] = useState<{ status: string; hasRun: boolean } | null>(null);
-  const connector = ['rss', 'web', 'api'].includes(source.type);
+  const connector = ['rss', 'web', 'api', 'mcp'].includes(source.type);
   const activation = useQuery({
     queryKey: connectorKeys.activation(source.id),
     queryFn: () => getConnectorActivation(source.id),
@@ -254,7 +254,7 @@ function SourceEntry({
 }
 
 /** Which add/edit dialog is open on the sources page; null when only the table is shown. */
-type DialogState = { kind: 'builtin' } | { kind: 'connector' } | { kind: 'manual' } | { kind: 'edit'; source: Source } | null;
+type DialogState = { kind: 'builtin' } | { kind: 'connector' } | { kind: 'manual' } | { kind: 'manual_import'; purpose: 'notes' | 'personal_finance' } | { kind: 'edit'; source: Source } | null;
 
 /**
  * Sources page header and table, with add actions beside the title and paused built-ins above the list.
@@ -347,6 +347,8 @@ export function SourceList() {
         <Button size="sm" disabled={allBuiltinsAdded} title={allBuiltinsAdded ? t('addBuiltinAllAdded') : undefined} onClick={() => transition({ kind: 'builtin' })}>{t('addBuiltin')}</Button>
         <Button size="sm" variant="outline" onClick={() => transition({ kind: 'connector' })}>{t('addConnector')}</Button>
         <Button size="sm" variant="outline" onClick={() => transition({ kind: 'manual' })}>{t('addManual')}</Button>
+        <Button size="sm" variant="outline" onClick={() => transition({ kind: 'manual_import', purpose: 'notes' })}>{t('addNotes')}</Button>
+        <Button size="sm" variant="outline" onClick={() => transition({ kind: 'manual_import', purpose: 'personal_finance' })}>{t('addFinance')}</Button>
       </div>
     </header>
     <BuiltinResumeList onChanged={() => { void refresh(); }} />

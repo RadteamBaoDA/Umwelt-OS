@@ -212,3 +212,11 @@ export async function apiRequest<T>(
 export function csrfHeaders(token: string): HeadersInit {
   return { "X-CSRF-Token": token };
 }
+
+/**
+ * React Query `retry` predicate for the session read: the server answers 409 ("retry the request") while concurrent
+ * requests hold its NOWAIT owner lock during CSRF rotation. Only that transient conflict is retried, at most 3 times.
+ */
+export function retrySessionConflict(failureCount: number, error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409 && failureCount < 3;
+}

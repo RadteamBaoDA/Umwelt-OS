@@ -55,7 +55,7 @@ export function BuiltinResumeList({ onChanged }: { onChanged: () => void }) {
 
   return <section className="flex flex-col gap-2" aria-label={t('builtinResumeTitle')}>
     <h3 className="m-0 text-sm font-semibold">{t('builtinResumeTitle')}</h3>
-    {error && <p className="text-danger" role="alert">{error}</p>}
+    {error && <p className="text-destructive" role="alert">{error}</p>}
     {paused.map((item) => <div key={item.id} className="flex items-center justify-between gap-3 rounded-md border border-border p-3">
       <span className="font-medium">{item.label}</span>
       <Button variant="outline" disabled={busyId !== null} onClick={() => void resume(item)}>{busyId === item.id ? t('enabling') : t('builtinResume')}</Button>
@@ -105,7 +105,7 @@ export function BuiltinTermsFields({ builtin, use, onUseChange, aiOptions, onAiO
         <SelectContent>{USES.map(([value, label]) => <SelectItem key={value} value={value}>{t(label)}</SelectItem>)}</SelectContent>
       </Select></div>
     <SourceAiToggles idPrefix="builtin-source" value={aiOptions} onChange={onAiOptionsChange} />
-    {error && <p className="text-danger" role="alert">{error}</p>}
+    {error && <p className="text-destructive" role="alert">{error}</p>}
   </section>;
 }
 
@@ -203,7 +203,7 @@ export function BuiltinWizard({ onClose, onChanged }: { onClose: () => void; onC
     {index === 0 && <section className="flex flex-col gap-3" aria-label={t('stepBuiltinPick')}>
       <p className="text-muted-foreground">{t('builtinPickHint')}</p>
       {builtins.isPending && <p className="text-muted-foreground">{t('loading')}</p>}
-      {builtins.isError && <p className="text-danger" role="alert">{t('builtinLoadFailed')} <Button variant="outline" onClick={() => builtins.refetch()}>{t('retry')}</Button></p>}
+      {builtins.isError && <p className="text-destructive" role="alert">{t('builtinLoadFailed')} <Button variant="outline" onClick={() => builtins.refetch()}>{t('retry')}</Button></p>}
       {groupByCategory(builtins.data ?? []).map(([category, rows]) => <div key={category} className="flex flex-col gap-2" role="group" aria-label={t(CATEGORY_KEY[category])}>
         <h3 className="m-0 text-sm font-semibold uppercase text-muted-foreground">{t(CATEGORY_KEY[category])}</h3>
         {rows.map((row) => {

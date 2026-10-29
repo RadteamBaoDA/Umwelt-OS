@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
+import { OWNER_STATE } from './run-paths';
 
 test('owner can set up, log in, and log out', async ({ page }) => {
   const setupToken = process.env.E2E_SETUP_TOKEN;
@@ -21,7 +22,7 @@ test('owner can set up, log in, and log out', async ({ page }) => {
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
   await mkdir('playwright/.auth', { recursive: true });
-  await page.context().storageState({ path: 'playwright/.auth/owner.json' });
+  await page.context().storageState({ path: OWNER_STATE });
 });
 
 test('sign out stays a sign out when a request 401s before the logout reply', async ({ page }) => {

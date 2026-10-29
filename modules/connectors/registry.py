@@ -11,7 +11,7 @@ from modules.connectors.backends import (
 from modules.connectors.public import DEFAULT_TIMEZONE, ConnectorConfig
 from modules.sources.schemas import ConnectorSource
 
-SUPPORTED_TYPES = GENERIC_SOURCE_TYPES - {"mcp"}
+SUPPORTED_TYPES = GENERIC_SOURCE_TYPES - {"mcp"} | set(PROVIDER_SOURCE_TYPES.values())
 
 
 def configuration(source: ConnectorSource) -> ConnectorConfig:
@@ -30,7 +30,11 @@ def configuration(source: ConnectorSource) -> ConnectorConfig:
 
 
 def validate(source: ConnectorSource) -> dict[str, Any]:
-    """Validate active packaged connector settings and return a collector snapshot."""
+    """Validate packaged settings and exact provider scopes before returning a collector snapshot.
+
+    FHIR and Home Assistant require their configured endpoint and explicit patient/entity scope;
+    endpoint syntax is checked here, while the local transport enforces resolved private addresses.
+    """
     if source.status != "active":
         raise ValueError("Source is not active")
     if source.type == "mcp":
@@ -55,7 +59,12 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
         raw_keys = set(source.configuration or {})
         if raw_keys - scope_fields - common - {"history_mode"}:
             raise ValueError("Provider configuration contains unsupported fields")
-        required_scope_fields = scope_fields - ({"github_history_days"} if source.provider == "github" else set())
+        optional_scope_fields = {
+            "github": {"github_history_days"},
+            "mastodon": {"mastodon_account", "mastodon_hashtag"},
+            "x": {"x_account", "x_query"},
+        }.get(source.provider, set())
+        required_scope_fields = scope_fields - optional_scope_fields
         if raw_keys & required_scope_fields != required_scope_fields or source.configuration.get("history_mode") != expected_history:
             raise ValueError("Provider scope and history mode are required")
         config = configuration(source)
@@ -63,6 +72,12 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
             raise ValueError("Native provider request timeout cannot exceed 30 seconds")
         if source.provider == "github_releases" and (not config.github_owner or not config.github_repository):
             raise ValueError("GitHub owner and repository are required")
+        if source.provider == "bluesky" and not config.bluesky_actor:
+            raise ValueError("A Bluesky handle or DID is required")
+        if source.provider == "mastodon" and bool(config.mastodon_account) == bool(config.mastodon_hashtag):
+            raise ValueError("Choose exactly one Mastodon account or hashtag")
+        if source.provider == "x" and bool(config.x_account) == bool(config.x_query):
+            raise ValueError("Choose exactly one X account or search query")
         if source.provider == "alpha_vantage" and (
             not config.market_symbols or not config.market_currency or not config.market_exchange_timezone
         ):
@@ -72,6 +87,10 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
             or not config.weather_timezone or not config.weather_metrics
         ):
             raise ValueError("Open-Meteo coordinates, timezone, and metric scope are required")
+        if source.provider == "health" and (not config.fhir_base_url or not config.fhir_patient_id):
+            raise ValueError("FHIR endpoint and patient ID are required")
+        if source.provider == "home_assistant" and (not config.ha_base_url or not config.ha_entity_ids):
+            raise ValueError("Home Assistant endpoint and selected entities are required")
         if source.provider == "github":
             from modules.connectors.github.schemas import project_github_source_config
 
@@ -85,11 +104,13 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
             "configuration": config.model_dump(mode="json", exclude_none=True),
         }
     if set(source.configuration or {}) & {
-        "youtube_channel_id", "arxiv_category", "huggingface_author",
+        "youtube_channel_id", "arxiv_category", "huggingface_author", "bluesky_actor",
         "github_owner", "github_repository", "include_issues", "include_pulls", "include_commits", "include_releases", "telegram_chat_ids", "history_mode",
         "market_symbols", "market_currency", "market_exchange_timezone", "weather_latitude", "weather_longitude", "weather_timezone", "weather_metrics",
         "news_query", "news_site", "news_locale", "sec_cik", "sec_contact_email", "scholarly_query",
         "fred_series_id", "owm_latitude", "owm_longitude", "openaq_location_id", "firms_country",
+        "google_mail_label_ids", "google_mail_history_days", "google_calendar_ids", "google_drive_ids",
+        "fhir_base_url", "fhir_patient_id", "ha_base_url", "ha_entity_ids",
     }:
         raise ValueError("Provider scope requires a registered source provider")
     config = configuration(source)

@@ -33,8 +33,8 @@ def test_dispatch_and_executor_agree_for_every_generic_type(type_):
     assert collection.supports_native(source(type_, configuration=cfg))
 
 
-def test_browser_rendered_web_is_not_native():
-    assert not collection.supports_native(source("web", configuration={"url": "https://a.example/", "js_render": True}))
+def test_browser_rendered_web_uses_the_shared_dispatch_and_browser_worker():
+    assert collection.supports_native(source("web", configuration={"url": "https://a.example/", "js_render": True}))
 
 
 # ---- gzip bomb cap
@@ -160,3 +160,34 @@ async def test_mcp_adapter_fails_without_runtime_or_when_every_call_fails(monkey
     run.ctx = {"agent_mcp_runtime": object()}
     with pytest.raises(mcp_collection.McpCollectionError):
         await collection._run_mcp(run)
+
+
+@pytest.mark.asyncio
+async def test_mcp_adapter_fence_loss_in_gate_propagates_not_counted_failed(monkeypatch):
+    from modules.tools import public as tools
+
+    src = source("mcp", configuration={"connection_id": str(uuid4()), "calls": [{"grant_id": str(uuid4())}]})
+
+    async def gate(*_a):
+        raise collection.CollectionFenceLost("admission_lost")
+
+    async def read_capability(runtime, *, authorize_extra, **kw):
+        try:
+            await authorize_extra()
+        except Exception:  # noqa: BLE001  # mirrors mcp_collection.authorized, which swallows gate errors
+            raise RuntimeError("authorize failed") from None
+
+    async def state(run):
+        return SimpleNamespace(cursor=None)
+
+    monkeypatch.setattr(tools, "read_collection_capability", read_capability)
+    monkeypatch.setattr(collection, "_state", state)
+    run = SimpleNamespace(attempt=SimpleNamespace(source=src, scope=None, multi=False), gate=gate,
+                          ctx={"agent_mcp_runtime": object()})
+    with pytest.raises(collection.CollectionFenceLost):
+        await collection._run_mcp(run)
+
+
+def test_classify_mcp_collection_error_is_non_retryable_code():
+    out = collection._classify(mcp_collection.McpCollectionError("mcp_collection_failed"))
+    assert out == {"outcome": "failed", "error_code": "mcp_collection_failed"}

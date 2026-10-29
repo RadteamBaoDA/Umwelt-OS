@@ -101,6 +101,8 @@ export interface ChatMessage {
   generative_ui?: Record<string, unknown> | null;
   /** Every Generative UI widget of this message in render order; `generative_ui` is the first one. */
   generative_ui_parts?: Record<string, unknown>[];
+  /** Model "thinking" text persisted with the answer; plain text only, null/absent when none was produced. */
+  reasoning?: string | null;
   response_id: string | null;
   /** Message whose prompt or assistant response this append-only revision follows. */
   revision_of_message_id: string | null;
@@ -167,6 +169,9 @@ export interface MessageMutationPayload {
   content?: string;
   /** Per-mutation opt-in; not inherited from the original message. */
   web_search?: boolean;
+  /** Optional model choice for the new answer; both fields are sent together or not at all. */
+  provider_id?: string;
+  model?: string;
 }
 
 /**
@@ -210,6 +215,8 @@ export interface StreamEventsOptions {
   lastEventId?: string;
   signal?: AbortSignal;
   onDelta?: (text: string) => void;
+  /** Plain-text "thinking" chunk (`message.reasoning.delta`); arrives before the answer deltas. */
+  onReasoning?: (text: string) => void;
   onCitations?: (citations: Citation[]) => void;
   onWebSearch?: (outcome: WebSearchOutcome) => void;
   onUiDelta?: (ui: Record<string, unknown>) => void;
@@ -483,7 +490,8 @@ export async function streamResponseEvents(
       window.dispatchEvent(new Event('bbd:unauthorized'));
     }
     const errText = await response.text().catch(() => 'Streaming request failed');
-    const error = new Error(`Streaming failed (${response.status}): ${errText}`);
+    // Status lets callers retry transient 5xx/network failures but not 4xx rejections.
+    const error = Object.assign(new Error(`Streaming failed (${response.status}): ${errText}`), { status: response.status });
     options.onError?.(error);
     throw error;
   }
@@ -543,6 +551,13 @@ export async function streamResponseEvents(
             }
           } catch {
             options.onDelta?.(eventData);
+          }
+        } else if (eventType === 'message.reasoning.delta') {
+          try {
+            const parsed = JSON.parse(eventData);
+            if (typeof parsed?.text === 'string' && parsed.text) options.onReasoning?.(parsed.text);
+          } catch (err) {
+            console.warn('Failed to parse message.reasoning.delta SSE payload', err);
           }
         } else if (eventType === 'message.citations') {
           try {

@@ -276,6 +276,57 @@ class GithubOAuthAttempt(Base):
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class ConnectorOAuthAttempt(Base):
+    """Bind one connector authorization callback to its owner session and exact source revision."""
+    __tablename__ = "connector_oauth_attempts"
+    __table_args__ = (
+        Index("ix_connector_oauth_attempt_expiry", "expires_at"),
+        CheckConstraint("provider IN ('google_mail', 'google_calendar', 'google_drive', 'reddit')", name="ck_connector_oauth_attempt_provider"),
+        CheckConstraint("source_generation > 0 AND configuration_revision >= 0 AND credential_revision >= 0 AND expected_token_revision >= 0", name="ck_connector_oauth_attempt_fences"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), nullable=False)
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    owner_id: Mapped[int] = mapped_column(Integer, ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    session_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    state_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    encrypted_verifier: Mapped[str] = mapped_column(Text, nullable=False)
+    source_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    configuration_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    credential_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    expected_token_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ConnectorOAuthGrant(Base):
+    """Store one source-bound, encrypted connector token set and its revision fences."""
+    __tablename__ = "connector_oauth_grants"
+    __table_args__ = (
+        CheckConstraint("provider IN ('google_mail', 'google_calendar', 'google_drive', 'reddit')", name="ck_connector_oauth_grant_provider"),
+        CheckConstraint("source_generation > 0 AND configuration_revision > 0 AND credential_revision > 0 AND token_revision > 0", name="ck_connector_oauth_grant_fences"),
+        CheckConstraint("state IN ('ready', 'revocation_pending', 'reconciliation_required', 'revoked')", name="ck_connector_oauth_grant_state"),
+    )
+
+    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), primary_key=True)
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    owner_id: Mapped[int] = mapped_column(Integer, ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    operation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    source_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    configuration_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    credential_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    token_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    encrypted_tokens: Mapped[str | None] = mapped_column(Text)
+    granted_scopes: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
 class GithubOAuthGrant(Base):
     """Store one source binding to encrypted expiring GitHub App user tokens."""
     __tablename__ = "github_oauth_grants"

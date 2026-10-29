@@ -1,0 +1,4 @@
+account_id,transaction_id,date,amount,currency,description
+acct-demo-1,txn-demo-1,2026-10-01,-12.50,USD,Fictional coffee shop
+acct-demo-1,txn-demo-2,2026-10-02,2500.00,USD,Fictional salary deposit
+acct-demo-1,txn-demo-3,2026-10-03,-48.20,USD,Fictional grocery store

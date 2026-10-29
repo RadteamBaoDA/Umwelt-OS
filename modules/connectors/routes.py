@@ -43,7 +43,7 @@ from modules.connectors.models import (
     ConnectorWorldCredential,
     GithubOAuthGrant,
 )
-from modules.connectors.provider_specs import TERMS_INELIGIBLE
+from modules.connectors.provider_specs import TERMS_INELIGIBLE, get_provider_spec
 from modules.connectors.public import (
     AgentBrowserGrantPatch,
     CollectionFence,
@@ -273,11 +273,15 @@ async def collect_mcp_scheduled(
     The same source generation, applied connector revision and reviewed connection identity are
     carried into the collector so each provider request and final receipt can recheck them.
 
+    The admitted request is proved, then settled by the collector's single ingestion proof
+    (receipt or no-change); a collector error settles it failed (401 when the bearer was
+    revoked, otherwise 409) so the slot frees immediately.
+
     All owner reads/writes receive an explicit admitted workspace/job scope and the
     actual rollout flag; members have no Source/configuration/credential access. Service bearer capability remains distinct from principal scope.
     """
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
-    _token, scope, _access_fence = await _mcp_collector(
+    token, scope, _access_fence = await _mcp_collector(
         session, source_id, authorization, multi_workspace_enabled=multi_workspace_enabled,
     )
     source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
@@ -292,15 +296,32 @@ async def collect_mcp_scheduled(
         multi_workspace_enabled=multi_workspace_enabled, scope=scope,
     ):
         raise HTTPException(status_code=409, detail="MCP source or provisioning revision is stale")
+    ref = CollectionRequestRef(request_id=payload.admission_request_id, admission_token=payload.admission_token)
     await _prove_admission(
-        session, CollectionRequestRef(request_id=payload.admission_request_id, admission_token=payload.admission_token),
-        source_id=source_id, source_generation=payload.source_generation,
+        session, ref, source_id=source_id, source_generation=payload.source_generation,
         connector_revision=payload.connector_revision, scope=scope)
     runtime = getattr(request.app.state, "mcp_runtime", None)
     if runtime is None:
         raise HTTPException(status_code=503, detail="MCP runtime is unavailable")
+    # Release the access-fence/Source locks: no lock may be held across MCP I/O.
     await session.rollback()
-    raise HTTPException(status_code=503, detail="Scoped MCP collector contract is pending")
+    try:
+        result = await mcp_collection.collect(
+            runtime, request.app.state.session_factory, source_id, payload.connector_revision,
+            payload.source_generation, collector_token=token, expected_connection_id=payload.connection_id,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled, request_ref=ref,
+        )
+    except mcp_collection.McpCollectionError as exc:
+        # Free the admitted slot now; the sweeper would otherwise hold it until expiry.
+        await _settle_request_exit(session, ref, outcome="failed", error_code=exc.code)
+        raise HTTPException(
+            status_code=401 if exc.code == "mcp_collector_revoked" else 409, detail=exc.code) from exc
+    except LookupError as exc:
+        await _settle_request_exit(session, ref, outcome="failed", error_code="source_not_found")
+        raise HTTPException(status_code=404, detail="Source not found") from exc
+    return ManualSyncResult(
+        run_id=result["run_id"], batch_id=result["batch_id"], status=result["status"],
+        failed_calls=result["failed_calls"])
 
 
 @router.get("/{source_id}/agent-browser-grant", dependencies=[Depends(module_dependency("connectors"))])
@@ -1345,12 +1366,32 @@ async def read_provider_terms(
 async def acknowledge_provider_terms(
     source_id: UUID, payload: provider_terms.ProviderTermsAcknowledge, session: Session, request: Request, _owner: OwnerWrite,
 ) -> provider_terms.ProviderTermsRead:
-    """Owner acknowledges provider terms; clears a terms action-required gate at the new revision."""
+    """Owner acknowledges provider terms; clears a terms action-required gate at the new revision.
+
+    Review-class providers also need operator review evidence. The single-user instance operator is the
+    reviewer, so their own acknowledgement records it here, exactly as the built-in toggle does; any other
+    owner still waits for the operator's review queue. Ineligible declared uses record nothing.
+    """
     await _owner_access(session, request, _owner)
+    # Read the auth-session ORM row before rollback expires it (lazy refresh is illegal under asyncio).
+    is_operator = is_instance_operator(request.state.auth_session)
+    reviewer_user_id = request.state.auth_session.owner_id
     await session.rollback()
     result = await provider_terms.acknowledge_terms(
         session, source_id, payload, scope=_owner,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    spec = get_provider_spec(result.provider_id)
+    if (spec is not None and spec.eligibility == "review" and result.decision == "operator_review_required"
+            and result.declared_use in ("personal", "noncommercial", "commercial")
+            and is_operator):
+        result = await provider_terms.record_operator_review(
+            session, workspace_id=_owner.workspace_id, source_id=source_id,
+            reviewer_user_id=reviewer_user_id,
+            body=provider_terms.OperatorTermsReview(
+                state="approved", allowed_use=cast(Any, result.declared_use),
+                evidence_ref=f"operator-acknowledge:{spec.id}:{spec.terms_url}@{spec.checked_on}",
+                reviewed_terms_version=result.terms_version),
+            instance_operator=True)
     await scheduler.clear_collection_block(session, source_id, terms_revision=result.terms_revision)
     await session.commit()
     return result
@@ -1384,9 +1425,10 @@ async def trigger_collection(
 ) -> ManualSyncResult:
     """Request collection in the selected owner workspace under its captured applied revision.
 
-    Packaged n8n wake uses explicit original scope. MCP remains unavailable pending its
-    scoped ToolPrincipal driver; no owner1 fallback can execute. Native backend scheduling
-    and managed request UUID settlement remain separate C2/C4 integration gates.
+    Packaged n8n wake uses explicit original scope. MCP sources, once prechecked as enabled,
+    follow the generic flow: the native backend queues a durable request run by the worker
+    (the saved allowlisted calls only; no request input names a tool, URL or argument), and the
+    n8n backend wakes the packaged workflow, which settles via ``/mcp-collect``.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
     actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
@@ -1409,14 +1451,8 @@ async def trigger_collection(
             )
         ):
             raise HTTPException(status_code=409, detail="Enable this MCP source before collecting")
-        # Exact saved identity is retained for the future scoped MCP driver.
-        # The current callee has no accepted ToolPrincipal contract.
-        runtime = getattr(request.app.state, "mcp_runtime", None)
-        if runtime is None:
-            raise HTTPException(status_code=503, detail="MCP runtime is unavailable")
-        await session.rollback()
-        raise HTTPException(status_code=503, detail="Scoped MCP collector contract is pending")
-    if source.status != "active" or source.type not in {"rss", "web", "api"}:
+        # Precheck passed: fall through to the generic native/n8n dispatch below.
+    if source.status != "active" or source.type not in {"rss", "web", "api", mcp_collection.PROVIDER_ID}:
         raise HTTPException(status_code=409, detail="Active packaged connector required")
     provisioned = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
     if (provisioned is None or provisioned.state != "active"
@@ -1437,7 +1473,8 @@ async def trigger_collection(
                 raise HTTPException(status_code=409, detail="terms_not_accepted") from exc
             raise
         return ManualSyncResult(status=queued.status, request_id=queued.request_id)
-    if not is_native_provider(source.provider):
+    # MCP has no URL to validate: its saved calls are checked by mcp_collection.validate at run time.
+    if not is_native_provider(source.provider) and source.type != mcp_collection.PROVIDER_ID:
         try:
             data = registry.validate(source)
             await session.rollback()

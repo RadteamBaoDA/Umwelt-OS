@@ -28,12 +28,14 @@ def test_compose_split_keeps_browser_and_n8n_separate() -> None:
 
 def test_catalog_requires_service() -> None:
     by_id = {e.provider_id: e.requires_service for e in _ENTRIES}
-    assert by_id["browser"] == "browser" and by_id["web"] == "browser"
+    # Browser rendering is a capability of `web` (js_render); no standalone, unwired `browser` provider is cataloged.
+    assert "browser" not in by_id and by_id["web"] == "browser"
     assert by_id["rss"] is None
 
 
-def test_redis_url_without_password_rejected_outside_dev(monkeypatch) -> None:
+def test_redis_url_without_password_rejected_outside_dev(monkeypatch, tmp_path) -> None:
     """Non-dev/test environments (including "auto") refuse an unauthenticated Redis; dev/test accept it."""
+    monkeypatch.chdir(tmp_path)  # Settings reads ./.env; isolate from a developer's local file
     monkeypatch.setenv("REDIS_URL", "redis://redis:6379/0")
     monkeypatch.setenv("ENVIRONMENT", "development")
     Settings()  # explicit development keeps working
@@ -44,6 +46,5 @@ def test_redis_url_without_password_rejected_outside_dev(monkeypatch) -> None:
         with pytest.raises(ValidationError, match="redis_url must include a password"):
             Settings()
     monkeypatch.setenv("REDIS_URL", "redis://:s3cret@redis:6379/0")
-    with pytest.raises(ValidationError) as exc:  # other template secrets still fail, but not redis_url
-        Settings()
-    assert "redis_url" not in str(exc.value)
+    # No SecretStr default is a template placeholder any more, so a password-bearing redis_url now validates.
+    assert Settings().redis_url.startswith("redis://:s3cret@")

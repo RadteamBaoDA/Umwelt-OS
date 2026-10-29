@@ -10,7 +10,7 @@ import { UmweltLogo } from '@/components/brand/umwelt-mark';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
+import { ApiError, apiRequest, csrfHeaders, retrySessionConflict } from '@/core/api';
 import { CommandPalette } from '@/core/command-palette';
 import { ConnectionFooter } from '@/core/app-shell/connection-footer';
 import { useChatController } from '@/core/app-shell/chat-controller';
@@ -63,10 +63,13 @@ function ChatTriggerButton() {
   const t = useTranslations('chat');
   const chatCtrl = useChatController();
   const { toggleDrawer } = chatCtrl;
+  const pathname = usePathname();
 
   useEffect(() => {
     /** Global shortcut Ctrl+J or Cmd+J to toggle chat drawer without rebinding on draft changes. */
     const handleKeyDown = (e: KeyboardEvent) => {
+      // The full Chat page is already the chat surface: opening a drawer over it would duplicate the session.
+      if (pathname === '/chat' || pathname.startsWith('/chat/')) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') {
         e.preventDefault();
         toggleDrawer();
@@ -74,21 +77,29 @@ function ChatTriggerButton() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [toggleDrawer]);
+  }, [toggleDrawer, pathname]);
 
   return (
-    <button
+    <Button
       type="button"
+      variant="outline"
       onClick={toggleDrawer}
-      className="button secondary flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold"
+      className="text-sm font-semibold"
       title={t('quickChat')}
       aria-label={t('quickChat')}
     >
-      <MessageSquare className="size-4 text-primary" />
+      <MessageSquare className="size-4 text-primary" aria-hidden="true" />
       <span className="hidden sm:inline">{t('quickChat')}</span>
-    </button>
+    </Button>
   );
 }
+
+/**
+ * Module-scope latch: true from the owner's logout request until the next successful session read.
+ * It outlives the auth-keyed remount of the shell, whose fresh refs would otherwise report the post-logout 401
+ * as `?reason=expired`.
+ */
+let ownerSignOutInFlight = false;
 
 /**
  * Render the authenticated app shell with session, route, and responsive main-navigation state.
@@ -114,7 +125,14 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   const sessionEndedRef = useRef(false);
   /** Set while the owner's own logout is in flight: the server has revoked the session, so 401s are expected. */
   const signingOutRef = useRef(false);
-  const session = useQuery({ queryKey: ['session'], queryFn: () => apiRequest<Session>('/api/v1/auth/session') });
+  const session = useQuery({
+    queryKey: ['session'],
+    queryFn: () => apiRequest<Session>('/api/v1/auth/session'),
+    // The server answers 409 ("retry the request") when concurrent tabs/requests hold its NOWAIT owner lock while the
+    // CSRF token rotates; one transient conflict must not turn the whole shell into "Workspace is unavailable".
+    retry: retrySessionConflict,
+    retryDelay: (attempt) => 150 * (attempt + 1),
+  });
   const moduleAvailability = useQuery({
     queryKey: ['module-lifecycle'],
     queryFn: () => apiRequest<ModuleAvailability>('/api/v1/settings/modules'),
@@ -148,7 +166,9 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
     display.endAuthSession();
     setPreferencesOpen(false);
     setAccountOpen(false);
-    router.replace(expired && !signingOutRef.current ? '/login?reason=expired' : '/login');
+    // Auth-keyed remounts create a fresh shell with signingOutRef=false; the module latch keeps the owner's
+    // sign-out from being re-reported as an expiry by that shell's own 401.
+    router.replace(expired && !signingOutRef.current && !ownerSignOutInFlight ? '/login?reason=expired' : '/login');
   }, [client, display.endAuthSession, router]);
 
   useEffect(() => {
@@ -168,16 +188,23 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
     if (session.error instanceof ApiError && session.error.status === 401) endSession(true);
   }, [endSession, session.error]);
 
+  useEffect(() => {
+    // A successful session read proves a new login: later 401s are genuine expiries again.
+    // The ended shell is excluded: it can still re-emit its stale cached session after client.clear().
+    if (session.data && !sessionEndedRef.current) ownerSignOutInFlight = false;
+  }, [session.data]);
+
   const logout = useMutation({
     mutationFn: () => {
       signingOutRef.current = true;
+      ownerSignOutInFlight = true;
       return apiRequest<void>('/api/v1/auth/logout', {
         method: 'POST',
         headers: csrfHeaders(session.data?.csrfToken ?? ''),
       });
     },
     onSuccess: () => endSession(),
-    onError: () => { signingOutRef.current = false; },
+    onError: () => { signingOutRef.current = false; ownerSignOutInFlight = false; },
   });
 
   /** Loads owner preferences for the dialog retry; returns null on request failure, abort, or stale auth generation. */

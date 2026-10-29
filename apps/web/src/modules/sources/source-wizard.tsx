@@ -12,7 +12,9 @@ import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { archiveSource, createManualSource, sourceKeys, type Source } from './api';
 import { ConnectorEditor, type EditorActions, type EditorSnapshot, type EditorStep } from './connector-editor';
 import { GitHubWebhookStatus } from './github-summary';
+import { SettingsSection } from '@/modules/settings/settings-layout';
 import { SourceAiToggles, type SourceAiOptions } from './source-ai-toggles';
+import { Upload } from '@/modules/ingestion/upload';
 
 /** One wizard step: stable id, display title, and whether the owner may leave it forward in add mode. */
 export type WizardStepDef = { id: string; title: string; valid: boolean };
@@ -83,25 +85,27 @@ export function WizardShell({ title, mode, steps, stepIndex, onStepChange, busy,
 
   return <>
     <Dialog open onOpenChange={(open) => { if (!open) requestClose(); }}>
-      <DialogContent size="full" closeLabel={t('close')} className="grid-rows-[auto_auto_1fr_auto] content-start">
+      <DialogContent size="full" closeLabel={t('close')} className="grid-rows-[auto_1fr_auto] content-start">
         <DialogHeader className="text-left">
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{current?.title}</DialogDescription>
         </DialogHeader>
-        <ol aria-label={t('wizardStepsLabel')} className="m-0 grid list-none auto-cols-fr grid-flow-col gap-2 p-0 max-[720px]:grid-flow-row max-[720px]:grid-cols-1">
-          {steps.map((step, index) => {
-            // Add mode never lets the owner skip ahead of validated steps; edit mode is free navigation.
-            const reachable = mode === 'edit' || index <= stepIndex;
-            return <li key={step.id}>
-              <button type="button" disabled={!reachable || locked} aria-current={index === stepIndex ? 'step' : undefined} onClick={() => onStepChange(index)}
-                className={`flex min-h-11 w-full flex-col items-start rounded-lg border bg-transparent p-3 text-left disabled:cursor-not-allowed disabled:opacity-60 ${index === stepIndex ? 'border-primary' : 'border-border'}`}>
-                <span className="text-xs text-muted-foreground">{index + 1}</span>
-                <strong className="text-sm">{step.title}</strong>
-              </button>
-            </li>;
-          })}
-        </ol>
-        <div className="flex min-w-0 flex-col gap-4">{children}</div>
+        <div className="grid min-h-0 grid-cols-1 auto-rows-max content-start gap-4 overflow-y-auto min-[900px]:grid-cols-[220px_1fr] min-[900px]:items-start">
+          <ol aria-label={t('wizardStepsLabel')} className="m-0 grid list-none auto-cols-max grid-flow-col gap-2 p-0 pb-1 max-[899px]:overflow-x-auto min-[900px]:sticky min-[900px]:top-0 min-[900px]:grid-flow-row min-[900px]:auto-cols-auto">
+            {steps.map((step, index) => {
+              // Add mode never lets the owner skip ahead of validated steps; edit mode is free navigation.
+              const reachable = mode === 'edit' || index <= stepIndex;
+              return <li key={step.id}>
+                <button type="button" disabled={!reachable || locked} aria-current={index === stepIndex ? 'step' : undefined} onClick={() => onStepChange(index)}
+                  className={`flex min-h-11 w-full items-center gap-3 rounded-lg border p-3 text-left disabled:cursor-not-allowed disabled:opacity-60 ${index === stepIndex ? 'border-primary bg-card' : 'border-border bg-transparent'}`}>
+                  <span className={`flex size-6 shrink-0 items-center justify-center rounded-full text-xs ${index === stepIndex ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>{index + 1}</span>
+                  <strong className="whitespace-nowrap text-sm">{step.title}</strong>
+                </button>
+              </li>;
+            })}
+          </ol>
+          <div className="flex min-w-0 flex-col gap-4">{children}</div>
+        </div>
         <DialogFooter className="sticky bottom-0 border-t border-border bg-background pt-3">
           <Button type="button" variant="outline" disabled={locked || stepIndex === 0} onClick={() => onStepChange(stepIndex - 1)}>{t('back')}</Button>
           {last
@@ -116,7 +120,7 @@ export function WizardShell({ title, mode, steps, stepIndex, onStepChange, busy,
           <AlertDialogTitle>{t('discardNewSourceTitle')}</AlertDialogTitle>
           <AlertDialogDescription>{t('discardNewSourceBody')}</AlertDialogDescription>
         </AlertDialogHeader>
-        {discardFailed && <p className="text-danger" role="alert">{t('actionFailed')}</p>}
+        {discardFailed && <p className="text-destructive" role="alert">{t('actionFailed')}</p>}
         <AlertDialogFooter>
           <AlertDialogCancel disabled={discarding}>{t('discardNewSourceKeep')}</AlertDialogCancel>
           <AlertDialogAction disabled={discarding} onClick={(event) => { event.preventDefault(); void confirmDiscard(); }}>{t('discardNewSourceConfirm')}</AlertDialogAction>
@@ -149,7 +153,8 @@ function ConnectorWizard({ source, onClose, onChanged, registerTransitionGuard }
   const [snapshot, setSnapshot] = useState<EditorSnapshot>({ sourceId: source?.id ?? '', provider: source?.provider ?? '', busy: false, providerOk: false, connectOk: true, chooseOk: true, verify: { phase: 'idle' } });
   const [index, setIndex] = useState(0);
   const mcp = snapshot.provider === 'mcp';
-  const ids: EditorStep[] = mcp ? ['connect', 'verify'] : ['connect', 'choose', 'collect', 'verify'];
+  const google = ['google_mail', 'google_calendar', 'google_drive'].includes(snapshot.provider);
+  const ids: EditorStep[] = mcp ? ['connect', 'verify'] : google ? ['connect', 'choose', 'collect', 'verify'] : ['connect', 'choose', 'collect', 'verify'];
   if (!edit) ids.unshift('provider');
   const titles: Record<EditorStep, string> = { provider: t('stepProviderName'), connect: mcp ? t('stepMcpConfigure') : t('wizConnect'), choose: t('wizChooseData'), collect: t('stepSchedule'), verify: t('stepVerify') };
   const valid: Record<EditorStep, boolean> = { provider: snapshot.providerOk || Boolean(snapshot.sourceId), connect: snapshot.connectOk, choose: snapshot.chooseOk, collect: true, verify: true };
@@ -185,31 +190,54 @@ function ConnectorWizard({ source, onClose, onChanged, registerTransitionGuard }
 }
 
 /** One-step wizard for manual sources: a name only, since manual sources never fetch data. */
-function ManualWizard({ onClose, onChanged }: { onClose: () => void; onChanged: () => void }) {
+function ManualWizard({ onClose, onChanged, purpose = null }: {
+  onClose: () => void;
+  onChanged: () => void;
+  purpose?: 'notes' | 'personal_finance' | null;
+}) {
   const t = useTranslations('sources');
   const { csrfToken } = useWorkspaceSession();
   const queryClient = useQueryClient();
-  const [name, setName] = useState('');
+  const [name, setName] = useState(() => purpose === 'notes' ? t('notesSourceName') : purpose === 'personal_finance' ? t('financeSourceName') : '');
+  const [createdSourceId, setCreatedSourceId] = useState('');
   const [aiOptions, setAiOptions] = useState<SourceAiOptions>({ graph_enabled: true, rag_index_enabled: true });
   const trimmed = name.trim();
   const create = useMutation({
     mutationFn: () => createManualSource(trimmed, csrfToken, aiOptions),
-    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: sourceKeys.all }); onChanged(); onClose(); },
+    onSuccess: async (source) => {
+      await queryClient.invalidateQueries({ queryKey: sourceKeys.all });
+      if (purpose) { setCreatedSourceId(source.id); onChanged(); }
+      else { onChanged(); onClose(); }
+    },
   });
-  return <WizardShell title={t('wizardTitleManual')} mode="add" steps={[{ id: 'name', title: t('stepManualName'), valid: Boolean(trimmed) }]} stepIndex={0}
-    onStepChange={() => undefined} busy={create.isPending} onRequestClose={onClose}
-    final={{ label: create.isPending ? t('saving') : t('saveSource'), disabled: !trimmed, onClick: () => create.mutate() }}>
-    <form className="form" onSubmit={(event) => { event.preventDefault(); if (trimmed && !create.isPending) create.mutate(); }}>
-      <div className="field"><Label htmlFor="source-name">{t('sourceName')}</Label><Input id="source-name" autoFocus maxLength={200} value={name} onChange={(event) => setName(event.target.value)} /></div>
-      <p className="text-muted-foreground">{t('manualNoFetch')}</p>
-      <SourceAiToggles idPrefix="manual-source" value={aiOptions} onChange={setAiOptions} disabled={create.isPending} />
+  /** Creates the local-only manual source before showing the existing durable upload flow. */
+  async function createBeforeImport(): Promise<boolean> {
+    if (!purpose || !trimmed || create.isPending) return false;
+    try { await create.mutateAsync(); return true; } catch { return false; }
+  }
+  const steps: WizardStepDef[] = purpose
+    ? [{ id: 'name', title: t('stepManualName'), valid: Boolean(trimmed) }, { id: 'import', title: t('stepManualImport'), valid: true }]
+    : [{ id: 'name', title: t('stepManualName'), valid: Boolean(trimmed) }];
+  const stepIndex = purpose && createdSourceId ? 1 : 0;
+  const description = purpose === 'notes' ? t('manualNotesHint') : purpose === 'personal_finance' ? t('manualFinanceHint') : t('manualNoFetch');
+  return <WizardShell title={purpose ? t(purpose === 'notes' ? 'wizardTitleNotes' : 'wizardTitleFinance') : t('wizardTitleManual')}
+    mode="add" steps={steps} stepIndex={stepIndex} onStepChange={() => undefined} busy={create.isPending}
+    onNext={purpose && !createdSourceId ? createBeforeImport : undefined} onRequestClose={onClose}
+    final={{ label: purpose ? t('done') : create.isPending ? t('saving') : t('saveSource'), disabled: purpose ? !createdSourceId : !trimmed, onClick: () => { if (!purpose && trimmed) create.mutate(); else onClose(); } }}>
+    {stepIndex === 0 ? <form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); if (purpose) void createBeforeImport(); else if (trimmed && !create.isPending) create.mutate(); }}>
+      <SettingsSection title={t('panelIdentity')} description={description}>
+        <div className="field"><Label htmlFor="source-name">{t('sourceName')}</Label><Input id="source-name" autoFocus maxLength={200} value={name} onChange={(event) => setName(event.target.value)} /></div>
+      </SettingsSection>
+      <SettingsSection title={t('aiOptionsTitle')}>
+        <SourceAiToggles idPrefix="manual-source" value={aiOptions} onChange={setAiOptions} disabled={create.isPending} />
+      </SettingsSection>
       {create.error && <p className="error" role="alert">{t('actionFailed')}</p>}
-    </form>
+    </form> : createdSourceId && purpose ? <Upload initialMode={purpose === 'notes' ? 'notes' : 'finance'} initialSourceId={createdSourceId} /> : null}
   </WizardShell>;
 }
 
 /** Which flow the dialog runs: a new connector, a new manual source, or editing an existing connector. */
-export type SourceWizardRequest = { kind: 'connector' } | { kind: 'manual' } | { kind: 'edit'; source: Source };
+export type SourceWizardRequest = { kind: 'connector' } | { kind: 'manual' } | { kind: 'manual_import'; purpose: 'notes' | 'personal_finance' } | { kind: 'edit'; source: Source };
 
 /** Opens the full-screen add/edit dialog for the requested connector or manual flow. */
 export function SourceWizard({ request, onClose, onChanged, registerTransitionGuard }: {
@@ -219,5 +247,6 @@ export function SourceWizard({ request, onClose, onChanged, registerTransitionGu
   registerTransitionGuard: (guard: (() => boolean) | null) => void;
 }) {
   if (request.kind === 'manual') return <ManualWizard onClose={onClose} onChanged={onChanged} />;
+  if (request.kind === 'manual_import') return <ManualWizard onClose={onClose} onChanged={onChanged} purpose={request.purpose} />;
   return <ConnectorWizard source={request.kind === 'edit' ? request.source : null} onClose={onClose} onChanged={onChanged} registerTransitionGuard={registerTransitionGuard} />;
 }

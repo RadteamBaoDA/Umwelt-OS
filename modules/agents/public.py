@@ -26,7 +26,7 @@ from core.tools.schemas import ToolExecutionPrincipal, ToolOutputFence
 from core.workspaces.schemas import AccessFence, Scope
 from modules.agents.access import actor, admit, read_workspace_modules, run_epoch
 from modules.agents.account_checkpoints import (
-    erase_account_checkpoints_page as erase_account_checkpoints_page,
+    erase_account_checkpoints_page,
 )
 from modules.agents.leases import try_agent_run_lease_in_uow
 from modules.agents.models import (
@@ -1873,6 +1873,7 @@ __all__ = [
     "create_profile_run_in_uow",
     "create_run",
     "current_profile_revision",
+    "erase_account_checkpoints_page",
     "get_approval",
     "get_run",
     "get_run_for_owner",

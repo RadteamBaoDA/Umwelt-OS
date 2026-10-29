@@ -23,6 +23,7 @@ from sqlalchemy import or_ as _or
 from sqlalchemy import select as _select
 from sqlalchemy import tuple_ as _tuple
 from sqlalchemy import union as _union
+from sqlalchemy import update as _update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.models import Owner as _Owner
@@ -1680,7 +1681,7 @@ async def purge_document_copied_evidence_page(
                     # Deltas of terminal runs are purged on a schedule and the final message/citations
                     # events are still scrubbed; scanning ~1M delta rows made a document delete take hours.
                     # Active runs keep the scan so an in-flight delta can still trigger privacy cancel.
-                    _or(StreamEvent.event_type != "message.delta", ResponseRun.status.in_(("pending", "streaming", "awaiting_input"))),
+                    _or(StreamEvent.event_type.not_in(("message.delta", "message.reasoning.delta")), ResponseRun.status.in_(("pending", "streaming", "awaiting_input"))),
                 )
                 .order_by(StreamEvent.id).limit(remaining + 1)
             )).all())
@@ -1710,6 +1711,13 @@ async def purge_document_copied_evidence_page(
                     # Both keys are popped unconditionally (any() would stop at the first hit).
                     popped = [message.metadata_json.pop(key, None) for key in ("generative_ui", "generative_ui_parts")]
                     had_widget = any(value is not None for value in popped)
+                    # Free-text model reasoning may quote the withdrawn evidence and cannot be attributed: drop it too.
+                    dropped_reasoning = [message.metadata_json.pop(key, None) for key in ("reasoning", "reasoning_truncated")]
+                    if any(value is not None for value in dropped_reasoning) and message.response_id is not None:
+                        await session.execute(_update(StreamEvent).where(
+                            StreamEvent.response_id == message.response_id,
+                            StreamEvent.event_type == "message.reasoning.delta",
+                        ).values(data={"text": ""}))
                     changed += 1
                     # Streaming deltas carry no document ids, so blank all widget events of the answer's run.
                     if had_widget and message.response_id is not None:

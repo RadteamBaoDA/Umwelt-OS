@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, Literal
 from uuid import UUID
 
@@ -31,7 +31,9 @@ MEASUREMENT_PROVIDER_IDS = (
     "noaa_kp", "open_er_api", "oecd_cli", "iss_position", "disease_sh", "ioda", "nvd",
 )
 PROVIDER_IDS = (
-    "youtube", "arxiv", "huggingface", "github_releases", "github", "telegram",
+    "youtube", "arxiv", "huggingface", "bluesky", "reddit", "mastodon", "x",
+    "github_releases", "github", "telegram", "notion", "slack",
+    "google_mail", "google_calendar", "google_drive", "health", "home_assistant",
     *MEASUREMENT_PROVIDER_IDS, *NEWS_PROVIDER_IDS,
 )
 # Bounded per-provider evidence keys retained beside the typed measurement (no arbitrary response mirroring).
@@ -215,7 +217,11 @@ class ProviderRecordMetadata(BaseModel):
 
     @model_validator(mode="after")
     def validate_provider_snapshot_fields(self) -> "ProviderRecordMetadata":
-        """Enforce provider-specific allowlists and require Telegram's typed identity block."""
+        """Enforce provider-specific bounded evidence fields and require Telegram's typed identity block.
+
+        The allowlists are the trust boundary for provider-controlled metadata persisted with a
+        durable ingestion receipt; adding a provider requires explicit bounded field contracts.
+        """
         if (self.provider == "telegram") != (self.telegram is not None):
             raise ValueError("Telegram detail must match provider")
         if self.provider in MEASUREMENT_PROVIDER_IDS:
@@ -227,6 +233,17 @@ class ProviderRecordMetadata(BaseModel):
             "youtube": {"author", "summary", "title", "tags", "published_at", "provider_updated_at"},
             "arxiv": {"author", "authors", "categories", "tags", "summary", "title", "published_at", "provider_updated_at"},
             "huggingface": {"author", "tags", "pipeline_tag", "created_at", "last_modified"},
+            "bluesky": {"author", "canonical_url", "created_at"},
+            "reddit": {"title", "subreddit", "author", "canonical_url", "created_at"},
+            "mastodon": {"author", "canonical_url", "created_at"},
+            "x": {"author_id", "canonical_url", "created_at", "language"},
+            "google_mail": {"thread_id", "history_id", "subject", "from", "to", "date_header"},
+            "google_calendar": {"calendar_id", "event_id", "status", "start", "end", "start_timezone", "end_timezone", "recurrence", "html_link"},
+            "google_drive": {"name", "mime_type", "modified_time", "web_view_link", "md5_checksum"},
+            "notion": {"title", "canonical_url"},
+            "slack": {"channel_id", "message_ts", "thread_ts", "user_id"},
+            "health": {"patient_id", "observation_id", "value", "unit", "observed_at_source"},
+            "home_assistant": {"entity_id", "state", "observed_at_source", "unit_of_measurement", "friendly_name", "latitude", "longitude"},
             "github_releases": {"node_id", "name", "body", "html_url", "tag_name", "draft", "prerelease", "author", "created_at", "published_at"},
             "github": {"record_type", "node_id", "html_url"},
             "telegram": set(),
@@ -246,12 +263,25 @@ class ProviderRecordMetadata(BaseModel):
             "tag_name": 255, "record_type": 16, "last_modified": 64, "created_at": 64,
             "published_at": 64, "provider_updated_at": 64,
             "canonical_url": 2048, "guid": 512, "publisher": 200, "text": 4000, "url": 2048, "by": 128,
+            "subreddit": 21, "author_id": 255,
             "type": 32, "form": 32, "cik": 10, "doi": 255, "source": 255, "seendate": 32, "domain": 255, "language": 64, "sourcecountry": 64,
+            "channel_id": 82, "message_ts": 24, "thread_ts": 24, "user_id": 255,
+            "thread_id": 255, "history_id": 255, "subject": 500, "from": 1000, "to": 2000,
+            "date_header": 255, "calendar_id": 255, "event_id": 255, "status": 32,
+            "start": 64, "end": 64, "start_timezone": 128, "end_timezone": 128,
+            "recurrence": 100, "mime_type": 128, "modified_time": 64, "html_link": 2048,
+            "web_view_link": 2048, "md5_checksum": 64,
+            "patient_id": 128, "observation_id": 255, "value": 64, "unit": 64,
+            "observed_at_source": 64, "entity_id": 255, "state": 512,
+            "unit_of_measurement": 64, "friendly_name": 512, "latitude": 64, "longitude": 64,
         }
         for key, value in self.source_fields.items():
-            if key in {"tags", "categories", "authors"}:
+            if self.provider == "slack" and key in {"thread_ts", "user_id"} and value is None:
+                continue
+            if key in {"tags", "categories", "authors", "recurrence"}:
                 if not isinstance(value, list) or len(value) > 100 or any(
-                    not isinstance(item, str) or len(item) > 255 for item in value
+                    not isinstance(item, str) or len(item) > (1000 if key == "recurrence" else 255)
+                    for item in value
                 ):
                     raise ValueError(f"Provider {key} must be a bounded string list")
             elif key in {"draft", "prerelease", "deleted", "dead"}:
@@ -260,7 +290,7 @@ class ProviderRecordMetadata(BaseModel):
             elif key in {"time", "id", "cited_by_count"}:
                 if type(value) is not int or value < 0:
                     raise ValueError(f"Provider {key} must be a non-negative integer")
-            elif key in {"canonical_url", "url"}:
+            elif key in {"canonical_url", "url", "web_view_link", "html_link"}:
                 from urllib.parse import urlsplit
 
                 parsed_link = urlsplit(value) if isinstance(value, str) and len(value) <= 2048 else None
@@ -277,13 +307,25 @@ class ProviderRecordMetadata(BaseModel):
             elif key in string_limits:
                 if not isinstance(value, str) or len(value) > string_limits[key]:
                     raise ValueError(f"Provider {key} must be a bounded string")
-                if key in {"created_at", "published_at", "last_modified", "provider_updated_at"}:
+                if key in {"created_at", "published_at", "last_modified", "provider_updated_at", "modified_time", "observed_at_source"}:
                     try:
                         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
                     except ValueError as exc:
                         raise ValueError(f"Provider {key} must be an ISO timestamp") from exc
                     if parsed.tzinfo is None or parsed.utcoffset() is None:
                         raise ValueError(f"Provider {key} must include a timezone")
+                elif key in {"start", "end"}:
+                    try:
+                        # Calendar all-day events use YYYY-MM-DD; timed events must carry an offset.
+                        parsed_date = date.fromisoformat(value) if "T" not in value else None
+                        parsed_time = (
+                            datetime.fromisoformat(value.replace("Z", "+00:00"))  # noqa: FURB162
+                            if parsed_date is None else None
+                        )
+                    except ValueError as exc:
+                        raise ValueError(f"Provider {key} must be an ISO date or timestamp") from exc
+                    if parsed_date is None and (parsed_time is None or parsed_time.tzinfo is None or parsed_time.utcoffset() is None):
+                        raise ValueError(f"Provider {key} timestamp must include a timezone")
             else:
                 raise ValueError("Provider snapshot field is unsupported")
         return self
@@ -576,7 +618,10 @@ class GadgetTelegramRecordRead(BaseModel):
 class GadgetProviderMetadataRead(BaseModel):
     """Expose only typed provider fields needed to render owner dashboard records."""
     model_config = ConfigDict(extra="forbid")
-    provider: Literal["youtube", "arxiv", "huggingface", "github_releases", "github", "telegram"]
+    # Any registered provider id: a closed Literal here rejected every built-in feed/measurement provider
+    # (e.g. nasa_eonet) and made the whole dashboard-projections page answer 422. Registration is already
+    # enforced when ProviderRecordMetadata is stored.
+    provider: str = Field(min_length=1, max_length=64)
     source_fields: dict[str, Any]
     telegram: GadgetTelegramRecordRead | None = None
 

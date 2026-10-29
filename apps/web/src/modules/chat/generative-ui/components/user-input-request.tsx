@@ -130,7 +130,7 @@ export function UserInputRequest({
           </form>
         )}
         {failed && (
-          <p role="alert" className="text-xs text-danger" data-testid="input-failed">
+          <p role="alert" className="text-xs text-destructive" data-testid="input-failed">
             {copy.failed}
           </p>
         )}

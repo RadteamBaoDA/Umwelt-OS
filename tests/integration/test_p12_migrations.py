@@ -7,6 +7,8 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
@@ -17,7 +19,7 @@ pytestmark = pytest.mark.skipif(
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
-HEAD = "0001_init"
+HEAD = ScriptDirectory.from_config(Config(str(REPOSITORY_ROOT / "alembic.ini"))).get_current_head()
 
 
 def _alembic(database_url: str, *arguments: str) -> str:

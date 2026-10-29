@@ -4,6 +4,7 @@ import * as React from 'react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { ExternalLinkIcon, FileTextIcon, GlobeIcon, XIcon } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import type { Citation } from '@/modules/chat/api';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
@@ -65,14 +66,9 @@ export function CitationPanel({
           <span>{t('citations')} ({itemsToRender.length})</span>
         </div>
         {onClose && (
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-            aria-label={t('closeDrawer')}
-          >
-            <XIcon className="size-3.5" />
-          </button>
+          <Button type="button" variant="ghost" size="icon" onClick={onClose} className="size-11 text-muted-foreground" aria-label={t('closeDrawer')}>
+            <XIcon className="size-3.5" aria-hidden="true" />
+          </Button>
         )}
       </div>
 
@@ -170,7 +166,7 @@ export function CitationPanel({
               )}
 
               <div className="flex items-center justify-between text-xs text-muted-foreground pt-1 border-t border-border/40">
-                <span>{t('source')}: {citation.sourceType}</span>
+                <span>{t('source')}: {t('document')}</span>
                 {formattedDate && <span>{formattedDate}</span>}
               </div>
             </div>

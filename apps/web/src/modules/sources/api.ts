@@ -51,6 +51,22 @@ export type ConnectorConfig = {
   timezone: string;
   schedule_interval_minutes: 15 | 30 | 60 | 360 | 1440;
   youtube_channel_id?: string;
+  bluesky_actor?: string;
+  mastodon_instance_url?: string;
+  mastodon_account?: string;
+  mastodon_hashtag?: string;
+  reddit_subreddit?: string;
+  x_account?: string;
+  x_query?: string;
+  google_mail_label_ids?: string[];
+  google_calendar_ids?: string[];
+  google_drive_ids?: string[];
+  notion_page_ids?: string[];
+  slack_channel_ids?: string[];
+  fhir_base_url?: string;
+  fhir_patient_id?: string;
+  ha_base_url?: string;
+  ha_entity_ids?: string[];
   arxiv_category?: string;
   huggingface_author?: string;
   github_owner?: string;
@@ -105,12 +121,12 @@ export type CollectionRequest = { request_id: string; source_id: string; status:
 export type ManualSyncResult = { run_id: string | null; batch_id: string | null; status: string; request_id: string | null };
 export type ConnectorConfiguration = {
   source_id: string;
-  source_type: 'rss' | 'web' | 'api' | 'mcp';
+  source_type: 'rss' | 'web' | 'api' | 'mcp' | 'email' | 'calendar';
   source_generation: number;
   provider: string | null;
   configuration: ConnectorConfig;
   expected_revision: number;
-  auth_method: 'none' | 'http_header' | 'telegram_bot_token';
+  auth_method: 'none' | 'http_header' | 'telegram_bot_token' | 'oauth2';
   auth_header_name: string | null;
   desired_enabled: boolean;
   activation_state: string;
@@ -132,6 +148,8 @@ export type DraftValidation = {
 export type BuiltinCategory = 'news' | 'economy' | 'hazards' | 'space' | 'security' | 'tech';
 export type ConnectorCatalogEntry = {
   provider_id: string;
+  kind?: 'connector' | 'group' | 'preset' | 'manual_import';
+  source_type?: 'rss' | 'web' | 'api' | 'mcp' | 'email' | 'calendar' | 'manual' | null;
   label: string;
   auth_methods: string[];
   scope_fields: string[];
@@ -143,6 +161,8 @@ export type ConnectorCatalogEntry = {
   supports_edit: boolean;
   supports_delete: boolean;
   availability: 'available' | 'implemented' | 'requires_credentials' | 'unsupported_operation' | 'planned' | 'unavailable';
+  code_available?: boolean;
+  requires_service?: 'n8n' | 'browser' | null;
   unavailable_reason?: string | null;
   availability_reason?: string | null;
   unavailable_operations: string[];
@@ -236,7 +256,7 @@ export function getConnectorCatalog(signal?: AbortSignal) {
 }
 
 /** Creates a connector with its immutable native provider identity, if any, using the source owner route. */
-export function createConnectorSource(type: 'rss' | 'web' | 'api' | 'mcp', name: string, csrfToken: string, signal?: AbortSignal, provider?: string, options?: SourceAiOptions) {
+export function createConnectorSource(type: Exclude<ConnectorCatalogEntry['source_type'], 'manual' | null | undefined>, name: string, csrfToken: string, signal?: AbortSignal, provider?: string, options?: SourceAiOptions) {
   return apiRequest<Source>('/api/v1/sources', { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ type, name, ...(provider ? { provider } : {}), ...options }), signal });
 }
 
@@ -335,6 +355,59 @@ export function getGitHubSummary(id: string, signal?: AbortSignal) {
 /** Reads secret-free GitHub grant status and its access-token expiry for this source. */
 export function getGitHubStatus(id: string, signal?: AbortSignal) {
   return apiRequest<GitHubStatus>(`/api/v1/connectors/${id}/github/status`, { signal });
+}
+
+/** Reads secret-free Google connector grant state for the currently selected source. */
+export function getGoogleOAuthStatus(id: string, signal?: AbortSignal) {
+  return apiRequest<{ state: 'not_connected' | 'ready' | 'revocation_pending' | 'reconciliation_required' | 'revoked'; scopes: string[]; token_revision: number; expires_at: string | null; error_code: string | null }>(`/api/v1/connectors/${id}/oauth/google/status`, { signal });
+}
+
+export type GoogleResourceChoice = { id: string; name: string; kind: 'label' | 'calendar' | 'drive' | 'folder'; mime_type?: string; modified_time?: string };
+
+/** Discovers bounded, secret-free Google resources for the exact saved source and grant revisions. */
+export function discoverGoogleResources(
+  id: string,
+  provider: 'google_mail' | 'google_calendar' | 'google_drive',
+  sourceGeneration: number,
+  expectedRevision: number,
+  tokenRevision: number,
+  parentId?: string,
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams({
+    expected_source_generation: String(sourceGeneration),
+    expected_revision: String(expectedRevision),
+    expected_token_revision: String(tokenRevision),
+  });
+  if (parentId) params.set('parent_id', parentId);
+  return apiRequest<{ items: GoogleResourceChoice[]; token_revision: number; truncated: boolean }>(
+    `/api/v1/connectors/${id}/oauth/google/${provider}/resources?${params.toString()}`, { signal },
+  );
+}
+
+/** Starts a session-bound, read-only Google authorization attempt for a saved source revision. */
+export function startGoogleOAuth(id: string, provider: string, sourceGeneration: number, expectedRevision: number, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<{ authorization_url: string }>(`/api/v1/connectors/${id}/oauth/google/${provider}/start`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ expected_source_generation: sourceGeneration, expected_revision: expectedRevision }), signal });
+}
+
+/** Revokes the stored Google grant only for the exact reviewed source and token revisions. */
+export function disconnectGoogleOAuth(id: string, sourceGeneration: number, expectedRevision: number, tokenRevision: number, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<{ state: string }>(`/api/v1/connectors/${id}/oauth/google/disconnect`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ expected_source_generation: sourceGeneration, expected_revision: expectedRevision, expected_token_revision: tokenRevision }), signal });
+}
+
+/** Reads secret-free Reddit grant state and its source-bound token revision. */
+export function getRedditOAuthStatus(id: string, signal?: AbortSignal) {
+  return apiRequest<{ state: 'not_connected' | 'ready' | 'revocation_pending' | 'reconciliation_required' | 'revoked'; scopes: string[]; token_revision: number; expires_at: string | null; error_code: string | null }>(`/api/v1/connectors/${id}/oauth/reddit/status`, { signal });
+}
+
+/** Starts the source-revision-bound Reddit read-scope authorization flow. */
+export function startRedditOAuth(id: string, sourceGeneration: number, expectedRevision: number, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<{ authorization_url: string }>(`/api/v1/connectors/${id}/oauth/reddit/start`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ expected_source_generation: sourceGeneration, expected_revision: expectedRevision }), signal });
+}
+
+/** Revokes the Reddit grant only for the reviewed source and token revisions. */
+export function disconnectRedditOAuth(id: string, sourceGeneration: number, expectedRevision: number, tokenRevision: number, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<{ state: string }>(`/api/v1/connectors/${id}/oauth/reddit/disconnect`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ expected_source_generation: sourceGeneration, expected_revision: expectedRevision, expected_token_revision: tokenRevision }), signal });
 }
 
 /** Resets GitHub polling only for the current reviewed source revisions and scope digest. */

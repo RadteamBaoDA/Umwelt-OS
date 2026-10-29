@@ -3,6 +3,17 @@
 import * as React from 'react';
 import { Tooltip as TooltipPrimitive } from 'radix-ui';
 
+/**
+ * Pointer-enter handler that sets a native `title` with the full text only when the element
+ * (or a direct child) is visually clipped by ellipsis, so short labels show no tooltip.
+ */
+export function titleIfClipped(event: React.PointerEvent<HTMLElement>): void {
+  const el = event.currentTarget;
+  const clipped = [el, ...Array.from(el.children)].some((n) => n.scrollWidth > n.clientWidth);
+  if (clipped) el.title = el.textContent?.trim() ?? '';
+  else el.removeAttribute('title');
+}
+
 /** Provides shared hover and focus behavior for one or more tooltip triggers. */
 export function TooltipProvider({ ...props }: React.ComponentProps<typeof TooltipPrimitive.Provider>) {
   return <TooltipPrimitive.Provider data-slot="tooltip-provider" {...props} />;

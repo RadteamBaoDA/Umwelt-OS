@@ -639,6 +639,11 @@ async def revalidate_context_fence(
     return len(reasons) == 0, reasons
 
 
+def _neutralize_angles(text: str) -> str:
+    """Swap `<`/`>` for single guillemets (as web_search does) so evidence cannot forge or close prompt tags."""
+    return text.replace("<", "‹").replace(">", "›")
+
+
 def format_grounded_context(context: AnswerContext) -> str:
     """Format retrieved evidence and contextual summaries into untrusted prompt delimiters.
 
@@ -660,11 +665,11 @@ def format_grounded_context(context: AnswerContext) -> str:
 
     for idx, item in enumerate(context.evidence, 1):
         provenance = (
-            f"Document: {item.title} | Source ID: {item.source_id} | "
+            f"Document: {_neutralize_angles(item.title)} | Source ID: {item.source_id} | "
             f"Doc ID: {item.document_id} | Version: {item.document_version_id} | Chunk: {item.chunk_id}"
         )
         parts.append(f"[{idx}] {provenance}")
-        parts.append(item.content.strip())
+        parts.append(_neutralize_angles(item.content.strip()))
         parts.append("")
 
     parts.append("</retrieved_evidence>")

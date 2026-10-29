@@ -36,7 +36,9 @@ from modules.chat.templates_routes import router as chat_templates_router
 from modules.chat.todos_routes import router as chat_todos_router
 from modules.connectors.builtins import router as connector_builtins_router
 from modules.connectors.github.routes import router as github_oauth_router
+from modules.connectors.oauth_routes import router as connector_oauth_router
 from modules.connectors.provisioning_routes import router as connector_provisioning_router
+from modules.connectors.reddit_oauth_routes import router as reddit_oauth_router
 from modules.connectors.routes import operator_router as connectors_operator_router
 from modules.connectors.routes import router as connectors_router
 from modules.dashboard.routes import router as dashboard_router
@@ -195,6 +197,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(connector_builtins_router)
     app.include_router(connector_provisioning_router)
     app.include_router(github_oauth_router)
+    app.include_router(connector_oauth_router)
+    app.include_router(reddit_oauth_router)
     app.include_router(settings_router)
     app.include_router(translations_router)
     app.include_router(onboarding_router)

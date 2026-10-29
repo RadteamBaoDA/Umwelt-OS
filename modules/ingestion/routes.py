@@ -1,3 +1,4 @@
+from io import BytesIO
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Annotated, Literal
 from uuid import UUID
@@ -31,6 +32,11 @@ from core.workspaces.dependencies import (
 from core.workspaces.public import lock_access_fence
 from core.workspaces.schemas import WorkspaceContext
 from modules.connectors import public as connectors
+from modules.connectors.providers.manual_finance import (
+    MAX_IMPORT_BYTES,
+    parse_finance_import,
+    render_finance_markdown,
+)
 from modules.ingestion import public
 from modules.ingestion.files import validate_upload
 from modules.ingestion.models import IngestionRun
@@ -280,6 +286,69 @@ async def upload_document(
     """Validate and durably store a bounded upload, removing raw bytes if intake fails or deduplicates."""
     scope = _owner_scope(_owner)
     run, _document_id = await _intake_upload(request, session, scope, source_id, upload)
+    return Receipt(workspace_id=run.workspace_id, batch_id=run.batch_id, run_id=run.id, status=run.status)
+
+
+@documents_router.post("/finance-import", response_model=Receipt, status_code=202,
+                      dependencies=[Depends(require_budget("ingest_upload", 20, 60))])
+async def upload_finance_import(
+    request: Request,
+    source_id: Annotated[UUID, Form()],
+    upload: Annotated[UploadFile, File(alias="file")],
+    session: Session,
+    _owner: OwnerWrite,
+) -> Receipt:
+    """Normalize a CSV/OFX into a local-only Markdown receipt under the admitted manual Source.
+
+    The original financial export is parsed in memory and never stored. Source lookup is
+    workspace-scoped; manual Source type and local_only are immutable after creation. Source
+    eligibility is read through the Sources owner projection. The
+    normalized file then uses the existing fenced upload, dedupe and durable ingestion path.
+    Owner authorization precedes source lookup and content parsing; raw and normalized content
+    are bounded by the smaller of configured upload size and the 8 MiB parser limit. Invalid
+    formats/records return 415/422, oversized requests return 413, and unavailable OFX support
+    returns 503. The response is the existing durable Ingestion receipt; no transaction is
+    written to a separate persistence model and no caller receives authority over source bytes.
+    """
+    scope = _owner_scope(_owner)
+    settings = request.app.state.settings
+    byte_limit = min(settings.upload_max_bytes, MAX_IMPORT_BYTES)
+    filename = upload.filename or ""
+    extension = PurePosixPath(PureWindowsPath(filename).name).suffix.lower()
+    expected_mime = {".csv": "text/csv", ".ofx": "application/x-ofx"}.get(extension)
+    if expected_mime is None:
+        raise HTTPException(status_code=415, detail="Finance import supports CSV and OFX files only")
+    declared_mime = (upload.content_type or "").partition(";")[0].strip().lower()
+    if declared_mime not in ("", "application/octet-stream", expected_mime):
+        raise HTTPException(status_code=415, detail="File extension and MIME type do not match")
+    source = await sources.get_tool_source(
+        session, source_id, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+        source_ids=frozenset({source_id}),
+    )
+    if source is None or source.type != "manual" or not source.local_only:
+        raise HTTPException(status_code=404, detail="Local manual Source not found")
+    if await sources.is_chat_attachments_source(
+        session, source_id, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+    ):
+        raise HTTPException(status_code=404, detail="Local manual Source not found")
+    await session.rollback()
+    if upload.size is not None and upload.size > byte_limit:
+        raise HTTPException(status_code=413, detail="Finance import exceeds the configured size limit")
+    content = await upload.read(byte_limit + 1)
+    await upload.seek(0)
+    if len(content) > byte_limit:
+        raise HTTPException(status_code=413, detail="Finance import exceeds the configured size limit")
+    try:
+        imported = await to_thread_joined(parse_finance_import, filename, content)
+        markdown = await to_thread_joined(render_finance_markdown, imported, byte_limit)
+    except ValueError as exc:
+        status_code = 413 if "size limit" in str(exc) else 422
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="OFX import is unavailable") from exc
+    normalized_bytes = markdown.encode("utf-8")
+    normalized = UploadFile(file=BytesIO(normalized_bytes), size=len(normalized_bytes), filename="transactions.md")
+    run, _document_id = await _intake_upload(request, session, scope, source_id, normalized)
     return Receipt(workspace_id=run.workspace_id, batch_id=run.batch_id, run_id=run.id, status=run.status)
 
 

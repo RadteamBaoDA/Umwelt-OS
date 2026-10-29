@@ -32,6 +32,22 @@ class QuotaWindowPolicy:
     basis: Literal["pilot_local", "official_documented", "official_unknown"] = "pilot_local"
 
 
+# Durable call-count budgets for providers whose use is governed by connector credentials,
+# local service capacity, or per-method API limits rather than free-provider terms. These do
+# not imply entitlement; adapter-specific request bounds remain authoritative as well.
+_NON_FREE_QUOTA_POLICIES: dict[str, tuple[QuotaWindowPolicy, ...]] = {
+    provider_id: (
+        QuotaWindowPolicy("pilot_calls_utc_minute", "provider", "minute", "http_calls", 30),
+        # Google mail's bounded first snapshot can read 500 messages plus profile/list-page overhead.
+        QuotaWindowPolicy("pilot_calls_utc_day", "provider", "day", "http_calls",
+                          600 if provider_id.startswith("google_") else 500),
+    )
+    for provider_id in (
+        "health", "home_assistant", "google_mail", "google_calendar", "google_drive", "notion", "slack", "reddit",
+    )
+}
+
+
 @dataclass(frozen=True)
 class FreeProviderSpec:
     """Catalog facts and execution bounds; availability is not a license grant."""
@@ -56,13 +72,13 @@ class FreeProviderSpec:
     category: Literal["news", "economy", "hazards", "space", "security", "tech"] = "news"
 
 
-# Providers the shared executor can actually dispatch (collection.ADAPTERS). CoinGecko requires an
-# owner-entered API key (connector_rest_credentials) and fails closed without one. Code presence only;
-# runtime_verified stays False.
+# Providers the shared executor can dispatch (ADAPTERS or registered SIMPLE_NATIVE providers).
+# CoinGecko requires an owner-entered API key (connector_rest_credentials) and fails closed without one.
+# Code presence only; runtime_verified stays False.
 DISPATCHABLE = frozenset({
     "bbc_world", "vnexpress_business", "dantri_news", "thanhnien_news", "tuoitre_news", "hn_top", "gdelt_economy",
     "world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika",
-    "coingecko", "google_news", "nasa_eonet", "cisa_kev", "sec_edgar", "openalex",
+    "coingecko", "google_news", "nasa_eonet", "cisa_kev", "sec_edgar", "openalex", "bluesky",
     # Built-in RSS/Atom world-data feeds (providers/news.py FEED_URLS).
     "aljazeera_world", "npr_news", "fed_press", "gdacs_rss", "lobsters", "us_travel_advisories",
     "noaa_tsunami", "jma_eqvol",
@@ -134,6 +150,12 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
           "https://help.openalex.org/how-to-use-the-api/api-overview", "open",
           "Credit OpenAlex; data is CC0. Link the work's OpenAlex id and DOI; abstracts are rebuilt from the inverted index.",
           ("/works",), (_day(8), _unknown())),
+    replace(_spec(
+        "bluesky", "Bluesky public account feed", "tech", ("public.api.bsky.app", "bsky.app"), "news", 30,
+        "https://bsky.social/about/support/tos", "review",
+        "Attribute Bluesky and link to each original post; Bluesky terms do not establish redistribution rights for post content.",
+        ("/xrpc/app.bsky.feed.getAuthorFeed",), (_unknown(),), execution="supported",
+    ), checked_on="2026-10-24"),
     _spec("hn_top", "Hacker News top stories", "tech", ("hacker-news.firebaseio.com",), "news", 60,
           "https://github.com/HackerNews/API", "review",
           "Attribute Hacker News plus the item and publisher URL; the API license does not license linked articles.",
@@ -330,7 +352,7 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
            QuotaWindowPolicy("official_calls_per_minute", "credential", "minute", "http_calls", 60, 1,
                              "official_documented")),
           key=True, secret="header"),
-    _spec("newsapi", "NewsAPI top headlines (US business)", "news", ("newsapi.org",), "news", 120,
+    _spec("newsapi", "NewsAPI top headlines (US business)", "news", ("newsapi.org",), "news", 360,
           "https://newsapi.org/terms", "review",
           "Credit NewsAPI.org and the article's publisher; the free Developer plan is for development use only.",
           ("/v2/top-headlines?country=us&category=business&pageSize=20",),
@@ -351,7 +373,7 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
           "Credit OpenAQ and the originating data provider; data licenses vary per provider (mostly CC BY 4.0).",
           ("/v3/locations/{location}/sensors",), (_day(48, kind="credential"), _unknown("credential")),
           key=True, secret="header"),
-    _spec("nasa_firms", "NASA FIRMS active fires (VIIRS, 24h)", "hazards", ("firms.modaps.eosdis.nasa.gov",), "event", 180,
+    _spec("nasa_firms", "NASA FIRMS active fires (VIIRS, 24h)", "hazards", ("firms.modaps.eosdis.nasa.gov",), "event", 360,
           "https://www.earthdata.nasa.gov/engage/open-data-services-software-policies", "open",
           "Credit NASA FIRMS (LANCE/EOSDIS); hotspots are detections, not confirmed fires.",
           ("/api/country/csv/{MAP_KEY}/VIIRS_SNPP_NRT/{country}/1",), (_day(16, kind="credential"), _unknown("credential")),
@@ -402,6 +424,22 @@ assert len(_BY_ID) == len(FREE_PROVIDER_SPECS)  # import-time catalog invariant
 def get_provider_spec(provider_id: str | None) -> FreeProviderSpec | None:
     """Return the exact free-provider spec, or None for any other provider."""
     return _BY_ID.get(provider_id or "")
+
+
+def get_quota_policies(provider_id: str | None) -> tuple[QuotaWindowPolicy, ...]:
+    """Return durable send budgets without coupling non-free connectors to terms eligibility.
+
+    Free providers use their documented catalog policy. Google, workspace apps, and explicitly
+    configured local services use a conservative instance-wide pilot call budget; no credentials,
+    grants, or provider terms are inferred from this policy. Unknown providers fail closed by
+    returning no policy and therefore cannot be sent through a quota-enabled adapter.
+    """
+    if not provider_id:
+        return ()
+    spec = get_provider_spec(provider_id)
+    if spec is not None:
+        return spec.quota
+    return _NON_FREE_QUOTA_POLICIES.get(provider_id, ())
 
 
 def deployment_use_matches(eligibility: str, deployment_use: str) -> bool:

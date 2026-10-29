@@ -156,3 +156,19 @@ async def test_completed_run_matching_scope_loses_input_request_todos_and_templa
         (idx,) = [i for i, q in enumerate(session.sql) if q.startswith(f"DELETE FROM {table}")]
         assert RUN_ID in session.params[idx].values()  # keyed by the matched run's source_response_id
     assert any(q.startswith("UPDATE chat_response_runs SET input_request") for q in session.sql)
+
+
+async def test_cleanup_drops_reasoning_of_an_affected_message_and_blanks_its_events() -> None:
+    scope = evidence()
+    message = SimpleNamespace(
+        citations=[], response_id=RUN_ID,
+        metadata_json={"keep": 1, "reasoning": "quoted secret", "reasoning_truncated": True,
+                       "generative_ui": {"kind": "table", "citations": [_copied(scope.document_id)]}},
+    )
+    session = ScriptedSession(message, {})
+    with admitted(), patch("modules.memory.public.lock_export_privacy", AsyncMock()), \
+            patch("modules.memory.public.bound_cleanup_lock_waits", AsyncMock()):
+        await chat.purge_document_copied_evidence_page(session, scope, **CTX)  # type: ignore[arg-type]
+    assert message.metadata_json == {"keep": 1}
+    assert any(q.startswith("UPDATE chat_stream_events") and "message.reasoning.delta" in str(p)
+               for q, p in zip(session.sql, session.params, strict=True))

@@ -190,7 +190,7 @@ def test_hn_version_ignores_score_and_clock():
 def test_gdelt_request_bounded():
     req = gdelt_request()
     assert req.url == "https://api.gdeltproject.org/api/v2/doc/doc?query=economy&mode=artlist&format=json&maxrecords=5&timespan=24h"
-    assert GDELT_TIMEOUT_SECONDS == 8 and "maxrecords=50" in gdelt_request(50).url
+    assert GDELT_TIMEOUT_SECONDS == 30 and "maxrecords=50" in gdelt_request(50).url
     for bad in (0, 51, True, "5"):
         with pytest.raises(ProviderPayloadError):
             gdelt_request(bad)  # type: ignore[arg-type]
@@ -208,10 +208,17 @@ def test_gdelt_mapping_dedupes_and_is_stable():
     assert len(capped) == 1 and pr(capped[0])["coverage"] == "truncated"
 
 
-@pytest.mark.parametrize("body", [b"Timespan is too short.", b"", b"[]", b'{"error":"x"}', b"{}", b'{"articles":"no"}'])
+@pytest.mark.parametrize("body", [b"Timespan is too short.", b"", b"[]", b'{"error":"x"}', b'{"articles":"no"}'])
 def test_gdelt_rejects_error_and_empty_shapes(body):
-    with pytest.raises(ProviderPayloadError):
+    with pytest.raises(ProviderPayloadError) as exc:
         map_news_body("gdelt_economy", body, NOW)
+    assert exc.value.kind == "invalid"
+
+
+def test_gdelt_empty_object_is_soft_throttle():
+    with pytest.raises(ProviderPayloadError) as exc:
+        map_news_body("gdelt_economy", b"{}", NOW)
+    assert exc.value.kind == "rate_limited"
 
 
 def test_gdelt_empty_list_is_valid_and_registry_dispatch():

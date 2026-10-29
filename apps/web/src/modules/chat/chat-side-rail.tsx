@@ -11,7 +11,7 @@ import { CitationPanel } from './citation-panel';
 import { useContextLabel } from './chat-context-bar';
 
 /**
- * Sources, Activity and Context tabs built from loaded conversation data; shared by the desktop rail and mobile sheet.
+ * Sources and Context tabs built from loaded conversation data; shared by the desktop rail and mobile sheet.
  *
  * @param props - Citations and context to display.
  * @returns Evidence tabs element.
@@ -23,13 +23,11 @@ function RailTabs({ citations, context }: { citations: Citation[]; context: Chat
     <Tabs defaultValue="sources">
       <TabsList aria-label={t('railLabel')}>
         <TabsTrigger value="sources">{t('railSources')}{citations.length > 0 ? ` (${citations.length})` : ''}</TabsTrigger>
-        <TabsTrigger value="activity">{t('railActivity')}</TabsTrigger>
         <TabsTrigger value="context">{t('railContext')}</TabsTrigger>
       </TabsList>
       <TabsContent value="sources">
         {citations.length ? <CitationPanel citations={citations} variant="card" /> : <p className="mt-3 text-xs text-muted-foreground">{t('railSourcesEmpty')}</p>}
       </TabsContent>
-      <TabsContent value="activity"><p className="mt-3 text-xs text-muted-foreground">{t('railActivityEmpty')}</p></TabsContent>
       <TabsContent value="context"><p className="mt-3 text-xs text-muted-foreground">{contextLabel ?? t('railContextEmpty')}</p></TabsContent>
     </Tabs>
   );
@@ -46,10 +44,10 @@ export function ChatSideRail({ citations, context }: { citations: Citation[]; co
   const [collapsed, setCollapsed] = React.useState(true);
   return (
     <aside id="chat-evidence-rail" aria-label={t('railLabel')} className={`hidden shrink-0 flex-col overflow-y-auto border-l border-border bg-surface lg:flex ${collapsed ? 'w-12 items-center p-0' : 'w-[300px] p-3'}`}>
-      <Button type="button" variant="ghost" size="icon" className="size-11 shrink-0" onClick={() => setCollapsed((value) => !value)} aria-label={collapsed ? t('expandRail') : t('collapseRail')} aria-expanded={!collapsed} aria-controls="chat-evidence-rail">
+      <Button type="button" variant="ghost" size="icon" className="size-11 shrink-0" onClick={() => setCollapsed((value) => !value)} aria-label={collapsed ? t('expandRail') : t('collapseRail')} aria-expanded={!collapsed} aria-controls={collapsed ? undefined : 'chat-evidence-rail-content'}>
         {collapsed ? <PanelRightOpen aria-hidden="true" /> : <PanelRightClose aria-hidden="true" />}
       </Button>
-      {!collapsed && <RailTabs citations={citations} context={context} />}
+      {!collapsed && <div id="chat-evidence-rail-content" className="w-full"><RailTabs citations={citations} context={context} /></div>}
     </aside>
   );
 }

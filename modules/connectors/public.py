@@ -3,12 +3,13 @@ import base64
 import hashlib
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from ipaddress import ip_address
 from socket import getaddrinfo
-from typing import TYPE_CHECKING, Literal, TypeGuard
+from typing import TYPE_CHECKING, Any, Literal, TypeGuard
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -41,6 +42,7 @@ from modules.connectors.models import (
     AgentBrowserGrant,
     ConnectorManagedCredential,
     ConnectorNativeCredential,
+    ConnectorOAuthGrant,
     ConnectorProvisioning,
     ConnectorRestCredential,
     ConnectorWorldCredential,
@@ -232,7 +234,11 @@ def is_native_provider(provider: str | None) -> TypeGuard[str]:
 
 
 class ConnectorConfig(BaseModel):
-    """Validate bounded source, REST mapping, timezone, and schedule settings."""
+    """Validate bounded source scopes, per-provider mappings, timezone, and schedule settings.
+
+    Social, Google, FHIR, Home Assistant, Notion, and Slack selections are checked against the
+    provider-specific field bounds before they can be persisted or activated.
+    """
     model_config = ConfigDict(extra="forbid")
 
     url: HttpUrl | None = None
@@ -251,6 +257,13 @@ class ConnectorConfig(BaseModel):
     youtube_channel_id: str | None = Field(default=None, pattern=r"^UC[A-Za-z0-9_-]{22}$")
     arxiv_category: str | None = Field(default=None, min_length=1, max_length=64, pattern=r"^[A-Za-z][A-Za-z0-9.-]{0,63}$")
     huggingface_author: str | None = Field(default=None, min_length=1, max_length=96, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$")
+    bluesky_actor: str | None = Field(default=None, min_length=3, max_length=253)
+    reddit_subreddit: str | None = Field(default=None, min_length=2, max_length=21)
+    mastodon_instance_url: str | None = Field(default=None, min_length=8, max_length=512)
+    mastodon_account: str | None = Field(default=None, min_length=1, max_length=320)
+    mastodon_hashtag: str | None = Field(default=None, min_length=1, max_length=100)
+    x_account: str | None = Field(default=None, min_length=1, max_length=15)
+    x_query: str | None = Field(default=None, min_length=1, max_length=512)
     github_owner: str | None = Field(default=None, min_length=1, max_length=39, pattern=r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}$")
     github_repository: str | None = Field(default=None, min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]{1,100}$")
     include_issues: bool = False
@@ -278,6 +291,16 @@ class ConnectorConfig(BaseModel):
     owm_longitude: float | None = Field(default=None, ge=-180, le=180)
     openaq_location_id: StrictInt | None = Field(default=None, ge=1, le=2_147_483_647)
     firms_country: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    google_mail_label_ids: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=10)
+    google_mail_history_days: StrictInt = Field(default=30, ge=1, le=30)
+    google_calendar_ids: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=25)
+    google_drive_ids: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=100)
+    notion_page_ids: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=100)
+    slack_channel_ids: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=100)
+    fhir_base_url: str | None = Field(default=None, min_length=8, max_length=512)
+    fhir_patient_id: str | None = Field(default=None, min_length=1, max_length=128)
+    ha_base_url: str | None = Field(default=None, min_length=8, max_length=512)
+    ha_entity_ids: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=500)
     history_mode: Literal["returned_snapshot", "pending_updates"] | None = None
 
     @field_validator("news_query", mode="before")
@@ -319,6 +342,76 @@ class ConnectorConfig(BaseModel):
             raise ValueError("arXiv category must be one category")
         return value
 
+    @field_validator("bluesky_actor")
+    @classmethod
+    def valid_bluesky_actor(cls, value: str | None) -> str | None:
+        """Accept one Bluesky handle or supported DID, preventing arbitrary actor expressions."""
+        if value is None:
+            return None
+        if re.fullmatch(r"(?i)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}", value):
+            return value.lower()
+        if re.fullmatch(r"did:plc:[a-z2-7]{24}", value):
+            return value
+        if re.fullmatch(r"did:web:[A-Za-z0-9.%:-]{1,220}", value):
+            return value
+        raise ValueError("Bluesky actor must be a handle or DID")
+
+    @field_validator("reddit_subreddit")
+    @classmethod
+    def valid_reddit_subreddit(cls, value: str | None) -> str | None:
+        """Require one subreddit slug so owner input cannot add a Reddit API route segment."""
+        if value is not None and re.fullmatch(r"[A-Za-z0-9_]{2,21}", value) is None:
+            raise ValueError("Reddit scope must be one subreddit name")
+        return value
+
+    @field_validator("mastodon_instance_url")
+    @classmethod
+    def valid_mastodon_instance_url(cls, value: str | None) -> str | None:
+        """Restrict a Mastodon instance to a credential-free HTTPS origin on the default port."""
+        if value is None:
+            return value
+        parts = urlsplit(value)
+        try:
+            port = parts.port
+        except ValueError as exc:
+            raise ValueError("Mastodon instance port is invalid") from exc
+        if (parts.scheme != "https" or not parts.hostname or parts.username or parts.password
+                or parts.path not in {"", "/"} or parts.query or parts.fragment or port not in (None, 443)):
+            raise ValueError("Mastodon requires an HTTPS instance origin")
+        return f"https://{parts.hostname.lower()}"
+
+    @field_validator("mastodon_account")
+    @classmethod
+    def valid_mastodon_account(cls, value: str | None) -> str | None:
+        """Accept one Mastodon acct identifier, excluding path and query syntax."""
+        if value is not None and re.fullmatch(r"@?[A-Za-z0-9_.-]{1,64}(?:@[A-Za-z0-9.-]{1,253})?", value) is None:
+            raise ValueError("Mastodon account scope is invalid")
+        return value
+
+    @field_validator("mastodon_hashtag")
+    @classmethod
+    def valid_mastodon_hashtag(cls, value: str | None) -> str | None:
+        """Accept one hashtag token without its optional leading hash or path delimiters."""
+        if value is not None and re.fullmatch(r"[A-Za-z0-9_]{1,100}", value) is None:
+            raise ValueError("Mastodon hashtag scope is invalid")
+        return value
+
+    @field_validator("x_account")
+    @classmethod
+    def valid_x_account(cls, value: str | None) -> str | None:
+        """Accept only a single X username for the fixed API route."""
+        if value is not None and re.fullmatch(r"[A-Za-z0-9_]{1,15}", value) is None:
+            raise ValueError("X account scope is invalid")
+        return value
+
+    @field_validator("x_query", mode="before")
+    @classmethod
+    def clean_x_query(cls, value: object) -> object:
+        """Strip control characters and fold spaces before a user search reaches the X API."""
+        if not isinstance(value, str):
+            return value
+        return " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", value).split())
+
     @field_validator("github_repository")
     @classmethod
     def valid_github_repository(cls, value: str | None) -> str | None:
@@ -341,7 +434,7 @@ class ConnectorConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_world_data_scope(self) -> "ConnectorConfig":
-        """Keep finance and weather scopes narrow, unique, and internally complete."""
+        """Keep finance, social, weather, workspace, Google, FHIR and Home Assistant scopes bounded."""
         if self.market_symbols is not None and (
             len(set(self.market_symbols)) != len(self.market_symbols)
             or any(not re.fullmatch(r"[A-Z0-9.^_-]{1,20}", symbol) for symbol in self.market_symbols)
@@ -359,6 +452,60 @@ class ConnectorConfig(BaseModel):
             or not set(self.weather_metrics).issubset({"temperature_2m", "relative_humidity_2m", "precipitation", "wind_speed_10m"})
         ):
             raise ValueError("Weather metric is outside the Open-Meteo bounded allowlist")
+        if self.google_mail_label_ids is not None and (
+            len(set(self.google_mail_label_ids)) != len(self.google_mail_label_ids)
+            or any(not re.fullmatch(r"[A-Za-z0-9_-]{1,225}", value) for value in self.google_mail_label_ids)
+        ):
+            raise ValueError("Gmail labels must be unique provider label IDs")
+        if self.google_calendar_ids is not None and (
+            len(set(self.google_calendar_ids)) != len(self.google_calendar_ids)
+            or any(not re.fullmatch(r"[^\s\x00-\x1f]{1,256}", value) for value in self.google_calendar_ids)
+        ):
+            raise ValueError("Google Calendar IDs must be unique non-empty identifiers")
+        if self.google_drive_ids is not None and (
+            len(set(self.google_drive_ids)) != len(self.google_drive_ids)
+            or any(not re.fullmatch(r"[A-Za-z0-9_-]{5,200}", value) for value in self.google_drive_ids)
+        ):
+            raise ValueError("Google Drive IDs must be unique provider file IDs")
+        if self.notion_page_ids is not None and (
+            len(set(self.notion_page_ids)) != len(self.notion_page_ids)
+            or any(re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value) is None for value in self.notion_page_ids)
+        ):
+            raise ValueError("Notion page IDs must be unique provider identifiers")
+        if self.slack_channel_ids is not None and (
+            len(set(self.slack_channel_ids)) != len(self.slack_channel_ids)
+            or any(re.fullmatch(r"[CG][A-Z0-9]{1,80}", value) is None for value in self.slack_channel_ids)
+        ):
+            raise ValueError("Slack scopes require unique channel identifiers")
+        if (bool(self.mastodon_account) == bool(self.mastodon_hashtag)
+                and (self.mastodon_account is not None or self.mastodon_hashtag is not None)):
+            raise ValueError("Choose exactly one Mastodon account or hashtag")
+        if (self.mastodon_account is not None or self.mastodon_hashtag is not None) and not self.mastodon_instance_url:
+            raise ValueError("Mastodon requires an instance URL for account or hashtag scope")
+        if bool(self.x_account) == bool(self.x_query) and (self.x_account is not None or self.x_query is not None):
+            raise ValueError("Choose exactly one X account or search query")
+        if self.x_query is not None and not 1 <= len(self.x_query) <= 512:
+            raise ValueError("X search query is outside the supported bounds")
+        for endpoint in (self.fhir_base_url, self.ha_base_url):
+            if endpoint is None:
+                continue
+            parts = urlsplit(endpoint)
+            try:
+                port = parts.port
+            except ValueError as exc:
+                raise ValueError("Local service endpoint port is invalid") from exc
+            if (parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password
+                    or parts.query or parts.fragment or (port is not None and not 1 <= port <= 65535)):
+                raise ValueError("Local service endpoint must be a credential-free HTTP(S) origin")
+        if self.fhir_patient_id is not None and (
+            "/" in self.fhir_patient_id or re.fullmatch(r"[A-Za-z0-9.-]{1,128}", self.fhir_patient_id) is None
+        ):
+            raise ValueError("FHIR patient ID must be one identifier")
+        if self.ha_entity_ids is not None and (
+            len(set(self.ha_entity_ids)) != len(self.ha_entity_ids)
+            or any(re.fullmatch(r"[a-z0-9_]+\.[a-z0-9_]+", value) is None for value in self.ha_entity_ids)
+        ):
+            raise ValueError("Home Assistant entity IDs must be unique entity identifiers")
         return self
 
 
@@ -401,6 +548,29 @@ def cii_v8_availability(requested_countries: list[str]) -> CiiProjection:
     return unavailable_v8_projection(requested_countries)
 
 
+# Providers whose scope is exactly one of several alternative fields (enforced by registry.validate).
+_ALTERNATIVE_SCOPE_FIELDS: dict[str, frozenset[str]] = {
+    "mastodon": frozenset({"mastodon_account", "mastodon_hashtag"}),
+    "x": frozenset({"x_account", "x_query"}),
+}
+
+
+def _scope_values(provider_id: str, scope_fields: Sequence[str], configuration: dict[str, Any]) -> dict[str, Any] | None:
+    """Collect the configured scope fields, or None when a required one is missing.
+
+    Alternative fields (Mastodon account or hashtag, X account or query) are optional individually but at least
+    one must be present; requiring all of them made every such source's accepted scope unverifiable, which hid its
+    ingested records from dashboard projections.
+    """
+    alternatives = _ALTERNATIVE_SCOPE_FIELDS.get(provider_id, frozenset())
+    values = {name: configuration[name] for name in scope_fields if name in configuration}
+    if any(name not in values and name not in alternatives for name in scope_fields):
+        return None
+    if alternatives and not alternatives & values.keys():
+        return None
+    return values
+
+
 async def get_current_provider_scope(
     session: AsyncSession, source_id: UUID, expected_source_generation: int,
     *, scope: Scope, multi_workspace_enabled: bool,
@@ -429,10 +599,8 @@ async def get_current_provider_scope(
         configuration = provider_configuration(source).model_dump(mode="json", exclude_none=True)
     except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
         return None
-    if any(name not in configuration for name in entry.scope_fields):
-        return None
-    values = {name: configuration[name] for name in entry.scope_fields if name in configuration}
-    if len(values) != len(entry.scope_fields):
+    values = _scope_values(provider_id, entry.scope_fields, configuration)
+    if values is None:
         return None
     encoded = json.dumps([provider_id, values], sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return ProviderScopeSnapshot(
@@ -473,10 +641,8 @@ async def export_provider_scope(
         configuration = provider_configuration(source).model_dump(mode="json", exclude_none=True)
     except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
         return None
-    if any(name not in configuration for name in entry.scope_fields):
-        return None
-    values = {name: configuration[name] for name in entry.scope_fields if name in configuration}
-    if len(values) != len(entry.scope_fields):
+    values = _scope_values(provider_id, entry.scope_fields, configuration)
+    if values is None:
         return None
     encoded = json.dumps([provider_id, values], sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return ProviderScopeSnapshot(
@@ -762,6 +928,9 @@ async def get_connector_configuration(
         if row is not None and "native" in (row.execution_backend, row.target_backend)
         else None
     )
+    oauth_grant = await session.get(ConnectorOAuthGrant, source_id) if source.provider in {
+        "google_mail", "google_calendar", "google_drive", "reddit",
+    } else None
     configuration = ConnectorConfig.model_validate(source.configuration).model_dump(
         mode="json", exclude_none=True
     )
@@ -794,12 +963,16 @@ async def get_connector_configuration(
         expected_revision=row.desired_revision if row is not None else 0,
         auth_method=(
             "telegram_bot_token" if source.provider == "telegram"
+            else "oauth2" if source.provider in {"google_mail", "google_calendar", "google_drive", "reddit"}
+            else "http_header" if source.provider in {"notion", "slack"}
+            else "http_header" if source.provider in {"health", "home_assistant"}
             else "none" if source.provider in NATIVE_PROVIDERS
             else str(desired.get("auth_method", "none"))
         ),
         auth_header_name=(
             str(desired["auth_header_name"])
             if desired.get("auth_header_name") is not None
+            else "Authorization" if source.provider in {"notion", "slack"}
             else None
         ),
         desired_enabled=bool(row and row.desired_enabled),
@@ -813,6 +986,14 @@ async def get_connector_configuration(
                  and row is not None
                  and native_credential.configuration_revision == row.desired_revision)
             if source.provider == "telegram"
+            else bool(oauth_grant is not None and oauth_grant.state == "ready" and oauth_grant.encrypted_tokens
+                      and oauth_grant.provider == source.provider and oauth_grant.workspace_id == source.workspace_id
+                      and oauth_grant.owner_id == (
+                          scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+                      ) and oauth_grant.source_generation == source.generation
+                      and row is not None and oauth_grant.configuration_revision == row.desired_revision
+                      and oauth_grant.credential_revision == row.credential_revision)
+            if source.provider in {"google_mail", "google_calendar", "google_drive", "reddit"}
             else bool(world_credential is not None and row is not None
                       and world_credential.source_generation == source.generation
                       and world_credential.configuration_revision == row.desired_revision)
@@ -824,7 +1005,14 @@ async def get_connector_configuration(
             else bool(provider_credential is not None and provider_credential.state == "ready"
                       and provider_credential.credential_id)
         ),
-        provider_credential_state=("ready" if source.provider == "alpha_vantage" and world_credential is not None
+        provider_credential_state=(oauth_grant.state if source.provider in {"google_mail", "google_calendar", "google_drive", "reddit"}
+                                   and oauth_grant is not None else "not_connected" if source.provider in {"google_mail", "google_calendar", "google_drive", "reddit"}
+                                   else (rest_credential.state if rest_credential is not None
+                                         and rest_credential.state == "ready" and row is not None
+                                         and rest_credential.source_generation == source.generation
+                                         and rest_credential.configuration_revision == row.desired_revision
+                                         else "not_connected") if source.provider in {"notion", "slack"}
+                                   else "ready" if source.provider == "alpha_vantage" and world_credential is not None
                                    and row is not None and world_credential.source_generation == source.generation
                                    and world_credential.configuration_revision == row.desired_revision
                                    else native_credential.state if source.provider == "telegram" and native_credential is not None
@@ -841,6 +1029,14 @@ def default_schedule_interval_minutes(source_type: str) -> int:
     return 15 if source_type == "rss" else 30
 
 
+_UNSET = object()
+# Provider-only ConnectorConfig fields whose model default is not None, so exclude_none cannot drop them.
+_NATIVE_ONLY_DEFAULTS: dict[str, object] = {
+    "include_issues": False, "include_pulls": False, "include_commits": False, "include_releases": False,
+    "github_history_days": 90, "google_mail_history_days": 30,
+}
+
+
 def serialize_source_configuration(source: ConnectorSource, config: ConnectorConfig) -> dict[str, object]:
     """Serialize generic settings unchanged and native scopes with a reusable 30-second default.
 
@@ -850,7 +1046,9 @@ def serialize_source_configuration(source: ConnectorSource, config: ConnectorCon
     """
     values = config.model_dump(mode="json", exclude_none=True)
     if source.provider not in NATIVE_PROVIDERS:
-        return values
+        # Native-only fields with non-None defaults (GitHub flags/horizon) would otherwise be stored on every
+        # RSS/web/REST source and make registry.validate reject it as carrying provider scope.
+        return {key: value for key, value in values.items() if _NATIVE_ONLY_DEFAULTS.get(key, _UNSET) != value}
     scope_fields = PROVIDER_SCOPE_FIELDS[source.provider]
     common = {"timezone", "schedule_interval_minutes", "timeout_seconds", "history_mode"}
     supplied = config.model_fields_set
@@ -1009,6 +1207,33 @@ async def require_collection_fence(
         fence.connector_revision,
         lock=lock, backend_revision=fence.backend_revision,
         scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+
+
+async def validate_provider_credential_revision_in_uow(
+    session: AsyncSession, source_id: UUID, expected_revision: int, *,
+    access_fence: AccessFence, source_fence: SourceFence, scope: Scope,
+    multi_workspace_enabled: bool,
+) -> bool:
+    """Prove a credential-backed adapter's captured revision under connector owner locks.
+
+    The caller already holds the source/access locks and commits the receipt in this unit of work;
+    a credential replacement or disconnect bumps the provisioning revision and makes old output fail.
+    """
+    from modules.connectors import provisioning
+
+    current, row, _ = await provisioning.lock_connector(
+        session, source_id, provisioning._ALL_CREDENTIAL_SLOTS, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence,
+    )
+    if current != source_fence or row is None or row.credential_revision != expected_revision:
+        return False
+    credential = await session.get(ConnectorRestCredential, source_id, with_for_update=True, populate_existing=True)
+    return bool(
+        credential is not None and credential.state == "ready" and credential.encrypted_secret
+        and credential.source_generation == source_fence.generation
+        and credential.configuration_revision == row.desired_revision
+        and credential.header_name == "Authorization"
     )
 
 

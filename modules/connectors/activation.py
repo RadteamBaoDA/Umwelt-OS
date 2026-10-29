@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.ids import uuid7
-from core.workspaces.schemas import AccessFence, Scope
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
 from modules.connectors import provider_terms, provisioning, scheduler
 from modules.connectors.credentials import (
     CredentialEncryptionUnavailable,
@@ -16,6 +16,7 @@ from modules.connectors.credentials import (
 )
 from modules.connectors.models import (
     ConnectorNativeCredential,
+    ConnectorOAuthGrant,
     ConnectorProvisioning,
     ConnectorRestCredential,
     GithubOAuthGrant,
@@ -307,17 +308,21 @@ async def activate_native_in_uow(
 ) -> str:
     """Activate the native backend on already-locked Source/provisioning rows; the caller commits.
 
-    Validates active/private-allowed source, native support, terms eligibility and (for header
-    authentication) a ready owner-entered credential for this exact generation/revision. On success
-    persists desired+applied revision, applied backend revision and the schedule in the caller's
-    transaction and returns ""; otherwise returns a bounded owner-action code and changes nothing.
-    No n8n credential, workflow or key is involved.
+    Validates active/private-allowed source, native support, terms eligibility and a ready credential
+    for the exact generation/revision. Google and Reddit grants are row-locked and checked against
+    the source, workspace, owner, provider and credential revision; GitHub, Telegram, and header
+    credentials retain their provider-specific checks. On success, persists desired+applied revision,
+    applied backend revision and schedule in the caller's transaction and returns ""; otherwise
+    returns a bounded owner-action code (``local_only_source`` for privacy-blocked sources) and changes nothing. No n8n credential, workflow or key is involved.
     """
     from modules.connectors import collection, public
     from modules.settings.public import module_is_enabled
 
     source = await sources.get_connector_source(
         session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    if source is not None and source.status == "active" and source_fence.local_only:
+        # Privacy boundary: local-only sources (Home Assistant, FHIR, ...) never leave the device, so no collection may be scheduled.
+        return "local_only_source"
     if (
         source is None or source.status != "active" or source_fence.local_only
         or row.source_generation != source.generation or row.workflow_operation is not None
@@ -344,15 +349,26 @@ async def activate_native_in_uow(
             return "invalid_credential"
     elif (row.desired_configuration or {}).get("auth_method") not in (None, "none"):
         return "native_unsupported"
-    if source.provider in ("github", "telegram"):  # the native run needs the owner's grant / bot token for this exact revision
-        grant: GithubOAuthGrant | ConnectorNativeCredential | None
-        grant = await (session.get(GithubOAuthGrant, source_id) if source.provider == "github"
-                       else session.get(ConnectorNativeCredential, source_id))
-        if (
-            grant is None or grant.state != "ready" or grant.source_generation != source.generation
-            or grant.configuration_revision != row.desired_revision
-            or (source.provider == "github" and getattr(grant, "encrypted_tokens", None) is None)
-        ):
+    if source.provider == "github":  # GitHub needs the owner's grant for this exact revision
+        grant = await session.get(GithubOAuthGrant, source_id)
+        if (grant is None or grant.state != "ready" or grant.encrypted_tokens is None
+                or grant.source_generation != source.generation
+                or grant.configuration_revision != row.desired_revision):
+            return "invalid_credential"
+    elif source.provider == "telegram":  # Telegram needs the bot credential for this exact revision
+        native_credential = await session.get(ConnectorNativeCredential, source_id)
+        if (native_credential is None or native_credential.state != "ready"
+                or native_credential.source_generation != source.generation
+                or native_credential.configuration_revision != row.desired_revision):
+            return "invalid_credential"
+    if source.provider in {"google_mail", "google_calendar", "google_drive", "reddit"}:
+        oauth_grant = await session.get(ConnectorOAuthGrant, source_id, with_for_update=True)
+        owner_id = scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+        if (oauth_grant is None or oauth_grant.state != "ready" or oauth_grant.encrypted_tokens is None
+                or oauth_grant.provider != source.provider or oauth_grant.workspace_id != source.workspace_id
+                or oauth_grant.owner_id != owner_id or oauth_grant.source_generation != source.generation
+                or oauth_grant.configuration_revision != row.desired_revision
+                or oauth_grant.credential_revision != row.credential_revision):
             return "invalid_credential"
     row.execution_backend = "native"
     row.desired_enabled = True

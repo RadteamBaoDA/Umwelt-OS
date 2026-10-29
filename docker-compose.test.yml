@@ -53,7 +53,11 @@ services:
       AI_ALLOWED_ENDPOINT_HOSTS: '["fake-model:8000"]'
       # Docker default bridge pools; the host allowlist above pins the authority to the fake model.
       AI_ALLOWED_ENDPOINT_CIDRS: '["172.16.0.0/12","192.168.0.0/16","10.0.0.0/8"]'
+      # Exact-origin MCP exception for the fake local services (connector e2e); no wildcard origins.
+      MCP_ALLOWED_ENDPOINT_CIDRS: '{"http://fake-local:8000":["172.16.0.0/12","192.168.0.0/16","10.0.0.0/8"]}'
       AI_CREDENTIAL_ENCRYPTION_KEY: ${TEST_AI_CREDENTIAL_ENCRYPTION_KEY:-ZmFrZS1tb2RlbC10ZXN0LWtleS0wMDAwMDAwMDAwMDA=}
+      # Owner-entered provider API keys (CoinGecko, FRED, ...) are encrypted with this; without it the credential PUT returns 503.
+      CONNECTOR_CREDENTIAL_ENCRYPTION_KEY: ${TEST_CONNECTOR_CREDENTIAL_ENCRYPTION_KEY:-ZmFrZS1jb25uZWN0b3ItdGVzdC1rZXktMDAwMDAwMDA=}
 
   worker:
     # Never read a developer's real .env into the disposable test stack.
@@ -68,7 +72,11 @@ services:
       AI_ALLOWED_ENDPOINT_HOSTS: '["fake-model:8000"]'
       # Docker default bridge pools; the host allowlist above pins the authority to the fake model.
       AI_ALLOWED_ENDPOINT_CIDRS: '["172.16.0.0/12","192.168.0.0/16","10.0.0.0/8"]'
+      # Exact-origin MCP exception for the fake local services (connector e2e); no wildcard origins.
+      MCP_ALLOWED_ENDPOINT_CIDRS: '{"http://fake-local:8000":["172.16.0.0/12","192.168.0.0/16","10.0.0.0/8"]}'
       AI_CREDENTIAL_ENCRYPTION_KEY: ${TEST_AI_CREDENTIAL_ENCRYPTION_KEY:-ZmFrZS1tb2RlbC10ZXN0LWtleS0wMDAwMDAwMDAwMDA=}
+      # Owner-entered provider API keys (CoinGecko, FRED, ...) are encrypted with this; without it the credential PUT returns 503.
+      CONNECTOR_CREDENTIAL_ENCRYPTION_KEY: ${TEST_CONNECTOR_CREDENTIAL_ENCRYPTION_KEY:-ZmFrZS1jb25uZWN0b3ItdGVzdC1rZXktMDAwMDAwMDA=}
 
   chat-worker:
     # Never read a developer's real .env into the disposable test stack.
@@ -113,6 +121,19 @@ services:
       WEB_CONCURRENCY: "1"
     volumes:
       - ./tests/integration/fake_model.py:/fake/fake_model.py:ro
+    restart: unless-stopped
+
+  fake-local:
+    # Fake MCP / Home Assistant / FHIR / HTML servers for the local-services connector e2e.
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    command: ["uvicorn", "fake_local_services:app", "--host", "0.0.0.0", "--port", "8000", "--app-dir", "/fake"]
+    env_file: !reset []
+    environment:
+      WEB_CONCURRENCY: "1"
+    volumes:
+      - ./tests/integration/fake_local_services.py:/fake/fake_local_services.py:ro
     restart: unless-stopped
 
 volumes:

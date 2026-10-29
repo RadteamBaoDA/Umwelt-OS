@@ -466,6 +466,13 @@ export function OpenGenerativeUIRenderer({
           }}
           data-testid="sandboxed-ui-iframe"
         />
+        {/* Provenance cue: this widget is model-generated code running in an isolated iframe. */}
+        <span
+          data-testid="sandboxed-ui-badge"
+          className="pointer-events-none absolute bottom-1.5 right-2 z-10 rounded-md border border-border bg-surface/90 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+        >
+          {genUiCopy().sandboxedBadge}
+        </span>
       </div>
     </ExportOverlay>
   );

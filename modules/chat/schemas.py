@@ -386,6 +386,7 @@ class MessageRead(BaseModel):
     web_search: WebSearchOutcomeRead | None = None
     generative_ui: GenerativeUIPayload | None = None  # first part, kept for older clients
     generative_ui_parts: list[GenerativeUIPayload] = Field(default_factory=list)
+    reasoning: str | None = None  # model "thinking" text kept from the stream, capped at write time
 
 
 class ChatExportCitation(BaseModel):
@@ -609,6 +610,16 @@ class MessageMutationRequest(BaseModel):
     client_request_id: str = Field(min_length=1, max_length=128)
     content: str | None = Field(default=None, min_length=1, max_length=20_000)
     web_search: bool = False
+    # Optional explicit model choice; omitted carries the original run's model forward.
+    provider_id: str | None = Field(default=None, min_length=1, max_length=64)
+    model: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def _override_is_pair(self) -> "MessageMutationRequest":
+        """Require provider_id and model together so an override always names one exact configured model."""
+        if (self.provider_id is None) != (self.model is None):
+            raise ValueError("provider_id and model must be provided together")
+        return self
 
 
 class SendMessageResponse(BaseModel):

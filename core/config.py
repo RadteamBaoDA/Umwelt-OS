@@ -97,6 +97,12 @@ class Settings(BaseSettings):
     pick_enabled: bool = Field(default=False, validation_alias="PICK_ENABLED")
     google_client_id: str = ""
     google_client_secret: SecretStr = SecretStr("")
+    connector_google_client_id: str = Field(default="", validation_alias="CONNECTOR_GOOGLE_CLIENT_ID")
+    connector_google_client_secret: SecretStr = Field(default=SecretStr(""), validation_alias="CONNECTOR_GOOGLE_CLIENT_SECRET", repr=False)
+    connector_google_callback_url: str = Field(default="", validation_alias="CONNECTOR_GOOGLE_CALLBACK_URL")
+    connector_reddit_client_id: str = Field(default="", validation_alias="CONNECTOR_REDDIT_CLIENT_ID")
+    connector_reddit_client_secret: SecretStr = Field(default=SecretStr(""), validation_alias="CONNECTOR_REDDIT_CLIENT_SECRET", repr=False)
+    connector_reddit_callback_url: str = Field(default="", validation_alias="CONNECTOR_REDDIT_CALLBACK_URL")
     github_app_client_id: str = ""
     github_app_client_secret: SecretStr = SecretStr("")
     github_app_callback_url: str = ""

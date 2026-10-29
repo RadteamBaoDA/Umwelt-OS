@@ -85,7 +85,7 @@ _SOURCE_PURGE_PRODUCERS = {
 }
 _READY_EVENT_PRODUCERS = {
     "document.version.ready": {"modules.ingestion", "modules.knowledge.documents"},
-    "news.document.ready": {"modules.knowledge.documents"},
+    "news.document.ready": {"modules.ingestion", "modules.knowledge.documents"},
 }
 
 
@@ -1904,13 +1904,14 @@ async def accept_native_collection(
     expected_world_credential_operation_id: UUID | None,
     request_ref: CollectionRequestRef | None = None,
     state_update: CollectionStateUpdate | None = None,
+    provider_credential_revision: int | None = None,
 ) -> NativeCollectionReceipt:
     """Authenticate, reclassify, and atomically persist one reserved native page.
 
-    Source and connector/native credential fences precede batch replay lookup;
-    the collection token and cursor are rechecked only for new work. Telegram
-    proofs are recomputed from raw updates and the verified bot binding. GitHub
-    proof shape, digest, and current grant fence are checked before exact replay
+    Source, connector, Google/Reddit OAuth grant, and workspace-app REST credential revision fences precede
+    batch replay lookup; the collection token and cursor are rechecked only for new work. Telegram
+    proofs are recomputed from raw updates and the verified bot binding. Google and GitHub
+    grant proof is checked before exact replay
     lookup; for new work, records and cursor are recomputed only after the live
     reservation is confirmed. Targeted hint acknowledgement is flush-only in the
     same batch/source visibility transaction. Ambiguous missing current GitHub
@@ -1968,6 +1969,18 @@ async def accept_native_collection(
         ),
         lock=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled):
         raise HTTPException(status_code=409, detail="Connector collection fence is stale")
+    revisioned_rest_provider = source.provider in {"notion", "slack", "x"}
+    optional_rest_provider = source.provider == "mastodon"
+    if (revisioned_rest_provider and provider_credential_revision is None) or (
+        provider_credential_revision is not None and not (revisioned_rest_provider or optional_rest_provider)
+    ):
+        raise HTTPException(status_code=422, detail="Provider credential revision proof does not match the source")
+    if (provider_credential_revision is not None
+            and not await connectors.validate_provider_credential_revision_in_uow(
+                session, source.id, provider_credential_revision, access_fence=access_fence,
+                source_fence=source_fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )):
+        raise HTTPException(status_code=409, detail="Provider credential changed during collection")
     bot_id: str | None = None
     github_proof = None
     github_fence = None
@@ -2055,6 +2068,54 @@ async def accept_native_collection(
         if github_fence is None or github_proof.fence != github_fence:
             raise HTTPException(status_code=409, detail="GitHub grant is unavailable or requires reconnection")
 
+    google_provider = source.provider in {"google_mail", "google_calendar", "google_drive"}
+    google_proof_present = payload.google_operation_id is not None and payload.google_token_revision is not None
+    if google_provider != google_proof_present or (
+        not google_provider and (payload.google_operation_id is not None or payload.google_token_revision is not None)
+    ):
+        raise HTTPException(status_code=422, detail="Google credential proof does not match the provider")
+    if google_provider:
+        from modules.connectors.models import ConnectorOAuthGrant, ConnectorProvisioning
+
+        grant = await session.scalar(select(ConnectorOAuthGrant).where(
+            ConnectorOAuthGrant.source_id == source.id,
+        ).with_for_update())
+        credential_revision = await session.scalar(select(ConnectorProvisioning.credential_revision).where(
+            ConnectorProvisioning.source_id == source.id,
+        ))
+        if (grant is None or grant.state != "ready" or grant.encrypted_tokens is None
+                or grant.workspace_id != source.workspace_id or grant.owner_id != _actor_id(scope)
+                or grant.provider != source.provider or grant.source_generation != payload.source_generation
+                or grant.configuration_revision != payload.connector_revision
+                or grant.credential_revision != credential_revision
+                or grant.operation_id != payload.google_operation_id
+                or grant.token_revision != payload.google_token_revision):
+            raise HTTPException(status_code=409, detail="Google grant changed during collection")
+
+    reddit_provider = source.provider == "reddit"
+    reddit_proof_present = payload.reddit_operation_id is not None and payload.reddit_token_revision is not None
+    if reddit_provider != reddit_proof_present or (
+        not reddit_provider and (payload.reddit_operation_id is not None or payload.reddit_token_revision is not None)
+    ):
+        raise HTTPException(status_code=422, detail="Reddit credential proof does not match the provider")
+    if reddit_provider:
+        from modules.connectors.models import ConnectorOAuthGrant, ConnectorProvisioning
+
+        grant = await session.scalar(select(ConnectorOAuthGrant).where(
+            ConnectorOAuthGrant.source_id == source.id,
+        ).with_for_update())
+        credential_revision = await session.scalar(select(ConnectorProvisioning.credential_revision).where(
+            ConnectorProvisioning.source_id == source.id,
+        ))
+        if (grant is None or grant.state != "ready" or grant.encrypted_tokens is None
+                or grant.workspace_id != source.workspace_id or grant.owner_id != _actor_id(scope)
+                or grant.provider != "reddit" or grant.source_generation != payload.source_generation
+                or grant.configuration_revision != payload.connector_revision
+                or grant.credential_revision != credential_revision
+                or grant.operation_id != payload.reddit_operation_id
+                or grant.token_revision != payload.reddit_token_revision):
+            raise HTTPException(status_code=409, detail="Reddit grant changed during collection")
+
     stable_records = [record.model_dump(mode="json", exclude={"collected_at"}) for record in payload.records]
     stable = {
         "source_id": str(payload.source_id), "source_generation": payload.source_generation,
@@ -2069,7 +2130,7 @@ async def accept_native_collection(
     batch_key = f"native:{source.provider}:{payload_hash}"
     if len(batch_key) > 255:
         raise HTTPException(status_code=422, detail="Native batch key exceeds its bound")
-    # Provider credential -> collector -> optional GitHub grant -> state -> receipt order.
+    # Provider credential -> collector -> optional provider grant -> state -> receipt order.
     state = await session.scalar(select(SourceIngestionState).where(
         SourceIngestionState.source_id == source.id,
     ).with_for_update().execution_options(populate_existing=True))

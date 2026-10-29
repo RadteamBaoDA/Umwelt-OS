@@ -318,3 +318,81 @@ async def test_csrf_rotation_retries_busy_owner_lock_then_succeeds(monkeypatch) 
         response = await client.get("/api/v1/auth/session")
     assert response.status_code == 200
     assert calls == 3
+
+
+@pytest.mark.asyncio
+async def test_lock_retry_exhausts_with_409_and_backs_off_linearly(monkeypatch) -> None:
+    """A lock that stays busy is attempted ``attempts`` times, sleeping 50 ms * n between tries, then 409s."""
+    sleeps: list[float] = []
+    rollbacks = 0
+    calls = 0
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    async def busy(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise HTTPException(status_code=409, detail="busy")
+
+    class FakeSession:
+        async def rollback(self) -> None:
+            nonlocal rollbacks
+            rollbacks += 1
+
+    monkeypatch.setattr(auth_routes.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(auth_routes, "_lock_owner_session", busy)
+    stale = AuthSession(token_hash="h", owner_id=1)
+    with pytest.raises(HTTPException) as exc:
+        await auth_routes._lock_owner_session_retrying(None, FakeSession(), stale)  # type: ignore[arg-type]
+    assert exc.value.status_code == 409
+    assert calls == 8 and rollbacks == 7
+    assert sleeps == pytest.approx([0.05 * n for n in range(1, 8)])
+
+
+@pytest.mark.asyncio
+async def test_lock_retry_does_not_swallow_non_409(monkeypatch) -> None:
+    """Only lock contention is retried; other HTTP errors surface immediately."""
+    calls = 0
+
+    async def denied(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise HTTPException(status_code=401, detail="no")
+
+    monkeypatch.setattr(auth_routes, "_lock_owner_session", denied)
+    with pytest.raises(HTTPException) as exc:
+        await auth_routes._lock_owner_session_retrying(None, None, AuthSession(token_hash="h", owner_id=1))  # type: ignore[arg-type]
+    assert exc.value.status_code == 401 and calls == 1
+
+
+@pytest.mark.asyncio
+async def test_owner_lock_share_flag_compiles_for_share_vs_for_update() -> None:
+    """Rotation's owner lock is FOR SHARE NOWAIT (never starved by admissions); the default stays FOR UPDATE NOWAIT."""
+    from sqlalchemy.dialects import postgresql
+
+    compiled: list[str] = []
+
+    class FakeSession:
+        async def scalar(self, stmt):
+            compiled.append(str(stmt.compile(dialect=postgresql.dialect())))
+            return  # noqa: PLR1711
+
+    await auth_routes._lock_owner(FakeSession(), 1)  # type: ignore[arg-type]
+    await auth_routes._lock_owner(FakeSession(), 1, share=True)  # type: ignore[arg-type]
+    assert compiled[0].endswith("FOR UPDATE NOWAIT")
+    assert compiled[1].endswith("FOR SHARE NOWAIT")
+
+
+@pytest.mark.asyncio
+async def test_rotation_retry_requests_share_owner_lock(monkeypatch) -> None:
+    """The CSRF rotation path asks for the shared owner lock."""
+    seen: dict[str, object] = {}
+
+    async def fake(*_args, **kwargs):
+        seen.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(auth_routes, "_lock_owner_session", fake)
+    await auth_routes._lock_owner_session_retrying(None, None, AuthSession(token_hash="h", owner_id=1))  # type: ignore[arg-type]
+    assert seen["share_owner"] is True

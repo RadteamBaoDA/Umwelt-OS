@@ -3099,10 +3099,13 @@ async def upsert_normalized_document_in_uow(
             session, payload.source_id, payload.expected_source_generation, scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
         )
+        # Generic RSS/web/REST sources have no catalog provider on the row; Connectors derives their scope
+        # provider from the source type, so compare against the same derivation or every generic fetch is rejected.
+        expected_provider = source_projection.provider or {"rss": "rss", "web": "web", "api": "rest"}.get(source_projection.type)
         if (provider_scope is None or provider_scope.workspace_id != scope.workspace_id
                 or provider_scope.source_id != payload.source_id
                 or provider_scope.source_generation != payload.expected_source_generation
-                or provider_scope.provider_id != source_projection.provider
+                or provider_scope.provider_id != expected_provider
                 or provider_scope.discriminator != discriminator):
             raise RuntimeError("normalized_preparation_provider_changed")
     expected, document, identity = await _normalized_target(session, payload.provider_id, preparation)

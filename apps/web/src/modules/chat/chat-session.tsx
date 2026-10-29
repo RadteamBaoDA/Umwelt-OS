@@ -4,7 +4,7 @@ import * as React from 'react';
 import { ApiError, apiRequest } from '@/core/api';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { PlusIcon } from 'lucide-react';
+import { MoreHorizontalIcon, PlusIcon } from 'lucide-react';
 import {
   cancelResponse,
   chatKeys,
@@ -16,6 +16,7 @@ import {
   streamResponseEvents,
   submitResponseInput,
   type ChatMessage,
+  type StreamEventsOptions,
   type InputRequest,
   type Citation,
   type WebSearchOutcome,
@@ -39,6 +40,7 @@ import {
 } from '@/core/app-shell/chat-controller';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { Button } from '@/components/ui/button';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cancelAgentRun, getAgentProfiles, getAgentRun, listAgentRuns, startAgentRun } from '@/modules/agents/api';
 import { AgentRunDetail } from '@/modules/agents/run-detail';
@@ -82,6 +84,11 @@ function chatFailureKey(err: unknown, fallback: string): string {
   return fallback;
 }
 
+/** Max automatic stream resumes after a transient network/5xx failure, each resuming from the last event id. */
+export const MAX_RESUME_ATTEMPTS = 3;
+/** Base delay of the exponential resume backoff (500ms, 1s, 2s). */
+export const RESUME_BACKOFF_MS = 500;
+
 /** Display names for known web-search providers; anything else uses the neutral `webSearchProviderGeneric` copy. */
 const WEB_SEARCH_PROVIDER_LABELS: Record<string, string> = { brave: 'Brave', tavily: 'Tavily' };
 
@@ -92,8 +99,10 @@ export interface ChatSessionProps {
   onConversationCreated?: (id: string) => void;
   /** Mode indicating whether ChatSession is hosted inside the quick drawer or full /chat route. */
   mode?: 'drawer' | 'full';
-  /** Optional actions rendered in the header of the full conversation (e.g. Rename and Delete). */
-  headerActions?: React.ReactNode;
+  /** Opens the rename dialog for the open conversation (full mode header); omitted when there is no saved conversation. */
+  onRenameConversation?: () => void;
+  /** Opens the delete confirmation for the open conversation (full mode header). */
+  onDeleteConversation?: () => void;
   /** Optional callback to close the drawer presentation when hosted inside ChatDrawer. */
   onCloseDrawer?: () => void;
 }
@@ -117,7 +126,8 @@ export function ChatSession({
   conversationId,
   onConversationCreated,
   mode = 'drawer',
-  headerActions,
+  onRenameConversation,
+  onDeleteConversation,
 }: ChatSessionProps) {
   const t = useTranslations('chat');
   const tAgents = useTranslations('aiSettings');
@@ -126,6 +136,9 @@ export function ChatSession({
   const chatCtrl = useChatController();
 
   const [streamingText, setStreamingText] = React.useState<string>('');
+  const [streamingReasoning, setStreamingReasoning] = React.useState<string>('');
+  // Neutral "generation stopped" outcome; kept apart from `error` so it never renders as a failure with Retry.
+  const [cancelled, setCancelled] = React.useState(false);
   const [streamingCitations, setStreamingCitations] = React.useState<Citation[]>([]);
   const [streamingWebSearch, setStreamingWebSearch] = React.useState<WebSearchOutcome | null>(null);
   const [streamingUi, setStreamingUi] = React.useState<UiPart[]>([]);
@@ -137,7 +150,7 @@ export function ChatSession({
   const [isPending, setIsPending] = React.useState<boolean>(false);
   const [activeResponseId, setActiveResponseId] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const providerReady = useChatProviderReady(mode === 'full');
+  const providerReady = useChatProviderReady();
   const [providerGateOpen, setProviderGateOpen] = React.useState(false);
   const [editingMessageId, setEditingMessageId] = React.useState<string | null>(null);
   const [selectedProfileId, setSelectedProfileId] = React.useState('assistant');
@@ -159,6 +172,12 @@ export function ChatSession({
     promise: Promise<void>;
   } | null>(null);
   const sendGenerationRef = React.useRef(0);
+  // Last content handed to handleSend, so Retry can resend it even after the draft was cleared.
+  const lastSentRef = React.useRef<string | null>(null);
+  // Response ids already reattached once after a stream ended without a terminal event.
+  const reattachedRef = React.useRef<Set<string>>(new Set());
+  // Streams started per response id; recovery reattaches only when this stream was the sole attach so far.
+  const attachCountRef = React.useRef<Map<string, number>>(new Map());
   const mountedRef = React.useRef(false);
   const promotedSelectionRef = React.useRef<{
     conversationId: string;
@@ -256,6 +275,7 @@ export function ChatSession({
     setActiveAgentRunId(null);
     setIsStreaming(false);
     setStreamingText('');
+    setStreamingReasoning('');
     setStreamingCitations([]);
     setStreamingWebSearch(null);
     setStreamingUi([]);
@@ -272,6 +292,7 @@ export function ChatSession({
     promotedSelectionRef.current = null;
     setIsPending(false);
     setError(null);
+    setCancelled(false);
   }, [conversationId, chatCtrl.activeConversationGeneration]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
@@ -299,10 +320,17 @@ export function ChatSession({
       return;
     }
     attached?.controller.abort();
+    attachCountRef.current.set(responseId, (attachCountRef.current.get(responseId) ?? 0) + 1);
     const abortCtrl = new AbortController();
     abortControllerRef.current = abortCtrl;
-    const streamPromise = streamResponseEvents(responseId, {
+    // Terminal = the run reached message.done or a terminal status; anything else is a lost stream to recover.
+    let terminal = false;
+    let unavailable = false;
+    const streamOptions: StreamEventsOptions = {
       signal: abortCtrl.signal,
+      onReasoning: (chunk) => {
+        if (isCurrentView()) setStreamingReasoning((prev) => prev + chunk);
+      },
       onDelta: (chunk) => {
         if (isCurrentView()) setStreamingText((prev) => prev + chunk);
       },
@@ -333,9 +361,11 @@ export function ChatSession({
         });
       },
       onDone: () => {
+        terminal = true;
         if (isCurrentView()) {
           setIsStreaming(false);
           setStreamingText('');
+          setStreamingReasoning('');
           setStreamingCitations([]);
           setStreamingWebSearch(null);
           setStreamingUi([]);
@@ -346,18 +376,26 @@ export function ChatSession({
         void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
       },
       onStatus: (statusVal) => {
+        if (statusVal === 'cancelled' || statusVal === 'failed' || statusVal === 'auth_expired') terminal = true;
+        if (statusVal === 'unavailable') {
+          // The server cannot serve this stream: stop reading and let the post-stream recovery reset the UI.
+          unavailable = true;
+          abortCtrl.abort();
+          return;
+        }
         if (statusVal === 'cancelled') {
           if (isCurrentView()) {
             setIsStreaming(false);
             setIsPending(false);
             setStreamingText('');
+            setStreamingReasoning('');
             setStreamingCitations([]);
             setStreamingWebSearch(null);
             setStreamingUi([]);
             // A still-pending request is shown as cancelled (an expired one keeps its own state).
             setInputRequest((prev) => (prev && prev.state === 'pending' ? { ...prev, state: 'cancelled' } : prev));
             setActiveResponseId(null);
-            setError(t('cancelled'));
+            setCancelled(true);
           }
           void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(responseConversationId) });
           void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
@@ -367,6 +405,7 @@ export function ChatSession({
             setIsStreaming(false);
             setIsPending(false);
             setStreamingText('');
+            setStreamingReasoning('');
             setStreamingCitations([]);
             setStreamingWebSearch(null);
             setStreamingUi([]);
@@ -387,7 +426,9 @@ export function ChatSession({
             if (attachedResponseStreamRef.current === streamAttachment) attachedResponseStreamRef.current = null;
             if (!isCurrentView() || attachedResponseStreamRef.current) return;
             setError(null);
+            setCancelled(false);
             setStreamingText('');
+            setStreamingReasoning('');
             setStreamingCitations([]);
             setStreamingUi([]);
             setActiveResponseId(responseId);
@@ -396,15 +437,33 @@ export function ChatSession({
           }).catch(() => undefined);
         }
       },
-      onError: () => {
-        if (!abortCtrl.signal.aborted && isCurrentView()) {
-          setIsStreaming(false);
-          setIsPending(false);
-          setActiveResponseId(null);
-          setError(t('errorSending'));
+      // Failures are surfaced once, by the resume loop below, after automatic resumes are exhausted.
+      onError: () => undefined,
+    };
+    const streamPromise = (async () => {
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          await streamResponseEvents(responseId, streamOptions);
+          return;
+        } catch (err: unknown) {
+          const status = (err as { status?: number }).status;
+          // Only transient failures (network, 5xx) resume; 4xx means the server rejected this stream.
+          if (abortCtrl.signal.aborted || terminal || (status !== undefined && status < 500) || attempt >= MAX_RESUME_ATTEMPTS) throw err;
+          // Without a cursor the server replays from the start, so drop partial local output to avoid duplicates.
+          if (!streamOptions.lastEventId && isCurrentView()) {
+            setStreamingText('');
+            setStreamingReasoning('');
+            setStreamingCitations([]);
+            setStreamingUi([]);
+          }
+          await new Promise<void>((resolve) => {
+            const timer = window.setTimeout(resolve, RESUME_BACKOFF_MS * 2 ** attempt);
+            abortCtrl.signal.addEventListener('abort', () => { window.clearTimeout(timer); resolve(); }, { once: true });
+          });
+          if (abortCtrl.signal.aborted) return;
         }
-      },
-    });
+      }
+    })();
     const streamAttachment = {
       responseId,
       conversationId: responseConversationId,
@@ -427,6 +486,35 @@ export function ChatSession({
       if (attachedResponseStreamRef.current === streamAttachment) {
         attachedResponseStreamRef.current = null;
         if (abortControllerRef.current === abortCtrl) abortControllerRef.current = null;
+      }
+    }
+
+    // Stuck-"Generating" recovery: the stream ended (or reported `unavailable`) without a terminal event.
+    // Clear the live state, refresh the transcript, and reattach once if the server still reports the run active.
+    if (!terminal && (unavailable || !abortCtrl.signal.aborted)) {
+      if (isCurrentView()) {
+        setIsStreaming(false);
+        setIsPending(false);
+        setActiveResponseId(null);
+        setStreamingText('');
+        setStreamingReasoning('');
+        setStreamingCitations([]);
+        setStreamingWebSearch(null);
+        setStreamingUi([]);
+      }
+      // Only the first lost stream of a response may reattach; later ones just reset the UI (no retry storm).
+      const firstRecovery = !reattachedRef.current.has(responseId);
+      reattachedRef.current.add(responseId);
+      void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
+      const detail = await queryClient.fetchQuery({
+        queryKey: chatKeys.conversation(responseConversationId),
+        queryFn: () => getConversation(responseConversationId),
+        staleTime: 0,
+      }).catch(() => null);
+      if (firstRecovery && attachCountRef.current.get(responseId) === 1 && detail?.active_response_id === responseId && !attachedResponseStreamRef.current && isCurrentView()) {
+        setActiveResponseId(responseId);
+        setIsStreaming(true);
+        await streamRunRef.current?.(responseId, responseConversationId, isCurrentView).catch(() => undefined);
       }
     }
   }, [queryClient, t]);
@@ -453,10 +541,12 @@ export function ChatSession({
     setIsPending(false);
     setIsStreaming(true);
     setStreamingText('');
+    setStreamingReasoning('');
     setStreamingCitations([]);
     setStreamingWebSearch(null);
     setStreamingUi([]);
     setError(null);
+    setCancelled(false);
     void streamResponseRun(responseId, conversationId, isCurrentView).catch(() => {
       // streamResponseRun reports visible failures through its guarded error path.
     });
@@ -486,6 +576,8 @@ export function ChatSession({
       && selectionRef.current.conversationId === viewConversationId;
 
     setError(null);
+
+    setCancelled(false);
     setIsPending(true);
     const webSearchRequested = mode === 'full' && webSearchUsable && webSearchOn;
     try {
@@ -505,6 +597,7 @@ export function ChatSession({
           client_request_id: envelope.clientRequestId,
           ...(envelope.content !== undefined ? { content: envelope.content } : {}),
           ...(webSearchRequested ? { web_search: true } : {}),
+          ...(modelChoice ? { provider_id: modelChoice.providerId, model: modelChoice.model } : {}),
         },
         session.csrfToken,
       );
@@ -523,6 +616,7 @@ export function ChatSession({
       setIsPending(false);
       setIsStreaming(true);
       setStreamingText('');
+      setStreamingReasoning('');
       setStreamingCitations([]);
       setStreamingWebSearch(null);
       setStreamingUi([]);
@@ -535,7 +629,7 @@ export function ChatSession({
           : t(chatFailureKey(mutationError, 'revisionFailed')));
       }
     }
-  }, [chatCtrl, conversationId, isPending, isStreaming, messages, mode, queryClient, session.csrfToken, streamResponseRun, t, webSearchUsable, webSearchOn]);
+  }, [chatCtrl, conversationId, isPending, isStreaming, messages, mode, modelChoice, queryClient, session.csrfToken, streamResponseRun, t, webSearchUsable, webSearchOn]);
 
   /** Opens the full Chat composer with a user message's content for an append-only edit. */
   const handleEditMessage = React.useCallback((message: ChatMessage) => {
@@ -567,6 +661,7 @@ export function ChatSession({
         setProviderGateOpen(true);
         return false;
       }
+      lastSentRef.current = content;
       if (mode === 'full' && effectiveEditingMessageId) {
         await handleMessageMutation('edit', effectiveEditingMessageId, content);
         // Edit is an append-only mutation, not a widget send; its outcome is not reported here.
@@ -585,6 +680,8 @@ export function ChatSession({
         selectionRef.current.conversationId === viewConversationId;
 
       setError(null);
+
+      setCancelled(false);
       setIsPending(true);
       const otherPending = Object.values(chatCtrl.pendingSpecialistRuns).find((run) => run.prompt === content) ?? null;
       const unresolved = pendingProfileRun ?? otherPending;
@@ -722,6 +819,7 @@ export function ChatSession({
         setIsPending(false);
         setIsStreaming(true);
         setStreamingText('');
+        setStreamingReasoning('');
         setStreamingCitations([]);
         setStreamingWebSearch(null);
         setStreamingUi([]);
@@ -733,9 +831,10 @@ export function ChatSession({
           setIsPending(false);
           setIsStreaming(false);
           setActiveResponseId(null);
-          // Selection failures are identified by the server's machine code (never by message text) and keep the draft.
+          // A send the server did not accept (409/422/429/network) must not lose the text the composer already cleared.
+          if (!accepted) chatCtrl.setDraft(content);
+          // Selection failures are identified by the server's machine code (never by message text).
           const selectionFailure = selectionStage && selItems.length > 0 && err instanceof ApiError && !!err.code && Object.hasOwn(SELECTION_ERROR_KEYS, err.code);
-          if (selectionFailure) chatCtrl.setDraft(content);
           const errMsg = err instanceof LocalizedError
             ? err.message
             : selectionFailure
@@ -792,9 +891,11 @@ export function ChatSession({
     setIsStreaming(false);
     setIsPending(false);
     setActiveResponseId(null);
-    setError(t('cancelled'));
+    // User-initiated stop is a neutral status line, never an error banner (so no Retry is offered).
+    setError(null);
+    setCancelled(true);
     void refetchDetail();
-  }, [activeResponseId, refetchDetail, session.csrfToken, t]);
+  }, [activeResponseId, refetchDetail, session.csrfToken]);
 
   /**
    * Starts a clean new conversation thread.
@@ -804,7 +905,9 @@ export function ChatSession({
     chatCtrl.resetConversation();
     setEditingMessageId(null);
     setError(null);
+    setCancelled(false);
     setStreamingText('');
+    setStreamingReasoning('');
     setStreamingCitations([]);
     setStreamingWebSearch(null);
     setStreamingUi([]);
@@ -865,19 +968,40 @@ export function ChatSession({
     <PromptBridgeProvider onSendPrompt={handleWidgetSendPrompt}>
       <div className="flex flex-col h-full bg-background relative overflow-hidden">
         {/* Session header if inside drawer or full mode */}
-        <div className={`flex items-center justify-between gap-2 border-b border-border bg-surface shrink-0 ${mode === 'drawer' ? 'px-4 py-3 pr-14' : 'px-5 py-3'}`}>
+        <div className={`flex flex-wrap items-center justify-between gap-2 border-b border-border bg-surface shrink-0 ${mode === 'drawer' ? 'px-4 py-3 pr-14' : 'px-5 py-3'}`}>
           {mode === 'full' ? (
             <h1 className="min-w-0 flex-1 truncate text-lg font-semibold text-foreground">
               {conversationDetail?.title || t('title')}
             </h1>
           ) : null}
 
-          <div className={`flex items-center gap-2 shrink-0 ${mode === 'drawer' ? 'order-first' : ''}`}>
+          <div className={`flex shrink-0 items-center gap-2 ${mode === 'drawer' ? 'order-first' : ''}`}>
             {mode === 'full' && <PickQrButton csrfToken={session.csrfToken} onPrompt={handleTranscriptSendPrompt} />}
-            {mode === 'full' && headerActions}
+            {mode === 'full' && (onRenameConversation || onDeleteConversation) && (
+              <>
+                {/* sm and up: inline buttons. Below sm they collapse into one "More" menu so the header never overflows at 375px. */}
+                <div className="hidden items-center gap-2 sm:flex">
+                  {onRenameConversation && <Button type="button" variant="outline" className="min-h-11" onClick={onRenameConversation}>{t('renameConversation')}</Button>}
+                  {onDeleteConversation && <Button type="button" variant="outline" className="min-h-11 text-destructive" onClick={onDeleteConversation}>{t('delete')}</Button>}
+                </div>
+                <div className="sm:hidden">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button type="button" variant="outline" size="icon" aria-label={t('moreActions')}>
+                        <MoreHorizontalIcon className="size-4" aria-hidden="true" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      {onRenameConversation && <DropdownMenuItem onSelect={onRenameConversation}>{t('renameConversation')}</DropdownMenuItem>}
+                      {onDeleteConversation && <DropdownMenuItem className="text-destructive" onSelect={onDeleteConversation}>{t('delete')}</DropdownMenuItem>}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              </>
+            )}
             {mode === 'full' && (
               <Select value={pendingProfileRun?.profileId ?? selectedProfileId} onValueChange={setSelectedProfileId}>
-                <SelectTrigger aria-label={tAgents('agentSelect')} className="w-40" disabled={Boolean(pendingProfileRun)}><SelectValue placeholder={tAgents('agentSelect')} /></SelectTrigger>
+                <SelectTrigger aria-label={tAgents('agentSelect')} className="w-32 sm:w-40" disabled={Boolean(pendingProfileRun)}><SelectValue placeholder={tAgents('agentSelect')} /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="assistant">{tAgents('agentAssistant')}</SelectItem>
                   {(profiles.data ?? []).map((profile) => (
@@ -968,6 +1092,8 @@ export function ChatSession({
           mode={mode}
           messages={messages}
           streamingText={streamingText}
+          streamingReasoning={streamingReasoning}
+          cancelled={cancelled}
           streamingCitations={streamingCitations}
           streamingWebSearch={streamingWebSearch}
           streamingUi={streamingUi}
@@ -979,7 +1105,7 @@ export function ChatSession({
           onSendPrompt={handleTranscriptSendPrompt}
           onWidgetSendPrompt={handleWidgetSendPrompt}
           onRetry={() => {
-            const retryDraft = pendingProfileRun?.prompt ?? chatCtrl.draft;
+            const retryDraft = pendingProfileRun?.prompt ?? lastSentRef.current ?? chatCtrl.draft;
             if (retryDraft) {
               void handleSend(retryDraft);
             }
@@ -1008,6 +1134,8 @@ export function ChatSession({
           onChange={pendingProfileRun ? () => undefined : chatCtrl.setDraft}
           onSend={handleSend}
           onStop={handleStop}
+          onAttachFiles={mode === 'full' ? (files) => attachments.add(files) : undefined}
+          attachmentBusy={isPending || isStreaming || attachmentsUnavailable || attachments.full}
           isStreaming={isStreaming}
           disabled={isPending}
           modelLabel={latestAssistant?.model_identity ?? null}

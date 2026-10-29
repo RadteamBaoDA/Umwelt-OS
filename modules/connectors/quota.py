@@ -25,7 +25,7 @@ from modules.connectors.models import (
 from modules.connectors.provider_specs import (
     QUOTA_POLICY_REVISION,
     QuotaWindowPolicy,
-    get_provider_spec,
+    get_quota_policies,
 )
 
 INSTANCE_GLOBAL_SUBJECT = "instance-global"
@@ -85,11 +85,11 @@ def subject_hash(
 def _plan(
     provider_id: str, now: datetime, credential: str | None, egress: str | None,
 ) -> list[tuple[QuotaWindowPolicy, str, datetime, datetime]]:
-    spec = get_provider_spec(provider_id)
-    if spec is None:
+    policies = get_quota_policies(provider_id)
+    if not policies:
         raise ValueError("Provider has no quota policy")
     rows = []
-    for policy in spec.quota:
+    for policy in policies:
         start, end = window_bounds(policy.window, now)
         rows.append((policy, subject_hash(policy, provider_id, credential=credential, egress=egress), start, end))
     # Lexicographic complete-key order keeps concurrent debits deadlock-free.

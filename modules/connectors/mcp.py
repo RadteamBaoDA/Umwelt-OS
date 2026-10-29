@@ -27,6 +27,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from core.realtime import commit_with_replay, make_source_change
 from core.workspaces.public import lock_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope
+from modules.connectors import scheduler
+from modules.connectors.collection_schemas import CollectionRequestRef
 from modules.ingestion import public as ingestion
 from modules.ingestion.schemas import Receipt, ReceiveBatch
 from modules.sources import public as sources
@@ -73,8 +75,9 @@ CONTRACT = McpCollectionContract(
         "not followed; a server that paginates is collected one window at a time."
     ),
     history=(
-        "Only what the tool or resource returns now; there is no backfill. Every run appends one "
-        "observation per record, so unchanged items repeat as observations with an identical version."
+        "Only what the tool or resource returns now; there is no backfill. The n8n path appends one "
+        "observation per record every run, so unchanged items repeat with an identical version; the "
+        "native worker path drops records already stored, so an unchanged run settles as no_changes."
     ),
 )
 
@@ -218,8 +221,14 @@ async def collect(
     *,
     scope: InternalJobScope,
     multi_workspace_enabled: bool,
+    request_ref: CollectionRequestRef | None = None,
 ) -> dict[str, Any]:
     """Run the source's allowlisted calls once and submit one fenced ingestion batch.
+
+    ``request_ref`` is the admitted durable collection request (n8n ``/mcp-collect``). When set,
+    every fence also renews that admission, and the outcome settles the request through the one
+    ingestion proof (``request_ref``) instead of a minted collector credential; ``None`` keeps
+    the legacy credential-minting behavior.
 
     Invariants: each call re-resolves its grant and exact active provisioning revision, so a
     disabled connection, revoked grant, or changed/disabled source fails closed before any
@@ -283,6 +292,12 @@ async def collect(
                         if exc.status_code not in _DENIED:
                             raise
                         return False
+                    # An expired or replaced admission must stop every further outbound request.
+                    if request_ref is not None and not await scheduler.renew_admission(
+                        session, request_ref.request_id, request_ref.admission_token,
+                        multi_workspace_enabled=multi_workspace_enabled,
+                    ):
+                        return False
                     return await _collection_fence(
                         session, source_id, expected_generation, expected_connector_revision,
                         scope=scope, multi_workspace_enabled=multi_workspace_enabled,
@@ -322,17 +337,30 @@ async def collect(
             scope=scope, multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=fence,
         ):
             raise McpCollectionError("mcp_source_stale")
-        await _record_result(
-            session_factory, source, None, no_changes=True,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=fence,
-        )
+        if request_ref is not None:
+            # The admitted request settles itself with the no-change proof (health, receipt, slot).
+            async with session_factory() as session:
+                await ingestion.accept_collection_no_changes(
+                    session, source_id=source_id, source_generation=expected_generation,
+                    connector_revision=expected_connector_revision, request_ref=request_ref,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                )
+        else:
+            await _record_result(
+                session_factory, source, None, no_changes=True,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=fence,
+            )
         return {"status": "no_changes", "run_id": None, "batch_id": None, "failed_calls": failed}
     if len(records) > MAX_RECORDS:
         records = records[:MAX_RECORDS]
     batch = ReceiveBatch(
         source_id=source_id, source_generation=source.generation,
         connector_revision=expected_connector_revision,
-        batch_key="mcp:" + _digest(f"{source_id}:{source.generation}:{collected_at.isoformat()}"),
+        # Admitted requests are idempotent per request id, as in the native generic accept path.
+        batch_key=(
+            f"connector-request:{request_ref.request_id}" if request_ref is not None
+            else "mcp:" + _digest(f"{source_id}:{source.generation}:{collected_at.isoformat()}")
+        ),
         cursor_before=cursor_before, cursor_after="mcp:" + collected_at.isoformat(),
         records=records,
     )
@@ -345,11 +373,14 @@ async def collect(
                 expected_access_fence=fence,
             ) is None:
                 raise McpCollectionError("mcp_source_stale")
-            token = await ingestion.create_collector_credential(
-                session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            )
+            if request_ref is None:
+                token = await ingestion.create_collector_credential(
+                    session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                )
+            # Exactly one proof: the request ref, or the minted credential, never both.
             receipt: Receipt = await ingestion.receive_connector_batch(
                 session, batch, token, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                request_ref=request_ref,
             )
     finally:
         if token is not None:

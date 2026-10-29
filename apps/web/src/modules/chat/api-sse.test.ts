@@ -76,3 +76,25 @@ data: ${JSON.stringify({ text: 'ok', generative_ui: a, generative_ui_parts: [a, 
     expect(onDone).toHaveBeenCalledWith(expect.objectContaining({ generative_ui_parts: [a, b] }));
   });
 });
+
+describe('streamResponseEvents reasoning events', () => {
+  it('dispatches message.reasoning.delta text before the answer deltas and ignores malformed payloads', async () => {
+    mockSse(
+      [
+        `event: message.reasoning.delta\ndata: ${JSON.stringify({ text: 'think ' })}\n\n`,
+        `event: message.reasoning.delta\ndata: not-json\n\n`,
+        `event: message.reasoning.delta\ndata: ${JSON.stringify({ text: 'more' })}\n\n`,
+        `event: message.delta\ndata: ${JSON.stringify({ text: 'Answer' })}\n\n`,
+      ].join(''),
+    );
+    const order: string[] = [];
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await streamResponseEvents('r3', {
+      onReasoning: (text) => order.push(`r:${text}`),
+      onDelta: (text) => order.push(`d:${text}`),
+    });
+
+    expect(order).toEqual(['r:think ', 'r:more', 'd:Answer']);
+  });
+});

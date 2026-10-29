@@ -44,7 +44,7 @@ PRODUCERS_BY_EVENT = {
     "connector.crawl.requested": {"modules.connectors"},
     "ingestion.normalize.requested": {"modules.ingestion"},
     "document.version.ready": {"modules.ingestion", "modules.knowledge.documents"},
-    "news.document.ready": {"modules.knowledge.documents"},
+    "news.document.ready": {"modules.ingestion", "modules.knowledge.documents"},
 }
 
 

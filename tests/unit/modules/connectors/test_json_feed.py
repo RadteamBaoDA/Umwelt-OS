@@ -89,3 +89,11 @@ def test_date_addressed_feeds_resolve_to_a_concrete_day():
     url = feed_request(JSON_FEEDS["wikipedia_mostread"]).url
     assert "{" not in url and url.startswith("https://api.wikimedia.org/feed/v1/wikipedia/en/featured/")
     assert set(json_feed_adapters()) == set(JSON_FEEDS)
+
+
+def test_wikipedia_featured_feed_uses_today_and_pageviews_use_yesterday():
+    now = datetime(2026, 10, 26, 0, 30, tzinfo=UTC)
+    featured, pageviews = JSON_FEEDS["wikipedia_mostread"].url, JSON_FEEDS["wikipedia_top_views"].url
+    assert callable(featured) and callable(pageviews)
+    assert featured(now).endswith("/featured/2026/10/26")
+    assert pageviews(now).endswith("/2026/10/25")

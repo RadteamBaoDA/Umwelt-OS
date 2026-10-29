@@ -687,8 +687,15 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                 raise ValueError("unknown_evidence_chunk")
             if len({item.key for item in extracted.entities}) != len(extracted.entities):
                 raise ValueError("duplicate_candidate_key")
-            if any(item.source_key == item.target_key or item.source_key not in {e.key for e in extracted.entities} or item.target_key not in {e.key for e in extracted.entities} for item in extracted.relationships):
-                raise ValueError("invalid_relationship_endpoint")
+            # Models routinely emit self-loops or edges naming an entity they did not list. Such an
+            # edge has no valid endpoints to store, but it must not discard the valid entities
+            # extracted alongside it, so drop only the bad edges.
+            entity_keys = {e.key for e in extracted.entities}
+            extracted.relationships = [
+                item for item in extracted.relationships
+                if item.source_key != item.target_key
+                and item.source_key in entity_keys and item.target_key in entity_keys
+            ]
             # Reacquire the locks released before inference and compare against the phase-1 snapshot.
             relocked = await sources.lock_source(
                 session, data.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,

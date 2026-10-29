@@ -108,20 +108,6 @@ class PendingBody(BaseModel):
     template_id: str = Field(min_length=1, max_length=64)
 
 
-class ModelSaveTemplateArgs(BaseModel):
-    """Model-facing arguments of ``save_template``: create-only, so a model can never overwrite an existing template.
-
-    There is deliberately no ``id`` field; any ``id`` the model sends is ignored. Owner routes use ``TemplateIn``.
-    """
-
-    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
-
-    name: str = Field(min_length=1, max_length=120)
-    description: str = Field(default="", max_length=500)
-    html: str = Field(min_length=1, max_length=MAX_HTML_CHARS)
-    data_description: str = Field(default="", max_length=500)
-
-
 class ApplyTemplateArgs(BaseModel):
     """Arguments of ``apply_template``: a ``template_id``, or a ``name`` (most recent match); neither uses pending."""
 
@@ -285,11 +271,11 @@ async def run_template_tool(name: str, raw_args: str, session: AsyncSession, con
                             response_id: UUID | None = None) -> str:
     """Execute a template tool and return the tool-message JSON; never raises.
 
-    Tools: ``save_template`` (create-only; stamps ``response_id`` as provenance), ``list_templates`` (owned plus
+    Tools: ``list_templates`` (owned plus
     read-only seeds, no html), ``apply_template`` (returns the html of ``template_id``, or of the most recent
     template called ``name``, or when both are omitted of the conversation's pending template, then clears
-    pending), ``clear_pending_template``. There is no model-callable delete or overwrite: a prompt-injected
-    model must not destroy or replace the owner's templates (owner routes do that). As with todos, the conversation is loaded by id to
+    pending), ``clear_pending_template``. There is no model-callable save, delete or overwrite: a prompt-injected
+    model must not persist, destroy or replace the owner's templates (owner routes do that). As with todos, the conversation is loaded by id to
     derive the run's own owner scope, so a call can only touch that owner's data. Failures roll back and
     return ``{"error": ...}``.
     """
@@ -309,12 +295,6 @@ async def run_template_tool(name: str, raw_args: str, session: AsyncSession, con
             mine = [_record(r, with_html=False) for r in await list_templates(session, scope)]
             return json.dumps({"templates": [*(_record(s, with_html=False) for s in SEED_TEMPLATES), *mine],
                                "pending_template": conversation.pending_template})
-        if name == "save_template":
-            created = ModelSaveTemplateArgs.model_validate(args)
-            row = await save_template(session, scope, TemplateIn(**created.model_dump()),
-                                      source_response_id=response_id)
-            await session.commit()
-            return json.dumps({"saved": _record(row, with_html=False)})
         if name == "apply_template":
             apply_args = ApplyTemplateArgs.model_validate(args)
             if apply_args.template_id:

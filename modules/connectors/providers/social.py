@@ -46,9 +46,12 @@ def _validated_next(value: str, owner: str, repository: str) -> tuple[str, int]:
     parsed = urlsplit(target)
     expected_path = f"/repos/{owner}/{repository}/releases"
     query = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+    # GitHub's Link header names the repository by numeric id (/repositories/<id>/releases) rather than owner/name.
+    # Only the page number is taken from it; the returned URL is rebuilt from the configured owner/repository.
+    path_ok = parsed.path.casefold() == expected_path.casefold() or re.fullmatch(r"/repositories/\d+/releases", parsed.path) is not None
     if (
         parsed.scheme != "https" or parsed.netloc != "api.github.com" or parsed.username
-        or parsed.password or parsed.fragment or parsed.path.casefold() != expected_path.casefold()
+        or parsed.password or parsed.fragment or not path_ok
         or set(query) != {"per_page", "page"} or query["per_page"] != ["100"]
         or len(query["page"]) != 1 or not query["page"][0].isdigit()
     ):

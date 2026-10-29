@@ -162,12 +162,14 @@ export function ChatComposer({
       onKeyDown={handleKeyDown}
       onPaste={handlePaste}
       placeholder={placeholder ?? t('composerPlaceholder')}
-      disabled={disabled}
+      // readOnly + aria-disabled (not disabled) so the textarea keeps focus while a send is dispatching.
+      readOnly={disabled}
+      aria-disabled={disabled || undefined}
       rows={2}
       className={isFull
         // Full layout: the surrounding box owns the border and focus ring, so the field itself is borderless.
-        ? 'block max-h-[200px] min-h-14 w-full resize-none overflow-y-auto bg-transparent px-1 py-1 text-base text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-50 sm:text-[15px]'
-        : 'block max-h-[200px] min-h-14 w-full resize-none overflow-y-auto rounded-lg border border-border bg-background p-3 text-base text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 sm:text-[15px]'}
+        ? 'block max-h-[200px] min-h-14 w-full resize-none overflow-y-auto bg-transparent px-1 py-1 text-base text-foreground outline-none placeholder:text-muted-foreground aria-disabled:opacity-50 sm:text-[15px]'
+        : 'block max-h-[200px] min-h-14 w-full resize-none overflow-y-auto rounded-lg border border-border bg-background p-3 text-base text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring aria-disabled:opacity-50 sm:text-[15px]'}
       aria-label={t('composerPlaceholder')}
     />
   );
@@ -176,11 +178,12 @@ export function ChatComposer({
       type="button"
       variant="outline"
       onClick={onStop}
+      data-testid="chat-stop"
       className="min-h-11 border-destructive text-destructive hover:text-destructive"
       aria-label={t('stopGenerating')}
     >
       <SquareIcon className="size-3.5 fill-current" />
-      <span>{t('stop')}</span>
+      <span className="hidden sm:inline">{t('stop')}</span>
     </Button>
   );
   const sendButton = (
@@ -191,19 +194,21 @@ export function ChatComposer({
       // handleSend is the click guard.
       aria-disabled={!canSend}
       className="min-h-11 aria-disabled:cursor-not-allowed aria-disabled:opacity-40"
+      data-testid="chat-send"
       aria-label={t('send')}
       aria-describedby={sendBlockedBy ?? undefined}
     >
       <SendIcon className="size-4" />
-      <span>{t('send')}</span>
+      <span className="hidden sm:inline">{t('send')}</span>
     </Button>
   );
 
   if (!isFull) {
     return (
-      <div className="relative flex items-end gap-2 border-t border-border bg-surface p-4 shrink-0 pb-[max(1rem,env(safe-area-inset-bottom))]">
+      <div className="relative flex flex-wrap items-end gap-2 border-t border-border bg-surface p-4 shrink-0 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-nowrap">
+        {/* Below sm the picker takes its own row above the textarea so Send keeps room beside it. */}
+        {modelPicker && <div className="order-first w-full sm:order-none sm:w-auto"><ModelPicker picker={modelPicker} disabled={isStreaming || disabled} /></div>}
         <div className="min-w-0 flex-1">{textarea}</div>
-        {modelPicker && <ModelPicker picker={modelPicker} disabled={isStreaming || disabled} />}
         {isStreaming ? stopButton : sendButton}
       </div>
     );
@@ -211,7 +216,7 @@ export function ChatComposer({
 
   // Round icon-only controls for the full layout; the aria-labels keep them named for assistive tech.
   const roundStop = (
-    <Button type="button" variant="outline" size="icon" onClick={onStop} className="rounded-full border-destructive text-destructive hover:text-destructive" aria-label={t('stopGenerating')}>
+    <Button type="button" variant="outline" size="icon" onClick={onStop} className="rounded-full border-destructive text-destructive hover:text-destructive" data-testid="chat-stop" aria-label={t('stopGenerating')}>
       <SquareIcon className="size-3.5 fill-current" aria-hidden="true" />
     </Button>
   );
@@ -222,6 +227,7 @@ export function ChatComposer({
       onClick={handleSend}
       aria-disabled={!canSend}
       className="rounded-full aria-disabled:cursor-not-allowed aria-disabled:opacity-40"
+      data-testid="chat-send"
       aria-label={t('send')}
       aria-describedby={sendBlockedBy ?? undefined}
     >

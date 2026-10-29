@@ -24,7 +24,7 @@ def test_url_is_fixed_host_path_with_escaped_query():
         "https://news.google.com/rss/search?q=Gi%C3%A1%20v%C3%A0ng%20%26%20USD%3D1%20site%3Aapnews.com"
         "&hl=vi&gl=VN&ceid=VN%3Avi"
     )
-    assert google_news_url("a", "any", "en-US").endswith("?q=a&hl=en&gl=US&ceid=US%3Aen")
+    assert google_news_url("a", "any", "en-US").endswith("?q=a&hl=en-US&gl=US&ceid=US%3Aen")
 
 
 def test_control_characters_stripped_and_injection_is_inert():

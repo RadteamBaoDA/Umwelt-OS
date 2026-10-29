@@ -191,10 +191,10 @@ def _run_context(
     return context
 
 
-async def _validated_model_override(
-    request: Request, session: AsyncSession, scope: Any, payload: SendMessageRequest,
-) -> dict[str, str] | None:
-    """Return the validated per-send chat model override, or None when the owner's default applies.
+async def _validate_model_pair(
+    request: Request, session: AsyncSession, scope: Any, provider_id: str, model: str,
+) -> dict[str, str]:
+    """Validate one provider/model pair against the owner's current execution config.
 
     The provider must exist and not be policy-denied, and the model must be one of its configured models
     that the `chat` role accepts (type `llm`). Anything else is a 422 so a stale picker never silently
@@ -203,23 +203,65 @@ async def _validated_model_override(
     Raises:
         HTTPException: 422 when the provider or model is unknown, denied, or not a chat-capable model.
     """
-    if payload.model is None or payload.provider_id is None:
-        return None
     from modules.settings import public as settings_public
 
     config = await settings_public.get_ai_execution_config(
         session, request.app.state.settings, request.app.state.redis, scope=scope,
     )
-    provider = config.providers.get(payload.provider_id)
-    chosen = next((m for m in provider.models if m.id == payload.model), None) if provider else None
+    provider = config.providers.get(provider_id)
+    chosen = next((m for m in provider.models if m.id == model), None) if provider else None
     if provider is None or provider.policy_denied or chosen is None or not settings_public.role_accepts("chat", chosen):
         raise HTTPException(status_code=422, detail="Selected chat model is not available")
-    return {"provider_id": payload.provider_id, "model": payload.model}
+    return {"provider_id": provider_id, "model": model}
+
+
+async def _validated_model_override(
+    request: Request, session: AsyncSession, scope: Any, payload: SendMessageRequest | MessageMutationRequest,
+) -> dict[str, str] | None:
+    """Return the validated per-request chat model override, or None when the owner's default applies.
+
+    Raises:
+        HTTPException: 422 when the provider or model is unknown, denied, or not a chat-capable model.
+    """
+    if payload.model is None or payload.provider_id is None:
+        return None
+    return await _validate_model_pair(request, session, scope, payload.provider_id, payload.model)
+
+
+async def _mutation_model_override(
+    request: Request, session: AsyncSession, scope: Any,
+    payload: MessageMutationRequest, original_context: dict[str, Any] | None,
+) -> dict[str, str] | None:
+    """Pick the model for a regenerate/edit run: an explicit payload choice wins, else the original run's.
+
+    `_run_context` strips server-private "_" keys, so the original run's override is carried forward
+    here and revalidated exactly like a fresh send; a model that is no longer valid is a 422 rather
+    than a silent switch to a different model.
+
+    Raises:
+        HTTPException: 422 when the chosen or carried model is no longer available.
+    """
+    explicit = await _validated_model_override(request, session, scope, payload)
+    if explicit is not None:
+        return explicit
+    carried = (original_context or {}).get(MODEL_OVERRIDE_KEY)
+    if not isinstance(carried, dict):
+        return None
+    provider_id, model = carried.get("provider_id"), carried.get("model")
+    if not isinstance(provider_id, str) or not isinstance(model, str):
+        return None
+    return await _validate_model_pair(request, session, scope, provider_id, model)
+
+
+def _message_reasoning(metadata: Any) -> str | None:
+    """Return the stored model reasoning text from a message's metadata, or None when absent or malformed."""
+    value = metadata.get("reasoning") if isinstance(metadata, dict) else None
+    return value if isinstance(value, str) and value else None
 
 
 def _message_mutation_digest(
     *, action: str, target_message_id: UUID, base_content_hash: str, content: str | None,
-    web_search: bool = False,
+    web_search: bool = False, model_override: dict[str, str] | None = None,
 ) -> str:
     """Hash canonical mutation fields so a request key cannot be replayed with new data.
 
@@ -229,6 +271,7 @@ def _message_mutation_digest(
         base_content_hash: SHA-256 of the displayed message used for the concurrency fence.
         content: Trimmed replacement text for edits, or None for regeneration.
         web_search: Per-run web search opt-in; hashed only when true so pre-deploy receipts stay valid.
+        model_override: Explicit client model choice; hashed only when present for the same reason.
 
     Returns:
         Lowercase SHA-256 digest of the canonical JSON payload.
@@ -241,6 +284,8 @@ def _message_mutation_digest(
     }
     if web_search:
         fields["web_search"] = True
+    if model_override:
+        fields["model_override"] = model_override
     canonical = json.dumps(
         fields,
         sort_keys=True,
@@ -620,6 +665,7 @@ async def get_conversation(
             web_search=web_search_by_assistant.get(m.id),
             generative_ui=parts[0] if parts else None,  # first part, for older clients
             generative_ui_parts=parts,
+            reasoning=_message_reasoning(getattr(m, "metadata_json", None)),
         )
         for m, citations, parts in zip(
             messages_rows, current_citations,
@@ -886,6 +932,10 @@ async def mutate_message(
         base_content_hash=payload.base_content_hash,
         content=normalized_content,
         web_search=payload.web_search,
+        model_override=(
+            {"provider_id": payload.provider_id, "model": payload.model}
+            if payload.provider_id and payload.model else None
+        ),
     )
 
     receipt = await session.scalar(
@@ -963,6 +1013,11 @@ async def mutate_message(
         session, original_run.retrieval_context, scope=scope, multi_workspace_enabled=multi_workspace_enabled(),
     )
 
+    # Explicit client choice wins; otherwise the original run's model is carried (revalidated, 422 if gone).
+    model_override = await _mutation_model_override(
+        request, session, scope, payload, original_run.retrieval_context,
+    )
+
     user_message = Message(
         conversation_id=conversation_id,
         role="user",
@@ -982,7 +1037,7 @@ async def mutate_message(
         # Retain the original client-visible context; every server-private `_` key (privacy fence,
         # web search opt-in) is rewritten by `_run_context`. The worker rechecks its source/version
         # fences before retrieval and before remote send.
-        retrieval_context=_run_context(original_run.retrieval_context, privacy, payload.web_search),
+        retrieval_context=_run_context(original_run.retrieval_context, privacy, payload.web_search, model_override),
         ephemeral=conversation.ephemeral,
         expires_at=conversation.expires_at,
     )

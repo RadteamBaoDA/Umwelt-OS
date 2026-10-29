@@ -378,7 +378,7 @@ def _records_from_feed(
         record_metadata: dict[str, object] = {
             "provider_record": _provider_record(
                 provider=source.provider,
-                identity=identity,
+                identity=provider_id,
                 version=version,
                 timestamp_basis=basis,
                 modified_at=modified,

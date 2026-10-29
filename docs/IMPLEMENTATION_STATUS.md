@@ -1188,3 +1188,8 @@ Current proof: 458 backend tests passed/2 real-symlink tests skipped; 25 fronten
 GitNexus refreshed and detect_changes included all39 new production files using a temporary independent index; actual index unchanged. Whole dirty worktree is CRITICAL/117flows because it also includes separate Models/UI changes; no whole-worktree readiness claim. Five npm HIGH development lint-chain advisories remain, with no compatible automatic downgrade. Full evidence and limitations: `docs/privacy-implementation-verification.md`.
 
 Docker integration/E2E, live providers, actual runtime erasure/recovery and deployed-asset checks remain unverified/owner-gated. No account deletion, live migration, commit, push, deploy or key rotation ran. Legal placeholders remain drafts. Legacy unknown remote endpoints and ambiguous revoke results deliberately remain failed pending operator reconciliation.
+
+
+## Scoped MCP collector enabled - 2026-10-28
+
+`POST /sources/{id}/collect` no longer returns the 503 "contract pending" stub for `mcp` sources: the native backend queues a request run by the worker (`_run_mcp`, fence loss now fails closed and `McpCollectionError` settles as a non-retryable code), and `POST /sources/{id}/mcp-collect` runs `mcp.collect(..., request_ref=...)`, which renews the admission at every fence and settles the request with a single ingestion proof. Verified by unit tests only; Docker integration/E2E and live MCP servers not run.

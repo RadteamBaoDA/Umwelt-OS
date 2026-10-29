@@ -340,7 +340,7 @@ export function MeetingTimePicker({
         )}
 
         {submitFailed && (
-          <p role="alert" data-testid="meeting-input-failed" className="text-xs text-danger">
+          <p role="alert" data-testid="meeting-input-failed" className="text-xs text-destructive">
             {inputCopy.failed}
           </p>
         )}

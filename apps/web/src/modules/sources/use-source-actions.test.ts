@@ -15,6 +15,15 @@ describe('pollCollectionRequest', () => {
     expect(seen).toEqual(['queued', 'running', 'succeeded']);
   });
 
+  it('settles as failed when a retrying request outlives timeoutMs', async () => {
+    const retrying = { ...req('queued'), error_code: 'provider_timeout' };
+    const fetchRequest = vi.fn().mockResolvedValue(retrying);
+    const result = await pollCollectionRequest(fetchRequest, { signal: new AbortController().signal, intervalMs: 1, timeoutMs: 20 });
+    expect(result).toMatchObject({ status: 'failed', error_code: 'provider_timeout' });
+    const bare = await pollCollectionRequest(vi.fn().mockResolvedValue(req('running')), { signal: new AbortController().signal, intervalMs: 1, timeoutMs: 5 });
+    expect(bare?.error_code).toBe('test_fetch_timeout');
+  });
+
   it('stops when aborted and returns null', async () => {
     const controller = new AbortController();
     const fetchRequest = vi.fn().mockImplementation(async () => { controller.abort(); return req('queued'); });

@@ -10,7 +10,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -407,9 +407,15 @@ async def github_connection_status(
                     cursor_invalid = True
             except ValueError:
                 cursor_invalid = True
+    history_days = 90
+    if source.provider == "github":
+        try:
+            history_days = project_github_source_config(source.configuration).github_history_days
+        except ValidationError:
+            # A draft whose repository scope is not chosen yet has no valid config; the status poll must still answer.
+            pass
     sync_status = {
-        "history_days": project_github_source_config(source.configuration).github_history_days
-        if source.provider == "github" else 90,
+        "history_days": history_days,
         "scope_sha256": scope_sha256,
         "last_reset_at": last_reset.reset_at if last_reset else None,
         "gap_recorded": last_reset is not None,

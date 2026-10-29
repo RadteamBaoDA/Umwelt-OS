@@ -191,6 +191,7 @@ dependencies = [
     { name = "mcp" },
     { name = "neo4j" },
     { name = "numpy" },
+    { name = "ofxtools" },
     { name = "openai" },
     { name = "posthog" },
     { name = "psycopg", extra = ["binary"] },
@@ -241,6 +242,7 @@ requires-dist = [
     { name = "mcp", specifier = "==2.3.0" },
     { name = "neo4j", specifier = "==5.28.3" },
     { name = "numpy", specifier = "==2.5.3" },
+    { name = "ofxtools", specifier = ">=0.9,<1" },
     { name = "openai", specifier = ">=2.20,<3" },
     { name = "posthog", specifier = "==7.61.1" },
     { name = "psycopg", extras = ["binary"], specifier = "==3.3.3" },
@@ -1342,6 +1344,12 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f3/ec/100f2b1794ede74a9b3d7ec6b9736927f56713414c1dfe19ab6c383494bf/numpy-2.5.3-cp313-cp313-win_amd64.whl", hash = "sha256:71cad2b2a7451ab79d8f5e71b453485b6775963d5cf794179144a7463fe6e8ec", size = 12560965, upload-time = "2026-09-06T16:25:26.602Z" },
     { url = "https://files.pythonhosted.org/packages/80/b1/7dc825ca94c12acebbce4c37caa5e198695eb31424bc579679f32b1bb49d/numpy-2.5.3-cp313-cp313-win_arm64.whl", hash = "sha256:8e4dd766076855b5ff7ea52fa5f07ce26286726e0f8bff446b7739d02e6ea204", size = 10482343, upload-time = "2026-09-06T16:25:29.772Z" },
 ]
+
+[[package]]
+name = "ofxtools"
+version = "0.9.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ce/37/d224428cbb44b8d36b9458c2c9b11eb54ece95bc455ef6f7ada583809b13/ofxtools-0.9.5.tar.gz", hash = "sha256:682a516bfa5ccad0f9551c17cc2cf155422f9f5f85a341cfb4911b324de46045", size = 114090, upload-time = "2022-01-13T14:18:16.584Z" }
 
 [[package]]
 name = "openai"

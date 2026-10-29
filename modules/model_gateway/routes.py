@@ -32,6 +32,9 @@ OwnerRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 Session = Annotated[AsyncSession, Depends(get_session)]
 
 
+_NOT_PROVED = "Gateway answered, but the response lacked the data this capability requires"
+
+
 def _capability_proved(capability: str, response: object) -> bool:
     """Require capability-specific response evidence before recording support."""
     if not isinstance(response, dict):
@@ -140,6 +143,7 @@ async def probe_draft(
         timeout_seconds=15, scope=_owner, configuration_revision=0, gateway_identity=identity, before_send=recheck_send,
         approved_endpoint_cidrs=tuple(settings.ai_allowed_endpoint_cidrs), allow_public_endpoints=settings.ai_allow_public_providers)
     message = [{"role": "user", "content": "Reply with the word ready."}]
+    detail = ""  # real failure reason for the owner; empty when supported
     try:
         if body.capability == "embeddings":
             response = await client.embed(role, mapping, policy, ["Synthetic capability probe."], probe=True)
@@ -174,16 +178,18 @@ async def probe_draft(
         else:
             response = await client.chat(role, mapping, policy, message, probe=True)
         result = "supported" if _capability_proved(body.capability, response) else "unsupported"
+        if result == "unsupported":
+            detail = _NOT_PROVED
     except PrivacyPolicyDenied as exc:
         raise HTTPException(status_code=403, detail="Probe denied by privacy policy") from exc
-    except CapabilityUnsupported:
-        result = "unsupported"
-    except (ModelGatewayError, ValueError):  # unparseable gateway reply: truthful failure, not a 500
-        result = "failed"
+    except CapabilityUnsupported as exc:
+        detail, result = str(exc), "unsupported"
+    except (ModelGatewayError, ValueError) as exc:  # unparseable gateway reply: truthful failure, not a 500
+        detail, result = str(exc), "failed"
     await recheck_send()
     out: dict[str, object] = {"role": role, "model": mapping.model, "version": mapping.version,
                               "gateway_identity": identity, "configuration_revision": 0,
-                              "capability": body.capability, "result": result}
+                              "capability": body.capability, "result": result, "detail": detail}
     if body.capability == "embeddings" and result == "supported":
         out["dimensions"] = len(response["data"][0]["embedding"])  # _capability_proved guarantees this shape
     return out
@@ -262,6 +268,7 @@ async def probe_model(
         before_send=recheck_send, approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
         allow_public_endpoints=config.allow_public_providers)
     message = [{"role": "user", "content": "Reply with the word ready."}]
+    detail = ""  # real failure reason for the owner; empty when supported
     try:
         if body.capability == "embeddings":
             response = await client.embed(role, mapping, policy, ["Synthetic capability probe."], probe=True)
@@ -294,12 +301,17 @@ async def probe_model(
             response = await client.tools(role, mapping, policy, [{"role": "user", "content": "Call the probe tool now."}], [{"type": "function", "function": {"name": "probe", "description": "Return a synthetic readiness signal.", "parameters": {"type": "object", "properties": {}}}}], probe=True)
         else:
             response = await client.chat(role, mapping, policy, message, probe=True)
-        result = ai_settings.new_capability_result(role, mapping, body.capability, "supported" if _capability_proved(body.capability, response) else "unsupported", config=config, scope=_owner, multi_workspace_enabled=settings.multi_workspace_enabled)
+        proved = _capability_proved(body.capability, response)
+        if not proved:
+            detail = _NOT_PROVED
+        result = ai_settings.new_capability_result(role, mapping, body.capability, "supported" if proved else "unsupported", config=config, scope=_owner, multi_workspace_enabled=settings.multi_workspace_enabled)
     except PrivacyPolicyDenied as exc:
         raise HTTPException(status_code=403, detail="Probe denied by privacy policy") from exc
-    except CapabilityUnsupported:
+    except CapabilityUnsupported as exc:
+        detail = str(exc)
         result = ai_settings.new_capability_result(role, mapping, body.capability, "unsupported", config=config, scope=_owner, multi_workspace_enabled=settings.multi_workspace_enabled)
-    except (ModelGatewayError, ValueError):  # unparseable gateway reply: failed, not a 500
+    except (ModelGatewayError, ValueError) as exc:  # unparseable gateway reply: failed, not a 500
+        detail = str(exc)
         result = ai_settings.new_capability_result(role, mapping, body.capability, "failed", config=config, scope=_owner, multi_workspace_enabled=settings.multi_workspace_enabled)
     except RedisError as exc:
         raise HTTPException(status_code=503, detail="Model capability storage is unavailable") from exc
@@ -312,4 +324,4 @@ async def probe_model(
         raise HTTPException(status_code=503, detail="Model capability storage is unavailable") from exc
     finally:
         await session.rollback()
-    return result.model_dump(mode="json")
+    return {**result.model_dump(mode="json"), "detail": detail}

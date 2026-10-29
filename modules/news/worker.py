@@ -329,10 +329,24 @@ async def recover_news_work(ctx: dict[str, object]) -> int:
                 source_page = await sources.list_active_gadget_sources(session, scope=scope,
                     multi_workspace_enabled=flag, limit=32, cursor=checkpoint.source_cursor)
                 source_ids = tuple(item.id for item in source_page.items)
-                projections, document_cursor = await documents.list_news_document_projections(
-                    session, source_ids=source_ids, limit=10, cursor=checkpoint.document_cursor,
-                    scope=scope, multi_workspace_enabled=flag,
-                ) if source_ids else ([], None)
+                projections: list[documents.NewsDocumentProjection] = []
+                document_cursor = None
+                if source_ids:
+                    try:
+                        projections, document_cursor = await documents.list_news_document_projections(
+                            session, source_ids=source_ids, limit=10, cursor=checkpoint.document_cursor,
+                            scope=scope, multi_workspace_enabled=flag,
+                        )
+                    except ValueError as exc:
+                        # The stored cursor is bound to a fingerprint of the access fence and source
+                        # page; a revision bump or source change makes it permanently undecodable.
+                        # Restart this source page (clustering is idempotent) instead of failing forever.
+                        if checkpoint.document_cursor is None or "cursor" not in str(exc):
+                            raise
+                        projections, document_cursor = await documents.list_news_document_projections(
+                            session, source_ids=source_ids, limit=10, cursor=None,
+                            scope=scope, multi_workspace_enabled=flag,
+                        )
                 projections.sort(key=lambda item: (str(item.source_id), str(item.document_id)))
                 fences = {}
                 for source_id in sorted(source_ids, key=str):

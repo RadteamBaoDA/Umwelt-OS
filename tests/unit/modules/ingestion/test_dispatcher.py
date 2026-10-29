@@ -328,3 +328,20 @@ class TestCursorCasLogic:
             cursor_after = prior_cursor.isoformat()
 
         assert cursor_after == prior_cursor.isoformat()
+
+
+def test_ingestion_producer_may_publish_news_document_ready() -> None:
+    """Connector ingestion emits news.document.ready itself; both producer tables must admit it."""
+    assert "modules.ingestion" in dispatcher.PRODUCERS_BY_EVENT["news.document.ready"]
+    assert "modules.ingestion" in public._READY_EVENT_PRODUCERS["news.document.ready"]
+    assert "modules.ingestion" in dispatcher.PRODUCERS_BY_EVENT["document.version.ready"]
+
+
+def test_ingestion_worker_publishes_both_ready_events() -> None:
+    """The normalization worker must publish document.version.ready and news.document.ready."""
+    import inspect
+
+    from modules.ingestion import worker
+
+    src = inspect.getsource(worker)
+    assert '("document.version.ready", "news.document.ready")' in src

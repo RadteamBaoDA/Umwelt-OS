@@ -24,7 +24,8 @@ const BACKGROUND_KEYS = new Set(['shell-api-health']);
  * Opens on a click to a same-origin link with a different pathname (before the route even resolves) or on any pathname
  * change (programmatic navigation), and closes only after the new route has arrived and no tracked react-query fetch is
  * in flight and no skeleton/spinner remains in the DOM for STABLE_POLLS consecutive polls. Dashboard routes also wait
- * for the selected dashboard's explicit readiness marker and skip the general timeout cap. Also covers initial loads.
+ * for the selected dashboard's explicit readiness marker uncapped; the general cap starts only once it is ready.
+ * Also covers initial loads.
  *
  * @returns The overlay while a route transition is loading, otherwise null.
  */
@@ -64,8 +65,17 @@ export function RouteLoader() {
 
   useEffect(() => {
     if (from === null) return;
-    // Dashboard pages own an explicit readiness marker, so the general cap cannot hide them mid-load.
-    if (arrived && isDashboardRoute) return;
+    if (arrived && isDashboardRoute) {
+      // The dashboard's own readiness marker is never capped, so the overlay cannot hide it mid-load. Once it is ready,
+      // gadgets get the general cap: many live gadgets keep refetching and would otherwise hold the overlay indefinitely.
+      let cap: number | undefined;
+      const wait = window.setInterval(() => {
+        if (cap === undefined && document.querySelector('[data-dashboard-ready="true"]')) {
+          cap = window.setTimeout(() => setFrom(null), MAX_BLOCK_MS);
+        }
+      }, POLL_MS);
+      return () => { window.clearInterval(wait); window.clearTimeout(cap); };
+    }
     const cap = window.setTimeout(() => setFrom(null), arrived ? MAX_BLOCK_MS : NO_ARRIVAL_MS);
     return () => window.clearTimeout(cap);
   }, [from, arrived, isDashboardRoute]);

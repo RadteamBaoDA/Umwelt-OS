@@ -7,7 +7,7 @@ from alembic.script import ScriptDirectory
 
 BASE = "0001_init"
 SECOND = "0002_observations_provider_ids"
-HEAD = "0003_model_test_results"
+HEAD = ScriptDirectory.from_config(Config("alembic.ini")).get_current_head()  # derived: later revisions advance it
 
 
 def _alembic(*args: str) -> subprocess.CompletedProcess[str]:
@@ -28,7 +28,12 @@ def test_single_head_follows_the_init_baseline() -> None:
     assert script.get_heads() == [HEAD]
     assert script.get_revision(BASE).down_revision is None  # type: ignore[union-attr]
     assert script.get_revision(SECOND).down_revision == BASE  # type: ignore[union-attr]
-    assert script.get_revision(HEAD).down_revision == SECOND  # type: ignore[union-attr]
+    # Walking head -> base must be one contiguous linear chain that visits SECOND and ends at BASE.
+    chain = [revision.revision for revision in script.walk_revisions()]
+    assert chain[0] == HEAD and chain[-1] == BASE and SECOND in chain
+    assert len(chain) == len(set(chain)) == len(list(script.walk_revisions("base", "heads")))
+    for revision in script.walk_revisions():
+        assert isinstance(revision.down_revision, (str, type(None)))  # no merge points: strictly linear
     result = _alembic("heads")
     assert result.returncode == 0, result.stderr
     assert result.stdout.split() == [HEAD, "(head)"]

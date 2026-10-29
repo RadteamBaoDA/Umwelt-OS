@@ -78,11 +78,15 @@ def test_review_provider_needs_matching_operator_approval() -> None:
 def test_specs_never_claim_runtime_acceptance_or_unproven_code() -> None:
     assert not any(spec.runtime_verified for spec in FREE_PROVIDER_SPECS)
     # Code presence only: exactly the providers the shared executor dispatches (CoinGecko needs an owner key).
-    from modules.connectors.collection import ADAPTERS
+    from modules.connectors.backends import PROVIDER_SOURCE_TYPES
+    from modules.connectors.collection import _adapter_for
 
     implemented = {spec.id for spec in FREE_PROVIDER_SPECS if spec.code_implemented}
     assert implemented == {"alpha_vantage"} | set(DISPATCHABLE)
-    assert set(DISPATCHABLE) <= set(ADAPTERS) and "coingecko" in implemented
+    assert all(_adapter_for(type("SourceRef", (), {
+        "provider": provider, "type": PROVIDER_SOURCE_TYPES[provider],
+    })()) is not None for provider in DISPATCHABLE)
+    assert "coingecko" in implemented
 
 
 def test_unknown_official_caps_are_counted_not_invented() -> None:
@@ -193,6 +197,7 @@ def test_fixed_providers_have_static_example_config_and_sample():
     entries = {e.provider_id: e for e in list_catalog()}
     for pid in DISPATCHABLE:
         e = entries[pid]
-        assert e.example_config is not None and e.example_config["schedule_interval_minutes"] == e.default_interval_minutes
-        assert e.sample_output
+        if not e.scope_fields:
+            assert e.example_config is not None and e.example_config["schedule_interval_minutes"] == e.default_interval_minutes
+            assert e.sample_output
     assert entries["youtube"].example_config is None

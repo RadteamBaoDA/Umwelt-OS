@@ -35,6 +35,7 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- config is CommonJS and needs __dirname
   outputFileTracingRoot: require('node:path').join(__dirname, '../..'),
   outputFileTracingIncludes: { '/*': ['../../docs/legal/**/*.md', '../../docs/third-party-services.md'] },
   // Default proxy timeout is 30 s; brief generate (lease wait + up to 180 s model time) goes through the /api rewrite.

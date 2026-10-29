@@ -1,42 +1,106 @@
 # Provider catalog
 
-This catalog distinguishes implemented mapper scope from provider ideas that still need a
-permitted endpoint, source scope, authentication contract, licensing review, or adapter work.
-Public access alone does not imply permission to redistribute provider content.
+The backend catalog returned by `GET /api/v1/connectors/catalog` owns provider IDs, source types,
+authentication methods, collection modes, scope fields, bounds, adapter availability and history
+descriptions. The source wizard reads this catalog instead of maintaining a second supported-provider
+list. UI category headings group concrete catalog rows; they are not connectors.
 
-Free presets (BBC, VnExpress, Google News RSS search, Hacker News top stories, GDELT, World Bank, Frankfurter, ECB, Binance, Alternative.me, USGS, NASA EONET, CoinPaprika, CoinGecko, Alpha Vantage) also have terms, quota and setup facts in [free-sources.md](free-sources.md). Their live behaviour is not yet verified; see [provider-research-2026-10-07.md](provider-research-2026-10-07.md).
+`code_available` means a provider reaches an adapter registered by the shared collection executor.
+It does not prove that credentials, browser services, provider permissions, deployment policy or
+live endpoints are ready. `availability` distinguishes implemented adapters from required
+credentials and unsupported catalog ideas. Runtime verification remains separate: the providers
+below have not been accepted against live services in this implementation pass.
+
+## Source groups
+
+- **News:** `bbc_world`, `vnexpress_business`, `tuoitre_news`, `thanhnien_news`, `dantri_news`,
+  `google_news`, `gdelt_economy`, `aljazeera_world`, `npr_news`, `finnhub_news`, `newsapi`.
+  Vietnamese press uses its named RSS feeds. GDELT returns bounded article metadata. Google News is
+  an unofficial, scoped RSS preset; it is not an official Google API.
+- **Economy and markets:** `alpha_vantage`, `sec_edgar`, `world_bank`, `frankfurter`, `ecb`,
+  `binance`, `alternative_me`, `coinpaprika`, `coingecko`, `fed_press`, `open_er_api`, `oecd_cli`,
+  `fred`. Credentials, usage terms, quota and provider entitlement remain provider-specific.
+- **Hazards and environment:** `usgs`, `nasa_eonet`, `gdacs_rss`, `us_travel_advisories`,
+  `noaa_tsunami`, `jma_eqvol`, `gdacs_events`, `nws_alerts`, `emsc_quakes`, `bmkg_quakes`,
+  `openweathermap`, `openaq`, `nasa_firms`. Measurements and coordinates come from the provider;
+  Open-Meteo is a three-day forecast, not climate history.
+- **Security:** `cisa_kev`, `ioda`, `nvd`. CVE identifiers, provider timestamps and provenance are
+  preserved by the registered mappers.
+- **Space:** `launch_library`, `satnogs_observations`, `noaa_kp`, `iss_position`.
+- **Technology and research:** `reddit`, `bluesky`, `openalex`, `hn_top`, `lobsters`,
+  `wikipedia_mostread`, `wikipedia_top_views`, `disease_sh`.
+- **Other and account connectors:** generic `rss`, `web`, `rest`, and `mcp`; GitHub App and public
+  releases; Mastodon, X, YouTube, arXiv, Hugging Face, Telegram; Google Gmail, Calendar and Drive;
+  FHIR R4 `health`; Home Assistant; Notion and Slack; and Open-Meteo.
+- **Manual imports:** `notes` accepts Markdown through the existing upload receipt. `personal_finance`
+  accepts OFX 1/2 or UTF-8 CSV with the exact columns `account_id, transaction_id, date, amount,
+  currency, description`; dates must be ISO `YYYY-MM-DD`, and money is parsed as `Decimal`. Imports
+  remain in a local-only manual source and do not connect to a bank or create transactions.
+
+## Collection contracts and limits
+
+- Gmail reads selected labels over an initial 30-day window, then continues from Gmail history
+  cursors. It does not download attachments. Calendar starts 30 days in the past and 90 days ahead;
+  per-calendar sync tokens retain recurrence and cancellation state. Drive snapshots selected
+  files, exports Google Docs as text, reads only formats already supported by the document parser,
+  and follows Drive changes. All three use separate read-only connector OAuth grants and advance
+  cursors only with their durable ingestion receipts.
+- Reddit collects public posts from one selected subreddit using read-only OAuth. Bluesky reads
+  public account posts through AppView. Mastodon reads one explicitly selected public account or
+  hashtag from its configured HTTPS instance, optionally with a read token. X reads a configured
+  public account or recent query using the owner's app bearer token and API entitlement. These
+  adapters do not request write access.
+- Notion uses an internal integration token and the pinned API version `2026-03-11`; it reads only
+  selected page text, not attachments, databases or workspace-wide search. Slack uses a bot token
+  to read top-level messages from selected channels where the bot has access. DMs and thread replies
+  are excluded; rate limits are returned to the shared scheduler.
+- FHIR reads patient-scoped R4 `Observation` resources from the configured origin and preserves
+  source ID, value, unit and measurement time. Home Assistant reads only selected entity states and
+  actual source coordinates; it is a bounded snapshot with a scope cursor, not history or device
+  control. Both use the exact configured private origin and port, reject redirects and enforce
+  resolved-address checks.
+- Generic Web supports static pages and JavaScript rendering through the existing isolated browser
+  worker. Crawl URL, depth, page count, response bytes and timeout are bounded. The browser worker
+  must be configured for JavaScript mode; it is not a separate provider adapter.
+- Fixed-scope presets expose their returned-snapshot limits through `history_description` in the
+  backend catalog. The catalog's default schedule and provider-specific terms remain authoritative;
+  a snapshot provider does not imply complete history or removal detection.
+- Pausing or disconnecting revokes collection authority but retains ingested data. Purge remains
+  the separate existing source-erasure operation. New personal manual, Google, health, Home
+  Assistant, Notion and Slack sources are created `local_only` by the Sources owner.
+
+The catalog and its provider-specific quota, terms, endpoint and attribution facts are maintained
+in `modules/connectors/catalog.py` and `modules/connectors/provider_specs.py`. Free-provider usage
+details are in [free-sources.md](free-sources.md). Adapter code and mock/build evidence do not
+establish provider terms, credentials, live service behavior or deployment acceptance.
 
 ## Inventory
 
-Generated from `modules/connectors/catalog.py` and `modules/connectors/provider_specs.py` (free-provider facts checked on 2026-10-07, the built-in expansion on 2026-10-21; policy revision 1). Read the table as follows:
+Generated from `modules/connectors/catalog.py` and `modules/connectors/provider_specs.py`. Read the table as follows:
 
 - **Availability** is the catalog's own value and governs source selection. `implemented` means a collection adapter is registered; it does not mean the provider works live.
-- **Code registered** means the shared executor has an adapter for the provider. It is not a runtime, licence or deployment acceptance.
+- **Code registered** means the shared collection executor has an adapter wired for the provider. It is not a runtime, licence or deployment acceptance.
 - **Runtime verified** is `no` for every row. No provider has live verification yet; endpoint shapes and quotas are plan-documented, not observed.
 - **Eligibility** is the catalog class (`open`, `personal`, `noncommercial`, `review`) or `unknown` for providers without a free preset. It is never a grant for a workspace; see `free-sources.md`.
-
-The 17 registered fixed-endpoint native providers (plus the scoped `google_news`, `sec_edgar` and `openalex` presets) are `bbc_world`, `vnexpress_business`, `tuoitre_news`, `thanhnien_news`, `dantri_news`, `hn_top`, `gdelt_economy`, `world_bank`, `frankfurter`, `ecb`, `binance`, `alternative_me`, `usgs`, `nasa_eonet`, `cisa_kev`, `coinpaprika` and `coingecko` (requires an owner API key). `gdelt_economy` is `experimental`. The native registry also holds the earlier providers (`youtube`, `arxiv`, `huggingface`, `github_releases`, `github`, `telegram`, `alpha_vantage`, `open_meteo`), which are listed below with their own availability.
-
-Notes on specific rows:
-
-- `google_news` is implemented as a scoped preset (query, site allowlist, `vi-VN`/`en-US`; the owner never supplies a URL). It uses an unofficial Google News RSS endpoint with no official API contract, requires terms acknowledgement plus operator review, and is not runtime verified.
-- `openalex` is implemented as a scoped preset (`scholarly_query`; the owner never supplies a URL). OpenAlex data is CC0 and basic use needs no key. It is not runtime verified.
-- `hn_top` (implemented top-stories preset) and `hacker_news` (planned, broader catalog entry) are separate rows. Only `hn_top` has an adapter.
-- `sec_edgar` is implemented as a scoped preset (owner CIK plus contact email for the SEC-required User-Agent; the owner never supplies a URL). It is not runtime verified.
-- `coingecko` is registered (requires API key). The owner supplies a Demo key through the native REST credential slot; it is stored encrypted and never returned. Without a key it fails closed with `credential_missing`. Its availability is `implemented`, not runtime verified.
-- `finance` is `planned` in the catalog, while the prose below lists crypto, commodity and macro families as unavailable. Only `alpha_vantage` has an adapter in that family.
-- `alpha_vantage` is `requires_credentials`: an owner-supplied key is required, stored encrypted, and activation is gated.
-- No row is `disabled`. Free presets start disabled per source; the catalog has no disabled value.
+- `google_news` is a scoped preset on an unofficial Google News RSS endpoint with no official API contract. It requires terms acknowledgement plus operator review and is not runtime verified.
+- `coingecko` requires an owner-supplied API key and fails closed without one.
 
 | ID | Availability | Eligibility | Execution | Code registered | Runtime verified | Default interval (min) | Terms checked |
+|---|---|---|---|---|---|---|---|
 | `rss` | `available` | unknown | - | yes | no | - | - |
 | `web` | `available` | unknown | - | yes | no | - | - |
 | `rest` | `available` | unknown | - | yes | no | - | - |
 | `mcp` | `available` | unknown | - | yes | no | - | - |
 | `github` | `requires_credentials` | unknown | - | yes | no | - | - |
-| `google_mail` | `unavailable` | unknown | - | no | no | - | - |
-| `google_calendar` | `unavailable` | unknown | - | no | no | - | - |
-| `google_drive` | `unavailable` | unknown | - | no | no | - | - |
+| `reddit` | `requires_credentials` | unknown | - | yes | no | - | - |
+| `bluesky` | `implemented` | review | supported | yes | no | 30 | 2026-10-24 |
+| `mastodon` | `implemented` | unknown | - | yes | no | - | - |
+| `x` | `requires_credentials` | unknown | - | yes | no | - | - |
+| `google_mail` | `requires_credentials` | unknown | - | yes | no | - | - |
+| `google_calendar` | `requires_credentials` | unknown | - | yes | no | - | - |
+| `google_drive` | `requires_credentials` | unknown | - | yes | no | - | - |
+| `health` | `requires_credentials` | unknown | - | yes | no | - | - |
+| `home_assistant` | `requires_credentials` | unknown | - | yes | no | - | - |
 | `youtube` | `implemented` | unknown | - | yes | no | - | - |
 | `arxiv` | `implemented` | unknown | - | yes | no | - | - |
 | `huggingface` | `implemented` | unknown | - | yes | no | - | - |
@@ -44,34 +108,19 @@ Notes on specific rows:
 | `telegram` | `requires_credentials` | unknown | - | yes | no | - | - |
 | `alpha_vantage` | `requires_credentials` | personal | supported | yes | no | 1440 | 2026-10-07 |
 | `open_meteo` | `implemented` | unknown | - | yes | no | - | - |
-| `reddit` | `planned` | unknown | - | no | no | - | - |
-| `hacker_news` | `planned` | unknown | - | no | no | - | - |
-| `mastodon` | `planned` | unknown | - | no | no | - | - |
-| `bluesky` | `planned` | unknown | - | no | no | - | - |
-| `x` | `planned` | unknown | - | no | no | - | - |
-| `vietnamese_press` | `planned` | unknown | - | no | no | - | - |
-| `gdelt_government` | `planned` | unknown | - | no | no | - | - |
-| `finance` | `planned` | unknown | - | no | no | - | - |
-| `weather_disaster_climate` | `planned` | unknown | - | no | no | - | - |
-| `cyber_cve` | `planned` | unknown | - | no | no | - | - |
-| `map_osint` | `planned` | unknown | - | no | no | - | - |
-| `browser` | `unsupported_operation` | unknown | - | no | no | - | - |
-| `notes` | `planned` | unknown | - | no | no | - | - |
-| `health` | `planned` | unknown | - | no | no | - | - |
-| `personal_finance` | `planned` | unknown | - | no | no | - | - |
-| `iot` | `planned` | unknown | - | no | no | - | - |
-| `notion` | `planned` | unknown | - | no | no | - | - |
-| `slack` | `planned` | unknown | - | no | no | - | - |
-| `home_assistant` | `planned` | unknown | - | no | no | - | - |
+| `notes` | `available` | unknown | - | yes | no | - | - |
+| `personal_finance` | `available` | unknown | - | yes | no | - | - |
+| `notion` | `requires_credentials` | unknown | - | yes | no | - | - |
+| `slack` | `requires_credentials` | unknown | - | yes | no | - | - |
 | `bbc_world` | `implemented` | review | supported | yes | no | 30 | 2026-10-07 |
 | `vnexpress_business` | `implemented` | noncommercial | supported | yes | no | 30 | 2026-10-07 |
 | `tuoitre_news` | `implemented` | noncommercial | supported | yes | no | 30 | 2026-10-07 |
 | `thanhnien_news` | `implemented` | noncommercial | supported | yes | no | 30 | 2026-10-07 |
 | `dantri_news` | `implemented` | noncommercial | supported | yes | no | 30 | 2026-10-07 |
 | `google_news` | `implemented` | review | supported | yes | no | 30 | 2026-10-07 |
+| `sec_edgar` | `implemented` | open | supported | yes | no | 360 | 2026-10-07 |
 | `openalex` | `implemented` | open | supported | yes | no | 1440 | 2026-10-07 |
 | `hn_top` | `implemented` | review | supported | yes | no | 60 | 2026-10-07 |
-| `sec_edgar` | `implemented` | open | supported | yes | no | 360 | 2026-10-07 |
 | `gdelt_economy` | `implemented` | review | experimental | yes | no | 60 | 2026-10-07 |
 | `world_bank` | `implemented` | open | supported | yes | no | 1440 | 2026-10-07 |
 | `frankfurter` | `implemented` | open | supported | yes | no | 1440 | 2026-10-07 |
@@ -108,66 +157,7 @@ Notes on specific rows:
 | `nvd` | `implemented` | open | supported | yes | no | 360 | 2026-10-21 |
 | `fred` | `implemented` | review | supported | yes | no | 1440 | 2026-10-21 |
 | `finnhub_news` | `implemented` | personal | supported | yes | no | 60 | 2026-10-21 |
-| `newsapi` | `implemented` | review | supported | yes | no | 120 | 2026-10-21 |
+| `newsapi` | `implemented` | review | supported | yes | no | 360 | 2026-10-21 |
 | `openweathermap` | `implemented` | open | supported | yes | no | 60 | 2026-10-21 |
 | `openaq` | `implemented` | open | supported | yes | no | 60 | 2026-10-21 |
-| `nasa_firms` | `implemented` | open | supported | yes | no | 180 | 2026-10-21 |
-
-
-## World and news sources
-
-| Provider | Availability | Bounded scope and known limits |
-|---|---|---|
-| RSS / Atom | Supported through the generic feed connector | Owner supplies a permitted public feed URL. A returned feed is a snapshot; missing entries do not imply deletion or complete history. |
-| Google News | `google_news` implemented as a scoped RSS search preset; not runtime verified | Unofficial `news.google.com/rss/search` endpoint: Google documents no API, quota or stability contract. The server builds the URL from a validated query, an allowlisted site (reuters.com, apnews.com, bbc.com, vnexpress.net or any) and `vi-VN`/`en-US`. Items carry the publisher from `<source>` and the label "Google News RSS / publisher"; links point to Google article URLs and the original article is not fetched. A generic RSS URL is still not Google News support. |
-| YouTube | Mapper implemented; integration gate open | One configured public channel Atom feed. Metadata only; no transcripts, media, private videos, or notification guarantee. Returned feed only; missed edits and removals are possible. |
-| arXiv | Mapper implemented; integration gate open | One configured category Atom feed, metadata only. Daily feed snapshots are not an archive. A shared PostgreSQL advisory lock spaces requests by at least three seconds. |
-| Hugging Face | Mapper implemented; integration gate open | One public author listing, at most 100 model metadata rows. On 429, the latest applicable valid retry/reset deadline is honored, including the official `RateLimit` API bucket `t`; `RateLimit-Policy` describes policy and is not a reset deadline. No model cards, weights, private grants, or inference. Public quotas can change and are shared by egress IP. |
-| GitHub Releases | Mapper implemented; integration gate open | One configured public repository, at most five REST pages / 500 releases. No assets or complete edit history. Repository content licensing remains source-specific. |
-| GitHub App | Native adapter implemented; runtime/provider acceptance deferred | One repository selected from an installed GitHub App, with separately selected issue, pull request, commit, and release reads. BBD-OS owns expiring user OAuth, encrypted rotating tokens, PKCE, bounded requests, and peer-aware revocation; n8n carries scheduling only. Runtime/provider acceptance remains deferred. |
-| Telegram | Mapper implemented; credentials and integration required | Configured channels only, after bot identity, empty webhook, channel type, and administrator rights are verified. Each full Bot API response body is capped at 10 MiB and counted against the 25 MiB trigger budget, including envelope and filtered events. Pending updates only; no historical bootstrap, media download, or inferred deletion. |
-| Reddit | Planned; endpoint, authentication, quota, and content terms unresolved | No scraping or generic REST relabeling. |
-| Hacker News | `hacker_news` planned; the `hn_top` top-stories preset is implemented (see Inventory) | Official API documentation does not establish a user-post redistribution license or edit timestamp. Linked articles are not fetched or licensed by the HN API. |
-| Mastodon | Planned; instance and access gates unresolved | Public timeline availability varies by instance and may require an app token with read scope. |
-| Bluesky | Planned; endpoint, rate, and content terms unresolved | No endpoint or license assumptions. |
-| X / Twitter | Planned; requires an authorized provider/API contract | No scraping or assumed access. |
-| Vietnamese press | Planned; site-specific RSS and permission terms required | No blanket press reuse permission. |
-| GDELT / government sources | `gdelt_government` planned; `gdelt_economy` economy article list is implemented as experimental | Government sources need named source and bounded scope. The GDELT preset is metadata-only with no quota claim beyond its pilot ceiling. |
-| Alpha Vantage | Daily equity OHLCV adapter and encrypted API-key slot implemented; API key required and provider activation gated | `TIME_SERIES_DAILY` raw as-traded endpoint only; at most five configured symbols, one daily scheduled run, and a local Redis budget of 25 requests per credential reference per UTC day (manual collection uses the same budget). Reservations are conservative and may reset if Redis state is lost; other deployments using the same key and provider-side usage remain outside this local budget. Currency and exchange timezone are explicit source scope because the response date alone does not establish them. No premium adjusted/realtime quote claim. Official Terms of Service PDF at https://www.alphavantage.co/terms_of_service/ was read on 2026-10-05: personal-use grant only absent written agreement; commercial use includes organizational use, redistribution/third-party access, and specified finance-sector affiliations. Key acceptance, exact entitlement, live quota, deployment eligibility and activation remain unverified; provider quota responses remain authoritative and rate-limited runs do not publish empty series. |
-| Open-Meteo | Bounded hourly forecast adapter implemented; deployment eligibility and live activation remain owner gates | Official schema at https://open-meteo.com/en/docs and terms at https://open-meteo.com/en/terms inspected 2026-10-05. Three-day forecast only, configured coordinates/metrics/timezone, returned units and attribution retained. Free API is non-commercial with published request ceilings; commercial deployments require an appropriate subscription. Forecast data is not a disaster or climate-history adapter. |
-| Other finance families | Unavailable | Crypto, commodities, macro/government, and exchange/composite data each require named provider schemas, terms, entitlements, and bounded scope. Alpha Vantage macro/commodities also depend on FRED API terms; no such adapters are registered. |
-| Disaster / climate feeds | Planned; named endpoint and usage terms required | Open-Meteo forecast values are not disaster event observations or climate-history records. |
-| Traffic | Unavailable | No authorized named provider/schema or bounded adapter. |
-| Cybersecurity / CVE | Unavailable | No authorized named provider/schema or bounded adapter; no complete feed/history claim. |
-| Maps / OSINT | Planned; source-specific scope and permission required | Structured observation work is tracked separately. |
-
-## Personal sources
-
-| Provider | Availability | Gate |
-|---|---|---|
-| Gmail / Calendar / Drive | Planned | Separate least-privilege user OAuth consent and provider scopes. Owner login does not grant collection authority. |
-| Browser data | Planned | Explicit local data selection and retention controls. |
-| Notes | Planned | A named supported storage adapter and ownership boundary. |
-| GitHub | Planned | The public Releases mapper does not implement the separate OAuth repositories/issues/pull requests/commits scope. |
-| Health | Planned | Explicit source authorization, sensitive-data handling, and retention terms. |
-| Personal finance | Planned | Named institution/API scope and explicit owner authorization. |
-| IoT / Home Assistant | Planned | Authenticated local instance scope and device permissions. |
-| Notion | Planned | Least-privilege OAuth and selected workspace scope. |
-| Slack | Planned | Workspace OAuth, selected scopes, and workspace content terms. |
-| MCP sources | Planned | Each server/tool requires its own authentication and permission contract. |
-
-## Shared limits
-
-Native snapshot mappers use fixed HTTPS hosts, verified TLS, no redirects, bounded response sizes,
-an absolute 30-second timeout per physical request, and at most 4,000 text characters per record.
-Truncation is represented explicitly. Collection time is stored separately from provider observation
-time. A metadata hash detects changed snapshots but does not establish chronology. Provider errors
-never advance a durable cursor; rate responses carry a finite next-eligible time using the latest
-applicable supplied retry/reset evidence. A conservative fallback is used only when no applicable
-deadline evidence is supplied; malformed, overflowing, or UTC-unrepresentable supplied deadlines
-fail with a fixed provider error. Telegram uses a 60-second fallback only when its
-429 response omits `retry_after`.
-
-The mapper files alone do not establish route registration, workflow execution, provider terms
-acceptance, live quotas, or runtime/provider acceptance. Those remain integration and operational
-gates for the complete R13 slice.
+| `nasa_firms` | `implemented` | open | supported | yes | no | 360 | 2026-10-21 |

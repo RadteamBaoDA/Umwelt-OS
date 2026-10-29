@@ -135,9 +135,9 @@ def test_collect_signature_matches_frozen_contract() -> None:
     parameters = list(inspect.signature(mcp.collect).parameters.values())
     assert [p.name for p in parameters] == [
         "runtime", "session_factory", "source_id", "expected_connector_revision", "expected_generation",
-        "collector_token", "expected_connection_id", "scope", "multi_workspace_enabled",
+        "collector_token", "expected_connection_id", "scope", "multi_workspace_enabled", "request_ref",
     ]
-    assert all(p.kind is inspect.Parameter.KEYWORD_ONLY for p in parameters[-2:])
+    assert all(p.kind is inspect.Parameter.KEYWORD_ONLY for p in parameters[-3:])
     assert "owner_id" not in inspect.signature(mcp.collect).parameters
 
 
@@ -541,3 +541,49 @@ async def test_changed_access_fence_between_start_and_record_is_denied_and_publi
     assert access.await_args.kwargs["expected"] == stale
     record.assert_not_awaited()
     replay.assert_not_awaited()
+
+
+def _collect_env(monkeypatch, records):
+    """Stub every fence/IO collaborator of mcp.collect so only the settlement path under test runs."""
+    from modules.connectors.collection_schemas import CollectionRequestRef
+
+    source = SimpleNamespace(id=SOURCE_ID, generation=4)
+    config = SimpleNamespace(connection_id=uuid4(), calls=[SimpleNamespace(grant_id=uuid4(), arguments={})])
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=MagicMock())
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    factory = MagicMock(return_value=ctx)
+    monkeypatch.setattr(mcp.sources, "get_connector_source", AsyncMock(return_value=source))
+    monkeypatch.setattr(mcp, "validate", MagicMock(return_value=config))
+    monkeypatch.setattr(mcp, "_collection_fence", AsyncMock(return_value=FENCE))
+    monkeypatch.setattr(mcp, "_fence_current", AsyncMock(return_value=True))
+    monkeypatch.setattr(mcp.ingestion, "get_source_cursor", AsyncMock(return_value=None))
+    monkeypatch.setattr(mcp.tools, "read_collection_capability", AsyncMock(return_value=object()))
+    monkeypatch.setattr(mcp, "normalize", MagicMock(return_value=records))
+    monkeypatch.setattr(mcp.scheduler, "renew_admission", AsyncMock(return_value=True))
+    return factory, CollectionRequestRef(request_id=uuid4(), admission_token=uuid4())
+
+
+async def test_collect_with_request_ref_uses_request_proof_not_credential(monkeypatch) -> None:
+    factory, ref = _collect_env(monkeypatch, [{"provider_id": "p", "content": "c", "observed_at": "2026-01-01T00:00:00Z"}])
+    create, revoke = AsyncMock(), AsyncMock()
+    receive = AsyncMock(return_value=SimpleNamespace(status="accepted", run_id=uuid4(), batch_id=uuid4()))
+    monkeypatch.setattr(mcp.ingestion, "create_collector_credential", create)
+    monkeypatch.setattr(mcp.ingestion, "revoke_collector_credential", revoke)
+    monkeypatch.setattr(mcp.ingestion, "receive_connector_batch", receive)
+    await mcp.collect(MagicMock(), factory, SOURCE_ID, 1, 4, scope=SCOPE, multi_workspace_enabled=False, request_ref=ref)
+    batch = receive.await_args.args[1]
+    assert receive.await_args.args[2] is None and receive.await_args.kwargs["request_ref"] is ref
+    assert batch.batch_key == f"connector-request:{ref.request_id}"
+    create.assert_not_awaited()
+    revoke.assert_not_awaited()
+
+
+async def test_collect_with_request_ref_and_no_records_accepts_no_changes(monkeypatch) -> None:
+    factory, ref = _collect_env(monkeypatch, [])
+    no_changes = AsyncMock()
+    monkeypatch.setattr(mcp.ingestion, "accept_collection_no_changes", no_changes)
+    result = await mcp.collect(
+        MagicMock(), factory, SOURCE_ID, 1, 4, scope=SCOPE, multi_workspace_enabled=False, request_ref=ref)
+    assert result["status"] == "no_changes"
+    assert no_changes.await_args.kwargs["request_ref"] is ref

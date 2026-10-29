@@ -3770,3 +3770,10 @@ def downgrade() -> None:
     """
     op.execute("DROP SCHEMA public CASCADE")
     op.execute("CREATE SCHEMA public")
+    # DROP SCHEMA also removed alembic_version, but Alembic's trailing DELETE FROM alembic_version would then fail.
+    # Recreate it (same shape as env.py _WideVersionImpl) holding this revision so that delete succeeds.
+    op.execute(
+        "CREATE TABLE alembic_version (version_num VARCHAR(255) NOT NULL, "
+        "CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num))"
+    )
+    op.execute("INSERT INTO alembic_version (version_num) VALUES ('0001_init')")

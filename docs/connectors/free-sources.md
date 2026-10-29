@@ -28,6 +28,7 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 | `sec_edgar` | data.sec.gov | event | 360 | open | none | supported | registered | [terms](https://www.sec.gov/privacy.htm#security) | economy |
 | `openalex` | api.openalex.org | event | 1440 | open | none | supported | registered | [terms](https://help.openalex.org/how-to-use-the-api/api-overview) | tech |
 | `hn_top` | hacker-news.firebaseio.com | news | 60 | review | none | supported | registered | [terms](https://github.com/HackerNews/API) | tech |
+| `bluesky` | public.api.bsky.app, bsky.app | news | 30 | review | none | supported | registered | [terms](https://bsky.social/about/support/tos) | tech |
 | `gdelt_economy` | api.gdeltproject.org | news | 60 | review | none | experimental | registered | [terms](https://gdeltproject.org/about.html) | news |
 | `world_bank` | api.worldbank.org | measurement | 1440 | open | none | supported | registered | [terms](https://datacatalog.worldbank.org/public-licenses) | economy |
 | `frankfurter` | api.frankfurter.dev | measurement | 1440 | open | none | supported | registered | [terms](https://frankfurter.dev/license/) | economy |
@@ -79,6 +80,7 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 - `dantri_news`: Credit Dân trí as the source and link the original article; feed-only scope.
 - `google_news`: Google News RSS / publisher: show the item's publisher (from its `<source>` element) and link to the original article; feed-only title, summary and link.
 - `openalex`: Credit OpenAlex; data is CC0. Link the work's OpenAlex id and DOI; abstracts are rebuilt from the inverted index.
+- `bluesky`: Attribute Bluesky and link to each original post; Bluesky terms do not establish redistribution rights for post content.
 - `hn_top`: Attribute Hacker News plus the item and publisher URL; the API license does not license linked articles.
 - `gdelt_economy`: Cite the GDELT Project and the publisher URL; article metadata is not republication permission.
 - `world_bank`: Credit the World Bank and the original indicator; retain the dataset license and changed notice.

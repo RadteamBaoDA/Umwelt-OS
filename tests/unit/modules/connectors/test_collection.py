@@ -58,6 +58,7 @@ def test_snapshot_matches_requires_all_three_to_agree():
     (rest.RestSchemaChanged("x"), "schema_changed", None),
     (collection.TermsIneligible(), "terms_not_accepted", None),
     (rest.UnsafeDestination("x"), "destination_blocked", None),
+    (rest.UnsafeDestination("host_unresolvable"), "provider_timeout", True),
     (rest.ProviderHttpError(401), "invalid_credential", None),
     (rest.ProviderHttpError(503), "provider_unavailable", True),
     (rest.ProviderHttpError(404), "provider_rejected", False),
@@ -422,3 +423,13 @@ async def test_rest_resumes_from_checkpoint_without_conditional_headers(monkeypa
     await collection._run_rest(run)
     assert sent == [("https://a.example/items?p=2", None)]
     assert [r["provider_id"] for r in got["records"]] == ["2"]  # boundary record 1 not delivered twice
+
+
+def test_keyless_forbidden_is_a_provider_rejection_not_a_credential_error():
+    """A 403 from a source that sends no key (CISA geo-block) must not tell the owner to fix a credential."""
+    got = collection._classify(rest.ProviderHttpError(403), keyless=True)
+    assert got["error_code"] == "provider_rejected" and got["retryable"] is False
+    assert collection._sends_no_credential(SimpleNamespace(provider="cisa_kev", type="api"))
+    assert collection._sends_no_credential(SimpleNamespace(provider=None, type="rss"))
+    assert not collection._sends_no_credential(SimpleNamespace(provider="coingecko", type="api"))
+    assert not collection._sends_no_credential(SimpleNamespace(provider=None, type="api"))

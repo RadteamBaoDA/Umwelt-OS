@@ -15,9 +15,9 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { acknowledgeProviderTerms, connectorKeys, getProviderTerms, type ConnectorCatalogEntry, type ConnectorConfig, type DeclaredUse, type Source } from './api';
 import { isStale, periodKind } from './freshness';
 
-export type NativeProvider = 'youtube' | 'arxiv' | 'huggingface' | 'github' | 'github_releases' | 'telegram' | 'alpha_vantage' | 'open_meteo' | 'google_news' | 'sec_edgar' | 'openalex' | 'fred' | 'openweathermap' | 'openaq' | 'nasa_firms';
+export type NativeProvider = 'youtube' | 'arxiv' | 'huggingface' | 'reddit' | 'bluesky' | 'mastodon' | 'x' | 'github' | 'github_releases' | 'telegram' | 'alpha_vantage' | 'open_meteo' | 'google_news' | 'sec_edgar' | 'openalex' | 'fred' | 'openweathermap' | 'openaq' | 'nasa_firms' | 'notion' | 'slack';
 
-/** Renders fixed native-provider scope controls; GitHub resource flags and bounded history horizon remain in the owning revision-fenced draft. */
+/** Renders bounded native-provider scopes, including Reddit subreddits and selected Notion pages/Slack channels; values stay in the revision-fenced draft. */
 export function ProviderScope({
   provider,
   configuration,
@@ -35,8 +35,18 @@ export function ProviderScope({
   const parsedTelegramIds = configuration.telegram_chat_ids ?? [];
   const parsedTelegramSignature = JSON.stringify(parsedTelegramIds);
   const telegramTextFromConfig = parsedTelegramIds.join(', ');
+  const parsedNotionIds = configuration.notion_page_ids ?? [];
+  const parsedNotionSignature = JSON.stringify(parsedNotionIds);
+  const parsedSlackIds = configuration.slack_channel_ids ?? [];
+  const parsedSlackSignature = JSON.stringify(parsedSlackIds);
   const [telegramText, setTelegramText] = useState(() => parsedTelegramIds.join(', '));
+  const [notionText, setNotionText] = useState(() => parsedNotionIds.join(', '));
+  const [slackText, setSlackText] = useState(() => parsedSlackIds.join(', '));
   const lastEmittedSignature = useRef(parsedTelegramSignature);
+  const lastNotionSignature = useRef(parsedNotionSignature);
+  const lastSlackSignature = useRef(parsedSlackSignature);
+  const lastNotionResetEpoch = useRef(resetEpoch);
+  const lastSlackResetEpoch = useRef(resetEpoch);
   const lastResetEpoch = useRef(resetEpoch);
   useEffect(() => {
     // A reset is authoritative even when parsed values match; otherwise ignore local owner echoes that would erase typed separators.
@@ -49,6 +59,20 @@ export function ProviderScope({
       setTelegramText(telegramTextFromConfig);
     }
   }, [parsedTelegramSignature, resetEpoch, telegramTextFromConfig]);
+  useEffect(() => {
+    if (resetEpoch !== lastNotionResetEpoch.current || parsedNotionSignature !== lastNotionSignature.current) {
+      lastNotionResetEpoch.current = resetEpoch;
+      lastNotionSignature.current = parsedNotionSignature;
+      setNotionText(parsedNotionIds.join(', '));
+    }
+  }, [parsedNotionSignature, resetEpoch]);
+  useEffect(() => {
+    if (resetEpoch !== lastSlackResetEpoch.current || parsedSlackSignature !== lastSlackSignature.current) {
+      lastSlackResetEpoch.current = resetEpoch;
+      lastSlackSignature.current = parsedSlackSignature;
+      setSlackText(parsedSlackIds.join(', '));
+    }
+  }, [parsedSlackSignature, resetEpoch]);
   /** Pairs a scope field with its translated label and constrained native input. */
   const field = (key: keyof ConnectorConfig, label: string, value: string, update: (value: string) => void, props: { maxLength?: number; pattern?: string } = {}) => (
     <div className="field" key={key}>
@@ -98,6 +122,36 @@ export function ProviderScope({
   if (provider === 'openaq') return field('openaq_location_id', t('openaqLocationId'), String(configuration.openaq_location_id ?? ''), (value) => onChange('openaq_location_id', value === '' ? undefined : Number(value)), { maxLength: 10, pattern: '[0-9]{1,10}' });
   if (provider === 'nasa_firms') return field('firms_country', t('firmsCountry'), configuration.firms_country ?? '', (value) => onChange('firms_country', value.toUpperCase()), { maxLength: 3, pattern: '[A-Z]{3}' });
   if (provider === 'youtube') return <>{field('youtube_channel_id', t('youtubeChannelId'), configuration.youtube_channel_id ?? '', (value) => onChange('youtube_channel_id', value), { maxLength: 24, pattern: 'UC[A-Za-z0-9_-]{22}' })}</>;
+  if (provider === 'reddit') return <>{field('reddit_subreddit', t('redditSubreddit'), configuration.reddit_subreddit ?? '', (value) => onChange('reddit_subreddit', value.trim()), { maxLength: 21, pattern: '[A-Za-z0-9_]{2,21}' })}<small className="text-muted-foreground">{t('redditReadOnlyHelp')}</small></>;
+  if (provider === 'bluesky') return <>{field('bluesky_actor', t('blueskyActor'), configuration.bluesky_actor ?? '', (value) => onChange('bluesky_actor', value.trim()), { maxLength: 253, pattern: '(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z]{2,63}|did:plc:[a-z2-7]{24}|did:web:[A-Za-z0-9.%:-]{1,220}' })}</>;
+  if (provider === 'mastodon') return <>
+    {/* Account and hashtag are mutually exclusive on the server, so each is optional here and the empty one is sent as undefined. */}
+    <div className="field">
+      <Label htmlFor="source-scope-mastodon_instance_url">{t('mastodonInstanceUrl')}</Label>
+      <Input id="source-scope-mastodon_instance_url" type="url" required maxLength={512} disabled={disabled} value={configuration.mastodon_instance_url ?? ''} onChange={(event) => onChange('mastodon_instance_url', event.target.value.trim() || undefined)} />
+    </div>
+    <div className="field">
+      <Label htmlFor="source-scope-mastodon_account">{t('mastodonAccount')}</Label>
+      <Input id="source-scope-mastodon_account" maxLength={320} disabled={disabled} required={!configuration.mastodon_hashtag} value={configuration.mastodon_account ?? ''} onChange={(event) => onChange('mastodon_account', event.target.value.trim() || undefined)} />
+    </div>
+    <div className="field">
+      <Label htmlFor="source-scope-mastodon_hashtag">{t('mastodonHashtag')}</Label>
+      <Input id="source-scope-mastodon_hashtag" maxLength={100} disabled={disabled} required={!configuration.mastodon_account} value={configuration.mastodon_hashtag ?? ''} onChange={(event) => onChange('mastodon_hashtag', event.target.value.trim().replace(/^#/, '') || undefined)} />
+    </div>
+    <small className="text-muted-foreground">{t('mastodonHelp')}</small>
+  </>;
+  if (provider === 'x') return <>
+    {/* The server requires exactly one of account or search query; each is optional here and the empty one is sent as undefined. */}
+    <div className="field">
+      <Label htmlFor="source-scope-x_account">{t('xAccount')}</Label>
+      <Input id="source-scope-x_account" maxLength={16} disabled={disabled} required={!configuration.x_query} value={configuration.x_account ?? ''} onChange={(event) => onChange('x_account', event.target.value.trim().replace(/^@/, '') || undefined)} />
+    </div>
+    <div className="field">
+      <Label htmlFor="source-scope-x_query">{t('xQuery')}</Label>
+      <Input id="source-scope-x_query" maxLength={512} disabled={disabled} required={!configuration.x_account} value={configuration.x_query ?? ''} onChange={(event) => onChange('x_query', event.target.value.trim() || undefined)} />
+    </div>
+    <small className="text-muted-foreground">{t('xScopeHelp')}</small>
+  </>;
   if (provider === 'arxiv') return <>{field('arxiv_category', t('arxivCategory'), configuration.arxiv_category ?? '', (value) => onChange('arxiv_category', value), { maxLength: 64, pattern: '[A-Za-z][A-Za-z0-9.-]{0,63}' })}</>;
   if (provider === 'huggingface') return <>{field('huggingface_author', t('huggingfaceAuthor'), configuration.huggingface_author ?? '', (value) => onChange('huggingface_author', value), { maxLength: 96, pattern: '[A-Za-z0-9][A-Za-z0-9_-]{0,95}' })}</>;
   if (provider === 'github' || provider === 'github_releases') return <>
@@ -125,6 +179,28 @@ export function ProviderScope({
     {field('weather_timezone', t('weatherTimezone'), configuration.weather_timezone ?? '', (value) => onChange('weather_timezone', value), { maxLength: 64 })}
     {field('weather_metrics', t('weatherMetrics'), (configuration.weather_metrics ?? []).join(', '), (value) => onChange('weather_metrics', value.split(/[\s,]+/).filter(Boolean).slice(0, 4)), { maxLength: 200 })}
   </>;
+  if (provider === 'notion') return <div className="field">
+    <Label htmlFor="source-scope-notion_page_ids">{t('notionPageIds')}</Label>
+    <Input id="source-scope-notion_page_ids" maxLength={13000} disabled={disabled} required value={notionText} aria-describedby="source-scope-notion-help" onChange={(event) => {
+      const rawText = event.target.value;
+      setNotionText(rawText);
+      const values = rawText.split(/[\s,]+/).filter(Boolean);
+      lastNotionSignature.current = JSON.stringify(values);
+      onChange('notion_page_ids', values);
+    }} />
+    <small id="source-scope-notion-help" className="text-muted-foreground">{t('notionPageIdsHelp')}</small>
+  </div>;
+  if (provider === 'slack') return <div className="field">
+    <Label htmlFor="source-scope-slack_channel_ids">{t('slackChannelIds')}</Label>
+    <Input id="source-scope-slack_channel_ids" maxLength={8400} disabled={disabled} required value={slackText} aria-describedby="source-scope-slack-help" onChange={(event) => {
+      const rawText = event.target.value;
+      setSlackText(rawText);
+      const values = rawText.split(/[\s,]+/).filter(Boolean);
+      lastSlackSignature.current = JSON.stringify(values);
+      onChange('slack_channel_ids', values);
+    }} />
+    <small id="source-scope-slack-help" className="text-muted-foreground">{t('slackChannelIdsHelp')}</small>
+  </div>;
   return <div className="field">
     <Label htmlFor="source-scope-telegram_chat_ids">{t('telegramChannelIds')}</Label>
     <Input id="source-scope-telegram_chat_ids" maxLength={2200} disabled={disabled} required value={telegramText} aria-describedby="source-scope-telegram-help" onChange={(event) => {
@@ -187,14 +263,14 @@ export function ProviderGuide({ entry, source, now, onTest, testBusy, testPassed
       {quotas.length > 0 && row(t('guideQuotaLabel'), quotas.join('; '))}
       {entry.attribution && row(t('guideAttribution'), <>{entry.attribution}{entry.terms_url ? <> <a className="text-accent underline" href={safeHttpUrl(entry.terms_url)} target="_blank" rel="noopener noreferrer">{t('providerTerms')}</a></> : null}</>)}
       {row(t('guideVerified'), entry.runtime_verified ? t('guideVerifiedYes') : t('guideVerifiedNo'))}
-      {source && row(t('guideLastSuccess'), source.last_success_at ? <>{fmt(source.last_success_at)}{stale && <span role="status" className="ml-2 rounded-md border border-border px-1.5 py-0.5 text-xs text-danger">{t('stale')}</span>}</> : t('never'))}
-      {source?.collection_error_code && row(t('guideLastError'), <span role="alert" className="text-danger">{source.collection_error_code}{source.last_success_at ? ` · ${t('guideShowingLastGood')}` : ''}</span>)}
+      {source && row(t('guideLastSuccess'), source.last_success_at ? <>{fmt(source.last_success_at)}{stale && <span role="status" className="ml-2 rounded-md border border-border px-1.5 py-0.5 text-xs text-destructive">{t('stale')}</span>}</> : t('never'))}
+      {source?.collection_error_code && row(t('guideLastError'), <span role="alert" className="text-destructive">{source.collection_error_code}{source.last_success_at ? ` · ${t('guideShowingLastGood')}` : ''}</span>)}
       {row(t('guideRecovery'), t('guideRecoveryBody'))}
     </dl>
     {entry.example_config && <div className="grid gap-1"><strong>{t('guideExampleConfig')}</strong>
-      <pre className="overflow-x-auto rounded-md border border-border bg-bg p-2 text-xs" data-testid="guide-example-config">{JSON.stringify(entry.example_config, null, 2)}</pre></div>}
+      <pre className="overflow-x-auto rounded-md border border-border bg-muted p-2 text-xs" data-testid="guide-example-config">{JSON.stringify(entry.example_config, null, 2)}</pre></div>}
     {entry.sample_output && <div className="grid gap-1"><strong>{t('guideSampleOutput')}</strong>
-      <pre className="overflow-x-auto rounded-md border border-border bg-bg p-2 text-xs" data-testid="guide-sample-output">{JSON.stringify(entry.sample_output, null, 2)}</pre></div>}
+      <pre className="overflow-x-auto rounded-md border border-border bg-muted p-2 text-xs" data-testid="guide-sample-output">{JSON.stringify(entry.sample_output, null, 2)}</pre></div>}
     {(entry.example_config || entry.sample_output) && <small className="text-muted-foreground">{t('guideExampleNote')}</small>}
     <div className="flex flex-wrap items-center gap-2">
       <Button type="button" variant="outline" disabled={!onTest || testBusy} onClick={onTest}>{t('guideTest')}</Button>
@@ -228,8 +304,8 @@ export function ProviderTerms({ sourceId, entry, csrfToken, disabled }: { source
   const declared = use || (current?.declared_use as DeclaredUse | undefined) || '';
   return <section aria-label={t('termsTitle')} className="grid gap-2 rounded-lg border border-border p-3 text-sm">
     <h4 className="font-semibold">{t('termsTitle')}</h4>
-    {!current?.eligible && <p role="status" className="text-danger">{t('termsRequired')}</p>}
-    {termsQuery.isError ? <p role="alert" className="text-danger">{t('termsLoadFailed')}</p> : <p>{t(decision)}</p>}
+    {!current?.eligible && <p role="status" className="text-destructive">{t('termsRequired')}</p>}
+    {termsQuery.isError ? <p role="alert" className="text-destructive">{t('termsLoadFailed')}</p> : <p>{t(decision)}</p>}
     <p className="text-muted-foreground">{t('termsVersion')}: {version || t('guideNone')} · <a className="text-accent underline" href={safeHttpUrl(entry.terms_url)} target="_blank" rel="noopener noreferrer">{t('providerTerms')}</a></p>
     <div className="field"><Label htmlFor="terms-declared-use">{t('termsDeclaredUse')}</Label>
       <Select value={declared} onValueChange={(value) => setUse(value as DeclaredUse)} disabled={disabled}>
@@ -243,7 +319,7 @@ export function ProviderTerms({ sourceId, entry, csrfToken, disabled }: { source
     <div className="flex items-center gap-2">
       <Button type="button" disabled={disabled || save.isPending || !declared || !read || !version} onClick={() => save.mutate()}>{save.isPending ? t('termsSaving') : t('termsSave')}</Button>
       {save.isSuccess && <small role="status">{t('termsSaved')}</small>}
-      {save.isError && <small role="alert" className="text-danger">{t('actionFailed')}</small>}
+      {save.isError && <small role="alert" className="text-destructive">{t('actionFailed')}</small>}
     </div>
   </section>;
 }

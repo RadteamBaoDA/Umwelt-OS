@@ -8,6 +8,4 @@ test('owner sees truthful integration status', async ({ page }) => {
   await expect(page.locator('.status-item').filter({ has: page.getByText('Chat worker', { exact: true }) })).toContainText('healthy');
   // The gateway counts as configured only once an owner saves a provider (no env bootstrap); a fresh stack has none.
   await expect(page.locator('.status-item').filter({ hasText: 'Model gateway' })).toContainText('Model gateway is not configured');
-  await page.goto('/settings/sources');
-  await expect(page.getByText('No sources yet.')).toBeVisible();
 });

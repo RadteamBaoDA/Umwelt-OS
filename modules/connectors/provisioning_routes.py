@@ -239,7 +239,7 @@ class ConnectorConfigurationRead(BaseModel):
     configuration: dict[str, object]
     provider: str | None = None
     expected_revision: int
-    auth_method: Literal["none", "http_header", "telegram_bot_token"]
+    auth_method: Literal["none", "http_header", "telegram_bot_token", "oauth2"]
     auth_header_name: str | None
     desired_enabled: bool
     activation_state: str
@@ -324,11 +324,12 @@ async def validate_draft_configuration(
     request: Request,
     _owner: OwnerRead,
 ) -> DraftValidationRead:
-    """Validate a draft and recheck its source, revision, and Telegram bot binding afterward.
+    """Validate a draft and recheck its source, revision, and provider-specific credential mode.
 
     Retained-token reads lock source, provisioning, managed credentials, and the
     native row before decryption. Locks are released for provider requests, then
-    reacquired to ensure the result still describes the requested active draft.
+    reacquired to ensure the result still describes the requested active draft. FHIR,
+    Home Assistant, Notion and Slack drafts require an Authorization bearer header but are never contacted here.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
     actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
@@ -345,9 +346,17 @@ async def validate_draft_configuration(
     current_revision = row.desired_revision if row is not None else 0
     if payload.expected_revision != current_revision:
         raise HTTPException(status_code=409, detail="Connector configuration revision changed; reload before validating")
-    expected_auth = "telegram_bot_token" if source.provider == "telegram" else "none" if source.provider else None
+    expected_auth = (
+        "telegram_bot_token" if source.provider == "telegram"
+        else "http_header" if source.provider in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS
+        else "none" if source.provider else None
+    )
+    if source.provider == "mastodon" and payload.auth_method == "none":
+        expected_auth = "none"  # Mastodon's bearer token is optional: public reads need no credential.
     if expected_auth is not None and payload.auth_method != expected_auth:
         raise HTTPException(status_code=422, detail="Authentication mode does not match the provider")
+    if expected_auth == "http_header" and source.provider in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS and payload.auth_header_name != "Authorization":
+        raise HTTPException(status_code=422, detail="Provider bearer credentials require the Authorization header")
     if source.provider is None and payload.auth_method == "telegram_bot_token":
         raise HTTPException(status_code=422, detail="Telegram authentication requires a Telegram source")
     if payload.auth_method == "http_header" and source.type != "api":
@@ -530,7 +539,9 @@ async def put_configuration(
     """Save revision-checked desired settings without starting a new activation.
 
     Reconciles/cancels prior activation and workflow intent as needed, commits
-    the saved configuration, and returns the resulting activation projection.
+    the saved configuration, and returns the resulting activation projection. FHIR and
+    Home Assistant, Notion and Slack use a fixed Authorization bearer header plus native endpoint
+    or scope fields.
     Owner-write authorization is enforced by the route dependency.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
@@ -547,9 +558,17 @@ async def put_configuration(
         raise HTTPException(status_code=409, detail="Wait for source deactivation to finish before saving")
     if pending is not None and pending.transition_phase != "idle":
         raise HTTPException(status_code=409, detail="Wait for the backend transition to finish before saving")
-    expected_auth = "telegram_bot_token" if source.provider == "telegram" else "none" if source.provider else None
+    expected_auth = (
+        "telegram_bot_token" if source.provider == "telegram"
+        else "http_header" if source.provider in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS
+        else "none" if source.provider else None
+    )
+    if source.provider == "mastodon" and payload.auth_method == "none":
+        expected_auth = "none"  # Mastodon's bearer token is optional: public reads need no credential.
     if expected_auth is not None and payload.auth_method != expected_auth:
         raise HTTPException(status_code=422, detail="Authentication mode does not match the provider")
+    if expected_auth == "http_header" and source.provider in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS and payload.auth_header_name != "Authorization":
+        raise HTTPException(status_code=422, detail="Provider bearer credentials require the Authorization header")
     if source.provider is None and payload.auth_method == "telegram_bot_token":
         raise HTTPException(status_code=422, detail="Telegram authentication requires a Telegram source")
     if payload.auth_method == "http_header" and source.type != "api":
@@ -957,11 +976,12 @@ async def remove_provider_credential(
     session: Session,
     request: Request, _owner: OwnerWrite,
 ) -> ActivationRead:
-    """Disable provider authentication and queue a fenced credential deletion.
+    """Disable provider authentication and queue or perform a fenced credential deletion.
 
     Owner-write authorization is enforced by the route dependency. The local
     configuration and delete intent commit before reconciliation; the external
-    n8n credential remains until the later delete acknowledgement clears it.
+    n8n credential remains until the later delete acknowledgement clears it. Native local-service
+    bearer tokens have no external operation and are erased in the same transaction.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
     actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
@@ -1016,6 +1036,12 @@ async def remove_provider_credential(
         raise HTTPException(status_code=409, detail="Connector configuration revision changed")
     saved_source, updated = saved
     updated.state = "disabled"
+    if source.provider in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS:
+        local_credential = await session.get(ConnectorRestCredential, source_id, with_for_update=True)
+        if local_credential is not None:
+            # Native local/workspace-app tokens have no external credential operation to reconcile.
+            await session.delete(local_credential)
+            updated.credential_revision += 1
     if revocation_snapshot is not None:
         try:
             await provisioning.revoke_native_credential_in_uow(
@@ -1109,6 +1135,7 @@ _NATIVE_ERRORS = {
     "terms_not_accepted": (409, "terms_not_accepted"),
     "invalid_credential": (409, "invalid_credential"),
     "native_unsupported": (422, "This source cannot use the native backend"),
+    "local_only_source": (409, {"code": "local_only_source", "message": "local_only_source"}),
     "source_inactive": (409, "Source is inactive or private; it cannot be activated"),
 }
 
@@ -1232,10 +1259,13 @@ async def resolve_backend_transition(
 async def reenter_native_rest_credential(
     source_id: UUID, payload: NativeRestCredentialRequest, session: Session, request: Request, _owner: OwnerWrite,
 ) -> ActivationRead:
-    """Owner re-enters the REST header secret for the native backend (write-only, encrypted, never echoed).
+    """Owner re-enters a native REST or local-service header secret (write-only, encrypted, never echoed).
 
     Bumps the credential revision and lifts an ``invalid_credential`` schedule gate; the secret is bound to
     the current source generation and configuration revision, so a later settings save needs re-entry.
+    FHIR and Home Assistant accept only the fixed ``Authorization`` header. Notion, Slack, Mastodon and X use
+    the same encrypted write-only credential owner for their fixed bearer-token header; their
+    adapters apply the provider-required Bearer scheme when making requests.
     """
     scope = _owner
     settings = request.app.state.settings
@@ -1246,8 +1276,14 @@ async def reenter_native_rest_credential(
     row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=gate, scope=scope)
     desired = dict(row.desired_configuration) if row is not None else {}
     keyed_header = collection.KEYED_PROVIDERS.get(source.provider or "")  # keyed preset: fixed placement (header | query:<param> | path:<token>)
+    workspace_app_header = "Authorization" if source.provider in {"notion", "slack", "mastodon", "x"} else None
+    local_header = (
+        "Authorization" if source.provider in collection.HEADER_AUTH_PROVIDERS
+        and desired.get("auth_method") == "http_header" and desired.get("auth_header_name") == "Authorization"
+        else None
+    )
     if source.status != "active" or source.type != "api" or row is None or (
-        keyed_header is None and (
+        keyed_header is None and local_header is None and workspace_app_header is None and (
             source.provider is not None
             or desired.get("auth_method") != "http_header" or not desired.get("auth_header_name"))
     ):
@@ -1262,7 +1298,7 @@ async def reenter_native_rest_credential(
             validate_key(str(source.provider), payload.secret.get_secret_value())
         except ProviderPayloadError as exc:
             raise HTTPException(status_code=422, detail="The API key is not acceptable for this provider") from exc
-    header_name = keyed_header or str(desired["auth_header_name"])
+    header_name = keyed_header or local_header or workspace_app_header or str(desired["auth_header_name"])
     operation_id = uuid7()
     try:
         ciphertext = encrypt_rest_secret(

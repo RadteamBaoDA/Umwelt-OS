@@ -3,7 +3,8 @@ set -euo pipefail
 
 pytest_target="${PYTEST_TARGET:-}"
 e2e_target="${E2E_TARGET:-}"
-if [[ -n "$pytest_target" && -n "$e2e_target" ]]; then
+e2e_only="${E2E_ONLY_RUN:-}"
+if [[ -n "$pytest_target" && ( -n "$e2e_target" || -n "$e2e_only" ) ]]; then
   echo 'Choose only one of PYTEST_TARGET or E2E_TARGET.' >&2
   exit 2
 fi
@@ -13,7 +14,7 @@ if [[ -n "$pytest_target" && "$pytest_target" != tests/integration/* ]]; then
   exit
 fi
 
-if [[ -z "$pytest_target" && -z "$e2e_target" ]]; then
+if [[ -z "$pytest_target" && -z "$e2e_target" && -z "$e2e_only" ]]; then
   uv run pytest -q
 fi
 
@@ -37,6 +38,7 @@ trap cleanup EXIT
 export INTEGRATION=1
 export API_URL="http://localhost:${API_TEST_PORT}"
 "${compose[@]}" exec -T postgres psql -U bbd_test -d bbd_test -At -c "SELECT current_database() || '|' || current_user" | grep -Fx 'bbd_test|bbd_test' >/dev/null
+if [[ -z "$e2e_only" ]]; then
 uv run pytest tests/integration/test_auth_race.py -q
 if [[ -n "$pytest_target" ]]; then
   if [[ "$pytest_target" != tests/integration/test_auth_race.py ]]; then
@@ -45,17 +47,28 @@ if [[ -n "$pytest_target" ]]; then
 else
   uv run pytest tests/integration -q --ignore=tests/integration/test_auth_race.py
 fi
+fi
 
 if [[ -z "$pytest_target" || -n "$e2e_target" ]]; then
   # Only this uniquely named disposable project and verified test identity may be reset.
   [[ "$project" =~ ^bbd-os-test-[0-9a-f]{10}$ ]]
-  "${compose[@]}" exec -T postgres psql -U bbd_test -d bbd_test -v ON_ERROR_STOP=1 -c "$(tr -d '\r' < "$(dirname "${BASH_SOURCE[0]}")/sql/e2e-reset.sql" | tr '\n' ' ')"
+  e2e_reset() {
+    "${compose[@]}" exec -T postgres psql -U bbd_test -d bbd_test -v ON_ERROR_STOP=1 -c "$(tr -d '\r' < "$(dirname "${BASH_SOURCE[0]}")/sql/e2e-reset.sql" | tr '\n' ' ')"
+    "${compose[@]}" exec -T redis redis-cli FLUSHALL >/dev/null
+  }
   export E2E_SETUP_TOKEN=bbd-os-disposable-test-token
   export PLAYWRIGHT_BASE_URL="http://localhost:${WEB_PORT}"
   export PLAYWRIGHT_EXTERNAL_SERVER=1
+  e2e_reset
   if [[ -n "$e2e_target" ]]; then
     npm run test:e2e -- "$e2e_target"
   else
-    npm run test:e2e
+    # Two groups, each with its own global timeout and a fresh owner bootstrap (see playwright.config.ts).
+    # The second group runs even when the first fails, so one slow provider cannot hide the rest of the suite.
+    status=0
+    E2E_GROUP=datasources npm run test:e2e || status=$?
+    e2e_reset
+    E2E_GROUP=rest npm run test:e2e || status=$?
+    exit "$status"
   fi
 fi

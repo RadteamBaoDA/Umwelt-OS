@@ -8,16 +8,22 @@ import { archiveSource, CollectionRequest, CollectionStatus, connectorKeys, Conn
 const TERMINAL: ReadonlySet<string> = new Set(['succeeded', 'no_changes', 'failed', 'cancelled']);
 export const COLLECTION_POLL_MS = 2000;
 
-/** Polls a collection request every `intervalMs` until it is terminal; resolves null when aborted. A fetch error ends the poll by throwing. */
+/**
+ * Polls a collection request every `intervalMs` until it is terminal; resolves null when aborted. A fetch error ends the poll by throwing.
+ * With `timeoutMs`, a request still queued/running at the deadline (the server retries retryable failures up to 5 attempts, each up to 90 s)
+ * resolves as a local `failed` request carrying the last server error code (or `test_fetch_timeout`), so callers always reach a terminal outcome.
+ */
 export async function pollCollectionRequest(
   fetchRequest: (signal: AbortSignal) => Promise<CollectionRequest>,
-  { signal, intervalMs = COLLECTION_POLL_MS, onUpdate }: { signal: AbortSignal; intervalMs?: number; onUpdate?: (request: CollectionRequest) => void },
+  { signal, intervalMs = COLLECTION_POLL_MS, onUpdate, timeoutMs }: { signal: AbortSignal; intervalMs?: number; onUpdate?: (request: CollectionRequest) => void; timeoutMs?: number },
 ): Promise<CollectionRequest | null> {
+  const deadline = timeoutMs === undefined ? Infinity : Date.now() + timeoutMs;
   while (!signal.aborted) {
     const request = await fetchRequest(signal);
     if (signal.aborted) return null;
     onUpdate?.(request);
     if (TERMINAL.has(request.status)) return request;
+    if (Date.now() >= deadline) return { ...request, status: 'failed', error_code: request.error_code ?? 'test_fetch_timeout' };
     await new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, intervalMs);
       signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
@@ -59,7 +65,7 @@ export async function waitForActivation(
 export async function collectAndWait(
   sourceId: string,
   csrfToken: string,
-  { signal, intervalMs, onAccepted, onUpdate }: { signal: AbortSignal; intervalMs?: number; onAccepted?: (result: ManualSyncResult) => void; onUpdate?: (request: CollectionRequest) => void },
+  { signal, intervalMs, onAccepted, onUpdate, timeoutMs }: { signal: AbortSignal; intervalMs?: number; onAccepted?: (result: ManualSyncResult) => void; onUpdate?: (request: CollectionRequest) => void; timeoutMs?: number },
 ): Promise<CollectionRequest | null> {
   const result = await triggerCollection(sourceId, csrfToken);
   if (signal.aborted) return null;
@@ -70,7 +76,7 @@ export async function collectAndWait(
     const known = TERMINAL.has(result.status);
     return { request_id: '', source_id: sourceId, status: (known ? result.status : 'failed') as CollectionStatus, ingestion_run_id: result.run_id, error_code: known ? null : 'no_request_id' };
   }
-  return pollCollectionRequest((s) => getCollectionRequest(sourceId, requestId, s), { signal, intervalMs, onUpdate });
+  return pollCollectionRequest((s) => getCollectionRequest(sourceId, requestId, s), { signal, intervalMs, onUpdate, timeoutMs });
 }
 
 /** Shared Pause/Resume and Disconnect handlers used by both the source list rows and the connector editor header. */

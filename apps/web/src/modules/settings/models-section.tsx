@@ -1,11 +1,12 @@
 'use client';
 
-import { Check, Plus, Trash2 } from 'lucide-react';
+import { Check, Info, Plus, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { SearchableSelect } from '@/components/ui/searchable-select';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { guessModelType, mappingProviderId, modelTestKey, ModelTestChip, selectableModelTypes, testRoleByType, type ModelTestState, type ModelType, type ProviderModel, type ProviderRead } from './provider-editor';
 import { FieldGrid } from './settings-layout';
@@ -32,10 +33,10 @@ export function pruneDefaults(prev: ProviderRead[], next: ProviderRead[], defaul
   return Object.fromEntries(Object.entries(defaults).map(([role, m]) => [role, m?.model && gone.has(modelTestKey(mappingProviderId(m.provider_id, prev), m.model)) ? null : m]));
 }
 
-type ModelsProps = { providers: ProviderRead[]; discovered: Record<string, string[]>; modelTests: Record<string, ModelTestState>; checkedAt?: Record<string, string>; disabled: boolean; onChange: (providers: ProviderRead[]) => void; onTestModel: (provider: ProviderRead, model: ProviderModel) => void; t: Translate };
+type ModelsProps = { providers: ProviderRead[]; discovered: Record<string, string[]>; modelTests: Record<string, ModelTestState>; checkedAt?: Record<string, string>; details?: Record<string, string>; disabled: boolean; onChange: (providers: ProviderRead[]) => void; onTestModel: (provider: ProviderRead, model: ProviderModel) => void; t: Translate };
 
 /** The single Models area: add row (provider, discovered model, type, vision) and one table of every added model. */
-export function ModelsPanel({ providers, discovered, modelTests, checkedAt = {}, disabled, onChange, onTestModel, t }: ModelsProps) {
+export function ModelsPanel({ providers, discovered, modelTests, checkedAt = {}, details = {}, disabled, onChange, onTestModel, t }: ModelsProps) {
   const [providerId, setProviderId] = useState('');
   const [pending, setPending] = useState('');
   const [type, setType] = useState<ModelType>('llm');
@@ -61,7 +62,7 @@ export function ModelsPanel({ providers, discovered, modelTests, checkedAt = {},
       <Button type="button" variant="outline" disabled={disabled || !provider || !pending} onClick={() => { patch(provider!.id, [...(provider!.models ?? []), type === 'llm' && vision ? { id: pending, type, vision: true } : { id: pending, type }]); setPending(''); setVision(false); }}><Plus className="size-4" aria-hidden="true" /> {t('modelAdd')}</Button>
       {type === 'llm' && <label className="flex items-center gap-2 text-sm sm:col-span-4"><Checkbox disabled={disabled} checked={vision} onCheckedChange={(next) => setVision(next === true)} />{t('modelVision')}</label>}
     </div>
-    {rows.length === 0 ? <p className="text-muted-foreground m-0">{t('modelsEmpty')}</p> : <Table aria-label={t('modelsTable')}>
+    {rows.length === 0 ? <p className="text-muted-foreground m-0">{t('modelsEmpty')}</p> : <TooltipProvider delayDuration={200}><Table aria-label={t('modelsTable')}>
       <TableHeader><TableRow><TableHead>{t('providerColumn')}</TableHead><TableHead>{t('modelColumn')}</TableHead><TableHead>{t('typeColumn')}</TableHead><TableHead>{t('visionColumn')}</TableHead><TableHead>{t('actionsColumn')}</TableHead></TableRow></TableHeader>
       <TableBody>{rows.map(({ provider: owner, model }) => {
         const state = modelTests[modelTestKey(owner.id, model.id)];
@@ -75,10 +76,14 @@ export function ModelsPanel({ providers, discovered, modelTests, checkedAt = {},
             <Button type="button" variant="outline" disabled={disabled} aria-label={t('modelRemove', { id: model.id })} onClick={() => patch(owner.id, (owner.models ?? []).filter((item) => item.id !== model.id))}><Trash2 className="size-4" aria-hidden="true" /></Button>
             <ModelTestChip state={state} t={t} />
             {state && state !== 'pending' && checkedAt[modelTestKey(owner.id, model.id)] && <span className="text-muted-foreground text-xs">{t('modelCheckedAt', { time: new Date(checkedAt[modelTestKey(owner.id, model.id)]).toLocaleString() })}</span>}
+            {state && state !== 'pending' && state !== 'supported' && details[modelTestKey(owner.id, model.id)] && <Tooltip>
+              <TooltipTrigger asChild><button type="button" className="text-destructive inline-flex" aria-label={details[modelTestKey(owner.id, model.id)]}><Info className="size-4" aria-hidden="true" /></button></TooltipTrigger>
+              <TooltipContent className="max-w-sm break-words">{details[modelTestKey(owner.id, model.id)]}</TooltipContent>
+            </Tooltip>}
           </div></TableCell>
         </TableRow>;
       })}</TableBody>
-    </Table>}
+    </Table></TooltipProvider>}
     <p className="text-muted-foreground m-0 text-xs">{t('modelTypesHelp')}</p>
   </div>;
 }

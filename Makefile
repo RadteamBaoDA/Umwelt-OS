@@ -1,4 +1,4 @@
-.PHONY: setup dev stop migrate seed workspace-up workspace-stop workspace-seed reset-preview reset lint typecheck test build
+.PHONY: setup dev stop migrate seed workspace-up workspace-stop workspace-seed reset-preview reset lint typecheck test e2e build
 export WORKSPACE CONFIRM_FINGERPRINT
 
 setup:

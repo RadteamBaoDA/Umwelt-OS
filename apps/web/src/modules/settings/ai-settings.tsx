@@ -17,7 +17,7 @@ import { mappingFor, ModelDefaults, ModelsPanel, pruneDefaults, type DefaultSlot
 import { modelTestKey, parseDraftSnapshot, ProviderEditor, testRoleByType, type ModelTestState, type ProviderModel, type ProviderRead, type ProviderSecret } from './provider-editor';
 
 type Privacy = { allow_remote_reasoning: boolean; allow_remote_embeddings: boolean; allow_remote_web_search: boolean; allow_widget_remote_media: boolean; reasoning_destinations: string[]; embedding_destinations: string[]; web_search_destinations: string[] };
-type Capability = { role: string; capability: string; result: string; expires_at: string; dimensions?: number };
+type Capability = { role: string; capability: string; result: string; expires_at: string; dimensions?: number; detail?: string };
 type AISettings = { configuration_revision: number; providers: ProviderRead[]; web_search_provider: 'none' | 'tavily' | 'brave' | 'searxng'; web_search_endpoint: string | null; web_search_credential_configured: boolean; defaults: Defaults; capabilities: Capability[]; privacy: Privacy; request_timeout_seconds: number };
 
 /**
@@ -53,6 +53,8 @@ export function AISettingsWorkspace() {
   const [discoverError, setDiscoverError] = useState<{ id: string; text: string } | null>(null);
   const [discovered, setDiscovered] = useState<Record<string, string[]>>({});
   const [modelTests, setModelTests] = useState<Record<string, ModelTestState>>({});
+  // Real failure reason from the last test in this session; the stored row keeps only the result.
+  const [testDetails, setTestDetails] = useState<Record<string, string>>({});
   // Last stored test outcome per model (DB), shown after reload until a fresh test in this session overrides it.
   const storedTests = useQuery({ queryKey: ['model-test-results'], queryFn: () => apiRequest<{ provider_id: string; model: string; result: ModelTestState; checked_at: string }[]>('/api/v1/settings/models/test-results') });
   const storedByKey = Object.fromEntries((Array.isArray(storedTests.data) ? storedTests.data : []).map((row) => [modelTestKey(row.provider_id, row.model), row]));
@@ -162,6 +164,12 @@ export function AISettingsWorkspace() {
     onError: (error, provider) => setDiscoverError({ id: provider.id, text: describeError(error, t, 'discoveryFailed') }),
     onSettled: () => setDiscoveringId(null),
   });
+  /** Probes the saved embedding default through the role endpoint, the only path that persists embeddings evidence. */
+  const embeddingProbe = useMutation({
+    mutationFn: () => apiRequest<Capability>('/api/v1/settings/models/embedding/test', { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ capability: 'embeddings' }) }),
+    // Refetch even on failure so the chip shows the stored outcome.
+    onSettled: () => client.invalidateQueries({ queryKey: ['ai-settings'] }),
+  });
   const draftProbe = useMutation({ mutationFn: ({ role, mapping, capability, provider }: { role: DefaultSlot; mapping: Mapping; capability: string; provider: ProviderRead | undefined }) => apiRequest<Capability>('/api/v1/settings/models/draft-test', { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ role, provider_id: provider && savedIds.includes(provider.id) ? provider.id : undefined, base_url: provider?.base_url, kind: provider?.kind, api_key: provider ? secrets[provider.id]?.key ?? '' : '', model: mapping.model, version: mapping.version, capability }) }),
     // A supported embeddings probe records the vector size on the embedding default draft.
     onSuccess: (data, { role, mapping }) => { if (data.capability === 'embeddings' && data.result === 'supported' && typeof data.dimensions === 'number') setDraft((current) => { const from = current ?? query.data; // Ignore a late probe for a model the owner has since replaced.
@@ -194,9 +202,14 @@ export function AISettingsWorkspace() {
       return post('/api/v1/settings/models/draft-test', { role: slot.role, provider_id: savedIds.includes(provider.id) ? provider.id : undefined, base_url: provider.base_url, kind: provider.kind, api_key: secrets[provider.id]?.key ?? '', model: model.id, version: null, capability: slot.capability });
     },
     onMutate: ({ provider, model }) => setModelTests((current) => ({ ...current, [modelTestKey(provider.id, model.id)]: 'pending' })),
-    onSuccess: (data, { provider, model }) => finishTest(provider, model, data.result as ModelTestState),
-    onError: (_error, { provider, model }) => finishTest(provider, model, 'failed'),
+    onSuccess: (data, { provider, model }) => { setDetail(provider, model, data.detail); finishTest(provider, model, data.result as ModelTestState); },
+    onError: (error, { provider, model }) => { setDetail(provider, model, error instanceof Error ? error.message : ''); finishTest(provider, model, 'failed'); },
   });
+  /** Records (or clears, when empty) the server-reported reason of a model's latest test. */
+  function setDetail(provider: ProviderRead, model: ProviderModel, detail: string | undefined) {
+    const key = modelTestKey(provider.id, model.id);
+    setTestDetails((current) => { const { [key]: _old, ...rest } = current; return detail ? { ...rest, [key]: detail } : rest; });
+  }
   /** Shows a finished test at once, then stores it (with server time) and lets the stored row take over; keeps the local value if saving fails. */
   function finishTest(provider: ProviderRead, model: ProviderModel, result: ModelTestState) {
     const key = modelTestKey(provider.id, model.id);
@@ -264,14 +277,21 @@ export function AISettingsWorkspace() {
       </SettingsSection>
       <SettingsSection title={t('modelsSection')}>
         <p className="text-muted-foreground m-0 text-xs">{t('modelsHelp')}</p>
-        <ModelsPanel providers={saved.providers} discovered={discovered} modelTests={shownTests} checkedAt={checkedAt} disabled={save.isPending} onChange={changeModels} onTestModel={(provider, model) => testModel.mutate({ provider, model })} t={t as never} />
+        <ModelsPanel providers={saved.providers} discovered={discovered} modelTests={shownTests} checkedAt={checkedAt} details={testDetails} disabled={save.isPending} onChange={changeModels} onTestModel={(provider, model) => testModel.mutate({ provider, model })} t={t as never} />
         <ModelDefaults providers={saved.providers} defaults={defaults} disabled={save.isPending} embeddingStatus={embeddingStatus} onPick={pickDefault} t={t as never} />
         {embeddingDimsChanged && <p className="error m-0 text-xs" role="status">{t('dimensionsChangedWarning')}</p>}
       </SettingsSection>
       <details className={advancedClass}><summary className={summaryClass}>{t('embeddingsTitle')}</summary>
-        <div className="flex flex-col gap-3 px-5 pb-5">{embeddingsAvailable
-          ? <ul className="m-0 flex flex-wrap gap-2 p-0"><li className="list-none"><CapabilityChip status={capabilityStatus('embedding', 'embeddings')} label={capabilityLabel('embeddings')} t={t} /></li></ul>
-          : <><p className="label m-0">{t('embeddingsUnavailable')}</p><p className="text-muted-foreground m-0">{t('embeddingsUnavailableHelp')}</p></>}</div>
+        <div className="flex flex-col gap-3 px-5 pb-5">
+          <p className="text-muted-foreground m-0">{t('embeddingsPurpose')}</p>
+          <p className="text-muted-foreground m-0 text-xs">{t('embeddingsWhyShown')}</p>
+          {embeddingMapping?.model && <p className="m-0">{t('embeddingsModel', { model: embeddingMapping.model, dimensions: embeddingMapping.dimensions ?? 0 })}</p>}
+          {embeddingsAvailable
+            ? <><div className="flex flex-wrap items-center gap-2"><CapabilityChip status={capabilityStatus('embedding', 'embeddings')} label={capabilityLabel('embeddings')} t={t} />
+              {/* The role probe reads the saved mapping, so unsaved edits must be saved first. */}
+              <Button type="button" variant="outline" disabled={save.isPending || dirty || embeddingProbe.isPending} onClick={() => embeddingProbe.mutate()}>{t('modelTest')}</Button></div>
+              <p className="text-muted-foreground m-0 text-xs">{t('embeddingsTestHelp')}</p></>
+            : <><p className="label m-0">{t('embeddingsUnavailable')}</p><p className="text-muted-foreground m-0">{t(embeddingMapping?.model ? 'embeddingsReasonConsent' : 'embeddingsReasonNoModel')}</p><p className="text-muted-foreground m-0">{t('embeddingsLexicalFallback')}</p></>}</div>
       </details>
       <details className={advancedClass}><summary className={summaryClass}>{t('budgetsTitle')}</summary>
         <div className="flex flex-col gap-3 px-5 pb-5">

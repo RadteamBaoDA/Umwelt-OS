@@ -71,7 +71,8 @@ PUBLISHERS: dict[str, str] = {
 GOOGLE_NEWS_URL = "https://news.google.com/rss/search"
 GOOGLE_NEWS_LICENSE = "Google News RSS / publisher"
 GOOGLE_NEWS_SITES = ("any", "reuters.com", "apnews.com", "bbc.com", "vnexpress.net")
-GOOGLE_NEWS_LOCALES: dict[str, tuple[str, str, str]] = {"vi-VN": ("vi", "VN", "VN:vi"), "en-US": ("en", "US", "US:en")}
+# Google 302-redirects (and fetch_bounded refuses redirects) unless hl is its canonical form: "en-US" for English, bare "vi" for Vietnamese.
+GOOGLE_NEWS_LOCALES: dict[str, tuple[str, str, str]] = {"vi-VN": ("vi", "VN", "VN:vi"), "en-US": ("en-US", "US", "US:en")}
 _QUERY_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _SITE_OPERATOR_RE = re.compile(r"(?i)\bsite\s*:")
 

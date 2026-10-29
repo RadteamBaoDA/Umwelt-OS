@@ -52,7 +52,8 @@ export function ProviderObservationGadget({ instance }: { instance: GadgetInstan
     queryKey: ['world-observations', 'provider', instance.id, sourceId, metrics, symbols, lookbackDays],
     queryFn: ({ signal }) => {
       const to = new Date(Date.now() + 86_400_000);
-      const from = new Date(Date.now() - lookbackDays * 86_400_000);
+      // `to` runs one day ahead (provider clock skew); keep the whole window within the API's 366-day maximum.
+      const from = new Date(to.getTime() - Math.min(lookbackDays + 1, 366) * 86_400_000);
       return listWorldObservationWindow({ sourceIds: [sourceId], metrics, symbols, from, to }, signal);
     },
     enabled: Boolean(sourceId), staleTime: 60_000,

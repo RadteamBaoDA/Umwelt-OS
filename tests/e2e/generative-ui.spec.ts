@@ -48,7 +48,7 @@ async function mockChat(page: Page, opts: { assistantUi?: Json; sse?: string; on
   const message = (id: string, role: string, content: string, extra: Json = {}) => ({ id, conversation_id: 'c1', role, content, client_request_id: null, model_identity: null, citations: [], response_id: null, revision_of_message_id: null, created_at: NOW, ...extra });
   const messages: Json[] = [message('m1', 'user', 'show me something')];
   if (opts.assistantUi && !opts.sse) messages.push(message('m2', 'assistant', 'Here you go.', { generative_ui: opts.assistantUi, response_id: 'r0' }));
-  await page.route('**/api/v1/settings/ai', (route) => route.fulfill({ json: { web_search_provider: 'none', web_search_credential_configured: false, privacy: { allow_remote_web_search: false } } }));
+  await page.route('**/api/v1/settings/ai', (route) => route.fulfill({ json: { providers: [{ id: 'default', credential_configured: false, local: true, policy_denied: false, destination_id: null }], defaults: { chat: { model: 'e2e-model', provider_id: 'default' } }, web_search_provider: 'none', web_search_credential_configured: false, privacy: { allow_remote_web_search: false } } }));
   await page.route('**/api/v1/conversations/c1', (route) => route.fulfill({ json: { ...conversation, active_response_id: null, messages } }));
   await page.route(/\/api\/v1\/conversations(\?.*)?$/, (route) => route.fulfill({ json: [conversation] }));
   await page.route('**/api/v1/conversations/c1/messages', async (route) => {
@@ -68,6 +68,10 @@ const sse = (frames: Array<[string, Json]>) => frames.map(([event, data], i) => 
 
 async function openChat(page: Page) {
   await page.goto('/chat');
+  // /chat starts with its history rail collapsed; expand it (locale-independent) unless already open.
+  const toggle = page.locator('[aria-controls="chat-history-sidebar"]').first();
+  await toggle.waitFor();
+  if ((await toggle.getAttribute('aria-expanded')) === 'false') await toggle.click();
   await page.getByText('Widget chat').first().click();
 }
 

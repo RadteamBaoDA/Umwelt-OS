@@ -4,13 +4,14 @@ import { messageUiParts, uiPartKey, type UiPart } from './generative-ui-parts';
 import * as React from 'react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
-import { AlertCircleIcon, BotIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, RefreshCwIcon } from 'lucide-react';
+import { AlertCircleIcon, ArrowDownIcon, BotIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, RefreshCwIcon } from 'lucide-react';
 import type { ChatMessage, Citation, WebSearchOutcome } from '@/modules/chat/api';
 import { Button } from '@/components/ui/button';
 import { CitationPanel, webHost } from './citation-panel';
 import { safeHttpUrl } from '@/core/safe-url';
 import { ChatMarkdown } from './chat-markdown';
 import { useChatScroll } from './use-chat-scroll';
+import { ChatReasoning } from './chat-reasoning';
 import { useCopyMessage } from './use-copy-message';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
@@ -110,6 +111,10 @@ export interface ChatTranscriptProps {
   messages: ChatMessage[];
   /** Active response generation streaming text, if currently in flight. */
   streamingText?: string;
+  /** Plain-text reasoning ("thinking") streamed for the active run before the answer text. */
+  streamingReasoning?: string;
+  /** True after a user- or server-side cancellation; shown as a neutral status line, not an error. */
+  cancelled?: boolean;
   /** Citations retrieved for the active response run, if available. */
   streamingCitations?: Citation[];
   /** Web search outcome streamed for the active run. */
@@ -153,6 +158,8 @@ export function ChatTranscript({
   mode = 'drawer',
   messages,
   streamingText,
+  streamingReasoning = '',
+  cancelled = false,
   streamingCitations,
   streamingWebSearch,
   streamingUi = [],
@@ -172,7 +179,7 @@ export function ChatTranscript({
   const display = useDisplayPreferences();
   const timezone = display.confirmedPreferences?.timezone || 'UTC';
   const locale = display.confirmedPreferences?.locale || 'en-us';
-  const { containerRef, scrollHandlers } = useChatScroll({
+  const { containerRef, scrollHandlers, isAtBottom, jumpToLatest } = useChatScroll({
     conversationId,
     messageCount: messages.length,
     lastMessageId: messages[messages.length - 1]?.id,
@@ -189,12 +196,15 @@ export function ChatTranscript({
   );
 
   return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
     <div
       ref={containerRef}
       {...scrollHandlers}
       className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 focus:outline-none"
       role="log"
       aria-live="polite"
+      // aria-busy keeps assistive tech from announcing every streamed token; the settled message is announced once.
+      aria-busy={isStreaming || isPending}
       aria-label={t('title')}
     >
       {mode === 'full' && onSendPrompt && <ChatShellTools locale={locale} />}
@@ -258,6 +268,8 @@ export function ChatTranscript({
                 </p>
               )}
 
+              {!isUser && msg.reasoning ? <ChatReasoning text={msg.reasoning} /> : null}
+
               {isUser
                 ? <ChatMarkdown content={msg.content} locale={locale} />
                 : <RevealMarkdown content={msg.content} citations={msg.citations} locale={locale} />}
@@ -286,15 +298,16 @@ export function ChatTranscript({
             <div className="flex flex-wrap items-center gap-2">
               {formattedDate && <span className="text-xs text-muted-foreground">{formattedDate}</span>}
               {/* Expose one-click copy for all full-page messages and completed assistant messages in the drawer. */}
-              {(mode === 'full' || (!isUser && Boolean(msg.content))) && <button
+              {(mode === 'full' || (!isUser && Boolean(msg.content))) && <Button
                 type="button"
+                variant="ghost"
                 onClick={() => void copyMessage(msg.id, msg.content)}
-                className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="min-h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 aria-label={t('copyMessage')}
               >
                 {copiedMessageId === msg.id ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
                 <span>{copiedMessageId === msg.id ? t('copiedMessage') : t('copyMessage')}</span>
-              </button>}
+              </Button>}
               {(mode === 'full' || !isUser) && failedMessageId === msg.id && (
                 <span role="status" className="text-xs text-destructive">{t('copyFailed')}</span>
               )}
@@ -339,7 +352,7 @@ export function ChatTranscript({
       })}
 
       {/* Pending status indicator */}
-      {isPending && !streamingText && streamingUi.length === 0 && (
+      {isPending && !streamingText && !streamingReasoning && streamingUi.length === 0 && (
         <div className="mr-auto flex max-w-[88%] items-center gap-2 text-xs text-muted-foreground">
           <Loader2Icon className="size-4 animate-spin text-primary" />
           <span>{t('thinking')}</span>
@@ -347,7 +360,7 @@ export function ChatTranscript({
       )}
 
       {/* Active streaming assistant bubble */}
-      {(streamingText || streamingUi.length > 0 || isStreaming) && (
+      {(streamingText || streamingReasoning || streamingUi.length > 0 || isStreaming) && (
         <div className="mr-auto flex max-w-[88%] flex-col gap-2.5">
           <div className="text-sm text-foreground">
             <div className="flex items-center gap-2 text-xs text-muted-foreground mb-0.5">
@@ -356,6 +369,8 @@ export function ChatTranscript({
                 {t('streaming')}
               </span>
             </div>
+
+            <ChatReasoning text={streamingReasoning} streaming answerStarted={Boolean(streamingText) || streamingUi.length > 0} />
 
             <ChatMarkdown content={streamingText || ''} citations={streamingCitations} locale={locale} />
 
@@ -380,6 +395,11 @@ export function ChatTranscript({
         </div>
       )}
 
+      {/* Cancellation is a neutral outcome chosen by the user (or the server), not a failure: no alert, no Retry. */}
+      {cancelled && !error && (
+        <p role="status" data-testid="chat-cancelled" className="text-xs text-muted-foreground">{t('cancelled')}</p>
+      )}
+
       {/* Error banner */}
       {error && (
         <div role="alert" className="flex items-center justify-between gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
@@ -388,17 +408,26 @@ export function ChatTranscript({
             <span>{error}</span>
           </div>
           {onRetry && (
-            <button
-              type="button"
-              onClick={onRetry}
-              className="min-h-8 rounded bg-destructive px-2 py-1 text-xs font-medium text-destructive-foreground hover:opacity-90"
-            >
+            <Button type="button" variant="destructive" size="sm" onClick={onRetry} className="min-h-8 px-2 py-1 text-xs font-medium">
               {t('retry')}
-            </button>
+            </Button>
           )}
         </div>
       )}
 
+    </div>
+      {!isAtBottom && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={jumpToLatest}
+          className="absolute bottom-3 left-1/2 z-10 min-h-8 -translate-x-1/2 gap-1 rounded-full bg-surface px-3 text-xs shadow-md"
+        >
+          <ArrowDownIcon className="size-3.5" aria-hidden="true" />
+          {t('jumpToLatest')}
+        </Button>
+      )}
     </div>
   );
 }

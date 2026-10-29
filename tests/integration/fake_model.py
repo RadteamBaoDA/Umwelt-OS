@@ -18,6 +18,11 @@ Generative UI (tool calls): when the request carries `tools`, a non-stream reply
 entry (the capability probe's pass condition), and a streaming reply with marker `ui=table|sandbox` emits that
 terminal tool call as `delta.tool_calls` fragments (name once, arguments in ~40-char pieces) instead of text.
 Without the marker the streamed reply is plain text, as before.
+
+Reasoning ("thinking"): when the last user message contains `[think]`, the streamed reply first sends three
+`delta.reasoning_content` chunks, then the normal content. With `[think-tag]` the reasoning is instead sent
+inline in `delta.content` as `<think>...</think>` (the tags are split across chunks to exercise the gateway
+parser) before the normal content. Marker `think_delay_ms=N` sleeps N ms after each `[think]` reasoning chunk.
 """
 
 import asyncio
@@ -89,11 +94,17 @@ async def rerank(request: Request) -> Response:
                                      for i in reversed(range(len(docs)))]})
 
 
-def _chunk(content: str | None, finish: str | None = None) -> str:
+def _chunk(content: str | None, finish: str | None = None, *, reasoning: str | None = None) -> str:
     delta = {"content": content} if content is not None else {}
+    if reasoning is not None:
+        delta["reasoning_content"] = reasoning
     payload = {"id": "chatcmpl-fake", "object": "chat.completion.chunk", "created": 0, "model": MODEL,
                "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
     return f"data: {json.dumps(payload)}\n\n"
+
+
+_REASONING = ["Considering the question… ", "checking sources… ", "drafting an answer."]
+_THINK_TAGGED = ["<thi", "nk>" + _REASONING[0], _REASONING[1], _REASONING[2] + "</th", "ink>\n"]
 
 
 _UI_TOOLS: dict[str, tuple[str, dict]] = {
@@ -142,7 +153,12 @@ async def chat_completions(request: Request) -> Response:
             "usage": {"prompt_tokens": 1, "completion_tokens": tokens, "total_tokens": tokens + 1}})
 
     ui = _marker(_last_user(body)).get("ui")
-    if body.get("tools") and ui in _UI_TOOLS:
+    # Answer the tool call once per turn: a `tool` message after the last user turn means the widget already ran,
+    # so later generative-UI rounds fall through to plain text instead of re-rendering the same widget.
+    messages = body.get("messages") or []
+    last_user = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
+    tool_answered = any(m.get("role") == "tool" for m in messages[last_user + 1:])
+    if body.get("tools") and ui in _UI_TOOLS and not tool_answered:
         name, args = _UI_TOOLS[ui]
         raw = json.dumps(args)
 
@@ -162,6 +178,16 @@ async def chat_completions(request: Request) -> Response:
     async def events() -> AsyncIterator[str]:
         if first_delay:
             await asyncio.sleep(first_delay / 1000)
+        last_user = _last_user(body)
+        think_delay = int(_marker(last_user).get("think_delay_ms", 0))  # keeps the "thinking" UI state observable
+        if "[think-tag]" in last_user:
+            for piece in _THINK_TAGGED:
+                yield _chunk(piece)
+        elif "[think]" in last_user:
+            for piece in _REASONING:
+                yield _chunk(None, reasoning=piece)
+                if think_delay:
+                    await asyncio.sleep(think_delay / 1000)
         for i in range(tokens):
             yield _chunk(f"tok{i} ")
             if delay:

@@ -34,6 +34,8 @@ FLAG = False  # the disposable stack runs the default single-workspace rollout
 class FakeN8n:
     """Records stop calls; ``lose_stop`` makes the response vanish after the stop was sent."""
 
+    service_url = "http://fake"  # mirrors N8nApi.service_url, read when binding the n8n endpoint lineage
+
     def __init__(self, lose_stop: bool = False) -> None:
         self.lose_stop, self.calls = lose_stop, []
 
@@ -129,7 +131,7 @@ async def make_env(committed_engine: AsyncEngine, ready_owner_client: AsyncClien
             "source_id": source_id, "source_generation": generation, "desired_revision": 3, "applied_revision": 3,
             "desired_enabled": True, "state": "active", "execution_backend": "n8n", "backend_revision": 1,
             "applied_backend_revision": 1, "workflow_id": "wf-old", "workflow_name": "c4-old",
-            "template_revision": 1, "applied_template_revision": 1, "desired_configuration": {}}
+            "template_revision": 1, "applied_template_revision": 1, "desired_configuration": {}, "n8n_service_url": "http://fake"}
         values.update(row)
         async with factory() as session:
             session.add(ConnectorProvisioning(**values))

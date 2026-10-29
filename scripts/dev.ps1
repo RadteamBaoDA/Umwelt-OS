@@ -4,6 +4,7 @@ param(
   [string]$Task,
   [string]$PytestTarget,
   [string]$E2eTarget,
+  [switch]$E2eOnly,
   [string]$Workspace,
   [string]$ConfirmFingerprint
 )
@@ -129,12 +130,12 @@ N8N_ENCRYPTION_KEY=$(New-Secret)
       Invoke-Checked 'npm' @('run', 'typecheck')
     }
     'test' {
-      if ($PytestTarget -and $E2eTarget) { throw 'Choose only one of -PytestTarget or -E2eTarget.' }
+      if ($PytestTarget -and ($E2eTarget -or $E2eOnly)) { throw 'Choose only one of -PytestTarget or -E2eTarget/-E2eOnly.' }
       if ($PytestTarget -and $PytestTarget -notlike 'tests/integration/*') {
         Invoke-Checked 'uv' @('run', 'pytest', $PytestTarget, '-q')
         break
       }
-      if (-not $PytestTarget -and -not $E2eTarget) {
+      if (-not $PytestTarget -and -not $E2eTarget -and -not $E2eOnly) {
         Invoke-Checked 'uv' @('run', 'pytest', '-q')
       }
       $project = 'bbd-os-test-' + [guid]::NewGuid().ToString('N').Substring(0, 10)
@@ -163,31 +164,51 @@ N8N_ENCRYPTION_KEY=$(New-Secret)
         $env:TEST_DATABASE_URL = "postgresql+asyncpg://bbd_test:bbd-os-test-db-only@127.0.0.1:$postgresPort/bbd_test"
         $env:TEST_PUBLIC_ORIGIN = "http://localhost:$webPort"
         Invoke-Checked 'docker' ($compose + @('up', '-d', '--build'))
-        # `up` waits for migration completion; this second run proves the revision is idempotent.
-        Invoke-Checked 'docker' ($compose + @('run', '--rm', 'migrate'))
-        Invoke-Checked 'docker' ($compose + @('run', '--rm', '--no-deps', 'api', 'python', '-c', 'import apps.api.main, core.auth.dependencies, modules'))
-        $env:INTEGRATION = '1'
-        $env:API_URL = "http://localhost:$apiPort"
-        $identity = & docker @($compose + @('exec', '-T', 'postgres', 'psql', '-U', 'bbd_test', '-d', 'bbd_test', '-At', '-c', "SELECT current_database() || '|' || current_user"))
-        if ($LASTEXITCODE -ne 0) { throw 'Could not verify disposable PostgreSQL identity' }
-        if (($identity -join '').Trim() -ne 'bbd_test|bbd_test') { throw 'Refusing integration tests against a non-test database' }
-        Invoke-Checked 'uv' @('run', 'pytest', 'tests/integration/test_auth_race.py', '-q')
-        if ($PytestTarget) {
-          if ($PytestTarget -ne 'tests/integration/test_auth_race.py') {
-            Invoke-Checked 'uv' @('run', 'pytest', $PytestTarget, '-q', '--ignore=tests/integration/test_auth_race.py')
+        # -E2eOnly skips the (slow) integration suite and runs only the browser specs.
+        if (-not $E2eOnly) {
+          # `up` waits for migration completion; this second run proves the revision is idempotent.
+          Invoke-Checked 'docker' ($compose + @('run', '--rm', 'migrate'))
+          Invoke-Checked 'docker' ($compose + @('run', '--rm', '--no-deps', 'api', 'python', '-c', 'import apps.api.main, core.auth.dependencies, modules'))
+          $env:INTEGRATION = '1'
+          $env:API_URL = "http://localhost:$apiPort"
+          $identity = & docker @($compose + @('exec', '-T', 'postgres', 'psql', '-U', 'bbd_test', '-d', 'bbd_test', '-At', '-c', "SELECT current_database() || '|' || current_user"))
+          if ($LASTEXITCODE -ne 0) { throw 'Could not verify disposable PostgreSQL identity' }
+          if (($identity -join '').Trim() -ne 'bbd_test|bbd_test') { throw 'Refusing integration tests against a non-test database' }
+          Invoke-Checked 'uv' @('run', 'pytest', 'tests/integration/test_auth_race.py', '-q')
+          if ($PytestTarget) {
+            if ($PytestTarget -ne 'tests/integration/test_auth_race.py') {
+              Invoke-Checked 'uv' @('run', 'pytest', $PytestTarget, '-q', '--ignore=tests/integration/test_auth_race.py')
+            }
+          } else {
+            Invoke-Checked 'uv' @('run', 'pytest', 'tests/integration', '-q', '--ignore=tests/integration/test_auth_race.py')
           }
-        } else {
-          Invoke-Checked 'uv' @('run', 'pytest', 'tests/integration', '-q', '--ignore=tests/integration/test_auth_race.py')
         }
         if (-not $PytestTarget -or $E2eTarget) {
           if ($project -notmatch '^bbd-os-test-[0-9a-f]{10}$') { throw 'Refusing browser reset outside unique disposable project' }
           $reset = (Get-Content -Raw (Join-Path $PSScriptRoot 'sql/e2e-reset.sql')) -replace '\r?\n', ' '
-          Invoke-Checked 'docker' ($compose + @('exec', '-T', 'postgres', 'psql', '-U', 'bbd_test', '-d', 'bbd_test', '-v', 'ON_ERROR_STOP=1', '-c', $reset))
-        $env:E2E_SETUP_TOKEN = 'bbd-os-disposable-test-token'
-        $env:PLAYWRIGHT_BASE_URL = "http://localhost:$webPort"
-        $env:PLAYWRIGHT_EXTERNAL_SERVER = '1'
+          $resetE2e = {
+            Invoke-Checked 'docker' ($compose + @('exec', '-T', 'postgres', 'psql', '-U', 'bbd_test', '-d', 'bbd_test', '-v', 'ON_ERROR_STOP=1', '-c', $reset))
+            Invoke-Checked 'docker' ($compose + @('exec', '-T', 'redis', 'redis-cli', 'FLUSHALL'))
+          }
+          & $resetE2e
+          $env:E2E_SETUP_TOKEN = 'bbd-os-disposable-test-token'
+          $env:PLAYWRIGHT_BASE_URL = "http://localhost:$webPort"
+          $env:PLAYWRIGHT_EXTERNAL_SERVER = '1'
+          $env:API_URL = "http://localhost:$apiPort"
           if ($E2eTarget) { Invoke-Checked 'npm' @('run', 'test:e2e', '--', $E2eTarget) }
-          elseif (-not $PytestTarget) { Invoke-Checked 'npm' @('run', 'test:e2e') }
+          elseif (-not $PytestTarget) {
+            # Two groups, each with its own global timeout and a fresh owner bootstrap (see playwright.config.ts).
+            # The second group runs even when the first fails, so one slow provider cannot hide the rest of the suite.
+            $failed = @()
+            foreach ($group in @('datasources', 'rest')) {
+              $env:E2E_GROUP = $group
+              & npm run test:e2e
+              if ($LASTEXITCODE -ne 0) { $failed += $group }
+              if ($group -eq 'datasources') { & $resetE2e }
+            }
+            Remove-Item Env:E2E_GROUP -ErrorAction SilentlyContinue
+            if ($failed) { throw "e2e groups failed: $($failed -join ', ')" }
+          }
         }
       } finally {
         & docker @($compose + @('down', '--volumes', '--remove-orphans'))

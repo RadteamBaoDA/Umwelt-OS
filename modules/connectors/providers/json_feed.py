@@ -179,11 +179,15 @@ def map_json_feed(feed: JsonFeed, body: bytes, collected_at: datetime) -> list[I
     return records
 
 
-def _wiki_day(template: str) -> Callable[[datetime], str]:
-    """URL function for date-addressed Wikimedia endpoints: yesterday (UTC), the latest complete day."""
+def _wiki_day(template: str, days_back: int = 1) -> Callable[[datetime], str]:
+    """URL function for date-addressed Wikimedia endpoints, ``days_back`` UTC days before ``now``.
+
+    Pageview tops default to yesterday, the latest complete day. The featured feed passes 0: its ``mostread`` block
+    already covers the previous day, and past-dated featured feeds often omit ``mostread`` (seen 2026-10-26).
+    """
     def build(now: datetime) -> str:
-        """Fill ``{y}/{m}/{d}`` with the previous UTC calendar day."""
-        day = now - timedelta(days=1)
+        """Fill ``{y}/{m}/{d}`` with the UTC calendar day ``days_back`` before ``now``."""
+        day = now - timedelta(days=days_back)
         return template.format(y=f"{day.year:04d}", m=f"{day.month:02d}", d=f"{day.day:02d}")
     return build
 
@@ -229,7 +233,7 @@ JSON_FEEDS: dict[str, JsonFeed] = {f.provider: f for f in (
     ),
     JsonFeed(
         "wikipedia_mostread", "Wikipedia",
-        _wiki_day("https://api.wikimedia.org/feed/v1/wikipedia/en/featured/{y}/{m}/{d}"),
+        _wiki_day("https://api.wikimedia.org/feed/v1/wikipedia/en/featured/{y}/{m}/{d}", days_back=0),
         "mostread.articles", ("title",), ("titles.normalized",),
         (("Views", "views"), ("Rank", "rank"), ("About", "description")),
         link="content_urls.desktop.page", skip_id_prefixes=_WIKI_SKIP,

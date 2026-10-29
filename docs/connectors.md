@@ -58,7 +58,9 @@ and stdio profile catalog. Arguments come only from the source configuration sav
 [{grant_id, arguments}]}}`, at most 10 calls); arguments are validated against the reviewed input schema, and no command,
 URL or tool name is ever accepted from the UI or a model. Stdio remains admin-allowlisted.
 
-`POST /api/v1/connectors/sources/{id}/collect` is the protected collection API and runs the adapter for `mcp` sources.
+`POST /api/v1/connectors/sources/{id}/collect` is the protected collection API for `mcp` sources. On the native backend
+it queues a durable collection request (returns `request_id`) that the worker runs through the same gated adapter; on the
+n8n backend it wakes the packaged workflow, which calls `POST .../mcp-collect` and settles the admitted request.
 Every request and the result return re-check the connection (enabled, revision), grant (revision, expiry, revocation),
 descriptor, stdio profile identity and source generation. Disabling the connection or revoking the grant stops new calls
 and keeps every observation already ingested; deleting is a separate source purge.
@@ -72,7 +74,8 @@ Declared contract (`CONTRACT` in the module):
 - Provenance (record metadata): connection, grant and revision, connection revision, capability kind and remote key,
   descriptor hash, arguments digest.
 - Pagination and history: one request per call per run, provider cursors are not followed, no backfill; every run appends
-  observations, so unchanged items repeat with an identical version.
+  observations on the n8n path, so unchanged items repeat with an identical version. The native worker path drops records
+  already stored, so an unchanged run settles as `no_changes` (an accepted divergence between the two paths).
 
 MCP source collection configuration accepts `schedule_interval_minutes` (15, 30, 60, 360 or 1440) and an IANA
 `timezone`. Save the MCP source configuration, then activate its packaged workflow through the normal connector

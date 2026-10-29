@@ -902,7 +902,9 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
     matching source run lease is renewed while work remains and released only
     when normalization or its owning run becomes terminal; generic ingestion
     keeps its existing lease lifecycle. Provider validation uses the detached
-    connector projection obtained under the source lock. Telegram selection
+    connector projection obtained under the source lock. Each registered provider's
+    bounded raw metadata fields are merged only through its explicit normalization allowlist.
+    Telegram selection
     time must agree across its persisted record, raw Bot API clock, and selected
     observation column before current-version ordering is authorized. Structured
     observations select by accepted time and ingestion identity; their winning
@@ -1038,6 +1040,17 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                             "youtube": ("author", "summary", "title", "tags", "published_at", "provider_updated_at"),
                             "arxiv": ("author", "authors", "categories", "tags", "summary", "title", "published_at", "provider_updated_at"),
                             "huggingface": ("author", "tags", "pipeline_tag", "created_at", "last_modified"),
+                            "bluesky": ("author", "canonical_url", "created_at"),
+                            "reddit": ("title", "subreddit", "author", "canonical_url", "created_at"),
+                            "mastodon": ("author", "canonical_url", "created_at"),
+                            "x": ("author_id", "canonical_url", "created_at", "language"),
+                            "google_mail": ("thread_id", "history_id", "subject", "from", "to", "date_header"),
+                            "google_calendar": ("calendar_id", "event_id", "status", "start", "end", "start_timezone", "end_timezone", "recurrence", "html_link"),
+                            "google_drive": ("name", "mime_type", "modified_time", "web_view_link", "md5_checksum"),
+                            "notion": ("title", "canonical_url"),
+                            "slack": ("channel_id", "message_ts", "thread_ts", "user_id"),
+                            "health": ("patient_id", "observation_id", "value", "unit", "observed_at_source"),
+                            "home_assistant": ("entity_id", "state", "observed_at_source", "unit_of_measurement", "friendly_name", "latitude", "longitude"),
                             "github_releases": ("node_id", "name", "body", "html_url", "tag_name", "draft", "prerelease", "author", "created_at", "published_at"),
                             "github": ("record_type", "node_id", "html_url"),
                             "telegram": (),
@@ -1095,7 +1108,10 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                             coverage="returned_snapshot", content_truncated=False,
                             world_data=measurement,
                         )
-                    elif source_projection.provider in {"youtube", "arxiv", "huggingface", "github_releases", "github", "telegram", *NEWS_PROVIDER_IDS}:
+                    elif source_projection.provider in {
+                        "youtube", "arxiv", "huggingface", "bluesky", "reddit", "mastodon", "x",
+                        "github_releases", "github", "telegram", *NEWS_PROVIDER_IDS,
+                    }:
                         raise ValueError("Native provider record metadata is missing")
                     title_value = raw_metadata.get("title")
                     title = title_value.strip()[:500] if isinstance(title_value, str) and title_value.strip() else record.provider_id[:500]
@@ -1242,24 +1258,26 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                     progress.document_version_id = result.document_version_id
                     progress.chunk_count = result.chunk_count if result.created_version else 0
                     if result.created_version and result.chunk_count:
-                        ready = DomainEvent(
-                            id=uuid7(), type="document.version.ready", version=1,
-                            occurred_at=datetime.now(UTC), producer="modules.ingestion",
-                            payload={
-                                "workspace_id": str(work.scope.workspace_id),
-                                "actor_user_id": work.scope.actor_user_id,
-                                "membership_revision": work.scope.membership_revision,
-                                "source_id": str(observation.source_id),
-                                "document_id": str(result.document_id),
-                                "document_version_id": str(result.document_version_id),
-                                "source_generation": generation,
-                                "version_number": result.version_number,
-                            },
-                        )
+                        ready_payload = {
+                            "workspace_id": str(work.scope.workspace_id),
+                            "actor_user_id": work.scope.actor_user_id,
+                            "membership_revision": work.scope.membership_revision,
+                            "source_id": str(observation.source_id),
+                            "document_id": str(result.document_id),
+                            "document_version_id": str(result.document_version_id),
+                            "source_generation": generation,
+                            "version_number": result.version_number,
+                        }
                         # Publication proves the exact journal/run/batch/accepted observation.
                         await session.flush()
-                        await ingestion_api.publish_event(session, ready, scope=work.scope,
-                                                          multi_workspace_enabled=enabled)
+                        # Connector-collected documents never pass the Documents extraction publisher,
+                        # so News clustering needs its own ready event; both share one journal proof.
+                        for ready_type in ("document.version.ready", "news.document.ready"):
+                            await ingestion_api.publish_event(session, DomainEvent(
+                                id=uuid7(), type=ready_type, version=1,
+                                occurred_at=datetime.now(UTC), producer="modules.ingestion",
+                                payload=dict(ready_payload),
+                            ), scope=work.scope, multi_workspace_enabled=enabled)
                     if source_projection.provider in MEASUREMENT_PROVIDER_IDS:
                         # Structured series can change even when the normalized document version is reused.
                         knowledge_changes.append(make_knowledge_change(observation.source_id, scope=work.scope))

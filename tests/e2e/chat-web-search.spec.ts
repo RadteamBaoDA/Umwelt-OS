@@ -11,6 +11,9 @@ const web = (url: string, title: string, quote = 'snippet'): Cit => ({ sourceTyp
 async function mockChat(page: Page, opts: { configured?: boolean; citations?: Cit[]; webSearch?: unknown } = {}) {
   const now = '2026-10-07T00:00:00Z';
   await page.route('**/api/v1/settings/ai', (route) => route.fulfill({ json: {
+    // Chat send is held as a draft unless the AI settings show a usable chat model; mock a local one.
+    providers: [{ id: 'default', credential_configured: false, local: true, policy_denied: false, destination_id: null }],
+    defaults: { chat: { model: 'e2e-model', provider_id: 'default' } },
     web_search_provider: opts.configured ? 'tavily' : 'none',
     web_search_credential_configured: Boolean(opts.configured),
     privacy: { allow_remote_web_search: Boolean(opts.configured) },
@@ -26,6 +29,10 @@ async function mockChat(page: Page, opts: { configured?: boolean; citations?: Ci
 
 async function openChat(page: Page) {
   await page.goto('/chat');
+  // /chat starts with its history rail collapsed; expand it (locale-independent) unless already open.
+  const toggle = page.locator('[aria-controls="chat-history-sidebar"]').first();
+  await toggle.waitFor();
+  if ((await toggle.getAttribute('aria-expanded')) === 'false') await toggle.click();
   await page.getByText('Web chat').first().click();
 }
 
@@ -33,7 +40,10 @@ test.describe('web search toggle', () => {
   test('is absent in the quick-chat drawer', async ({ page }) => {
     await mockChat(page, { configured: true });
     await page.goto('/');
-    await page.getByRole('button', { name: /chat/i }).first().click();
+    // The header quick-chat button only renders on /dashboard/<id>; the command palette opens the drawer from anywhere.
+    await page.getByRole('button', { name: 'Search or run a command' }).click();
+    await page.getByText('Quick chat', { exact: true }).first().click();
+    await expect(page.getByRole('dialog')).toBeVisible();
     // The drawer has no + menu, so the web search item cannot exist.
     await expect(page.getByRole('button', { name: 'Add context, files or options' })).toHaveCount(0);
     await expect(page.locator('#chat-web-search')).toHaveCount(0);

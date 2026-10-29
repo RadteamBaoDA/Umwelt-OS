@@ -18,9 +18,9 @@ const base = {
 };
 const instance = { id: 'g1', title: '', definition: { source_ids: ['s1'], scope: { metrics: [] } } } as never;
 
-function view() {
+function view(gadget = instance) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}><NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}><ProviderObservationGadget instance={instance} /></NextIntlClientProvider></QueryClientProvider>);
+  return render(<QueryClientProvider client={client}><NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}><ProviderObservationGadget instance={gadget} /></NextIntlClientProvider></QueryClientProvider>);
 }
 
 describe('ProviderObservationGadget', () => {
@@ -49,6 +49,14 @@ describe('ProviderObservationGadget', () => {
     api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: [{ ...base, id: 'o1', provider: 'binance', metric: 'btc_price', value: 1, collected_at: new Date(Date.now() - 3 * 3600_000).toISOString(), observed_at: '2026-10-09T00:00:00Z' }] });
     view();
     await waitFor(() => expect(screen.getByText(/Stale/)).toBeTruthy());
+  });
+
+  it('keeps the maximum 366-day lookback within the API window limit', async () => {
+    api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: [] });
+    view({ id: 'g2', title: '', definition: { source_ids: ['s1'], scope: { metrics: [], lookback_days: 366 } } } as never);
+    await waitFor(() => expect(api.listWorldObservationWindow).toHaveBeenCalled());
+    const { from, to } = api.listWorldObservationWindow.mock.calls[0][0] as { from: Date; to: Date };
+    expect(to.getTime() - from.getTime()).toBe(366 * 86_400_000);
   });
 
   it('shows an error when no value was ever loaded', async () => {

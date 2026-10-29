@@ -16,11 +16,14 @@ export function SettingsPageHeader({ eyebrow, title, description, status }: { ey
   );
 }
 
-/** Bordered section card with an h2 title and a 16px-gap body; replaces fieldset/legend groupings. */
-export function SettingsSection({ title, children }: { title: React.ReactNode; children: React.ReactNode }) {
+/** Bordered section card with an h2 title, optional muted description and a 16px-gap body; replaces fieldset/legend groupings. */
+export function SettingsSection({ title, description, children }: { title: React.ReactNode; description?: React.ReactNode; children: React.ReactNode }) {
   return (
     <section className="flex flex-col gap-4 rounded-lg border border-border bg-card p-5">
-      <h2 className="m-0 text-lg font-bold">{title}</h2>
+      <div className="flex flex-col gap-1">
+        <h2 className="m-0 text-lg font-bold">{title}</h2>
+        {description ? <p className="m-0 text-sm text-muted-foreground">{description}</p> : null}
+      </div>
       {children}
     </section>
   );

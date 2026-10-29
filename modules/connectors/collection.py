@@ -22,12 +22,14 @@ from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
+from types import SimpleNamespace
 from typing import Any, Literal, cast
 from urllib.parse import urldefrag, urljoin
 from uuid import UUID
 
 import httpx
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
@@ -37,7 +39,7 @@ from modules.connectors import provider_terms, provisioning, quota, scheduler
 from modules.connectors import public as connectors
 from modules.connectors.collection_schemas import CollectionAdmissionRead, CollectionRequestRef
 from modules.connectors.models import ConnectorCollectionRequest, ConnectorProvisioning
-from modules.connectors.provider_specs import get_provider_spec
+from modules.connectors.provider_specs import get_provider_spec, get_quota_policies
 from modules.connectors.providers import news as _news
 from modules.connectors.providers import rest
 from modules.connectors.providers.json_feed import JSON_FEEDS
@@ -62,7 +64,9 @@ PURE_PROVIDERS = (  # coingecko needs a key slot
     "noaa_kp", "open_er_api", "oecd_cli", "iss_position", "disease_sh", "ioda", "nvd",  # bespoke keyless mappers
 )
 KEYED_PROVIDERS = {provider: row.placement for provider, row in KEYED.items()}  # provider -> stored credential header_name (header | query:<p> | path:<t>)
-SIMPLE_NATIVE = frozenset({"youtube", "arxiv", "huggingface", "github_releases", "alpha_vantage", "open_meteo"})
+SIMPLE_NATIVE = frozenset({"youtube", "arxiv", "huggingface", "bluesky", "reddit", "mastodon", "x", "github_releases", "alpha_vantage", "open_meteo", "google_mail", "google_calendar", "google_drive", "health", "home_assistant", "notion", "slack"})
+HEADER_AUTH_PROVIDERS = frozenset({"health", "home_assistant"})
+REVISIONED_REST_PROVIDERS = frozenset({"notion", "slack", "mastodon", "x"})
 REFUSED_HERE: frozenset[str] = frozenset()  # providers that must never run here (GitHub/Telegram are native now)
 Snapshot = tuple[int, int, int]
 
@@ -173,6 +177,11 @@ class SendGate:
         return await rest.fetch_bounded(url, before_send=self, **kwargs)
 
     async def _authorize(self) -> None:
+        """Revalidate the current request, terms and any captured credential revision before a send.
+
+        Keyed presets, local-service tokens, and Notion/Slack bearer credentials must still match
+        the admission revision; expired source, permission, terms or credential authority fails closed.
+        """
         a = self._a
         if time.monotonic() > self._deadline:
             raise TimeoutError
@@ -195,7 +204,8 @@ class SendGate:
                 raise CollectionFenceLost("terms_changed", "revision_changed")
             if source.provider == "alpha_vantage" and self.captured_operation is not None:
                 await self._check_world_credential(session, source)
-            if source.provider in KEYED_PROVIDERS:
+            if (source.provider in KEYED_PROVIDERS or source.provider in HEADER_AUTH_PROVIDERS
+                    or source.provider in REVISIONED_REST_PROVIDERS):
                 await self._check_credential_revision(session, source)
 
     async def _check_credential_revision(self, session: AsyncSession, source: ConnectorSource) -> None:
@@ -317,7 +327,7 @@ async def _load_attempt(
         ref=CollectionRequestRef(request_id=admission.request_id, admission_token=admission.admission_token),
         attempt=admission.attempt, scope=scope, multi=multi, source=source, access_fence=access_fence,
         source_fence=source_fence, terms_revision=terms_revision, connector_revision=desired_revision,
-        authenticated=auth_method not in (None, "none"),
+        authenticated=auth_method not in (None, "none") or source.provider in {"google_mail", "google_calendar", "google_drive"},
         credential_revision=credential_revision,
     )
 
@@ -347,12 +357,12 @@ async def _heartbeat(
 
 async def _record_rate_limit(run: Run, deadline: datetime) -> None:
     """Persist a provider 429/Retry-After on every applicable window; never shortens one."""
-    spec = get_provider_spec(run.attempt.source.provider)
-    if spec is None:
+    provider_id = run.attempt.source.provider
+    if not provider_id or not get_quota_policies(provider_id):
         return
     fingerprint = await run.gate._fingerprint() if run.gate._fingerprint is not None else None
     async with run.factory() as session:
-        await quota.defer_provider(session, provider_id=spec.id, until=deadline, credential=fingerprint)
+        await quota.defer_provider(session, provider_id=provider_id, until=deadline, credential=fingerprint)
         await session.commit()
 
 
@@ -461,7 +471,12 @@ async def _rest_secret(run: Run) -> tuple[str, str]:
 
     a = run.attempt
     async with run.factory() as session:
-        credential = await session.get(ConnectorRestCredential, a.source.id)
+        row = await session.get(ConnectorRestCredential, a.source.id)
+        # Copy the columns before rollback: rollback expires the ORM row and a lazy reload outside the
+        # session raises (surfacing as executor_error instead of the credential outcome).
+        credential = None if row is None else SimpleNamespace(
+            state=row.state, encrypted_secret=row.encrypted_secret, source_generation=row.source_generation,
+            configuration_revision=row.configuration_revision, operation_id=row.operation_id, header_name=row.header_name)
         await session.rollback()
     if (
         credential is None or credential.state != "ready" or credential.encrypted_secret is None
@@ -477,6 +492,28 @@ async def _rest_secret(run: Run) -> tuple[str, str]:
     except CredentialEncryptionUnavailable as exc:
         raise rest.ProviderHttpError(401) from exc
     return credential.header_name, secret
+
+
+async def _optional_rest_secret(run: Run) -> tuple[str, str] | None:
+    """Read an optional REST credential only when a current encrypted binding exists.
+
+    Mastodon permits public reads without a token. A present but stale, revoked, or mismatched
+    credential is an owner-action error and must never silently downgrade to anonymous access.
+    """
+    from modules.connectors.models import ConnectorRestCredential
+
+    a = run.attempt
+    async with run.factory() as session:
+        credential = await session.get(ConnectorRestCredential, a.source.id)
+        snapshot = None if credential is None else (
+            credential.state, credential.source_generation, credential.configuration_revision,
+        )
+        await session.rollback()
+    if snapshot is None:
+        return None
+    if snapshot != ("ready", a.source.generation, a.connector_revision):
+        raise CredentialMissing
+    return await _rest_secret(run)
 
 
 def _with_header(
@@ -587,12 +624,30 @@ class _PageText(HTMLParser):
 
 
 async def _run_web(run: Run) -> None:
-    """Static web read: same-origin BFS through the gated, pinned transport (browser mode stays on crawl.py)."""
+    """Collect static web pages through bounded HTTP or queue a fenced browser-worker crawl.
+
+    Browser mode hands its existing scheduler admission to the durable ingestion
+    crawl event; the worker later owns the bounded browser request and receipt.
+    """
     from modules.connectors.registry import configuration, normalize
 
     config = configuration(run.attempt.source)
     start = str(config.url)
     state = await _state(run)
+    if config.js_render:
+        if not run.settings.browser_shared_token.get_secret_value():
+            raise rest.ProviderHttpError(503)
+        a = run.attempt
+        async with run.factory() as session:
+            await ingestion.queue_connector_crawl(
+                session, a.source.id, a.source.generation, a.connector_revision, state.cursor,
+                {
+                    "url": start, "mode": "playwright", "max_pages": config.max_pages,
+                    "max_depth": config.max_depth, "timeout_seconds": config.timeout_seconds,
+                },
+                scope=a.scope, multi_workspace_enabled=a.multi, request_ref=a.ref,
+            )
+        return
     origin = rest._origin(start)
     queue, visited = [(start, 0)], {start}
     records: list[dict[str, Any]] = []
@@ -632,9 +687,17 @@ async def _run_mcp(run: Run) -> None:
     collected_at = datetime.now(UTC)
     records: list[dict[str, Any]] = []
     failed = 0
+    # mcp_collection.authorized swallows exceptions from authorize_extra; remember lost authority here
+    # so a fence loss fails closed instead of counting as a retryable per-call failure.
+    lost: CollectionFenceLost | TermsIneligible | TimeoutError | None = None
 
     async def authorized() -> bool:
-        await run.gate()  # raises CollectionFenceLost / TermsIneligible / TimeoutError; never returns False
+        nonlocal lost
+        try:
+            await run.gate()  # raises CollectionFenceLost / TermsIneligible / TimeoutError; never returns False
+        except (CollectionFenceLost, TermsIneligible, TimeoutError) as exc:
+            lost = exc
+            raise
         return True
 
     for call in config.calls:
@@ -647,6 +710,8 @@ async def _run_mcp(run: Run) -> None:
         except (CollectionFenceLost, TermsIneligible, TimeoutError, asyncio.CancelledError):
             raise
         except Exception:  # noqa: BLE001  # one failing call never blocks the others (as in mcp.collect)
+            if lost is not None:
+                raise lost from None
             failed += 1
     if failed == len(config.calls):
         raise mcp_collection.McpCollectionError("mcp_collection_failed")
@@ -657,11 +722,20 @@ async def _run_mcp(run: Run) -> None:
 # ---------------------------------------------------------------- simple native providers
 
 async def _run_native(run: Run) -> None:
-    """Collect one registered snapshot provider through the reserved native lease + atomic receipt."""
+    """Collect one registered native provider through a reserved lease and atomic receipt.
+
+    Google uses its encrypted source grant and commits its opaque continuation only with the
+    receipt. FHIR and Home Assistant use the encrypted REST credential against the exact
+    configured local-service origin. Notion and Slack use the same encrypted bearer credential
+    owner with fixed public API origins; each send and the atomic receipt fence its revision.
+    Bluesky, Reddit, Mastodon and X use bounded read-only social adapters and commit returned cursors
+    with receipts, so paginated feed progress is durable only after accepted ingestion.
+    """
     a, provider = run.attempt, run.attempt.source.provider
     collected_at = datetime.now(UTC)
     lease = await _lease(run)
     gate = run.gate
+    page: Any = None  # Provider adapters intentionally return several validated receipt shapes.
     async with run.factory() as session:
         if provider in {"youtube", "arxiv"}:
             from modules.connectors.providers.feed_catalog import collect_provider_feed
@@ -672,6 +746,188 @@ async def _run_native(run: Run) -> None:
             from modules.connectors.providers.research import collect_huggingface_models
 
             page = await collect_huggingface_models(a.source, collected_at=collected_at, before_request=gate)
+        elif provider == "bluesky":
+            from modules.connectors.providers.social_feeds import collect_bluesky_profile
+
+            config = connectors.ConnectorConfig.model_validate(a.source.configuration)
+            page = await collect_bluesky_profile(
+                config.bluesky_actor or "", collected_at=collected_at,
+                cursor=lease.cursor_before,
+                fetch_bytes=lambda url: gate.fetch_bytes(
+                    url, max_bytes=5 * 1024 * 1024, headers={"Accept": "application/json"}),
+            )
+            await _credential_fence(run)
+            await _accept_native(
+                run, lease, page.records, page.coverage, collected_at, cursor_after=page.cursor_after,
+            )
+            return
+        elif provider == "reddit":
+            from modules.connectors.providers.social_networks import collect_reddit_subreddit
+
+            config = connectors.ConnectorConfig.model_validate(a.source.configuration)
+            token, binding = await _reddit_access_token(run)
+
+            async def before_reddit_send() -> None:
+                """Debit admission and recheck the exact Reddit grant before every HTTP send."""
+                await gate()
+                await _credential_fence(run, reddit=binding)
+
+            page = await collect_reddit_subreddit(
+                config.reddit_subreddit or "", token, cursor=lease.cursor_before,
+                collected_at=collected_at,
+                fetch_bytes=lambda url, **kwargs: rest.fetch_bounded(
+                    url, before_send=before_reddit_send, **kwargs),
+            )
+            await _credential_fence(run, reddit=binding)
+            await _accept_native(
+                run, lease, page.records, page.coverage, collected_at,
+                cursor_after=page.cursor_after, reddit_binding=binding,
+            )
+            return
+        elif provider in {"mastodon", "x"}:
+            from modules.connectors.providers.social_networks import (
+                collect_mastodon_scope,
+                collect_x_scope,
+            )
+
+            config = connectors.ConnectorConfig.model_validate(a.source.configuration)
+            if provider == "mastodon":
+                optional_credential = await _optional_rest_secret(run)
+                if optional_credential is not None and optional_credential[0] != "Authorization":
+                    raise CredentialMissing
+                social_page = await collect_mastodon_scope(
+                    config.mastodon_instance_url or "", account=config.mastodon_account,
+                    hashtag=config.mastodon_hashtag,
+                    access_token=optional_credential[1] if optional_credential is not None else None,
+                    cursor=lease.cursor_before, collected_at=collected_at, fetch_bytes=gate.fetch_bytes,
+                )
+                credential_revision = a.credential_revision if optional_credential is not None else None
+            else:
+                try:
+                    header_name, bearer_token = await _rest_secret(run)
+                except rest.ProviderHttpError as exc:
+                    raise CredentialMissing from exc
+                if header_name != "Authorization" or not bearer_token or a.credential_revision is None:
+                    raise CredentialMissing
+                social_page = await collect_x_scope(
+                    account=config.x_account, query=config.x_query, access_token=bearer_token,
+                    cursor=lease.cursor_before, collected_at=collected_at, fetch_bytes=gate.fetch_bytes,
+                )
+                credential_revision = a.credential_revision
+            await _credential_fence(run)
+            await _accept_native(
+                run, lease, social_page.records, social_page.coverage, collected_at,
+                provider_credential_revision=credential_revision, cursor_after=social_page.cursor_after,
+            )
+            return
+        elif provider in {"google_mail", "google_calendar", "google_drive"}:
+            from modules.connectors.providers import google_api
+
+            token, binding = await _google_access_token(run)
+
+            async def before_google_send() -> None:
+                """Debit/revalidate each Google API send against the current grant and lease."""
+                await gate()
+                await _credential_fence(run, google=binding)
+
+            config = connectors.ConnectorConfig.model_validate(a.source.configuration)
+            if provider == "google_mail":
+                page = await google_api.collect_gmail(
+                    token, config.google_mail_label_ids or (), before_request=before_google_send,
+                    cursor=lease.cursor_before, collected_at=collected_at,
+                )
+            elif provider == "google_calendar":
+                page = await google_api.collect_calendar(
+                    token, config.google_calendar_ids or (), before_request=before_google_send,
+                    cursor=lease.cursor_before, collected_at=collected_at,
+                )
+            else:
+                page = await google_api.collect_drive(
+                    token, config.google_drive_ids or (), before_request=before_google_send,
+                    cursor=lease.cursor_before, collected_at=collected_at,
+                )
+            await _credential_fence(run, google=binding)
+            await _accept_proof(
+                run, lease, records=page.records, coverage=page.coverage, cursor_after=page.cursor_after,
+                collected_at=collected_at, google_binding=binding)
+            return
+        elif provider in REVISIONED_REST_PROVIDERS:
+            from modules.connectors.providers.workspace_apps import (
+                NotionScope,
+                SlackScope,
+                collect_notion_pages,
+                collect_slack_channel_messages,
+            )
+
+            header_name, bearer_token = await _rest_secret(run)
+            if header_name != "Authorization" or not bearer_token or a.credential_revision is None:
+                raise CredentialMissing
+            config = connectors.ConnectorConfig.model_validate(a.source.configuration)
+            if provider == "notion":
+                page = await collect_notion_pages(
+                    bearer_token, NotionScope(tuple(config.notion_page_ids or ())),
+                    fetch_bytes=gate.fetch_bytes, collected_at=collected_at,
+                )
+            else:
+                page = await collect_slack_channel_messages(
+                    bearer_token, SlackScope(tuple(config.slack_channel_ids or ())),
+                    fetch_bytes=gate.fetch_bytes, collected_at=collected_at,
+                )
+            await _credential_fence(run)
+            await _accept_native(
+                run, lease, page.records, page.coverage, collected_at,
+                provider_credential_revision=a.credential_revision,
+            )
+            return
+        elif provider in HEADER_AUTH_PROVIDERS:
+            from modules.connectors.providers.local_services import (
+                LocalServiceError,
+                collect_fhir_observations,
+                collect_home_assistant_snapshot,
+            )
+
+            header_name, bearer_token = await _rest_secret(run)
+            if header_name != "Authorization" or not bearer_token:
+                raise CredentialMissing
+
+            async def before_local_send() -> None:
+                """Recheck schedule admission and source/credential revisions before each local request."""
+                await gate()
+                await _credential_fence(run)
+
+            config = connectors.ConnectorConfig.model_validate(a.source.configuration)
+            try:
+                if provider == "health":
+                    records = await collect_fhir_observations(
+                        config.fhir_base_url or "", config.fhir_patient_id or "",
+                        bearer_token=bearer_token, before_send=before_local_send, collected_at=collected_at,
+                    )
+                else:
+                    page = await collect_home_assistant_snapshot(
+                        config.ha_base_url or "", tuple(config.ha_entity_ids or ()),
+                        bearer_token=bearer_token, before_send=before_local_send,
+                        cursor=lease.cursor_before, collected_at=collected_at,
+                    )
+            except LocalServiceError as exc:
+                reason = str(exc)
+                if reason == "authorization_rejected":
+                    raise rest.ProviderHttpError(401) from exc
+                if reason == "rate_limited":
+                    raise connectors.ProviderRateLimited(datetime.now(UTC) + PAYLOAD_RATE_LIMIT_BACKOFF) from exc
+                if reason == "request_failed":
+                    raise TimeoutError("local_service_request_failed") from exc
+                if reason.startswith("destination_"):
+                    raise rest.UnsafeDestination(reason) from exc
+                if reason.startswith("http_") and reason[5:].isdigit():
+                    raise rest.ProviderHttpError(int(reason[5:])) from exc
+                raise
+            await _credential_fence(run)
+            if provider == "health":
+                await _accept_native(run, lease, records, "returned_snapshot", collected_at)
+            else:
+                await _accept_native(run, lease, page.records, page.coverage, collected_at,
+                                     cursor_after=page.cursor_after)
+            return
         elif provider == "github_releases":
             from modules.connectors.providers.social import collect_github_releases
 
@@ -709,20 +965,31 @@ async def _lease(run: Run) -> Any:
 async def _accept_native(
     run: Run, lease: Any, records: Sequence[IngestionRecord], coverage: Literal["returned_snapshot", "pending_updates_only", "truncated"],
     collected_at: datetime, state_update: CollectionStateUpdate | None = None,
+    provider_credential_revision: int | None = None,
+    cursor_after: str | None = None, reddit_binding: tuple[UUID, int] | None = None,
 ) -> None:
-    """Hand a leased native page (possibly empty = no changes) to the ingestion owner."""
+    """Hand a leased native page and any required provider-credential proof to ingestion.
+
+    Reddit's OAuth operation and token revision travel with the page so ingestion can reject
+    a grant replacement before committing its receipt or continuation cursor.
+    """
     a, gate = run.attempt, run.gate
     batch = NativeCollectionBatch(
         source_id=a.source.id, source_generation=a.source.generation, connector_revision=a.connector_revision,
-        lease_token=lease.token, cursor_before=lease.cursor_before, cursor_after=lease.cursor_before,
+        lease_token=lease.token, cursor_before=lease.cursor_before,
+        cursor_after=cursor_after if cursor_after is not None else lease.cursor_before,
         records=list(records), telegram_deliveries=(), telegram_raw_deliveries=(),
-        coverage=coverage, github_segment=None, collected_at=collected_at)
+        coverage=coverage, github_segment=None, collected_at=collected_at,
+        provider_credential_revision=provider_credential_revision,
+        reddit_operation_id=reddit_binding[0] if reddit_binding is not None else None,
+        reddit_token_revision=reddit_binding[1] if reddit_binding is not None else None)
     async with run.factory() as session:
         await ingestion.accept_native_collection(
             session, batch, collector_token=None, lease=lease, scope=a.scope, multi_workspace_enabled=a.multi,
             expected_native_operation_id=None,
             expected_world_credential_operation_id=gate.captured_operation if a.source.provider == "alpha_vantage" else None,
-            request_ref=a.ref, state_update=state_update)
+            request_ref=a.ref, state_update=state_update,
+            provider_credential_revision=provider_credential_revision)
     run.extras["accepted"] = True
 
 
@@ -925,9 +1192,14 @@ ADAPTERS.update({
 
 async def _credential_fence(
     run: Run, *, github: tuple[Any, tuple[UUID, int]] | None = None, telegram: Any = None,
+    google: tuple[UUID, int] | None = None, reddit: tuple[UUID, int] | None = None,
 ) -> None:
-    """Before every send/accept: locked, rolled-back recheck of credential revision, grant/bot proof and lease."""
-    from modules.connectors.models import GithubOAuthGrant
+    """Before every send/accept, recheck source credentials and provider grant under ordered locks.
+
+    GitHub, Telegram, Google and Reddit bindings are compared with their captured operation/revision;
+    the lease and request must still be current before network bytes or a receipt are accepted.
+    """
+    from modules.connectors.models import ConnectorOAuthGrant, GithubOAuthGrant
 
     a, lease = run.attempt, run.extras["lease"]
     async with run.factory() as session:
@@ -958,6 +1230,26 @@ async def _credential_fence(
                     connector_revision=lease.connector_revision, scope=a.scope, multi_workspace_enabled=a.multi)
                 if now_native != telegram or telegram.access_fence != a.access_fence:
                     raise CollectionFenceLost("credential_changed", "revision_changed")
+            if google is not None:
+                grant = await session.scalar(select(ConnectorOAuthGrant).where(
+                    ConnectorOAuthGrant.source_id == a.source.id,
+                ).with_for_update())
+                if (grant is None or grant.state != "ready" or grant.credential_revision != a.credential_revision
+                        or (grant.operation_id, grant.token_revision) != google
+                        or grant.source_generation != lease.source_generation
+                        or grant.configuration_revision != lease.connector_revision):
+                    raise CollectionFenceLost("credential_changed", "revision_changed")
+            if reddit is not None:
+                grant = await session.scalar(select(ConnectorOAuthGrant).where(
+                    ConnectorOAuthGrant.source_id == a.source.id,
+                ).with_for_update())
+                if (grant is None or grant.provider != "reddit" or grant.state != "ready"
+                        or grant.workspace_id != a.scope.workspace_id or grant.owner_id != a.scope.actor_user_id
+                        or grant.credential_revision != a.credential_revision
+                        or (grant.operation_id, grant.token_revision) != reddit
+                        or grant.source_generation != lease.source_generation
+                        or grant.configuration_revision != lease.connector_revision):
+                    raise CollectionFenceLost("credential_changed", "revision_changed")
             if not await ingestion.validate_connector_collection_in_uow(
                 session, lease, collector_token=None, scope=a.scope, multi_workspace_enabled=a.multi,
                 access_fence=a.access_fence, source_fence=a.source_fence, request_ref=a.ref,
@@ -967,19 +1259,131 @@ async def _credential_fence(
             await session.rollback()
 
 
+async def _google_access_token(run: Run) -> tuple[str, tuple[UUID, int]]:
+    """Load a source-bound read-only Google token and serialize refresh under its grant row lock.
+
+    Refresh results are persisted only while the original source/configuration/credential fence
+    remains current. Holding the grant lock across Google's token exchange prevents concurrent
+    workers from overwriting a rotated refresh token; failures leave the prior grant unchanged.
+    """
+    from modules.connectors.google_oauth_tokens import refresh_google_token
+    from modules.connectors.models import ConnectorOAuthGrant
+    from modules.connectors.oauth_routes import _PROVIDER_SCOPES, _cipher, _open_cipher
+
+    a = run.attempt
+    async with run.factory() as session:
+        current, row, _ = await provisioning.lock_connector(
+            session, a.source.id, provisioning._ALL_CREDENTIAL_SLOTS, scope=a.scope,
+            multi_workspace_enabled=a.multi, expected_access_fence=a.access_fence)
+        if (current != a.source_fence or row is None or row.credential_revision != a.credential_revision
+                or not await provisioning.require_collection_fence(
+                    session, a.source, a.source.generation, a.connector_revision,
+                    scope=a.scope, multi_workspace_enabled=a.multi)):
+            await session.rollback()
+            raise CollectionFenceLost("credential_changed", "revision_changed")
+        await ingestion.lock_source_credentials_in_uow(
+            session, a.source.id, scope=a.scope, multi_workspace_enabled=a.multi,
+            access_fence=a.access_fence, source_fence=a.source_fence)
+        grant = await session.scalar(select(ConnectorOAuthGrant).where(
+            ConnectorOAuthGrant.source_id == a.source.id,
+        ).with_for_update())
+        if (grant is None or grant.state != "ready" or grant.provider != a.source.provider
+                or grant.workspace_id != a.scope.workspace_id or grant.owner_id != a.scope.actor_user_id
+                or grant.source_generation != a.source.generation
+                or grant.configuration_revision != a.connector_revision
+                or grant.credential_revision != a.credential_revision or not grant.encrypted_tokens
+                or _PROVIDER_SCOPES.get(grant.provider) not in grant.granted_scopes):
+            await session.rollback()
+            raise CredentialMissing
+        try:
+            key = run.settings.connector_credential_encryption_key.get_secret_value()
+            tokens = _open_cipher(key, grant.encrypted_tokens, a.source.id, grant.operation_id,
+                                  grant.source_generation, grant.configuration_revision)
+            access = tokens.get("access_token")
+            refresh = tokens.get("refresh_token")
+            if not isinstance(access, str) or not isinstance(refresh, str):
+                raise ValueError("google_token_missing")  # noqa: TRY004
+            expiry = grant.token_expires_at
+            if expiry is not None and expiry > datetime.now(UTC) + timedelta(seconds=60):
+                binding = (grant.operation_id, grant.token_revision)
+                await session.rollback()
+                return access, binding
+            rotated = await refresh_google_token(run.settings, grant.provider, refresh)
+            tokens.update(rotated)
+            grant.token_revision += 1
+            grant.encrypted_tokens = _cipher(
+                key, a.source.id, grant.operation_id, grant.source_generation,
+                grant.configuration_revision, tokens)
+            grant.token_expires_at = datetime.fromisoformat(rotated["access_expires_at"])
+            binding = (grant.operation_id, grant.token_revision)
+            access = rotated["access_token"]
+            await session.commit()
+            return access, binding
+        except Exception:
+            await session.rollback()
+            raise
+
+
+async def _reddit_access_token(run: Run) -> tuple[str, tuple[UUID, int]]:
+    """Load or serialize-refresh Reddit's source-bound read-only grant for one admitted collection.
+
+    The current source and owner credentials are locked before the grant row. Refresh uses the
+    grant lock and persists its new token revision before returning, so every HTTP send and the
+    eventual receipt can prove the same token revision.
+    """
+    from modules.connectors.reddit_oauth_routes import refresh_reddit_grant
+
+    a = run.attempt
+    async with run.factory() as session:
+        current, row, _ = await provisioning.lock_connector(
+            session, a.source.id, provisioning._ALL_CREDENTIAL_SLOTS, scope=a.scope,
+            multi_workspace_enabled=a.multi, expected_access_fence=a.access_fence)
+        if (current != a.source_fence or row is None or a.credential_revision is None
+                or row.credential_revision != a.credential_revision
+                or not await provisioning.require_collection_fence(
+                    session, a.source, a.source.generation, a.connector_revision,
+                    scope=a.scope, multi_workspace_enabled=a.multi)):
+            await session.rollback()
+            raise CollectionFenceLost("credential_changed", "revision_changed")
+        await ingestion.lock_source_credentials_in_uow(
+            session, a.source.id, scope=a.scope, multi_workspace_enabled=a.multi,
+            access_fence=a.access_fence, source_fence=a.source_fence)
+        try:
+            access_token, operation_id, token_revision = await refresh_reddit_grant(
+                session, run.settings, a.source.id, workspace_id=a.scope.workspace_id,
+                owner_id=a.scope.actor_user_id, source_generation=a.source.generation,
+                configuration_revision=a.connector_revision,
+                credential_revision=a.credential_revision,
+            )
+        except ValueError as exc:
+            await session.rollback()
+            raise CredentialMissing from exc
+        return access_token, (operation_id, token_revision)
+
+
 async def _accept_proof(
     run: Run, lease: Any, *, records: Sequence[IngestionRecord],
     coverage: Literal["returned_snapshot", "pending_updates_only", "truncated"], cursor_after: str | None,
     collected_at: datetime, github_segment: Any = None, telegram: Sequence[Any] = (), raw: Sequence[Any] = (),
-    native_operation_id: UUID | None = None,
+    native_operation_id: UUID | None = None, google_binding: tuple[UUID, int] | None = None,
+    reddit_binding: tuple[UUID, int] | None = None,
 ) -> None:
-    """Hand a proof-bearing page to the ingestion owner (one commit: batch, cursor, request outcome, slot)."""
+    """Hand a proof-bearing page to ingestion for one atomic receipt and cursor commit.
+
+    OAuth operation/token revisions are included only for their matching source provider and
+    are revalidated by the ingestion owner before durable receipt acceptance.
+    """
     a = run.attempt
     batch = NativeCollectionBatch(
         source_id=a.source.id, source_generation=lease.source_generation, connector_revision=lease.connector_revision,
         lease_token=lease.token, cursor_before=lease.cursor_before, cursor_after=cursor_after,
         records=list(records), telegram_deliveries=tuple(telegram), telegram_raw_deliveries=tuple(raw),
-        coverage=coverage, github_segment=github_segment, collected_at=collected_at)
+        coverage=coverage, github_segment=github_segment,
+        google_operation_id=google_binding[0] if google_binding is not None else None,
+        google_token_revision=google_binding[1] if google_binding is not None else None,
+        reddit_operation_id=reddit_binding[0] if reddit_binding is not None else None,
+        reddit_token_revision=reddit_binding[1] if reddit_binding is not None else None,
+        collected_at=collected_at)
     async with run.factory() as session:
         await ingestion.accept_native_collection(
             session, batch, collector_token=None, lease=lease, scope=a.scope, multi_workspace_enabled=a.multi,
@@ -1145,8 +1549,18 @@ ADAPTERS.update({"github": _run_github, "telegram": _run_telegram})
 
 # ---------------------------------------------------------------- orchestration
 
-def _classify(exc: BaseException) -> dict[str, Any]:
-    """Map an adapter failure to ``settle_admission`` arguments (never response text)."""
+def _classify(exc: BaseException, *, keyless: bool = False) -> dict[str, Any]:
+    """Map an adapter failure to ``settle_admission`` arguments (never response text).
+
+    ``keyless`` marks a source that sends no credential: a 401/403 from it is the provider blocking or
+    refusing the request (geo/IP policy, missing user agent), not a bad owner credential, so it settles as
+    ``provider_rejected`` instead of the misleading ``invalid_credential``.
+    """
+    from modules.connectors.mcp import McpCollectionError
+
+    if isinstance(exc, McpCollectionError):
+        # Stable secret-free MCP code; all-calls-failed or stale config will not heal by retrying.
+        return {"outcome": "failed", "error_code": exc.code}
     if isinstance(exc, rest.CollectionIncomplete):
         return {"outcome": "failed", "error_code": "collection_incomplete"}
     if isinstance(exc, rest.RestSchemaChanged):
@@ -1156,9 +1570,13 @@ def _classify(exc: BaseException) -> dict[str, Any]:
     if isinstance(exc, TermsIneligible):
         return {"outcome": "failed", "error_code": "terms_not_accepted"}
     if isinstance(exc, rest.UnsafeDestination):
+        if str(exc) == "host_unresolvable":
+            # A DNS failure/timeout is transient network trouble, not a policy block; every retry re-resolves
+            # and re-checks that all addresses are public, so retrying never weakens the destination guard.
+            return {"outcome": "failed", "error_code": "provider_timeout", "retryable": True}
         return {"outcome": "failed", "error_code": "destination_blocked"}
     if isinstance(exc, rest.ProviderHttpError):
-        if exc.status_code in {401, 403}:
+        if exc.status_code in {401, 403} and not keyless:
             return {"outcome": "failed", "error_code": "invalid_credential"}
         return {"outcome": "failed", "error_code": "provider_unavailable" if exc.retryable else "provider_rejected",
                 "retryable": exc.retryable}
@@ -1169,6 +1587,14 @@ def _classify(exc: BaseException) -> dict[str, Any]:
     if isinstance(exc, ValueError):
         return {"outcome": "failed", "error_code": "provider_response_invalid"}
     return {"outcome": "failed", "error_code": "executor_error", "retryable": True}
+
+
+def _sends_no_credential(source: Any) -> bool:
+    """True for RSS/web sources and catalog providers that need no key; generic REST may carry an owner header."""
+    if source.provider is None:
+        return source.type in {"rss", "web"}
+    spec = get_provider_spec(source.provider)
+    return spec is not None and not spec.key_required
 
 
 async def _release_lease(run: Run, error_code: str) -> None:
@@ -1192,10 +1618,13 @@ def _adapter_for(source: ConnectorSource) -> Adapter | None:
     return _run_native if provider in SIMPLE_NATIVE else None
 
 
+def provider_collection_available(provider_id: str) -> bool:
+    """Report whether a provider ID reaches a registered production collection adapter."""
+    return provider_id in ADAPTERS or provider_id in SIMPLE_NATIVE
+
+
 def supports_native(source: ConnectorSource) -> bool:
     """True when the shared executor can collect this source; activation refuses everything else."""
-    if source.type == "web" and source.provider is None and (source.configuration or {}).get("js_render"):
-        return False  # browser rendering stays on crawl.py
     return _adapter_for(source) is not None and source.provider not in REFUSED_HERE
 
 
@@ -1210,11 +1639,11 @@ async def execute_collection(ctx: dict[str, object], admission: CollectionAdmiss
     if adapter is None or attempt.source.provider in REFUSED_HERE:
         await _settle(factory, admission, outcome="failed", error_code="collection_unsupported")
         return
-    spec = get_provider_spec(attempt.source.provider)
+    quota_policies = get_quota_policies(attempt.source.provider)
     state: dict[str, Any] = {"attempt": attempt, "factory": factory, "settings": settings}
     gate = SendGate(
         factory, attempt, settings=settings, deadline=time.monotonic() + rest.RUN_DEADLINE_SECONDS,
-        quota_provider=spec.id if spec is not None else None,
+        quota_provider=attempt.source.provider if quota_policies else None,
         fingerprint=_alpha_fingerprint(state) if attempt.source.provider == "alpha_vantage" else None)
     run = Run(ctx=ctx, factory=factory, settings=settings, attempt=attempt, gate=gate)
     lost = asyncio.Event()
@@ -1244,7 +1673,11 @@ async def execute_collection(ctx: dict[str, object], admission: CollectionAdmiss
         settle = {"outcome": "failed", "error_code": "provider_rate_limited", "retryable": True,
                   "provider_deadline": exc.next_eligible_at}
     except Exception as exc:  # deliberate boundary: every failure must settle the request
-        settle = _classify(exc)
+        settle = _classify(exc, keyless=_sends_no_credential(attempt.source))
+        if isinstance(exc, rest.ProviderHttpError):
+            # The settled code hides the upstream status; log it (never the body or URL) to tell throttles from rejects.
+            logger.warning("Collection provider HTTP %s; provider=%s request_id=%s error_code=%s",
+                           exc.status_code, attempt.source.provider, admission.request_id, settle.get("error_code"))
         if settle["error_code"] == "executor_error":
             # Unclassified failure: the settled code alone hides the cause, so keep the traceback (no response body).
             logger.exception("Collection adapter failed; provider=%s request_id=%s",

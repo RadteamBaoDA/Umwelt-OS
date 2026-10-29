@@ -10,7 +10,9 @@ __pycache__/
 .next/
 node_modules/
 playwright-report/
+playwright-report-*/
 test-results/
+test-results-*/
 **/playwright/.auth/
 data/
 .backup-restores/

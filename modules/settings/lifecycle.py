@@ -24,7 +24,7 @@ from core.workspaces.dependencies import (
     require_workspace_write,
 )
 from core.workspaces.public import read_access_fence
-from core.workspaces.schemas import Scope, WorkspaceContext
+from core.workspaces.schemas import Scope
 from modules.settings.models import ModuleLifecycleRecord, RetentionSettingsRecord
 from modules.settings.public import require_settings_scope, scope_actor
 from modules.settings.schemas import (
@@ -196,7 +196,7 @@ async def save_retention_settings(
     return await read_retention_settings(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
 
-async def _require_owner_for_module(request: Request, session: AsyncSession, *, module_id: str) -> WorkspaceContext | None:
+async def _require_owner_for_module(request: Request, session: AsyncSession, *, module_id: str) -> Scope | None:
     """Prepare explicit domain identity; retain operator authentication for instance modules.
 
     Historical name is retained without bootstrap authority for ordinary domains. Member

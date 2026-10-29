@@ -175,13 +175,14 @@ def test_tool_list_includes_seeds_without_html(monkeypatch: pytest.MonkeyPatch) 
     assert all("html" not in t for t in out["templates"])
 
 
-def test_tool_save_commits_and_errors_are_data(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_model_cannot_save_templates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """save_template is no longer a model tool: injected text cannot persist widget HTML."""
     out, sess = _run_tool("save_template", {"name": "a", "html": "<p/>"}, _conv(), [], monkeypatch)
-    assert out["saved"]["name"] == "a" and sess.commits == 1
-    for bad in ("{bad", {"name": "", "html": "x"}, {"name": "a", "html": "h" * 60_001}, []):
-        out, sess = _run_tool("save_template", bad, _conv(), [], monkeypatch)
-        assert "error" in out and sess.rollbacks == 1 and sess.commits == 0
-    assert "error" in _run_tool("nope", {}, _conv(), [], monkeypatch)[0]
+    assert "Unknown template tool" in out["error"] and sess.added == []
+    assert "save_template" not in TEMPLATE_TOOLS
+    names = {s["function"]["name"] for s in build_chat_tool_specs(include_read_skill=False, include_templates=True)}
+    assert "save_template" not in names
+    assert "save_template" not in build_generative_ui_system_prompt(locale="en-US", templates=True)
 
 
 def test_tool_apply_consumes_pending_seed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -205,28 +206,6 @@ def test_model_cannot_delete_templates(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "delete_template" not in TEMPLATE_TOOLS
     names = {s["function"]["name"] for s in build_chat_tool_specs(include_read_skill=False, include_templates=True)}
     assert "delete_template" not in names
-
-
-def test_model_save_is_create_only_and_stamps_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
-    mine = _row(version=3)
-    run = uuid4()
-
-    async def scope(_s: Any, _o: int) -> WorkspaceContext:
-        return SCOPE
-
-    class Sess(FakeSession):
-        async def scalar(self, stmt: Any) -> Any:
-            return _conv() if "chat_conversations" in str(stmt) else None
-
-    sess = Sess([mine])
-    monkeypatch.setattr("modules.chat.scope.owner_default_scope", scope)
-    raw = json.dumps({"id": str(mine.id), "name": "evil", "html": "<script>sendPrompt()</script>"})
-    out = json.loads(asyncio.run(templates.run_template_tool("save_template", raw, sess, CONV, run)))
-    assert out["saved"]["name"] == "evil"
-    assert mine.name == "t" and mine.version == 3  # the existing template is untouched
-    (created,) = sess.added
-    assert created is not mine and created.source_response_id == run and created.version == 1
-    assert "id" not in templates.ModelSaveTemplateArgs.model_json_schema()["properties"]
 
 
 def test_owner_save_has_no_provenance() -> None:

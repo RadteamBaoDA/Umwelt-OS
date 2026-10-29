@@ -324,9 +324,12 @@ class TestPublicDiscoveryAndCatalog:
         assert isinstance(entries, tuple)
         assert len(entries) >= 15
         assert all(isinstance(e, CatalogEntry) for e in entries)
+        provider_ids = [entry.provider_id for entry in entries]
+        assert len(provider_ids) == len(set(provider_ids))
+        assert all(entry.source_type is not None and entry.code_available for entry in entries)
 
         # Check key providers are present
-        provider_ids = {e.provider_id for e in entries}
+        provider_ids = set(provider_ids)
         expected = {"rss", "web", "rest", "github", "telegram", "mcp", "youtube", "arxiv", "huggingface", "github_releases"}
         assert expected.issubset(provider_ids)
 

@@ -113,6 +113,8 @@ CANCEL_KEY_PREFIX = "chat:cancel:"
 STREAM_FLUSH_SECONDS = 0.4
 # Terminal runs keep their full text in message.done, so their deltas are dead weight after a day.
 DELTA_RETENTION = timedelta(days=1)
+# Model "thinking" kept on the assistant message; longer reasoning is cut and flagged `reasoning_truncated`.
+REASONING_MAX_CHARS = 32_000
 DELTA_PURGE_LIMIT = 5000
 STREAM_FLUSH_CHARS = 256
 CHAT_QUEUE = "arq:chat"
@@ -715,7 +717,7 @@ async def purge_terminal_message_deltas(
         .where(
             # message.ui.delta partial widget snapshots are as disposable as text deltas: message.ui.done
             # keeps the final widget.
-            StreamEvent.event_type.in_(("message.delta", "message.ui.delta")),
+            StreamEvent.event_type.in_(("message.delta", "message.reasoning.delta", "message.ui.delta")),
             ResponseRun.status.in_(("completed", "cancelled", "failed")),
             ResponseRun.completed_at.is_not(None),
             ResponseRun.completed_at < cutoff,
@@ -799,6 +801,8 @@ async def run_response_generation(
 
     # 2. Retrieve user message and grounding context
     accumulated_text = ""
+    accumulated_reasoning = ""  # published reasoning, capped at REASONING_MAX_CHARS
+    reasoning_truncated = False
     privacy_fence = (raw_context_req or {}).get("_chat_privacy_fence") if isinstance(raw_context_req, dict) else None
     try:
         # S1/D6: scope comes from the claimed run row; admission failure takes the privacy-cancel path.
@@ -1098,6 +1102,7 @@ async def run_response_generation(
         # revalidated transaction in the same lock order as before (privacy -> conversation -> run -> evidence).
         loop = asyncio.get_running_loop()
         pending = ""
+        pending_reasoning = ""  # same flush cadence and privacy fence as `pending`; published before it
         # Newest unpublished cumulative UI snapshot per part id (older ones are superseded).
         pending_ui: dict[str, dict[str, Any]] = {}
         last_flush = float("-inf")
@@ -1108,8 +1113,8 @@ async def run_response_generation(
             Text precedes the UI snapshot so a snapshot never outruns the prose it follows. None means the
             run was cancelled/redacted and both buffers were dropped.
             """
-            nonlocal pending, pending_ui, accumulated_text, seq, last_flush
-            if not pending and not pending_ui:
+            nonlocal pending, pending_reasoning, pending_ui, accumulated_text, accumulated_reasoning, seq, last_flush
+            if not pending and not pending_reasoning and not pending_ui:
                 return True
             async with session_factory() as session:
                 _, live_run = await _lock_live_response(
@@ -1118,6 +1123,7 @@ async def run_response_generation(
                 )
                 if await is_run_cancelled(response_id, redis):
                     pending = ""
+                    pending_reasoning = ""
                     pending_ui = {}
                     await _cancel_response_locked(session, live_run, seq)
                     await session.commit()
@@ -1130,10 +1136,22 @@ async def run_response_generation(
                     )
                     if not fences_ok:
                         pending = ""
+                        pending_reasoning = ""
                         pending_ui = {}
                         await _privacy_cancel_locked(session, live_run, seq)
                         await session.commit()
                         return None
+                if pending_reasoning:
+                    seq = await _next_event_seq(session, response_id, seq)
+                    session.add(
+                        StreamEvent(
+                            response_id=response_id,
+                            seq=seq,
+                            event_type="message.reasoning.delta",
+                            event_id=make_event_id(response_id, seq),
+                            data={"text": pending_reasoning},
+                        )
+                    )
                 if pending:
                     seq = await _next_event_seq(session, response_id, seq)
                     session.add(
@@ -1159,7 +1177,9 @@ async def run_response_generation(
                     )
                 await session.commit()
             accumulated_text += pending
+            accumulated_reasoning += pending_reasoning
             pending = ""
+            pending_reasoning = ""
             pending_ui = {}
             last_flush = loop.time()
             return True
@@ -1273,9 +1293,17 @@ async def run_response_generation(
                                 if choices and isinstance(choices, list):
                                     delta = choices[0].get("delta", {})
                                     content_delta = delta.get("content", "")
-                                    if content_delta:
-                                        pending += content_delta
-                                        due = len(pending) >= STREAM_FLUSH_CHARS or (
+                                    # The gateway folds provider `reasoning` and inline <think> blocks into
+                                    # `reasoning_content`; `reasoning` is still read for gateways that skip that.
+                                    reasoning_delta = delta.get("reasoning_content") or delta.get("reasoning")
+                                    if isinstance(reasoning_delta, str) and reasoning_delta:
+                                        room = REASONING_MAX_CHARS - len(accumulated_reasoning) - len(pending_reasoning)
+                                        if len(reasoning_delta) > room:
+                                            reasoning_truncated = True  # drop the overflow; later chunks are dropped too
+                                        pending_reasoning += reasoning_delta[:max(room, 0)]
+                                    if content_delta or pending_reasoning:
+                                        pending += content_delta or ""
+                                        due = len(pending) + len(pending_reasoning) >= STREAM_FLUSH_CHARS or (
                                             loop.time() - last_flush >= STREAM_FLUSH_SECONDS
                                         )
                                         if due and await _flush_pending() is None:
@@ -1542,6 +1570,8 @@ async def run_response_generation(
                 revision_of_message_id=revision_of_message_id,
                 **(
                     {"metadata_json": {
+                        **({"reasoning": accumulated_reasoning, **({"reasoning_truncated": True} if reasoning_truncated else {})}
+                           if accumulated_reasoning else {}),
                         **({"generative_ui": generative_ui, "generative_ui_parts": generative_uis}
                            if generative_ui is not None else {}),
                         # Audit trail of the external router's choice (category + renderer only, no content).
@@ -1549,7 +1579,7 @@ async def run_response_generation(
                                              "renderer": route_decision["renderer"]}}
                            if route_decision is not None else {}),
                     }}
-                    if generative_ui is not None or route_decision is not None
+                    if generative_ui is not None or route_decision is not None or accumulated_reasoning
                     else {}
                 ),
             )
@@ -1637,8 +1667,9 @@ async def run_response_generation(
         raise
     except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
         # Router failures carry a safe code (never a URL, body or key); logging it names the setting to fix.
-        # ModelGatewayError messages are fixed strings (HTTP status, capability, policy), so they are safe to log and
-        # say why the model failed; other exception text may carry payloads, so it stays out of the log.
+        # ModelGatewayError messages are built by the gateway (HTTP status, capability, policy, and a
+        # secret-redacted, length-capped upstream reason), so they are safe to log and say why the model
+        # failed; other exception text may carry payloads, so it stays out of the log.
         code = getattr(exc, "code", None)
         reason = f" [{exc}]" if isinstance(exc, ModelGatewayError) else ""
         logger.error("Response generation failed for run %s: %s%s%s", response_id, type(exc).__name__, f" ({code})" if code else "", reason)
@@ -1682,7 +1713,7 @@ async def _release_on_shutdown(
             return
         published = await session.scalar(select(StreamEvent.id).where(
             StreamEvent.response_id == response_id,
-            StreamEvent.event_type.in_(("message.delta", "message.citations")),
+            StreamEvent.event_type.in_(("message.delta", "message.reasoning.delta", "message.citations")),
         ).limit(1))
         if published is None and not timed_out:
             await session.execute(delete(StreamEvent).where(StreamEvent.response_id == response_id))
@@ -1825,7 +1856,7 @@ async def _privacy_cancel_locked(session: AsyncSession, run: ResponseRun, curren
         return current_seq
     await session.execute(update(StreamEvent).where(
         StreamEvent.response_id == run.id,
-        StreamEvent.event_type == "message.delta",
+        StreamEvent.event_type.in_(("message.delta", "message.reasoning.delta")),
     ).values(data={"text": ""}))
     await session.execute(update(StreamEvent).where(
         StreamEvent.response_id == run.id,
@@ -1951,7 +1982,12 @@ async def _mark_failed(
     *,
     scope: InternalJobScope | None,
 ) -> None:
-    """Serialize terminal failure with consent revocation and Stop; drift takes redaction path."""
+    """Serialize terminal failure with consent revocation and Stop; drift takes redaction path.
+
+    Stored/streamed error text is `str(exc)` only for `ModelGatewayError` (vetted, secret-redacted) and the
+    worker's own fixed-text `TimeoutError`s ("generation timed out", shutdown, abandoned); any other
+    exception yields "Response generation failed". `error_code` is the exception type name.
+    """
     privacy_read_failed = False
     async with session_factory() as session:
         await lock_export_privacy(session)
@@ -1976,7 +2012,11 @@ async def _mark_failed(
         else:
             run.status = "failed"
             run.error_code = type(exc).__name__
-            run.error_message = str(exc)[:500]
+            # Only gateway errors carry vetted (secret-redacted) text; any other exception may embed
+            # payloads or paths, so users see a fixed message and the type name stays in the logs.
+            # TimeoutError is only raised internally with fixed strings (timeout, shutdown, abandoned run).
+            safe_text = str(exc) if isinstance(exc, (ModelGatewayError, TimeoutError)) else "Response generation failed"
+            run.error_message = safe_text[:500]
             run.completed_at = func.now()
             terminal_seq = await _next_event_seq(session, response_id, seq)
             session.add(StreamEvent(
@@ -1984,7 +2024,7 @@ async def _mark_failed(
                 seq=terminal_seq,
                 event_type="status",
                 event_id=make_event_id(response_id, terminal_seq),
-                data={"status": "failed", "error": str(exc)},
+                data={"status": "failed", "error": safe_text},
             ))
             await session.commit()
     if privacy_read_failed:

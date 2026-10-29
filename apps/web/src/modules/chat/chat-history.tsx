@@ -1,38 +1,17 @@
 'use client';
 
 import * as React from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { PanelLeftClose, PencilIcon, PlusIcon, SearchIcon, Trash2Icon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import type { ConversationActions } from '@/modules/chat/conversation-actions';
 import {
   chatKeys,
-  deleteConversation,
   listConversations,
-  patchConversation,
   type Conversation,
 } from '@/modules/chat/api';
-import { useChatController } from '@/core/app-shell/chat-controller';
-import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
 
@@ -47,16 +26,8 @@ export interface ChatHistoryProps {
   className?: string;
   /** Optional callback that collapses the containing conversation-history sidebar. */
   onCollapse?: () => void;
-  /** Optional handle filled with rename/delete openers so the conversation header can reuse this component's dialogs. */
-  actionsRef?: React.MutableRefObject<ChatHistoryActions | null>;
-}
-
-/** Imperative openers for the rename and delete dialogs owned by ChatHistory. */
-export interface ChatHistoryActions {
-  /** Opens the rename dialog for a conversation. */
-  rename: (conversation: { id: string; title: string }) => void;
-  /** Opens the delete confirmation for a conversation id. */
-  remove: (id: string) => void;
+  /** Rename/delete openers from useConversationActions; the dialogs are mounted by the owner, not by this list. */
+  actions: Pick<ConversationActions, 'rename' | 'remove'>;
 }
 
 /**
@@ -70,54 +41,17 @@ export function ChatHistory({
   onSelectConversation,
   onNewConversation,
   className = '',
-  actionsRef,
+  actions,
   onCollapse,
 }: ChatHistoryProps) {
   const t = useTranslations('chat');
-  const session = useWorkspaceSession();
-  const queryClient = useQueryClient();
   const display = useDisplayPreferences();
   const timezone = display.confirmedPreferences?.timezone || 'UTC';
   const locale = display.confirmedPreferences?.locale || 'en-us';
   const [searchQuery, setSearchQuery] = React.useState('');
-  const [pendingDeleteId, setPendingDeleteId] = React.useState<string | null>(null);
-  const [pendingRename, setPendingRename] = React.useState<{ id: string; title: string } | null>(null);
-  const [renameValue, setRenameValue] = React.useState('');
-
-  const { data: conversations = [], isLoading } = useQuery({
+  const { data: conversations = [], isLoading, isError, refetch } = useQuery({
     queryKey: chatKeys.conversations(),
     queryFn: () => listConversations(),
-  });
-
-  React.useEffect(() => {
-    if (!actionsRef) return;
-    actionsRef.current = {
-      rename: (conversation) => { setRenameValue(conversation.title); setPendingRename(conversation); },
-      remove: setPendingDeleteId,
-    };
-    return () => { actionsRef.current = null; };
-  }, [actionsRef]);
-
-  const { unbindConversation } = useChatController();
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => deleteConversation(id, session.csrfToken),
-    onSuccess: (_, deletedId) => {
-      void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
-      // A deleted day conversation must stop being that day's drawer target.
-      unbindConversation(deletedId);
-      if (activeConversationId === deletedId) {
-        onNewConversation();
-      }
-      setPendingDeleteId(null);
-    },
-  });
-  const renameMutation = useMutation({
-    mutationFn: ({ id, title }: { id: string; title: string }) => patchConversation(id, { title }, session.csrfToken),
-    onSuccess: (updated) => {
-      void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
-      void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(updated.id) });
-      setPendingRename(null);
-    },
   });
 
   // Filter sessions case-insensitively by title (including untitled fallback) or context kind.
@@ -132,15 +66,16 @@ export function ChatHistory({
     );
   }, [conversations, searchQuery, t]);
 
-  // Grouping uses the viewer's local calendar day; the server already orders newest first.
+  // Grouping uses the calendar day in the owner's preference timezone (not the browser's); the server orders newest first.
   const groupedConversations = React.useMemo(() => {
-    const today = new Date().toDateString();
+    const dayKey = (date: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(date);
+    const today = dayKey(new Date());
     const groups = { today: [] as Conversation[], earlier: [] as Conversation[] };
     for (const conv of filteredConversations) {
-      (new Date(conv.updated_at).toDateString() === today ? groups.today : groups.earlier).push(conv);
+      (dayKey(new Date(conv.updated_at)) === today ? groups.today : groups.earlier).push(conv);
     }
     return (['today', 'earlier'] as const).filter((key) => groups[key].length).map((key) => ({ key, items: groups[key] }));
-  }, [filteredConversations]);
+  }, [filteredConversations, timezone]);
 
   return (
     <aside
@@ -188,21 +123,24 @@ export function ChatHistory({
       <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-1">
         {isLoading && (
           <div role="status" className="p-4 text-xs text-center text-muted-foreground">
-            {t('thinking')}
+            {t('loading')}
           </div>
         )}
 
-        {!isLoading && filteredConversations.length === 0 && (
+        {isError && (
+          <div role="alert" className="flex flex-col items-center gap-2 p-4 text-center text-xs text-destructive">
+            <span>{t('historyLoadFailed')}</span>
+            <Button type="button" variant="outline" size="sm" onClick={() => void refetch()}>{t('retry')}</Button>
+          </div>
+        )}
+
+        {!isLoading && !isError && filteredConversations.length === 0 && (
           <div className="p-4 text-xs text-center text-muted-foreground flex flex-col items-center gap-2">
             <span>{searchQuery.trim() && conversations.length > 0 ? t('paletteNoResults') : t('noHistory')}</span>
             {searchQuery.trim() && conversations.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery('')}
-                className="inline-flex min-h-8 items-center rounded-md border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
+              <Button type="button" variant="outline" size="sm" onClick={() => setSearchQuery('')}>
                 {t('cancel')}
-              </button>
+              </Button>
             )}
           </div>
         )}
@@ -219,93 +157,46 @@ export function ChatHistory({
                   key={conv.id}
                   className={`group flex items-center gap-1 rounded-lg border text-sm ${isActive ? 'border-border bg-background font-semibold text-foreground' : 'border-transparent text-foreground hover:bg-background'}`}
                 >
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
                     onClick={() => onSelectConversation(conv.id)}
                     aria-current={isActive ? 'true' : undefined}
-                    className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-lg p-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="h-auto min-h-11 min-w-0 flex-1 justify-start whitespace-normal rounded-lg p-2 text-left font-[inherit] hover:bg-transparent"
                   >
                     <span className="min-w-0 flex-1">
                       <span className="block truncate">{conv.title || t('untitledConversation')}</span>
                       <span className="block text-[11px] font-normal text-muted-foreground">{formatDateTime(conv.updated_at, locale, timezone)}</span>
                     </span>
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
-                    onClick={() => { setRenameValue(conv.title); setPendingRename({ id: conv.id, title: conv.title }); }}
-                    className="inline-flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:opacity-0 md:group-hover:opacity-100"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => actions.rename({ id: conv.id, title: conv.title })}
+                    className="size-9 shrink-0 text-muted-foreground focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100"
                     title={t('renameConversation')}
                     aria-label={t('renameConversation')}
                   >
                     <PencilIcon className="size-3.5" aria-hidden="true" />
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
-                    onClick={() => setPendingDeleteId(conv.id)}
-                    className="mr-1 inline-flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:opacity-0 md:group-hover:opacity-100"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => actions.remove(conv.id)}
+                    className="mr-1 size-9 shrink-0 text-muted-foreground hover:text-destructive focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100"
                     title={t('delete')}
                     aria-label={t('delete')}
                   >
                     <Trash2Icon className="size-3.5" aria-hidden="true" />
-                  </button>
+                  </Button>
                 </div>
               );
             })}
           </section>
         ))}
       </div>
-
-      {/* Confirmation Dialog for Deleting Conversation */}
-      <AlertDialog
-        open={pendingDeleteId !== null}
-        onOpenChange={(open) => {
-          if (!open) setPendingDeleteId(null);
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t('delete')}</AlertDialogTitle>
-            <AlertDialogDescription>{t('deleteConfirm')}</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                if (pendingDeleteId) {
-                  deleteMutation.mutate(pendingDeleteId);
-                }
-              }}
-              className="bg-destructive text-destructive-foreground hover:opacity-90"
-            >
-              {t('delete')}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <Dialog open={pendingRename !== null} onOpenChange={(open) => { if (!open) setPendingRename(null); }}>
-        <DialogContent closeLabel={t('cancel')}>
-          <DialogHeader>
-            <DialogTitle>{t('renameConversation')}</DialogTitle>
-            <DialogDescription className="sr-only">{t('renameLabel')}</DialogDescription>
-          </DialogHeader>
-          <form
-            className="grid gap-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              const title = renameValue.trim();
-              if (pendingRename && title && !renameMutation.isPending) renameMutation.mutate({ id: pendingRename.id, title });
-            }}
-          >
-            <Input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} aria-label={t('renameLabel')} maxLength={200} />
-            {renameMutation.isError && <p role="alert" className="text-xs text-destructive">{t('renameFailed')}</p>}
-            <DialogFooter>
-              <Button type="button" className="secondary" onClick={() => setPendingRename(null)}>{t('cancel')}</Button>
-              <Button type="submit" disabled={!renameValue.trim() || renameMutation.isPending}>{t('renameSave')}</Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
     </aside>
   );
 }

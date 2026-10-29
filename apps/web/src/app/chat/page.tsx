@@ -4,7 +4,8 @@ import * as React from 'react';
 import { useTranslations } from 'next-intl';
 import { WorkspaceShell } from '@/core/app-shell/workspace-shell';
 import { ChatSession } from '@/modules/chat/chat-session';
-import { ChatHistory, type ChatHistoryActions } from '@/modules/chat/chat-history';
+import { ChatHistory } from '@/modules/chat/chat-history';
+import { useConversationActions } from '@/modules/chat/conversation-actions';
 import { Button } from '@/components/ui/button';
 import { PanelLeftOpen, Plus } from 'lucide-react';
 import { useChatController } from '@/core/app-shell/chat-controller';
@@ -20,7 +21,6 @@ import { useQuery } from '@tanstack/react-query';
 function ChatPageContent() {
   const t = useTranslations('chat');
   const chatCtrl = useChatController();
-  const historyActions = React.useRef<ChatHistoryActions | null>(null);
   const [mobileView, setMobileView] = React.useState<'history' | 'chat'>('chat');
   const [historyCollapsed, setHistoryCollapsed] = React.useState(true);
 
@@ -36,6 +36,9 @@ function ChatPageContent() {
     chatCtrl.resetConversation();
     setMobileView('chat');
   }, [chatCtrl]);
+
+  // Rename/delete dialogs live here (not in the history list) so the header actions work with history collapsed.
+  const conversationActions = useConversationActions(chatCtrl.activeConversationId, handleNewConversation);
 
   // Same query key as ChatSession, so this reads the cached transcript without another request.
   const { data: detail } = useQuery({
@@ -77,7 +80,7 @@ function ChatPageContent() {
             onSelectConversation={handleSelectConversation}
             onNewConversation={handleNewConversation}
             className="w-full"
-            actionsRef={historyActions}
+            actions={conversationActions}
             onCollapse={mobileView === 'history' ? undefined : () => setHistoryCollapsed(true)}
           />
         )}
@@ -91,13 +94,14 @@ function ChatPageContent() {
       >
         {/* Mobile view switch header */}
         <div className="lg:hidden flex items-center justify-between gap-2 p-2 border-b border-border bg-background">
-          <button
+          <Button
             type="button"
+            variant="outline"
             onClick={() => setMobileView('history')}
-            className="md:hidden min-h-11 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-foreground"
+            className="md:hidden min-h-11 px-3 py-1.5 text-xs font-semibold"
           >
             ← {t('history')}
-          </button>
+          </Button>
           <span className="min-w-0 flex-1 text-xs font-semibold text-muted-foreground truncate">
             {chatCtrl.activeConversationId ? t('activeConversation') : t('newChat')}
           </span>
@@ -109,17 +113,18 @@ function ChatPageContent() {
             conversationId={chatCtrl.activeConversationId}
             onConversationCreated={(id) => chatCtrl.setActiveConversationId(id)}
             mode="full"
-            headerActions={chatCtrl.activeConversationId ? (
-              <>
-                <Button type="button" variant="outline" className="min-h-11" onClick={() => historyActions.current?.rename({ id: chatCtrl.activeConversationId!, title: detail?.title ?? '' })}>{t('renameConversation')}</Button>
-                <Button type="button" variant="outline" className="min-h-11 text-destructive" onClick={() => historyActions.current?.remove(chatCtrl.activeConversationId!)}>{t('delete')}</Button>
-              </>
-            ) : null}
+            onRenameConversation={chatCtrl.activeConversationId
+              ? () => conversationActions.rename({ id: chatCtrl.activeConversationId!, title: detail?.title ?? '' })
+              : undefined}
+            onDeleteConversation={chatCtrl.activeConversationId
+              ? () => conversationActions.remove(chatCtrl.activeConversationId!)
+              : undefined}
           />
         </div>
       </div>
 
       <ChatSideRail citations={citations} context={chatCtrl.context} />
+      {conversationActions.dialogs}
     </div>
   );
 }

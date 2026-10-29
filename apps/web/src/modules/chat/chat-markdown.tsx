@@ -153,7 +153,7 @@ export function ChatMarkdown({
       btn.setAttribute('aria-label', labels.markdownCopyCode);
       btn.textContent = labels.markdownCopy;
       btn.className =
-        'absolute right-2 top-2 rounded border border-border bg-background/90 px-2 py-0.5 text-[11px] font-medium text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 hover:text-foreground';
+        'absolute right-2 top-2 rounded border border-border bg-background/90 px-2 py-0.5 text-[11px] font-medium text-muted-foreground opacity-0 [@media(hover:none)]:opacity-100 transition-opacity group-hover:opacity-100 focus:opacity-100 hover:text-foreground';
       btn.addEventListener('click', () => {
         const codeEl = pre.querySelector('code');
         const rawCode = codeEl?.textContent ?? pre.textContent ?? '';
@@ -171,7 +171,7 @@ export function ChatMarkdown({
   return (
     <div
       ref={containerRef}
-      className="chat-markdown min-w-0 break-words text-sm leading-relaxed text-foreground [&_p]:my-1.5 [&_h1]:my-2 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:my-2 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:my-2 [&_h3]:font-semibold [&_a]:text-primary [&_a:not(.cite)]:underline [&_table]:my-2 [&_table]:border-collapse [&_table]:text-sm [&_td]:border-b [&_td]:border-border [&_td]:px-2.5 [&_td]:py-1.5 [&_tr:last-child_td]:border-b-0 [&_th]:border-b [&_th]:border-border [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left [&_th]:font-semibold [&_th]:text-muted-foreground"
+      className="chat-markdown min-w-0 break-words text-sm leading-relaxed text-foreground [&_p]:my-1.5 [&_h1]:my-2 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:my-2 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:my-2 [&_h3]:font-semibold [&_a]:text-primary [&_a:not(.cite)]:underline [&_table]:my-2 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto [&_table]:border-collapse [&_table]:text-sm [&_td]:border-b [&_td]:border-border [&_td]:px-2.5 [&_td]:py-1.5 [&_tr:last-child_td]:border-b-0 [&_th]:border-b [&_th]:border-border [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left [&_th]:font-semibold [&_th]:text-muted-foreground"
       dangerouslySetInnerHTML={{ __html: safeHtml }}
     />
   );

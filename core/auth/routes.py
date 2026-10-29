@@ -389,13 +389,20 @@ def _raise_if_owner_lock_busy(exc: DBAPIError) -> None:
         cause = cause.__cause__ or cause.__context__
 
 
-async def _lock_owner(session: AsyncSession, owner_id: int) -> Owner | None:
-    """Lock the owner row with NOWAIT and map lock contention to the API conflict response."""
+async def _lock_owner(
+    session: AsyncSession, owner_id: int, *, share: bool = False
+) -> Owner | None:
+    """Lock the owner row with NOWAIT and map lock contention to the API conflict response.
+
+    Default is ``FOR UPDATE``. ``share=True`` takes ``FOR SHARE`` instead, which coexists with the
+    ``FOR SHARE`` admission locks held by concurrent collection/request work (so it is not starved)
+    but still conflicts with every account-state writer's ``FOR UPDATE``.
+    """
     try:
         return await session.scalar(
             select(Owner)
             .where(Owner.id == owner_id)
-            .with_for_update(nowait=True)
+            .with_for_update(read=share, nowait=True)
             .execution_options(populate_existing=True)
         )
     except DBAPIError as exc:
@@ -433,14 +440,18 @@ async def _lock_owner_session(
     csrf_token: str | None,
     *,
     check_csrf: bool = True,
+    share_owner: bool = False,
 ) -> tuple[Owner, AuthSession]:
     """Lock account then session, rechecking complete active identity, feature gate and current CSRF.
+
+    ``share_owner`` downgrades only the owner-row lock to ``FOR SHARE`` (CSRF rotation): it writes
+    nothing on the owner, and the session row stays ``FOR UPDATE`` so rotation is still serialized.
 
     Reauthentication, logout and rotation share this ordered lock/reload. Inactive, incomplete
     or gate-denied accounts return401 even when an earlier dependency admitted the session.
     This grants account lifecycle authority only, never legacy operator/domain access.
     """
-    owner = await _lock_owner(session, stale_session.owner_id)
+    owner = await _lock_owner(session, stale_session.owner_id, share=share_owner)
     if owner is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     auth_session = await _lock_auth_session(
@@ -463,23 +474,29 @@ async def _lock_owner_session(
 
 
 async def _lock_owner_session_retrying(
-    request: Request, session: AsyncSession, stale_session: AuthSession, attempts: int = 5
+    request: Request, session: AsyncSession, stale_session: AuthSession, attempts: int = 8
 ) -> tuple[Owner, AuthSession]:
     """Take the owner/session locks for CSRF rotation, briefly retrying NOWAIT contention.
 
-    Rotation is idempotent for the caller, so concurrent tabs wait a few tens of milliseconds for
+    Rotation is idempotent for the caller, so concurrent tabs wait up to ~1.4 s in total (50 ms steps) for
     each other instead of surfacing a 409. Still 409 if the locks stay busy after ``attempts``.
+
+    The owner row is locked ``FOR SHARE``: rotation never writes the owner, and an exclusive NOWAIT lock
+    could never win against concurrent admissions holding ``FOR SHARE``. Disable, password change and
+    lifecycle writers take ``FOR UPDATE`` and still conflict, so account state stays protected.
     """
     # rollback expires loaded rows; keep the two identifiers the lock helpers read on a detached copy.
     ids = AuthSession(token_hash=stale_session.token_hash, owner_id=stale_session.owner_id)
     for attempt in range(attempts):
         try:
-            return await _lock_owner_session(request, session, ids, None, check_csrf=False)
+            return await _lock_owner_session(
+                request, session, ids, None, check_csrf=False, share_owner=True
+            )
         except HTTPException as exc:
             if exc.status_code != 409 or attempt == attempts - 1:
                 raise
             await session.rollback()  # a failed NOWAIT aborts the transaction
-            await asyncio.sleep(0.02 * (attempt + 1))
+            await asyncio.sleep(0.05 * (attempt + 1))
     raise AssertionError("unreachable")
 
 

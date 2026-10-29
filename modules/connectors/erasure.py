@@ -49,6 +49,8 @@ ERASURE_TABLES: tuple[str, ...] = (
     "connector_quota_debits",
     "connector_quota_windows",
     "connector_rest_credentials",
+    "connector_oauth_attempts",
+    "connector_oauth_grants",
     "connector_schedules",
     "connector_workspace_dispatch",
     "connector_world_credentials",

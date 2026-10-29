@@ -105,3 +105,21 @@ async def test_missing_tools_capability_rejected() -> None:
     """tools without a verified 'tools' capability raises CapabilityUnsupported before I/O."""
     with pytest.raises(CapabilityUnsupported):
         await _run(_gateway(("streaming",)), tools=TOOLS)
+
+
+@pytest.mark.asyncio
+async def test_embed_cohere_uses_native_body_and_normalizes_reply() -> None:
+    """Cohere ids get texts/input_type and the embeddings.float reply becomes OpenAI-shaped data rows."""
+    gw = _gateway(set())
+    seen: dict[str, Any] = {}
+
+    async def fake_request(role: str, mapping: Any, policy: Any, capability: str, path: str, payload: dict[str, Any], *a: Any, **k: Any) -> Any:
+        seen.update(path=path, payload=payload)
+        return {"embeddings": {"float": [[0.1, 0.2]]}}
+
+    cohere = ModelMapping(model="cohere/embed-multilingual-light-v3.0", version="1", destination="remote")
+    with patch.object(ModelGateway, "_request", side_effect=fake_request):
+        out = await gw.embed("embedding", cohere, POLICY, ["hi"], probe=True)
+    assert seen["path"] == "embeddings-native"
+    assert seen["payload"] == {"texts": ["hi"], "input_type": "search_document", "embedding_types": ["float"]}
+    assert out["data"] == [{"index": 0, "embedding": [0.1, 0.2]}]

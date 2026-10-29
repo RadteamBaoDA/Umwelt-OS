@@ -306,3 +306,79 @@ async def test_public_settle_collection_exit_delegates_to_scheduler_settle() -> 
     settle.assert_awaited_once_with(
         session, ref.request_id, ref.admission_token, outcome="failed", error_code="x", retryable=True,
         provider_deadline=None)
+
+
+def _mcp_payload(cid):
+    return routes.McpScheduledCollectionRequest(
+        **FENCE, connection_id=cid, admission_request_id=uuid4(), admission_token=uuid4())
+
+
+def _mcp_route_patches(monkeypatch: pytest.MonkeyPatch, cid):
+    """Pass every pre-collection check of /mcp-collect so only mcp_collection.collect decides the outcome."""
+    import modules.connectors.mcp as mcp_collection
+
+    scope = object()
+    monkeypatch.setattr(routes, "_mcp_collector", AsyncMock(return_value=("tok", scope, object())))
+    monkeypatch.setattr(routes, "_source", AsyncMock(return_value=SimpleNamespace(type=mcp_collection.PROVIDER_ID, status="active")))
+    monkeypatch.setattr(mcp_collection, "validate", MagicMock(return_value=SimpleNamespace(connection_id=cid)))
+    monkeypatch.setattr(routes.provisioning, "require_collection_fence", AsyncMock(return_value=True))
+    monkeypatch.setattr(routes, "_prove_admission", AsyncMock())
+    http = _http()
+    http.app.state.mcp_runtime = object()
+    http.app.state.session_factory = object()
+    return scope, http
+
+
+@pytest.mark.asyncio
+async def test_mcp_collect_passes_request_ref_with_payload_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    import modules.connectors.mcp as mcp_collection
+
+    cid, session = uuid4(), MagicMock(rollback=AsyncMock())
+    _scope, http = _mcp_route_patches(monkeypatch, cid)
+    batch_id = uuid4()
+    collect = AsyncMock(return_value={"status": "accepted", "run_id": uuid4(), "batch_id": batch_id, "failed_calls": []})
+    monkeypatch.setattr(mcp_collection, "collect", collect)
+    payload = _mcp_payload(cid)
+    result = await routes.collect_mcp_scheduled(SOURCE_ID, payload, session, http, "Bearer tok")  # type: ignore[arg-type]
+    ref = collect.await_args.kwargs["request_ref"]
+    assert (ref.request_id, ref.admission_token) == (payload.admission_request_id, payload.admission_token)
+    assert collect.await_args.kwargs["collector_token"] == "tok" and result.batch_id == batch_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("code", "status"), [("mcp_source_stale", 409), ("mcp_collector_revoked", 401)])
+async def test_mcp_collect_error_settles_request_failed(monkeypatch: pytest.MonkeyPatch, code: str, status: int) -> None:
+    import modules.connectors.mcp as mcp_collection
+
+    cid, session = uuid4(), MagicMock(rollback=AsyncMock())
+    _scope, http = _mcp_route_patches(monkeypatch, cid)
+    monkeypatch.setattr(mcp_collection, "collect", AsyncMock(side_effect=mcp_collection.McpCollectionError(code)))
+    settle = AsyncMock()
+    monkeypatch.setattr(routes, "_settle_request_exit", settle)
+    with pytest.raises(HTTPException) as exc:
+        await routes.collect_mcp_scheduled(SOURCE_ID, _mcp_payload(cid), session, http, "Bearer tok")  # type: ignore[arg-type]
+    assert exc.value.status_code == status and exc.value.detail == code
+    assert settle.await_args.kwargs == {"outcome": "failed", "error_code": code}
+
+
+@pytest.mark.asyncio
+async def test_trigger_collection_mcp_native_queues_request_not_503(monkeypatch: pytest.MonkeyPatch) -> None:
+    import modules.connectors.mcp as mcp_collection
+
+    scope, session = SimpleNamespace(workspace_id=uuid4()), MagicMock(rollback=AsyncMock())
+    source = SimpleNamespace(type=mcp_collection.PROVIDER_ID, status="active", generation=2, provider=None)
+    status = SimpleNamespace(
+        state="active", desired_enabled=True, applied_revision=3, desired_revision=3, source_generation=2,
+        execution_backend="native")
+    monkeypatch.setattr(routes, "_owner_access", AsyncMock(return_value=object()))
+    monkeypatch.setattr(routes, "_source", AsyncMock(return_value=source))
+    monkeypatch.setattr(routes.provisioning, "activation_status", AsyncMock(return_value=status))
+    monkeypatch.setattr(routes.provisioning, "require_collection_fence", AsyncMock(return_value=True))
+    rid = uuid4()
+    request_collection = AsyncMock(return_value=SimpleNamespace(status="queued", request_id=rid))
+    monkeypatch.setattr(routes.scheduler, "request_collection", request_collection)
+    http = _http()
+    http.app.state.settings.multi_workspace_enabled = False
+    result = await routes.trigger_collection(SOURCE_ID, session, http, scope)  # type: ignore[arg-type]
+    assert result.request_id == rid
+    request_collection.assert_awaited_once()

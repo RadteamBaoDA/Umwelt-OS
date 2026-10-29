@@ -65,3 +65,15 @@ describe('non-JSON responses', () => {
     await expect(apiRequest('/api/v1/x')).rejects.toBeInstanceOf(ApiError);
   });
 });
+
+describe('retrySessionConflict', () => {
+  it('retries only a 409 ApiError, at most 3 times', async () => {
+    const { ApiError, retrySessionConflict } = await import('./api');
+    const conflict = new ApiError(409, 'Authentication state changed; retry the request');
+    expect(retrySessionConflict(0, conflict)).toBe(true);
+    expect(retrySessionConflict(2, conflict)).toBe(true);
+    expect(retrySessionConflict(3, conflict)).toBe(false);
+    expect(retrySessionConflict(0, new ApiError(500, 'boom'))).toBe(false);
+    expect(retrySessionConflict(0, new Error('x'))).toBe(false);
+  });
+});

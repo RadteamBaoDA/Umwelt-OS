@@ -23,7 +23,8 @@ from modules.connectors.providers.news import _record, https_link, plain_text
 from modules.ingestion.schemas import IngestionRecord
 
 EXPERIMENTAL = True
-GDELT_TIMEOUT_SECONDS = 8
+# Measured 2026-10: the DOC API answers in 12-20 s (a 429 throttle also takes ~12 s), so 8 s could never succeed.
+GDELT_TIMEOUT_SECONDS = 30
 GDELT_DEFAULT_MAX_RECORDS = 5
 GDELT_HARD_MAX_RECORDS = 50
 _BASE = "https://api.gdeltproject.org/api/v2/doc/doc"
@@ -51,7 +52,14 @@ def _seen(raw: object) -> datetime | None:
 
 
 def map_gdelt(payload: object, collected_at: datetime, max_records: int = GDELT_DEFAULT_MAX_RECORDS) -> list[IngestionRecord]:
-    """Map an artlist payload; non-object bodies, error text and a missing ``articles`` key are rejected."""
+    """Map an artlist payload; non-object bodies, error text and a missing ``articles`` key are rejected.
+
+    A bare ``{}`` is classified ``rate_limited`` (retryable), not ``invalid``: GDELT soft-throttles an IP with a
+    200 ``{}`` body, whereas a genuinely empty result is ``{"articles": []}``.
+    """
+    if payload == {}:
+        # GDELT answers 200 "{}" while soft-throttling an IP (seen 2026-10-28 between 429s); a real empty result is {"articles": []}.
+        raise ProviderPayloadError("gdelt_throttled_empty", "rate_limited")
     if not isinstance(payload, dict) or not isinstance(payload.get("articles"), list):
         raise ProviderPayloadError("gdelt_response_invalid")
     max_records = min(max(max_records, 1), GDELT_HARD_MAX_RECORDS)

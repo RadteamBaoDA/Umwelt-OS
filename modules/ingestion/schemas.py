@@ -282,7 +282,7 @@ class TelegramProbeClassification(BaseModel):
 
 
 class NativeCollectionBatch(BaseModel):
-    """Carry owner-reserved provider output and immutable Telegram or GitHub collection proof."""
+    """Carry owner-reserved provider output and immutable provider-credential revision proof."""
     model_config = ConfigDict(extra="forbid")
     source_id: UUID
     source_generation: int = Field(ge=1)
@@ -294,6 +294,11 @@ class NativeCollectionBatch(BaseModel):
     telegram_deliveries: tuple[TelegramDeliveryProof, ...] = Field(max_length=100)
     telegram_raw_deliveries: tuple[TelegramRawDelivery, ...] = Field(max_length=100)
     github_segment: GitHubSegmentProof | None = None
+    google_operation_id: UUID | None = None
+    google_token_revision: int | None = Field(default=None, ge=1)
+    reddit_operation_id: UUID | None = None
+    reddit_token_revision: int | None = Field(default=None, ge=1)
+    provider_credential_revision: int | None = Field(default=None, ge=1)
     coverage: Literal["returned_snapshot", "pending_updates_only", "truncated"]
     collected_at: datetime
 

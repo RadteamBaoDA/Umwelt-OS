@@ -94,25 +94,25 @@ export function TodosPanel({ conversationId, isStreaming = false }: TodosPanelPr
   };
 
   return (
-    <section aria-label={t('title')} className="mx-3 mb-2 rounded-lg border border-line bg-surface text-text">
+    <section aria-label={t('title')} className="mx-3 mb-2 rounded-lg border border-border bg-surface text-foreground">
       <div className="flex items-center justify-between gap-2 px-3 py-1.5">
         <span className="text-sm font-medium">
-          {t('title')} <span className="text-xs font-normal text-muted">{todos.length ? t('count', { done, total: todos.length }) : ''}</span>
+          {t('title')} <span className="text-xs font-normal text-muted-foreground">{todos.length ? t('count', { done, total: todos.length }) : ''}</span>
         </span>
         <Button type="button" variant="ghost" size="icon" aria-expanded={open} aria-label={open ? t('collapse') : t('expand')} onClick={() => setOpen((v) => !v)}>
           {open ? <ChevronUpIcon size={16} aria-hidden /> : <ChevronDownIcon size={16} aria-hidden />}
         </Button>
       </div>
       {open && (
-        <div className="space-y-2 border-t border-line px-3 py-2">
-          {query.isPending && <p className="text-sm text-muted">{t('loading')}</p>}
+        <div className="space-y-2 border-t border-border px-3 py-2">
+          {query.isPending && <p className="text-sm text-muted-foreground">{t('loading')}</p>}
           {query.isError && (
-            <p role="alert" className="text-sm text-danger">
+            <p role="alert" className="text-sm text-destructive">
               {t('loadFailed')} <Button type="button" variant="link" onClick={() => void refetch()}>{t('retry')}</Button>
             </p>
           )}
-          {failed && <p role="alert" className="text-sm text-danger">{t('mutateFailed')}</p>}
-          {query.isSuccess && todos.length === 0 && <p className="text-sm text-muted">{t('empty')}</p>}
+          {failed && <p role="alert" className="text-sm text-destructive">{t('mutateFailed')}</p>}
+          {query.isSuccess && todos.length === 0 && <p className="text-sm text-muted-foreground">{t('empty')}</p>}
           <ul className="space-y-1">
             {todos.map((todo) => (
               <li key={todo.id} className="flex items-start gap-2">
@@ -131,10 +131,10 @@ export function TodosPanel({ conversationId, isStreaming = false }: TodosPanelPr
                 ) : (
                   <>
                     <div className="min-w-0 flex-1">
-                      <p className={`text-sm ${todo.status === 'completed' ? 'text-muted line-through' : ''}`}>
+                      <p className={`text-sm ${todo.status === 'completed' ? 'text-muted-foreground line-through' : ''}`}>
                         {todo.emoji ? <span aria-hidden className="mr-1">{todo.emoji}</span> : null}{todo.title}
                       </p>
-                      {todo.description ? <p className="text-xs text-muted">{todo.description}</p> : null}
+                      {todo.description ? <p className="text-xs text-muted-foreground">{todo.description}</p> : null}
                     </div>
                     <Button type="button" variant="ghost" size="icon" aria-label={t('edit', { title: todo.title })} onClick={() => setEditing({ id: todo.id, title: todo.title })}>
                       <PencilIcon size={14} aria-hidden />
@@ -153,7 +153,7 @@ export function TodosPanel({ conversationId, isStreaming = false }: TodosPanelPr
               <PlusIcon size={14} aria-hidden /> {t('add')}
             </Button>
           </form>
-          {todos.length >= MAX_TODOS && <p className="text-xs text-muted">{t('limit', { max: MAX_TODOS })}</p>}
+          {todos.length >= MAX_TODOS && <p className="text-xs text-muted-foreground">{t('limit', { max: MAX_TODOS })}</p>}
         </div>
       )}
     </section>

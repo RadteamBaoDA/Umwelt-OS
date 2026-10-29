@@ -435,8 +435,9 @@ async def create_source(session: AsyncSession, payload: SourceCreate, *, scope: 
 ) -> Source:
     """Create in the owner workspace after access locks, preserving wrapper replay/commit.
 
-    No network I/O occurs; an optional captured fence rejects stale deferred configuration.
-    The locked access fence is handed to replay, which must not acquire earlier locks again.
+    No network I/O occurs; manual imports and personal health, home, Google, Notion, and Slack
+    sources default to local-only. An optional captured fence rejects stale deferred configuration;
+    replay reuses the locked access fence without reacquiring earlier locks.
     """
     access_fence = await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True, expected=expected_access_fence)
     source = Source(
@@ -444,7 +445,9 @@ async def create_source(session: AsyncSession, payload: SourceCreate, *, scope: 
         type=payload.type,
         name=payload.name,
         provider=payload.provider,
-        local_only=payload.type == "manual",
+        local_only=payload.type == "manual" or payload.provider in {
+            "health", "home_assistant", "google_mail", "google_calendar", "google_drive", "notion", "slack",
+        },
         graph_enabled=payload.graph_enabled,
         rag_index_enabled=payload.rag_index_enabled,
     )

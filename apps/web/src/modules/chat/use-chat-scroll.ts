@@ -107,7 +107,7 @@ export function useChatScroll({
       scrollToBottom();
       pinToBottom();
     }
-  }, [conversationId, messageCount, lastMessageId, scrollToBottom, pinToBottom, reader]);
+  }, [conversationId, messageCount, lastMessageId, lastMessageRole, prefersReducedMotion, scrollToBottom, pinToBottom, reader]);
 
   React.useEffect(() => {
     if (!isStreaming || reader) return;
@@ -164,9 +164,16 @@ export function useChatScroll({
     if (startY !== null && event.touches[0]?.clientY > startY) followRef.current = false;
   }, []);
 
+  /** Explicit "jump to latest": re-engages follow and scrolls to the end. */
+  const jumpToLatest = React.useCallback(() => {
+    followRef.current = true;
+    scrollToBottom(true);
+  }, [scrollToBottom]);
+
   return {
     containerRef,
     isAtBottom,
+    jumpToLatest,
     scrollHandlers: {
       onScroll: handleScroll,
       onWheel: handleWheel,
