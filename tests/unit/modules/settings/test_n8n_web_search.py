@@ -116,7 +116,7 @@ async def test_env_secrets_not_sent_to_a_different_stored_url() -> None:
 
 def _web_row(**over: object) -> SimpleNamespace:
     base = {"configuration_revision": 2, "privacy": {}, "web_search_provider": "none", "web_search_endpoint": None,
-            "web_search_api_key_ciphertext": None}
+            "web_search_api_key_ciphertext": None, "web_search_fallbacks": []}
     return SimpleNamespace(**{**base, **over})
 
 
@@ -124,7 +124,7 @@ def _web_row(**over: object) -> SimpleNamespace:
 async def test_save_web_search_searxng_is_keyless_and_binds_consent_to_the_endpoint() -> None:
     row = _web_row()
     await _save(public.save_web_search, row, WebSearchUpdate(
-        expected_revision=2, provider="searxng", endpoint="http://searx:8080", allow_remote_web_search=True), _settings())
+        expected_revision=2, providers=[{"provider": "searxng", "endpoint": "http://searx:8080"}], allow_remote_web_search=True), _settings())
     destination = public._web_destination("http://searx:8080")
     assert row.web_search_provider == "searxng" and row.web_search_api_key_ciphertext is None
     assert row.privacy == {"allow_remote_web_search": True, "web_search_destinations": [destination]}
@@ -137,13 +137,30 @@ async def test_save_web_search_validation_and_key_handling() -> None:
     settings.ai_allowed_endpoint_hosts = {"searx:8080", "api.tavily.com"}
     with pytest.raises(HTTPException) as exc:  # keyed provider without a key
         await _save(public.save_web_search, _web_row(), WebSearchUpdate(
-            expected_revision=2, provider="tavily", endpoint="http://api.tavily.com"), settings)
+            expected_revision=2, providers=[{"provider": "tavily", "endpoint": "http://api.tavily.com"}]), settings)
     assert exc.value.status_code == 422
-    with pytest.raises(HTTPException):  # provider without endpoint
-        await _save(public.save_web_search, _web_row(), WebSearchUpdate(expected_revision=2, provider="searxng"), settings)
     row = _web_row(web_search_provider="tavily", web_search_endpoint="http://api.tavily.com",
                    web_search_api_key_ciphertext=_enc("k"))
     await _save(public.save_web_search, row, WebSearchUpdate(
-        expected_revision=2, provider="searxng", endpoint="http://searx:8080"), settings)
+        expected_revision=2, providers=[{"provider": "searxng", "endpoint": "http://searx:8080"}]), settings)
     assert row.web_search_api_key_ciphertext is None  # endpoint changed -> key dropped, consent off
     assert row.privacy["allow_remote_web_search"] is False
+
+
+@pytest.mark.asyncio
+async def test_fallback_reorder_retains_endpoint_keys_and_consent() -> None:
+    settings = _settings()
+    settings.ai_allowed_endpoint_hosts = {"api.tavily.com", "router.example"}
+    first, second = "https://api.tavily.com", "https://router.example/v1"
+    old_key, fallback_key = _enc("first"), _enc("second")
+    row = _web_row(web_search_provider="tavily", web_search_endpoint=first,
+                   web_search_api_key_ciphertext=old_key,
+                   web_search_fallbacks=[{"provider": "omniroute", "endpoint": second, "key_ciphertext": fallback_key}])
+    await _save(public.save_web_search, row, WebSearchUpdate(expected_revision=2, allow_remote_web_search=True,
+        providers=[{"provider": "omniroute", "endpoint": second}, {"provider": "tavily", "endpoint": first}]), settings)
+    assert row.web_search_api_key_ciphertext == fallback_key
+    assert row.web_search_fallbacks[0]["key_ciphertext"] == old_key
+    assert row.privacy["web_search_destinations"] == [public._web_destination(second), public._web_destination(first)]
+    with pytest.raises(HTTPException):
+        await _save(public.save_web_search, row, WebSearchUpdate(expected_revision=3,
+            providers=[{"provider": "searxng", "endpoint": first}, {"provider": "searxng", "endpoint": first}]), settings)

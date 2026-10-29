@@ -1767,7 +1767,7 @@ async def purge_document_copied_evidence_page(
                 if payload_changed:
                     event.data = payload if isinstance(payload, dict) else {}
                     # Same rule for widget payloads carried by ui/done events.
-                    if event.event_type in {"message.ui.delta", "message.ui.done"}:
+                    if event.event_type in {"message.ui.delta", "message.ui.done", "message.ui.discard"}:
                         event.data = {}
                     else:
                         event.data.pop("generative_ui", None)

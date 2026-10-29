@@ -8,11 +8,13 @@ every result string is sanitized before it can reach a prompt or storage.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import json
 import logging
 import re
 import unicodedata
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -22,7 +24,7 @@ import httpx
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
-from core.model_gateway.schemas import AIExecutionConfig
+from core.model_gateway.schemas import AIExecutionConfig, PrivacySettings, WebSearchTarget
 from core.model_gateway.transport import EndpointNetworkPolicyError
 
 logger = logging.getLogger("bbd.chat.web_search")
@@ -119,8 +121,9 @@ def _result(title: Any, url: Any, snippet: Any) -> WebSearchResult | None:
 def parse_results(provider: str, payload: Any) -> list[WebSearchResult]:
     """Strict parse; wrong container shape -> provider_error, malformed items are dropped."""
     items: Any
-    if provider in ("tavily", "searxng"):  # both: top-level ``results``; SearXNG snippets are ``content``
-        items, snippet_key = (payload.get("results") if isinstance(payload, dict) else None), "content"
+    if provider in ("tavily", "searxng", "omniroute"):
+        items = payload.get("results") if isinstance(payload, dict) else None
+        snippet_key = "snippet" if provider == "omniroute" else "content"
     else:
         web = payload.get("web") if isinstance(payload, dict) else None
         items, snippet_key = (web.get("results") if isinstance(web, dict) else None), "description"
@@ -151,7 +154,7 @@ def format_web_results(results: list[WebSearchResult], start: int) -> str:
 
 def web_search_permitted(config: AIExecutionConfig) -> bool:
     """Config/consent gate. Callers must evaluate it inside the fence (review P1-1)."""
-    keyed = config.web_search_provider in ("tavily", "brave") and (
+    keyed = config.web_search_provider in ("tavily", "brave", "omniroute") and (
         config.web_search_credential_configured and bool(config.web_search_api_key))
     return (
         (keyed or config.web_search_provider == "searxng")  # SearXNG is keyless
@@ -163,6 +166,7 @@ def web_search_permitted(config: AIExecutionConfig) -> bool:
 async def _fetch(
     provider: str, endpoint: str, api_key: str, query: str, transport: httpx.AsyncBaseTransport
 ) -> Any:
+    """Send one bounded JSON request over the caller-supplied approved transport."""
     base = endpoint.rstrip("/")
     if provider == "searxng":
         request = httpx.Request("GET", f"{base}/search", headers={"Accept": "application/json"},
@@ -172,6 +176,11 @@ async def _fetch(
             "POST", f"{base}/search", headers={"Authorization": f"Bearer {api_key}"},
             json={"query": query, "max_results": MAX_RESULTS, "search_depth": "basic",
                   "include_answer": False, "include_raw_content": False, "include_images": False},
+        )
+    elif provider == "omniroute":
+        request = httpx.Request(
+            "POST", f"{base}/search", headers={"Authorization": f"Bearer {api_key}"},
+            json={"query": query, "max_results": MAX_RESULTS, "search_type": "web"},
         )
     else:
         request = httpx.Request(
@@ -211,7 +220,7 @@ async def search(
     is built (``provider_error``: a bad credential, and no new failure code is needed).
     """
     query = normalize_query(message)
-    if provider not in ("tavily", "brave", "searxng") or not (api_key.isascii() and api_key.isprintable()):
+    if provider not in ("tavily", "brave", "searxng", "omniroute") or not (api_key.isascii() and api_key.isprintable()):
         raise WebSearchError("provider_error")
     loop = asyncio.get_running_loop()
     started, code = loop.time(), "ok"
@@ -232,6 +241,45 @@ async def search(
         raise WebSearchError("provider_error") from None
     finally:
         logger.info("web_search provider=%s outcome=%s ms=%d", provider, code, int((loop.time() - started) * 1000))
+
+
+def target_permitted(target: WebSearchTarget, privacy: PrivacySettings) -> bool:
+    """Require the target's own endpoint consent and usable credential before egress."""
+    if not target.endpoint or not privacy.allow_remote_web_search:
+        return False
+    # Destination identity matches the settings-owned consent record; never derive it from credentials.
+    destination = f"web-search:{hashlib.sha256(target.endpoint.encode()).hexdigest()[:32]}"
+    keyed = target.provider in ("tavily", "brave", "omniroute") and target.credential_configured and bool(target.api_key)
+    return destination in privacy.web_search_destinations and (keyed or target.provider == "searxng")
+
+
+async def search_with_fallback(
+    targets: Sequence[WebSearchTarget], message: str,
+    make_transport: Callable[[WebSearchTarget], httpx.AsyncBaseTransport],
+) -> tuple[list[WebSearchResult], str]:
+    """Try approved targets in order; empty results succeed and only provider failures retry.
+
+    Transport policy denial is a retryable network failure. The last failure is returned
+    without logging endpoint, query or credential; callers must provide at least one target.
+    """
+    normalize_query(message)
+    last: WebSearchError | None = None
+    for target in targets:
+        try:
+            try:
+                transport = make_transport(target)
+            except EndpointNetworkPolicyError:
+                logger.info("web_search provider=%s outcome=network_denied", target.provider)
+                raise WebSearchError("network_denied") from None
+            assert target.endpoint is not None  # targets must be filtered by target_permitted
+            return await search(target.provider, target.endpoint, target.api_key, message, transport=transport), target.provider
+        except WebSearchError as exc:
+            if exc.code not in ("timeout", "provider_error", "network_denied"):
+                raise
+            last = exc
+    if last is None:
+        raise WebSearchError("provider_error")
+    raise last
 
 
 async def consume_daily_quota(redis: Redis, owner_id: object, limit: int, now: datetime | None = None) -> bool:

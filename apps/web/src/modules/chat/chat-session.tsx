@@ -26,7 +26,7 @@ import { ChatComposer } from './chat-composer';
 import { useChatModelPicker } from './model-picker';
 import { ProviderGateAlert, useChatProviderReady } from './provider-gate';
 import { PickQrButton } from '@/modules/pick/pick-qr-modal';
-import { upsertUiPart, type UiPart } from './generative-ui-parts';
+import { removeUiPart, upsertUiPart, type UiPart } from './generative-ui-parts';
 import { AssistantThemeBanner } from './assistant-theme-banner';
 import { ChatTranscript } from './chat-transcript';
 import { TodosPanel } from './todos/todos-panel';
@@ -90,7 +90,7 @@ export const MAX_RESUME_ATTEMPTS = 3;
 export const RESUME_BACKOFF_MS = 500;
 
 /** Display names for known web-search providers; anything else uses the neutral `webSearchProviderGeneric` copy. */
-const WEB_SEARCH_PROVIDER_LABELS: Record<string, string> = { brave: 'Brave', tavily: 'Tavily' };
+const WEB_SEARCH_PROVIDER_LABELS: Record<string, string> = { brave: 'Brave', tavily: 'Tavily', searxng: 'SearXNG', omniroute: 'OmniRoute' };
 
 export interface ChatSessionProps {
   /** Target conversation ID to render, or null/undefined for a fresh unsaved thread. */
@@ -230,7 +230,8 @@ export function ChatSession({
   });
   const webSearchAvailable = Boolean(
     aiSettings.data && aiSettings.data.web_search_provider !== 'none'
-    && aiSettings.data.web_search_credential_configured && aiSettings.data.privacy?.allow_remote_web_search,
+    && (aiSettings.data.web_search_provider === 'searxng' || aiSettings.data.web_search_credential_configured)
+    && aiSettings.data.privacy?.allow_remote_web_search,
   );
   // Specialist-agent sends (non-assistant profile or a pending profile retry) do not carry web_search.
   const webSearchProfileBlocked = selectedProfileId !== 'assistant' || Boolean(pendingProfileRun);
@@ -346,6 +347,9 @@ export function ChatSession({
       },
       onUiDone: (ui) => {
         if (isCurrentView()) setStreamingUi((prev) => upsertUiPart(prev, ui));
+      },
+      onUiDiscard: (partId) => {
+        if (isCurrentView()) setStreamingUi((prev) => removeUiPart(prev, partId));
       },
       onThemeRequest: (mode) => {
         if (isCurrentView()) setThemeRequest(mode);

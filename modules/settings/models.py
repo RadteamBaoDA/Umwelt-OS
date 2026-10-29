@@ -69,6 +69,8 @@ class AISettingsRecord(Base):
     web_search_provider: Mapped[str] = mapped_column(String(32), nullable=False, server_default="none")
     web_search_endpoint: Mapped[str | None] = mapped_column(Text)
     web_search_api_key_ciphertext: Mapped[str | None] = mapped_column(Text)
+    # Ordered secondary destinations hold only encrypted credential material.
+    web_search_fallbacks: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
     request_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="20")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())

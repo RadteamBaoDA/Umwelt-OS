@@ -773,7 +773,9 @@ class ModelGateway:
 
         ``tools`` (OpenAI function specs) require both ``streaming`` and ``tools`` capabilities to
         pass ``may_send``; an unverified ``tools`` capability raises CapabilityUnsupported before any I/O.
-        ``tool_choice`` and ``max_tokens`` are forwarded only when not None.
+        ``tool_choice`` and ``max_tokens`` are forwarded only when not None. A configured ``reasoning_effort``
+        (chat role) is sent as the OpenAI-compatible ``reasoning_effort`` parameter; if the provider answers
+        400/422 naming it before any chunk, it is dropped once with a warning and the request is retried.
         """
         capabilities = ("streaming", "tools") if tools else ("streaming",)
         if not self._policy_matches(policy) or not all(may_send(policy, role, mapping, self.destination_id, bool(self.api_key), c) for c in capabilities) or self.base_url is None or mapping is None:
@@ -789,6 +791,9 @@ class ModelGateway:
             extra["tool_choice"] = tool_choice
         if max_tokens is not None:
             extra["max_tokens"] = max_tokens
+        # Owner-chosen reasoning effort (chat role only): request-gated models stream reasoning only when asked.
+        if role == "chat" and not probe and mapping.reasoning_effort != "off":
+            extra["reasoning_effort"] = mapping.reasoning_effort
         if not probe:
             await self._breaker_check()
         async with self._lease(_STREAM_LEASE_WAIT_SECONDS):
@@ -851,6 +856,12 @@ class ModelGateway:
                     except RedisError as exc:
                         raise ModelGatewayError("Model gateway request failed") from exc
                     except APIStatusError as exc:
+                        if (attempt == 0 and not emitted and "reasoning_effort" in extra and exc.status_code in {400, 422}
+                                and "reasoning" in str(exc.message or "").lower()):
+                            # A wrong effort setting must never break chat: retry once without the parameter.
+                            _LOG.warning("Provider rejected reasoning_effort (%s); retrying without it", _upstream_reason(exc))
+                            del extra["reasoning_effort"]
+                            continue
                         # A status error after chunks were emitted is never retried or counted.
                         if not emitted and _retryable_status(exc.status_code) and await self._on_retryable_status(exc, attempt):
                             continue

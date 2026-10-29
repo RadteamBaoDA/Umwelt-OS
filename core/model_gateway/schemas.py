@@ -10,7 +10,8 @@ ProviderKind = Literal["openai", "openrouter", "groq", "gemini", "anthropic", "o
 ModelType = Literal["llm", "embedding", "reranker", "decision", "background", "vision", "asr", "tts"]
 ModelRole = Literal["chat", "brief", "background", "embedding", "reranker", "vision"]
 MODEL_ROLES: tuple[ModelRole, ...] = ("chat", "brief", "background", "embedding", "reranker", "vision")
-WebSearchProvider = Literal["none", "tavily", "brave", "searxng"]
+ReasoningEffort = Literal["off", "low", "medium", "high"]
+WebSearchProvider = Literal["none", "tavily", "brave", "searxng", "omniroute"]
 LOCAL_PROVIDER_KINDS = frozenset({"ollama", "lmstudio"})
 MAX_PROVIDERS = 8
 DEFAULT_PROVIDER_ID = "default"
@@ -47,6 +48,9 @@ class ModelMapping(BaseModel):
     destination: Literal["unknown", "remote"] = "unknown"
     provider_id: ProviderId | None = None  # None resolves to the "default" provider
     dimensions: int | None = Field(default=None, ge=1, le=4096)  # embedding role only; set from the embeddings probe
+    # Chat role only. "off" sends nothing (providers that reject unknown params keep working); otherwise the
+    # gateway adds ``reasoning_effort`` to streamed chat requests so request-gated models emit reasoning.
+    reasoning_effort: ReasoningEffort = "off"
 
 
 class ModelDefaults(BaseModel):
@@ -178,6 +182,15 @@ class ConnectionCheck(BaseModel):
     model_ids: list[str]
 
 
+class WebSearchTarget(BaseModel):
+    """A detached search destination with a write-only credential for one egress attempt."""
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    provider: WebSearchProvider
+    endpoint: str | None
+    api_key: str = Field(default="", repr=False, exclude=True)
+    credential_configured: bool = False
+
+
 class AIExecutionConfig(BaseModel):
     """Owner-scoped detached execution snapshot; plaintext secrets are excluded from repr/serialization.
 
@@ -206,6 +219,7 @@ class AIExecutionConfig(BaseModel):
     web_search_endpoint: str | None
     web_search_api_key: str = Field(repr=False, exclude=True)
     web_search_credential_configured: bool = False
+    web_search_fallbacks: tuple[WebSearchTarget, ...] = ()
     system_prompts: dict[str, str] = Field(default_factory=dict)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
 

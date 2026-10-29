@@ -46,6 +46,19 @@ describe('streamResponseEvents generative UI events', () => {
     );
   });
 
+  it('dispatches message.ui.discard with the part id and ignores redacted payloads', async () => {
+    mockSse(`event: message.ui.discard
+data: {"part_id":"r1-t1"}
+
+event: message.ui.discard
+data: {}
+
+`);
+    const onUiDiscard = vi.fn();
+    await streamResponseEvents('r1', { onUiDiscard });
+    expect(onUiDiscard.mock.calls).toEqual([['r1-t1']]);
+  });
+
   it('forwards part_id on ui events and done.generative_ui_parts', async () => {
     const a = { kind: 'table', part_id: 'a', status: 'completed', table: { rows: [] } };
     const b = { kind: 'plan', part_id: 'b', status: 'streaming', plan: { steps: [] } };

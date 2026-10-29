@@ -13,6 +13,7 @@ from modules.chat.generative_ui.streaming import (
     finalize_generative_ui,
     skill_tool_result,
     streaming_snapshot,
+    ui_call_error,
 )
 from modules.chat.generative_ui.tool_specs import (
     TERMINAL_UI_TOOLS,
@@ -39,4 +40,5 @@ __all__ = [
     "parse_ui_tool_args",
     "skill_tool_result",
     "streaming_snapshot",
+    "ui_call_error",
 ]

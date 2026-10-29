@@ -26,6 +26,8 @@ while [[ "$API_TEST_PORT" == "$WEB_PORT" ]]; do export API_TEST_PORT="$(free_por
 export TEST_POSTGRES_PORT="$(free_port)"
 while [[ "$TEST_POSTGRES_PORT" == "$WEB_PORT" || "$TEST_POSTGRES_PORT" == "$API_TEST_PORT" ]]; do export TEST_POSTGRES_PORT="$(free_port)"; done
 export TEST_PUBLIC_ORIGIN="http://localhost:${WEB_PORT}"
+# Opt-in real-model chat e2e: public https providers are reachable only when .env.e2e-real holds a key (never exported to compose).
+if [[ -f .env.e2e-real ]] && grep -Eq '^[[:space:]]*E2E_REAL_API_KEY[[:space:]]*=[[:space:]]*[^[:space:]]' .env.e2e-real; then export E2E_ALLOW_PUBLIC_PROVIDERS=true; fi
 export TEST_DATABASE_URL="postgresql+asyncpg://bbd_test:bbd-os-test-db-only@127.0.0.1:${TEST_POSTGRES_PORT}/bbd_test"
 compose=(docker compose -p "$project" -f docker-compose.yml -f docker-compose.test.yml)
 cleanup() { "${compose[@]}" down --volumes --remove-orphans; }

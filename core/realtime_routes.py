@@ -318,7 +318,27 @@ class _RealtimePage:
     reason: str | None
 
 
-class _PermitResponse(StreamingResponse):
+class _PollingStreamingResponse(StreamingResponse):
+    """StreamingResponse that never cancels its body generator when the client disconnects.
+
+    Starlette's default (ASGI spec < 2.4) runs `listen_for_disconnect` in an anyio task group and cancels the
+    body task on disconnect. That cancel lands mid-DB-await; SQLAlchemy then invalidates the asyncpg connection
+    inside the cancelled scope, `terminate()` is cancelled again, and the connection is leaked
+    ("Exception terminating connection", "non-checked-in connection" SAWarning). Our generators poll
+    `request.is_disconnected()` and exit at a clean point (sessions closed), so no task group is needed.
+    """
+
+    async def __call__(self, scope: ASGIScope, receive: Receive, send: Send) -> None:
+        """Stream the body in the calling task; a send to a gone client (spec 2.4 servers) maps to ClientDisconnect."""
+        try:
+            await self.stream_response(send)
+        except OSError:
+            raise ClientDisconnect() from None
+        if self.background is not None:
+            await self.background()
+
+
+class _PermitResponse(_PollingStreamingResponse):
     """Streaming response that frees the stream permit if the generator never started (failed send, early error)."""
 
     def __init__(self, content: AsyncIterator[str], started: asyncio.Event, semaphore: asyncio.Semaphore, **kwargs: Any) -> None:
@@ -328,12 +348,7 @@ class _PermitResponse(StreamingResponse):
 
     async def __call__(self, scope: ASGIScope, receive: Receive, send: Send) -> None:
         try:
-            # No listen_for_disconnect task group (Starlette spec < 2.4): its scope cancel would land inside the
-            # body generator mid-DB-await and cancel the session rollback. Both generators poll
-            # request.is_disconnected(), so they exit at a clean point; uvicorn's send is a no-op after disconnect.
-            await self.stream_response(send)
-        except OSError:
-            raise ClientDisconnect() from None  # spec 2.4 servers raise on send once the client is gone
+            await super().__call__(scope, receive, send)
         finally:
             # Starlette never closes body_iterator; close it here so the generator's finally (permit
             # release, rollback) runs now, not at GC. Shielded + bounded for servers that cancel the task.
@@ -457,7 +472,7 @@ async def stream_events(
                 acquired = True
         except TimeoutError as exc:
             raise HTTPException(status_code=503, detail="Realtime connection limit reached") from exc
-        response = _RealtimeResponse(StreamingResponse(body(), media_type="text/event-stream", headers={
+        response = _RealtimeResponse(_PollingStreamingResponse(body(), media_type="text/event-stream", headers={
             **_PRIVATE_HEADERS, "Cache-Control": "private, no-store, no-transform",
             "X-Accel-Buffering": "no", "Connection": "keep-alive",
         }), request=request, workspace=workspace, access_fence=fence, auth_session=auth_session,

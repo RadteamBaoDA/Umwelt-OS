@@ -1219,3 +1219,51 @@ class TestCircuitBreaker:
         gw2, redis2 = _breaker_gateway()
         await run(gw2, AsyncMock(side_effect=lambda **_: broken()))
         assert not redis2.fails
+
+
+class TestReasoningEffort:
+    """The chat mapping's reasoning_effort rides the streamed request; a provider 400 on it falls back once."""
+
+    @staticmethod
+    async def _run(effort: str, create: Any, role: str = "chat") -> list[str]:
+        mapping = ModelMapping(model="m", version="1", destination="remote", reasoning_effort=effort)  # type: ignore[arg-type]
+        gw = _loopback_gateway("https://x")
+        with patch("core.model_gateway.client.AsyncOpenAI", side_effect=_fake_openai_with(create)), \
+             patch.object(ModelGateway, "_http_client", return_value=MagicMock()):
+            return [x async for x in gw.stream(role, mapping, _POLICY, [])]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("effort", "role", "expected"), [
+        ("low", "chat", "low"), ("off", "chat", None)])
+    async def test_effort_sent_only_for_chat_when_not_off(self, effort: str, role: str, expected: str | None) -> None:
+        seen: dict[str, Any] = {}
+
+        async def create(**kwargs: Any) -> object:
+            seen.update(kwargs)
+
+            async def empty():  # type: ignore[no-untyped-def]
+                return
+                yield
+            return empty()
+
+        await self._run(effort, create, role)
+        assert seen.get("reasoning_effort") == expected
+
+    @pytest.mark.asyncio
+    async def test_400_naming_the_parameter_retries_once_without_it(self) -> None:
+        bodies: list[dict[str, Any]] = []
+
+        async def create(**kwargs: Any) -> object:
+            bodies.append(kwargs)
+            if "reasoning_effort" in kwargs:
+                response = httpx.Response(400, request=httpx.Request("POST", "https://x"))
+                raise APIStatusError("Unknown parameter: reasoning_effort", response=response, body=None)
+
+            async def empty():  # type: ignore[no-untyped-def]
+                return
+                yield
+            return empty()
+
+        lines = await self._run("medium", create)
+        assert lines[-1] == "data: [DONE]"
+        assert ["reasoning_effort" in b for b in bodies] == [True, False]

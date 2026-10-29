@@ -108,7 +108,7 @@ async def factory(
             "INSERT INTO ai_settings (workspace_id, owner_id, web_search_provider, web_search_endpoint, "
             "web_search_api_key_ciphertext, privacy) VALUES ((SELECT id FROM workspaces ORDER BY created_at LIMIT 1), 1, 'tavily', :e, :c, CAST(:p AS jsonb)) "
             "ON CONFLICT (owner_id) DO UPDATE SET web_search_provider = 'tavily', web_search_endpoint = :e, "
-            "web_search_api_key_ciphertext = :c, privacy = CAST(:p AS jsonb)"
+            "web_search_api_key_ciphertext = :c, web_search_fallbacks = '[]'::jsonb, privacy = CAST(:p AS jsonb)"
         ), {"e": ENDPOINT, "c": cipher, "p": privacy})
     fake_model.SEARCH_LOG.clear()
     try:
@@ -121,9 +121,10 @@ async def factory(
                 await connection.execute(text(
                     "UPDATE ai_settings SET web_search_provider = :web_search_provider, "
                     "web_search_endpoint = :web_search_endpoint, "
-                    "web_search_api_key_ciphertext = :web_search_api_key_ciphertext, privacy = CAST(:p AS jsonb) "
+                    "web_search_api_key_ciphertext = :web_search_api_key_ciphertext, "
+                    "web_search_fallbacks = CAST(:fallbacks AS jsonb), privacy = CAST(:p AS jsonb) "
                     "WHERE owner_id = 1"
-                ), {**before, "p": json.dumps(before["privacy"])})
+                ), {**before, "p": json.dumps(before["privacy"]), "fallbacks": json.dumps(before["web_search_fallbacks"])})
 
 
 async def _run(factory: async_sessionmaker[AsyncSession], message: str) -> tuple[UUID, UUID, Any]:

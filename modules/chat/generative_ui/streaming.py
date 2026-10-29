@@ -6,11 +6,12 @@ The chat worker feeds `delta.tool_calls` chunks into `ToolCallAccumulator`, publ
 the model never supplies evidence identifiers (only citation numbers the server resolves).
 """
 
+import json
 import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from pydantic_core import from_json
 
 from modules.chat.generative_ui.prompt import CANONICAL_SANDBOX_PARAM_ORDER, SandboxedUiArgs
@@ -49,6 +50,9 @@ logger = logging.getLogger(__name__)
 
 # A skill document is context for the model, not a transcript row: bound what is re-sent.
 MAX_SKILL_RESULT_CHARS = 24_000
+
+# Bound of the validation feedback re-sent to the model for an invalid widget call.
+MAX_UI_ERROR_CHARS = 800
 
 # Fallback sandbox-widget title per owner locale (`en-US` / `vi-VN`); unknown locales use English.
 _FALLBACK_TITLES = {"en-US": "Interactive view", "vi-VN": "Chế độ xem tương tác"}
@@ -212,6 +216,34 @@ def _envelope(
     return payload
 
 
+def _error_paths(exc: ValueError) -> str:
+    """Summarize a validation failure as ``path: message`` lines; never echoes the offending input values."""
+    if isinstance(exc, ValidationError):
+        lines = [f"{'.'.join(str(p) for p in e['loc']) or '(root)'}: {e['msg']}" for e in exc.errors(include_input=False)]
+        return "; ".join(lines)[:MAX_UI_ERROR_CHARS]
+    return "arguments are not valid JSON" if "json" in str(exc).lower() else type(exc).__name__
+
+
+def ui_call_error(tool_name: str, raw_args: str) -> str | None:
+    """Check a terminal UI call against its argument model and describe any problem for the model.
+
+    Args:
+        tool_name: Terminal UI tool name.
+        raw_args: Complete argument JSON from the stream.
+
+    Returns:
+        None when valid; otherwise a bounded JSON tool-result string with field paths and messages (no
+        raw user data) so the model can correct the call in its next round. Logged at warning level.
+    """
+    try:
+        parse_ui_tool_args(tool_name, raw_args)
+    except ValueError as exc:
+        detail = _error_paths(exc)
+        logger.warning("Invalid generative UI call %s: %s", tool_name, detail)
+        return json.dumps({"status": "error", "error": f"invalid {tool_name} arguments; fix and call again. {detail}"})
+    return None
+
+
 def finalize_generative_ui(
     tool_name: str,
     raw_args: str,
@@ -238,7 +270,7 @@ def finalize_generative_ui(
     try:
         args: BaseModel = parse_ui_tool_args(tool_name, raw_args)
     except ValueError as exc:
-        logger.warning("Dropping invalid generative UI call %s (%s)", tool_name, type(exc).__name__)
+        logger.warning("Dropping invalid generative UI call %s (%s)", tool_name, _error_paths(exc))
         return None
     try:
         if isinstance(args, SandboxedUiArgs):

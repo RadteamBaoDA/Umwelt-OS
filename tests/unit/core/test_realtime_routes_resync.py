@@ -84,3 +84,55 @@ def test_permit_response_disconnect_spec_2_3_does_not_cancel_db_rollback() -> No
 
     assert asyncio.run(run()) == 1
     assert events == ["rollback-ok"]
+
+
+def test_polling_response_lets_inflight_db_call_finish_and_returns_connection_on_disconnect() -> None:
+    """Disconnect mid-poll must not cancel the body: the in-flight 'query' completes and nothing stays checked out.
+
+    Starlette's default task group would cancel the body mid-await (leaking the connection via a cancelled
+    SQLAlchemy terminate()); the polling response runs the body uncancelled and exits at the next
+    is_disconnected() check. `checked_out` stands in for `pool.checkedout()`.
+    """
+    import warnings
+
+    from starlette.requests import Request
+
+    from core import realtime_routes
+
+    async def run() -> tuple[int, bool, int]:
+        gone = asyncio.Event()
+        state = {"checked_out": 0, "finished_query": False, "sends": 0}
+
+        async def receive():
+            await gone.wait()
+            return {"type": "http.disconnect"}
+
+        scope = {"type": "http", "asgi": {"spec_version": "2.3"}}
+        request = Request(scope, receive)
+
+        class _Conn:
+            async def __aenter__(self):
+                state["checked_out"] += 1
+
+            async def __aexit__(self, *exc):
+                state["checked_out"] -= 1
+
+        async def body():
+            while not await request.is_disconnected():
+                async with _Conn():
+                    await asyncio.sleep(0.2)  # query in flight when the disconnect lands
+                    state["finished_query"] = True
+                yield ": ping"
+
+        async def send(_message):
+            state["sends"] += 1
+
+        asyncio.get_running_loop().call_later(0.05, gone.set)
+        response = realtime_routes._PollingStreamingResponse(body(), media_type="text/event-stream")
+        await response(scope, receive, send)
+        return state["checked_out"], state["finished_query"], state["sends"]
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        checked_out, finished, _ = asyncio.run(run())
+    assert checked_out == 0 and finished

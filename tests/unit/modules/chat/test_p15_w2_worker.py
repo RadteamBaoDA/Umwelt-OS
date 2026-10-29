@@ -1,6 +1,7 @@
 """P15 W2: web search wired into chat generation (fence, outcome, prompt, citations, cancellation)."""
 
 import asyncio
+import hashlib
 import json
 import socket
 from collections.abc import AsyncIterator
@@ -13,7 +14,7 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from core.model_gateway.schemas import PrivacySettings
+from core.model_gateway.schemas import PrivacySettings, WebSearchTarget
 from core.model_gateway.transport import (
     ApprovedEndpointTransport,
     EndpointNetworkPolicyError,
@@ -46,6 +47,9 @@ def _web_config(**overrides: Any) -> Any:
                                    reasoning_destinations=["omniroute"]),
     }
     values.update(overrides)
+    if "privacy" not in overrides and values["web_search_endpoint"]:
+        destination = hashlib.sha256(values["web_search_endpoint"].encode()).hexdigest()[:32]
+        values["privacy"] = values["privacy"].model_copy(update={"web_search_destinations": [f"web-search:{destination}"]})
     return _config(**values)
 
 
@@ -188,11 +192,11 @@ async def test_missing_ai_settings_row_is_not_configured(monkeypatch: pytest.Mon
     s.quota.assert_not_awaited()
 
 
-async def test_host_denied_does_not_spend_daily_quota(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_host_denied_spends_one_daily_quota(monkeypatch: pytest.MonkeyPatch) -> None:
     s = _Search(monkeypatch)
     monkeypatch.setattr(worker, "approved_web_search_transport", MagicMock(side_effect=EndpointNetworkPolicyError("host")))
     assert (await s.run()).outcome == {"status": "unavailable", "reason": "network_denied", "result_count": 0}
-    s.quota.assert_not_awaited()
+    s.quota.assert_awaited_once()
 
 
 async def test_timeout_is_cancelled_before_rollback_once_body_is_sent(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -536,3 +540,47 @@ async def test_missing_source_fence_fails_closed(monkeypatch: pytest.MonkeyPatch
     assert run.outcome == {"status": "skipped", "reason": "local_only_context", "result_count": 0}
     s.search.assert_not_awaited()
     s.quota.assert_not_awaited()
+
+
+async def test_fallback_uses_one_quota_and_records_actual_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    fallback_endpoint = "https://router.example/v1"
+    fallback = WebSearchTarget(provider="omniroute", endpoint=fallback_endpoint, api_key="key", credential_configured=True)
+    primary = "web-search:" + hashlib.sha256(b"https://api.tavily.com").hexdigest()[:32]
+    secondary = "web-search:" + hashlib.sha256(fallback_endpoint.encode()).hexdigest()[:32]
+    privacy = PrivacySettings(allow_remote_web_search=True, web_search_destinations=[primary, secondary])
+    s = _Search(monkeypatch, _web_config(privacy=privacy, web_search_fallbacks=(fallback,)))
+    s.search.side_effect = [WebSearchError("provider_error"), [R1]]
+    run = await s.run()
+    assert run.outcome["status"] == "used" and run.provider == "omniroute"
+    assert s.search.await_count == 2
+    s.quota.assert_awaited_once()
+
+
+@pytest.mark.parametrize("revoke", [False, True])
+async def test_presend_timeout_refences_before_fallback(monkeypatch: pytest.MonkeyPatch, revoke: bool) -> None:
+    fallback_endpoint = "https://router.example/v1"
+    fallback = WebSearchTarget(provider="omniroute", endpoint=fallback_endpoint, api_key="key", credential_configured=True)
+    destinations = ["web-search:" + hashlib.sha256(endpoint.encode()).hexdigest()[:32]
+                    for endpoint in ("https://api.tavily.com", fallback_endpoint)]
+    privacy = PrivacySettings(allow_remote_web_search=True, web_search_destinations=destinations)
+    s = _Search(monkeypatch, _web_config(privacy=privacy, web_search_fallbacks=(fallback,)))
+    monkeypatch.setattr(worker, "WEB_SEARCH_FENCE_SECONDS", 0.05)
+    calls = 0
+
+    async def attempt(*_a: Any, **_k: Any) -> list[WebSearchResult]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            if revoke:
+                s.config = s.config.model_copy(update={"privacy": PrivacySettings()})
+            await asyncio.sleep(1)
+        return [R1]
+
+    s.search.side_effect = attempt
+    run = await s.run()
+    assert s.lock.await_count == 2 and s.quota.await_count == 1
+    assert calls == (1 if revoke else 2)
+    if revoke:
+        assert run.outcome["status"] != "used"
+    else:
+        assert run.provider == "omniroute" and run.outcome["status"] == "used"

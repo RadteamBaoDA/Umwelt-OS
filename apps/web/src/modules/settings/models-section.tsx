@@ -13,7 +13,10 @@ import { FieldGrid } from './settings-layout';
 
 type Translate = (key: string, values?: Record<string, string | number>) => string;
 /** Stored mapping: which provider model serves one role. */
-export type Mapping = { model: string; version: string | null; destination: 'unknown' | 'remote'; provider_id?: string | null; dimensions?: number | null };
+export type Mapping = { model: string; version: string | null; destination: 'unknown' | 'remote'; provider_id?: string | null; dimensions?: number | null; reasoning_effort?: ReasoningEffort };
+/** Chat-role reasoning effort; `off` sends nothing to the provider. */
+export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high';
+const efforts: readonly ReasoningEffort[] = ['off', 'low', 'medium', 'high'];
 /** Role the owner can pick a default model for. */
 export type DefaultSlot = 'chat' | 'brief' | 'background' | 'embedding' | 'reranker' | 'vision';
 /** Role defaults as stored by the backend; `null` leaves a role unset (brief/background then fall back). */
@@ -88,10 +91,10 @@ export function ModelsPanel({ providers, discovered, modelTests, checkedAt = {},
   </div>;
 }
 
-type DefaultsProps = { providers: ProviderRead[]; defaults: Defaults; disabled: boolean; embeddingStatus: 'idle' | 'checking' | 'error'; onPick: (slot: DefaultSlot, provider: ProviderRead | null, model: string) => void; t: Translate };
+type DefaultsProps = { providers: ProviderRead[]; defaults: Defaults; disabled: boolean; embeddingStatus: 'idle' | 'checking' | 'error'; onPick: (slot: DefaultSlot, provider: ProviderRead | null, model: string) => void; onEffort?: (effort: ReasoningEffort) => void; t: Translate };
 
-/** Default-model selects, one per role; each lists only added models of the matching type. Optional roles offer a fallback entry that clears the default. */
-export function ModelDefaults({ providers, defaults, disabled, embeddingStatus, onPick, t }: DefaultsProps) {
+/** Default-model selects, one per role; each lists only added models of the matching type. Optional roles offer a fallback entry that clears the default. The chat role also gets a reasoning-effort select when `onEffort` is given. */
+export function ModelDefaults({ providers, defaults, disabled, embeddingStatus, onPick, onEffort, t }: DefaultsProps) {
   const all = providers.flatMap((p) => (p.models ?? []).map((m) => ({ provider: p, model: m })));
   const entries = (filter: (m: ProviderModel) => boolean) => all.filter((e) => filter(e.model));
   const refOf = (m: Mapping | null | undefined) => (m?.model ? modelTestKey(mappingProviderId(m.provider_id, providers), m.model) : '');
@@ -110,6 +113,11 @@ export function ModelDefaults({ providers, defaults, disabled, embeddingStatus, 
     <p className="text-muted-foreground m-0 text-xs">{t('defaultsHelp')}</p>
     <FieldGrid>
       {field('chat', t('chatModel'), chats)}
+      {onEffort && <label className="field"><span className="label">{t('reasoningEffort')}</span>
+        <Select disabled={disabled || !defaults.chat?.model} value={defaults.chat?.reasoning_effort ?? 'off'} onValueChange={(next) => onEffort(next as ReasoningEffort)}><SelectTrigger aria-label={t('reasoningEffort')}><SelectValue /></SelectTrigger><SelectContent>
+          {efforts.map((item) => <SelectItem key={item} value={item}>{t(`effort${item[0].toUpperCase()}${item.slice(1)}`)}</SelectItem>)}
+        </SelectContent></Select>
+        <span className="text-muted-foreground text-xs">{t('reasoningEffortHelp')}</span></label>}
       {field('brief', t('briefModel'), chats, { id: same, label: t('sameAsChat') })}
       {field('background', t('backgroundModel'), entries((m) => m.type === 'background' || m.type === 'llm'), { id: same, label: t('sameAsBrief') })}
       {field('embedding', t('embeddingModel'), entries((m) => m.type === 'embedding'))}

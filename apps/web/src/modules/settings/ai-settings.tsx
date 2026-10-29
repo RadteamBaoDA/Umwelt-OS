@@ -13,12 +13,12 @@ import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { AgentSettingsWorkspace } from '@/modules/agents/agent-settings';
 import { CheckboxField, SettingsActions, SettingsPageHeader, SettingsSection } from './settings-layout';
 import { AutomationSettings } from '@/modules/automations/rule-list';
-import { mappingFor, ModelDefaults, ModelsPanel, pruneDefaults, type DefaultSlot, type Defaults, type Mapping } from './models-section';
+import { mappingFor, ModelDefaults, ModelsPanel, pruneDefaults, type DefaultSlot, type Defaults, type Mapping, type ReasoningEffort } from './models-section';
 import { modelTestKey, parseDraftSnapshot, ProviderEditor, testRoleByType, type ModelTestState, type ProviderModel, type ProviderRead, type ProviderSecret } from './provider-editor';
 
 type Privacy = { allow_remote_reasoning: boolean; allow_remote_embeddings: boolean; allow_remote_web_search: boolean; allow_widget_remote_media: boolean; reasoning_destinations: string[]; embedding_destinations: string[]; web_search_destinations: string[] };
 type Capability = { role: string; capability: string; result: string; expires_at: string; dimensions?: number; detail?: string };
-type AISettings = { configuration_revision: number; providers: ProviderRead[]; web_search_provider: 'none' | 'tavily' | 'brave' | 'searxng'; web_search_endpoint: string | null; web_search_credential_configured: boolean; defaults: Defaults; capabilities: Capability[]; privacy: Privacy; request_timeout_seconds: number };
+type AISettings = { configuration_revision: number; providers: ProviderRead[]; web_search_provider: 'none' | 'tavily' | 'brave' | 'searxng' | 'omniroute'; web_search_endpoint: string | null; web_search_credential_configured: boolean; defaults: Defaults; capabilities: Capability[]; privacy: Privacy; request_timeout_seconds: number };
 
 /**
  * Draft-only default auto-fill: the first Chat model newly present in `next` fills an empty chat and brief
@@ -261,10 +261,14 @@ export function AISettingsWorkspace() {
   const changeModels = (providers: ProviderRead[]) => set({ providers, defaults: pruneDefaults(saved.providers, providers, autoFillDefaults(saved.providers, providers, defaults)) });
   /** Writes one role default directly; an embedding pick also starts the dimensions probe and stays unsavable until it reports them. */
   const pickDefault = (role: DefaultSlot, provider: ProviderRead | null, model: string) => {
-    const mapping: Mapping | null = provider && model ? mappingFor(provider, model) : null;
+    const picked: Mapping | null = provider && model ? mappingFor(provider, model) : null;
+    // Switching the chat model keeps the owner's reasoning-effort choice.
+    const mapping: Mapping | null = picked && role === 'chat' && defaults.chat?.reasoning_effort ? { ...picked, reasoning_effort: defaults.chat.reasoning_effort } : picked;
     set({ defaults: { ...defaults, [role]: mapping && role === 'embedding' ? { ...mapping, dimensions: null } : mapping } });
     if (role === 'embedding' && mapping && provider) draftProbe.mutate({ role, mapping, capability: 'embeddings', provider });
   };
+  /** Sets the chat role's reasoning effort on the current draft. */
+  const pickEffort = (effort: ReasoningEffort) => { if (defaults.chat) set({ defaults: { ...defaults, chat: { ...defaults.chat, reasoning_effort: effort } } }); };
   const advancedClass = 'rounded-lg border border-border bg-card';
   const summaryClass = 'flex min-h-[52px] cursor-pointer items-center px-5 font-bold';
   return <div className="flex flex-col gap-5">
@@ -278,7 +282,7 @@ export function AISettingsWorkspace() {
       <SettingsSection title={t('modelsSection')}>
         <p className="text-muted-foreground m-0 text-xs">{t('modelsHelp')}</p>
         <ModelsPanel providers={saved.providers} discovered={discovered} modelTests={shownTests} checkedAt={checkedAt} details={testDetails} disabled={save.isPending} onChange={changeModels} onTestModel={(provider, model) => testModel.mutate({ provider, model })} t={t as never} />
-        <ModelDefaults providers={saved.providers} defaults={defaults} disabled={save.isPending} embeddingStatus={embeddingStatus} onPick={pickDefault} t={t as never} />
+        <ModelDefaults providers={saved.providers} defaults={defaults} disabled={save.isPending} embeddingStatus={embeddingStatus} onPick={pickDefault} onEffort={pickEffort} t={t as never} />
         {embeddingDimsChanged && <p className="error m-0 text-xs" role="status">{t('dimensionsChangedWarning')}</p>}
       </SettingsSection>
       <details className={advancedClass}><summary className={summaryClass}>{t('embeddingsTitle')}</summary>

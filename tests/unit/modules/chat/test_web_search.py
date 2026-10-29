@@ -342,3 +342,67 @@ def test_content_type_exact_media_type() -> None:
     assert _run("tavily", lambda r: httpx.Response(200, content=b'{"results": []}', headers=ok)) == []
     for bad in ("application/jsonp", "application/json-seq", "text/plain; x=application/json"):
         _fails("tavily", lambda r, bad=bad: httpx.Response(200, content=b"{}", headers={"content-type": bad}), "provider_error")
+
+
+def test_omniroute_request_and_results() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, headers=JSON, json={"results": [
+            {"title": "Result", "url": "https://result.example/", "snippet": "body"}]})
+
+    result = asyncio.run(ws.search("omniroute", "https://router.example/v1", KEY, "hello",
+                                   transport=httpx.MockTransport(handler)))
+    assert result[0].snippet == "body"
+    request = requests[0]
+    assert request.method == "POST" and request.url.path == "/v1/search"
+    assert request.headers["authorization"] == f"Bearer {KEY}"
+    assert json.loads(request.content) == {"query": "hello", "max_results": 5, "search_type": "web"}
+
+
+def test_fallback_attempts_only_retryable_failures_and_preserves_empty_success() -> None:
+    from core.model_gateway.schemas import WebSearchTarget
+
+    targets = [WebSearchTarget(provider="brave", endpoint="https://first.example", api_key=KEY, credential_configured=True),
+               WebSearchTarget(provider="omniroute", endpoint="https://second.example/v1", api_key=KEY, credential_configured=True)]
+    calls: list[str] = []
+
+    def make_transport(target: WebSearchTarget) -> httpx.AsyncBaseTransport:
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request.url.host or "")
+            if request.url.host == "first.example":
+                return httpx.Response(503, headers=JSON)
+            return httpx.Response(200, headers=JSON, json={"results": []})
+        return httpx.MockTransport(handler)
+
+    result, provider = asyncio.run(ws.search_with_fallback(targets, "hello", make_transport))
+    assert result == [] and provider == "omniroute"
+    assert calls == ["first.example", "second.example"]
+    calls.clear()
+    with pytest.raises(ws.WebSearchError, match="query_too_long"):
+        asyncio.run(ws.search_with_fallback(targets, "a" * 401, make_transport))
+    assert calls == []
+
+    def fail_transport(target: WebSearchTarget) -> httpx.AsyncBaseTransport:
+        if target.provider == "brave":
+            raise ws.EndpointNetworkPolicyError("denied")
+        return httpx.MockTransport(lambda request: httpx.Response(503, headers=JSON))
+
+    with pytest.raises(ws.WebSearchError, match="provider_error"):
+        asyncio.run(ws.search_with_fallback(targets, "hello", fail_transport))
+
+
+def test_empty_primary_result_does_not_try_fallback() -> None:
+    from core.model_gateway.schemas import WebSearchTarget
+
+    targets = [WebSearchTarget(provider="tavily", endpoint="https://first.example", api_key=KEY, credential_configured=True),
+               WebSearchTarget(provider="omniroute", endpoint="https://second.example", api_key=KEY, credential_configured=True)]
+    calls: list[str] = []
+
+    def transport(target: WebSearchTarget) -> httpx.AsyncBaseTransport:
+        calls.append(target.provider)
+        return httpx.MockTransport(lambda request: httpx.Response(200, headers=JSON, json={"results": []}))
+
+    results, provider = asyncio.run(ws.search_with_fallback(targets, "hello", transport))
+    assert results == [] and provider == "tavily" and calls == ["tavily"]

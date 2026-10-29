@@ -53,7 +53,7 @@ def _row(**over: object) -> SimpleNamespace:
     base = {
         "configuration_revision": 2, "providers": {}, "defaults": {}, "n8n": {},
         "privacy": {}, "system_prompts": {},
-        "web_search_provider": "none", "web_search_endpoint": None, "web_search_api_key_ciphertext": None, "request_timeout_seconds": 20}
+        "web_search_provider": "none", "web_search_endpoint": None, "web_search_api_key_ciphertext": None, "web_search_fallbacks": [], "request_timeout_seconds": 20}
     return SimpleNamespace(**{**base, **over})
 
 
@@ -368,3 +368,35 @@ def test_every_model_gateway_construction_uses_a_derived_config() -> None:
         if re.search(r"(?<![A-Za-z_])ModelGateway\(", text) and not re.search(r"derive_for_role|derive_for_mapping|resolve_draft_provider", text):
             offenders.append(str(path.relative_to(root)))
     assert not offenders, f"ModelGateway built without derive_for_role: {offenders}"
+
+
+@pytest.mark.asyncio
+async def test_model_save_preserves_existing_fallback_consent_and_config_identity() -> None:
+    primary, fallback = "https://gw.example", "https://other.example"
+    grants = [public._web_destination(primary), public._web_destination(fallback)]
+    row = _row(web_search_provider="searxng", web_search_endpoint=primary,
+               web_search_fallbacks=[{"provider": "omniroute", "endpoint": fallback, "key_ciphertext": _enc("key")}],
+               privacy={"allow_remote_web_search": True, "web_search_destinations": grants})
+    before = await _config(row)
+    assert before.privacy.web_search_destinations == grants
+    assert before.web_search_fallbacks[0].api_key == "key"
+    await _save(row, _update(web_search_provider="searxng", web_search_endpoint=primary,
+                            privacy=PrivacySettings(allow_remote_web_search=True, web_search_destinations=grants)))
+    assert row.privacy["web_search_destinations"] == grants
+    saved = await _config(row)
+    row.web_search_fallbacks[0]["key_ciphertext"] = _enc("new")
+    assert (await _config(row)).gateway_identity != saved.gateway_identity
+
+
+@pytest.mark.asyncio
+async def test_legacy_save_rejects_duplicate_fallback_and_clears_key_on_endpoint_change() -> None:
+    primary, fallback = "https://gw.example", "https://other.example"
+    row = _row(web_search_provider="tavily", web_search_endpoint=primary, web_search_api_key_ciphertext=_enc("secret"),
+               web_search_fallbacks=[{"provider": "searxng", "endpoint": fallback, "key_ciphertext": None}])
+    with pytest.raises(HTTPException) as exc:
+        await _save(row, _update(web_search_provider="searxng", web_search_endpoint=fallback))
+    assert exc.value.status_code == 422
+    assert row.web_search_api_key_ciphertext is not None
+    row.web_search_fallbacks = []
+    await _save(row, _update(web_search_provider="searxng", web_search_endpoint=fallback))
+    assert row.web_search_api_key_ciphertext is None

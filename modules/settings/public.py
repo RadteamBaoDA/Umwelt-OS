@@ -36,6 +36,7 @@ from core.model_gateway.schemas import (
     ProviderConfig,
     ProviderModel,
     ProviderRead,
+    WebSearchTarget,
 )
 from core.model_gateway.transport import approved_transport
 from core.workspaces.public import (
@@ -70,6 +71,7 @@ from modules.settings.schemas import (
     TranslationSettingsRead,
     VizRouterRead,
     VizRouterUpdate,
+    WebSearchEntryRead,
     WebSearchRead,
     WebSearchUpdate,
 )
@@ -225,7 +227,7 @@ async def _row(session: AsyncSession, *, scope: Scope, locked: bool = False) -> 
     return await session.scalar(query.execution_options(populate_existing=True))
 
 
-def _privacy(raw: dict[str, object] | None, destinations: list[str], web_destination: str | None) -> PrivacySettings:
+def _privacy(raw: dict[str, object] | None, destinations: list[str], web_destinations: list[str]) -> PrivacySettings:
     """Project explicit consent onto each remote provider's validated destination.
 
     ``destinations`` are the non-local provider destinations; a grant needs the flag and an exact list entry.
@@ -242,14 +244,14 @@ def _privacy(raw: dict[str, object] | None, destinations: list[str], web_destina
     reasoning = granted("reasoning_destinations", "allow_remote_reasoning")
     embeddings = granted("embedding_destinations", "allow_remote_embeddings")
     web_values = raw.get("web_search_destinations")
-    web_search = bool(web_destination and raw.get("allow_remote_web_search")
-                      and isinstance(web_values, list) and web_destination in web_values)
+    web_search = ([d for d in dict.fromkeys(web_destinations) if d in web_values]
+                  if raw.get("allow_remote_web_search") and isinstance(web_values, list) else [])
     return PrivacySettings(
         allow_remote_reasoning=bool(reasoning), allow_remote_embeddings=bool(embeddings),
-        allow_remote_web_search=web_search,
+        allow_remote_web_search=bool(web_search),
         allow_widget_remote_media=bool(raw.get("allow_widget_remote_media")),  # plain consent: no provider destination to bind
         reasoning_destinations=reasoning, embedding_destinations=embeddings,
-        web_search_destinations=[web_destination] if web_search and web_destination else [],
+        web_search_destinations=web_search,
     )
 
 
@@ -383,12 +385,25 @@ async def get_ai_execution_config(session: AsyncSession, settings: Settings, red
         revision, timeout = 1, 20
         system_prompts: dict[str, str] = {}
         web_provider, web_endpoint, web_credential, web_configured = "none", None, "", False
+        web_fallbacks: tuple[WebSearchTarget, ...] = ()
     else:
         providers = {pid: _resolve_provider(rec, settings) for pid, rec in _stored_providers(row).items()}
         defaults = ModelDefaults.model_validate({key: value for key, value in (row.defaults or {}).items()
                                                  if key in MODEL_ROLES and value})
-        web_destination = f"web-search:{_fingerprint(row.web_search_endpoint or '')[:32]}" if row.web_search_endpoint else None
-        privacy = _privacy(row.privacy, [p.destination_id for p in providers.values() if p.destination_id and not p.local], web_destination)
+        fallback_targets = []
+        for item in row.web_search_fallbacks or []:
+            try:
+                fallback_key = _decrypt(item.get("key_ciphertext"), settings)
+            except HTTPException as exc:
+                if exc.status_code != 503:
+                    raise
+                fallback_key = ""  # A bad fallback secret must not disable unrelated capabilities.
+            fallback_targets.append(WebSearchTarget(provider=item["provider"], endpoint=item["endpoint"],
+                                                    api_key=fallback_key, credential_configured=bool(item.get("key_ciphertext"))))
+        web_fallbacks = tuple(fallback_targets)
+        web_destinations = [d for endpoint in (row.web_search_endpoint, *(t.endpoint for t in web_fallbacks))
+                            if (d := _web_destination(endpoint))]
+        privacy = _privacy(row.privacy, [p.destination_id for p in providers.values() if p.destination_id and not p.local], web_destinations)
         revision, timeout = row.configuration_revision, row.request_timeout_seconds
         system_prompts = dict(row.system_prompts or {})
         web_provider, web_endpoint = row.web_search_provider, row.web_search_endpoint
@@ -409,7 +424,8 @@ async def get_ai_execution_config(session: AsyncSession, settings: Settings, red
         separators=(",", ":")))
     identity = _fingerprint(json.dumps((str(scope.workspace_id), scope_actor(scope), fence.membership_revision,
         fence.configuration_revision, revision, credential_identity, defaults.model_dump(),
-        privacy.model_dump(), web_provider, web_endpoint, _fingerprint(web_credential), tuple(sorted(settings.ai_allowed_endpoint_hosts)),
+        privacy.model_dump(), web_provider, web_endpoint, _fingerprint(web_credential),
+        [(t.provider, t.endpoint, _fingerprint(t.api_key)) for t in web_fallbacks], tuple(sorted(settings.ai_allowed_endpoint_hosts)),
         tuple(sorted(settings.ai_allowed_endpoint_cidrs)), _fingerprint(settings.ai_credential_encryption_key.get_secret_value())),
         sort_keys=True, separators=(",", ":"), default=str))
     return AIExecutionConfig(
@@ -421,7 +437,8 @@ async def get_ai_execution_config(session: AsyncSession, settings: Settings, red
         gateway_base_url=default.base_url, gateway_api_key=default.api_key, defaults=defaults, privacy=privacy,
         request_timeout_seconds=timeout,
         web_search_provider=web_provider, web_search_endpoint=web_endpoint, web_search_api_key=web_credential,
-        web_search_credential_configured=web_configured, system_prompts=system_prompts, providers=providers,
+        web_search_credential_configured=web_configured, web_search_fallbacks=web_fallbacks,
+        system_prompts=system_prompts, providers=providers,
     )
 
 
@@ -624,9 +641,14 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
             raise HTTPException(status_code=422, detail=f"Role {role} needs a {ROLE_MODEL_TYPE_LABEL[role]} model")
         if mapping.dimensions is not None and role != "embedding":
             raise HTTPException(status_code=422, detail="Dimensions apply only to the embedding role")
+        if mapping.reasoning_effort != "off" and role != "chat":
+            raise HTTPException(status_code=422, detail="Reasoning effort applies only to the chat role")
         if role == "embedding" and mapping.model and mapping.dimensions is None:
             raise HTTPException(status_code=422, detail="Embedding dimensions required; run the embeddings probe")
     next_web_endpoint = _endpoint(str(update.web_search_endpoint) if update.web_search_endpoint else None, settings)
+    if (update.web_search_provider != "none" and next_web_endpoint
+            and any(item.get("endpoint") == next_web_endpoint for item in (row.web_search_fallbacks or []))):
+        raise HTTPException(status_code=422, detail="Web search endpoints must be unique")
     current_web_destination = f"web-search:{_fingerprint(row.web_search_endpoint or '')[:32]}" if row.web_search_endpoint else None
     next_web_destination = f"web-search:{_fingerprint(next_web_endpoint or '')[:32]}" if next_web_endpoint else None
     privacy = update.privacy.model_dump(mode="json")
@@ -644,14 +666,22 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
     for enabled, key in (("allow_remote_reasoning", "reasoning_destinations"), ("allow_remote_embeddings", "embedding_destinations")):
         privacy[key] = list(dict.fromkeys(grants[key]))
         privacy[enabled] = bool(privacy[key])
-    web_endpoint_changed = current_web_destination != next_web_destination
-    if web_endpoint_changed or not next_web_destination or update.web_search_provider == "none":
-        privacy["allow_remote_web_search"] = False
-    privacy["web_search_destinations"] = [next_web_destination] if privacy["allow_remote_web_search"] else []
+    # Existing fallback grants survive model saves but cannot be created through this legacy API.
+    prior_web = (row.privacy or {}).get("web_search_destinations", [])
+    prior_web = prior_web if isinstance(prior_web, list) else []
+    fallback_destinations = [_web_destination(item.get("endpoint")) for item in (row.web_search_fallbacks or [])]
+    web_grants = [d for d in fallback_destinations if d and d in prior_web and d in privacy["web_search_destinations"]]
+    if (privacy["allow_remote_web_search"] and current_web_destination == next_web_destination
+            and next_web_destination and update.web_search_provider != "none"):
+        web_grants.insert(0, next_web_destination)
+    privacy["web_search_destinations"] = list(dict.fromkeys(web_grants)) if privacy["allow_remote_web_search"] else []
+    privacy["allow_remote_web_search"] = bool(privacy["web_search_destinations"])
     row.providers = providers
     row.privacy = privacy
     row.defaults = {role: mapping.model_dump(mode="json") for role, mapping in chosen_defaults.items()}
     row.web_search_provider = update.web_search_provider
+    if current_web_destination != next_web_destination:
+        row.web_search_api_key_ciphertext = None  # Never reuse a key at a changed destination.
     row.web_search_endpoint = next_web_endpoint
     if update.web_search_credential_action == "replaced":
         if not update.web_search_api_key:
@@ -671,25 +701,30 @@ def _web_destination(endpoint: str | None) -> str | None:
 
 
 async def read_web_search(session: AsyncSession, settings: Settings, redis: Redis | None = None, *, scope: Scope) -> WebSearchRead:
-    """Return web-search settings for the owner workspace without the key."""
+    """Return ordered owner search destinations without exposing credential values."""
     config = await get_ai_execution_config(session, settings, redis, scope=scope)
-    return WebSearchRead(
-        configuration_revision=config.configuration_revision, provider=config.web_search_provider,
-        endpoint=config.web_search_endpoint, credential_configured=config.web_search_credential_configured,
-        allow_remote_web_search=config.privacy.allow_remote_web_search,
-        destination_id=_web_destination(config.web_search_endpoint))
+    targets = []
+    if config.web_search_provider != "none" and config.web_search_endpoint:
+        targets.append(WebSearchEntryRead(provider=config.web_search_provider, endpoint=config.web_search_endpoint,
+                                          credential_configured=config.web_search_credential_configured,
+                                          destination_id=_web_destination(config.web_search_endpoint)))
+    targets.extend(WebSearchEntryRead(provider=t.provider, endpoint=t.endpoint,
+                                      credential_configured=t.credential_configured,
+                                      destination_id=_web_destination(t.endpoint)) for t in config.web_search_fallbacks)
+    return WebSearchRead(configuration_revision=config.configuration_revision, providers=targets,
+                         allow_remote_web_search=config.privacy.allow_remote_web_search)
 
 
 async def save_web_search(session: AsyncSession, update: WebSearchUpdate, settings: Settings, *, scope: Scope,
                           auth_sessions: tuple[AccountSessionRef, ...] = ()) -> WebSearchRead:
-    """Revision-checked replace of the web-search provider, endpoint, key and remote-search consent.
+    """Replace ordered search targets and destination-bound consent under the owner revision fence.
 
-    A key is kept only while the endpoint is unchanged. Consent is bound to the endpoint's destination
-    and cleared when the provider is ``none`` or the endpoint is empty. Bumps ``configuration_revision``.
+    Keys are retained only for the same normalized endpoint, regardless of ordering; new keys are encrypted.
+    The caller owns the transaction, and duplicate endpoints and missing required keys are rejected.
     """
-    endpoint = _endpoint(str(update.endpoint) if update.endpoint else None, settings)
-    if update.provider != "none" and endpoint is None:
-        raise HTTPException(status_code=422, detail="Web search endpoint is required")
+    endpoints = [_endpoint(str(item.endpoint), settings) for item in update.providers]
+    if any(endpoint is None for endpoint in endpoints) or len(set(endpoints)) != len(endpoints):
+        raise HTTPException(status_code=422, detail="Web search endpoints must be present and unique")
     await require_settings_scope(session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
                                  locked=True, auth_sessions=auth_sessions)
     await session.execute(insert(AISettingsRecord).values(owner_id=scope_actor(scope), workspace_id=scope.workspace_id)
@@ -699,20 +734,31 @@ async def save_web_search(session: AsyncSession, update: WebSearchUpdate, settin
         raise RuntimeError("AI settings singleton could not be initialized")
     if row.configuration_revision != update.expected_revision:
         raise HTTPException(status_code=409, detail="AI settings changed; reload before saving")
-    ciphertext = row.web_search_api_key_ciphertext if row.web_search_endpoint == endpoint else None
-    if update.credential_action == "replaced":
-        if not update.api_key:
-            raise HTTPException(status_code=422, detail="Replacement search credential is required")
-        ciphertext = _cipher(settings).encrypt(update.api_key.encode()).decode()
-    elif update.credential_action == "removed":
-        ciphertext = None
-    if update.provider in ("tavily", "brave") and not ciphertext:
-        raise HTTPException(status_code=422, detail="Search credential is required for this provider")
-    consent = bool(update.allow_remote_web_search and update.provider != "none" and endpoint)
-    destination = _web_destination(endpoint)
+    stored = {row.web_search_endpoint: row.web_search_api_key_ciphertext}
+    stored.update({item.get("endpoint"): item.get("key_ciphertext") for item in (row.web_search_fallbacks or [])})
+    records = []
+    for item, endpoint in zip(update.providers, endpoints, strict=True):
+        ciphertext = stored.get(endpoint)
+        if item.credential_action == "replaced":
+            if not item.api_key:
+                raise HTTPException(status_code=422, detail="Replacement search credential is required")
+            ciphertext = _cipher(settings).encrypt(item.api_key.encode()).decode()
+        elif item.credential_action == "removed":
+            ciphertext = None
+        if item.provider in ("tavily", "brave", "omniroute") and not ciphertext:
+            raise HTTPException(status_code=422, detail="Search credential is required for this provider")
+        records.append({"provider": item.provider, "endpoint": endpoint, "key_ciphertext": ciphertext})
+    if records:
+        row.web_search_provider = update.providers[0].provider
+        row.web_search_endpoint = endpoints[0]
+        row.web_search_api_key_ciphertext = records[0]["key_ciphertext"]
+    else:
+        row.web_search_provider, row.web_search_endpoint, row.web_search_api_key_ciphertext = "none", None, None
+    row.web_search_fallbacks = records[1:]
+    destinations = [_web_destination(endpoint) for endpoint in endpoints]
+    consent = bool(update.allow_remote_web_search and destinations)
     row.privacy = {**(row.privacy or {}), "allow_remote_web_search": consent,
-                   "web_search_destinations": [destination] if consent and destination else []}
-    row.web_search_provider, row.web_search_endpoint, row.web_search_api_key_ciphertext = update.provider, endpoint, ciphertext
+                   "web_search_destinations": destinations if consent else []}
     row.configuration_revision += 1
     await session.flush()
     return await read_web_search(session, settings, scope=scope)

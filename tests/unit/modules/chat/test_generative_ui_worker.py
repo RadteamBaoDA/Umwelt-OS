@@ -497,6 +497,14 @@ async def test_widget_text_widget_across_two_rounds(monkeypatch: pytest.MonkeyPa
     assert gen.events("message.done")[0].data["generative_ui_parts"] == message.metadata_json["generative_ui_parts"]
 
 
+async def test_later_round_text_does_not_glue_onto_previous_sentence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real models end a round without trailing whitespace; the next round's prose starts a new paragraph."""
+    gen = _UIGen(monkeypatch, [_table_round("t", "Across the equator."), [_text("Here's the table.")], END])
+    await gen.run()
+    message = next(m for m in gen.added if isinstance(m, Message))
+    assert "Across the equator.\n\nHere's the table." in message.content
+
+
 async def test_part_cap_counts_parts_across_rounds(monkeypatch: pytest.MonkeyPatch) -> None:
     gen = _UIGen(monkeypatch, [_table_round("a"), _table_round("b"), _table_round("c"), END])
     await gen.run(generative_ui_max_parts=2)
@@ -707,3 +715,37 @@ async def test_external_router_refused_for_local_only_before_any_model_request(m
     classify.assert_not_awaited()
     gen.failed.assert_not_awaited()
     assert gen.requests
+
+
+# ------------------------------------------------- invalid widget calls are fed back, not silently dropped
+
+
+BAD_TABLE_ARGS = json.dumps({"title": "T", "subtitle": "SECRET-USER-DATA", "columns": [{"key": "a", "label": "A"}], "rows": [["1"]]})
+
+
+async def test_invalid_call_returns_validation_error_and_corrected_round_renders(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A real model added an unknown field: the error (path + message, no input) is the tool result; round 2 renders."""
+    gen = _UIGen(monkeypatch, [
+        [_call(0, name="render_table", args=BAD_TABLE_ARGS, call_id="t1")],
+        [_call(0, name="render_table", args=TABLE_ARGS, call_id="t2")],
+        END,
+    ])
+    await gen.run()
+    gen.failed.assert_not_awaited()
+    assert len(gen.requests) == 3
+    # The worker appends to one list across rounds, so the first tool message is the round-1 result.
+    tool_msgs = [m for m in gen.requests[1]["messages"] if m["role"] == "tool"]
+    err = json.loads(tool_msgs[0]["content"])
+    assert err["status"] == "error" and "subtitle" in err["error"] and "SECRET-USER-DATA" not in err["error"]
+    assert tool_msgs[0]["tool_call_id"] == "t1"
+    (done,) = gen.events("message.ui.done")
+    assert done.data["kind"] == "table"
+    # The invalid call's part id is discarded so a streamed partial widget disappears from the client.
+    (discard,) = gen.events("message.ui.discard")
+    assert discard.data["part_id"] != done.data["part_id"] and "SECRET-USER-DATA" not in json.dumps(discard.data)
+
+
+async def test_invalid_call_retries_respect_round_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _UIGen(monkeypatch, [[_call(0, name="render_table", args=BAD_TABLE_ARGS, call_id="t")]])
+    await gen.run(generative_ui_max_rounds=2)
+    assert len(gen.requests) == 2 and gen.events("message.ui.done") == []

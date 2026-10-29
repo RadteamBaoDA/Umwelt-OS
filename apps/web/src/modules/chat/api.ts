@@ -221,6 +221,8 @@ export interface StreamEventsOptions {
   onWebSearch?: (outcome: WebSearchOutcome) => void;
   onUiDelta?: (ui: Record<string, unknown>) => void;
   onUiDone?: (ui: Record<string, unknown>) => void;
+  /** The server rejected a streamed widget (`message.ui.discard`); drop its partial snapshots. */
+  onUiDiscard?: (partId: string) => void;
   onStatus?: (status: string, payload?: unknown) => void;
   /** A run parked on `request_user_input`; also replayed on reconnect. */
   onInputRequest?: (request: InputRequest) => void;
@@ -584,6 +586,14 @@ export async function streamResponseEvents(
             }
           } catch (err) {
             console.warn('Failed to parse message.ui.done SSE payload', err);
+          }
+        } else if (eventType === 'message.ui.discard') {
+          try {
+            const parsed = JSON.parse(eventData);
+            // Privacy redaction rewrites old events to `{}`; ignore anything without a part id.
+            if (typeof parsed?.part_id === 'string') options.onUiDiscard?.(parsed.part_id);
+          } catch (err) {
+            console.warn('Failed to parse message.ui.discard SSE payload', err);
           }
         } else if (eventType === 'message.input.request') {
           try {

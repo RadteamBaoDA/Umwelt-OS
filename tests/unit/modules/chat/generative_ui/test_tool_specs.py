@@ -80,3 +80,33 @@ def test_sample_data_defaults_source_unless_model_sets_one(name: str) -> None:
     assert parse(is_sample=True, source="Grounded evidence").source == "Grounded evidence"
     assert parse(is_sample=True, source="Acme").source == "Acme"
     assert parse().source == "Grounded evidence"
+
+
+def test_advertised_schema_agrees_with_pydantic_model_for_every_ui_tool() -> None:
+    """Each terminal tool's advertised schema is its model's schema: a minimal valid call passes both, an unknown key fails both."""
+    from pydantic import ValidationError
+
+    from modules.chat.generative_ui.tool_specs import _UI_MODELS
+    from modules.chat.generative_ui.tool_specs import build_chat_tool_specs as build
+
+    samples = {
+        "render_table": {"title": "T", "columns": [{"key": "a", "label": "A"}]},
+        "render_chart": {"title": "T", "series": [{"key": "v", "label": "V"}]},
+        "render_plan": {"title": "T", "approach": "x", "steps": [{"title": "s"}]},
+        "render_time_picker": None,
+        "render_form": {"title": "F", "fields": [{"id": "c", "label": "C", "type": "text"}]},
+    }
+    specs = {s["function"]["name"]: s["function"]["parameters"] for s in build(include_read_skill=False)}
+    assert set(specs) == set(_UI_MODELS)
+    for name, sample in samples.items():
+        if sample is None:
+            continue
+        validator = Draft202012Validator(specs[name])
+        assert not list(validator.iter_errors(sample)), name
+        parse_ui_tool_args(name, json.dumps(sample))
+        assert list(validator.iter_errors({**sample, "bogus": 1})), name
+        with pytest.raises(ValidationError):
+            parse_ui_tool_args(name, json.dumps({**sample, "bogus": 1}))
+    # Every advertised property is a real model field (schema is derived from the model, not hand-written).
+    for name, (model, _) in _UI_MODELS.items():
+        assert set(specs[name]["properties"]) <= {f.alias or n for n, f in model.model_fields.items()} | set(model.model_fields), name

@@ -71,4 +71,19 @@ describe('model defaults', () => {
     await userEvent.click(screen.getByRole('option', { name: 'OpenAI · emb1' }));
     expect(onPick).toHaveBeenCalledWith('embedding', all, 'emb1');
   });
+
+  it('sets the chat reasoning effort and is disabled without a chat model', async () => {
+    const onEffort = vi.fn();
+    function Block({ chat }: { chat: Mapping | null }) {
+      const t = useTranslations('aiSettings');
+      return <ModelDefaults providers={[cloud]} defaults={{ chat }} disabled={false} embeddingStatus="idle" onPick={vi.fn()} onEffort={onEffort} t={t as never} />;
+    }
+    const wrap = (chat: Mapping | null) => <NextIntlClientProvider locale="en-US" messages={messages['en-us']}><Block chat={chat} /></NextIntlClientProvider>;
+    const { rerender } = render(wrap(null));
+    expect(screen.getByRole('combobox', { name: 'Reasoning effort' }).hasAttribute('disabled')).toBe(true);
+    rerender(wrap(m('gpt-4o')));
+    await userEvent.click(screen.getByRole('combobox', { name: 'Reasoning effort' }));
+    await userEvent.click(screen.getByRole('option', { name: 'High' }));
+    expect(onEffort).toHaveBeenCalledWith('high');
+  });
 });

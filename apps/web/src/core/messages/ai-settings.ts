@@ -20,6 +20,8 @@ export const aiSettingsMessages = {
      
      
       chatModel: 'Chat model',
+      reasoningEffort: 'Reasoning effort', reasoningEffortHelp: 'Asks the chat model to think before answering. The thinking panel only appears for models that stream their reasoning; some providers ignore or reject this, in which case chat continues without it.',
+      effortOff: 'Off', effortLow: 'Low', effortMedium: 'Medium', effortHigh: 'High',
       briefModel: 'Brief model',
      
       selectModel: 'Select a model', dimensionsChangedWarning: 'Changing dimensions requires re-indexing graph and search data.',
@@ -75,6 +77,8 @@ export const aiSettingsMessages = {
      
      
       chatModel: 'Mô hình trò chuyện',
+      reasoningEffort: 'Mức độ suy luận', reasoningEffortHelp: 'Yêu cầu mô hình trò chuyện suy nghĩ trước khi trả lời. Khung suy nghĩ chỉ hiện với mô hình truyền trực tiếp phần suy luận; một số nhà cung cấp bỏ qua hoặc từ chối tùy chọn này, khi đó trò chuyện vẫn tiếp tục mà không có nó.',
+      effortOff: 'Tắt', effortLow: 'Thấp', effortMedium: 'Vừa', effortHigh: 'Cao',
       briefModel: 'Mô hình bản tin',
      
       selectModel: 'Chọn mô hình', dimensionsChangedWarning: 'Đổi số chiều cần lập chỉ mục lại dữ liệu đồ thị và tìm kiếm.',

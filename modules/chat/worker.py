@@ -12,6 +12,7 @@ from typing import Any, cast
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+import httpx
 from fastapi import HTTPException
 from redis.asyncio import Redis
 from sqlalchemy import delete, func, select, update
@@ -24,7 +25,7 @@ from core.model_gateway.client import (
     ModelGatewayError,
     PrivacyPolicyDenied,
 )
-from core.model_gateway.schemas import ModelMapping, RequestPolicy
+from core.model_gateway.schemas import ModelMapping, RequestPolicy, WebSearchTarget
 from core.model_gateway.transport import (
     EndpointNetworkPolicyError,
     approved_web_search_transport,
@@ -52,6 +53,7 @@ from modules.chat.generative_ui import (
     list_skills,
     skill_tool_result,
     streaming_snapshot,
+    ui_call_error,
 )
 from modules.chat.generative_ui import external_router as viz
 from modules.chat.generative_ui.tool_specs import (
@@ -405,85 +407,114 @@ async def _search_for_run(
     Uses only its own ``session_factory()`` session (never the retrieval session). The decision is made
     inside the egress fence (review P1-1): privacy -> Conversation -> Run (``_lock_live_response``), then
     ``ai_settings`` FOR SHARE as a leaf, then consent/provider/endpoint/key and scoped ``local_only`` are
-    re-read in that transaction. The fence is released when the request body has been handed to
-    ``transport.write`` (``body_sent``, the same hook as the model send fence), or in ``finally`` on any
-    earlier exit, so no DB connection or lock is held while waiting for the provider (review P2-1).
+    re-read in that transaction before each attempt. The fence is released when the request body has been
+    handed to ``transport.write`` (``body_sent``), or on any earlier exit, so provider response waits do
+    not hold the lock. Settings identity changes abort fallback and quota is charged only once.
     """
     try:
         web.normalize_query(message)
     except web.WebSearchError as exc:
         return _web_search_run(exc.code)
-    async with session_factory() as fence:
-        released = False
+    quota_consumed = False
+    first_identity: str | None = None
+    last_error: web.WebSearchError | None = None
+    # Reacquire the fence for every attempt: a connect timeout can occur before any body is sent.
+    for index in range(4):
+        async with session_factory() as fence:
+            released = False
+            attempt_started = False
+            target_count = 0
 
-        async def release() -> None:
-            """Roll back the fence transaction once (returns its connection); never raises."""
-            nonlocal released
-            if released:
-                return
-            released = True
+            async def release() -> None:
+                """Return this attempt's connection and locks once, even on cancellation."""
+                nonlocal released
+                if released:
+                    return
+                released = True
+                try:
+                    await fence.rollback()
+                except Exception as exc:  # noqa: BLE001 - cleanup must not leak into httpcore
+                    logger.warning("Web search fence release failed (%s)", type(exc).__name__)
+
             try:
-                await fence.rollback()
-            except Exception as exc:  # noqa: BLE001  # must not raise into httpcore; close() still runs on exit
-                logger.warning("Web search fence release failed (%s)", type(exc).__name__)
-
-        try:
-            async with asyncio.timeout(WEB_SEARCH_FENCE_SECONDS) as deadline:
-                try:
-                    await _lock_live_response(
-                        fence, response_id, conversation_id, expected_fence, scope=scope, access_fence=access_fence,
+                async with asyncio.timeout(WEB_SEARCH_FENCE_SECONDS) as deadline:
+                    try:
+                        await _lock_live_response(
+                            fence, response_id, conversation_id, expected_fence, scope=scope, access_fence=access_fence,
+                        )
+                    except (PrivacyFenceChanged, ResponseNoLongerActive):
+                        return _web_search_run("run_inactive")
+                    if await is_run_cancelled(response_id, redis):
+                        return _web_search_run("run_inactive")
+                    if not await settings_public.lock_ai_settings_for_share(fence, scope=scope):
+                        return _web_search_run("not_configured")
+                    config = await settings_public.get_ai_execution_config(fence, settings, redis, scope=scope)
+                    # A settings change invalidates the original ordering and authorization snapshot.
+                    if first_identity is None:
+                        first_identity = config.gateway_identity
+                    elif first_identity != config.gateway_identity:
+                        return _web_search_run("not_configured")
+                    primary = WebSearchTarget(
+                        provider=config.web_search_provider, endpoint=config.web_search_endpoint,
+                        api_key=config.web_search_api_key, credential_configured=config.web_search_credential_configured,
                     )
-                except (PrivacyFenceChanged, ResponseNoLongerActive):
-                    return _web_search_run("run_inactive")  # the next main-path fence cancels/redacts as today
-                if await is_run_cancelled(response_id, redis):
-                    return _web_search_run("run_inactive")
-                if not await settings_public.lock_ai_settings_for_share(fence, scope=scope):
-                    return _web_search_run("not_configured")  # no row: nothing to lock, so no consent either
-                config = await settings_public.get_ai_execution_config(fence, settings, redis, scope=scope)
-                endpoint = config.web_search_endpoint
-                if not web.web_search_permitted(config) or not endpoint:
-                    return _web_search_run("not_configured")
-                for source_id in scoped_source_ids:
-                    source = await sources_public.get_source_fence(
-                        fence, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled(),
-                    )
-                    if source is None or source.local_only:  # OB-1: foreign/deleted fails closed
-                        return _web_search_run("local_only_context")
-                provider = config.web_search_provider
-                transport = approved_web_search_transport(  # one per search: search() closes it; host check first
-                    endpoint, settings.ai_allowed_endpoint_hosts, settings.web_search_allowed_cidrs,
-                    allow_http=provider == "searxng",
-                )
-                # ponytail: a P14 shutdown re-pend re-runs the search on re-claim, so the cap counts it twice.
-                # Also: the re-claim reuses event seqs, so a live client may keep the first outcome until reload.
-                if not await web.consume_daily_quota(
-                    redis, f"{scope.workspace_id}:{scope.actor_user_id}", settings.web_search_daily_limit,
-                ):
-                    return _web_search_run("daily_limit")
+                    targets = [target for target in (primary, *config.web_search_fallbacks)
+                               if web.target_permitted(target, config.privacy)]
+                    target_count = len(targets)
+                    if index >= target_count:
+                        return _web_search_run(last_error.code if last_error else "not_configured")
+                    for source_id in scoped_source_ids:
+                        source = await sources_public.get_source_fence(
+                            fence, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled(),
+                        )
+                        if source is None or source.local_only:
+                            return _web_search_run("local_only_context")
+                    # One quota charge covers all attempts, including policy-denied targets.
+                    if not quota_consumed:
+                        if not await web.consume_daily_quota(
+                            redis, f"{scope.workspace_id}:{scope.actor_user_id}", settings.web_search_daily_limit,
+                        ):
+                            return _web_search_run("daily_limit")
+                        quota_consumed = True
 
-                async def body_written() -> None:
-                    deadline.reschedule(None)  # first: the body is out, so the rollback must not be cancelled
-                    await release()  # search()'s own total timeout bounds the rest
+                    async def body_written() -> None:
+                        """Release the attempt's fence once the request body leaves the process."""
+                        deadline.reschedule(None)  # rollback after egress must not be cancelled
+                        await release()
 
-                token = body_sent.set(body_written)
-                try:
-                    results = await web.search(
-                        provider, endpoint, config.web_search_api_key, message, transport=transport,
-                    )
-                finally:
-                    body_sent.reset(token)
-            return _web_search_run(None, results, provider)
-        except web.WebSearchError as exc:
-            return _web_search_run(exc.code)
-        except EndpointNetworkPolicyError:
-            return _web_search_run("network_denied")
-        except TimeoutError:
-            return _web_search_run("timeout")
-        except Exception as exc:  # noqa: BLE001  # boundary: a search failure must never fail the answer
-            logger.warning("Web search failed for run %s (%s)", response_id, type(exc).__name__)
-            return _web_search_run("provider_error")
-        finally:
-            await release()
+                    def make_transport(target: WebSearchTarget) -> httpx.AsyncBaseTransport:
+                        """Pin this endpoint to the approved network policy before the attempt."""
+                        assert target.endpoint is not None
+                        return approved_web_search_transport(
+                            target.endpoint, settings.ai_allowed_endpoint_hosts, settings.web_search_allowed_cidrs,
+                            allow_http=target.provider == "searxng",
+                        )
+
+                    attempt_started = True
+                    token = body_sent.set(body_written)
+                    try:
+                        results, provider = await web.search_with_fallback([targets[index]], message, make_transport)
+                    finally:
+                        body_sent.reset(token)
+                return _web_search_run(None, results, provider)
+            except web.WebSearchError as exc:
+                if exc.code not in ("timeout", "provider_error", "network_denied"):
+                    return _web_search_run(exc.code)
+                last_error = exc
+            except EndpointNetworkPolicyError:
+                last_error = web.WebSearchError("network_denied")
+            except TimeoutError:
+                last_error = web.WebSearchError("timeout")
+            except Exception as exc:  # noqa: BLE001 - search must never fail the answer
+                logger.warning("Web search failed for run %s (%s)", response_id, type(exc).__name__)
+                return _web_search_run("provider_error")
+            finally:
+                await release()
+            # A lock timeout is not a provider failure, and no extra transaction is needed
+            # after the final configured target.
+            if not attempt_started or index + 1 >= target_count:
+                break
+    return _web_search_run(last_error.code if last_error else "not_configured")
 
 
 async def _stop_search(task: "asyncio.Task[_WebSearchRun]") -> None:
@@ -717,7 +748,7 @@ async def purge_terminal_message_deltas(
         .where(
             # message.ui.delta partial widget snapshots are as disposable as text deltas: message.ui.done
             # keeps the final widget.
-            StreamEvent.event_type.in_(("message.delta", "message.reasoning.delta", "message.ui.delta")),
+            StreamEvent.event_type.in_(("message.delta", "message.reasoning.delta", "message.ui.delta", "message.ui.discard")),
             ResponseRun.status.in_(("completed", "cancelled", "failed")),
             ResponseRun.completed_at.is_not(None),
             ResponseRun.completed_at < cutoff,
@@ -1241,6 +1272,31 @@ async def run_response_generation(
             outcome = await await_user_input(session_factory, response_id, payload["request_id"])
             return outcome if outcome.outcome in ("answered", "declined") else None
 
+        async def _publish_ui_discards(part_ids: list[str]) -> bool:
+            """Publish one ``message.ui.discard`` per part whose streamed snapshots must be removed from the client.
+
+            Runs under the live-run fence (same lock order as other mid-run publishes). Returns False when the
+            run was cancelled meanwhile (terminal state already persisted), True otherwise.
+            """
+            nonlocal seq
+            async with session_factory() as discard_session:
+                _, discard_run = await _lock_live_response(
+                    discard_session, response_id, conversation_id, privacy_fence,
+                    scope=job_scope, access_fence=access_fence,
+                )
+                if await is_run_cancelled(response_id, redis):
+                    await _cancel_response_locked(discard_session, discard_run, seq)
+                    await discard_session.commit()
+                    return False
+                for discard_id in part_ids:
+                    seq = await _next_event_seq(discard_session, response_id, seq)
+                    discard_session.add(StreamEvent(
+                        response_id=response_id, seq=seq, event_type="message.ui.discard",
+                        event_id=make_event_id(response_id, seq), data={"part_id": discard_id},
+                    ))
+                await discard_session.commit()
+            return True
+
         async def _run_todos(name: str, raw_args: str) -> str | None:
             """Run one todo/template/theme tool under the live-run fence; None when the run was cancelled meanwhile.
 
@@ -1301,6 +1357,12 @@ async def run_response_generation(
                                         if len(reasoning_delta) > room:
                                             reasoning_truncated = True  # drop the overflow; later chunks are dropped too
                                         pending_reasoning += reasoning_delta[:max(room, 0)]
+                                    if (content_delta and round_text_start
+                                            and len(accumulated_text) + len(pending) == round_text_start
+                                            and not (accumulated_text + pending)[-1:].isspace()):
+                                        # A later generative-UI round continues the answer: keep its first words from
+                                        # gluing onto the previous round's last sentence ("equator.Here's").
+                                        content_delta = "\n\n" + content_delta
                                     if content_delta or pending_reasoning:
                                         pending += content_delta or ""
                                         due = len(pending) + len(pending_reasoning) >= STREAM_FLUSH_CHARS or (
@@ -1358,15 +1420,24 @@ async def run_response_generation(
             # Presentation tools never end the turn: every call this response made (within the remaining part
             # budget) is a part, and the model gets another round to write text or add widgets.
             round_parts = _round_terminals(acc)
+            capped_out = sum(c["name"] in TERMINAL_UI_TOOLS for c in calls) > len(round_parts)
+            # Invalid widget calls are not rendered; the model gets the validation error as the tool result and
+            # may correct them in the next round (bounded by generative_ui_max_rounds below).
+            invalid_of = {id(c): err for _, c in round_parts if (err := ui_call_error(c["name"], c["arguments"]))}
+            # Streamed partial snapshots of an invalid call may already be on screen: tell the client to drop them.
+            invalid_pids = [pid for pid, c in round_parts if id(c) in invalid_of]
+            if invalid_pids and not await _publish_ui_discards(invalid_pids):
+                return
+            round_parts = [(pid, c) for pid, c in round_parts if id(c) not in invalid_of]
             part_of = {id(c): pid for pid, c in round_parts}
-            if sum(c["name"] in TERMINAL_UI_TOOLS for c in calls) > len(round_parts):
+            if capped_out:
                 logger.warning("Generative UI part cap (%d) reached for run %s; extra widgets ignored", max_parts, response_id)
             # Calls we answer, in model order: widgets, bounded data tools, bounded input requests.
             handled: list[dict[str, str]] = []
             reads = trips = todo_calls = asks = 0
             for c in calls:
                 name = c["name"]
-                if id(c) in part_of:
+                if id(c) in part_of or id(c) in invalid_of:
                     handled.append(c)
                 elif name == TOOL_READ_SKILL and reads < MAX_SKILL_CALLS_PER_ROUND:
                     reads += 1
@@ -1382,8 +1453,11 @@ async def run_response_generation(
                     handled.append(c)
             if not handled:
                 break  # a plain text round (or nothing we may act on): the answer is complete
-            data_calls = [c for c in handled if id(c) not in part_of and c["name"] != TOOL_REQUEST_USER_INPUT]
-            if round_parts:
+            data_calls = [
+                c for c in handled
+                if id(c) not in part_of and id(c) not in invalid_of and c["name"] != TOOL_REQUEST_USER_INPUT
+            ]
+            if round_parts or invalid_of:
                 ui_parts.extend(round_parts)
                 ui_rounds += 1
                 if len(ui_parts) >= max_parts or ui_rounds >= max_ui_rounds:
@@ -1404,7 +1478,9 @@ async def run_response_generation(
             })
             for tc, c in zip(tool_calls, handled, strict=True):
                 name = c["name"]
-                if id(c) in part_of:
+                if id(c) in invalid_of:
+                    content = invalid_of[id(c)]
+                elif id(c) in part_of:
                     # The payload is already on screen; echoing it back would only cost tokens.
                     content = json.dumps({"status": "rendered", "part_id": part_of[id(c)]})
                 elif name == TOOL_TRIP_IMAGES:
@@ -1824,7 +1900,7 @@ async def neutralize_ui_events(session: AsyncSession, response_id: UUID) -> None
     """
     await session.execute(update(StreamEvent).where(
         StreamEvent.response_id == response_id,
-        StreamEvent.event_type.in_(("message.ui.delta", "message.ui.done")),
+        StreamEvent.event_type.in_(("message.ui.delta", "message.ui.done", "message.ui.discard")),
     ).values(data={}))
 
 

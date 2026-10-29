@@ -23,6 +23,18 @@ export function upsertUiPart(parts: readonly UiPart[], next: UiPart): UiPart[] {
 }
 
 /**
+ * Remove a streamed widget part the server reported invalid (`message.ui.discard`).
+ *
+ * @param parts Current ordered parts of the streaming turn.
+ * @param partId Id of the part to drop; an unknown id leaves the list unchanged.
+ * @returns A new array when a part was removed, otherwise the same array.
+ */
+export function removeUiPart(parts: readonly UiPart[], partId: string): UiPart[] {
+  const next = parts.filter((p) => p.part_id !== partId);
+  return next.length === parts.length ? (parts as UiPart[]) : next;
+}
+
+/**
  * Ordered widget parts of a persisted message.
  *
  * Prefers `generative_ui_parts`; rows written before multi-widget turns only carry `generative_ui`.

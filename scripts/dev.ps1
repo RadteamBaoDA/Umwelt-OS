@@ -150,6 +150,7 @@ N8N_ENCRYPTION_KEY=$(New-Secret)
       $previousE2eToken = $env:E2E_SETUP_TOKEN
       $previousPlaywrightUrl = $env:PLAYWRIGHT_BASE_URL
       $previousExternalServer = $env:PLAYWRIGHT_EXTERNAL_SERVER
+      $previousAllowPublic = $env:E2E_ALLOW_PUBLIC_PROVIDERS
       $webPort = Get-FreePort
       $apiPort = Get-FreePort
       while ($apiPort -eq $webPort) { $apiPort = Get-FreePort }
@@ -163,6 +164,11 @@ N8N_ENCRYPTION_KEY=$(New-Secret)
         $env:TEST_POSTGRES_PORT = [string]$postgresPort
         $env:TEST_DATABASE_URL = "postgresql+asyncpg://bbd_test:bbd-os-test-db-only@127.0.0.1:$postgresPort/bbd_test"
         $env:TEST_PUBLIC_ORIGIN = "http://localhost:$webPort"
+        # Opt-in real-model chat e2e: only when .env.e2e-real holds a non-empty key. The key itself is never exported to compose;
+        # the spec reads the file directly. Without it the stack keeps AI egress pinned to the fake model.
+        if ((Test-Path '.env.e2e-real') -and (Select-String -Path '.env.e2e-real' -Pattern '^\s*E2E_REAL_API_KEY\s*=\s*\S' -Quiet)) {
+          $env:E2E_ALLOW_PUBLIC_PROVIDERS = 'true'
+        }
         Invoke-Checked 'docker' ($compose + @('up', '-d', '--build'))
         # -E2eOnly skips the (slow) integration suite and runs only the browser specs.
         if (-not $E2eOnly) {
@@ -213,8 +219,8 @@ N8N_ENCRYPTION_KEY=$(New-Secret)
       } finally {
         # Keep the disposable stack's logs: `down` destroys the only evidence of a container that died mid-run.
         New-Item -ItemType Directory -Force -Path 'test-results' | Out-Null
-        & docker @($compose + @('ps', '-a')) *> 'test-results/compose-ps.txt'
-        & docker @($compose + @('logs', '--no-color', '--timestamps', '--tail', '400')) *> 'test-results/compose-logs.txt'
+        & docker @($compose + @('ps', '-a')) 2>&1 | Out-File -Encoding utf8 'test-results/compose-ps.txt'
+        & docker @($compose + @('logs', '--no-color', '--timestamps', '--tail', '5000')) 2>&1 | Out-File -Encoding utf8 'test-results/compose-logs.txt'
         & docker @($compose + @('down', '--volumes', '--remove-orphans'))
         if ($null -eq $previousWebPort) { Remove-Item Env:WEB_PORT -ErrorAction SilentlyContinue }
         else { $env:WEB_PORT = $previousWebPort }
@@ -236,6 +242,8 @@ N8N_ENCRYPTION_KEY=$(New-Secret)
         else { $env:PLAYWRIGHT_BASE_URL = $previousPlaywrightUrl }
         if ($null -eq $previousExternalServer) { Remove-Item Env:PLAYWRIGHT_EXTERNAL_SERVER -ErrorAction SilentlyContinue }
         else { $env:PLAYWRIGHT_EXTERNAL_SERVER = $previousExternalServer }
+        if ($null -eq $previousAllowPublic) { Remove-Item Env:E2E_ALLOW_PUBLIC_PROVIDERS -ErrorAction SilentlyContinue }
+        else { $env:E2E_ALLOW_PUBLIC_PROVIDERS = $previousAllowPublic }
       }
     }
     'build' {

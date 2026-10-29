@@ -275,6 +275,8 @@ async def test_web_search(body: WebSearchTest, session: Session, request: Reques
     endpoint = public.validate_endpoint(str(body.endpoint), settings)
     config = await public.get_ai_execution_config(session, settings, request.app.state.redis, scope=_owner)
     key = body.api_key or (config.web_search_api_key if config.web_search_endpoint == endpoint else "")
+    if not key:
+        key = next((target.api_key for target in config.web_search_fallbacks if target.endpoint == endpoint), "")
     await session.rollback()  # no SQL held across egress
     if endpoint is None or (body.provider != "searxng" and not key):
         return ConnectionTestResult(ok=False, error="credential_required")

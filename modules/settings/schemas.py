@@ -132,33 +132,42 @@ class SystemPromptsUpdate(BaseModel):
 CredentialAction = Literal["unchanged", "replaced", "removed"]
 
 
-class WebSearchRead(BaseModel):
-    """Web-search settings; the key is never returned, only whether one is stored."""
-    configuration_revision: int = Field(ge=1)
-    provider: Literal["none", "tavily", "brave", "searxng"]
-    endpoint: str | None = None
+class WebSearchEntryRead(BaseModel):
+    """Expose one ordered search destination and credential presence, never its key."""
+    provider: Literal["tavily", "brave", "searxng", "omniroute"]
+    endpoint: str
     credential_configured: bool
-    allow_remote_web_search: bool
     destination_id: str | None = None
 
 
-class WebSearchUpdate(BaseModel):
-    """Full replace of web-search settings under the shared revision check."""
-    model_config = ConfigDict(extra="forbid")
+class WebSearchRead(BaseModel):
+    """Return ordered search destinations and their shared remote-search consent."""
+    configuration_revision: int = Field(ge=1)
+    providers: list[WebSearchEntryRead]
+    allow_remote_web_search: bool
 
-    expected_revision: int = Field(ge=1)
-    provider: Literal["none", "tavily", "brave", "searxng"]
-    endpoint: AnyHttpUrl | None = None
+
+class WebSearchEntryUpdate(BaseModel):
+    """Validate one search destination and write-only credential action."""
+    model_config = ConfigDict(extra="forbid")
+    provider: Literal["tavily", "brave", "searxng", "omniroute"]
+    endpoint: AnyHttpUrl
     credential_action: CredentialAction = "unchanged"
     api_key: str | None = Field(default=None, max_length=4096, repr=False)
+
+
+class WebSearchUpdate(BaseModel):
+    """Replace up to four ordered search destinations under the shared revision fence."""
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+    providers: list[WebSearchEntryUpdate] = Field(max_length=4)
     allow_remote_web_search: bool = False
 
 
 class WebSearchTest(BaseModel):
-    """Draft probe input; a blank key falls back to the stored key only for the stored endpoint."""
+    """Probe one draft; a blank key may reuse a saved key only for the same endpoint."""
     model_config = ConfigDict(extra="forbid")
-
-    provider: Literal["tavily", "brave", "searxng"]
+    provider: Literal["tavily", "brave", "searxng", "omniroute"]
     endpoint: AnyHttpUrl
     api_key: str = Field(default="", max_length=4096, repr=False)
 
