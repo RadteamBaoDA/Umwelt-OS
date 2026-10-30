@@ -14,6 +14,9 @@ from pydantic import (
     model_validator,
 )
 
+# Widest supported read window; annual series need ~10 years. Row volume stays bounded by the query's
+# page limit (<=100) and the 2,048-row scan cap in public.list_observations, not by this window.
+MAX_WINDOW_DAYS = 3660
 _FX_PROVIDERS = frozenset({"frankfurter", "ecb"})
 
 
@@ -56,6 +59,8 @@ class ObservationQuery(BaseModel):
     to_at: datetime
     limit: StrictInt = Field(default=100, ge=1, le=100)
     geospatial_only: bool = False
+    # Opt-in: also return superseded (non-current) revisions so a fixed-identity series charts as history.
+    history: bool = False
 
     @field_validator("from_at", "to_at")
     @classmethod
@@ -81,9 +86,9 @@ class ObservationQuery(BaseModel):
 
     @model_validator(mode="after")
     def validate_window(self) -> "ObservationQuery":
-        """Keep windows half-open, finite and within the supported 366-day range."""
+        """Keep windows half-open, finite and within the supported 3660-day range."""
         from datetime import timedelta
-        if self.from_at >= self.to_at or self.to_at - self.from_at > timedelta(days=366):
+        if self.from_at >= self.to_at or self.to_at - self.from_at > timedelta(days=MAX_WINDOW_DAYS):
             raise ValueError("invalid observation time window")
         for values in (self.source_ids, self.metrics, self.symbols, self.regions):
             if len(values) != len(set(values)):

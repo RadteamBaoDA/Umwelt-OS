@@ -261,7 +261,7 @@ async def test_admit_event_snapshot_fence_drift_is_noop() -> None:
 async def test_process_source_purge_dependency_limit_fails_operation_and_delivers() -> None:
     operation = SimpleNamespace(id=OP, generation=2, documents_status="queued", status="queued",
                                 error_code=None, pending_owner_codes=[])
-    source = SimpleNamespace(id=SRC, workspace_id=WS, status="archived", generation=2, local_only=False)
+    source = SimpleNamespace(id=SRC, workspace_id=WS, status="archived", generation=2, local_only=False, graph_enabled=True, rag_index_enabled=True)
     delivery = _delivery()
     session = MagicMock()
     factory = MagicMock()
@@ -289,7 +289,7 @@ async def test_process_source_purge_dependency_limit_fails_operation_and_deliver
 async def test_process_source_purge_other_errors_propagate() -> None:
     operation = SimpleNamespace(id=OP, generation=2, documents_status="queued", status="queued",
                                 error_code=None, pending_owner_codes=[])
-    source = SimpleNamespace(id=SRC, workspace_id=WS, status="archived", generation=2, local_only=False)
+    source = SimpleNamespace(id=SRC, workspace_id=WS, status="archived", generation=2, local_only=False, graph_enabled=True, rag_index_enabled=True)
     delivery = _delivery()
     factory = MagicMock()
     factory.return_value.__aenter__ = AsyncMock(return_value=MagicMock())

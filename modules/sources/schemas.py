@@ -71,6 +71,7 @@ class SourceRead(BaseModel):
     # Filled by the route from connector schedule state; None for sources without a schedule.
     next_due_at: datetime | None = None
     retry_at: datetime | None = None
+    realtime_mode: Literal["realtime", "near_realtime"] | None = None
 
 
 class SourceFence(BaseModel):
@@ -167,6 +168,7 @@ class GadgetSourceSelection(BaseModel):
     status: str
     generation: int
     local_only: bool
+    last_success_at: datetime | None = None
 
 
 class GadgetSourceSelectionPage(BaseModel):

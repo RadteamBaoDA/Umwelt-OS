@@ -13,7 +13,8 @@ import { archiveSource, createManualSource, sourceKeys, type Source } from './ap
 import { ConnectorEditor, type EditorActions, type EditorSnapshot, type EditorStep } from './connector-editor';
 import { GitHubWebhookStatus } from './github-summary';
 import { SettingsSection } from '@/modules/settings/settings-layout';
-import { SourceAiToggles, type SourceAiOptions } from './source-ai-toggles';
+import type { DataShape } from '@/core/data-shapes';
+import type { SourceAiOptions } from './source-ai-toggles';
 import { Upload } from '@/modules/ingestion/upload';
 
 /** One wizard step: stable id, display title, and whether the owner may leave it forward in add mode. */
@@ -135,6 +136,8 @@ type ConnectorWizardProps = {
   onClose: () => void;
   onChanged: () => void;
   registerTransitionGuard: (guard: (() => boolean) | null) => void;
+  shapeFilter?: DataShape[];
+  onClearFilter?: () => void;
 };
 
 /**
@@ -144,7 +147,7 @@ type ConnectorWizardProps = {
  * MCP collapses connect/choose/schedule into a single configure step. A source created here and not yet
  * verified is archived if the owner discards it; verified or edited sources are never archived by closing.
  */
-function ConnectorWizard({ source, onClose, onChanged, registerTransitionGuard }: ConnectorWizardProps) {
+function ConnectorWizard({ source, onClose, onChanged, registerTransitionGuard, shapeFilter, onClearFilter }: ConnectorWizardProps) {
   const t = useTranslations('sources');
   const { csrfToken } = useWorkspaceSession();
   const queryClient = useQueryClient();
@@ -185,7 +188,7 @@ function ConnectorWizard({ source, onClose, onChanged, registerTransitionGuard }
     final={{ label: t('done'), disabled: !edit && !verified, onClick: onClose }}
     discard={createdId ? { needed: !verified, onConfirm: discard } : undefined}>
     {snapshot.provider === 'github' && <GitHubWebhookStatus />}
-    <ConnectorEditor source={source} step={step} actionsRef={actionsRef} onSnapshot={setSnapshot} registerTransitionGuard={registerTransitionGuard} onChanged={onChanged} onClose={onClose} />
+    <ConnectorEditor source={source} shapeFilter={shapeFilter} onClearFilter={onClearFilter} step={step} actionsRef={actionsRef} onSnapshot={setSnapshot} registerTransitionGuard={registerTransitionGuard} onChanged={onChanged} onClose={onClose} />
   </WizardShell>;
 }
 
@@ -200,7 +203,7 @@ function ManualWizard({ onClose, onChanged, purpose = null }: {
   const queryClient = useQueryClient();
   const [name, setName] = useState(() => purpose === 'notes' ? t('notesSourceName') : purpose === 'personal_finance' ? t('financeSourceName') : '');
   const [createdSourceId, setCreatedSourceId] = useState('');
-  const [aiOptions, setAiOptions] = useState<SourceAiOptions>({ graph_enabled: true, rag_index_enabled: true });
+  const [aiOptions] = useState<SourceAiOptions>({ graph_enabled: false, rag_index_enabled: false });
   const trimmed = name.trim();
   const create = useMutation({
     mutationFn: () => createManualSource(trimmed, csrfToken, aiOptions),
@@ -228,9 +231,6 @@ function ManualWizard({ onClose, onChanged, purpose = null }: {
       <SettingsSection title={t('panelIdentity')} description={description}>
         <div className="field"><Label htmlFor="source-name">{t('sourceName')}</Label><Input id="source-name" autoFocus maxLength={200} value={name} onChange={(event) => setName(event.target.value)} /></div>
       </SettingsSection>
-      <SettingsSection title={t('aiOptionsTitle')}>
-        <SourceAiToggles idPrefix="manual-source" value={aiOptions} onChange={setAiOptions} disabled={create.isPending} />
-      </SettingsSection>
       {create.error && <p className="error" role="alert">{t('actionFailed')}</p>}
     </form> : createdSourceId && purpose ? <Upload initialMode={purpose === 'notes' ? 'notes' : 'finance'} initialSourceId={createdSourceId} /> : null}
   </WizardShell>;
@@ -240,13 +240,15 @@ function ManualWizard({ onClose, onChanged, purpose = null }: {
 export type SourceWizardRequest = { kind: 'connector' } | { kind: 'manual' } | { kind: 'manual_import'; purpose: 'notes' | 'personal_finance' } | { kind: 'edit'; source: Source };
 
 /** Opens the full-screen add/edit dialog for the requested connector or manual flow. */
-export function SourceWizard({ request, onClose, onChanged, registerTransitionGuard }: {
+export function SourceWizard({ request, onClose, onChanged, registerTransitionGuard, shapeFilter, onClearFilter }: {
   request: SourceWizardRequest;
   onClose: () => void;
   onChanged: () => void;
   registerTransitionGuard: (guard: (() => boolean) | null) => void;
+  shapeFilter?: DataShape[];
+  onClearFilter?: () => void;
 }) {
   if (request.kind === 'manual') return <ManualWizard onClose={onClose} onChanged={onChanged} />;
   if (request.kind === 'manual_import') return <ManualWizard onClose={onClose} onChanged={onChanged} purpose={request.purpose} />;
-  return <ConnectorWizard source={request.kind === 'edit' ? request.source : null} onClose={onClose} onChanged={onChanged} registerTransitionGuard={registerTransitionGuard} />;
+  return <ConnectorWizard source={request.kind === 'edit' ? request.source : null} onClose={onClose} onChanged={onChanged} registerTransitionGuard={registerTransitionGuard} shapeFilter={shapeFilter} onClearFilter={onClearFilter} />;
 }

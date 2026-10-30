@@ -11,7 +11,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import Select, func, select, text
+from sqlalchemy import Select, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
@@ -257,7 +257,7 @@ async def capture_authority(
 
 
 def eligible_chunks(*, workspace_id: UUID) -> Select[UUID, str, UUID]:
-    """Select one workspace's active-source chunks from ready current versions, skipping Sources whose owner turned RAG indexing off."""
+    """Select one workspace's active-source chunks from ready current versions, skipping Sources whose owner turned RAG indexing off or configured skip_embedding."""
     return (
         select(DocumentChunk.id, DocumentChunk.content, Source.id)
         .join(DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id)
@@ -268,6 +268,10 @@ def eligible_chunks(*, workspace_id: UUID) -> Select[UUID, str, UUID]:
             Document.workspace_id == workspace_id, Source.workspace_id == workspace_id,
             Document.extraction_status.in_(("ready", "succeeded")),
             Source.status == "active", Source.local_only.is_(False), Source.rag_index_enabled.is_(True),
+            or_(
+                Source.configuration["skip_embedding"].as_boolean().is_(None),
+                Source.configuration["skip_embedding"].as_boolean().is_(False),
+            ),
         )
     )
 

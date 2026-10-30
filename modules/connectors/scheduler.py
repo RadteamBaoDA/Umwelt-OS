@@ -46,6 +46,7 @@ from modules.connectors.models import (
 MAX_ATTEMPTS = 5
 SLOT_TTL = timedelta(seconds=120)  # renewal every 20 s is the executor's duty
 BUSY_DEFER = timedelta(seconds=30)
+REALTIME_BUSY_DEFER = timedelta(seconds=5)
 ENQUEUE_CLAIM = timedelta(seconds=60)
 REENQUEUE_AFTER = timedelta(minutes=5)  # lost Redis job: the durable row is enqueued again
 TICK_WORKSPACES = 50
@@ -350,8 +351,18 @@ async def admit_collection_request(
         select(ConnectorAdmissionSlot).where(ConnectorAdmissionSlot.occupied_request_id.is_(None))
         .order_by(ConnectorAdmissionSlot.slot_id).limit(1).with_for_update(skip_locked=True))
     if slot is None:
+        from modules.connectors.provider_specs import get_realtime_tier
+
+        defer_delta = (
+            REALTIME_BUSY_DEFER
+            if get_realtime_tier(
+                getattr(source, "provider", None),
+                getattr(source, "configuration", None),
+            ) == "realtime"
+            else BUSY_DEFER
+        )
         await session.rollback()
-        await _defer(session, request_id, BUSY_DEFER)
+        await _defer(session, request_id, defer_delta)
         return None
     token = uuid7()
     slot.occupied_request_id = request.id

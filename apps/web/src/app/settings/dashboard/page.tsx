@@ -1,19 +1,6 @@
-'use client';
+import { redirect } from 'next/navigation';
 
-import { useTranslations } from 'next-intl';
-import { WorkspaceShell } from '@/core/app-shell/workspace-shell';
-import { SettingsPageHeader } from '@/modules/settings/settings-layout';
-import { GadgetEditor } from '@/modules/settings/gadget-editor';
-
-/** Renders dashboard and gadget settings within the workspace shell. */
+/** Sends old Dashboard & Gadget settings links to the new Dashboard owner. */
 export default function DashboardSettingsPage() {
-  const t = useTranslations('gadgetSettings');
-  return (
-    <WorkspaceShell>
-      <div className="flex flex-col gap-5">
-        <SettingsPageHeader eyebrow={t('eyebrow')} title={t('title')} description={t('intro')} />
-        <GadgetEditor />
-      </div>
-    </WorkspaceShell>
-  );
+  redirect('/dashboard');
 }

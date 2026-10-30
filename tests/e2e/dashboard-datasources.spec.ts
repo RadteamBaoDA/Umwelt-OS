@@ -1,5 +1,8 @@
 import type { Locator, Page, Response } from '@playwright/test';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { test, expect } from './fixtures';
+import { RESULTS_DIR } from './run-paths';
 import {
   BUILTINS, WIZARD_CASES, connectWizardSource, deleteSources, enableBuiltinViaSettings, escapeRe, findSources, writeHeaders,
 } from './sources-helpers';
@@ -29,6 +32,13 @@ const EXTERNAL_BLOCK = new Set(['cisa_kev']);
  * active (checked 2026-10-24); arXiv's daily RSS is empty on weekends (checked Sat 2026-10-24), which the app reports as `collection_incomplete`. No data exists to bind a gadget to.
  */
 const EMPTY_FEED = new Set(['noaa_tsunami', 'arxiv']);
+/**
+ * Wikimedia publishes a UTC day's data some hours after midnight UTC: until then the pageviews top answers 404 for
+ * "yesterday" (`provider_rejected`) and the featured feed has no `mostread` for "today" (`provider_response_invalid`)
+ * (checked 2026-10-30 00:37 UTC). A fetch failing with one of those codes is a remote publication lag the app handled.
+ */
+const DAILY_LAG = new Set(['wikipedia_mostread', 'wikipedia_top_views']);
+const LAG_CODES = ['provider_rejected', 'provider_response_invalid'];
 
 /** Where a gadget's data shows up once rendered, per renderer id. */
 const ROW_SELECTOR: Record<string, string> = {
@@ -37,6 +47,7 @@ const ROW_SELECTOR: Record<string, string> = {
   provider_observation: 'li',
   weather: 'li, tbody tr, dl',
   finance_chart: 'svg',
+  video_panel: 'a[href]',
 };
 /** Visible copy that means "no data" or "failed"; none may appear in a gadget that claims to render data. */
 const NO_DATA = /No provider observations|No current records|Could not load|Feed stream empty|No current stories match/i;
@@ -44,12 +55,10 @@ const NO_DATA = /No provider observations|No current records|Could not load|Feed
 type Gadget = {
   /** Source key: built-in id or wizard case id. */
   id: string;
-  /** Template tile label (en-us), or `null` for the Custom tile with `renderer`. */
-  template: string | null;
-  /** Renderer id; for the Custom tile also looked up by its en-us label in `RENDERER_LABEL`. */
+  /** Renderer id; the Add gadget dialog offers it as the display-type tile named in `TILE_LABEL`. */
   renderer: keyof typeof ROW_SELECTOR;
-  /** Enable the built-in from inside the gadget editor instead of Settings (exercises that UI path). */
-  viaPicker?: boolean;
+  /** Chart symbol to track (replaces the provider's preselected suggestion). */
+  symbol?: string;
   /** Advanced-section fields to fill (label -> value). */
   advanced?: Record<string, string>;
   /** Evidenced product limitation: the gadget is expected to fail (Playwright reports an unexpected pass). */
@@ -57,36 +66,39 @@ type Gadget = {
 };
 
 const RENDERER_LABEL: Record<string, string> = {
-  news_feed: 'News feed', table_panel: 'Table panel', provider_observation: 'Provider observation', weather: 'Weather', finance_chart: 'Finance chart',
+  news_feed: 'News feed', video_panel: 'Video panel', table_panel: 'Table panel', provider_observation: 'Provider observation', weather: 'Weather', finance_chart: 'Finance chart',
 };
-const tpl = (id: string, template: string, renderer: Gadget['renderer'], extra: Partial<Gadget> = {}): Gadget => ({ id, template, renderer, ...extra });
-const custom = (id: string, renderer: Gadget['renderer'], extra: Partial<Gadget> = {}): Gadget => ({ id, template: null, renderer, ...extra });
+/** Display-type tile label (en-us) the Add gadget dialog shows first; picking it lists the compatible sources. */
+const TILE_LABEL: Record<string, string> = { news_feed: 'Feed', table_panel: 'Table', provider_observation: 'Metric', weather: 'Weather', finance_chart: 'Chart', video_panel: 'Video' };
+const gadget = (id: string, renderer: Gadget['renderer'], extra: Partial<Gadget> = {}): Gadget => ({ id, renderer, ...extra });
 
 /** One gadget per datasource; the renderer is the one the gadget editor offers for that provider's data shape. */
 const GADGETS: Gadget[] = [
-  // News lists from the templates.
-  ...['bbc_world', 'aljazeera_world', 'npr_news'].map((id) => tpl(id, 'World news', 'news_feed')),
-  ...['vnexpress_business', 'tuoitre_news', 'thanhnien_news', 'dantri_news'].map((id) => tpl(id, 'Vietnam business news', 'news_feed')),
-  ...['hn_top', 'lobsters'].map((id) => tpl(id, 'Tech news', 'news_feed')),
-  // Price / metric observations from the templates (alternative_me is enabled from inside the editor).
-  tpl('alternative_me', 'Fear & Greed index', 'provider_observation', { viaPicker: true }),
-  ...['binance', 'coinpaprika'].map((id) => tpl(id, 'Bitcoin price', 'provider_observation')),
-  tpl('coingecko', 'Bitcoin price', 'provider_observation'),
-  ...['frankfurter', 'ecb', 'open_er_api'].map((id) => tpl(id, 'Exchange rates', 'provider_observation')),
-  tpl('usgs', 'Earthquakes', 'provider_observation'),
-  tpl('open_meteo', 'Weather', 'weather'),
-  custom('world_bank', 'provider_observation', {
+  // News lists (Feed tile).
+  ...['bbc_world', 'aljazeera_world', 'npr_news'].map((id) => gadget(id, 'news_feed')),
+  ...['vnexpress_business', 'tuoitre_news', 'thanhnien_news', 'dantri_news'].map((id) => gadget(id, 'news_feed')),
+  ...['hn_top', 'lobsters'].map((id) => gadget(id, 'news_feed')),
+  // Price / metric observations (Metric tile) (the editor no longer enables sources inline, so every source is enabled from Settings first).
+  gadget('alternative_me', 'provider_observation'),
+  ...['binance', 'coinpaprika'].map((id) => gadget(id, 'provider_observation')),
+  gadget('coingecko', 'provider_observation'),
+  ...['frankfurter', 'ecb', 'open_er_api'].map((id) => gadget(id, 'provider_observation')),
+  gadget('usgs', 'provider_observation'),
+  gadget('open_meteo', 'weather'),
+  gadget('world_bank', 'provider_observation', {
     advanced: { 'Date range (days)': '366' },
     knownLimit: 'Annual GDP is observed on Jan 1 of its year (2025-01-01), older than the 366-day maximum observation window.',
   }),
-  custom('alpha_vantage', 'finance_chart', { advanced: { 'Tracked symbols (comma-separated)': 'IBM' } }),
-  // Generic news lists for feeds without a template.
+  gadget('alpha_vantage', 'finance_chart', { symbol: 'IBM' }),
+  // Generic news lists for feeds (Feed tile).
   ...['rss', 'google_news', 'wikipedia_mostread', 'wikipedia_top_views', 'fed_press', 'gdacs_rss', 'us_travel_advisories', 'noaa_tsunami', 'jma_eqvol', 'gdelt_economy']
-    .map((id) => custom(id, 'news_feed')),
+    .map((id) => gadget(id, 'news_feed')),
+  // Video list (youtube produces the `video` data shape, which only the Video tile accepts).
+  gadget('youtube', 'video_panel'),
   // Record tables for event / document / measurement sources.
-  ...['rest', 'web', 'nasa_eonet', 'sec_edgar', 'openalex', 'arxiv', 'huggingface', 'github_releases', 'youtube', 'gdacs_events', 'nws_alerts',
+  ...['rest', 'web', 'nasa_eonet', 'sec_edgar', 'openalex', 'arxiv', 'huggingface', 'github_releases', 'gdacs_events', 'nws_alerts',
     'emsc_quakes', 'launch_library', 'bmkg_quakes', 'satnogs_observations', 'noaa_kp', 'oecd_cli', 'iss_position', 'disease_sh', 'ioda', 'nvd']
-    .map((id) => custom(id, 'table_panel')),
+    .map((id) => gadget(id, 'table_panel')),
 ];
 
 const wizardCase = (id: string) => WIZARD_CASES.find((c) => c.id === id);
@@ -100,6 +112,23 @@ function pickerName(id: string): string {
   return wizardCase(id) ? `${PREFIX} ${id}` : builtinLabel(id)!;
 }
 
+/**
+ * Gadget ids whose test was skipped because the remote provider was throttled. Persisted to a file (not a module
+ * variable) because Playwright restarts the worker after a failed test, which would drop in-memory state.
+ */
+const SKIPPED_FILE = join(process.cwd(), RESULTS_DIR, 'dashboard-datasources-remote-skipped.json');
+
+/** Reads the persisted remote-skipped gadget ids (empty when none were recorded). */
+function readRemoteSkipped(): string[] {
+  try { return JSON.parse(readFileSync(SKIPPED_FILE, 'utf8')) as string[]; } catch { return []; }
+}
+
+/** Replaces the persisted remote-skipped gadget ids; the final check excludes exactly these. */
+function writeRemoteSkipped(ids: string[]): void {
+  mkdirSync(dirname(SKIPPED_FILE), { recursive: true });
+  writeFileSync(SKIPPED_FILE, JSON.stringify(ids));
+}
+
 /** Looks up the source id for a plan entry (wizard sources by name, built-ins by the catalog). */
 async function sourceIdOf(page: Page, id: string): Promise<string | null> {
   if (wizardCase(id)) return (await findSources(page, `${PREFIX} ${id}`))[0]?.id ?? null;
@@ -110,9 +139,27 @@ async function sourceIdOf(page: Page, id: string): Promise<string | null> {
 /** True when a slow provider's built-in source is parked on a retryable remote 429 (see SLOW_MS). */
 async function remoteThrottled(page: Page, id: string): Promise<boolean> {
   const label = builtinLabel(id);
-  if (!SLOW_MS[id] || !label) return false;
+  if (!(SLOW_MS[id] || DAILY_LAG.has(id)) || !label) return false;
   const source = (await findSources(page, label))[0];
-  return [source?.collection_error_code, source?.last_error_code].includes('provider_rate_limited');
+  const codes = [source?.collection_error_code, source?.last_error_code];
+  return SLOW_MS[id] ? codes.includes('provider_rate_limited') : codes.some((code) => LAG_CODES.includes(code ?? ''));
+}
+
+/** Public YouTube feed used as a canary: if the runner cannot fetch it either, a YouTube failure is a remote outage. */
+const YOUTUBE_CANARY = 'https://www.youtube.com/feeds/videos.xml?channel_id=UCBR8-60-B28hp2BmDPdntcQ';
+
+/**
+ * Skips (as a remote outage) a YouTube test whose fetch/render failed while the canary feed is also unreachable
+ * from the runner; records the id so the final dashboard check excludes it. Returns normally when the canary
+ * answers 2xx, so the caller's failure stays a hard failure.
+ */
+async function skipIfYoutubeOutage(id: string): Promise<void> {
+  if (id !== 'youtube') return;
+  const status = await fetch(YOUTUBE_CANARY, { signal: AbortSignal.timeout(10_000) }).then((r) => r.status, () => 0);
+  if (status >= 200 && status < 300) return;
+  test.info().annotations.push({ type: 'remote-outage', description: `youtube canary feed returned ${status || 'a network error'}` });
+  writeRemoteSkipped([...new Set([...readRemoteSkipped(), id])]);
+  test.skip(true, `youtube is unreachable from the runner (canary ${status || 'network error'})`);
 }
 
 /** Opens the e2e dashboard by id (resolved through the API so tests stay independent of each other). */
@@ -138,27 +185,50 @@ async function expectShellUp(page: Page) {
 /** Gadget region for a plan entry, found by the unique title the editor set. */
 const regionOf = (page: Page, id: string) => page.getByRole('region', { name: `${PREFIX} ${id}`, exact: true });
 
+/**
+ * Completes the metric and symbol pickers that follow source selection. Charts preselect a metric; Metric/Weather
+ * gadgets start empty, so the first catalog metric is ticked, and a symbol-keyed provider gets its first suggested
+ * symbol (or `g.symbol`, replacing the suggestion) so the server accepts the gadget.
+ */
+async function fillCatalogFields(dialog: Locator, g: Gadget) {
+  if (!['provider_observation', 'weather', 'finance_chart'].includes(g.renderer)) return;
+  const metricGroup = dialog.getByRole('group', { name: 'Metric' });
+  // The catalog loads asynchronously; give the picker a moment to appear (open-text providers never show one).
+  if (await metricGroup.waitFor({ state: 'visible', timeout: 5_000 }).then(() => true, () => false)) {
+    const boxes = metricGroup.getByRole('checkbox');
+    if ((await boxes.count()) > 0 && (await metricGroup.getByRole('checkbox', { checked: true }).count()) === 0) await boxes.first().check();
+  }
+  // Free-text fallback (provider catalog unknown): a plain "Symbols" textbox instead of the combobox picker.
+  const symbolText = dialog.getByRole('textbox', { name: 'Symbols', exact: true });
+  if (await symbolText.isVisible()) {
+    if (g.symbol) await symbolText.fill(g.symbol);
+    return;
+  }
+  const symbols = dialog.getByRole('combobox', { name: 'Symbols' });
+  if (!(await symbols.isVisible())) return;
+  const removes = dialog.getByRole('button', { name: /^Remove / });
+  if (g.symbol) {
+    while ((await removes.count()) > 0) await removes.first().click();
+    await symbols.click();
+    await dialog.page().getByRole('textbox', { name: 'Search or type a symbol' }).fill(g.symbol);
+    await dialog.page().keyboard.press('Enter');
+  } else if ((await removes.count()) === 0) {
+    await symbols.click();
+    await dialog.page().getByRole('option').first().click();
+  }
+}
+
 /** Adds one gadget through Edit layout -> Add gadget -> editor -> Save layout. */
 async function addGadget(page: Page, g: Gadget) {
   await openDashboard(page);
   await page.getByRole('button', { name: 'Edit layout' }).click();
   await page.getByRole('button', { name: 'Add gadget', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Add gadget to dashboard' });
-  if (g.template) {
-    await dialog.getByRole('button', { name: new RegExp(`^${escapeRe(g.template)}`) }).click();
-  } else {
-    await dialog.getByRole('button', { name: /^Custom/ }).click();
-    await dialog.getByRole('combobox', { name: 'Display type' }).click();
-    await page.getByRole('option', { name: RENDERER_LABEL[g.renderer], exact: true }).click();
-  }
+  // Display-type tiles come first; a tile with no compatible source would be a link to Settings, so it must be a button here.
+  await dialog.getByRole('button', { name: new RegExp(`^${escapeRe(TILE_LABEL[g.renderer])}\\b`) }).click();
   const name = new RegExp(`^${escapeRe(pickerName(g.id))}`);
-  if (g.viaPicker) {
-    await dialog.getByRole('radio', { name }).click();
-    await page.getByRole('alertdialog').getByRole('button', { name: 'Enable and use' }).click();
-    await expect(page.getByRole('alertdialog')).toBeHidden({ timeout: 60_000 });
-  } else {
-    await dialog.getByRole('radio', { name }).or(dialog.getByRole('checkbox', { name })).first().click();
-  }
+  await dialog.getByRole('radio', { name }).or(dialog.getByRole('checkbox', { name })).first().click();
+  await fillCatalogFields(dialog, g);
   await dialog.getByLabel('Name', { exact: true }).fill(`${PREFIX} ${g.id}`);
   if (g.advanced) {
     await dialog.getByText('Advanced', { exact: true }).click();
@@ -221,6 +291,8 @@ async function expectRendersData(page: Page, id: string, renderer: Gadget['rende
 
 test.describe('datasources', () => {
   test('clean slate', async ({ page }) => {
+    // Reset here (first test of the run), not in a beforeAll: Playwright re-runs beforeAll on worker restart after a failure.
+    rmSync(SKIPPED_FILE, { force: true });
     await deleteSources(page, PREFIX);
     const builtins = await (await page.request.get('/api/v1/connectors/builtins')).json() as { id: string; enabled: boolean }[];
     const planned = new Set(GADGETS.map((g) => g.id));
@@ -228,7 +300,7 @@ test.describe('datasources', () => {
     expect(dirty, 'built-ins already enabled: use a fresh disposable stack').toEqual([]);
   });
 
-  for (const [id, label] of BUILTINS.filter(([key]) => selected(key) && GADGETS.some((g) => g.id === key && !g.viaPicker))) {
+  for (const [id, label] of BUILTINS.filter(([key]) => selected(key) && GADGETS.some((g) => g.id === key))) {
     test(`source built-in ${id}`, async ({ page }) => {
       test.setTimeout(120_000 + (SLOW_MS[id] ?? 0));
       const out = await enableBuiltinViaSettings(page, id, label, SLOW_MS[id] ?? 120_000).catch(async (error: unknown) => {
@@ -244,6 +316,10 @@ test.describe('datasources', () => {
         return;
       }
       if (out.text.startsWith('remote throttle')) return;
+      if (!out.ok && DAILY_LAG.has(id) && LAG_CODES.some((code) => out.text.includes(code))) {
+        test.info().annotations.push({ type: 'remote-daily-lag', description: out.text });
+        return;
+      }
       expect(out.ok, out.text).toBe(true);
     });
   }
@@ -253,8 +329,10 @@ test.describe('datasources', () => {
       test.setTimeout(120_000);
       const out = await connectWizardSource(page, c, `${PREFIX} ${c.id}`);
       console.log(`RESULT ${c.id} :: ${out.text}`);
-      if (c.expect === 'fetch') expect(out.ok, out.text).toBe(true);
-      else {
+      if (c.expect === 'fetch') {
+        if (!out.ok) await skipIfYoutubeOutage(c.id);
+        expect(out.ok, out.text).toBe(true);
+      } else {
         expect(out.ok, 'dummy credential must not succeed').toBe(false);
         expect(out.text).toMatch(/Test fetch failed: (invalid_credential|provider_rejected|provider_response_invalid|provider_unavailable)\./);
       }
@@ -274,15 +352,24 @@ test.describe('dashboard', () => {
   });
 
   for (const g of GADGETS.filter((x) => selected(x.id))) {
-    test(`gadget ${g.id}: ${g.template ?? 'Custom'} renders data`, async ({ page }) => {
+    test(`gadget ${g.id}: ${RENDERER_LABEL[g.renderer]} renders data`, async ({ page }) => {
       test.setTimeout(120_000);
       test.skip(EXTERNAL_BLOCK.has(g.id), 'endpoint blocked from this network');
       test.skip(EMPTY_FEED.has(g.id), 'feed currently carries no entries');
       if (g.knownLimit) test.fail(true, g.knownLimit);
-      if (!g.viaPicker) test.skip(!(await sourceIdOf(page, g.id)), `source ${g.id} was not created (see its source test)`);
-      test.skip(await remoteThrottled(page, g.id), `${g.id} is throttled by the remote provider`);
-      await addGadget(page, g);
-      await expectRendersData(page, g.id, g.renderer);
+      test.skip(!(await sourceIdOf(page, g.id)), `source ${g.id} was not created (see its source test)`);
+      const throttled = await remoteThrottled(page, g.id);
+      if (throttled) writeRemoteSkipped([...readRemoteSkipped(), g.id]);
+      test.skip(throttled, `${g.id} is throttled by the remote provider`);
+      // A source test that skipped for an outage leaves its id here; do not turn that into a gadget failure.
+      test.skip(g.id === 'youtube' && readRemoteSkipped().includes(g.id), 'youtube source skipped for a remote outage');
+      try {
+        await addGadget(page, g);
+        await expectRendersData(page, g.id, g.renderer);
+      } catch (error) {
+        await skipIfYoutubeOutage(g.id);
+        throw error;
+      }
     });
   }
 
@@ -296,8 +383,10 @@ test.describe('dashboard', () => {
     await openDashboard(page);
     // Every planned gadget whose test was not skipped must be on the dashboard; a missing region is a failure.
     const missing: string[] = [];
+    // Exclude exactly the gadgets skipped for remote throttling; re-evaluating could flag one whose source recovered since.
+    const remoteSkipped = new Set(readRemoteSkipped());
     for (const g of GADGETS.filter((x) => selected(x.id) && !EXTERNAL_BLOCK.has(x.id) && !EMPTY_FEED.has(x.id) && !x.knownLimit)) {
-      if (await remoteThrottled(page, g.id)) continue;
+      if (remoteSkipped.has(g.id)) continue;
       if (!(await regionOf(page, g.id).waitFor({ timeout: 5_000 }).then(() => true, () => false))) missing.push(g.id);
     }
     expect(missing, 'planned gadgets missing from the dashboard').toEqual([]);
@@ -329,7 +418,14 @@ test.describe('dashboard', () => {
     for (const g of GADGETS) {
       if (wizardCase(g.id)) continue;
       const id = await sourceIdOf(page, g.id);
-      if (id) expect((await page.request.delete(`/api/v1/sources/${id}`, { headers: await writeHeaders(page) })).status(), `delete source ${g.id}`).toBeLessThan(300);
+      if (!id) continue;
+      // A 409 is an access/Source fence race with an in-flight collection; retry it, then assert the final status with its body.
+      let res = await page.request.delete(`/api/v1/sources/${id}`, { headers: await writeHeaders(page) });
+      for (let retry = 0; retry < 4 && res.status() === 409; retry += 1) {
+        await page.waitForTimeout(3_000);
+        res = await page.request.delete(`/api/v1/sources/${id}`, { headers: await writeHeaders(page) });
+      }
+      expect(res.status(), `delete source ${g.id}: ${res.status() >= 300 ? await res.text() : ''}`).toBeLessThan(300);
     }
   });
 });

@@ -55,12 +55,23 @@ def test_oecd_cli_sdmx_one_record_per_area_and_shape_change_fails():
     records = map_oecd_cli(payload, NOW)
     assert {wd(r)["region"] for r in records} == {"JPN", "USA", "CHN", "DEU", "GBR"}
     assert all(r.provider_id.endswith(":2026-09") and wd(r)["unit"] == "index" for r in records)
+    assert {r.metadata["provider_record"]["world_data"]["symbol"] for r in records} == {"JPN", "USA", "CHN", "DEU", "GBR"}
     broken = copy.deepcopy(payload)
     broken["data"]["dataSets"][0]["observations"]["9:9:9"] = [1.0]
     with pytest.raises(ProviderPayloadError, match="oecd_cli_response_invalid"):
         map_oecd_cli(broken, NOW)
     with pytest.raises(ProviderPayloadError):
         map_sdmx_json("oecd_cli", {"data": {}}, NOW, metric="m", unit="u", title="t")
+
+
+def test_oecd_cli_version_includes_symbol_so_legacy_symbolless_rows_are_refreshed():
+    """Rows collected before ``symbol=area`` was written keep the old version; the new version must differ."""
+    from modules.connectors.providers.macro import content_version
+
+    record = next(r for r in map_oecd_cli(jfixture("oecd_cli.json"), NOW) if wd(r)["region"] == "USA")
+    legacy = content_version("oecd_cli", "USA", "2026-09", record.metadata["provider_record"]["world_data"]["value"])
+    assert record.version != legacy
+    assert record.version == content_version("oecd_cli", "USA", "USA", "2026-09", wd(record)["value"])
 
 
 def test_iss_position_typed_coordinates_and_units_guard():
@@ -73,7 +84,14 @@ def test_iss_position_typed_coordinates_and_units_guard():
         map_iss_position({**payload, "units": "miles"}, NOW)
 
 
-def test_disease_sh_one_record_per_metric_keyed_in_place():
+def test_disease_sh_without_provider_update_instant_is_rejected_not_clock_stamped():
+    """No ``updated`` means no identity: a collection-clock fallback would mint a new row per retry, so the batch fails closed."""
+    body = {k: v for k, v in jfixture("disease_sh.json").items() if k != "updated"}
+    with pytest.raises(ProviderPayloadError, match="provider_time_invalid"):
+        map_disease_sh(body, NOW)
+
+
+def test_disease_sh_one_record_per_metric_and_provider_update():
     records = map_disease_sh(jfixture("disease_sh.json"), NOW)
     assert [r.provider_id for r in records] == [f"disease_sh:global:{m}" for m in ("cases", "deaths", "recovered", "active")]
     with pytest.raises(ProviderPayloadError, match="disease_sh_value_invalid"):

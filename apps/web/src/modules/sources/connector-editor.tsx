@@ -16,7 +16,7 @@ import { ApiError } from '@/core/api';
 import { assignAuthorizationUrl } from '@/core/safe-url';
 import { DisconnectDialog } from './disconnect-dialog';
 import { SyncHistory } from './sync-history';
-import { SourceAiToggles, type SourceAiOptions } from './source-ai-toggles';
+import type { SourceAiOptions } from './source-ai-toggles';
 import { collectAndWait, useSourceActions, waitForActivation } from './use-source-actions';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { AppLocaleId, normalizeFormattingLocale } from '@/core/i18n';
@@ -38,6 +38,7 @@ import {
   createConnectorSource,
   ConnectorActivation,
   getConnectorActivation,
+  RealtimeMode,
   getConnectorCatalog,
   listBuiltinSources,
   getProviderTerms,
@@ -49,7 +50,6 @@ import {
   saveConnectorConfiguration,
   Source,
   sourceKeys,
-  updateSourceAiOptions,
   updateSourceStatus,
   validateDraftConnector,
   disconnectGitHubOAuth,
@@ -70,6 +70,8 @@ import {
   type GitHubPeer,
   type GoogleResourceChoice,
 } from './api';
+import type { DataShape } from '@/core/data-shapes';
+import { matchesShapes } from './shape-filter';
 
 const intervals = [15, 30, 60, 360, 1440] as const;
 const genericProviderIds = new Set(['rss', 'web', 'rest', 'mcp']);
@@ -204,6 +206,20 @@ function errorText(error: unknown): string {
   return 'actionFailed';
 }
 
+/** Formats bounded API diagnostics without displaying submitted validation values or secrets. */
+function sourceErrorDetail(cause: unknown): string {
+  if (!(cause instanceof ApiError)) return '';
+  const fields = Array.isArray(cause.details) ? cause.details.flatMap((item: unknown) => {
+    if (!item || typeof item !== 'object') return [];
+    const issue = item as { loc?: unknown; type?: unknown };
+    if (!Array.isArray(issue.loc) || typeof issue.type !== 'string') return [];
+    return [`${issue.loc.filter((part: unknown) => typeof part === 'string' || typeof part === 'number').join('.')}: ${issue.type}`];
+  }).slice(0, 10) : [];
+  // Validation messages may contain submitted values; use only field paths and error types.
+  const message = cause.status < 500 && !Array.isArray(cause.details) && !cause.message.includes('\n') ? cause.message.slice(0, 300) : '';
+  return [`HTTP ${cause.status}`, cause.code, message, ...fields].filter(Boolean).join(' | ');
+}
+
 /** Pause and Disconnect controls for the editor header, sharing handlers and the confirmation dialog with the source list rows. */
 function EditorSourceActions({ source, activation, disabled, onChanged, onPurgeStarted, onClose, onBusyChange }: {
   source: Source;
@@ -263,8 +279,14 @@ export function ConnectorEditor({
   step,
   actionsRef,
   onSnapshot,
+  shapeFilter,
+  onClearFilter,
 }: {
   source?: Source | null;
+  /** Add grid keeps only catalog entries whose `data_shapes` intersect this list. */
+  shapeFilter?: DataShape[];
+  /** Clears the shape filter from the empty state. */
+  onClearFilter?: () => void;
   onClose: () => void;
   onChanged: () => void;
   onPurgeStarted?: (operationId: string) => void;
@@ -284,8 +306,7 @@ export function ConnectorEditor({
   const initialProvider = source?.provider && isProvider(source.provider) ? source.provider : source?.type === 'mcp' ? 'mcp' : source?.type === 'rss' ? 'rss' : source?.type === 'web' ? 'web' : 'rest';
   const [provider, setProvider] = useState<Provider>(initialProvider);
   const [name, setName] = useState(source?.name ?? '');
-  const [aiOptions, setAiOptions] = useState<SourceAiOptions>({ graph_enabled: source?.graph_enabled ?? true, rag_index_enabled: source?.rag_index_enabled ?? true });
-  const [aiOptionsError, setAiOptionsError] = useState(false);
+  const [aiOptions] = useState<SourceAiOptions>({ graph_enabled: source?.graph_enabled ?? false, rag_index_enabled: source?.rag_index_enabled ?? false });
   const [sourceId, setSourceId] = useState(source?.id ?? '');
   const providerRef = useRef(provider);
   const nameRef = useRef(name);
@@ -317,6 +338,7 @@ export function ConnectorEditor({
   const [busyAction, setBusyAction] = useState('');
   const [actionsBusy, setActionsBusy] = useState(false);
   const [error, setError] = useState('');
+  const [errorDetail, setErrorDetail] = useState('');
   const [conflict, setConflict] = useState(false);
   const [notice, setNotice] = useState('');
   const [verify, setVerify] = useState<VerifyState>(IDLE_VERIFY);
@@ -457,7 +479,7 @@ export function ConnectorEditor({
   const builtinReview = (builtinQuery.data ?? []).some((item) => item.id === provider && item.eligibility === 'review');
   // One source per built-in: a provider whose built-in already has a source cannot be created again from the catalog.
   const addedBuiltinIds = useMemo(() => new Set((builtinQuery.data ?? []).filter((item) => item.source_id !== null).map((item) => item.id)), [builtinQuery.data]);
-  const catalog = useMemo(() => (catalogQuery.data ?? []).filter((entry) => !builtinIds.has(entry.provider_id)), [catalogQuery.data, builtinIds]);
+  const catalog = useMemo(() => (catalogQuery.data ?? []).filter((entry) => !builtinIds.has(entry.provider_id) && matchesShapes(entry.data_shapes, shapeFilter)), [catalogQuery.data, builtinIds, shapeFilter]);
   // Built-ins are dropped from the add grid (`catalog`) but edit mode still needs their guide and terms panel.
   const sourceStatus = sourceStatusOverride ?? source?.status ?? 'active';
   const visibleActivationState = activationQuery.isError ? 'unknown' : activationQuery.data?.state ?? activationState;
@@ -558,6 +580,7 @@ export function ConnectorEditor({
     setValidation(null);
     setNotice('');
     setError('');
+    setErrorDetail('');
     if (isPreset(entry) && (!name.trim() || name === currentEntry?.label)) setName(entry.label);
     markDraftChanged();
   }
@@ -746,24 +769,6 @@ export function ConnectorEditor({
     }
   }
 
-  /** Edit mode: applies one toggle immediately with a PATCH and rolls the checkbox back if the save fails. */
-  async function changeAiOptions(next: SourceAiOptions) {
-    const previous = aiOptions;
-    setAiOptions(next);
-    setAiOptionsError(false);
-    if (!source) return; // create flow: the values are sent with the create request
-    try {
-      const patch: Partial<SourceAiOptions> = {};
-      if (next.graph_enabled !== previous.graph_enabled) patch.graph_enabled = next.graph_enabled;
-      if (next.rag_index_enabled !== previous.rag_index_enabled) patch.rag_index_enabled = next.rag_index_enabled;
-      await updateSourceAiOptions(source.id, patch, csrfToken);
-      onChanged();
-    } catch {
-      setAiOptions(previous);
-      setAiOptionsError(true);
-    }
-  }
-
   /** Creates a connector source on first save when necessary and returns its source identifier. */
   async function ensureSource(token: RequestToken): Promise<string> {
     if (sourceId) return sourceId;
@@ -813,6 +818,7 @@ export function ConnectorEditor({
     const draft = { ...settings, configuration: { ...configuration } };
     const submittedVersion = draftVersion.current;
     setError('');
+    setErrorDetail('');
     setNotice('');
     try {
       const id = await ensureSource(token);
@@ -867,6 +873,8 @@ export function ConnectorEditor({
     } catch (cause) {
       if (requestIsCurrent(token)) {
         setError(errorText(cause));
+        setErrorDetail(sourceErrorDetail(cause));
+        saveFailCode.current = cause instanceof ApiError ? cause.code ?? `http_${cause.status}` : 'request_failed';
         if (cause instanceof ApiError && cause.status === 409) setConflict(true);
         if (cause instanceof ApiError && cause.status >= 500) { setConflict(true); setError('reloadFailed'); }
       }
@@ -939,7 +947,11 @@ export function ConnectorEditor({
       if (cause instanceof ApiError && cause.code === 'local_only_source') {
         saveFailCode.current = 'local_only_source';
         setError('');
-      } else setError(errorText(cause));
+      } else {
+        setError(errorText(cause));
+        setErrorDetail(sourceErrorDetail(cause));
+        saveFailCode.current = cause instanceof ApiError ? cause.code ?? `http_${cause.status}` : 'request_failed';
+      }
       setNotice(t('savedInactive'));
       if (actionSourceId) await refreshOwnerState(actionSourceId, token);
       if (!requestIsCurrent(token)) return null;
@@ -1352,7 +1364,7 @@ export function ConnectorEditor({
     try {
       return await ensureSource(token);
     } catch (cause) {
-      if (requestIsCurrent(token)) setError(errorText(cause));
+      if (requestIsCurrent(token)) { setError(errorText(cause)); setErrorDetail(sourceErrorDetail(cause)); }
       return null;
     } finally {
       endRequest(token);
@@ -1371,6 +1383,7 @@ export function ConnectorEditor({
     const stillCurrent = () => verifyController.current === controller && !controller.signal.aborted;
     const fail = (code: string) => { if (stillCurrent()) setVerify({ phase: 'failed', code }); };
     saveFailCode.current = null;
+    setErrorDetail('');
     const verifyDeadline = Date.now() + VERIFY_TOTAL_MS; // eslint-disable-line react-hooks/purity -- event handler, not render
     setVerify({ phase: 'saving' });
     try {
@@ -1396,7 +1409,9 @@ export function ConnectorEditor({
       if (final.status === 'succeeded' || final.status === 'no_changes') setVerify({ phase: final.status, runId: final.ingestion_run_id });
       else fail(final.error_code ?? final.status);
     } catch (cause) {
-      fail(cause instanceof ApiError ? cause.message || `http_${cause.status}` : 'request_failed');
+      if (!stillCurrent()) return;
+      setErrorDetail(sourceErrorDetail(cause));
+      fail(cause instanceof ApiError ? cause.code ?? `http_${cause.status}` : 'request_failed');
     }
   }
 
@@ -1461,6 +1476,8 @@ export function ConnectorEditor({
       {!embedded && <header className="section-heading"><div><h2>{t('setupTitle')}</h2><p className="text-muted-foreground">{t('stepConnect')}</p></div></header>}
       {catalogQuery.isPending && <p className="text-muted-foreground">{t('loading')}</p>}
       {catalogQuery.isError && <p className="error" role="alert">{t('loadFailed')} <Button variant="outline" onClick={() => catalogQuery.refetch()}>{t('retry')}</Button></p>}
+      {Boolean(shapeFilter?.length) && catalogQuery.isSuccess && !sourceId && !(catalog.some((entry) => entry.kind !== 'manual_import' && entry.kind !== 'group'))
+        && <p role="status" className="text-muted-foreground">{t('shapeFilterNone')} {onClearFilter && <Button variant="outline" size="sm" onClick={onClearFilter}>{t('shapeFilterClear')}</Button>}</p>}
       {catalog.length > 0 && groupCatalog(catalog.filter((entry) => entry.kind !== 'manual_import' && entry.kind !== 'group')).map(([group, entries]) => <SettingsSection key={group} title={t(PROVIDER_GROUP_KEY[group])}>
         <div className="source-provider-grid !m-0" role="group" aria-label={t(PROVIDER_GROUP_KEY[group])}>
         {entries.map((entry) => {
@@ -1479,12 +1496,12 @@ export function ConnectorEditor({
       </SettingsSection>)}
       <SettingsSection title={t('panelIdentity')} description={t('panelIdentityHint')}>
         <div className="form source-editor-form">
+          <p className="text-muted-foreground">{t('selectedProvider', { provider: currentEntry?.label ?? provider })}</p>
           <div className="field"><Label htmlFor="new-source-name">{t('sourceName')}</Label><Input id="new-source-name" maxLength={200} disabled={locked || Boolean(sourceId)} value={name} onChange={(event) => { setName(event.target.value); markDraftChanged(); }} /></div>
-          {!sourceId && error && <p className="error" role="alert">{t(error as 'conflict' | 'configurationInvalid' | 'serviceUnavailable' | 'sourceNameRequired' | 'actionFailed' | 'builtinAlreadyAdded')}</p>}
+          {!sourceId && error && <p className="error" role="alert">{t(error as 'conflict' | 'configurationInvalid' | 'serviceUnavailable' | 'sourceNameRequired' | 'actionFailed' | 'builtinAlreadyAdded')}{errorDetail && ` | ${errorDetail}`}</p>}
           {!embedded && <div className="form-actions"><Button disabled={locked || !providerOk} onClick={() => void createSource()}>{busyAction === 'create' ? t('saving') : t('createAndContinue')}</Button><Button variant="outline" onClick={closeEditor}>{t('cancel')}</Button></div>}
         </div>
       </SettingsSection>
-      {!source && <SettingsSection title={t('aiOptionsTitle')}><SourceAiToggles idPrefix="new-source" value={aiOptions} onChange={(next) => void changeAiOptions(next)} disabled={locked || Boolean(sourceId)} /></SettingsSection>}
     </div>}
     {sourceId && <>
       {!embedded && <header className="section-heading">
@@ -1499,7 +1516,6 @@ export function ConnectorEditor({
           <Button variant="outline" onClick={closeEditor}>{t('close')}</Button>
         </div>
       </header>}
-      {source && showStep('connect') && <SettingsSection title={t('aiOptionsTitle')}><SourceAiToggles idPrefix="edit-source" value={aiOptions} onChange={(next) => void changeAiOptions(next)} disabled={locked} />{aiOptionsError && <p className="error" role="alert">{t('aiOptionsSaveFailed')}</p>}</SettingsSection>}
       {configurationQuery.isPending && <p className="text-muted-foreground">{t('loading')}</p>}
       {configurationQuery.isError && <div className="error" role="alert">{t(errorText(configurationQuery.error) as 'conflict' | 'configurationInvalid' | 'serviceUnavailable' | 'sourceNameRequired' | 'actionFailed')} <Button variant="outline" onClick={() => configurationQuery.refetch()}>{t('retry')}</Button></div>}
       {configurationQuery.isSuccess && <>
@@ -1620,6 +1636,7 @@ export function ConnectorEditor({
           <FieldGrid>
           <div className="field"><Label htmlFor="source-schedule">{t('schedule')}</Label><Select value={String(configuration.schedule_interval_minutes)} onValueChange={(value) => changeConfiguration('schedule_interval_minutes', Number(value) as ConnectorConfig['schedule_interval_minutes'])}><SelectTrigger id="source-schedule"><SelectValue /></SelectTrigger><SelectContent>{(provider === 'alpha_vantage' ? [1440] : intervals).map((minutes) => <SelectItem key={minutes} value={String(minutes)}>{t('everyMinutes', { minutes })}</SelectItem>)}</SelectContent></Select></div>
           <div className="field"><Label htmlFor="source-timezone">{t('timezone')}</Label><Input id="source-timezone" value={configuration.timezone} onChange={(event) => changeConfiguration('timezone', event.target.value)} /></div>
+          <div className="field"><Label htmlFor="source-realtime-mode">{t('trackingModeLabel')}</Label><Select value={configuration.realtime_mode ?? currentEntry?.realtime_tier ?? 'near_realtime'} onValueChange={(value) => changeConfiguration('realtime_mode', value as RealtimeMode)}><SelectTrigger id="source-realtime-mode"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="realtime">{t('trackingModeRealtime')}</SelectItem><SelectItem value="near_realtime">{t('trackingModeNearRealtime')}</SelectItem></SelectContent></Select><small className="text-muted-foreground">{t('trackingModeHelp')}</small></div>
           </FieldGrid>
             {isNativeEntry(currentEntry) && <>
             <div className="field"><Label htmlFor="source-history-mode">{t('historyMode')}</Label><Input id="source-history-mode" readOnly aria-readonly="true" value={t(provider === 'telegram' ? 'pendingUpdatesOnly' : 'returnedSnapshot')} /></div>
@@ -1692,7 +1709,7 @@ export function ConnectorEditor({
           </div>
         </SettingsSection>}
         {showStep('choose') && currentEntry?.quota_limits && <SettingsSection title={t('quota')}><p className="m-0 text-sm">{Object.entries(currentEntry.quota_limits).map(([key, value]) => `${key}: ${value}`).join(' · ')}</p></SettingsSection>}
-        {error && <p className="error" role="alert">{t(error as 'conflict' | 'configurationInvalid' | 'serviceUnavailable' | 'validationOutcomeUnknown' | 'sourceNameRequired' | 'actionFailed' | 'reloadFailed' | 'builtinAlreadyAdded' | 'redditConnectionFailed' | 'redditDisconnectFailed')}</p>}
+        {error && <p className="error" role="alert">{t(error as 'conflict' | 'configurationInvalid' | 'serviceUnavailable' | 'validationOutcomeUnknown' | 'sourceNameRequired' | 'actionFailed' | 'reloadFailed' | 'builtinAlreadyAdded' | 'redditConnectionFailed' | 'redditDisconnectFailed')}{errorDetail && ` | ${errorDetail}`}</p>}
         {notice && <p className="text-muted-foreground" role="status">{notice}</p>}
         {conflict && <SettingsSection title={t('conflict')}>
           <div role="group" aria-label={t('conflict')}><Button variant="outline" disabled={locked} onClick={reloadServerConfiguration}>{t('reloadDiscard')}</Button></div>
@@ -1750,7 +1767,7 @@ export function ConnectorEditor({
           {verify.phase === 'collecting' && <p role="status">{t('verifyCollecting')}</p>}
           {verify.phase === 'succeeded' && <p role="status">{t('verifySucceeded')}</p>}
           {verify.phase === 'no_changes' && <p role="status">{t('verifyNoChanges')}</p>}
-          {verify.phase === 'failed' && <p className="error" role="alert">{verify.code === 'local_only_source' ? t('verifyLocalOnly') : t('verifyFailed', { code: verify.code ?? 'unknown' })}</p>}
+          {verify.phase === 'failed' && <p className="error" role="alert">{verify.code === 'local_only_source' ? t('verifyLocalOnly') : t('verifyFailed', { code: verify.code ?? 'unknown' })}{!error && errorDetail && ` | ${errorDetail}`}</p>}
           {verify.runId && <p className="text-muted-foreground">{t('verifyRunId', { id: verify.runId })}</p>}
         </SettingsSection>}
       </>}

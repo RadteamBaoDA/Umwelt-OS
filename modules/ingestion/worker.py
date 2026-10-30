@@ -1599,7 +1599,11 @@ async def purge_collection_receipts(ctx: dict[str, object]) -> int:
         await session.commit()
     # Same hourly cron also trims other append-only bookkeeping, each in its own short transaction so
     # one failing table cannot block the receipts above. The receipt count stays the return value.
-    for purge in (connectors.purge_collection_history, ingestion_api.purge_delivered_outbox):
+    for purge in (
+        connectors.purge_collection_history,
+        ingestion_api.purge_delivered_outbox,
+        ingestion_api.purge_expired_datasource_data,
+    ):
         try:
             async with factory() as session:
                 await purge(session, limit=1000)

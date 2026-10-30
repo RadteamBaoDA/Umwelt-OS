@@ -51,7 +51,7 @@ describe('LayoutEditor Add dialog', () => {
     await addNew();
     await waitFor(() => expect(api.deleteGadgetDefinition).toHaveBeenCalledWith('new-def', 1, 'c'));
     expect(onCancelPendingAdd).toHaveBeenCalledWith('r1');
-    expect((await screen.findByRole('alert')).textContent).toContain('new gadget was removed');
+    expect((await screen.findByRole('alert')).textContent).toContain('Could not add the gadget');
   });
 
   it('compensates and keeps the dialog open when the handler resolves false', async () => {
@@ -59,7 +59,7 @@ describe('LayoutEditor Add dialog', () => {
     wrap();
     await addNew();
     await waitFor(() => expect(api.deleteGadgetDefinition).toHaveBeenCalledWith('new-def', 1, 'c'));
-    expect((await screen.findByRole('alert')).textContent).toContain('new gadget was removed');
+    expect((await screen.findByRole('alert')).textContent).toContain('Could not add the gadget');
     expect(screen.getByRole('button', { name: 'save-new' })).toBeTruthy();
     expect(onCancelPendingAdd).not.toHaveBeenCalled();
   });
@@ -82,7 +82,7 @@ describe('LayoutEditor Add dialog', () => {
   it('shows a message when no layout space can be reserved', async () => {
     wrap(null);
     await addNew();
-    expect((await screen.findByRole('alert')).textContent).toContain('new gadget was removed');
+    expect((await screen.findByRole('alert')).textContent).toContain('Could not add the gadget');
   });
 
   it('clears a previous add error when the dialog is reopened', async () => {
@@ -95,5 +95,13 @@ describe('LayoutEditor Add dialog', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Add gadget' }));
     await screen.findByRole('button', { name: 'save-new' });
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('add dialog has one name field', async () => {
+    wrap();
+    await userEvent.click(screen.getByRole('button', { name: 'Add gadget' }));
+    await screen.findByRole('button', { name: 'save-new' });
+    expect(screen.queryByLabelText(/instance title/i)).toBeNull();
+    expect(screen.queryByRole('textbox')).toBeNull();
   });
 });

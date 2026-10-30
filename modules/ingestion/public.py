@@ -71,6 +71,7 @@ from modules.ingestion.schemas import (
 )
 from modules.knowledge.documents import public as documents
 from modules.knowledge.documents.schemas import DocumentCleanupPreparationLimitError
+from modules.knowledge.observations import public as observations_public
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource, SourceFence
 
@@ -1517,6 +1518,61 @@ async def purge_delivered_outbox(session: AsyncSession, *, now: datetime | None 
     ).limit(limit)
     result = await session.execute(delete(EventOutbox).where(EventOutbox.id.in_(doomed)))
     return int(getattr(result, "rowcount", 0) or 0)
+
+
+async def purge_expired_datasource_data(
+    session: AsyncSession, *, now: datetime | None = None, limit: int = 500,
+) -> int:
+    """Delete one bounded slice of expired connector datasource history per source retention policy.
+
+    Preserves all current observations (``Observation.is_current == True``), all user-authored
+    documents (sources of type ``file`` or ``manual``; such sources get no retention cutoff), and any document with an owner bookmark
+    (``DocumentInteraction.bookmarked_at IS NOT NULL``). Uses ``FOR UPDATE SKIP LOCKED`` subqueries
+    so retention cleanup never blocks concurrent ingestion or queries. The caller commits.
+
+    Args:
+        session: Active asynchronous database session.
+        now: Reference UTC timestamp (defaults to ``datetime.now(UTC)``).
+        limit: Maximum rows to delete per table in a single pass.
+
+    Returns:
+        Total number of expired observation, source_observation, and document version rows deleted.
+    """
+    now = now or datetime.now(UTC)
+    cutoffs = await sources.list_retention_cutoffs(session, now=now)
+    if not cutoffs:
+        return 0
+
+    deleted = await observations_public.purge_expired_noncurrent_observations(session, cutoffs, limit=limit)
+
+    # Keep source observations still backing a current observation.
+    src_obs_cutoff_predicate = or_(
+        *(and_(SourceObservation.source_id == sid, SourceObservation.observed_at < cutoff) for sid, cutoff in cutoffs)
+    )
+    doomed_src_obs = (
+        select(SourceObservation.id)
+        .where(
+            not_(observations_public.current_observation_references(
+                SourceObservation.id, field="ingestion_observation_id",
+            )),
+            src_obs_cutoff_predicate,
+        )
+        .order_by(SourceObservation.observed_at.asc())
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    src_obs_res = await session.execute(
+        delete(SourceObservation).where(SourceObservation.id.in_(doomed_src_obs))
+    )
+    deleted += int(getattr(src_obs_res, "rowcount", 0) or 0)
+
+    deleted += await documents.purge_expired_document_versions(
+        session, cutoffs, limit=limit,
+        is_protected=lambda col: observations_public.current_observation_references(
+            col, field="document_version_id",
+        ),
+    )
+    return deleted
 
 
 async def validate_connector_collection_in_uow(

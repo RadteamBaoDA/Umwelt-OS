@@ -6,6 +6,7 @@ license grant, and nothing here asserts runtime acceptance. Facts were checked o
 caps are recorded as ``limit_units=None`` (never unlimited).
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Literal
 
@@ -70,6 +71,9 @@ class FreeProviderSpec:
     checked_on: str = CHECKED_ON
     secret_location: Literal["header", "query", "path"] | None = None
     category: Literal["news", "economy", "hazards", "space", "security", "tech"] = "news"
+    realtime_tier: Literal["realtime", "near_realtime"] = "near_realtime"
+    skip_embedding: bool = True
+    default_retention_days: int | None = 60
 
 
 # Providers the shared executor can dispatch (ADAPTERS or registered SIMPLE_NATIVE providers).
@@ -315,7 +319,7 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
           "https://www.oecd.org/en/about/terms-conditions.html", "open",
           "Source: OECD (CC BY 4.0); cite the dataset OECD.SDD.STES DF_CLI and state any processing.",
           (("/public/rest/data/OECD.SDD.STES,DSD_STES@DF_CLI/USA+CHN+JPN+DEU+GBR.M.LI...AA...H"
-            "?lastNObservations=1&dimensionAtObservation=AllDimensions"),), (_day(4), _unknown())),
+            "?lastNObservations=24&dimensionAtObservation=AllDimensions"),), (_day(4), _unknown())),
     _spec("iss_position", "ISS position", "space", ("api.wheretheiss.at",), "measurement", 15,
           "https://wheretheiss.at/w/developer", "noncommercial",
           "Credit wheretheiss.at; the API is free for non-commercial use with a documented ~1 request/second cap.",
@@ -413,8 +417,58 @@ _EXPANSION_IDS = frozenset({
     "openaq",
     "nasa_firms",
 })
+_REALTIME_TIER_IDS: frozenset[str] = frozenset({
+    "binance",
+    "coinpaprika",
+    "coingecko",
+    "usgs",
+    "nws_alerts",
+    "emsc_quakes",
+    "bmkg_quakes",
+    "noaa_tsunami",
+    "jma_eqvol",
+    "iss_position",
+    "gdacs_events",
+    "noaa_kp",
+    "openweathermap",
+    "openaq",
+    "nasa_firms",
+})
+_LONG_RETENTION_IDS: frozenset[str] = frozenset({
+    "world_bank",
+    "frankfurter",
+    "ecb",
+    "fred",
+    "oecd_cli",
+    "sec_edgar",
+    "openalex",
+    "cisa_kev",
+    "nvd",
+})
+
+
+def _finalize_spec(spec: FreeProviderSpec) -> FreeProviderSpec:
+    """Stamp expansion check date, realtime tier, and default retention window onto a catalog spec.
+
+    Args:
+        spec: Raw provider specification entry.
+
+    Returns:
+        Frozen FreeProviderSpec with tier and retention defaults populated.
+    """
+    is_realtime = spec.id in _REALTIME_TIER_IDS
+    retention_days = 14 if is_realtime else (365 if spec.id in _LONG_RETENTION_IDS else 60)
+    return replace(
+        spec,
+        checked_on=EXPANSION_CHECKED_ON if spec.id in _EXPANSION_IDS else spec.checked_on,
+        realtime_tier="realtime" if is_realtime else "near_realtime",
+        skip_embedding=True,
+        default_retention_days=retention_days,
+    )
+
+
 FREE_PROVIDER_SPECS: tuple[FreeProviderSpec, ...] = tuple(
-    replace(spec, checked_on=EXPANSION_CHECKED_ON) if spec.id in _EXPANSION_IDS else spec for spec in _SPECS_RAW
+    _finalize_spec(spec) for spec in _SPECS_RAW
 )
 
 _BY_ID = {spec.id: spec for spec in FREE_PROVIDER_SPECS}
@@ -424,6 +478,58 @@ assert len(_BY_ID) == len(FREE_PROVIDER_SPECS)  # import-time catalog invariant
 def get_provider_spec(provider_id: str | None) -> FreeProviderSpec | None:
     """Return the exact free-provider spec, or None for any other provider."""
     return _BY_ID.get(provider_id or "")
+
+
+def get_realtime_tier(
+    provider_id: str | None,
+    configuration: Mapping[str, object] | None = None,
+) -> Literal["realtime", "near_realtime"]:
+    """Return the collection tier ('realtime' or 'near_realtime') for a provider.
+
+    Honors an explicit owner-configured ``realtime_mode`` in ``configuration`` when present;
+    otherwise high-frequency market tickers, seismic/weather/hazard alerts, and live telemetry
+    use the 'realtime' fast lane and periodic feeds/macro series use 'near_realtime'.
+
+    Args:
+        provider_id: Provider identifier string or None.
+        configuration: Optional persisted source configuration dictionary.
+
+    Returns:
+        Literal 'realtime' or 'near_realtime'.
+    """
+    if isinstance(configuration, Mapping):
+        configured = configuration.get("realtime_mode")
+        if configured == "realtime":
+            return "realtime"
+        if configured == "near_realtime":
+            return "near_realtime"
+    spec = get_provider_spec(provider_id)
+    if spec is not None:
+        return spec.realtime_tier
+    if (provider_id or "").strip().lower() in _REALTIME_TIER_IDS:
+        return "realtime"
+    return "near_realtime"
+
+
+def get_default_retention_days(provider_id: str | None) -> int | None:
+    """Return the default retention period in days for a provider's historical records.
+
+    Args:
+        provider_id: Provider identifier string or None.
+
+    Returns:
+        Default retention window in days (14 for high-frequency realtime telemetry,
+        365 for macro/filings/advisories, 60 for general news/feeds), or None if unbounded.
+    """
+    spec = get_provider_spec(provider_id)
+    if spec is not None:
+        return spec.default_retention_days
+    normalized = (provider_id or "").strip().lower()
+    if normalized in _REALTIME_TIER_IDS:
+        return 14
+    if normalized in _LONG_RETENTION_IDS:
+        return 365
+    return 60
 
 
 def get_quota_policies(provider_id: str | None) -> tuple[QuotaWindowPolicy, ...]:

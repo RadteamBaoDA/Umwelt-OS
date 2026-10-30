@@ -259,6 +259,69 @@ def _selection_detail(code: str, message: str) -> dict[str, _Any]:
     return {"code": code, "message": message, "details": {}}
 
 
+async def _resolve_gadget_instance_context(
+    session: AsyncSession,
+    context: dict[str, _Any],
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
+) -> dict[str, _Any]:
+    """Validate a dashboard gadget context and bind its authorized active source IDs to ``source_scope``.
+
+    Args:
+        session: Active asynchronous database session.
+        context: Client-supplied gadget context dict (``kind == 'gadget'``).
+        scope: Admitted workspace context.
+        multi_workspace_enabled: Rollout flag for multi-workspace checks.
+
+    Returns:
+        Normalized retrieval context carrying ``kind``, ``gadget_id``, ``title``, ``renderer``,
+        ``source_scope``, and ``gadget_scope``.
+    """
+    from modules.sources import public as sources_public
+
+    raw_sources = (
+        context.get("sourceIds")
+        or context.get("source_ids")
+        or context.get("source_scope")
+        or []
+    )
+    valid_sources: list[str] = []
+    if isinstance(raw_sources, list):
+        seen: set[UUID] = set()
+        for item in raw_sources[:32]:
+            try:
+                sid = UUID(str(item))
+            except (ValueError, TypeError):
+                continue
+            if sid in seen:
+                continue
+            seen.add(sid)
+            src = await sources_public.get_source(
+                session, sid, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            if src is not None and src.status == "active" and not src.local_only:
+                valid_sources.append(str(sid))
+
+    raw_scope_obj = context.get("scope")
+    raw_scope: dict[_Any, _Any] = raw_scope_obj if isinstance(raw_scope_obj, dict) else {}
+    safe_scope = {
+        str(k)[:64]: v
+        for k, v in list(raw_scope.items())[:16]
+        if isinstance(v, (str, int, float, bool, list))
+    }
+    out: dict[str, _Any] = {
+        "kind": "gadget",
+        "gadget_id": str(context.get("gadgetId") or context.get("gadget_id") or "")[:128],
+        "title": str(context.get("title") or "")[:200],
+        "renderer": str(context.get("renderer") or "")[:64],
+        "gadget_scope": safe_scope,
+    }
+    if valid_sources:
+        out["source_scope"] = valid_sources
+    return out
+
+
 async def resolve_gadget_context(
     session: AsyncSession, context: dict[str, _Any] | None, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
 ) -> dict[str, _Any]:
@@ -270,6 +333,10 @@ async def resolve_gadget_context(
     """
     if not context:
         return {}
+    if context.get("kind") == "gadget":
+        return await _resolve_gadget_instance_context(
+            session, context, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
     if context.get("kind") != "selection":
         # This server-derived flag is reserved for validated exact gadget selections.
         # Strip server-reserved keys: "selected_only" and every "_"-prefixed private key.

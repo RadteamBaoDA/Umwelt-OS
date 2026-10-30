@@ -1,5 +1,8 @@
 import { apiRequest, csrfHeaders } from '@/core/api';
 import type { SourceAiOptions } from './source-ai-toggles';
+import type { DataShape } from '@/core/data-shapes';
+
+export type RealtimeMode = 'realtime' | 'near_realtime';
 
 export type Source = {
   id: string;
@@ -19,6 +22,7 @@ export type Source = {
   collection_error_code: string | null;
   next_due_at?: string | null;
   retry_at?: string | null;
+  realtime_mode?: RealtimeMode | null;
   processing_error_code: string | null;
   generation: number;
   retired_at: string | null;
@@ -96,6 +100,7 @@ export type ConnectorConfig = {
   sec_cik?: string;
   sec_contact_email?: string;
   history_mode?: 'returned_snapshot' | 'pending_updates';
+  realtime_mode?: RealtimeMode;
   connection_id?: string;
   calls?: { grant_id: string; arguments: Record<string, unknown> }[];
 };
@@ -160,6 +165,7 @@ export type ConnectorCatalogEntry = {
   supports_history: boolean;
   supports_edit: boolean;
   supports_delete: boolean;
+  data_shapes: DataShape[];
   availability: 'available' | 'implemented' | 'requires_credentials' | 'unsupported_operation' | 'planned' | 'unavailable';
   code_available?: boolean;
   requires_service?: 'n8n' | 'browser' | null;
@@ -176,6 +182,7 @@ export type ConnectorCatalogEntry = {
   endpoints?: string[];
   execution?: 'supported' | 'experimental' | 'research_only' | null;
   default_interval_minutes?: number | null;
+  realtime_tier?: RealtimeMode;
   key_fields?: string[];
   runtime_verified?: boolean;
   quota_policies?: QuotaPolicy[];
@@ -522,7 +529,9 @@ export function acknowledgeProviderTerms(id: string, declaredUse: DeclaredUse, t
 export type BuiltinSource = {
   id: string; label: string; category: BuiltinCategory; eligibility: 'open' | 'personal' | 'noncommercial' | 'review';
   terms_url: string; terms_checked_on: string; attribution: string; execution: 'supported' | 'experimental' | 'research_only';
+  realtime_tier?: RealtimeMode;
   source_id: string | null; enabled: boolean;
+  data_shapes: DataShape[];
 };
 
 /** Lists every built-in data source with its on/off state. */
@@ -531,7 +540,13 @@ export function listBuiltinSources(signal?: AbortSignal) {
 }
 
 /** Turns a built-in on; the server creates the source, records the terms acknowledgement (and operator review where required) and activates it. */
-export function enableBuiltinSource(provider: string, declaredUse: DeclaredUse, csrfToken: string, signal?: AbortSignal, options?: SourceAiOptions) {
+export function enableBuiltinSource(
+  provider: string,
+  declaredUse: DeclaredUse,
+  csrfToken: string,
+  signal?: AbortSignal,
+  options?: SourceAiOptions & { realtime_mode?: RealtimeMode },
+) {
   return apiRequest<BuiltinSource>(`/api/v1/connectors/builtins/${encodeURIComponent(provider)}/enable`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ declared_use: declaredUse, ...options }), signal });
 }
 

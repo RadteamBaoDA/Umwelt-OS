@@ -117,7 +117,7 @@ export function CommandPalette() {
     if (scope === 'all' && query) {
       list.push(
         { id: 'ask-ai', group: 'actions', label: tc('paletteAskAi', { query }), run: () => { setDraft(query); openDrawer(); close(); } },
-        { id: 'create-rule', group: 'actions', label: tc('paletteCreateRule'), meta: tc('paletteCreateRuleHint'), run: () => go('/settings/dashboard') },
+        { id: 'create-rule', group: 'actions', label: tc('paletteCreateRule'), meta: tc('paletteCreateRuleHint'), run: () => go('/dashboard?manage=highlights') },
         { id: 'collect-now', group: 'actions', label: tc('paletteCollectNow'), disabledReason: tc('paletteCollectUnavailable'), run: () => undefined },
       );
     }
@@ -133,7 +133,7 @@ export function CommandPalette() {
         list.push(
           { id: 'quick-chat', group: 'actions', label: tc('quickChat'), meta: tc('newChat'), run: () => { openDrawer(); close(); } },
           { id: 'manage-sources', group: 'actions', label: t('dataSources'), run: () => go('/settings/sources') },
-          { id: 'create-rule', group: 'actions', label: tc('paletteCreateRule'), meta: tc('paletteCreateRuleHint'), run: () => go('/settings/dashboard') },
+          { id: 'create-rule', group: 'actions', label: tc('paletteCreateRule'), meta: tc('paletteCreateRuleHint'), run: () => go('/dashboard?manage=highlights') },
           { id: 'collect-now', group: 'actions', label: tc('paletteCollectNow'), disabledReason: tc('paletteCollectUnavailable'), run: () => undefined },
         );
       }

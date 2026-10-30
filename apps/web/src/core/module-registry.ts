@@ -5,7 +5,6 @@ export type ShellMessageKey =
   | 'dataSources'
   | 'aiRouter'
   | 'systemPrompts'
-  | 'dashboardGadgets'
   | 'workspaceMembers'
   | 'documents'
   | 'timeline'
@@ -50,7 +49,7 @@ export function destinationEnabled(destination: NavigationDestination, state?: M
   if (!state) return true;
   const owner: Record<string, string> = {
     dashboard: 'dashboard', chat: 'chat', 'data-sources': 'sources',
-    'dashboard-gadgets': 'dashboard', documents: 'knowledge.documents',
+    documents: 'knowledge.documents',
     entities: 'knowledge.entities', search: 'search',
   };
   const moduleId = owner[destination.id];
@@ -67,7 +66,6 @@ export const settingsGroups: NavigationDestination[] = [
   { id: 'data-sources', href: '/settings/sources', messageKey: 'dataSources' },
   { id: 'ai-router', href: '/settings/models', messageKey: 'aiRouter' },
   { id: 'system-prompts', href: '/settings/prompts', messageKey: 'systemPrompts' },
-  { id: 'dashboard-gadgets', href: '/settings/dashboard', messageKey: 'dashboardGadgets' },
   { id: 'workspace-members', href: '/settings/workspace', messageKey: 'workspaceMembers' },
   { id: 'translation-settings', href: '/settings/translation', messageKey: 'translationSettings', members: true },
 ];

@@ -1,6 +1,5 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
 import {
   AlertCircle,
   Check,
@@ -12,7 +11,7 @@ import {
   X,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   AlertDialog,
   AlertDialogContent,
@@ -26,12 +25,9 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Label } from '@/components/ui/label';
 import {
   Select,
@@ -41,13 +37,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import {
-  dashboardKeys,
-  deleteGadgetDefinition,
-  listGadgetDefinitions,
-  type DashboardGroup,
-  type GadgetDefinition,
-} from './api';
+import { deleteGadgetDefinition, type DashboardGroup, type GadgetDefinition } from './api';
 import { GadgetEditor } from './gadget-editor';
 
 /** Props for the LayoutEditor toolbar and dirty confirmation workflow. */
@@ -146,43 +136,26 @@ export function LayoutEditor({
   onDismissSaveError,
 }: LayoutEditorProps) {
   const t = useTranslations('dashboard');
-  const ts = useTranslations('uiSweep');
   const session = useWorkspaceSession();
   const [addDialogOpen, setAddDialogOpen] = useState<boolean>(false);
-  const [isAdding, setIsAdding] = useState<boolean>(false);
   const isAddingRef = useRef(false);
 
-  // States for Add Gadget modal
-  const [selectedDefinitionId, setSelectedDefinitionId] = useState<string>('');
-  const [instanceTitle, setInstanceTitle] = useState<string>('');
   const [targetGroupId, setTargetGroupId] = useState<string>(activeGroupId || groups[0]?.id || '');
-  const [addTab, setAddTab] = useState<'new' | 'library'>('new');
   const [addError, setAddError] = useState<string | null>(null);
   const tg = useTranslations('gadgetSettings');
 
-  // Query for reusable definitions (the "From library" tab)
-  const definitionsQuery = useQuery({
-    queryKey: dashboardKeys.definitions,
-    queryFn: ({ signal }) => listGadgetDefinitions(200, signal),
-    enabled: addDialogOpen,
-  });
-
-  const definitions = useMemo(() => definitionsQuery.data ?? [], [definitionsQuery.data]);
-
   /**
-   * Places a definition on the dashboard: reserves layout space, then creates the instance. When the definition was
-   * created by this Add flow (`created`) and the instance cannot be created (handler resolves false or throws) or reserved, the definition is deleted
-   * again so no orphan is left in the library. Never throws; failures set the dialog error.
+   * Places the newly-created definition on the dashboard and deletes it if reservation or instance creation fails.
+   * Never throws; failures leave the add dialog open with a localized error.
    */
-  const addDefinition = useCallback(async (definition: Pick<GadgetDefinition, 'id' | 'renderer' | 'revision'>, created: boolean) => {
+  const addDefinition = useCallback(async (definition: Pick<GadgetDefinition, 'id' | 'renderer' | 'revision'>) => {
     // Empty means "let the server pick or create the default group".
     const finalGroupId = targetGroupId || groups[0]?.id || undefined;
     const compensate = async () => {
-      if (!created) return;
       try {
         await deleteGadgetDefinition(definition.id, definition.revision, session.csrfToken);
       } catch {
-        // Best effort: an orphan stays visible and deletable in the gadget library.
+        // Best effort: deletion can fail independently after the dashboard placement has failed.
       }
     };
     if (isAddingRef.current) {
@@ -198,14 +171,11 @@ export function LayoutEditor({
       return;
     }
     isAddingRef.current = true;
-    setIsAdding(true);
     setAddError(null);
     try {
-      const ok = await onAddGadgetInstance({ definitionId: definition.id, groupId: finalGroupId, title: instanceTitle.trim() || undefined, renderer: definition.renderer }, reservationId);
+      const ok = await onAddGadgetInstance({ definitionId: definition.id, groupId: finalGroupId, title: undefined, renderer: definition.renderer }, reservationId);
       if (ok) {
         setAddDialogOpen(false);
-        setSelectedDefinitionId('');
-        setInstanceTitle('');
       } else {
         // The handler already released the reservation and set the page banner with the server message.
         await compensate();
@@ -217,15 +187,8 @@ export function LayoutEditor({
       setAddError(tg('addFailed'));
     } finally {
       isAddingRef.current = false;
-      setIsAdding(false);
     }
-  }, [groups, instanceTitle, onAddGadgetInstance, onBeginAddGadgetInstance, onCancelPendingAdd, session.csrfToken, targetGroupId, tg]);
-
-  /** Adds the library definition chosen in the "From library" tab. */
-  const handleConfirmAdd = useCallback(async () => {
-    const selected = definitions.find((definition) => definition.id === selectedDefinitionId);
-    if (selected) await addDefinition(selected, false);
-  }, [addDefinition, definitions, selectedDefinitionId]);
+  }, [groups, onAddGadgetInstance, onBeginAddGadgetInstance, onCancelPendingAdd, session.csrfToken, targetGroupId, tg]);
 
   return (
     <>
@@ -352,20 +315,6 @@ export function LayoutEditor({
           </DialogHeader>
 
           <div className="space-y-4 py-2">
-            {/* Instance Title */}
-            <div className="space-y-1">
-              <Label htmlFor="inst-title" className="text-xs">
-                {t('instanceTitle')}
-              </Label>
-              <Input
-                id="inst-title"
-                value={instanceTitle}
-                onChange={(e) => setInstanceTitle(e.target.value)}
-                placeholder={ts('leInstancePlaceholder')}
-                className="h-8 text-xs"
-              />
-            </div>
-
             {/* Target Group */}
             {groups.length > 0 && (
               <div className="space-y-1">
@@ -390,51 +339,12 @@ export function LayoutEditor({
               </div>
             )}
 
-            <Tabs value={addTab} onValueChange={(next) => setAddTab(next as 'new' | 'library')}>
-              <TabsList aria-label={t('addGadgetTitle')}>
-                <TabsTrigger value="new" className="min-h-11">{tg('newFromTemplate')}</TabsTrigger>
-                <TabsTrigger value="library" className="min-h-11">{tg('fromLibrary')}</TabsTrigger>
-              </TabsList>
-              <TabsContent value="new" className="pt-2">
-                {/* One save creates the definition; onSaved then places the instance (compensating delete on failure). */}
-                <GadgetEditor
-                  onSaved={(definition) => addDefinition(definition, true)}
-                  onCancel={() => { if (!isAddingRef.current) setAddDialogOpen(false); }}
-                  saveLabel={t('addGadget')}
-                />
-              </TabsContent>
-              <TabsContent value="library" className="space-y-3 pt-2">
-                <div className="space-y-1">
-                  <Label htmlFor="inst-def" className="text-xs font-semibold">
-                    {t('selectDefinition')}
-                  </Label>
-                  {definitions.length > 0 ? (
-                    <Select value={selectedDefinitionId} onValueChange={setSelectedDefinitionId}>
-                      <SelectTrigger id="inst-def" className="h-8 text-xs">
-                        <SelectValue placeholder={ts('leChooseDef')} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {definitions.map((def) => (
-                          <SelectItem key={def.id} value={def.id} className="text-xs">
-                            {def.name} ({def.renderer})
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <p className="text-xs text-muted-foreground italic">{tg('libraryEmptyAdd')}</p>
-                  )}
-                </div>
-                <DialogFooter className="gap-2">
-                  <Button type="button" variant="outline" className="text-xs" disabled={isAdding} onClick={() => { if (!isAddingRef.current) setAddDialogOpen(false); }}>
-                    {t('cancel')}
-                  </Button>
-                  <Button type="button" disabled={isAdding || !selectedDefinitionId} className="text-xs font-bold" onClick={handleConfirmAdd}>
-                    {t('addGadget')}
-                  </Button>
-                </DialogFooter>
-              </TabsContent>
-            </Tabs>
+            {/* Save creates the definition, then places its instance; failure removes the unused new definition. */}
+            <GadgetEditor
+              onSaved={addDefinition}
+              onCancel={() => { if (!isAddingRef.current) setAddDialogOpen(false); }}
+              saveLabel={t('addGadget')}
+            />
             {addError && <p role="alert" className="text-xs text-destructive">{addError}</p>}
           </div>
         </DialogContent>

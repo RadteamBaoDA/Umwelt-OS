@@ -110,7 +110,7 @@ def disease_sh_request() -> ProviderRequest:
 
 
 def map_disease_sh(payload: object, collected_at: datetime) -> list[IngestionRecord]:
-    """Map global cumulative totals to one record per metric, keyed by metric so a refresh updates in place.
+    """Map global cumulative totals to one record per metric, keyed by metric so a refresh is a new revision of the same series (chart history comes from revisions).
 
     ``updated`` is the provider's own instant and is kept as ``observed_at`` so staleness stays visible.
     Negative or non-numeric totals raise ``ProviderPayloadError``.

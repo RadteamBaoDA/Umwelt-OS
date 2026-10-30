@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input';
 import type { ChatContext } from '@/modules/chat/api';
 import { searchDocuments, type SearchHit } from '@/modules/search/api';
+import { ChatDocumentPreview } from './chat-document-preview';
 
 /** Builds the human-readable label for the grounding context attached to the active chat. */
 export function useContextLabel(context: ChatContext | null) {
@@ -19,6 +20,7 @@ export function useContextLabel(context: ChatContext | null) {
   if (context.kind === 'day') return t('contextDay', { date: String(context.date ?? ''), timezone: String(context.timezone ?? '') });
   if (context.kind === 'document') return t('contextDocument', { title: String(context.resource_id ?? '') });
   if (context.kind === 'entity') return t('contextEntity', { name: String(context.resource_id ?? '') });
+  if (context.kind === 'gadget') return t('contextGadget', { title: String(context.title || context.gadgetId || '') });
   return t('contextSelection', { count: context.items?.length ?? 1 });
 }
 
@@ -98,10 +100,9 @@ function focusChip(bar: HTMLElement | null, idx: number) {
 }
 
 /**
- * Removable context badge row (`variant` picks the bordered bar or the composer's borderless badges) shared by the
- * quick-chat drawer and the full Chat page; `onChange` enables the add-context picker. In the `badges` variant the
- * composer's + menu owns the trigger, so the picker's open state is controlled via `pickerOpen`/`onPickerOpenChange`
- * and the row renders chips only (nothing at all when there are none).
+ * Removable context badge row shared by quick chat and the full Chat page; selected document badges open a read-only
+ * text preview, while `onChange` enables the add-context picker. In the `badges` variant the composer's + menu owns
+ * the picker trigger, so its open state is controlled via `pickerOpen`/`onPickerOpenChange`.
  */
 export function ChatContextBar({ context, onRemove, onChange, variant = 'bar', pickerOpen, onPickerOpenChange }: { context: ChatContext | null; onRemove: () => void; onChange?: (context: ChatContext | null) => void; variant?: 'bar' | 'badges'; pickerOpen?: boolean; onPickerOpenChange?: (open: boolean) => void }) {
   const t = useTranslations('chat');
@@ -115,10 +116,19 @@ export function ChatContextBar({ context, onRemove, onChange, variant = 'bar', p
   const canPick = !!onChange && (!context || context.kind === 'selection');
   if (!canPick && !label) return null;
   const items = context?.kind === 'selection' ? context.items ?? [] : [];
-  const chip = (key: string, text: string, remove: () => void) => (
+  /** Renders a removable context badge and opens selected document text without changing the submitted context. */
+  const chip = (key: string, text: string, remove: () => void, documentId?: string, versionId?: string) => (
     <Badge key={key} variant="outline" className="min-h-6 max-w-full gap-1 bg-surface py-0.5 pl-2 pr-0 text-foreground">
-      <FileTextIcon className="shrink-0 text-muted-foreground" aria-hidden="true" />
-      <span className="truncate">{text}</span>
+      {documentId ? (
+        <ChatDocumentPreview documentId={documentId} versionId={versionId} title={text}>
+          <Button type="button" variant="ghost" className="h-7 min-w-0 gap-1 px-1 text-xs font-normal" aria-label={t('previewDocument', { title: text })}>
+            <FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <span className="max-w-48 truncate">{text}</span>
+          </Button>
+        </ChatDocumentPreview>
+      ) : (
+        <><FileTextIcon className="shrink-0 text-muted-foreground" aria-hidden="true" /><span className="truncate">{text}</span></>
+      )}
       {/* 44px hit area; the negative margin keeps the badge's visual height. */}
       <Button type="button" variant="ghost" size="icon" className="-my-2 rounded-full text-muted-foreground" data-chip-remove onClick={remove} title={t('contextRemove', { label: text })} aria-label={t('contextRemove', { label: text })}>
         <XIcon className="size-3.5" aria-hidden="true" />
@@ -141,8 +151,8 @@ export function ChatContextBar({ context, onRemove, onChange, variant = 'bar', p
     <div id={barId} className={variant === 'badges' ? (items.length > 0 || label ? 'flex flex-wrap items-center gap-1.5 text-xs text-foreground' : 'contents') : 'flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-secondary px-4 py-2 text-xs text-foreground'}>
       {label && <span className="sr-only">{t('contextLabel')}</span>}
       {canPick && items.length > 0
-        ? items.map((i, idx) => chip(i.documentId, nameOf(i, idx), () => removeAt(idx)))
-        : label && chip('ctx', label, onRemove)}
+        ? items.map((i, idx) => chip(i.documentId, nameOf(i, idx), () => removeAt(idx), i.documentId, i.documentVersionId))
+        : label && chip('ctx', label, onRemove, context?.kind === 'document' ? context.resource_id : undefined)}
       <span role="status" className="sr-only">{announce}</span>
       {canPick && variant !== 'badges' && (
         <Button type="button" variant="outline" size="sm" className="min-h-11" data-add-context disabled={items.length >= MAX_ITEMS} onClick={() => setOpen(true)}>

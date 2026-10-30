@@ -31,12 +31,15 @@ from modules.connectors.provider_specs import (
     FreeProviderSpec,
     deployment_use_matches,
     get_provider_spec,
+    get_realtime_tier,
 )
 from modules.connectors.provisioning_routes import ActivationRequest, _owner_access, activate_native
 from modules.connectors.public import (
     ConnectorConfig,
+    DataShape,
     save_connector_configuration,
     serialize_source_configuration,
+    source_data_shapes,
 )
 from modules.settings.public import module_dependency
 from modules.sources import public as sources
@@ -61,6 +64,8 @@ class BuiltinSourceRead(BaseModel):
     terms_checked_on: str
     attribution: str
     execution: str
+    realtime_tier: Literal["realtime", "near_realtime"] = "near_realtime"
+    data_shapes: list[DataShape] = []
     source_id: UUID | None
     enabled: bool
 
@@ -72,6 +77,7 @@ class BuiltinEnableRequest(BaseModel):
     # Optional owner switches; None keeps the Source's current value (new Sources default to on).
     graph_enabled: bool | None = None
     rag_index_enabled: bool | None = None
+    realtime_mode: Literal["realtime", "near_realtime"] | None = None
 
 
 _DEFAULT_ENABLE = BuiltinEnableRequest()  # body is optional; the model is never mutated
@@ -90,7 +96,10 @@ def _read(spec: FreeProviderSpec, source: ConnectorSource | None, active: bool) 
     return BuiltinSourceRead(
         id=spec.id, label=spec.label, category=spec.category, eligibility=spec.eligibility,
         terms_url=spec.terms_url, terms_checked_on=spec.checked_on, attribution=spec.attribution,
-        execution=spec.execution, source_id=source.id if source is not None else None, enabled=active,
+        execution=spec.execution,
+        realtime_tier=get_realtime_tier(spec.id, getattr(source, "configuration", None)),
+        data_shapes=sorted(source_data_shapes(spec.id, PROVIDER_SOURCE_TYPES.get(spec.id, "api"))),
+        source_id=source.id if source is not None else None, enabled=active,
     )
 
 
@@ -201,8 +210,12 @@ async def enable_builtin(
         found = await sources.create_source(
             session, SourceCreate(
                 type=PROVIDER_SOURCE_TYPES[provider], name=spec.label, provider=provider,
-                graph_enabled=payload.graph_enabled is not False,
-                rag_index_enabled=payload.rag_index_enabled is not False),
+                graph_enabled=bool(payload.graph_enabled),
+                rag_index_enabled=(
+                    payload.rag_index_enabled
+                    if payload.rag_index_enabled is not None
+                    else not spec.skip_embedding
+                )),
             scope=scope, multi_workspace_enabled=gate, expected_access_fence=fence)
     else:
         # Re-enabling an existing Source: un-pause it and apply any explicitly sent switches in one patch.
@@ -223,7 +236,8 @@ async def enable_builtin(
     # demotes an active connector. A paused->active Source has a new generation, so it must be re-saved.
     config = ConnectorConfig(
         timeout_seconds=30, history_mode="returned_snapshot",
-        schedule_interval_minutes=spec.default_interval_minutes)
+        schedule_interval_minutes=spec.default_interval_minutes,
+        realtime_mode=payload.realtime_mode)
     try:
         source_configuration = serialize_source_configuration(source, config)
         registry.validate(source.model_copy(update={"configuration": source_configuration}))

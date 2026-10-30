@@ -1,10 +1,11 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertCircle, CheckCircle2, ChevronRight, Eye, LayoutTemplate, Sparkles, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, ChevronRight, LayoutTemplate, Sparkles, X } from 'lucide-react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import type { DataShape } from '@/core/data-shapes';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
@@ -17,17 +18,41 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { ApiError } from '@/core/api';
+import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import {
   applyDashboardPreset,
   dashboardKeys,
   listDashboardPresets,
+  listGadgetRenderers,
   previewDashboardPreset,
   type Dashboard,
   type DashboardPreset,
   type DashboardWarning,
   type PresetPreview,
 } from './api';
+import { DatasourcePicker, useSourceRows } from './gadget-editor';
+import { templateName } from '@/core/renderer-labels';
+import { sourcesLinkFor } from './sources-link';
+
+/** Slot id to explicitly chosen datasource ids; slots without an entry stay unbound. */
+type SlotSources = Record<string, string[]>;
+
+/**
+ * Drops empty selections so a request only names slots the owner actually bound.
+ *
+ * @param sources Draft selection per slot id.
+ * @returns The `slot_sources` request body.
+ */
+function boundSlotSources(sources: SlotSources): SlotSources {
+  return Object.fromEntries(Object.entries(sources).filter(([, ids]) => ids.length > 0));
+}
+
+/** True when a source's data shapes intersect the renderer's accepted shapes (null accepts any shape). */
+function isAccepted(shapes: readonly DataShape[] | undefined, accepted: readonly DataShape[] | null): boolean {
+  return accepted === null || (shapes ?? []).some((shape) => accepted.includes(shape));
+}
 
 /** Props configuring the preset picker dialog and its target context. */
 export interface PresetPickerProps {
@@ -45,6 +70,9 @@ export interface PresetPickerProps {
   onPresetApplied: (dashboard: Dashboard) => void;
 }
 
+/** Backend preview/apply 409 codes that have dedicated `dashboard.presetError.<code>` copy. */
+const PRESET_ERROR_CODES = ['dashboard_limit', 'definition_limit', 'preview_changed', 'revision_conflict', 'revision_exhausted'];
+
 /**
  * Modal dialog that allows owners to browse, preview, and apply curated dashboard presets.
  * Supports non-destructive preview with capability/access warnings and explicit replace confirmation.
@@ -61,6 +89,9 @@ export function PresetPicker({
 }: PresetPickerProps) {
   const t = useTranslations('dashboard');
   const ts = useTranslations('uiSweep');
+  const tg = useTranslations('gadgetSettings');
+  const newNameId = useId();
+  const confirmId = useId();
   const session = useWorkspaceSession();
   const queryClient = useQueryClient();
 
@@ -68,8 +99,19 @@ export function PresetPicker({
   const [applyMode, setApplyMode] = useState<'create' | 'replace'>('create');
   const [newDashboardName, setNewDashboardName] = useState<string>('');
   const [replaceConfirmed, setReplaceConfirmed] = useState<boolean>(false);
+  /** Localized copy for a failed preview/apply: the 409 code first (limits, stale preview), else the failure class. */
+  const presetFailureText = (error: unknown): string => {
+    if (error instanceof ApiError && error.code && PRESET_ERROR_CODES.includes(error.code)) return t(`presetError.${error.code}`);
+    return tg(apiFailureKey(error) ?? 'requestFailed');
+  };
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
+  // Explicit per-slot datasource choice; sent with preview AND apply so the preview fingerprint matches.
+  const [slotSources, setSlotSources] = useState<SlotSources>({});
+  // Rows load only while the dialog is open (the picker below shares this cache entry).
+  const { query: sourceQuery, rows: sourceRows } = useSourceRows(open);
+  /** Preset whose preselection waited for unloaded source pages; cleared once it has been re-run. */
+  const latePreselectRef = useRef<string | null>(null);
 
   // Fetch standard presets catalog
   const presetsQuery = useQuery({
@@ -78,25 +120,46 @@ export function PresetPicker({
     enabled: open,
   });
 
+  // Renderer descriptors drive the shape-filtered "needs setup" link of each slot.
+  const renderersQuery = useQuery({
+    queryKey: dashboardKeys.renderers,
+    queryFn: ({ signal }) => listGadgetRenderers(signal),
+    enabled: open,
+  });
+  const renderersById = useMemo(
+    () => new Map((renderersQuery.data ?? []).map((renderer) => [renderer.id, renderer])),
+    [renderersQuery.data],
+  );
+
+  const rendererCatalogLoaded = renderersQuery.isSuccess;
+
   const presets = presetsQuery.data ?? [];
   const selectedPreset = presets.find((preset) => preset.id === selectedPresetId) ?? null;
 
   // Preview query mutation
   const previewMutation = useMutation({
-    mutationFn: async (preset: DashboardPreset) => {
+    mutationFn: async ({ preset, sources, mode = applyMode }: { preset: DashboardPreset; sources: SlotSources; mode?: 'create' | 'replace' }) => {
       setPreviewError(null);
       return previewDashboardPreset(
         preset.id,
         {
-          target_dashboard_id: applyMode === 'replace' ? currentDashboardId : null,
+          slot_sources: boundSlotSources(sources),
+          // The fingerprint covers the target, so the preview must be requested for the mode that will be applied.
+          target_dashboard_id: mode === 'replace' ? currentDashboardId : null,
         },
         session.csrfToken,
       );
     },
     onError: (error) => {
-      setPreviewError(error instanceof Error ? error.message : t('previewingPreset'));
+      // Server messages are English-only: show localized copy keyed by the failure class instead.
+      setPreviewError(presetFailureText(error));
     },
   });
+
+  // `mutate` keeps a stable identity across renders (the mutation object does not), so effects can depend on it.
+  const previewMutate = previewMutation.mutate;
+  // `reset` is stable too; depending on the mutation objects would recreate handleClose on every render.
+  const previewReset = previewMutation.reset;
 
   // Apply mutation
   const applyMutation = useMutation({
@@ -106,6 +169,7 @@ export function PresetPicker({
         params.presetId,
         {
           preview_fingerprint: params.preview.preview_fingerprint,
+          slot_sources: boundSlotSources(slotSources),
           mode: applyMode,
           name: applyMode === 'create' ? newDashboardName.trim() || params.preview.name : null,
           target_dashboard_id: applyMode === 'replace' ? currentDashboardId : null,
@@ -124,9 +188,11 @@ export function PresetPicker({
       handleClose();
     },
     onError: (error) => {
-      setApplyError(error instanceof Error ? error.message : t('saveFailed'));
+      setApplyError(presetFailureText(error));
     },
   });
+
+  const applyReset = applyMutation.reset;
 
   /** Closes dialog and resets draft preview selection state. */
   const handleClose = useCallback(() => {
@@ -134,28 +200,102 @@ export function PresetPicker({
     setPreviewError(null);
     setApplyError(null);
     setReplaceConfirmed(false);
-    previewMutation.reset();
-    applyMutation.reset();
+    setSlotSources({});
+    latePreselectRef.current = null;
+    previewReset();
+    applyReset();
     onOpenChange(false);
-  }, [applyMutation, onOpenChange, previewMutation]);
+  }, [applyReset, onOpenChange, previewReset]);
 
-  /** Selects a preset and triggers preview generation. */
+  const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage, isSuccess: sourcesLoaded } = sourceQuery;
+  // Read every source page while the dialog is open (bounded by the page count) so "the only compatible source"
+  // is decided on complete data; stops on a page error.
+  useEffect(() => {
+    if (open && hasNextPage && !isFetchingNextPage && !isFetchNextPageError) void fetchNextPage({ cancelRefetch: false });
+  }, [open, hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage]);
+
+  /**
+   * Binds the only compatible active datasource of each source slot of a preset that is not yet in `existing`.
+   * Slots with several (or no) compatible sources stay unbound so the owner chooses deliberately; nothing is
+   * bound while source pages, the first page or the renderer catalog are still loading, because a lone compatible row may not be the only one.
+   */
+  const preselect = useCallback(
+    (preset: DashboardPreset, existing: SlotSources): SlotSources => {
+      const initial: SlotSources = {};
+      if (hasNextPage || !sourcesLoaded || !rendererCatalogLoaded) return initial;
+      for (const slot of preset.slots) {
+        if (slot.slot_id in existing) continue;
+        const descriptor = renderersById.get(slot.renderer);
+        if (!descriptor || descriptor.source_mode === 'none') continue;
+        const compatible = sourceRows.filter((row) => row.status === 'active' && isAccepted(row.data_shapes, descriptor.accepted_shapes));
+        if (compatible.length === 1) initial[slot.slot_id] = [compatible[0].id];
+      }
+      return initial;
+    },
+    [hasNextPage, rendererCatalogLoaded, renderersById, sourceRows, sourcesLoaded],
+  );
+
+  // Re-runs the preselection for still-unset slots once the pages that were missing at click time have loaded.
+  // A slot the owner already touched has a key in `slotSources` and is never overwritten.
+  useEffect(() => {
+    if (!selectedPreset || latePreselectRef.current !== selectedPreset.id || hasNextPage || !sourcesLoaded || !rendererCatalogLoaded) return;
+    latePreselectRef.current = null;
+    const extra = preselect(selectedPreset, slotSources);
+    if (Object.keys(extra).length === 0) return;
+    const next = { ...slotSources, ...extra };
+    // One-shot (guarded by the ref): the late preselection is a reaction to the source query finishing, not derivable during render.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSlotSources(next);
+    previewMutate({ preset: selectedPreset, sources: next });
+  }, [hasNextPage, preselect, previewMutate, rendererCatalogLoaded, selectedPreset, slotSources, sourcesLoaded]);
+
+  /**
+   * Selects a preset, preselects the only compatible active datasource of each source slot, and previews it.
+   * When source pages are still loading the preselection is re-run once they have all arrived.
+   */
   const handleSelectPreset = useCallback(
     (preset: DashboardPreset) => {
+      const initial = preselect(preset, {});
+      latePreselectRef.current = hasNextPage || !sourcesLoaded || !rendererCatalogLoaded ? preset.id : null;
       setSelectedPresetId(preset.id);
       setNewDashboardName(preset.label);
       setPreviewError(null);
       setApplyError(null);
-      void previewMutation.mutateAsync(preset);
+      setSlotSources(initial);
+      void previewMutation.mutateAsync({ preset, sources: initial });
     },
-    [previewMutation],
+    [hasNextPage, preselect, previewMutation, rendererCatalogLoaded, sourcesLoaded],
+  );
+
+  /** Records a slot's datasource choice and re-previews so readiness and the fingerprint reflect it. */
+  const handleSlotSources = useCallback(
+    (slotId: string, ids: string[]) => {
+      if (!selectedPreset) return;
+      const next = { ...slotSources, [slotId]: ids };
+      setSlotSources(next);
+      previewMutation.mutate({ preset: selectedPreset, sources: next });
+    },
+    [previewMutation, selectedPreset, slotSources],
+  );
+
+  /**
+   * Switches create/replace and re-previews, because the preview fingerprint includes the replace target and
+   * applying with a create-mode fingerprint would always conflict (`preview_changed`).
+   */
+  const handleApplyMode = useCallback(
+    (mode: 'create' | 'replace') => {
+      setApplyMode(mode);
+      if (selectedPreset && mode !== applyMode) previewMutation.mutate({ preset: selectedPreset, sources: slotSources, mode });
+    },
+    [applyMode, previewMutation, selectedPreset, slotSources],
   );
 
   /** Confirms and applies the active preview. */
   const handleApply = useCallback(() => {
     if (!selectedPreset || !previewMutation.data) return;
     if (applyMode === 'replace' && !replaceConfirmed) return;
-    void applyMutation.mutateAsync({
+    // mutate (not mutateAsync): failures are reported by onError, never as an unhandled rejection.
+    applyMutation.mutate({
       presetId: selectedPreset.id,
       preview: previewMutation.data,
     });
@@ -204,12 +344,9 @@ export function PresetPicker({
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-foreground text-sm">{preset.label}</span>
-                        <span className="text-[11px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-muted/40 text-muted-foreground font-mono">
-                          {preset.family}
-                        </span>
                       </div>
                       <p className="text-xs text-muted-foreground mt-1">
-                        {t('presetSlotsCount', { count: preset.slots.length })}: {preset.slots.map((s) => s.renderer).join(', ')}
+                        {t('presetSlotsCount', { count: preset.slots.length })}: {preset.slots.map((s) => templateName(s.renderer, tg)).join(', ')}
                       </p>
                     </div>
                     <ChevronRight
@@ -236,7 +373,7 @@ export function PresetPicker({
                   <h4 className="text-base font-bold text-foreground flex items-center gap-2">
                     <span>{selectedPreset.label}</span>
                     <span className="text-xs font-normal text-muted-foreground">
-                      ({selectedPreset.slots.length} gadgets)
+                      ({t('presetGadgetsCount', { count: selectedPreset.slots.length })})
                     </span>
                   </h4>
                   {previewMutation.isPending && (
@@ -255,20 +392,6 @@ export function PresetPicker({
                 {/* Resolved slots preview */}
                 {previewMutation.data && (
                   <div className="space-y-3">
-                    <div className="p-3 rounded-md bg-muted/30 border border-border text-xs space-y-1.5">
-                      <div className="font-semibold text-foreground flex items-center gap-1.5">
-                        <Eye className="w-3.5 h-3.5" />
-                        <span>{ts('ppPreview')}</span>
-                      </div>
-                      <div className="text-muted-foreground font-mono text-[11px] truncate">
-                        {t('fingerprint', { fingerprint: previewMutation.data.preview_fingerprint.slice(0, 16) + '…' })}
-                      </div>
-                      <div className="grid grid-cols-2 gap-1 text-[11px] pt-1">
-                        <span>{t('desktopLayout')}: 20 cols</span>
-                        <span>{t('mobileLayout')}: stack</span>
-                      </div>
-                    </div>
-
                     {/* Per-gadget readiness: warnings come from the preview; nothing is connected on the owner's behalf */}
                     <div className="space-y-1.5">
                       <p className="text-xs font-semibold text-foreground">
@@ -278,19 +401,38 @@ export function PresetPicker({
                         })}
                       </p>
                       <ul className="divide-y divide-border rounded-md border border-border">
-                        {previewMutation.data.slots.map((slot) => (
-                          <li key={slot.slot_id} className="flex items-center justify-between gap-2 px-2.5 py-1.5 text-xs">
-                            <span className="min-w-0 truncate font-mono">{slot.renderer}</span>
-                            {slot.warnings.length === 0 ? (
-                              <span className="shrink-0 text-muted-foreground">{t('slotReady')}</span>
-                            ) : (
-                              <span className="flex shrink-0 items-center gap-2">
-                                <span className="font-semibold text-destructive">{t('slotNeedsSetup')}</span>
-                                <Link href="/settings/sources" className="inline-flex min-h-11 items-center text-primary underline underline-offset-4">{t('slotConfigure')}</Link>
-                              </span>
-                            )}
-                          </li>
-                        ))}
+                        {previewMutation.data.slots.map((slot) => {
+                          const descriptor = renderersById.get(slot.renderer);
+                          const bindsSources = descriptor?.source_mode === 'single' || descriptor?.source_mode === 'multi';
+                          // An unbound slot is fixed by the selector below and a missing scope is set in the gadget editor after applying;
+                          // only the remaining warnings need the Sources page.
+                          const needsSourcesPage = slot.warnings.some((warning) => warning.code !== 'source_unbound' && warning.code !== 'scope_required');
+                          return (
+                            <li key={slot.slot_id} className="space-y-2 px-2.5 py-1.5 text-xs">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="min-w-0 truncate">{templateName(slot.renderer, tg)}</span>
+                                {slot.warnings.length === 0 ? (
+                                  <span className="shrink-0 text-muted-foreground">{t('slotReady')}</span>
+                                ) : (
+                                  <span className="flex shrink-0 items-center gap-2">
+                                    <span className="font-semibold text-destructive">{t('slotNeedsSetup')}</span>
+                                    {/* Renderers that bind no sources have nothing to configure in Sources. */}
+                                    {descriptor?.source_mode !== 'none' && needsSourcesPage && <Link href={descriptor ? sourcesLinkFor(descriptor) : '/settings/sources'} className="inline-flex min-h-11 items-center text-primary underline underline-offset-4">{t('slotConfigure')}</Link>}
+                                  </span>
+                                )}
+                              </div>
+                              {bindsSources && (
+                                <DatasourcePicker
+                                  acceptedShapes={descriptor.accepted_shapes}
+                                  mode={descriptor.source_mode === 'single' ? 'single' : 'multi'}
+                                  value={slotSources[slot.slot_id] ?? []}
+                                  onChange={(ids) => handleSlotSources(slot.slot_id, ids)}
+                                  sourcesHref={sourcesLinkFor(descriptor)}
+                                />
+                              )}
+                            </li>
+                          );
+                        })}
                       </ul>
                       <p className="text-[11px] text-muted-foreground">{t('presetsNoConnect')}</p>
                     </div>
@@ -305,8 +447,9 @@ export function PresetPicker({
                         <ul className="list-disc list-inside space-y-0.5 text-[11px] pl-1">
                           {allWarnings.slice(0, 5).map((warning, idx) => (
                             <li key={idx}>
-                              {warning.capability ? ts('ppCapability', { capability: warning.capability }) : warning.code}
-                              {warning.setup_group ? ` (group: ${warning.setup_group})` : ''}
+                              {warning.capability
+                                ? ts('ppCapability', { capability: warning.capability })
+                                : t.has(`presetWarning.${warning.code}`) ? t(`presetWarning.${warning.code}` as 'cancel') : warning.code}
                             </li>
                           ))}
                         </ul>
@@ -319,7 +462,7 @@ export function PresetPicker({
                       <div className="grid grid-cols-2 gap-2">
                         <button
                           type="button"
-                          onClick={() => setApplyMode('create')}
+                          onClick={() => handleApplyMode('create')}
                           className={`p-2.5 text-xs font-medium rounded-md border text-center transition-colors ${
                             applyMode === 'create'
                               ? 'border-primary bg-primary/10 font-bold text-foreground'
@@ -331,7 +474,7 @@ export function PresetPicker({
                         <button
                           type="button"
                           disabled={!currentDashboardId}
-                          onClick={() => setApplyMode('replace')}
+                          onClick={() => handleApplyMode('replace')}
                           className={`p-2.5 text-xs font-medium rounded-md border text-center transition-colors ${
                             applyMode === 'replace'
                               ? 'border-destructive bg-destructive/10 font-bold text-destructive'
@@ -344,11 +487,11 @@ export function PresetPicker({
 
                       {applyMode === 'create' ? (
                         <div className="space-y-1 pt-1">
-                          <Label htmlFor="preset-new-name" className="text-xs">
+                          <Label htmlFor={newNameId} className="text-xs">
                             {t('dashboardName')}
                           </Label>
                           <Input
-                            id="preset-new-name"
+                            id={newNameId}
                             value={newDashboardName}
                             onChange={(e) => setNewDashboardName(e.target.value)}
                             placeholder={selectedPreset.label}
@@ -362,12 +505,12 @@ export function PresetPicker({
                           </p>
                           <div className="flex items-center space-x-2 pt-1">
                             <Checkbox
-                              id="confirm-replace-cb"
+                              id={confirmId}
                               checked={replaceConfirmed}
                               onCheckedChange={(checked) => setReplaceConfirmed(Boolean(checked))}
                             />
                             <label
-                              htmlFor="confirm-replace-cb"
+                              htmlFor={confirmId}
                               className="text-[11px] font-medium leading-none cursor-pointer text-foreground"
                             >
                               {t('confirmReplaceCheckbox')}
@@ -400,7 +543,7 @@ export function PresetPicker({
         )}
 
         <DialogFooter className="p-4 border-t border-border flex items-center justify-between gap-2 bg-muted/10 sm:justify-between">
-          <Button type="button" className="secondary" onClick={handleClose}>
+          <Button type="button" variant="outline" onClick={handleClose}>
             {t('cancel')}
           </Button>
 

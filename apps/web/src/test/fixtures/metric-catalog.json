@@ -1,0 +1,425 @@
+{
+  "alpha_vantage": {
+    "cadence_days": 1,
+    "charts_as_series": true,
+    "default_lookback_days": null,
+    "metrics": [
+      {
+        "id": "open",
+        "unit": null
+      },
+      {
+        "id": "high",
+        "unit": null
+      },
+      {
+        "id": "low",
+        "unit": null
+      },
+      {
+        "id": "close",
+        "unit": null
+      },
+      {
+        "id": "volume",
+        "unit": "shares"
+      }
+    ],
+    "metrics_open": false,
+    "region_keyed": false,
+    "seed_symbol": true,
+    "suggested_regions": [],
+    "suggested_symbols": [],
+    "symbol_keyed": true
+  },
+  "alternative_me": {
+    "cadence_days": 1,
+    "charts_as_series": true,
+    "default_lookback_days": null,
+    "metrics": [
+      {
+        "id": "fear_greed_index",
+        "unit": "index (0-100)"
+      }
+    ],
+    "metrics_open": false,
+    "region_keyed": false,
+    "seed_symbol": true,
+    "suggested_regions": [],
+    "suggested_symbols": [],
+    "symbol_keyed": false
+  },
+  "binance": {
+    "cadence_days": 0.010416666666666666,
+    "charts_as_series": true,
+    "default_lookback_days": 3,
+    "metrics": [
+      {
+        "id": "spot_price",
+        "unit": null
+      }
+    ],
+    "metrics_open": false,
+    "region_keyed": false,
+    "seed_symbol": false,
+    "suggested_regions": [],
+    "suggested_symbols": [
+      "BTCUSDT"
+    ],
+    "symbol_keyed": true
+  },
+  "coingecko": {
+    "cadence_days": 0.010416666666666666,
+    "charts_as_series": true,
+    "default_lookback_days": 3,
+    "metrics": [
+      {
+        "id": "spot_price",
+        "unit": null
+      }
+    ],
+    "metrics_open": false,
+    "region_keyed": false,
+    "seed_symbol": false,
+    "suggested_regions": [],
+    "suggested_symbols": [
+      "BTC"
+    ],
+    "symbol_keyed": true
+  },
+  "coinpaprika": {
+    "cadence_days": 0.010416666666666666,
+    "charts_as_series": true,
+    "default_lookback_days": 3,
+    "metrics": [
+      {
+        "id": "spot_price",
+        "unit": null
+      }
+    ],
+    "metrics_open": false,
+    "region_keyed": false,
+    "seed_symbol": true,
+    "suggested_regions": [],
+    "suggested_symbols": [
+      "BTC"
+    ],
+    "symbol_keyed": true
+  },
+  "disease_sh": {
+    "cadence_days": 1,
+    "charts_as_series": true,
+    "default_lookback_days": null,
+    "metrics": [
+      {
+        "id": "covid19_cases",
+        "unit": "persons"
+      },
+      {
+        "id": "covid19_deaths",
+        "unit": "persons"
+      },
+      {
+        "id": "covid19_recovered",
+        "unit": "persons"
+      },
+      {
+        "id": "covid19_active",
+        "unit": "persons"
+      }
+    ],
+    "metrics_open": false,
+    "region_keyed": false,
+    "seed_symbol": true,
+    "suggested_regions": [],
+    "suggested_symbols": [],
+    "symbol_keyed": false
+  },
+  "ecb": {
+    "cadence_days": 1,
+    "charts_as_series": true,
+    "default_lookback_days": null,
+    "metrics": [
+      {
+        "id": "fx_reference_rate",
+        "unit": null
+      }
+    ],
+    "metrics_open": false,
+    "region_keyed": false,
+    "seed_symbol": true,
+    "suggested_regions": [],
+    "suggested_symbols": [
+      "EUR/USD",
+      "EUR/JPY",
+      "EUR/GBP"
+    ],
+    "symbol_keyed": true
+  },
+  "frankfurter": {
+    "cadence_days": 1,
+    "charts_as_series": true,
+    "default_lookback_days": null,
+    "metrics": [
+      {
+        "id": "fx_reference_rate",
+        "unit": null
+      }
+    ],
+    "metrics_open": false,
+    "region_keyed": false,
+    "seed_symbol": true,
+    "suggested_regions": [],
+    "suggested_symbols": [
+      "USD/VND"
+    ],
+    "symbol_keyed": true
+  },
+  "fred": {
+    "cadence_days": 31,
+    "charts_as_series": true,
+    "default_lookback_days": 730,
+    "metrics": [
+      {
+        "id": "fred_series",
+        "unit": "series units"
+      }
+    ],
+    "metrics_open": false,
+    "region_keyed": false,
+    "seed_symbol": false,
+    "suggested_regions": [],
+    "suggested_symbols": [
+      "DFF",
+      "CPIAUCSL",
+      "DGS10"
+    ],
+    "symbol_keyed": true
+  },
+  "iss_position": {
+    "cadence_days": 0.010416666666666666,
+    "charts_as_series": true,
+    "default_lookback_days": 3,
+    "metrics": [
+      {
+        "id": "iss_altitude",
+        "unit": "km"
+      }
+    ],
+    "metrics_open": false,
+    "region_keyed": false,
+    "seed_symbol": true,
+    "suggested_regions": [],
+    "suggested_symbols": [],
+    "symbol_keyed": false
+  },
+  "nasa_firms": {
+    "cadence_days": null,
+    "charts_as_series": false,
+    "default_lookback_days": null,
+    "metrics": [
+      {
+        "id": "fire_radiative_power",
+        "unit": "MW"
+      }
+    ],
+    "metrics_open": false,
+    "region_keyed": false,
+    "seed_symbol": true,
+    "suggested_regions": [],
+    "suggested_symbols": [],
+    "symbol_keyed": false
+  },
+  "noaa_kp": {
+    "cadence_days": 0.125,
+    "charts_as_series": true,
+    "default_lookback_days": 30,
+    "metrics": [
+      {
+        "id": "kp_index",
+        "unit": "kp"
+      }
+    ],
+    "metrics_open": false,
+    "region_keyed": false,
+    "seed_symbol": true,
+    "suggested_regions": [],
+    "suggested_symbols": [],
+    "symbol_keyed": false
+  },
+  "oecd_cli": {
+    "cadence_days": 31,
+    "charts_as_series": true,
+    "default_lookback_days": 730,
+    "metrics": [
+      {
+        "id": "composite_leading_indicator",
+        "unit": "index"
+      }
+    ],
+    "metrics_open": false,
+    "region_keyed": false,
+    "seed_symbol": true,
+    "suggested_regions": [],
+    "suggested_symbols": [
+      "USA",
+      "CHN",
+      "JPN",
+      "DEU",
+      "GBR"
+    ],
+    "symbol_keyed": true
+  },
+  "open_er_api": {
+    "cadence_days": 1,
+    "charts_as_series": true,
+    "default_lookback_days": null,
+    "metrics": [
+      {
+        "id": "fx_reference_rate",
+        "unit": null
+      }
+    ],
+    "metrics_open": false,
+    "region_keyed": false,
+    "seed_symbol": true,
+    "suggested_regions": [],
+    "suggested_symbols": [
+      "USD/VND",
+      "USD/EUR",
+      "USD/JPY",
+      "USD/GBP",
+      "USD/CNY"
+    ],
+    "symbol_keyed": true
+  },
+  "open_meteo": {
+    "cadence_days": 0.041666666666666664,
+    "charts_as_series": true,
+    "default_lookback_days": 3,
+    "metrics": [
+      {
+        "id": "temperature_2m",
+        "unit": null
+      },
+      {
+        "id": "relative_humidity_2m",
+        "unit": null
+      },
+      {
+        "id": "precipitation",
+        "unit": null
+      },
+      {
+        "id": "wind_speed_10m",
+        "unit": null
+      }
+    ],
+    "metrics_open": false,
+    "region_keyed": false,
+    "seed_symbol": true,
+    "suggested_regions": [],
+    "suggested_symbols": [],
+    "symbol_keyed": false
+  },
+  "openaq": {
+    "cadence_days": 0.041666666666666664,
+    "charts_as_series": true,
+    "default_lookback_days": 3,
+    "metrics": [
+      {
+        "id": "pm25",
+        "unit": null
+      },
+      {
+        "id": "pm10",
+        "unit": null
+      },
+      {
+        "id": "o3",
+        "unit": null
+      },
+      {
+        "id": "no2",
+        "unit": null
+      },
+      {
+        "id": "so2",
+        "unit": null
+      },
+      {
+        "id": "co",
+        "unit": null
+      }
+    ],
+    "metrics_open": true,
+    "region_keyed": true,
+    "seed_symbol": true,
+    "suggested_regions": [],
+    "suggested_symbols": [],
+    "symbol_keyed": false
+  },
+  "openweathermap": {
+    "cadence_days": 0.041666666666666664,
+    "charts_as_series": true,
+    "default_lookback_days": 3,
+    "metrics": [
+      {
+        "id": "temperature",
+        "unit": "degC"
+      },
+      {
+        "id": "humidity",
+        "unit": "%"
+      },
+      {
+        "id": "pressure",
+        "unit": "hPa"
+      },
+      {
+        "id": "wind_speed",
+        "unit": "m/s"
+      }
+    ],
+    "metrics_open": false,
+    "region_keyed": false,
+    "seed_symbol": true,
+    "suggested_regions": [],
+    "suggested_symbols": [],
+    "symbol_keyed": false
+  },
+  "usgs": {
+    "cadence_days": null,
+    "charts_as_series": false,
+    "default_lookback_days": null,
+    "metrics": [
+      {
+        "id": "earthquake_magnitude",
+        "unit": "magnitude"
+      }
+    ],
+    "metrics_open": false,
+    "region_keyed": false,
+    "seed_symbol": true,
+    "suggested_regions": [],
+    "suggested_symbols": [],
+    "symbol_keyed": false
+  },
+  "world_bank": {
+    "cadence_days": 365,
+    "charts_as_series": true,
+    "default_lookback_days": 3650,
+    "metrics": [
+      {
+        "id": "gdp_current_usd",
+        "unit": "current US$"
+      }
+    ],
+    "metrics_open": true,
+    "region_keyed": false,
+    "seed_symbol": true,
+    "suggested_regions": [],
+    "suggested_symbols": [],
+    "symbol_keyed": false
+  }
+}

@@ -17,7 +17,7 @@ const entry = {
   provider_id: 'frankfurter', label: 'Frankfurter', auth_methods: ['none'], scope_fields: [], configuration_fields: [], quota_limits: {}, history_description: null,
   collection_modes: [], supports_history: false, supports_edit: false, supports_delete: false, availability: 'implemented', unavailable_operations: [],
   terms_url: 'https://frankfurter.dev', terms_checked_on: '2026-10-07', attribution: 'Credit Frankfurter.', key_fields: [],
-  example_config: { timezone: 'Asia/Ho_Chi_Minh', schedule_interval_minutes: 1440 }, sample_output: { base: 'EUR', rate: 1.0 },
+  data_shapes: ['measurement'], example_config: { timezone: 'Asia/Ho_Chi_Minh', schedule_interval_minutes: 1440 }, sample_output: { base: 'EUR', rate: 1.0 },
 } as ConnectorCatalogEntry;
 const wrap = (ui: React.ReactNode) => render(
   <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>

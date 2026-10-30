@@ -15,6 +15,8 @@ from pydantic import (
     model_validator,
 )
 
+from modules.sources.public import GadgetSourceSelection
+
 MAX_DASHBOARDS_PER_OWNER = 50
 MAX_GROUPS_PER_DASHBOARD = 50
 MAX_DEFINITIONS_PER_OWNER = 200
@@ -24,6 +26,8 @@ MAX_RULES_PER_DEFINITION = 32
 MAX_TOPICS_PER_RULE = 8
 DEFAULT_PAGE_LIMIT = 50
 MAX_PAGE_LIMIT = 100
+# Annual providers (World Bank) need a decade of window; the observation read bounds rows separately.
+MAX_LOOKBACK_DAYS = 3660
 
 Revision = Annotated[StrictInt, Field(ge=1, le=9_007_199_254_740_991)]
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
@@ -54,7 +58,7 @@ class GadgetScope(StrictConfiguration):
         default_factory=list, max_length=31
     )
     metrics: list[Annotated[str, Field(min_length=1, max_length=80)]] = Field(default_factory=list, max_length=32)
-    lookback_days: StrictInt | None = Field(default=None, ge=1, le=366)
+    lookback_days: StrictInt | None = Field(default=None, ge=1, le=MAX_LOOKBACK_DAYS)
 
     @model_validator(mode="after")
     def ensure_unique_selectors(self) -> "GadgetScope":
@@ -502,7 +506,7 @@ class RendererRead(StrictConfiguration):
     runtime_state: Literal["planned", "available"]
     capability_keys: list[str]
     source_mode: Literal["none", "single", "multi"] = "none"
-    source_providers: list[str] | None = None
+    accepted_shapes: list[str] | None = None
 
 
 class GadgetTemplateRead(StrictConfiguration):
@@ -511,9 +515,31 @@ class GadgetTemplateRead(StrictConfiguration):
     id: str
     renderer: str
     source_mode: Literal["none", "single", "multi"]
-    providers: list[str]
+    accepted_shapes: list[str] | None = None
     scope: GadgetScope
     filters: GadgetFilters
+
+
+class MetricInfoRead(StrictConfiguration):
+    """One metric id a provider emits, with its unit (None when the unit varies per source)."""
+
+    id: str
+    unit: str | None
+
+
+class ProviderMetricsRead(StrictConfiguration):
+    """Static metric catalog entry of one measurement provider (read-only, no source data)."""
+
+    metrics: list[MetricInfoRead]
+    symbol_keyed: bool
+    suggested_symbols: list[str]
+    metrics_open: bool
+    charts_as_series: bool
+    region_keyed: bool
+    suggested_regions: list[str]
+    seed_symbol: bool
+    cadence_days: float | None
+    default_lookback_days: int | None
 
 
 class PresetSlotRead(StrictConfiguration):
@@ -631,3 +657,16 @@ class GadgetDefinitionUsageRead(StrictConfiguration):
     dashboard_id: UUID
     name: str
     instance_count: int
+
+
+class GadgetSourceOption(GadgetSourceSelection):
+    """Selectable source metadata plus last successful collection time and emitted data shapes."""
+
+    data_shapes: list[str]
+
+
+class GadgetSourceOptionPage(StrictConfiguration):
+    """Bounded keyset page of ``GadgetSourceOption`` items for the gadget source picker."""
+
+    items: list[GadgetSourceOption]
+    next_cursor: str | None = None

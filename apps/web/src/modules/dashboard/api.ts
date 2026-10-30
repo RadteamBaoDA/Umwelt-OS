@@ -1,4 +1,5 @@
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
+import type { DataShape } from '@/core/data-shapes';
 
 /** Dashboard summary returned by the owner-scoped collection endpoint. */
 export type DashboardSummary = {
@@ -53,7 +54,7 @@ export type GadgetScope = {
   map_layer_ids?: string[];
   cii_country_codes?: string[];
   metrics?: string[];
-  lookback_days?: number;
+  lookback_days?: number | null;
 };
 
 /** Explainable match against one immutable current document version. */
@@ -133,6 +134,8 @@ export type GadgetSource = {
   status: 'active' | 'paused' | 'archived';
   generation: number;
   local_only: boolean;
+  last_success_at: string | null;
+  data_shapes: DataShape[];
 };
 
 /** Cursor page for bounded source selection. */
@@ -148,16 +151,16 @@ export type GadgetRenderer = {
   capability_keys: string[];
   /** How many configured sources the renderer reads: none, exactly one, or many. */
   source_mode: 'none' | 'single' | 'multi';
-  /** Providers the renderer accepts; null means any provider. */
-  source_providers: string[] | null;
+  /** Data shapes the renderer accepts; null means any shape. */
+  accepted_shapes: DataShape[] | null;
 };
 
-/** Named gadget starting point; pre-fills renderer, provider choices, scope and filters only. */
+/** Named gadget starting point; pre-fills renderer, accepted shapes, scope and filters only. */
 export type GadgetTemplate = {
   id: string;
   renderer: string;
   source_mode: 'none' | 'single' | 'multi';
-  providers: string[];
+  accepted_shapes: DataShape[] | null;
   scope: GadgetScope;
   filters: GadgetFilters;
 };
@@ -227,6 +230,8 @@ export const dashboardKeys = {
   renderers: ['gadget-renderers'] as const,
   templates: ['gadget-templates'] as const,
   sources: ['gadget-sources'] as const,
+  compatibleCounts: ['gadget-renderer-compatible-counts'] as const,
+  metricCatalog: ['gadget-metric-catalog'] as const,
   presets: ['dashboard-presets'] as const,
   presetPreview: ['dashboard-preset-preview'] as const,
 };
@@ -368,6 +373,37 @@ export function listGadgetRenderers(signal?: AbortSignal) {
 /** Lists the fixed catalog of named gadget templates; display text is localized by template id. */
 export function listGadgetTemplates(signal?: AbortSignal) {
   return apiRequest<GadgetTemplate[]>('/api/v1/gadget-templates', { signal });
+}
+
+/** Metrics and symbol rules one provider exposes to measurement gadgets. */
+export type ProviderMetrics = {
+  metrics: { id: string; unit: string | null }[];
+  symbol_keyed: boolean;
+  suggested_symbols: string[];
+  /** True when the provider accepts metric ids beyond the listed ones (typed entry allowed). */
+  metrics_open: boolean;
+  /** False for point-event providers (quakes, hotspots) whose rows are not one time series. */
+  charts_as_series: boolean;
+  /** True when one source emits several regions as separate series (a chart needs one region). */
+  region_keyed: boolean;
+  /** Regions the adapter writes by default (empty when the owner configures them). */
+  suggested_regions: string[];
+  /** False when the owner configures the symbols (FRED series, Binance pairs): suggestions are hints, never seeded. */
+  seed_symbol: boolean;
+  /** Typical days between one series' observations; null for point-event providers. */
+  cadence_days: number | null;
+  /** Starting chart window in days when none is stored (annual/monthly series need more than 90); null means 90. */
+  default_lookback_days: number | null;
+};
+
+/** Counts, per renderer id, the active sources whose data shapes the renderer can read. */
+export function listCompatibleSourceCounts(signal?: AbortSignal) {
+  return apiRequest<Record<string, number>>('/api/v1/gadget-renderers/compatible-counts', { signal });
+}
+
+/** Fetches the per-provider metric catalog keyed by provider id. */
+export function getMetricCatalog(signal?: AbortSignal) {
+  return apiRequest<Record<string, ProviderMetrics>>('/api/v1/gadget-metric-catalog', { signal });
 }
 
 /** Lists bounded source identity and lifecycle metadata for explicit gadget selection. */

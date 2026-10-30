@@ -54,10 +54,15 @@ export interface WebSearchOutcome {
  * Bounded client context linking a chat session to specific resources or filters.
  */
 export interface ChatContext {
-  kind: 'general' | 'document' | 'entity' | 'day' | 'selection';
+  kind: 'general' | 'document' | 'entity' | 'day' | 'selection' | 'gadget';
   resource_id?: string;
   date?: string;
   timezone?: string;
+  gadgetId?: string;
+  title?: string;
+  renderer?: string;
+  sourceIds?: string[];
+  scope?: Record<string, unknown>;
   items?: Array<{
     sourceId: string;
     documentId: string;
@@ -147,6 +152,8 @@ export interface SendMessagePayload {
   context?: ChatContext | Record<string, unknown>;
   /** Per-message opt-in; omit (never send false-by-default state) unless the user ticked it. */
   web_search?: boolean;
+  /** Per-message opt-in for structured/SQL query over collected PostgreSQL datasources. */
+  db_query?: boolean;
   /** Optional per-message chat model override; both are sent together or not at all. */
   provider_id?: string;
   model?: string;
@@ -169,6 +176,8 @@ export interface MessageMutationPayload {
   content?: string;
   /** Per-mutation opt-in; not inherited from the original message. */
   web_search?: boolean;
+  /** Per-mutation opt-in for structured/SQL query over collected PostgreSQL datasources. */
+  db_query?: boolean;
   /** Optional model choice for the new answer; both fields are sent together or not at all. */
   provider_id?: string;
   model?: string;

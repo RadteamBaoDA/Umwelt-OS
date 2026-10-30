@@ -38,6 +38,7 @@ from modules.dashboard.schemas import (
     GadgetDefinitionPatch,
     GadgetDefinitionRead,
     GadgetDefinitionUsageRead,
+    GadgetSourceOptionPage,
     GadgetTemplateRead,
     GroupCreate,
     GroupPatch,
@@ -49,10 +50,10 @@ from modules.dashboard.schemas import (
     PresetApplyRequest,
     PresetPreviewRead,
     PresetPreviewRequest,
+    ProviderMetricsRead,
     RendererRead,
 )
 from modules.settings.public import module_dependency
-from modules.sources.schemas import GadgetSourceSelectionPage
 
 router = APIRouter(prefix="/api/v1", tags=["dashboard"], dependencies=[Depends(module_dependency("dashboard"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
@@ -77,7 +78,9 @@ async def _call[T](operation: Awaitable[T]) -> T:
     except (ValueError, KeyError) as exc:
         message = "Unknown preset or renderer" if isinstance(exc, KeyError) else str(exc)
         code = getattr(exc, "code", "invalid_dashboard_configuration")
-        raise HTTPException(status_code=422, detail={"code": code, "message": message, "details": {}}) from exc
+        field = getattr(exc, "field", None)
+        details = {"field": field} if field else {}
+        raise HTTPException(status_code=422, detail={"code": code, "message": message, "details": details}) from exc
 
 
 @router.get("/dashboards", response_model=list[DashboardSummary])
@@ -276,12 +279,27 @@ async def list_renderers(response: Response) -> list[RendererRead]:
 
 @router.get("/gadget-templates", response_model=list[GadgetTemplateRead])
 async def list_gadget_templates(response: Response) -> list[GadgetTemplateRead]:
-    """Return the static built-in gadget template catalog; names are localized client-side."""
+    """Return generic gadget display templates and their renderer compatibility metadata."""
     _no_store(response)
     return public.list_templates()
 
 
-@router.get("/gadget-sources", response_model=GadgetSourceSelectionPage)
+@router.get("/gadget-renderers/compatible-counts", response_model=dict[str, int])
+async def gadget_compatible_counts(session: Session, scope: WorkspaceRead, request: Request, response: Response) -> dict[str, int]:
+    """Return renderer id to exact count of active owner sources whose data shapes it can display."""
+    _no_store(response)
+    return await public.compatible_source_counts(
+        session, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+
+
+@router.get("/gadget-metric-catalog", response_model=dict[str, ProviderMetricsRead])
+async def gadget_metric_catalog(response: Response) -> dict[str, dict[str, Any]]:
+    """Return the static per-provider metric catalog used by the gadget editor."""
+    _no_store(response)
+    return public.metric_catalog_read()
+
+
+@router.get("/gadget-sources", response_model=GadgetSourceOptionPage)
 async def list_gadget_sources(session: Session, scope: WorkspaceRead, request: Request, response: Response, limit: Annotated[int, Query(ge=1, le=100)] = 50, cursor: str | None = Query(default=None, max_length=512)) -> dict[str, Any]:
     """Return owner source selection metadata without exposing connector configuration or content."""
     _no_store(response)

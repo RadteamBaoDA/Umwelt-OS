@@ -9,6 +9,7 @@ from modules.connectors.backends import (
     PROVIDER_SOURCE_TYPES,
     is_native_provider,
 )
+from modules.connectors.data_shapes import DataShape, source_data_shapes
 from modules.connectors.provider_specs import (
     FREE_PROVIDER_SPECS,
     FreeProviderSpec,
@@ -55,6 +56,7 @@ class CatalogEntry(BaseModel):
     endpoints: tuple[str, ...] = ()
     execution: Literal["supported", "experimental", "research_only"] | None = None
     default_interval_minutes: int | None = None
+    realtime_tier: Literal["realtime", "near_realtime"] = "near_realtime"
     key_fields: tuple[str, ...] = ()
     endpoint_probe: Literal["plan_documented", "unverified"] | None = None
     quota_policies: tuple[QuotaWindowPolicy, ...] = ()
@@ -64,6 +66,12 @@ class CatalogEntry(BaseModel):
     # Static, fixture-shaped illustrations for the setup guide. Never live data and never a quota or license claim.
     example_config: dict[str, Any] | None = None
     sample_output: dict[str, Any] | None = None
+
+    @computed_field(return_type=list[DataShape])  # type: ignore[prop-decorator]  # pydantic computed_field over property
+    @property
+    def data_shapes(self) -> list[DataShape]:
+        """Report the data shapes this provider emits (sorted, never empty) for renderer compatibility."""
+        return sorted(source_data_shapes(self.provider_id, "api"))
 
     @computed_field(return_type=bool)  # type: ignore[prop-decorator]  # pydantic computed_field over property
     @property
@@ -436,6 +444,7 @@ def _with_spec(entry: CatalogEntry, spec: FreeProviderSpec) -> CatalogEntry:
         "eligibility": spec.eligibility, "terms_url": spec.terms_url, "terms_checked_on": spec.checked_on,
         "attribution": spec.attribution, "category": spec.category, "hosts": spec.hosts, "endpoints": spec.endpoints,
         "execution": spec.execution, "default_interval_minutes": spec.default_interval_minutes,
+        "realtime_tier": spec.realtime_tier,
         "key_fields": ("api_key",) if spec.key_required else (), "endpoint_probe": spec.endpoint_probe,
         "quota_policies": spec.quota, "setup_guide": (
             f"Opt in per source, declare deployment use and acknowledge the terms ({spec.terms_url})."

@@ -2,6 +2,7 @@
 
 import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Download, History, Pause, Play, RefreshCw, Settings2, Trash2, Unplug } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -21,6 +22,7 @@ import {
   getOperation,
   listBuiltinSources,
   listSources,
+  RealtimeMode,
   Source,
   sourceKeys,
   triggerCollection,
@@ -31,6 +33,8 @@ import { useSourceActions } from './use-source-actions';
 import { SourceWizard } from './source-wizard';
 import { matchesFilter, SourceFilter, SourceRowState, sourceRowState, SourcesTable } from './source-table';
 import { SyncHistory } from './sync-history';
+import { parseShapeFilter } from './shape-filter';
+import { templateName } from '@/core/renderer-labels';
 
 /** Renders an accessible icon-only source action with the same translated name in its tooltip and accessible label. */
 function SourceAction({ label, icon, onClick, disabled = false, expanded }: {
@@ -134,11 +138,12 @@ function PurgeProgress({ operationId, onSucceeded }: { operationId: string; onSu
   </div>;
 }
 
-/** Renders a source’s schedule, status, and actions, including archive or purge confirmation. */
+/** Renders a source’s schedule, status, realtime/near-realtime tracking badge, and actions, including archive or purge confirmation. */
 function SourceEntry({
   source,
   schedule,
   timezone,
+  realtimeMode,
   operationId,
   onPurgeStarted,
   onPurgeFinished,
@@ -151,6 +156,7 @@ function SourceEntry({
   source: Source;
   schedule: string;
   timezone: string | null;
+  realtimeMode?: RealtimeMode | null;
   operationId: string;
   onPurgeStarted: (operationId: string) => void;
   onPurgeFinished: () => void;
@@ -175,9 +181,13 @@ function SourceEntry({
     queryFn: () => getConnectorActivation(source.id),
     enabled: connector,
   });
-  // Shared cache with the editor; supplies the label for providers that have no message key of their own.
+  // Shared cache with the editor; supplies the label and default tier for providers that have no message key of their own.
   const catalog = useQuery({ queryKey: connectorKeys.catalog, queryFn: ({ signal }) => getConnectorCatalog(signal), enabled: Boolean(source.provider), staleTime: 5 * 60_000 });
-  const catalogLabel = catalog.data?.find((entry) => entry.provider_id === source.provider)?.label;
+  const catalogEntry = catalog.data?.find((entry) => entry.provider_id === source.provider);
+  const catalogLabel = catalogEntry?.label;
+  const effectiveRealtimeMode: RealtimeMode | null = source.type === 'manual'
+    ? null
+    : (realtimeMode ?? source.realtime_mode ?? catalogEntry?.realtime_tier ?? 'near_realtime');
   const collect = useMutation({
     mutationFn: () => triggerCollection(source.id, csrfToken),
     onSuccess: (result) => {
@@ -209,7 +219,17 @@ function SourceEntry({
   return <>
     <tr className="border-b border-border max-[720px]:mb-3 max-[720px]:block max-[720px]:rounded-lg max-[720px]:border max-[720px]:p-3">
       <th scope="row" ref={nameCellRef} tabIndex={-1} className={`${cell} font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}>
-        <strong>{source.name}</strong>
+        <div className="flex flex-wrap items-center gap-2">
+          <strong>{source.name}</strong>
+          {effectiveRealtimeMode && (
+            <Badge
+              variant={effectiveRealtimeMode === 'realtime' ? 'default' : 'secondary'}
+              data-testid="source-realtime-badge"
+            >
+              {t(effectiveRealtimeMode === 'realtime' ? 'badgeRealtime' : 'badgeNearRealtime')}
+            </Badge>
+          )}
+        </div>
         <p className="text-muted-foreground">{providerLabel(source.provider, t, catalogLabel) ?? source.type}</p>
         {(source.collection_error_code || source.processing_error_code) && <p className="error">{t('collectionError')}: {source.collection_error_code ?? t('noError')} · {t('processingError')}: {source.processing_error_code ?? t('noError')}</p>}
       </th>
@@ -253,6 +273,16 @@ function SourceEntry({
   </>;
 }
 
+/** Banner naming the gadget renderer the Sources page is filtered for, with a clear action. */
+function ShapeFilterBanner({ renderer, onClear }: { renderer: string | null; onClear: () => void }) {
+  const t = useTranslations('sources');
+  const tg = useTranslations('gadgetSettings');
+  return <div role="status" className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted p-3 text-sm">
+    <span>{t('shapeFilterBanner', { renderer: renderer ? templateName(renderer, tg) : '' })}</span>
+    <Button size="sm" variant="outline" onClick={onClear}>{t('shapeFilterClear')}</Button>
+  </div>;
+}
+
 /** Which add/edit dialog is open on the sources page; null when only the table is shown. */
 type DialogState = { kind: 'builtin' } | { kind: 'connector' } | { kind: 'manual' } | { kind: 'manual_import'; purpose: 'notes' | 'personal_finance' } | { kind: 'edit'; source: Source } | null;
 
@@ -266,6 +296,13 @@ export function SourceList() {
   const queryClient = useQueryClient();
   const { ensureSourcesDocument } = useGuardedNavigation();
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  // Dashboard tiles with no compatible source link here with ?shapes=&for=; the filter only narrows the add flows.
+  const { shapes, renderer } = useMemo(() => parseShapeFilter(searchParams), [searchParams]);
+  const shapeFilter = shapes.length ? shapes : undefined;
+  /** Drops both filter params from the URL. */
+  const clearFilter = useCallback(() => router.replace('/settings/sources'), [router]);
   const [dialog, setDialog] = useState<DialogState>(null);
   const [editSession, setEditSession] = useState(0);
   const transitionGuard = useRef<(() => boolean) | null>(null);
@@ -351,16 +388,17 @@ export function SourceList() {
         <Button size="sm" variant="outline" onClick={() => transition({ kind: 'manual_import', purpose: 'personal_finance' })}>{t('addFinance')}</Button>
       </div>
     </header>
+    {shapeFilter && <ShapeFilterBanner renderer={renderer} onClear={clearFilter} />}
     <BuiltinResumeList onChanged={() => { void refresh(); }} />
-    {dialog?.kind === 'builtin' && <BuiltinWizard key={editSession} onClose={closeDialog} onChanged={() => { void refresh(); }} />}
-    {dialog && dialog.kind !== 'builtin' && <SourceWizard key={editSession} request={dialog} registerTransitionGuard={(guard) => { transitionGuard.current = guard; }} onChanged={() => { void refresh(); }} onClose={closeDialog} />}
+    {dialog?.kind === 'builtin' && <BuiltinWizard key={editSession} shapeFilter={shapeFilter} onClearFilter={clearFilter} onAddConnector={() => transition({ kind: 'connector' })} onClose={closeDialog} onChanged={() => { void refresh(); }} />}
+    {dialog && dialog.kind !== 'builtin' && <SourceWizard key={editSession} request={dialog} shapeFilter={shapeFilter} onClearFilter={clearFilter} registerTransitionGuard={(guard) => { transitionGuard.current = guard; }} onChanged={() => { void refresh(); }} onClose={closeDialog} />}
     {sources.isPending && <div className="skeleton" aria-label={t('loading')} />}
     {sources.isError && <p className="error" role="alert">{t('loadFailed')} <Button variant="outline" onClick={() => sources.refetch()}>{t('retry')}</Button></p>}
     {sources.isSuccess && items.length === 0 && <p className="empty-state">{t('empty')}</p>}
     {items.length > 0 && <SourcesTable filter={filter} counts={counts} onFilterChange={setFilter}>
       {visible.map((source) => {
         const configuration = configurationBySourceId.get(source.id);
-        return <SourceEntry key={source.id} source={source} schedule={configuration?.data ? scheduleLabel(configuration.data.configuration.schedule_interval_minutes, t) : t('scheduleUnknown')} timezone={configuration?.data?.configuration.timezone ?? null} operationId={operations[source.id] ?? ''} editingId={dialog?.kind === 'edit' ? dialog.source.id : null} onPurgeStarted={(id) => setOperations((current) => ({ ...current, [source.id]: id }))} purged={Boolean(purged[source.id])} onPurgeFinished={() => { if (purged[source.id]) return; setPurged((current) => ({ ...current, [source.id]: true })); void refresh(); }} onEdit={(value) => transition({ kind: 'edit', source: value })} onChanged={() => { void refresh(); }} onRemoved={() => headingRef.current?.focus()} />;
+        return <SourceEntry key={source.id} source={source} schedule={configuration?.data ? scheduleLabel(configuration.data.configuration.schedule_interval_minutes, t) : t('scheduleUnknown')} timezone={configuration?.data?.configuration.timezone ?? null} realtimeMode={configuration?.data?.configuration.realtime_mode ?? null} operationId={operations[source.id] ?? ''} editingId={dialog?.kind === 'edit' ? dialog.source.id : null} onPurgeStarted={(id) => setOperations((current) => ({ ...current, [source.id]: id }))} purged={Boolean(purged[source.id])} onPurgeFinished={() => { if (purged[source.id]) return; setPurged((current) => ({ ...current, [source.id]: true })); void refresh(); }} onEdit={(value) => transition({ kind: 'edit', source: value })} onChanged={() => { void refresh(); }} onRemoved={() => headingRef.current?.focus()} />;
       })}
     </SourcesTable>}
     {items.length > 0 && visible.length === 0 && <p className="empty-state">{t('emptyFiltered')}</p>}

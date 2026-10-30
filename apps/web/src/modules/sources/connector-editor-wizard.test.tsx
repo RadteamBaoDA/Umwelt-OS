@@ -5,6 +5,7 @@ import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sourcesMessages } from '@/core/messages/sources';
 import type { ConnectorCatalogEntry, ConnectorConfiguration } from './api';
+import type { DataShape } from '@/core/data-shapes';
 import type { EditorActions, EditorSnapshot, EditorStep } from './connector-editor';
 
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 't' }) }));
@@ -25,7 +26,8 @@ const entry = (provider_id: string, label: string, source_type: 'rss' | 'api' | 
   code_available: true, auth_methods: provider_id === 'telegram' ? ['telegram_bot_token'] : ['none'],
   key_fields: provider_id === 'coingecko' ? ['api_key'] : [], scope_fields: [], example_config: {},
 } as unknown as ConnectorCatalogEntry);
-const catalog = [entry('rest', 'REST API', 'api'), entry('rss', 'RSS / Atom', 'rss'), entry('binance', 'Binance', 'api'), entry('coingecko', 'CoinGecko', 'api'), entry('telegram', 'Telegram', 'api')];
+const shaped = (item: ConnectorCatalogEntry, data_shapes: string[]) => ({ ...item, data_shapes }) as ConnectorCatalogEntry;
+const catalog = [entry('rest', 'REST API', 'api'), shaped(entry('rss', 'RSS / Atom', 'rss'), ['news']), shaped(entry('binance', 'Binance', 'api'), ['measurement']), entry('coingecko', 'CoinGecko', 'api'), entry('telegram', 'Telegram', 'api')];
 const baseConfig = { timeout_seconds: 30, timezone: 'UTC', schedule_interval_minutes: 30, history_mode: 'returned_snapshot' };
 const serverConfig = (provider: string | null): ConnectorConfiguration => ({
   source_id: 's1', source_type: 'api', source_generation: 1, provider, configuration: baseConfig, expected_revision: 0, auth_method: 'none',
@@ -37,13 +39,13 @@ let actions: { current: EditorActions | null };
 let snapshot: EditorSnapshot | null;
 
 /** Mounts the embedded editor and returns a helper that switches the wizard step like the shell does. */
-function mount(initial: EditorStep = 'provider') {
+function mount(initial: EditorStep = 'provider', shapeFilter?: DataShape[]) {
   actions = { current: null };
   snapshot = null;
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const ui = (step: EditorStep) => <QueryClientProvider client={client}>
     <NextIntlClientProvider locale="en-US" messages={{ sources: sourcesMessages['en-us'] }}>
-      <ConnectorEditor onClose={() => undefined} onChanged={() => undefined} registerTransitionGuard={() => undefined} step={step} actionsRef={actions} onSnapshot={(s) => { snapshot = s; }} />
+      <ConnectorEditor shapeFilter={shapeFilter} onClose={() => undefined} onChanged={() => undefined} registerTransitionGuard={() => undefined} step={step} actionsRef={actions} onSnapshot={(s) => { snapshot = s; }} />
     </NextIntlClientProvider>
   </QueryClientProvider>;
   const view = render(ui(initial));
@@ -114,5 +116,14 @@ describe('ConnectorEditor wizard gating', () => {
     expect(body.auth_method).toBe('none');
     expect(body.auth_header_name).toBeUndefined();
     expect(body.secret).toBeUndefined();
+  });
+
+  it('shape filter narrows the provider grid and shows the empty state when nothing matches', async () => {
+    mount('provider', ['measurement']);
+    expect(await screen.findByRole('button', { name: /^Binance/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^RSS/ })).toBeNull();
+    cleanup();
+    mount('provider', ['video']);
+    expect(await screen.findByText(sourcesMessages['en-us'].shapeFilterNone)).toBeTruthy();
   });
 });

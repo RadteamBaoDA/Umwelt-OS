@@ -225,8 +225,7 @@ async def _lock_delivery(
 
 def _source_fence(source: Source) -> SourceFence:
     """Detach the actual Source already locked by this owner; construction grants no authority."""
-    return SourceFence(id=source.id, workspace_id=source.workspace_id, status=source.status,
-                       generation=source.generation, local_only=source.local_only)
+    return sources.source_fence_of(source)
 
 
 def _source_drafts(source: Source | None, operation_id: UUID, scope: InternalJobScope) -> list[ReplayDraft]:

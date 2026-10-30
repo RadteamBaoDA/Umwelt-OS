@@ -10,9 +10,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { ApiError } from '@/core/api';
 import { safeHttpUrl } from '@/core/safe-url';
-import { archiveSource, connectorKeys, disableBuiltinSource, enableBuiltinSource, listBuiltinSources, sourceKeys, type BuiltinCategory, type BuiltinSource, type DeclaredUse } from './api';
+import { archiveSource, connectorKeys, disableBuiltinSource, enableBuiltinSource, listBuiltinSources, sourceKeys, type BuiltinCategory, type BuiltinSource, type DeclaredUse, type RealtimeMode } from './api';
+import { matchesShapes } from './shape-filter';
+import type { DataShape } from '@/core/data-shapes';
 import { WizardShell } from './source-wizard';
-import { SourceAiToggles, type SourceAiOptions } from './source-ai-toggles';
+import type { SourceAiOptions } from './source-ai-toggles';
 import { collectAndWait, waitForActivation } from './use-source-actions';
 
 const CATEGORY_ORDER: BuiltinCategory[] = ['news', 'economy', 'hazards', 'space', 'security', 'tech'];
@@ -80,19 +82,29 @@ export function builtinEnableErrorKey(cause: unknown): 'builtinErrorOperator' | 
 }
 
 /**
- * Terms and declared-use step for enabling one built-in: attribution, terms link, operator-review note,
- * deployment-use select and AI toggles. Controlled by the caller; shared by the wizard and the gadget editor dialog.
+ * Terms, declared-use, and data-tracking mode step for enabling one built-in: attribution, terms link,
+ * operator-review note, deployment-use select, and realtime vs near-realtime tracking mode select.
+ * Controlled by the caller; shared by the wizard and the gadget editor dialog.
  * An `error` (already localized) renders as a role=alert line below the fields.
  */
-export function BuiltinTermsFields({ builtin, use, onUseChange, aiOptions, onAiOptionsChange, error }: {
+export function BuiltinTermsFields({ builtin, use, onUseChange, realtimeMode, onRealtimeModeChange, error }: {
   builtin: BuiltinSource;
   use: DeclaredUse;
   onUseChange: (use: DeclaredUse) => void;
-  aiOptions: SourceAiOptions;
-  onAiOptionsChange: (options: SourceAiOptions) => void;
+  realtimeMode?: RealtimeMode;
+  onRealtimeModeChange?: (mode: RealtimeMode) => void;
+  aiOptions?: SourceAiOptions;
+  onAiOptionsChange?: (options: SourceAiOptions) => void;
   error?: string | null;
 }) {
   const t = useTranslations('sources');
+  const defaultMode: RealtimeMode = builtin.realtime_tier ?? 'near_realtime';
+  const [localRealtimeMode, setLocalRealtimeMode] = useState<RealtimeMode>(defaultMode);
+  const effectiveRealtimeMode = realtimeMode ?? localRealtimeMode;
+  const handleRealtimeModeChange = (next: RealtimeMode) => {
+    setLocalRealtimeMode(next);
+    onRealtimeModeChange?.(next);
+  };
   return <section className="grid gap-3 text-sm" aria-label={t('builtinDialogTitle', { name: builtin.label })}>
     <h3 className="m-0 text-base font-semibold">{t('builtinDialogTitle', { name: builtin.label })}</h3>
     <p className="text-muted-foreground">{t('builtinTermsHint')}</p>
@@ -104,7 +116,15 @@ export function BuiltinTermsFields({ builtin, use, onUseChange, aiOptions, onAiO
         <SelectTrigger id="builtin-declared-use"><SelectValue /></SelectTrigger>
         <SelectContent>{USES.map(([value, label]) => <SelectItem key={value} value={value}>{t(label)}</SelectItem>)}</SelectContent>
       </Select></div>
-    <SourceAiToggles idPrefix="builtin-source" value={aiOptions} onChange={onAiOptionsChange} />
+    <div className="field"><Label htmlFor="builtin-realtime-mode">{t('trackingModeLabel')}</Label>
+      <Select value={effectiveRealtimeMode} onValueChange={(value) => handleRealtimeModeChange(value as RealtimeMode)}>
+        <SelectTrigger id="builtin-realtime-mode"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="realtime">{t('trackingModeRealtime')}</SelectItem>
+          <SelectItem value="near_realtime">{t('trackingModeNearRealtime')}</SelectItem>
+        </SelectContent>
+      </Select>
+      <small className="text-muted-foreground">{t('trackingModeHelp')}</small></div>
     {error && <p className="text-destructive" role="alert">{error}</p>}
   </section>;
 }
@@ -116,8 +136,10 @@ type TestState = { phase: 'idle' | 'activating' | 'collecting' | 'succeeded' | '
  * A built-in that already has a source (`source_id` set, active or paused) is shown disabled with an "Added" badge;
  * resume it from the table instead. Enabling records the terms acknowledgement server-side. If the test fetch has not
  * succeeded when the owner discards the dialog, the created source is paused and archived so no half-added source remains.
+ * When a shape filter leaves no built-in at all (for example Weather), the step points to "Connect a source" and
+ * `onAddConnector` (when given) opens that wizard.
  */
-export function BuiltinWizard({ onClose, onChanged }: { onClose: () => void; onChanged: () => void }) {
+export function BuiltinWizard({ onClose, onChanged, shapeFilter, onClearFilter, onAddConnector }: { onClose: () => void; onChanged: () => void; shapeFilter?: DataShape[]; onClearFilter?: () => void; onAddConnector?: () => void }) {
   const t = useTranslations('sources');
   const { csrfToken } = useWorkspaceSession();
   const queryClient = useQueryClient();
@@ -125,7 +147,8 @@ export function BuiltinWizard({ onClose, onChanged }: { onClose: () => void; onC
   const [index, setIndex] = useState(0);
   const [selected, setSelected] = useState<BuiltinSource | null>(null);
   const [use, setUse] = useState<DeclaredUse>('personal');
-  const [aiOptions, setAiOptions] = useState<SourceAiOptions>({ graph_enabled: true, rag_index_enabled: true });
+  const [realtimeModeOverride, setRealtimeModeOverride] = useState<RealtimeMode | null>(null);
+  const [aiOptions, setAiOptions] = useState<SourceAiOptions>({ graph_enabled: false, rag_index_enabled: false });
   const [error, setError] = useState<string | null>(null);
   const [createdId, setCreatedId] = useState('');
   const [test, setTest] = useState<TestState>({ phase: 'idle' });
@@ -171,7 +194,8 @@ export function BuiltinWizard({ onClose, onChanged }: { onClose: () => void; onC
     if (createdId) { void runTest(createdId); return true; }
     setError(null);
     try {
-      const result = await enableBuiltinSource(selected.id, use, csrfToken, undefined, aiOptions);
+      const options = realtimeModeOverride ? { ...aiOptions, realtime_mode: realtimeModeOverride } : aiOptions;
+      const result = await enableBuiltinSource(selected.id, use, csrfToken, undefined, options);
       if (!result.source_id) { setError(t('builtinErrorGeneric')); return false; }
       setCreatedId(result.source_id);
       refresh();
@@ -204,14 +228,19 @@ export function BuiltinWizard({ onClose, onChanged }: { onClose: () => void; onC
       <p className="text-muted-foreground">{t('builtinPickHint')}</p>
       {builtins.isPending && <p className="text-muted-foreground">{t('loading')}</p>}
       {builtins.isError && <p className="text-destructive" role="alert">{t('builtinLoadFailed')} <Button variant="outline" onClick={() => builtins.refetch()}>{t('retry')}</Button></p>}
-      {groupByCategory(builtins.data ?? []).map(([category, rows]) => <div key={category} className="flex flex-col gap-2" role="group" aria-label={t(CATEGORY_KEY[category])}>
+      {Boolean(shapeFilter?.length) && builtins.isSuccess && !(builtins.data ?? []).some((row) => matchesShapes(row.data_shapes, shapeFilter) && row.source_id === null)
+        // Compatible built-ins that are all already added/paused read as "all added", not "none compatible".
+        && <p role="status" className="text-muted-foreground">{(builtins.data ?? []).some((row) => matchesShapes(row.data_shapes, shapeFilter)) ? t('addBuiltinAllAdded') : t('shapeFilterNoBuiltin')} {onAddConnector && !(builtins.data ?? []).some((row) => matchesShapes(row.data_shapes, shapeFilter)) && <Button variant="outline" size="sm" onClick={onAddConnector}>{t('addConnector')}</Button>} {onClearFilter && <Button variant="outline" size="sm" onClick={onClearFilter}>{t('shapeFilterClear')}</Button>}</p>}
+      {groupByCategory((builtins.data ?? []).filter((row) => matchesShapes(row.data_shapes, shapeFilter))).map(([category, rows]) => <div key={category} className="flex flex-col gap-2" role="group" aria-label={t(CATEGORY_KEY[category])}>
         <h3 className="m-0 text-sm font-semibold uppercase text-muted-foreground">{t(CATEGORY_KEY[category])}</h3>
         {rows.map((row) => {
           const added = row.source_id !== null;
-          return <button key={row.id} type="button" disabled={added} aria-pressed={selected?.id === row.id} onClick={() => { setSelected(row); setUse('personal'); setError(null); }}
+          const tier = row.realtime_tier ?? 'near_realtime';
+          return <button key={row.id} type="button" disabled={added} aria-pressed={selected?.id === row.id} onClick={() => { setSelected(row); setUse('personal'); setRealtimeModeOverride(null); setError(null); }}
             className={`flex w-full items-start justify-between gap-3 rounded-md border bg-transparent p-3 text-left disabled:cursor-not-allowed disabled:opacity-60 ${selected?.id === row.id ? 'border-primary' : 'border-border'}`}>
             <span className="min-w-0">
               <span className="m-0 flex flex-wrap items-center gap-2 font-medium">{row.label}
+                <Badge variant={tier === 'realtime' ? 'default' : 'secondary'}>{t(tier === 'realtime' ? 'badgeRealtime' : 'badgeNearRealtime')}</Badge>
                 {added && <Badge variant="secondary">{t('builtinAdded')}</Badge>}
                 {row.execution === 'experimental' && <Badge variant="outline">{t('builtinExperimental')}</Badge>}
                 {row.eligibility === 'review' && <Badge variant="secondary">{t('builtinReviewClass')}</Badge>}
@@ -222,7 +251,7 @@ export function BuiltinWizard({ onClose, onChanged }: { onClose: () => void; onC
         })}
       </div>)}
     </section>}
-    {index === 1 && selected && <BuiltinTermsFields builtin={selected} use={use} onUseChange={setUse} aiOptions={aiOptions} onAiOptionsChange={setAiOptions} error={error} />}
+    {index === 1 && selected && <BuiltinTermsFields builtin={selected} use={use} onUseChange={setUse} realtimeMode={realtimeModeOverride ?? selected.realtime_tier ?? 'near_realtime'} onRealtimeModeChange={setRealtimeModeOverride} aiOptions={aiOptions} onAiOptionsChange={setAiOptions} error={error} />}
     {index === 2 && <section className="flex flex-col gap-3" aria-live="polite" aria-label={t('verifyTitle')}>
       <h3 className="m-0 text-base font-semibold">{t('verifyTitle')}</h3>
       {test.phase === 'activating' && <p role="status">{t('verifyWaitingActivation')}</p>}

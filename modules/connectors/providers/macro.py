@@ -561,14 +561,14 @@ def map_open_er_api(payload: object, collected_at: datetime) -> list[IngestionRe
 
 OECD_CLI_URL = (
     "https://sdmx.oecd.org/public/rest/data/OECD.SDD.STES,DSD_STES@DF_CLI/USA+CHN+JPN+DEU+GBR.M.LI...AA...H"
-    "?lastNObservations=1&dimensionAtObservation=AllDimensions"
+    "?lastNObservations=24&dimensionAtObservation=AllDimensions"
 )
 _SDMX_MAX_OBSERVATIONS = 200
 _PERIOD_RE = re.compile(r"^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$")
 
 
 def oecd_cli_request() -> ProviderRequest:
-    """Return the fixed OECD composite-leading-indicator request (SDMX-JSON 2.0, latest observation per area)."""
+    """Return the fixed OECD composite-leading-indicator request (SDMX-JSON 2.0, last 24 monthly observations per area)."""
     return ProviderRequest("GET", OECD_CLI_URL, {"Accept": "application/vnd.sdmx.data+json; version=2"})
 
 
@@ -612,15 +612,16 @@ def map_sdmx_json(
             provider=provider, identity=f"{provider}:{area}:{period}",
             content=f"{title} {area} {period}: {text} {unit}", title=f"{title} {area}",
             observed_at=observed, collected_at=collected_at,
-            version=content_version(provider, area, period, text), metric=metric, value=value, unit=unit,
-            region=area, quality="provider_reported",
+            # symbol is part of the version so rows stored before ``symbol=area`` existed are re-upserted with it
+            version=content_version(provider, area, area, period, text), metric=metric, value=value, unit=unit,
+            region=area, symbol=area, quality="provider_reported",
             provider_fields={"area": area, "period": str(period)},
         ))
     return sorted(records, key=lambda r: r.provider_id)
 
 
 def map_oecd_cli(payload: object, collected_at: datetime) -> list[IngestionRecord]:
-    """Latest OECD composite leading indicator (amplitude adjusted, index) per configured area."""
+    """OECD composite leading indicator (amplitude adjusted, index) per configured area and period."""
     return map_sdmx_json(
         "oecd_cli", payload, collected_at, metric="composite_leading_indicator", unit="index",
         title="OECD composite leading indicator",

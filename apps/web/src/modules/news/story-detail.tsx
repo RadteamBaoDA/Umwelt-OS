@@ -200,7 +200,7 @@ export function StoryDetail({ storyId, sourceIds, onBack, onClose }: StoryDetail
       </div>
       {story ? (
         <footer className="mt-auto flex flex-wrap items-center gap-2 border-t border-border pt-3">
-          <Button asChild variant="outline" className="min-h-11"><Link href="/settings/dashboard" onClick={onClose}>{d('createRule')}</Link></Button>
+          <Button asChild variant="outline" className="min-h-11"><Link href="/dashboard?manage=highlights" onClick={onClose}>{d('createRule')}</Link></Button>
           <span className="flex-1" />
           <Button type="button" className="min-h-11" disabled={!evidence.length} onClick={askAi}>{d('askAiAboutThis')}</Button>
         </footer>

@@ -108,7 +108,7 @@ def scope_edges(monkeypatch: pytest.MonkeyPatch) -> None:
         return SimpleNamespace()
 
     async def get_sources(_s: Any, ids: Any, **_k: Any) -> list[Any]:
-        return [SimpleNamespace(id=i, status="active", generation=1, local_only=False, provider=None) for i in ids]
+        return [SimpleNamespace(id=i, status="active", generation=1, local_only=False, provider=None, type="rss") for i in ids]
 
     async def lock_source(_s: Any, source_id: Any, **_k: Any) -> Any:
         return SimpleNamespace(status="active", generation=1, local_only=False)

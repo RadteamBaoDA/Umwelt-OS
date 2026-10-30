@@ -7,6 +7,7 @@ import {
   Maximize2,
   MoreVertical,
   Settings,
+  Sparkles,
   Trash2,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
@@ -15,6 +16,7 @@ import { createPortal } from 'react-dom';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { useChatController } from '@/core/app-shell/chat-controller';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
 import { GadgetFreshnessProvider } from './gadget-freshness';
@@ -119,6 +121,7 @@ export function GadgetFrame({
 }: GadgetFrameProps) {
   const t = useTranslations('dashboard');
   const ts = useTranslations('uiSweep');
+  const { openDrawer } = useChatController();
   const display = useDisplayPreferences();
   const [collectedAt, setCollectedAt] = useState<string | null>(null);
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
@@ -195,6 +198,20 @@ export function GadgetFrame({
   const toggleExpanded = useCallback(() => {
     setIsExpanded((prev) => !prev);
   }, []);
+
+  /** Opens the quick-chat drawer with this gadget's source IDs and scope attached as grounding context. */
+  const handleAskWithUmwelt = useCallback(() => {
+    openDrawer({
+      context: {
+        kind: 'gadget',
+        gadgetId: instance.id,
+        title: displayTitle,
+        renderer: definition.renderer,
+        sourceIds: definition.source_ids ?? [],
+        scope: definition.scope ?? {},
+      },
+    });
+  }, [openDrawer, instance.id, displayTitle, definition.renderer, definition.source_ids, definition.scope]);
 
   /** Supplies exactly one renderer subtree to the stable host; it is never invoked in two surfaces. */
   const renderGadgetContent = () => {
@@ -282,6 +299,21 @@ export function GadgetFrame({
 
           {/* Action controls cannot start title dragging. */}
           <div className="flex shrink-0 flex-nowrap items-center gap-1" onPointerDown={(event) => event.stopPropagation()}>
+            {!isEditMode && (
+              <Button
+                type="button"
+                onClick={handleAskWithUmwelt}
+                aria-label={t('askWithUmwelt')}
+                title={t('askWithUmwelt')}
+                data-testid="gadget-ask-with-umwelt"
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1.5 rounded-md px-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
+              >
+                <Sparkles className="size-3.5 text-primary" aria-hidden="true" />
+                <span className="hidden sm:inline">{t('askWithUmwelt')}</span>
+              </Button>
+            )}
             {/* Expand / Maximize modal trigger */}
             <Button
               type="button"

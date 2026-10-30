@@ -54,7 +54,10 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
         if source.type != PROVIDER_SOURCE_TYPES[source.provider]:
             raise ValueError("Source type does not match the registered provider")
         scope_fields = PROVIDER_SCOPE_FIELDS[source.provider]
-        common = {"timezone", "schedule_interval_minutes", "timeout_seconds"}
+        common = {
+            "timezone", "schedule_interval_minutes", "timeout_seconds",
+            "realtime_mode", "retention_days", "skip_embedding",
+        }
         expected_history = "pending_updates" if source.provider == "telegram" else "returned_snapshot"
         raw_keys = set(source.configuration or {})
         if raw_keys - scope_fields - common - {"history_mode"}:

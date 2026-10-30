@@ -32,6 +32,20 @@ async def _with_timing(session: AsyncSession, scope: WorkspaceContext | AdminWor
         read.next_due_at, read.retry_at = timing.get(read.id, (None, None))
 
 
+def _to_read(source: object) -> SourceRead:
+    """Project an ORM Source into SourceRead and resolve its effective realtime tracking tier."""
+    from modules.connectors.provider_specs import get_realtime_tier
+
+    read = SourceRead.model_validate(source, from_attributes=True)
+    if read.type != "manual":
+        cfg = getattr(source, "configuration", None)
+        read.realtime_mode = get_realtime_tier(
+            read.provider,
+            cfg if isinstance(cfg, dict) else None,
+        )
+    return read
+
+
 router = APIRouter(
     prefix="/api/v1/sources",
     tags=["sources"],
@@ -62,7 +76,7 @@ async def list_sources(
         session, limit, cursor, scope=scope,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
-    reads = [SourceRead.model_validate(item, from_attributes=True) for item in items]
+    reads = [_to_read(item) for item in items]
     await _with_timing(session, scope, reads)
     return SourceList(
         items=reads,
@@ -90,7 +104,7 @@ async def create_source(
     source = await public.create_source(
         session, payload, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
-    return SourceRead.model_validate(source, from_attributes=True)
+    return _to_read(source)
 
 
 @router.get("/{source_id}", response_model=SourceRead)
@@ -105,7 +119,7 @@ async def get_source(
     )
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
-    read = SourceRead.model_validate(source, from_attributes=True)
+    read = _to_read(source)
     await _with_timing(session, scope, [read])
     return read
 
@@ -149,7 +163,7 @@ async def update_source(
     )
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
-    return SourceRead.model_validate(source, from_attributes=True)
+    return _to_read(source)
 
 
 @router.delete("/{source_id}")

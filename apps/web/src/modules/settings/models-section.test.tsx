@@ -32,6 +32,15 @@ describe('models panel', () => {
     expect(onChange).toHaveBeenLastCalledWith([{ ...cloud, models: [{ id: 'gpt-4o', type: 'llm' }, { id: 'text-embedding-3', type: 'embedding' }] }]);
   });
 
+  it('filters duplicate discovered IDs as the search changes', async () => {
+    renderPanel({ providers: [cloud], discovered: { default: ['gemini/transcribe', 'gemini/transcribe', 'anthropic/claude'] } });
+    await userEvent.click(screen.getByRole('combobox', { name: 'Model' }));
+    await userEvent.type(screen.getByRole('textbox', { name: 'Search models' }), 'anthro');
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(['anthropic/claude']);
+    await userEvent.clear(screen.getByRole('textbox', { name: 'Search models' }));
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(['gemini/transcribe', 'anthropic/claude']);
+  });
+
   it('lists models across providers, tests and removes one', async () => {
     const onChange = vi.fn();
     const onTestModel = vi.fn();

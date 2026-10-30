@@ -130,33 +130,34 @@ def send_fence_trace(before_request: Callable[[], Awaitable[None]]) -> Callable[
 async def _read_feed(url: str, before_request: Callable[[], Awaitable[None]]) -> bytes:
     """Fetch one fixed feed response with TLS, no redirects, and a 10 MiB cap.
 
-    ``before_request`` runs immediately before the send and aborts it by raising.
+    ``before_request`` runs immediately before the send and aborts it by raising. Failures keep their
+    identity for ``_classify``: 429 -> ``ProviderRateLimited``; any other non-2xx (redirects included,
+    since they are never followed) -> ``ProviderHttpError`` (5xx/408/425 retryable); transport errors
+    (``httpx.HTTPError``/``TimeoutError``/``OSError``) propagate and settle as retryable timeouts.
     """
-    try:
-        async with asyncio.timeout(30):
-            async with httpx.AsyncClient(  # style-only rewrite skipped to avoid touching control flow
-                timeout=httpx.Timeout(30), trust_env=False, follow_redirects=False, verify=True
-            ) as client:
-                await before_request()
-                async with client.stream(
-                    "GET", url, headers={"Accept": "application/atom+xml, application/xml, text/xml"},
-                    extensions={"trace": send_fence_trace(before_request)},
-                ) as response:
-                    if response.status_code == 429:
-                        deadline = _retry_deadline(response.headers, datetime.now(UTC))
-                        raise ProviderRateLimited(deadline)
-                    if response.status_code >= 400 or 300 <= response.status_code < 400:
-                        raise ValueError("provider_feed_unavailable")
-                    result = bytearray()
-                    async for chunk in response.aiter_bytes():
-                        result.extend(chunk)
-                        if len(result) > _MAX_PAGE_BYTES:
-                            raise ValueError("provider_response_too_large")
-                    return bytes(result)
-    except ProviderRateLimited:
-        raise
-    except (httpx.HTTPError, TimeoutError, ElementTree.ParseError, OSError):
-        raise ValueError("provider_feed_unavailable") from None
+    # Lazy: rest.py imports this module's ``_retry_deadline`` at import time.
+    from modules.connectors.providers.rest import ProviderHttpError
+
+    async with asyncio.timeout(30):
+        async with httpx.AsyncClient(  # style-only rewrite skipped to avoid touching control flow
+            timeout=httpx.Timeout(30), trust_env=False, follow_redirects=False, verify=True
+        ) as client:
+            await before_request()
+            async with client.stream(
+                "GET", url, headers={"Accept": "application/atom+xml, application/xml, text/xml"},
+                extensions={"trace": send_fence_trace(before_request)},
+            ) as response:
+                if response.status_code == 429:
+                    deadline = _retry_deadline(response.headers, datetime.now(UTC))
+                    raise ProviderRateLimited(deadline)
+                if not 200 <= response.status_code < 300:
+                    raise ProviderHttpError(response.status_code)
+                result = bytearray()
+                async for chunk in response.aiter_bytes():
+                    result.extend(chunk)
+                    if len(result) > _MAX_PAGE_BYTES:
+                        raise ValueError("provider_response_too_large")
+                return bytes(result)
 
 
 def _retry_deadline(headers: httpx.Headers, now: datetime) -> datetime:
@@ -266,6 +267,20 @@ def _feed_canonical(entry: ElementTree.Element, provider: str, identity: str) ->
     return None
 
 
+def _same_youtube_channel(feed_id: str | None, configured: str | None) -> bool:
+    """Return True when two YouTube channel ids name the same channel.
+
+    The Atom feed's ``yt:channelId`` is sometimes the full ``UC``+22-char id and
+    sometimes the bare 22-char form. Only a leading ``UC`` on a 24-char id is
+    stripped, so distinct channels never compare equal.
+    """
+    def bare(value: str | None) -> str | None:
+        """Strip the ``UC`` prefix from a 24-char channel id; leave other values untouched."""
+        return value[2:] if value and len(value) == 24 and value.startswith("UC") else value
+
+    return feed_id is not None and bare(feed_id) == bare(configured)
+
+
 def _records_from_feed(
     source: ConnectorSource, body: bytes, collected_at: datetime
 ) -> ProviderCollectionPage:
@@ -284,14 +299,14 @@ def _records_from_feed(
         if source.provider == "youtube":
             channel_id = entry.findtext(f"{{{_YT}}}channelId")
             video_id = entry.findtext(f"{{{_YT}}}videoId")
-            if channel_id != scope or not video_id or len(video_id) > 128:
+            if not _same_youtube_channel(channel_id, scope) or not video_id or len(video_id) > 128:
                 truncated = True
                 continue
             published_raw = entry.findtext(f"{{{_ATOM}}}published")
             modified_raw = entry.findtext(f"{{{_ATOM}}}updated")
             published = _parse_time(published_raw)
             modified = _parse_time(modified_raw)
-            identity = f"youtube:{channel_id}:{video_id}"
+            identity = f"youtube:{scope}:{video_id}"
             author = _plain_text(entry.findtext(f"{{{_ATOM}}}author/{{{_ATOM}}}name") or "")
             category_nodes = entry.findall(f"{{{_ATOM}}}category")
             tags = [node.attrib["term"] for node in category_nodes if node.attrib.get("term")]

@@ -37,9 +37,14 @@ from core.workspaces.public import lock_access_fence, read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.connectors import provider_terms, provisioning, quota, scheduler
 from modules.connectors import public as connectors
+from modules.connectors.catalog import get_catalog_entry
 from modules.connectors.collection_schemas import CollectionAdmissionRead, CollectionRequestRef
 from modules.connectors.models import ConnectorCollectionRequest, ConnectorProvisioning
-from modules.connectors.provider_specs import get_provider_spec, get_quota_policies
+from modules.connectors.provider_specs import (
+    get_provider_spec,
+    get_quota_policies,
+    get_realtime_tier,
+)
 from modules.connectors.providers import news as _news
 from modules.connectors.providers import rest
 from modules.connectors.providers.json_feed import JSON_FEEDS
@@ -373,6 +378,69 @@ def _records(raw: list[dict[str, Any]]) -> list[IngestionRecord]:
     return [IngestionRecord.model_validate({**item, "collected_at": collected_at}) for item in raw]
 
 
+async def _publish_realtime_snapshot(
+    run: Run, records: Sequence[IngestionRecord], collected_at: datetime,
+) -> None:
+    """Publish a bounded hot snapshot to Redis and wake up active SSE streams after ingestion commits.
+
+    Uses a 3x-polling-interval TTL (stale-while-revalidate pattern) and never blocks or fails
+    a committed collection if Redis is absent or slow.
+
+    Args:
+        run: Active collection run context.
+        records: Accepted ingestion records committed in this collection batch.
+        collected_at: Timestamp of the accepted collection batch.
+    """
+    from core.realtime_routes import notify_realtime_wakeup
+
+    a = run.attempt
+    notify_realtime_wakeup(a.scope.workspace_id)
+    if not records:
+        return
+    ctx = getattr(run, "ctx", None)
+    redis: Any = ctx.get("redis") if isinstance(ctx, dict) else None
+    if redis is None:
+        return
+    with suppress(Exception):
+        import json
+
+        spec = get_provider_spec(a.source.provider)
+        cfg = getattr(a.source, "configuration", None) or {}
+        interval_minutes = int(
+            cfg.get("schedule_interval_minutes")
+            or (spec.default_interval_minutes if spec is not None else 15)
+        )
+        ttl_seconds = max(180, interval_minutes * 180)
+        preview = [
+            {
+                "provider_id": str(rec.provider_id)[:256],
+                "observed_at": rec.observed_at.isoformat(),
+                "title": str((rec.metadata or {}).get("title") or "")[:240],
+            }
+            for rec in records[:25]
+        ]
+        payload = json.dumps(
+            {
+                "source_id": str(a.source.id),
+                "source_generation": a.source.generation,
+                "provider": a.source.provider,
+                "realtime_tier": get_realtime_tier(a.source.provider, cfg),
+                "collected_at": collected_at.isoformat(),
+                "record_count": len(records),
+                "items": preview,
+            },
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        key = f"connector:snapshot:{a.scope.workspace_id}:{a.source.id}"
+        channel = f"realtime:workspace:{a.scope.workspace_id}"
+        async with asyncio.timeout(1.0):
+            if callable(getattr(redis, "set", None)):
+                await redis.set(key, payload, ex=ttl_seconds)
+            if callable(getattr(redis, "publish", None)):
+                await redis.publish(channel, str(a.source.id))
+
+
 async def _accept_generic(
     run: Run, records: list[dict[str, Any]], cursor_before: str | None, cursor_after: str | None,
     update: CollectionStateUpdate | None = None,
@@ -403,6 +471,7 @@ async def _accept_generic(
         await ingestion.receive_connector_batch(
             session, batch, None, scope=a.scope, multi_workspace_enabled=a.multi, request_ref=a.ref,
             state_update=update)
+    await _publish_realtime_snapshot(run, parsed, datetime.now(UTC))
 
 
 async def _state(run: Run) -> CollectionState:
@@ -991,6 +1060,7 @@ async def _accept_native(
             request_ref=a.ref, state_update=state_update,
             provider_credential_revision=provider_credential_revision)
     run.extras["accepted"] = True
+    await _publish_realtime_snapshot(run, records, collected_at)
 
 
 class _Unmetered:
@@ -1590,11 +1660,18 @@ def _classify(exc: BaseException, *, keyless: bool = False) -> dict[str, Any]:
 
 
 def _sends_no_credential(source: Any) -> bool:
-    """True for RSS/web sources and catalog providers that need no key; generic REST may carry an owner header."""
+    """True for RSS/web sources and providers that need no key; generic REST may carry an owner header.
+
+    Free-provider specs decide first. Catalog-only providers (youtube, arxiv, ...) have no spec, so they are keyless
+    only when the catalog lists ``("none",)`` as the sole auth method; entries with an optional header/bearer stay False.
+    """
     if source.provider is None:
         return source.type in {"rss", "web"}
     spec = get_provider_spec(source.provider)
-    return spec is not None and not spec.key_required
+    if spec is not None:
+        return not spec.key_required
+    entry = get_catalog_entry(source.provider)
+    return entry is not None and entry.auth_methods == ("none",)
 
 
 async def _release_lease(run: Run, error_code: str) -> None:

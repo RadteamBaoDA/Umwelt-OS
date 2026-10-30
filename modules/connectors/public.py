@@ -38,6 +38,24 @@ from modules.connectors.backends import (
 from modules.connectors.backends import (
     is_native_provider as _is_native_provider,
 )
+from modules.connectors.data_shapes import (
+    DataShape as DataShape,  # noqa: PLC0414 - public re-export
+)
+from modules.connectors.data_shapes import (
+    source_data_shapes as source_data_shapes,  # noqa: PLC0414 - public re-export
+)
+from modules.connectors.metric_catalog import (
+    MetricInfo as MetricInfo,  # noqa: PLC0414 - public re-export
+)
+from modules.connectors.metric_catalog import (
+    ProviderMetrics as ProviderMetrics,  # noqa: PLC0414 - public re-export
+)
+from modules.connectors.metric_catalog import (
+    metric_catalog as metric_catalog,  # noqa: PLC0414 - public re-export
+)
+from modules.connectors.metric_catalog import (
+    provider_metrics as provider_metrics,  # noqa: PLC0414 - public re-export
+)
 from modules.connectors.models import (
     AgentBrowserGrant,
     ConnectorManagedCredential,
@@ -302,6 +320,9 @@ class ConnectorConfig(BaseModel):
     ha_base_url: str | None = Field(default=None, min_length=8, max_length=512)
     ha_entity_ids: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=500)
     history_mode: Literal["returned_snapshot", "pending_updates"] | None = None
+    realtime_mode: Literal["realtime", "near_realtime"] | None = None
+    retention_days: StrictInt | None = Field(default=None, ge=1, le=3650)
+    skip_embedding: StrictBool | None = None
 
     @field_validator("news_query", mode="before")
     @classmethod
@@ -936,7 +957,10 @@ async def get_connector_configuration(
     )
     if source.provider in NATIVE_PROVIDERS:
         scope_fields = PROVIDER_SCOPE_FIELDS[source.provider]
-        common = {"timezone", "schedule_interval_minutes", "timeout_seconds", "history_mode"}
+        common = {
+            "timezone", "schedule_interval_minutes", "timeout_seconds", "history_mode",
+            "realtime_mode", "retention_days", "skip_embedding",
+        }
         configuration = {
             key: value for key, value in configuration.items()
             if key in scope_fields | common
@@ -1050,7 +1074,10 @@ def serialize_source_configuration(source: ConnectorSource, config: ConnectorCon
         # RSS/web/REST source and make registry.validate reject it as carrying provider scope.
         return {key: value for key, value in values.items() if _NATIVE_ONLY_DEFAULTS.get(key, _UNSET) != value}
     scope_fields = PROVIDER_SCOPE_FIELDS[source.provider]
-    common = {"timezone", "schedule_interval_minutes", "timeout_seconds", "history_mode"}
+    common = {
+        "timezone", "schedule_interval_minutes", "timeout_seconds", "history_mode",
+        "realtime_mode", "retention_days", "skip_embedding",
+    }
     supplied = config.model_fields_set
     if supplied - scope_fields - common:
         raise ValueError("Native provider configuration contains unsupported fields")
@@ -3160,3 +3187,14 @@ async def collection_timing(
     from modules.connectors import scheduler
 
     return await scheduler.collection_timing(session, scope.workspace_id, source_ids)
+
+
+def default_retention_days(provider: str | None) -> int | None:
+    """Return the provider's default history retention in days, or None when unbounded.
+
+    Thin public wrapper over the private provider-spec table so other modules
+    (Sources retention policy) never import ``provider_specs`` directly.
+    """
+    from modules.connectors.provider_specs import get_default_retention_days
+
+    return get_default_retention_days(provider)

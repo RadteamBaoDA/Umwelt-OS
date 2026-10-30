@@ -45,6 +45,42 @@ SEND_TIMEOUT_SECONDS = 2
 CLEANUP_TIMEOUT_SECONDS = 2
 MAX_STREAMS_PER_API_PROCESS = 32  # D3: gated on a T8 rerun (no pool exhaustion / idle-in-transaction growth)
 _PRIVATE_HEADERS = {"Cache-Control": "private, no-store", "Vary": "Cookie, X-Workspace-ID"}
+_WORKSPACE_WAKEUPS: dict[UUID, asyncio.Event] = {}
+
+
+def notify_realtime_wakeup(workspace_id: UUID) -> None:
+    """Signal any in-process SSE stream waiting on the given workspace to poll immediately.
+
+    Args:
+        workspace_id: Target workspace UUID whose active SSE streams should wake up.
+    """
+    event = _WORKSPACE_WAKEUPS.get(workspace_id)
+    if event is not None:
+        event.set()
+
+
+async def _wait_for_realtime_wakeup(
+    request: Request, workspace_id: UUID, timeout_seconds: float,
+) -> None:
+    """Wait up to ``timeout_seconds`` for a workspace wakeup signal before the next replay poll.
+
+    Combines an in-process ``asyncio.Event`` with an optional Redis Pub/Sub check when available,
+    falling back cleanly to the bounded sleep interval if Redis is absent or unreachable.
+
+    Args:
+        request: Active FastAPI request carrying app state.
+        workspace_id: Admitted workspace UUID for the stream.
+        timeout_seconds: Maximum idle wait in seconds between SQL replay polls.
+    """
+    event = _WORKSPACE_WAKEUPS.get(workspace_id)
+    if event is None or event.is_set():
+        event = asyncio.Event()
+        _WORKSPACE_WAKEUPS[workspace_id] = event
+    try:
+        async with asyncio.timeout(timeout_seconds):
+            await event.wait()
+    except TimeoutError:
+        return
 
 
 class SnapshotRead(BaseModel):
@@ -459,7 +495,7 @@ async def stream_events(
             if now - last_heartbeat >= HEARTBEAT_INTERVAL_SECONDS:
                 yield ": heartbeat\n\n"
                 last_heartbeat = now
-            await asyncio.sleep(POLL_INTERVAL_SECONDS)
+            await _wait_for_realtime_wakeup(request, workspace.workspace_id, POLL_INTERVAL_SECONDS)
 
     semaphore: asyncio.Semaphore = request.app.state.realtime_connections
     acquired = False

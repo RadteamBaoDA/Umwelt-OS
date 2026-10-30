@@ -5,7 +5,18 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 from uuid import UUID
 
-from modules.dashboard.schemas import GadgetConfiguration
+from modules.connectors.public import DataShape, provider_metrics, source_data_shapes
+from modules.dashboard.schemas import GadgetConfiguration, GadgetScope
+
+
+class GadgetConfigError(ValueError):
+    """Gadget configuration rejection carrying a stable machine ``code`` and the offending ``field``."""
+
+    def __init__(self, message: str, *, code: str, field: str | None = None) -> None:
+        """Store the HTTP-visible code and field alongside the human message."""
+        super().__init__(message)
+        self.code = code
+        self.field = field
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,9 +33,9 @@ class RendererDescriptor:
     minimum_height: int
     runtime_state: Literal["planned", "available"]
     capability_keys: tuple[str, ...]
-    # How many sources the renderer binds and which providers they may come from (None = any).
+    # How many sources the renderer binds and which data shapes they may emit (None = any source).
     source_mode: Literal["none", "single", "multi"] = "none"
-    source_providers: tuple[str, ...] | None = None
+    accepted_shapes: frozenset[DataShape] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,26 +57,26 @@ class DashboardPreset:
 
 
 RENDERERS: tuple[RendererDescriptor, ...] = (
-    RendererDescriptor("news_feed", 1, 4, 4, "available", ("news", "documents"), "multi"),
-    RendererDescriptor("telegram_feed", 1, 4, 4, "available", ("telegram_messages",), "multi"),
-    RendererDescriptor("text_panel", 1, 4, 3, "available", ("documents",), "multi"),
-    RendererDescriptor("table_panel", 1, 6, 4, "available", ("documents",), "multi"),
-    RendererDescriptor("video_panel", 1, 6, 4, "available", ("video",), "multi"),
-    RendererDescriptor("finance_chart", 1, 6, 4, "available", ("market_series", "world_observations"), "single", ("alpha_vantage",)),
+    RendererDescriptor("news_feed", 1, 4, 4, "available", ("news", "documents"), "multi", frozenset({"news", "event"})),
+    RendererDescriptor("telegram_feed", 1, 4, 4, "available", ("telegram_messages",), "multi", frozenset({"messages"})),
+    RendererDescriptor("text_panel", 1, 4, 3, "available", ("documents",), "multi", frozenset({"news"})),
+    RendererDescriptor("table_panel", 1, 6, 4, "available", ("documents",), "multi", frozenset({"news", "measurement", "event"})),
+    RendererDescriptor("video_panel", 1, 6, 4, "available", ("video",), "multi", frozenset({"video"})),
+    RendererDescriptor("finance_chart", 1, 6, 4, "available", ("market_series", "world_observations"), "single", frozenset({"series"})),
     RendererDescriptor("personal_context", 1, 4, 4, "planned", ("personal_context",)),
-    RendererDescriptor("map", 1, 8, 6, "available", ("map_layers", "world_observations"), "multi"),
-    RendererDescriptor("intelligence_panel", 1, 8, 6, "available", ("cross_stream_correlation", "cii_v8_availability"), "multi"),
+    RendererDescriptor("map", 1, 8, 6, "available", ("map_layers", "world_observations"), "multi", frozenset({"located"})),
+    RendererDescriptor("intelligence_panel", 1, 8, 6, "available", ("cross_stream_correlation", "cii_v8_availability"), "multi", frozenset({"located"})),
     RendererDescriptor("highlights", 1, 4, 3, "available", ("highlights",), "multi"),
     RendererDescriptor("watch_rules", 1, 4, 3, "available", ("watch_rules",), "multi"),
     RendererDescriptor("tasks", 1, 4, 4, "available", ("tasks",)),
     RendererDescriptor("goals", 1, 4, 4, "available", ("goals",)),
     RendererDescriptor("daily_brief", 1, 6, 4, "available", ("daily_brief",)),
-    RendererDescriptor("weather", 1, 4, 3, "available", ("weather", "world_observations"), "single", ("open_meteo",)),
+    RendererDescriptor("weather", 1, 4, 3, "available", ("weather", "world_observations"), "single", frozenset({"weather"})),
     # Generic provider observation gadget (Fear & Greed, FX, GDP, BTC price, USGS quakes).
-    RendererDescriptor("provider_observation", 1, 4, 3, "available", ("world_observations",), "single", ("alternative_me", "frankfurter", "ecb", "open_er_api", "world_bank", "binance", "coinpaprika", "coingecko", "usgs")),
+    RendererDescriptor("provider_observation", 1, 4, 3, "available", ("world_observations",), "single", frozenset({"measurement"})),
     RendererDescriptor("research", 1, 4, 4, "planned", ("research",)),
     # Reads the GitHub project summary and Timeline slice of one configured github source.
-    RendererDescriptor("github_project", 1, 6, 4, "available", ("github_project",), "single", ("github",)),
+    RendererDescriptor("github_project", 1, 6, 4, "available", ("github_project",), "single", frozenset({"project_activity"})),
 )
 
 PRESETS: tuple[DashboardPreset, ...] = (
@@ -73,26 +84,16 @@ PRESETS: tuple[DashboardPreset, ...] = (
         PresetSlot("news_feed", "news_feed"), PresetSlot("map", "map"),
         PresetSlot("highlights", "highlights"), PresetSlot("daily_brief", "daily_brief"),
     )),
-    DashboardPreset("technology", "Technology", "purpose", (
-        PresetSlot("news_feed", "news_feed"), PresetSlot("research", "research"),
-    )),
+    DashboardPreset("technology", "Technology", "purpose", (PresetSlot("news_feed", "news_feed"),)),
     DashboardPreset("finance", "Finance", "purpose", (
         PresetSlot("finance_chart", "finance_chart"), PresetSlot("news_feed", "news_feed"),
     )),
     DashboardPreset("personal", "Personal", "purpose", (
-        PresetSlot("personal_context", "personal_context"), PresetSlot("tasks", "tasks"),
-        PresetSlot("goals", "goals"), PresetSlot("daily_brief", "daily_brief"),
+        PresetSlot("tasks", "tasks"), PresetSlot("goals", "goals"), PresetSlot("daily_brief", "daily_brief"),
     )),
     DashboardPreset("world", "World", "purpose", (
         PresetSlot("map", "map"), PresetSlot("news_feed", "news_feed"),
         PresetSlot("highlights", "highlights"), PresetSlot("daily_brief", "daily_brief"),
-    )),
-    DashboardPreset("tech", "Tech", "variant", (
-        PresetSlot("news_feed", "news_feed"), PresetSlot("research", "research"),
-        PresetSlot("highlights", "highlights"),
-    )),
-    DashboardPreset("finance_variant", "Finance", "variant", (
-        PresetSlot("finance_chart", "finance_chart"), PresetSlot("news_feed", "news_feed"),
     )),
     DashboardPreset("commodity", "Commodity", "variant", (
         PresetSlot("finance_chart", "finance_chart"), PresetSlot("news_feed", "news_feed"),
@@ -100,43 +101,40 @@ PRESETS: tuple[DashboardPreset, ...] = (
     DashboardPreset("happy", "Happy", "variant", (PresetSlot("news_feed", "news_feed"),)),
     DashboardPreset("energy", "Energy", "variant", (
         PresetSlot("finance_chart", "finance_chart"), PresetSlot("news_feed", "news_feed"),
-        PresetSlot("research", "research"),
     )),
 )
+
+# Retired preset ids kept resolvable for old clients; no persisted column stores preset ids.
+PRESET_ALIASES: Mapping[str, str] = {"tech": "technology", "finance_variant": "finance"}
 
 
 @dataclass(frozen=True, slots=True)
 class GadgetTemplate:
-    """Name one built-in gadget preset: renderer, allowed datasource providers and default config.
-
-    Templates only pre-fill renderer, scope and filters in the editor; they are never persisted.
-    """
+    """Pair a generic display template with its renderer, without provider-specific defaults."""
 
     id: str
     renderer: str
-    providers: tuple[str, ...]
     scope: dict[str, Any] = field(default_factory=dict)
     filters: dict[str, Any] = field(default_factory=dict)
 
 
 TEMPLATES: tuple[GadgetTemplate, ...] = (
-    GadgetTemplate("world_news", "news_feed", ("bbc_world", "aljazeera_world", "npr_news"), filters={"limit": 25}),
-    GadgetTemplate("vn_business_news", "news_feed",
-        ("vnexpress_business", "tuoitre_news", "thanhnien_news", "dantri_news")),
-    GadgetTemplate("tech_news", "news_feed", ("hn_top", "lobsters")),
-    GadgetTemplate("fear_greed", "provider_observation", ("alternative_me",), scope={"metrics": ["fear_greed_index"]}),
-    GadgetTemplate("btc_price", "provider_observation", ("binance", "coinpaprika", "coingecko"),
-        # Providers emit different BTC symbols (binance BTCUSDT; coinpaprika/coingecko BTC), so pin both.
-        scope={"metrics": ["spot_price"], "symbols": ["BTC", "BTCUSDT"]}),
-    GadgetTemplate("fx_rates", "provider_observation", ("frankfurter", "ecb", "open_er_api"),
-        scope={"metrics": ["fx_reference_rate"]}),
-    GadgetTemplate("earthquakes", "provider_observation", ("usgs",), scope={"metrics": ["earthquake_magnitude"]}),
-    GadgetTemplate("weather", "weather", ("open_meteo",)),
-    GadgetTemplate("github_project", "github_project", ("github",)),
-    GadgetTemplate("highlights", "highlights", ()),
-    GadgetTemplate("tasks", "tasks", ()),
-    GadgetTemplate("goals", "goals", ()),
-    GadgetTemplate("daily_brief", "daily_brief", ()),
+    GadgetTemplate("feed", "news_feed"),
+    GadgetTemplate("message_list", "telegram_feed"),
+    GadgetTemplate("text", "text_panel"),
+    GadgetTemplate("table", "table_panel"),
+    GadgetTemplate("video", "video_panel"),
+    GadgetTemplate("chart", "finance_chart"),
+    GadgetTemplate("map", "map"),
+    GadgetTemplate("related_signals", "intelligence_panel"),
+    GadgetTemplate("highlights", "highlights"),
+    GadgetTemplate("watchlist", "watch_rules"),
+    GadgetTemplate("tasks", "tasks"),
+    GadgetTemplate("goals", "goals"),
+    GadgetTemplate("daily_brief", "daily_brief"),
+    GadgetTemplate("weather", "weather"),
+    GadgetTemplate("metric", "provider_observation"),
+    GadgetTemplate("activity", "github_project"),
 )
 
 _RENDERERS_BY_ID = {descriptor.id: descriptor for descriptor in RENDERERS}
@@ -160,7 +158,7 @@ def validate_renderer_configuration(
     renderer_descriptor(renderer_id)
     allowed_scope = {
         "telegram_feed": {"channel_ids"},
-        "finance_chart": {"symbols", "metrics", "lookback_days"},
+        "finance_chart": {"symbols", "metrics", "regions", "lookback_days"},
         "weather": {"metrics", "lookback_days"},
         "provider_observation": {"metrics", "symbols", "lookback_days"},
         "map": {"regions", "map_layer_ids", "lookback_days"},
@@ -169,15 +167,12 @@ def validate_renderer_configuration(
     for field_name, values in configuration.scope.model_dump().items():
         if field_name not in allowed_scope and values:
             raise ValueError(f"{field_name} is not valid for renderer {renderer_id}")
-    if renderer_id == "finance_chart" and set(configuration.scope.metrics) - {"open", "high", "low", "close", "volume"}:
-        raise ValueError("Finance chart metric is outside the provider-declared daily OHLCV set")
-    if renderer_id == "weather" and set(configuration.scope.metrics) - {"temperature_2m", "relative_humidity_2m", "precipitation", "wind_speed_10m"}:
-        raise ValueError("Weather metric is outside the Open-Meteo allowlist")
     if renderer_id == "map":  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
         if set(configuration.scope.map_layer_ids) - {
             "world_observations", "military", "economic", "disaster", "escalation",
         }:
-            raise ValueError("Map layer is not in the bounded catalog")
+            raise GadgetConfigError("Map layer is not in the bounded catalog",
+                                    code="map_layer_unavailable", field="map_layer_ids")
     if renderer_id == "intelligence_panel":  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
         if configuration.scope.map_layer_ids or configuration.scope.metrics or configuration.scope.symbols:
             raise ValueError("Map and measurement selectors are not valid for the intelligence panel")
@@ -188,9 +183,87 @@ def validate_renderer_configuration(
     return configuration
 
 
+def default_metric(metric_ids: Sequence[str]) -> str:
+    """Return the default chart metric for a provider's ordered metric ids: ``close`` when listed, else the first.
+
+    Shared rule for preset seeding (the web editor mirrors it for new charts). ``metric_ids`` must be non-empty.
+    """
+    return "close" if "close" in metric_ids else metric_ids[0]
+
+
+# Sourceless charts/weather gadgets still get an allowlist: the default provider each renderer is designed around.
+_FALLBACK_PROVIDER = {"finance_chart": "alpha_vantage", "weather": "open_meteo"}
+
+
+def validate_measurement_scope(renderer_id: str, provider: str | None, scope: GadgetScope) -> None:
+    """Check chart/metric/weather scope against the bound provider's metric catalog.
+
+    Applies to ``finance_chart``, ``provider_observation`` and ``weather``; other renderers and
+    providers without a catalog entry pass. With no provider, ``finance_chart``/``weather`` fall back to the
+    Alpha Vantage / Open-Meteo catalog for the metric allowlist only (symbol/region keys are not enforced).
+    Raises ``GadgetConfigError`` with ``metric_not_in_catalog`` (field ``metrics``), ``symbol_required``
+    (field ``symbols``) or ``region_required`` (field ``regions``, region-keyed providers need one region).
+    Providers flagged ``metrics_open`` skip the membership check; the symbol/region rules still apply.
+    """
+    if renderer_id not in {"finance_chart", "provider_observation", "weather"}:
+        return
+    fallback = provider is None
+    catalog = provider_metrics(_FALLBACK_PROVIDER.get(renderer_id) if fallback else provider)
+    if catalog is None:
+        return
+    metrics = scope.metrics
+    if renderer_id == "finance_chart" and len(metrics) != 1 and not (fallback and not metrics):
+        raise GadgetConfigError("A chart needs exactly one metric", code="metric_not_in_catalog", field="metrics")
+    if not catalog.metrics_open and set(metrics) - {m.id for m in catalog.metrics}:
+        raise GadgetConfigError(f"Metric is not emitted by provider {provider}",
+                                code="metric_not_in_catalog", field="metrics")
+    if fallback or renderer_id != "finance_chart":
+        return
+    if catalog.symbol_keyed and not scope.symbols:
+        raise GadgetConfigError(f"Provider {provider} needs a symbol", code="symbol_required", field="symbols")
+    if catalog.region_keyed and not any(region.strip() for region in scope.regions):
+        raise GadgetConfigError(f"Provider {provider} needs a region", code="region_required", field="regions")
+
+
+def preset_slot_scope(renderer_id: str, provider: str | None) -> dict[str, list[str] | int]:
+    """Return the starting scope for a preset slot bound to a single measurement ``provider``.
+
+    Chart-like renderers (``finance_chart``/``provider_observation``) get ``default_metric`` and, for
+    symbol-keyed providers whose symbols are fixed (``seed_symbol``), the first suggested symbol (and ``lookback_days`` seeded from the catalog default when it declares one, which may be narrower or wider than the generic window) (region-keyed ones the first suggested region for
+    charts). Symbol-keyed providers without suggestions or with owner-configured symbols (Alpha Vantage, FRED, Binance), region-keyed charts without a
+    suggested region, providers that do not chart as a series, other renderers, unbound slots and providers
+    without a catalog entry return ``{}``: the chart then queries the default ``close`` metric, finds no rows and shows its
+    setup message (a legacy Alpha Vantage chart with metrics ``[]`` and a symbol still plots ``close``). Pure; no lookup.
+    """
+    catalog = provider_metrics(provider)
+    if renderer_id not in {"finance_chart", "provider_observation"} or catalog is None or not catalog.metrics:
+        return {}
+    if renderer_id == "finance_chart" and not catalog.charts_as_series:
+        return {}
+    if catalog.symbol_keyed and not (catalog.suggested_symbols and catalog.seed_symbol):
+        return {}  # no knowable default symbol (none suggested or owner-configured): the editor asks for one
+    scope: dict[str, list[str] | int] = {"metrics": [default_metric([metric.id for metric in catalog.metrics])]}
+    if catalog.symbol_keyed:
+        scope["symbols"] = [catalog.suggested_symbols[0]]
+    if renderer_id == "finance_chart" and catalog.region_keyed:
+        if not catalog.suggested_regions:
+            return {}
+        scope["regions"] = [catalog.suggested_regions[0]]
+    if catalog.default_lookback_days:
+        # Slow series (annual/monthly) need a wider window. A Metric slot never starts below its 30-day runtime
+        # window (the 3-day default is a chart-point budget), so it takes the wider of the two.
+        scope["lookback_days"] = (
+            max(catalog.default_lookback_days, 30) if renderer_id == "provider_observation" else catalog.default_lookback_days
+        )
+    return scope
+
+
 def dashboard_preset(preset_id: str) -> DashboardPreset:
-    """Resolve one of the ten fixed template IDs without accessing persistence or source data."""
-    return _PRESETS_BY_ID[preset_id]
+    """Resolve a canonical or retired (``PRESET_ALIASES``) preset ID; KeyError when unknown.
+
+    Touches neither persistence nor source data.
+    """
+    return _PRESETS_BY_ID[PRESET_ALIASES.get(preset_id, preset_id)]
 
 
 def validate_preset_slot_sources(
@@ -205,36 +278,37 @@ def validate_preset_slot_sources(
             raise ValueError(f"slot {slot_id} must contain at most 32 distinct source IDs")
 
 
-def validate_renderer_sources(renderer_id: str, providers: Sequence[str | None]) -> None:
-    """Reject selected-source providers that the renderer's datasource rule does not allow.
+def validate_renderer_sources(renderer_id: str, sources: Sequence[tuple[str | None, str]]) -> None:
+    """Reject selected sources the renderer cannot display, by data shape.
 
-    ``providers`` holds one provider id (or None for provider-less sources) per selected source.
-    Raises ValueError naming the renderer and its allowed providers; performs no lookup.
+    ``sources`` holds ``(provider, source_type)`` per selected source. A source is compatible when
+    its shapes intersect the renderer's ``accepted_shapes`` (None accepts any). Raises
+    ``GadgetConfigError`` with ``source_incompatible`` or ``source_limit`` on ``source_ids``;
+    performs no lookup.
     """
     descriptor = renderer_descriptor(renderer_id)
     if descriptor.source_mode == "none":
-        if providers:
-            raise ValueError(f"Renderer {renderer_id} does not accept data sources")
+        if sources:
+            raise GadgetConfigError(f"Renderer {renderer_id} does not accept data sources",
+                                    code="source_incompatible", field="source_ids")
         return
-    if descriptor.source_mode == "single" and len(providers) > 1:
-        raise ValueError(f"Renderer {renderer_id} accepts at most one data source")
-    allowed = descriptor.source_providers
-    if allowed is not None and any(provider not in allowed for provider in providers):
-        raise ValueError(
-            f"Renderer {renderer_id} only accepts sources from providers: {', '.join(allowed)}"
-        )
+    if descriptor.source_mode == "single" and len(sources) > 1:
+        raise GadgetConfigError(f"Renderer {renderer_id} accepts at most one data source",
+                                code="source_limit", field="source_ids")
+    if descriptor.accepted_shapes is not None and any(
+        not source_data_shapes(provider, kind) & descriptor.accepted_shapes for provider, kind in sources
+    ):
+        raise GadgetConfigError(
+            f"Renderer {renderer_id} only accepts sources producing: {', '.join(sorted(descriptor.accepted_shapes))}",
+            code="source_incompatible", field="source_ids")
 
 
 def _check_templates() -> None:
-    """Fail at import when a template names an unknown renderer, foreign provider or invalid scope."""
+    """Fail at import when a generic template names an unknown renderer or invalid default configuration."""
     for template in TEMPLATES:
         descriptor = _RENDERERS_BY_ID.get(template.renderer)
         if descriptor is None:
             raise ValueError(f"Template {template.id} uses unknown renderer {template.renderer}")
-        if template.providers and descriptor.source_mode == "none":
-            raise ValueError(f"Template {template.id} lists providers for a sourceless renderer")
-        if descriptor.source_providers is not None and not set(template.providers) <= set(descriptor.source_providers):
-            raise ValueError(f"Template {template.id} providers exceed renderer {template.renderer}")
         validate_renderer_configuration(template.renderer, GadgetConfiguration.model_validate(
             {"scope": template.scope, "filters": template.filters}))
 

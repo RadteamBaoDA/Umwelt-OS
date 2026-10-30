@@ -37,12 +37,16 @@ export type WorldObservationPage = { items: WorldObservation[]; next_cursor: str
 /** One page of current provider-coordinate points with unsupported source coverage. */
 export type GeospatialObservationPage = WorldObservationPage & { omitted_source_count: number };
 
-/** Fetch a source-authorized observation page; no provider request or credential is made in the browser. */
+/**
+ * Fetch a source-authorized observation page; no provider request or credential is made in the browser.
+ * `history: true` also returns superseded revisions (de-duplicated per series point) so fixed-identity series chart as history.
+ */
 export function listWorldObservations(
-  filters: { sourceIds: string[]; metrics?: string[]; symbols?: string[]; regions?: string[]; from: Date; to: Date; limit?: number; cursor?: string },
+  filters: { sourceIds: string[]; metrics?: string[]; symbols?: string[]; regions?: string[]; from: Date; to: Date; limit?: number; cursor?: string; history?: boolean },
   signal?: AbortSignal,
 ) {
   const query = new URLSearchParams({ from_at: filters.from.toISOString(), to_at: filters.to.toISOString(), limit: String(filters.limit ?? 100) });
+  if (filters.history) query.set('history', 'true');
   for (const sourceId of filters.sourceIds) query.append('source_ids', sourceId);
   for (const metric of filters.metrics ?? []) query.append('metrics', metric);
   for (const symbol of filters.symbols ?? []) query.append('symbols', symbol);
@@ -63,15 +67,19 @@ export function listGeospatialObservations(
   return apiRequest<GeospatialObservationPage>(`/api/v1/observations/geospatial?${query.toString()}`, { signal });
 }
 
-/** Fetch at most five owner-authorized pages and report either server or client truncation. */
+/**
+ * Fetch at most `maxPages` (default five, never more) owner-authorized 100-row pages, newest first, and report either
+ * server or client truncation. Latest-value readers pass `maxPages: 1`: the newest page already holds each series' latest row.
+ */
 export async function listWorldObservationWindow(
-  filters: Omit<Parameters<typeof listWorldObservations>[0], 'cursor' | 'limit'>,
+  filters: Omit<Parameters<typeof listWorldObservations>[0], 'cursor' | 'limit'> & { maxPages?: number },
   signal?: AbortSignal,
 ): Promise<{ items: WorldObservation[]; truncated: boolean }> {
+  const { maxPages = 5, ...query } = filters;
   const items: WorldObservation[] = [];
   let cursor: string | undefined;
-  for (let pageNumber = 0; pageNumber < 5; pageNumber += 1) {
-    const page = await listWorldObservations({ ...filters, limit: 100, cursor }, signal);
+  for (let pageNumber = 0; pageNumber < Math.min(maxPages, 5); pageNumber += 1) {
+    const page = await listWorldObservations({ ...query, limit: 100, cursor }, signal);
     items.push(...page.items);
     if (!page.next_cursor) return { items, truncated: page.truncated };
     cursor = page.next_cursor;

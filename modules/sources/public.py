@@ -44,7 +44,6 @@ from core.workspaces.schemas import (
 from modules.sources.models import Source, SourcePurgeOperation
 from modules.sources.schemas import (
     ConnectorSource,
-    GadgetSourceSelection,
     GadgetSourceSelectionPage,
     OperationRead,
     SourceCreate,
@@ -57,6 +56,9 @@ from modules.sources.schemas import (
     SourcePatch,
     SourcePurgeJobIdentity,
     SourceRead,
+)
+from modules.sources.schemas import (
+    GadgetSourceSelection as GadgetSourceSelection,  # noqa: PLC0414  # explicit re-export (mypy strict)
 )
 
 
@@ -684,12 +686,26 @@ async def _lock_source_row(session: AsyncSession, source_id: UUID, *, scope: Sco
     return source, access_fence
 
 
+
+def source_fence_of(source: Source) -> SourceFence:
+    """Detach a complete fence (including graph/RAG toggles) from a Source row.
+
+    Connector fence checks compare every field with the actual ``get_source_fence`` value, so
+    omitting a toggle makes non-default Sources fail 409 forever. Pure; no I/O or authority.
+    """
+    return SourceFence(
+        id=source.id, workspace_id=source.workspace_id, status=source.status,
+        generation=source.generation, local_only=source.local_only,
+        graph_enabled=source.graph_enabled, rag_index_enabled=source.rag_index_enabled,
+    )
+
+
 async def get_source_fence(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool
 ) -> SourceFence | None:
     """Read a detached source eligibility fence without acquiring a database row lock.
 
     Owner: modules/sources
-    Fields: id, workspace_id, status, generation, local_only.
+    Fields: id, workspace_id, status, generation, local_only, graph_enabled, rag_index_enabled.
     Current owner admission and any internal exact generation are required; absent/invisible
     Source returns None. It is read-only and grants no authority to fetch provider items.
     """
@@ -699,10 +715,7 @@ async def get_source_fence(session: AsyncSession, source_id: UUID, *, scope: Sco
     ).execution_options(populate_existing=True))
     if source is None:
         return None
-    return SourceFence(
-        id=source.id, workspace_id=source.workspace_id, status=source.status, generation=source.generation, local_only=source.local_only,
-        graph_enabled=source.graph_enabled, rag_index_enabled=source.rag_index_enabled,
-    )
+    return source_fence_of(source)
 
 
 async def github_retirement_peer_projection_in_uow(
@@ -781,10 +794,7 @@ async def lock_source(session: AsyncSession, source_id: UUID, *, scope: Scope, m
     )
     if source is None:
         return None
-    return SourceFence(
-        id=source.id, workspace_id=source.workspace_id, status=source.status, generation=source.generation, local_only=source.local_only,
-        graph_enabled=source.graph_enabled, rag_index_enabled=source.rag_index_enabled,
-    )
+    return source_fence_of(source)
 
 
 async def lock_retained_evidence_source(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
@@ -826,11 +836,7 @@ async def _lock_source_fence_rows(
         )))
         if eligible_ids != set(source_ids):
             return None
-    return tuple(SourceFence(
-        id=source.id, workspace_id=source.workspace_id, status=source.status,
-        generation=source.generation, local_only=source.local_only,
-        graph_enabled=source.graph_enabled, rag_index_enabled=source.rag_index_enabled,
-    ) for source in rows)
+    return tuple(source_fence_of(source) for source in rows)
 
 
 async def lock_source_set(
@@ -1234,6 +1240,7 @@ async def list_gadget_sources(
         Source.generation,
         Source.local_only,
         Source.created_at,
+        Source.last_success_at,
     ).where(*_source_scope(scope)).order_by(desc(Source.created_at), desc(Source.id))
     if cursor is not None:
         timestamp, identifier = _decode_source_page_cursor(cursor, fingerprint)
@@ -1251,10 +1258,26 @@ async def list_gadget_sources(
             status=row.status,
             generation=row.generation,
             local_only=row.local_only,
+            last_success_at=row.last_success_at,
         )
         for row in rows
     )
     return GadgetSourceSelectionPage(items=items, next_cursor=next_cursor)
+
+
+async def list_active_source_kinds(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool
+) -> tuple[tuple[UUID, str | None, str], ...]:
+    """Return ``(id, provider, type)`` for every active source in scope, unpaged and metadata-only.
+
+    Requires owner admission like the selection page; used for exact renderer compatibility counts.
+    """
+    await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    # ponytail: full scan of active sources, single-user workspace; page if counts get slow
+    rows = (await session.execute(
+        select(Source.id, Source.provider, Source.type).where(Source.status == "active", *_source_scope(scope))
+    )).all()
+    return tuple((row.id, row.provider, row.type) for row in rows)
 
 
 async def update_source(
@@ -1411,10 +1434,7 @@ async def pause_source_for_connector_in_uow(
         source.status = "paused"
         source.retired_at = datetime.now(UTC)
         cleanup_scope = _transitioned_source_scope(scope, source)
-    paused_fence = SourceFence(
-        id=source.id, workspace_id=source.workspace_id, status=source.status,
-        generation=source.generation, local_only=source.local_only,
-    )
+    paused_fence = source_fence_of(source)
     # Owner mutation hooks freshly read the paused row; persist it within the held transaction.
     await session.flush()
     from modules.connectors import public as connectors
@@ -1699,10 +1719,7 @@ async def _fence_connector_source(
 
     scope = _transitioned_source_scope(scope, source)
     await session.flush()
-    source_fence = SourceFence(
-        id=source.id, workspace_id=source.workspace_id, status=source.status,
-        generation=source.generation, local_only=source.local_only,
-    )
+    source_fence = source_fence_of(source)
     await connectors.prepare_source_lifecycle_cleanup_in_uow(
         session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence, source_fence=source_fence,
@@ -1790,6 +1807,7 @@ async def get_connector_retained_effect_anchor_in_uow(
         raise ValueError("Retained effect does not match the original bound Source")
     row = (await session.execute(select(
         Source.id, Source.workspace_id, Source.status, Source.generation, Source.local_only,
+        Source.graph_enabled, Source.rag_index_enabled,
     ).where(
         Source.id == source_id, Source.workspace_id == scope.workspace_id,
         Source.generation >= source_generation,
@@ -2027,3 +2045,41 @@ async def get_source_impact(
         gadget_placement_count=placements,
         conversation_count=await chat.count_source_conversations(session, source_id, scope=scope),
     )
+
+
+# User-authored content: uploads are type "file", notes are "manual". They must never be
+# aged out by the connector retention cron (there is no "upload" SourceType).
+RETENTION_EXEMPT_SOURCE_TYPES = ("file", "manual")
+
+
+async def list_retention_cutoffs(
+    session: AsyncSession, *, now: datetime,
+) -> list[tuple[UUID, datetime]]:
+    """Return ``(source_id, cutoff)`` for every connector Source with a bounded retention window.
+
+    ``file`` (uploads) and ``manual`` (user notes) sources are excluded so user-authored
+    documents are never aged out. A per-source
+    ``configuration["retention_days"]`` wins only when it is a real int (not bool) in 1..3650;
+    anything else falls back to the connector provider default. Sources with no positive window
+    are omitted. Read-only; spans all workspaces because it feeds the system retention cron.
+    """
+    from datetime import timedelta
+
+    from modules.connectors import public as connectors
+
+    rows = (
+        await session.execute(
+            select(Source.id, Source.provider, Source.configuration).where(Source.type.not_in(RETENTION_EXEMPT_SOURCE_TYPES))
+        )
+    ).all()
+    cutoffs: list[tuple[UUID, datetime]] = []
+    for row in rows:
+        cfg = row.configuration if isinstance(row.configuration, dict) else {}
+        raw_days = cfg.get("retention_days")
+        if isinstance(raw_days, int) and not isinstance(raw_days, bool) and 1 <= raw_days <= 3650:
+            days: int | None = raw_days
+        else:
+            days = connectors.default_retention_days(row.provider)
+        if days is not None and days >= 1:
+            cutoffs.append((row.id, now - timedelta(days=days)))
+    return cutoffs

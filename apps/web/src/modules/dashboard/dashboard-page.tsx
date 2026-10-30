@@ -11,7 +11,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, useLayoutEffect } from 'react';
 import {
@@ -40,7 +40,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useWorkspace } from '@/core/workspace-context';
 import { useGuardedNavigation, type GuardedNavigationIntent } from '@/core/guarded-navigation';
@@ -68,6 +68,8 @@ import { getGadgetReadingBodyFloor } from './widget-registry';
 import { LayoutEditor } from './layout-editor';
 import { PresetPicker } from './preset-picker';
 import { GadgetSettings } from './gadget-settings';
+import { TopicSettings } from '@/modules/news/topic-settings';
+import { HighlightRuleEditor } from '@/modules/settings/highlight-rule-editor';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
 import { listSources, sourceKeys } from '@/modules/sources/api';
@@ -284,12 +286,13 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
   const t = useTranslations('dashboard');
   const ts = useTranslations('uiSweep');
   const session = useWorkspaceSession();
-  const { isAdminViewer } = useWorkspace();
+  const { isAdminViewer, isOwner } = useWorkspace();
   const queryClient = useQueryClient();
   const guardedNavigation = useGuardedNavigation();
   const display = useDisplayPreferences();
   const pathname = usePathname();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   // Active dashboard selection
   const [isEditMode, setIsEditMode] = useState<boolean>(false);
@@ -306,6 +309,8 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
   const [newGroupName, setNewGroupName] = useState<string>('');
   const [configuringInstance, setConfiguringInstance] = useState<GadgetInstance | null>(null);
   const [gadgetSettingsOpen, setGadgetSettingsOpen] = useState<boolean>(false);
+  const [managementDialogOpen, setManagementDialogOpen] = useState(false);
+  const [managementTab, setManagementTab] = useState<'topics' | 'rules'>('topics');
 
   // Dirty state and undo/redo history
   const [isDirty, setIsDirty] = useState<boolean>(false);
@@ -342,20 +347,42 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
     queryFn: ({ signal }) => listDashboards(signal),
   });
 
-  const dashboards = dashboardsQuery.data ?? [];
+  const dashboards = useMemo(() => dashboardsQuery.data ?? [], [dashboardsQuery.data]);
 
   // The route owns dashboard selection; /dashboard resolves to the workspace's first dashboard.
   const selectedDashboardId = dashboardId ?? dashboards[0]?.id ?? null;
 
+  // Legacy `?manage=highlights` deep link: ready once the owner's dashboard list resolved to the addressed dashboard.
+  const manageLinkReady = searchParams.get('manage') === 'highlights' && isOwner && dashboardsQuery.isSuccess
+    && (dashboardId ? dashboards.some((dashboard) => dashboard.id === dashboardId) : dashboards.length === 0);
+  // Adjust state while rendering (not in an effect) on the false -> true transition, so the dialog opens exactly once.
+  const [manageLinkSeen, setManageLinkSeen] = useState(false);
+  if (manageLinkReady !== manageLinkSeen) {
+    setManageLinkSeen(manageLinkReady);
+    if (manageLinkReady) {
+      setManagementTab('rules');
+      setManagementDialogOpen(true);
+    }
+  }
+
+  /** Removes the one-shot `manage` query flag once the deep link has opened highlight management. */
+  useEffect(() => {
+    if (!manageLinkReady) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('manage');
+    router.replace(params.size ? `${pathname}?${params.toString()}` : pathname, { scroll: false });
+  }, [manageLinkReady, pathname, router, searchParams]);
+
   useEffect(() => {
     if (!dashboardsQuery.isSuccess) return;
     const firstDashboardId = dashboards[0]?.id;
+    const suffix = searchParams.size ? `?${searchParams.toString()}` : '';
     if (dashboardId && !dashboards.some((dashboard) => dashboard.id === dashboardId)) {
-      router.replace(firstDashboardId ? `/dashboard/${encodeURIComponent(firstDashboardId)}` : '/dashboard');
+      router.replace(firstDashboardId ? `/dashboard/${encodeURIComponent(firstDashboardId)}${suffix}` : `/dashboard${suffix}`);
     } else if (pathname === '/dashboard' && firstDashboardId) {
-      router.replace(`/dashboard/${encodeURIComponent(firstDashboardId)}`);
+      router.replace(`/dashboard/${encodeURIComponent(firstDashboardId)}${suffix}`);
     }
-  }, [dashboardId, dashboards, dashboardsQuery.isSuccess, pathname, router]);
+  }, [dashboardId, dashboards, dashboardsQuery.isSuccess, pathname, router, searchParams]);
 
   /** Navigates to a dashboard's canonical URL after the caller's dirty-state guard succeeds. */
   const navigateToDashboard = useCallback((id: string, replace = false) => {
@@ -985,7 +1012,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
         setMembershipMutationsPending((pending) => Math.max(0, pending - 1));
       }
     },
-    [activeDashboard, currentBreakpoint, draftPlacements, layoutColumns, layoutIdentityRef, layoutOperationPending, queryClient, reconcileMembershipDashboard, session.csrfToken, t],
+    [activeDashboard, currentBreakpoint, draftPlacements, layoutColumns, layoutIdentityRef, layoutOperationPending, reconcileMembershipDashboard, session.csrfToken, t],
   );
 
   /** Filter instances by active group tab. */
@@ -1100,6 +1127,9 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
         >
           {isEditMode ? <Eye className="w-4 h-4" aria-hidden="true" /> : <Edit3 className="w-4 h-4" aria-hidden="true" />}
           <span>{isEditMode ? t('finishEditing') : t('toggleEdit')}</span>
+        </Button>}
+        {isOwner && <Button type="button" variant="outline" className="min-h-11" onClick={() => setManagementDialogOpen(true)}>
+          {t('manageTopicsAndHighlights')}
         </Button>}
       </div>
       {/* Group tabs: rendered only when the dashboard has groups */}
@@ -1445,6 +1475,22 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
         dashboardId={selectedDashboardId ?? ''}
         dashboardRevision={activeDashboard?.revision ?? 1}
       />
+      <Dialog open={managementDialogOpen} onOpenChange={setManagementDialogOpen}>
+        <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>{t('manageTopicsAndHighlights')}</DialogTitle>
+            <DialogDescription>{t('manageTopicsAndHighlightsDescription')}</DialogDescription>
+          </DialogHeader>
+          <Tabs value={managementTab} onValueChange={(value) => setManagementTab(value as 'topics' | 'rules')}>
+            <TabsList aria-label={t('manageTopicsAndHighlights')}>
+              <TabsTrigger value="topics" className="min-h-11">{t('manageTopics')}</TabsTrigger>
+              <TabsTrigger value="rules" className="min-h-11">{t('manageHighlights')}</TabsTrigger>
+            </TabsList>
+            <TabsContent value="topics" className="pt-4"><TopicSettings csrfToken={session.csrfToken} /></TabsContent>
+            <TabsContent value="rules" className="pt-4"><HighlightRuleEditor /></TabsContent>
+          </Tabs>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

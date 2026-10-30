@@ -28,6 +28,8 @@ MAX_CONTEXT_BUDGET_BYTES = 64_000
 # ResponseRun.retrieval_context keys: the route writes WEB_SEARCH_KEY, only the worker writes the outcome.
 WEB_SEARCH_KEY = "_web_search"
 WEB_SEARCH_OUTCOME_KEY = "_web_search_outcome"
+DB_QUERY_KEY = "_db_query"
+GADGET_SCOPE_KEY = "_gadget_scope"
 # Per-send chat model override {"provider_id", "model"}; written by the route after validation, read by the worker.
 MODEL_OVERRIDE_KEY = "_model_override"
 
@@ -588,6 +590,7 @@ class SendMessageRequest(BaseModel):
     client_request_id: str | None = Field(default=None, max_length=128)
     context: dict[str, Any] | None = None
     web_search: bool = False
+    db_query: bool = False
     # Optional per-chat model override; omitted keeps the owner's `chat` role default.
     provider_id: str | None = Field(default=None, min_length=1, max_length=64)
     model: str | None = Field(default=None, min_length=1, max_length=200)
@@ -610,6 +613,7 @@ class MessageMutationRequest(BaseModel):
     client_request_id: str = Field(min_length=1, max_length=128)
     content: str | None = Field(default=None, min_length=1, max_length=20_000)
     web_search: bool = False
+    db_query: bool = False
     # Optional explicit model choice; omitted carries the original run's model forward.
     provider_id: str | None = Field(default=None, min_length=1, max_length=64)
     model: str | None = Field(default=None, min_length=1, max_length=200)

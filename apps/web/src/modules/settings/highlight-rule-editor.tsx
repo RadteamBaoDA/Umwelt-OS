@@ -17,7 +17,6 @@ import {
   type GadgetDefinition, type HighlightRule,
 } from '@/modules/dashboard/api';
 import { fetchAllTopics } from '@/modules/news/api';
-import { parseKeywordList } from './gadget-library';
 import { CheckboxField, FieldGrid } from './settings-layout';
 import { uuid7 } from '@/core/uuid7';
 
@@ -31,6 +30,11 @@ const previewCodeKeys: Record<string, string> = { preview_rate_limited: 'rulePre
 const previewErrorKey = (error: unknown) => (error instanceof ApiError && Object.hasOwn(previewCodeKeys, error.code ?? '') ? previewCodeKeys[error.code as string] : null);
 
 const sourceModeKeys = { any: 'sourceAny', only: 'sourceOnly', exclude: 'sourceExclude' } as const;
+
+/** Normalizes comma-separated rule keywords and removes duplicates. */
+function parseKeywordList(value: string): string[] {
+  return [...new Set(value.split(',').map((item) => item.trim()).filter(Boolean))];
+}
 
 /** ISO instant to the `datetime-local` value in the browser time zone. */
 const toLocalInput = (iso?: string | null) => {

@@ -3,14 +3,30 @@
 import base64
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import Table, and_, func, or_, select, tuple_, update
+from sqlalchemy import (
+    ColumnElement,
+    SQLColumnExpression,
+    String,
+    Table,
+    and_,
+    delete,
+    func,
+    not_,
+    or_,
+    select,
+    tuple_,
+    update,
+)
+from sqlalchemy import cast as sql_cast
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from core.ids import uuid7
 from core.workspaces import public as workspaces
@@ -722,11 +738,55 @@ def _decode_cursor(cursor: str, fingerprint: str) -> tuple[datetime, UUID]:
         raise HTTPException(status_code=422, detail="Observation cursor is invalid") from exc
 
 
+def _window_statement(
+    query: ObservationQuery, workspace_id: UUID, source_scope_filters: tuple[Any, ...],
+) -> Any:
+    """Build the filtered observation window select (no ordering, paging or evidence checks).
+
+    Default mode reads current rows only. ``query.history`` also reads superseded revisions (kept until the
+    existing retention purge removes non-current rows past the source cutoff) but hides a row when a later
+    accepted row of the same series point (source, provider, scope discriminator, metric, symbol, region, unit, coordinates,
+    observed_at) exists, so a corrected period never counts twice. "Later" uses the current-selection key
+    (accepted_at, str(ingestion_observation_id)), so exact accepted_at ties pick the row that is_current picks.
+    Same scope filters and bounds apply.
+    """
+    statement = select(Observation).where(
+        Observation.workspace_id == workspace_id, or_(*source_scope_filters),
+        Observation.observed_at >= query.from_at, Observation.observed_at < query.to_at,
+    )
+    if not query.history:
+        return statement.where(Observation.is_current.is_(True))
+    newer = aliased(Observation)
+    superseded = (
+        select(1).where(
+            newer.workspace_id == Observation.workspace_id, newer.source_id == Observation.source_id,
+            newer.source_generation == Observation.source_generation, newer.provider == Observation.provider,
+            newer.provider_scope_discriminator.is_not_distinct_from(Observation.provider_scope_discriminator),
+            newer.metric == Observation.metric, newer.observed_at == Observation.observed_at,
+            newer.symbol.is_not_distinct_from(Observation.symbol),
+            newer.region.is_not_distinct_from(Observation.region),
+            newer.unit.is_not_distinct_from(Observation.unit),
+            newer.latitude.is_not_distinct_from(Observation.latitude),
+            newer.longitude.is_not_distinct_from(Observation.longitude),
+            # Same key as current selection (accepted_at, str(ingestion id)) so exact ties agree with is_current.
+            tuple_(newer.accepted_at, sql_cast(newer.ingestion_observation_id, String))
+            > tuple_(Observation.accepted_at, sql_cast(Observation.ingestion_observation_id, String)),
+        ).exists()
+    )
+    return statement.where(not_(superseded))
+
+
 async def list_observations(
     session: AsyncSession, query: ObservationQuery, cursor: str | None = None,
     *, scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[tuple[Observation, ...], str | None, bool, dict[UUID, int]]:
-    """Read bounded current-evidence points after owner admission and workspace/source filters."""
+    """Read bounded evidence points after owner admission and workspace/source filters.
+
+    Default: current revisions backed by the current document version. With ``query.history`` also
+    superseded revisions (deduped per series point by ``_window_statement``) backed by any version of
+    the same document; scope, source generation, provider identity and provenance fences are unchanged.
+    Returns (rows, next cursor, scan truncated, document version number per row).
+    """
     access_fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     scopes: list[ObservationScopeRead] = []
     current_scopes: dict[UUID, object] = {}
@@ -752,11 +812,7 @@ async def list_observations(
         Observation.provider == item.provider,
         Observation.provider_scope_discriminator == item.discriminator,
     ) for item in scopes)
-    statement = select(Observation).where(
-        Observation.workspace_id == scope.workspace_id,
-        or_(*source_scope_filters), Observation.is_current.is_(True),
-        Observation.observed_at >= query.from_at, Observation.observed_at < query.to_at,
-    )
+    statement = _window_statement(query, scope.workspace_id, source_scope_filters)
     if query.geospatial_only:
         # Do not infer point coordinates from a location label; only provider-recorded points map.
         statement = statement.where(
@@ -793,7 +849,7 @@ async def list_observations(
         ) for row in batch)
         allowed = await documents.current_observation_evidence_versions(
             session, candidates, current_scopes, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
+            multi_workspace_enabled=multi_workspace_enabled, include_historical=query.history,
         )
         for row in batch:
             if row.id in allowed:
@@ -992,3 +1048,45 @@ async def purge_document_in_uow(
                 Observation.workspace_id == scope.workspace_id, Observation.id.in_(ids),
             )
         )
+
+
+def current_observation_references(
+    column: SQLColumnExpression[Any], *, field: str,
+) -> ColumnElement[bool]:
+    """Return an EXISTS predicate: a *current* observation points at ``column`` via ``field``.
+
+    ``field`` is ``"document_version_id"`` or ``"ingestion_observation_id"``; ``column`` is the
+    caller's own id column (correlated). Lets other modules protect rows still backing a current
+    observation without importing the private Observation model.
+    """
+    if field not in ("document_version_id", "ingestion_observation_id"):
+        raise ValueError(f"Unsupported observation reference field: {field}")
+    return (
+        select(1)
+        .where(getattr(Observation, field) == column, Observation.is_current.is_(True))
+        .exists()
+    )
+
+
+async def purge_expired_noncurrent_observations(
+    session: AsyncSession, cutoffs: Sequence[tuple[UUID, datetime]], *, limit: int,
+) -> int:
+    """Delete up to ``limit`` non-current observations older than their source's cutoff.
+
+    Current observations are never deleted. Oldest first, ``FOR UPDATE SKIP LOCKED`` so cleanup
+    never blocks ingestion. Returns rows deleted; the caller commits.
+    """
+    if not cutoffs:
+        return 0
+    expired = or_(
+        *(and_(Observation.source_id == sid, Observation.observed_at < cutoff) for sid, cutoff in cutoffs)
+    )
+    doomed = (
+        select(Observation.id)
+        .where(Observation.is_current.is_(False), expired)
+        .order_by(Observation.observed_at.asc())
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    result = await session.execute(delete(Observation).where(Observation.id.in_(doomed)))
+    return int(getattr(result, "rowcount", 0) or 0)

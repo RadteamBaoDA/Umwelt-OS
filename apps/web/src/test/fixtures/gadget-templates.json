@@ -1,0 +1,395 @@
+[
+  {
+    "accepted_shapes": [
+      "event",
+      "news"
+    ],
+    "filters": {
+      "exclude_keywords": [],
+      "keywords": [],
+      "limit": 25,
+      "map_engine": null,
+      "show_precise_locations": false
+    },
+    "id": "feed",
+    "renderer": "news_feed",
+    "scope": {
+      "channel_ids": [],
+      "cii_country_codes": [],
+      "lookback_days": null,
+      "map_layer_ids": [],
+      "metrics": [],
+      "regions": [],
+      "source_item_ids": [],
+      "symbols": []
+    },
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": [
+      "messages"
+    ],
+    "filters": {
+      "exclude_keywords": [],
+      "keywords": [],
+      "limit": 25,
+      "map_engine": null,
+      "show_precise_locations": false
+    },
+    "id": "message_list",
+    "renderer": "telegram_feed",
+    "scope": {
+      "channel_ids": [],
+      "cii_country_codes": [],
+      "lookback_days": null,
+      "map_layer_ids": [],
+      "metrics": [],
+      "regions": [],
+      "source_item_ids": [],
+      "symbols": []
+    },
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": [
+      "news"
+    ],
+    "filters": {
+      "exclude_keywords": [],
+      "keywords": [],
+      "limit": 25,
+      "map_engine": null,
+      "show_precise_locations": false
+    },
+    "id": "text",
+    "renderer": "text_panel",
+    "scope": {
+      "channel_ids": [],
+      "cii_country_codes": [],
+      "lookback_days": null,
+      "map_layer_ids": [],
+      "metrics": [],
+      "regions": [],
+      "source_item_ids": [],
+      "symbols": []
+    },
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": [
+      "event",
+      "measurement",
+      "news"
+    ],
+    "filters": {
+      "exclude_keywords": [],
+      "keywords": [],
+      "limit": 25,
+      "map_engine": null,
+      "show_precise_locations": false
+    },
+    "id": "table",
+    "renderer": "table_panel",
+    "scope": {
+      "channel_ids": [],
+      "cii_country_codes": [],
+      "lookback_days": null,
+      "map_layer_ids": [],
+      "metrics": [],
+      "regions": [],
+      "source_item_ids": [],
+      "symbols": []
+    },
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": [
+      "video"
+    ],
+    "filters": {
+      "exclude_keywords": [],
+      "keywords": [],
+      "limit": 25,
+      "map_engine": null,
+      "show_precise_locations": false
+    },
+    "id": "video",
+    "renderer": "video_panel",
+    "scope": {
+      "channel_ids": [],
+      "cii_country_codes": [],
+      "lookback_days": null,
+      "map_layer_ids": [],
+      "metrics": [],
+      "regions": [],
+      "source_item_ids": [],
+      "symbols": []
+    },
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": [
+      "series"
+    ],
+    "filters": {
+      "exclude_keywords": [],
+      "keywords": [],
+      "limit": 25,
+      "map_engine": null,
+      "show_precise_locations": false
+    },
+    "id": "chart",
+    "renderer": "finance_chart",
+    "scope": {
+      "channel_ids": [],
+      "cii_country_codes": [],
+      "lookback_days": null,
+      "map_layer_ids": [],
+      "metrics": [],
+      "regions": [],
+      "source_item_ids": [],
+      "symbols": []
+    },
+    "source_mode": "single"
+  },
+  {
+    "accepted_shapes": [
+      "located"
+    ],
+    "filters": {
+      "exclude_keywords": [],
+      "keywords": [],
+      "limit": 25,
+      "map_engine": null,
+      "show_precise_locations": false
+    },
+    "id": "map",
+    "renderer": "map",
+    "scope": {
+      "channel_ids": [],
+      "cii_country_codes": [],
+      "lookback_days": null,
+      "map_layer_ids": [],
+      "metrics": [],
+      "regions": [],
+      "source_item_ids": [],
+      "symbols": []
+    },
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": [
+      "located"
+    ],
+    "filters": {
+      "exclude_keywords": [],
+      "keywords": [],
+      "limit": 25,
+      "map_engine": null,
+      "show_precise_locations": false
+    },
+    "id": "related_signals",
+    "renderer": "intelligence_panel",
+    "scope": {
+      "channel_ids": [],
+      "cii_country_codes": [],
+      "lookback_days": null,
+      "map_layer_ids": [],
+      "metrics": [],
+      "regions": [],
+      "source_item_ids": [],
+      "symbols": []
+    },
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": null,
+    "filters": {
+      "exclude_keywords": [],
+      "keywords": [],
+      "limit": 25,
+      "map_engine": null,
+      "show_precise_locations": false
+    },
+    "id": "highlights",
+    "renderer": "highlights",
+    "scope": {
+      "channel_ids": [],
+      "cii_country_codes": [],
+      "lookback_days": null,
+      "map_layer_ids": [],
+      "metrics": [],
+      "regions": [],
+      "source_item_ids": [],
+      "symbols": []
+    },
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": null,
+    "filters": {
+      "exclude_keywords": [],
+      "keywords": [],
+      "limit": 25,
+      "map_engine": null,
+      "show_precise_locations": false
+    },
+    "id": "watchlist",
+    "renderer": "watch_rules",
+    "scope": {
+      "channel_ids": [],
+      "cii_country_codes": [],
+      "lookback_days": null,
+      "map_layer_ids": [],
+      "metrics": [],
+      "regions": [],
+      "source_item_ids": [],
+      "symbols": []
+    },
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": null,
+    "filters": {
+      "exclude_keywords": [],
+      "keywords": [],
+      "limit": 25,
+      "map_engine": null,
+      "show_precise_locations": false
+    },
+    "id": "tasks",
+    "renderer": "tasks",
+    "scope": {
+      "channel_ids": [],
+      "cii_country_codes": [],
+      "lookback_days": null,
+      "map_layer_ids": [],
+      "metrics": [],
+      "regions": [],
+      "source_item_ids": [],
+      "symbols": []
+    },
+    "source_mode": "none"
+  },
+  {
+    "accepted_shapes": null,
+    "filters": {
+      "exclude_keywords": [],
+      "keywords": [],
+      "limit": 25,
+      "map_engine": null,
+      "show_precise_locations": false
+    },
+    "id": "goals",
+    "renderer": "goals",
+    "scope": {
+      "channel_ids": [],
+      "cii_country_codes": [],
+      "lookback_days": null,
+      "map_layer_ids": [],
+      "metrics": [],
+      "regions": [],
+      "source_item_ids": [],
+      "symbols": []
+    },
+    "source_mode": "none"
+  },
+  {
+    "accepted_shapes": null,
+    "filters": {
+      "exclude_keywords": [],
+      "keywords": [],
+      "limit": 25,
+      "map_engine": null,
+      "show_precise_locations": false
+    },
+    "id": "daily_brief",
+    "renderer": "daily_brief",
+    "scope": {
+      "channel_ids": [],
+      "cii_country_codes": [],
+      "lookback_days": null,
+      "map_layer_ids": [],
+      "metrics": [],
+      "regions": [],
+      "source_item_ids": [],
+      "symbols": []
+    },
+    "source_mode": "none"
+  },
+  {
+    "accepted_shapes": [
+      "weather"
+    ],
+    "filters": {
+      "exclude_keywords": [],
+      "keywords": [],
+      "limit": 25,
+      "map_engine": null,
+      "show_precise_locations": false
+    },
+    "id": "weather",
+    "renderer": "weather",
+    "scope": {
+      "channel_ids": [],
+      "cii_country_codes": [],
+      "lookback_days": null,
+      "map_layer_ids": [],
+      "metrics": [],
+      "regions": [],
+      "source_item_ids": [],
+      "symbols": []
+    },
+    "source_mode": "single"
+  },
+  {
+    "accepted_shapes": [
+      "measurement"
+    ],
+    "filters": {
+      "exclude_keywords": [],
+      "keywords": [],
+      "limit": 25,
+      "map_engine": null,
+      "show_precise_locations": false
+    },
+    "id": "metric",
+    "renderer": "provider_observation",
+    "scope": {
+      "channel_ids": [],
+      "cii_country_codes": [],
+      "lookback_days": null,
+      "map_layer_ids": [],
+      "metrics": [],
+      "regions": [],
+      "source_item_ids": [],
+      "symbols": []
+    },
+    "source_mode": "single"
+  },
+  {
+    "accepted_shapes": [
+      "project_activity"
+    ],
+    "filters": {
+      "exclude_keywords": [],
+      "keywords": [],
+      "limit": 25,
+      "map_engine": null,
+      "show_precise_locations": false
+    },
+    "id": "activity",
+    "renderer": "github_project",
+    "scope": {
+      "channel_ids": [],
+      "cii_country_codes": [],
+      "lookback_days": null,
+      "map_layer_ids": [],
+      "metrics": [],
+      "regions": [],
+      "source_item_ids": [],
+      "symbols": []
+    },
+    "source_mode": "single"
+  }
+]

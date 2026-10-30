@@ -5,7 +5,8 @@
 
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
-import { ArrowUpIcon, FileTextIcon, PaperclipIcon, PlusIcon, SendIcon, SquareIcon } from 'lucide-react';
+import { ArrowUpIcon, CloudIcon, DatabaseIcon, FileTextIcon, GlobeIcon, PaperclipIcon, PlusIcon, SendIcon, SquareIcon } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { COMPOSER_MENU_ID } from '@/modules/chat/chat-attachments';
@@ -44,6 +45,8 @@ export interface ChatComposerProps {
   sourcesCount?: number;
   /** Per-message web search opt-in; passed only by the full Chat page. */
   webSearch?: { available: boolean; profileBlocked?: boolean; provider?: string; enabled: boolean; onChange: (enabled: boolean) => void };
+  /** Per-message structured/SQL database query opt-in over collected datasources. */
+  dbQuery?: { enabled: boolean; onChange: (enabled: boolean) => void };
   /** Attachment controls rendered above the input (full Chat page only). */
   attachments?: React.ReactNode;
   /** Surface mode: `full` renders the page composer (context badges + toolbar); `drawer` the quick-chat textarea/button pair. */
@@ -81,6 +84,7 @@ export function ChatComposer({
   modelLabel = null,
   sourcesCount = 0,
   webSearch,
+  dbQuery,
   attachments,
   sendBlockedBy = null,
   onAttachFiles,
@@ -208,6 +212,33 @@ export function ChatComposer({
       <div className="relative flex flex-wrap items-end gap-2 border-t border-border bg-surface p-4 shrink-0 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-nowrap">
         {/* Below sm the picker takes its own row above the textarea so Send keeps room beside it. */}
         {modelPicker && <div className="order-first w-full sm:order-none sm:w-auto"><ModelPicker picker={modelPicker} disabled={isStreaming || disabled} /></div>}
+        {dbQuery && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button id={COMPOSER_MENU_ID} type="button" variant="ghost" size="icon" className="min-h-11 rounded-full text-muted-foreground" aria-label={t('composerMenu')} disabled={disabled}>
+                <PlusIcon className="size-4" aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" side="top">
+              <DropdownMenuCheckboxItem
+                id="chat-db-query"
+                checked={dbQuery.enabled}
+                disabled={isStreaming || disabled}
+                onSelect={(e) => e.preventDefault()}
+                onCheckedChange={(checked) => dbQuery.onChange(checked === true)}
+              >
+                <DatabaseIcon className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                {t('dbQueryToggle')}
+              </DropdownMenuCheckboxItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+        {dbQuery?.enabled && (
+          <Badge variant="secondary" className="shrink-0 gap-1 text-[11px]" data-testid="chat-db-query-badge">
+            <DatabaseIcon className="size-3" aria-hidden="true" />
+            {t('dbQueryBadge')}
+          </Badge>
+        )}
         <div className="min-w-0 flex-1">{textarea}</div>
         {isStreaming ? stopButton : sendButton}
       </div>
@@ -234,7 +265,7 @@ export function ChatComposer({
       <ArrowUpIcon className="size-4" aria-hidden="true" />
     </Button>
   );
-  const modelText = modelLabel ? t('modelLine', { model: modelLabel }) : t('modelNotReported');
+  const modelText = modelLabel ? t('modelLine', { model: modelLabel }) : null;
   const webSearchChecked = !!webSearch && webSearch.available && !webSearch.profileBlocked && webSearch.enabled;
 
   return (
@@ -253,11 +284,11 @@ export function ChatComposer({
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" side="top">
                 {menu.onAddContext && (
-                  <DropdownMenuItem onSelect={menu.onAddContext}>
+                  <DropdownMenuItem inset onSelect={menu.onAddContext}>
                     <FileTextIcon aria-hidden="true" />{t('addContext')}
                   </DropdownMenuItem>
                 )}
-                <DropdownMenuItem disabled={menu.attachDisabled} onSelect={menu.onAttach}>
+                <DropdownMenuItem inset disabled={menu.attachDisabled} onSelect={menu.onAttach}>
                   <PaperclipIcon aria-hidden="true" />{t('attach')}
                 </DropdownMenuItem>
                 <DropdownMenuCheckboxItem
@@ -267,6 +298,7 @@ export function ChatComposer({
                   onSelect={(e) => e.preventDefault()}
                   onCheckedChange={(checked) => menu.share.onChange(checked === true)}
                 >
+                  <CloudIcon className="size-4 text-muted-foreground" aria-hidden="true" />
                   {t('attachmentShareToggle')}
                 </DropdownMenuCheckboxItem>
                 {webSearch && (
@@ -279,16 +311,44 @@ export function ChatComposer({
                       onSelect={(e) => e.preventDefault()}
                       onCheckedChange={(checked) => webSearch.onChange(checked === true)}
                     >
+                      <GlobeIcon className="size-4 text-muted-foreground" aria-hidden="true" />
                       {t('webSearchToggle')}
+                    </DropdownMenuCheckboxItem>
+                  </>
+                )}
+                {dbQuery && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuCheckboxItem
+                      id="chat-db-query"
+                      checked={dbQuery.enabled}
+                      disabled={isStreaming || disabled}
+                      onSelect={(e) => e.preventDefault()}
+                      onCheckedChange={(checked) => dbQuery.onChange(checked === true)}
+                    >
+                      <DatabaseIcon className="size-4 text-muted-foreground" aria-hidden="true" />
+                      {t('dbQueryToggle')}
                     </DropdownMenuCheckboxItem>
                   </>
                 )}
               </DropdownMenuContent>
             </DropdownMenu>
           )}
+          {webSearchChecked && (
+            <Badge variant="secondary" className="shrink-0 gap-1 text-[11px]" data-testid="chat-web-search-badge">
+              <GlobeIcon className="size-3" aria-hidden="true" />
+              {t('webSearchBadge')}
+            </Badge>
+          )}
+          {dbQuery?.enabled && (
+            <Badge variant="secondary" className="shrink-0 gap-1 text-[11px]" data-testid="chat-db-query-badge">
+              <DatabaseIcon className="size-3" aria-hidden="true" />
+              {t('dbQueryBadge')}
+            </Badge>
+          )}
           {/* Below sm the picker already names the model; a truncated "Mo…" line only steals width. */}
           <span className={`min-w-0 flex-1 truncate text-xs text-muted-foreground ${modelPicker ? 'max-sm:invisible' : ''}`}>
-            {modelText}{sourcesCount > 0 ? ` · ${t('sourcesCount', { count: sourcesCount })}` : ''}
+            {modelText}{sourcesCount > 0 ? `${modelText ? ' · ' : ''}${t('sourcesCount', { count: sourcesCount })}` : ''}
           </span>
           {modelPicker && <ModelPicker picker={modelPicker} disabled={isStreaming || disabled} />}
           {isStreaming ? roundStop : roundSend}

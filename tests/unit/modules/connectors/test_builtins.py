@@ -187,6 +187,7 @@ async def test_list_reports_every_builtin_with_off_state_before_first_enable() -
         rows = await builtins.list_builtins(_session(), _request(), SCOPE)  # type: ignore[arg-type]
     assert {r.id for r in rows} == BUILTIN_PROVIDERS
     assert all(r.source_id is None and not r.enabled for r in rows)
+    assert all(r.model_dump()["data_shapes"] for r in rows)  # serialized row carries data shapes
 
 
 def test_every_builtin_schedule_is_accepted_by_connector_config() -> None:
@@ -258,3 +259,18 @@ async def test_enable_never_reads_provisioning_row_after_rollback(stale_row: boo
             read = await builtins.enable_builtin(
                 "bbc_world", session, _request(), SCOPE, builtins.BuiltinEnableRequest())  # type: ignore[arg-type]
     assert read.enabled
+
+
+async def test_enable_honors_explicit_realtime_mode_override() -> None:
+    """Explicit realtime_mode on BuiltinEnableRequest persists into ConnectorConfig and overrides default tier."""
+    with _World("world_bank") as world:
+        read = await builtins.enable_builtin(
+            "world_bank",
+            _session(),
+            _request(),
+            SCOPE,  # type: ignore[arg-type]
+            builtins.BuiltinEnableRequest(declared_use="personal", realtime_mode="realtime"),
+        )
+    assert read.enabled
+    assert world.row.desired_configuration["realtime_mode"] == "realtime"
+

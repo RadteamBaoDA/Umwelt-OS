@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 export const groupActive = (pathname: string, href: string) => pathname === href || pathname.startsWith(`${href}/`);
 
 /** Ids of the three design groups rendered above the separator in the settings panel nav. */
-const primaryIds = new Set(['data-sources', 'ai-router', 'system-prompts', 'dashboard-gadgets']);
+const primaryIds = new Set(['data-sources', 'ai-router', 'system-prompts']);
 
 /**
  * Settings panel: a surface card (18px radius, line border) with a 230px inner nav column and the page content on the right.

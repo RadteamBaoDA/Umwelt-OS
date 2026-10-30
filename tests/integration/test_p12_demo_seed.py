@@ -29,7 +29,9 @@ WORKER_OWNED = {
     # brief_schedules: the worker's brief cron lazily inserts a default row for every workspace it visits
     # (including ones other tests just created). document_chunks: ingestion of other tests' documents.
     "brief_schedules", "document_chunks",
-    "temporal_mappings", "temporal_supports", "automation_cursors", "news_stories", "news_story_identities", "news_observations",
+    # The graph ready-event consumer (entities/worker.py) writes allocations, partitions, mappings and
+    # supports in one transaction when the seeded documents' ready events arrive.
+    "temporal_mappings", "temporal_supports", "temporal_allocations", "temporal_partitions", "automation_cursors", "news_stories", "news_story_identities", "news_observations",
 }
 # Seed-owned tables whose rows only the owner (or the seed) may change; compared by content digest.
 DIGEST_TABLES = (

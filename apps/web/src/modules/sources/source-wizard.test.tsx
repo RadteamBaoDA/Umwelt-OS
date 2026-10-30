@@ -109,23 +109,15 @@ describe('SourceWizard edit flow', () => {
 });
 
 describe('SourceWizard manual flow', () => {
-  it('keeps Save disabled until a name is entered, then creates the source and closes', async () => {
+  it('keeps Save disabled until a name is entered, then creates the source with graph/RAG disabled and closes', async () => {
     api.createManualSource.mockResolvedValue({ id: 'm1' });
     renderWizard({ kind: 'manual' });
     expect(screen.getByRole('button', { name: 'Save source' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.queryByLabelText(/Build knowledge graph/)).toBeNull();
+    expect(screen.queryByLabelText(/Index for Q&A/)).toBeNull();
     await userEvent.type(screen.getByLabelText('Source name'), 'Notes');
-    await userEvent.click(screen.getByRole('button', { name: 'Save source' }));
-    await waitFor(() => expect(api.createManualSource).toHaveBeenCalledWith('Notes', 't', { graph_enabled: true, rag_index_enabled: true }));
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
-  });
-
-  it('sends the switches the owner turned off', async () => {
-    api.createManualSource.mockResolvedValue({ id: 'm1' });
-    renderWizard({ kind: 'manual' });
-    await userEvent.type(screen.getByLabelText('Source name'), 'Notes');
-    await userEvent.click(screen.getByLabelText(/Build knowledge graph/));
-    await userEvent.click(screen.getByLabelText(/Index for Q&A/));
     await userEvent.click(screen.getByRole('button', { name: 'Save source' }));
     await waitFor(() => expect(api.createManualSource).toHaveBeenCalledWith('Notes', 't', { graph_enabled: false, rag_index_enabled: false }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 });

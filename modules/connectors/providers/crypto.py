@@ -102,7 +102,7 @@ def map_binance(
     *,
     pairs: tuple[tuple[str, str, str], ...] = DEFAULT_BINANCE_PAIRS,
 ) -> list[IngestionRecord]:
-    """Map the latest Binance spot price(s); Binance supplies no event clock so collection time is the basis."""
+    """Map the latest Binance spot price(s); Binance supplies no event clock so collection time is the basis; the identity is fixed so each collection is a new revision of one series."""
     if not pairs:
         raise ProviderPayloadError("binance_scope_mismatch")
     allowed_pairs: dict[str, tuple[str, str]] = {

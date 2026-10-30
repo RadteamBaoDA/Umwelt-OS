@@ -3,13 +3,14 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { Settings } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { dashboardKeys, patchGadgetInstance, type GadgetInstance } from './api';
-import { GadgetEditor, rendererName } from './gadget-editor';
+import { GadgetEditor } from './gadget-editor';
+import { rendererName } from '@/core/renderer-labels';
 
 /** Props for the GadgetSettings modal dialog. */
 export interface GadgetSettingsProps {
@@ -45,6 +46,7 @@ export function GadgetSettings({
 }: GadgetSettingsProps) {
   const t = useTranslations('dashboard');
   const tg = useTranslations('gadgetSettings');
+  const titleId = useId();
   const session = useWorkspaceSession();
   const queryClient = useQueryClient();
   const [title, setTitle] = useState<string>(instance?.title ?? '');
@@ -77,13 +79,15 @@ export function GadgetSettings({
           </DialogDescription>
         </DialogHeader>
         <div className="flex-1 space-y-4 overflow-y-auto p-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="gadget-title" className="text-xs font-semibold">{t('instanceTitle')}</Label>
-            <Input id="gadget-title" value={title} onChange={(event) => setTitle(event.target.value)}
-              placeholder={instance.definition.name || instance.definition.renderer} className="h-8 text-xs" />
-          </div>
           <GadgetEditor key={`${instance.id}:${instance.definition.revision}`} definition={instance.definition} onSaved={handleSaved}
-            onCancel={() => onOpenChange(false)} saveLabel={t('save')} />
+            onCancel={() => onOpenChange(false)} saveLabel={t('save')}
+            afterName={<div className="space-y-1.5">
+            <Label htmlFor={titleId} className="text-xs font-semibold">{t('instanceTitle')}</Label>
+            <Input id={titleId} value={title} onChange={(event) => setTitle(event.target.value)} aria-describedby={`${titleId}-help`}
+              placeholder={instance.definition.name || instance.definition.renderer} className="h-8 text-xs" />
+            <p id={`${titleId}-help`} className="text-xs text-muted-foreground">{t('instanceTitleHelp')}</p>
+          </div>}
+          />
         </div>
       </DialogContent>
     </Dialog>

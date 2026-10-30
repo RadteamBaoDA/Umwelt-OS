@@ -70,6 +70,7 @@ async def read_observations(
     limit: Annotated[int, Query(ge=1, le=100)] = 100,
     cursor: Annotated[str | None, Query(max_length=2048)] = None,
     geospatial_only: bool = False,
+    history: bool = False,
 ) -> ObservationPage:
     """Return an owner-authorized half-open time series page with raw values omitted."""
     response.headers["Cache-Control"] = "private, no-store"
@@ -77,6 +78,7 @@ async def read_observations(
         query = ObservationQuery(
             source_ids=source_ids, metrics=metrics, symbols=symbols, regions=regions,
             from_at=from_at, to_at=to_at, limit=limit, geospatial_only=geospatial_only,
+            history=history,
         )
     except ValidationError as exc:
         from fastapi import HTTPException

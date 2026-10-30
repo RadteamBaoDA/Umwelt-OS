@@ -4641,7 +4641,9 @@ Use one Settings workspace with a compact local navigation and a content pane; c
 | --- | --- |
 | **Data sources / Nguồn dữ liệu** | Connector instances, credentials/authorization, collection scope, server schedules, health and runs; personal data permissions and MCP under relevant advanced sections |
 | **AI & Ommi Router** | Gateway connection, chat/brief model choices, web-search provider, capability checks, budgets and advanced embedding/privacy controls |
-| **Dashboard & Gadget** | Dashboard/presets, reusable gadget library, data/display templates, highlight rules and rule-specific notifications; map layers belong to map gadget configuration |
+| **System prompts** | Workspace prompt configuration and its existing revision and authorization controls |
+
+Dashboard owns dashboard layouts and presets, generic display gadget templates, compatible data-source selection, topics, highlight rules and rule-specific notifications. Gadget setup selects an already configured active source; it does not create or activate sources. Map layers belong to map gadget configuration. There is no separate gadget settings group or gadget library in Settings.
 
 Do not add an Account/Appearance group or duplicate user-menu preferences here. Use progressive disclosure: one primary Save for the current form, useful defaults, clear dirty/saved/error feedback and advanced sections for infrequent technical options. Cancel discards the current draft without resetting another form or dashboard layout. Guard unsaved navigation, avoid duplicate submissions, and do not claim a configuration is saved/active before server confirmation.
 

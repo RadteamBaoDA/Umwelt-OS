@@ -14,7 +14,7 @@ Status: UI technology and experience decisions selected by the owner. This docum
 
 ## 2. Product navigation and component mapping
 
-Main navigation contains exactly **Dashboard / Chat / Settings**. Settings has exactly three local groups: **Data sources**, **Models**, **Dashboard & Gadget**. Account, theme and language belong only in the user menu. Reading a story, entity or feed can open a detail view without adding a main navigation entry. Canonical approved requirements are specification section 165.
+Main navigation contains exactly **Dashboard / Chat / Settings**. Settings keeps its data, model and system prompt groups; dashboard layouts, gadget templates, topics and highlight rules are managed from Dashboard. Account, theme and language belong only in the user menu. Reading a story, entity or feed can open a detail view without adding a main navigation entry. Canonical approved requirements are specification section 165.
 
 | Product element | shadcn component/composition | Required behavior |
 | --- | --- | --- |
@@ -24,7 +24,7 @@ Main navigation contains exactly **Dashboard / Chat / Settings**. Settings has e
 | Connection footer | Badge, status text, Button | Client-to-server/API and realtime states separately; accessible live status; retry when appropriate; never infer source freshness from transport health |
 | Gadget container | Card + CardHeader/CardContent | Header, source/freshness, empty/error state; geometry owned by dashboard grid |
 | Dashboard editing | Button, DropdownMenu, Tooltip | View hides grid/handles; Edit creates a draft; Save/Cancel explicit |
-| Gadget management | Card, Tabs, Select/Combobox, Input, Label, form components | Data template + compatible renderer; only configured/permitted sources |
+| Gadget management | Dashboard Add/Configure dialogs using Card, Tabs, Select/Combobox, Input, Label and form components | Generic display template + compatible renderer; select existing active workspace sources; never create or activate a source from gadget setup |
 | General user preferences | **Dialog**, RadioGroup, Select, Button | Theme/language preview, Save, Cancel, translated labels/errors |
 | Quick chat | **Sheet**, ScrollArea, Textarea, Button | Right side, large width, New chat/messages/composer/close only |
 | Full Chat page | Sidebar/list, ScrollArea, Textarea, Sheet on mobile | History, open thread, search/manage history, context and advanced controls |

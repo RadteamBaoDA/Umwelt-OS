@@ -15,6 +15,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy import (
     ColumnElement,
+    SQLColumnExpression,
     and_,
     case,
     delete,
@@ -22,6 +23,7 @@ from sqlalchemy import (
     func,
     insert,
     literal,
+    not_,
     or_,
     select,
     text,
@@ -699,12 +701,16 @@ async def current_observation_evidence_versions(
     session: AsyncSession,
     candidates: Sequence[ObservationEvidenceCandidate],
     current_scopes: dict[UUID, object],
-    *, scope: Scope, multi_workspace_enabled: bool,
+    *, scope: Scope, multi_workspace_enabled: bool, include_historical: bool = False,
 ) -> dict[UUID, int]:
-    """Return current evidence revisions backed by matching document and provider fences.
+    """Return observation evidence revisions backed by matching document and provider fences.
+
+    ``include_historical`` (observation history mode only) also accepts superseded document versions of the
+    same document: every other fence (scope, source generation, provider identity, provenance) still applies.
 
     Documents owns version/provenance reads. The result contains accepted observation IDs
-    paired with their current version numbers; foreign modules never receive Document ORM
+    paired with the version number of the document version that backs each accepted observation
+    (the current version unless ``include_historical``); foreign modules never receive Document ORM
     rows or provenance bodies.
     """
     await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
@@ -754,7 +760,7 @@ async def current_observation_evidence_versions(
         ) = row
         if (
             source_id == candidate.source_id and source_generation == candidate.source_generation
-            and version_number == current_version and provider_id == candidate.external_id
+            and (include_historical or version_number == current_version) and provider_id == candidate.external_id
             and accepted_generation == candidate.source_generation
             and isinstance(provenance, dict)
             and provenance.get("provider_scope_discriminator") == candidate.provider_scope_discriminator
@@ -5319,3 +5325,46 @@ async def count_source_documents(session: AsyncSession, source_id: UUID, *, scop
         Document.source_id == source_id, *_document_scope(scope),
     ).limit(cap).subquery()
     return int(await session.scalar(select(func.count()).select_from(capped)) or 0)
+
+
+async def purge_expired_document_versions(
+    session: AsyncSession,
+    cutoffs: Sequence[tuple[UUID, datetime]],
+    *,
+    limit: int,
+    is_protected: Callable[[SQLColumnExpression[Any]], ColumnElement[bool]] | None = None,
+) -> int:
+    """Delete up to ``limit`` expired non-current document versions; the caller commits.
+
+    A version is kept when it is its document's current version, when any owner interaction
+    bookmarks it, or when ``is_protected(DocumentVersion.id)`` is true (ingestion passes the
+    Observations "backs a current observation" predicate; injected because Observations public
+    already imports this module). Per-source ``cutoffs`` bound ``observed_at``; oldest first with
+    ``FOR UPDATE SKIP LOCKED`` on versions so cleanup never blocks ingestion. Returns rows deleted.
+    """
+    if not cutoffs:
+        return 0
+    bookmarked = (
+        select(1)
+        .where(
+            DocumentInteraction.document_version_id == DocumentVersion.id,
+            DocumentInteraction.bookmarked_at.is_not(None),
+        )
+        .exists()
+    )
+    expired = or_(
+        *(and_(Document.source_id == sid, DocumentVersion.observed_at < cutoff) for sid, cutoff in cutoffs)
+    )
+    conditions = [DocumentVersion.version_number != Document.current_version, not_(bookmarked), expired]
+    if is_protected is not None:
+        conditions.append(not_(is_protected(DocumentVersion.id)))
+    doomed = (
+        select(DocumentVersion.id)
+        .join(Document, Document.id == DocumentVersion.document_id)
+        .where(*conditions)
+        .order_by(DocumentVersion.observed_at.asc())
+        .limit(limit)
+        .with_for_update(skip_locked=True, of=DocumentVersion)
+    )
+    result = await session.execute(delete(DocumentVersion).where(DocumentVersion.id.in_(doomed)))
+    return int(getattr(result, "rowcount", 0) or 0)

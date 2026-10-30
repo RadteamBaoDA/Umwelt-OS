@@ -13,7 +13,7 @@ const entry = (over: Partial<ConnectorCatalogEntry>): ConnectorCatalogEntry => (
   quota_limits: {}, history_description: null, collection_modes: [], supports_history: false, supports_edit: false, supports_delete: false,
   availability: 'implemented', unavailable_operations: [], terms_url: 'https://alternative.me/crypto/fear-and-greed-index/',
   attribution: 'Display Alternative.me with a link adjacent to the index.', hosts: ['api.alternative.me'], default_interval_minutes: 1440,
-  key_fields: [], runtime_verified: false, quota_policies: [{ policy_key: 'k', budget_kind: 'provider', window: 'day', unit: 'http_calls', limit_units: 8, basis: 'pilot_local' }], ...over,
+  key_fields: [], data_shapes: ['measurement'], runtime_verified: false, quota_policies: [{ policy_key: 'k', budget_kind: 'provider', window: 'day', unit: 'http_calls', limit_units: 8, basis: 'pilot_local' }], ...over,
 });
 const source = { last_success_at: '2026-10-01T00:00:00Z', collection_error_code: 'provider_unavailable' } as Source;
 

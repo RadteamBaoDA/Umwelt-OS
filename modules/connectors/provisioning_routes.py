@@ -576,7 +576,7 @@ async def put_configuration(
     try:
         source_configuration = serialize_source_configuration(source, payload.configuration)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail="Provider configuration is invalid") from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     desired_configuration = dict(source_configuration)
     desired_configuration["auth_method"] = payload.auth_method
     if payload.auth_header_name:

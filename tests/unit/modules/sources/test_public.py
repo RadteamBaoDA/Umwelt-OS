@@ -1,6 +1,8 @@
 """Unit tests for public sources functions: locking, lifecycle status, generation, and filters."""
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
@@ -501,3 +503,109 @@ class TestSourceFiltersAndProjections:
         assert res_local is not None
         assert res_local.id == source_id
         assert res_local.local_only is True
+
+
+def _toggled_off_source(**kwargs: object) -> Source:
+    """Build a Source whose graph/RAG toggles differ from the SourceFence defaults."""
+    src = _make_source(**kwargs)  # type: ignore[arg-type]
+    src.graph_enabled = False
+    src.rag_index_enabled = False
+    return src
+
+
+def _expected_fence(src: Source) -> object:
+    """Fence exactly as ``get_source_fence`` builds it, the value Connector compares against."""
+    return public.SourceFence(
+        id=src.id, workspace_id=src.workspace_id, status=src.status, generation=src.generation,
+        local_only=src.local_only, graph_enabled=src.graph_enabled, rag_index_enabled=src.rag_index_enabled,
+    )
+
+
+class TestSourceFenceCarriesToggles:
+    """Fences built from a Source row must keep graph/RAG toggles or Connector rejects them (409)."""
+
+    @pytest.mark.asyncio
+    async def test_fence_connector_source_keeps_toggles(self) -> None:
+        """Archive/purge preparation hands Connector a fence equal to ``get_source_fence``."""
+        src = _toggled_off_source(status="purging", generation=2)
+        access = AccessFence(WORKSPACE_ID, 7, 3, 5)
+        conn = MagicMock()
+        for name in ("prepare_source_lifecycle_cleanup_in_uow", "apply_source_lifecycle_cleanup_in_uow"):
+            setattr(conn, name, AsyncMock())
+        ing = MagicMock(lock_source_credentials_in_uow=AsyncMock(), revoke_source_credentials=AsyncMock())
+        tools = MagicMock(lock_source_browser_results_in_uow=AsyncMock(), purge_source_browser_results_in_uow=AsyncMock())
+        with (
+            patch("modules.connectors.public.prepare_source_lifecycle_cleanup_in_uow", conn.prepare_source_lifecycle_cleanup_in_uow),
+            patch("modules.connectors.public.apply_source_lifecycle_cleanup_in_uow", conn.apply_source_lifecycle_cleanup_in_uow),
+            patch("modules.ingestion.public.lock_source_credentials_in_uow", ing.lock_source_credentials_in_uow),
+            patch("modules.ingestion.public.revoke_source_credentials", ing.revoke_source_credentials),
+            patch("modules.tools.public.lock_source_browser_results_in_uow", tools.lock_source_browser_results_in_uow),
+            patch("modules.tools.public.purge_source_browser_results_in_uow", tools.purge_source_browser_results_in_uow),
+            patch("modules.sources.public._transitioned_source_scope", return_value=SCOPE),
+        ):
+            await public._fence_connector_source(
+                AsyncMock(), src, scope=SCOPE, multi_workspace_enabled=False, access_fence=access,
+            )
+        got = conn.prepare_source_lifecycle_cleanup_in_uow.call_args.kwargs["source_fence"]
+        assert got.graph_enabled is False and got.rag_index_enabled is False
+        assert got == _expected_fence(src)
+
+    @pytest.mark.asyncio
+    async def test_pause_for_connector_keeps_toggles(self) -> None:
+        """Pause cleanup passes the paused fence with toggles intact to Connector."""
+        src = _toggled_off_source(status="active", generation=1)
+        access = AccessFence(WORKSPACE_ID, 7, 3, 5)
+        apply = AsyncMock()
+        with (
+            patch("modules.sources.public._source_in_uow", AsyncMock(return_value=src)),
+            patch("modules.sources.public._transitioned_source_scope", return_value=SCOPE),
+            patch("modules.sources.public._connector_source", return_value=MagicMock()),
+            patch("modules.ingestion.public.revoke_source_credentials", AsyncMock()),
+            patch("modules.tools.public.purge_source_browser_results_in_uow", AsyncMock()),
+            patch("modules.connectors.public.apply_source_pause_cleanup_in_uow", apply),
+        ):
+            await public.pause_source_for_connector_in_uow(
+                AsyncMock(), src.id, scope=SCOPE, multi_workspace_enabled=False,
+                access_fence=access, source_fence=_expected_fence(src),  # type: ignore[arg-type]
+            )
+        paused = apply.call_args.kwargs["source_fence"]
+        assert paused.graph_enabled is False and paused.rag_index_enabled is False
+        assert paused == _expected_fence(src)
+
+    def test_worker_source_fence_keeps_toggles(self) -> None:
+        """Worker's detached fence equals the public fence for a toggled-off Source."""
+        from modules.sources import worker
+
+        src = _toggled_off_source()
+        assert worker._source_fence(src) == _expected_fence(src)
+
+    @pytest.mark.asyncio
+    async def test_retained_effect_anchor_keeps_toggles(self) -> None:
+        """The retained-effect anchor row projection preserves graph/RAG toggles set to False."""
+        src = _toggled_off_source(status="paused", generation=3)
+        access = AccessFence(WORKSPACE_ID, 7, 3, 5)
+        values = {
+            "id": src.id, "workspace_id": src.workspace_id, "status": src.status,
+            "generation": src.generation, "local_only": src.local_only,
+            "graph_enabled": False, "rag_index_enabled": False,
+        }
+        executed: list[Any] = []
+
+        async def execute(statement: Any) -> MagicMock:
+            """Return a row holding only the columns the executed statement actually selects."""
+            executed.append(statement)
+            names = {column.name for column in statement.selected_columns}
+            row = SimpleNamespace(_mapping={k: v for k, v in values.items() if k in names})
+            return MagicMock(one_or_none=MagicMock(return_value=row))
+
+        session = AsyncMock()
+        session.execute.side_effect = execute
+        with patch("modules.sources.public._admit_source_scope", AsyncMock(return_value=access)):
+            got = await public.get_connector_retained_effect_anchor_in_uow(
+                session, src.id, source_generation=1, scope=SCOPE, multi_workspace_enabled=False,
+                access_fence=access,
+            )
+        selected = {column.name for column in executed[0].selected_columns}
+        assert {"graph_enabled", "rag_index_enabled"} <= selected
+        assert got == public.source_fence_of(src)
+        assert got is not None and got.graph_enabled is False and got.rag_index_enabled is False

@@ -14,6 +14,7 @@ import binascii
 import hashlib
 import json
 from collections.abc import Collection, Mapping, Sequence
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -28,6 +29,7 @@ from sqlalchemy.sql.expression import Exists
 from core.realtime import commit_with_replay, make_dashboard_change
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, AdminWorkspaceReadContext, Scope, WorkspaceContext
+from modules.connectors.public import metric_catalog, provider_metrics, source_data_shapes
 from modules.dashboard import briefs, gadgets, layouts
 from modules.dashboard.daily_schemas import (
     BriefExportFence,
@@ -79,6 +81,8 @@ from modules.dashboard.schemas import (
     GadgetDefinitionUsageRead,
     GadgetFilters,
     GadgetScope,
+    GadgetSourceOption,
+    GadgetSourceOptionPage,
     GadgetTemplateRead,
     GroupCreate,
     GroupPatch,
@@ -96,7 +100,6 @@ from modules.dashboard.schemas import (
 )
 from modules.settings import public as settings_public
 from modules.sources import public as sources
-from modules.sources.schemas import GadgetSourceSelectionPage
 
 MAX_REVISION = 9_007_199_254_740_991
 DASHBOARD_QUOTA_LOCK_NAMESPACE = 4_603_202
@@ -1532,7 +1535,7 @@ async def create_definition(session: AsyncSession, payload: GadgetDefinitionCrea
     await _lock_selected_sources(session, payload.source_ids, require_active=True, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
     await _validate_selected_sources(session, payload.renderer, payload.source_ids, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled)
+        multi_workspace_enabled=multi_workspace_enabled, gadget_scope=configuration.scope)
     await validate_highlight_rules(session, payload.source_ids, configuration.highlight_rules, scope=scope)
     count = await session.scalar(select(func.count()).select_from(GadgetDefinition).where(
         GadgetDefinition.workspace_id == scope.workspace_id, GadgetDefinition.owner_id == owner_id)) or 0
@@ -1595,9 +1598,21 @@ async def patch_definition(session: AsyncSession, definition_id: UUID, payload: 
     )
     gadgets.validate_renderer_configuration(candidate["renderer"], config)
     # Only re-check datasource compatibility when the binding changes, so older saved definitions keep saving.
-    if payload.source_ids is not None or (payload.renderer is not None and payload.renderer != row.renderer):
+    # Measurement scope is re-checked only when metrics/symbols or the binding changed, so legacy rows still rename.
+    # Compare values, not field presence: the editor resends unchanged source_ids/scope on every save.
+    binding_changed = (
+        {str(item) for item in candidate["source_ids"]} != {str(item) for item in row.source_ids}
+        or candidate["renderer"] != row.renderer
+    )
+    # Only metrics/symbols/regions feed the measurement catalog rule; lookback and other selectors may differ
+    # (the editor resends lookback_days) without re-validating a legacy row.
+    stored_scope = GadgetScope.model_validate(row.scope)
+    scope_changed = (config.scope.metrics != stored_scope.metrics or config.scope.symbols != stored_scope.symbols
+                     or config.scope.regions != stored_scope.regions)
+    if binding_changed or scope_changed:
         await _validate_selected_sources(session, candidate["renderer"], candidate["source_ids"], scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled)
+            multi_workspace_enabled=multi_workspace_enabled, gadget_scope=config.scope,
+            check_binding=binding_changed)
     stored_topics = {UUID(str(topic)) for item in row.highlight_rules for topic in item.get("topic_ids", [])}
     await validate_highlight_rules(
         session, candidate["source_ids"], config.highlight_rules, scope=scope, known_topic_ids=stored_topics,
@@ -1821,40 +1836,99 @@ def renderer_reads() -> list[RendererRead]:
     return [RendererRead.model_validate({"id": row.id, "config_version": row.config_version, "minimum_width": row.minimum_width,
              "minimum_height": row.minimum_height, "runtime_state": row.runtime_state,
              "capability_keys": list(row.capability_keys), "source_mode": row.source_mode,
-             "source_providers": list(row.source_providers) if row.source_providers is not None else None})
+             "accepted_shapes": sorted(row.accepted_shapes) if row.accepted_shapes is not None else None})
             for row in gadgets.RENDERERS]
 
 
 def list_templates() -> list[GadgetTemplateRead]:
-    """Project the static built-in gadget templates with their renderer's datasource mode."""
-    return [GadgetTemplateRead.model_validate({
-        "id": row.id, "renderer": row.renderer, "providers": list(row.providers), "scope": row.scope,
-        "filters": row.filters, "source_mode": gadgets.renderer_descriptor(row.renderer).source_mode,
-    }) for row in gadgets.TEMPLATES]
+    """Project generic display templates with datasource compatibility taken from each renderer."""
+    templates = []
+    for row in gadgets.TEMPLATES:
+        renderer = gadgets.renderer_descriptor(row.renderer)
+        templates.append(GadgetTemplateRead.model_validate({
+            "id": row.id, "renderer": row.renderer,
+            "accepted_shapes": sorted(renderer.accepted_shapes) if renderer.accepted_shapes is not None else None,
+            "scope": row.scope, "filters": row.filters, "source_mode": renderer.source_mode,
+        }))
+    return templates
 
 
 async def _validate_selected_sources(
     session: AsyncSession, renderer: str, source_ids: Sequence[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+    gadget_scope: GadgetScope | None = None, check_binding: bool = True,
 ) -> None:
     """Check selected sources' providers against the renderer's datasource rule (ValueError on mismatch).
+
+    ``check_binding=False`` skips the datasource-compatibility rule (unchanged binding of a saved definition)
+    and validates only the measurement scope.
 
     Missing/foreign IDs are skipped here; lifecycle checks in ``_lock_selected_sources`` own those errors.
     """
     rows = await sources.get_gadget_sources(
         session, tuple(dict.fromkeys(source_ids)), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    gadgets.validate_renderer_sources(renderer, [row.provider for row in rows])
+    if check_binding:
+        gadgets.validate_renderer_sources(renderer, [(row.provider, row.type) for row in rows])
+    if gadget_scope is not None:  # measurement scope is checked against each bound provider's catalog
+        if not source_ids:  # sourceless: the renderer's default-provider metric allowlist still applies
+            gadgets.validate_measurement_scope(renderer, None, gadget_scope)
+        for row in rows:
+            gadgets.validate_measurement_scope(renderer, row.provider, gadget_scope)
 
 
 async def list_gadget_sources(
     session: AsyncSession, limit: int, cursor: str | None, *, scope: Scope, multi_workspace_enabled: bool,
-) -> GadgetSourceSelectionPage:
-    """Return the source owner's bounded metadata-only selection page."""
-    return await sources.list_gadget_sources(session, limit, cursor, scope=scope,
+) -> GadgetSourceOptionPage:
+    """Return the source owner's bounded metadata-only page, adding data shapes computed here.
+
+    Shapes are derived in the dashboard (connectors already imports sources; no reverse import).
+    """
+    page = await sources.list_gadget_sources(session, limit, cursor, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled)
+    return GadgetSourceOptionPage(
+        items=[GadgetSourceOption(**item.model_dump(), data_shapes=sorted(source_data_shapes(item.provider, item.type)))
+               for item in page.items],
+        next_cursor=page.next_cursor)
+
+
+async def compatible_source_counts(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+) -> dict[str, int]:
+    """Count active in-scope sources compatible with each source-binding renderer.
+
+    Scans every active source (not a page) so the counts are exact; renderers with
+    ``source_mode="none"`` are omitted and unconstrained renderers count all active sources.
+    """
+    kinds = await sources.list_active_source_kinds(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    shapes = [source_data_shapes(provider, kind) for _id, provider, kind in kinds]
+    return {
+        row.id: len(shapes) if row.accepted_shapes is None else sum(1 for item in shapes if item & row.accepted_shapes)
+        for row in gadgets.RENDERERS if row.source_mode != "none"
+    }
+
+
+def metric_catalog_read() -> dict[str, dict[str, Any]]:
+    """Serialise the provider metric catalog (dataclass fields pass through generically)."""
+    return {provider: asdict(entry) for provider, entry in metric_catalog().items()}
+
+
+# English display names matching the en-us gadget template names (web ``templateTypes``).
+_RENDERER_DISPLAY_NAMES = {
+    "news_feed": "Feed", "telegram_feed": "Message list", "text_panel": "Text", "table_panel": "Table",
+    "video_panel": "Video", "finance_chart": "Chart", "map": "Map", "intelligence_panel": "Related signals",
+    "highlights": "Highlights", "watch_rules": "Watchlist", "tasks": "Tasks", "goals": "Goals",
+    "daily_brief": "Daily brief", "weather": "Weather", "provider_observation": "Metric",
+    "github_project": "Activity",
+}
+
+
+def preset_definition_name(preset_name: str, renderer_id: str) -> str:
+    """Name a preset-created definition ``<preset> · <template name>``; unknown renderers keep their id. Pure."""
+    return f"{preset_name} · {_RENDERER_DISPLAY_NAMES.get(renderer_id, renderer_id)}"
 
 
 def preset_catalog() -> list[DashboardPresetRead]:
-    """Expose the ten stable source-free preset identities and renderer slots."""
+    """Expose the canonical source-free preset identities and renderer slots (aliases excluded)."""
     return [DashboardPresetRead.model_validate({"id": item.id, "label": item.label, "family": item.family,
              "slots": [{"slot_id": slot.slot_id, "renderer": slot.renderer} for slot in item.slots]})
             for item in gadgets.PRESETS]
@@ -1867,6 +1941,7 @@ async def preview_preset(
     """Resolve an explicit owner source selection into a canonical, nonpersistent preview."""
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     preset = gadgets.dashboard_preset(preset_id)
+    preset_id = preset.id  # alias ids share the canonical slot keys and fingerprint
     gadgets.validate_preset_slot_sources(preset_id, payload.slot_sources)
     selected = sorted({source_id for values in payload.slot_sources.values() for source_id in values}, key=str)
     states: dict[UUID, Any] = {}
@@ -1882,20 +1957,47 @@ async def preview_preset(
         if target is None:
             raise DashboardMissing
         target_revision = target.revision
+    # Active-source kinds are read lazily: only a source slot left without explicit sources needs them.
+    active_shapes: list[frozenset[Any]] | None = None
     slots: list[dict[str, Any]] = []
     for slot in preset.slots:
         source_ids = list(payload.slot_sources.get(slot.slot_id, []))
+        descriptor = gadgets.renderer_descriptor(slot.renderer)
         warnings = _renderer_warnings(slot.renderer)
-        if not source_ids:
-            warnings.append({"code": "missing_source", "setup_group": "data_sources"})
         resolved = []
         for source_id in source_ids:
             source = states.get(source_id)
             if source is None or source.status != "active":
                 warnings.append({"code": "source_unavailable", "source_id": str(source_id), "setup_group": "data_sources"})
             resolved.append({"id": source_id, "generation": source.generation if source else None, "status": source.status if source else "missing"})
+        known = [states[source_id] for source_id in source_ids if source_id in states]
+        if known:
+            try:
+                gadgets.validate_renderer_sources(slot.renderer, [(row.provider, row.type) for row in known])
+            except gadgets.GadgetConfigError:
+                warnings.append({"code": "source_incompatible", "setup_group": "data_sources"})
+        elif not source_ids and descriptor.source_mode != "none":
+            # Slots without explicit sources are never ready: source_unbound (pick one) or missing_source (add one).
+            if active_shapes is None:
+                kinds = await sources.list_active_source_kinds(
+                    session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+                active_shapes = [source_data_shapes(provider, kind) for _id, provider, kind in kinds]
+            accepted = descriptor.accepted_shapes
+            compatible = any(accepted is None or shape & accepted for shape in active_shapes)
+            # Compatible sources exist but none is chosen: apply would bind nothing, so the slot is not ready.
+            warnings.append({"code": "source_unbound" if compatible else "missing_source", "setup_group": "data_sources"})
+        # A single bound measurement source seeds the chart scope; otherwise the gadget shows its setup message.
+        slot_scope = (gadgets.preset_slot_scope(slot.renderer, known[0].provider)
+                      if len(source_ids) == 1 and len(known) == 1 and not any(w["code"] == "source_incompatible" for w in warnings)
+                      else {})
+        bound_catalog = provider_metrics(known[0].provider) if len(known) == 1 and len(source_ids) == 1 else None
+        if (not slot_scope and bound_catalog is not None and slot.renderer == "finance_chart"
+                and (bound_catalog.symbol_keyed or bound_catalog.region_keyed)
+                and not any(w["code"] == "source_incompatible" for w in warnings)):
+            # Seeding found no suggested symbol/region: the chart cannot draw until one is chosen after apply.
+            warnings.append({"code": "scope_required", "setup_group": "data_sources"})
         slots.append({"slot_id": slot.slot_id, "renderer": slot.renderer, "source_ids": source_ids,
-                      "scope": {}, "filters": {"keywords": [], "exclude_keywords": [], "limit": 25},
+                      "scope": slot_scope, "filters": {"keywords": [], "exclude_keywords": [], "limit": 25},
                       "highlight_rules": [], "sources": resolved, "warnings": warnings})
     minimums = {
         uuid5(NAMESPACE_URL, f"bbd-os-dashboard-preset:{preset_id}:{slot['slot_id']}"):
@@ -1947,6 +2049,12 @@ async def apply_preset(
     ), scope=scope, multi_workspace_enabled=multi_workspace_enabled)).model_dump(mode="python")
     if current["preview_fingerprint"] != payload.preview_fingerprint:
         raise DashboardConflict("preview_changed", "Preset preview changed; review it again", dashboard.revision if dashboard else None)
+    # Seeded measurement scopes must satisfy the bound provider's catalog before they are persisted.
+    for slot in current["slots"]:
+        if slot["scope"]:
+            await _validate_selected_sources(session, slot["renderer"], slot["source_ids"], scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled, gadget_scope=GadgetScope(**slot["scope"]),
+                check_binding=False)
     if payload.mode == "create":
         count = await session.scalar(select(func.count()).select_from(Dashboard).where(
             Dashboard.workspace_id == scope.workspace_id, Dashboard.owner_id == owner_id,
@@ -1979,8 +2087,8 @@ async def apply_preset(
     created_instances: list[tuple[GadgetInstance, GadgetDefinition, Any]] = []
     for index, slot in enumerate(current["slots"]):
         descriptor = gadgets.renderer_descriptor(slot["renderer"])
-        definition = GadgetDefinition(workspace_id=scope.workspace_id, owner_id=owner_id, name=f"{current['name']} · {slot['slot_id']}", renderer=slot["renderer"],
-            source_ids=[str(item) for item in slot["source_ids"]], scope={}, filters={"keywords": [], "exclude_keywords": [], "limit": 25}, highlight_rules=[])
+        definition = GadgetDefinition(workspace_id=scope.workspace_id, owner_id=owner_id, name=preset_definition_name(current["name"], slot["renderer"]), renderer=slot["renderer"],
+            source_ids=[str(item) for item in slot["source_ids"]], scope=slot["scope"], filters={"keywords": [], "exclude_keywords": [], "limit": 25}, highlight_rules=[])
         session.add(definition)
         await session.flush()
         assert dashboard is not None

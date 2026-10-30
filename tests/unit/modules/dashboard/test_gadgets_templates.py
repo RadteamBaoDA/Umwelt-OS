@@ -5,50 +5,39 @@ from uuid import uuid4
 
 import pytest
 
-from modules.connectors.provider_specs import get_provider_spec
 from modules.dashboard import gadgets, public
 
 
-def test_template_providers_subset_of_renderer_and_known() -> None:
-    """Each template provider is allowed by its renderer and (for built-ins) a known provider spec."""
-    for template in gadgets.TEMPLATES:
-        descriptor = gadgets.renderer_descriptor(template.renderer)
-        if descriptor.source_providers is not None:
-            assert set(template.providers) <= set(descriptor.source_providers)
-        if template.renderer in {"news_feed", "provider_observation"}:
-            assert all(get_provider_spec(p) is not None for p in template.providers)
-
-
 def test_validator_rules() -> None:
-    """Wrong provider, extra single sources and sources on sourceless renderers are rejected."""
-    gadgets.validate_renderer_sources("provider_observation", ["usgs"])
-    gadgets.validate_renderer_sources("news_feed", ["bbc_world", None, "hn_top"])
+    """Wrong shape, extra single sources and sources on sourceless renderers are rejected."""
+    gadgets.validate_renderer_sources("provider_observation", [("usgs", "api")])
+    gadgets.validate_renderer_sources("news_feed", [("bbc_world", "rss"), (None, "rss"), ("hn_top", "api")])
     gadgets.validate_renderer_sources("tasks", [])
-    with pytest.raises(ValueError, match="provider_observation.*alternative_me"):
-        gadgets.validate_renderer_sources("provider_observation", ["github"])
+    with pytest.raises(ValueError, match="provider_observation"):
+        gadgets.validate_renderer_sources("provider_observation", [("github", "api")])
     with pytest.raises(ValueError, match="at most one"):
-        gadgets.validate_renderer_sources("weather", ["open_meteo", "open_meteo"])
+        gadgets.validate_renderer_sources("weather", [("open_meteo", "api"), ("open_meteo", "api")])
     with pytest.raises(ValueError, match="does not accept"):
-        gadgets.validate_renderer_sources("tasks", ["bbc_world"])
+        gadgets.validate_renderer_sources("tasks", [("bbc_world", "rss")])
 
 
 def test_catalog_read() -> None:
-    """The public catalog exposes every template with its renderer's source mode."""
+    """The public catalog exposes every template with its renderer's source mode and accepted shapes."""
     reads = {t.id: t for t in public.list_templates()}
     assert len(reads) == len(gadgets.TEMPLATES)
-    assert reads["fear_greed"].source_mode == "single"
-    assert reads["fear_greed"].scope.metrics == ["fear_greed_index"]
-    assert reads["world_news"].filters.limit == 25
+    assert reads["metric"].source_mode == "single"
+    assert reads["metric"].accepted_shapes == ["measurement"]
+    assert reads["highlights"].accepted_shapes is None
     renderers = {r.id: r for r in public.renderer_reads()}
-    assert renderers["news_feed"].source_providers is None
-    assert renderers["github_project"].source_providers == ["github"]
+    assert renderers["news_feed"].accepted_shapes == ["event", "news"]
+    assert renderers["github_project"].accepted_shapes == ["project_activity"]
 
 
 @pytest.mark.asyncio
 async def test_selected_source_check_rejects_incompatible(monkeypatch: pytest.MonkeyPatch) -> None:
     """The create/patch guard maps fetched source providers through the renderer rule."""
     async def fake(*_a: object, **_k: object) -> tuple[SimpleNamespace, ...]:
-        return (SimpleNamespace(provider="bbc_world"),)
+        return (SimpleNamespace(provider="bbc_world", type="rss"),)
 
     monkeypatch.setattr(public.sources, "get_gadget_sources", fake)
     await public._validate_selected_sources(None, "news_feed", [uuid4()], scope=None, multi_workspace_enabled=False)  # type: ignore[arg-type]
@@ -57,11 +46,9 @@ async def test_selected_source_check_rejects_incompatible(monkeypatch: pytest.Mo
             None, "provider_observation", [uuid4()], scope=None, multi_workspace_enabled=False)  # type: ignore[arg-type]
 
 
-def test_watch_rules_accepts_sources_and_btc_template_pins_symbols() -> None:
-    """watch_rules evaluates highlights over sources, so it is multi-source; BTC template pins symbols."""
-    gadgets.validate_renderer_sources("watch_rules", ["bbc_world", "hn_top"])
-    btc = next(t for t in gadgets.TEMPLATES if t.id == "btc_price")
-    assert set(btc.scope["symbols"]) == {"BTC", "BTCUSDT"}
+def test_watch_rules_accepts_any_sources() -> None:
+    """watch_rules evaluates highlights over sources, so it is multi-source and shape-unconstrained."""
+    gadgets.validate_renderer_sources("watch_rules", [("bbc_world", "rss"), ("hn_top", "api")])
 
 
 def test_gadget_templates_route_is_no_store_and_parses() -> None:

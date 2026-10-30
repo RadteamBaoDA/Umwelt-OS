@@ -14,7 +14,7 @@ import { BuiltinResumeList } from './builtin-sources';
 
 const row = (over: Partial<BuiltinSource>): BuiltinSource => ({
   id: 'bbc_world', label: 'BBC World News', category: 'news', eligibility: 'review', terms_url: 'https://example.org/terms',
-  terms_checked_on: '2026-10-07', attribution: 'Credit the BBC.', execution: 'supported', source_id: 'src-1', enabled: false, ...over,
+  terms_checked_on: '2026-10-07', attribution: 'Credit the BBC.', execution: 'supported', source_id: 'src-1', enabled: false, data_shapes: ['measurement'], ...over,
 });
 const onChanged = vi.fn();
 const wrap = () => render(

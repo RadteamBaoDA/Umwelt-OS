@@ -35,6 +35,8 @@ from modules.chat.models import (
     StreamEvent,
 )
 from modules.chat.schemas import (
+    DB_QUERY_KEY,
+    GADGET_SCOPE_KEY,
     MODEL_OVERRIDE_KEY,
     WEB_SEARCH_KEY,
     WEB_SEARCH_OUTCOME_KEY,
@@ -177,7 +179,12 @@ async def _dispatch_response_run(request: Request, response_id: UUID) -> None:
 
 
 def _run_context(
-    inherited: dict[str, Any] | None, privacy: Any, web_search: bool, model_override: dict[str, str] | None = None,
+    inherited: dict[str, Any] | None,
+    privacy: Any,
+    web_search: bool,
+    model_override: dict[str, str] | None = None,
+    *,
+    db_query: bool = False,
 ) -> dict[str, Any]:
     """Build a run's retrieval context: client-visible keys kept, every server-private "_" key rewritten.
 
@@ -185,7 +192,22 @@ def _run_context(
     regenerate and edit carries only its own fence and its own explicit web-search choice.
     """
     kept = {k: v for k, v in (inherited or {}).items() if not k.startswith("_")}
-    context = {**kept, "_chat_privacy_fence": _privacy_fence(privacy), WEB_SEARCH_KEY: {"requested": web_search}}
+    context: dict[str, Any] = {
+        **kept,
+        "_chat_privacy_fence": _privacy_fence(privacy),
+        WEB_SEARCH_KEY: {"requested": web_search},
+    }
+    is_gadget = kept.get("kind") == "gadget"
+    if db_query or is_gadget:
+        context[DB_QUERY_KEY] = {"requested": True, "auto_gadget": is_gadget}
+    if is_gadget:
+        context[GADGET_SCOPE_KEY] = {
+            "gadget_id": kept.get("gadget_id") or "",
+            "title": kept.get("title") or "",
+            "renderer": kept.get("renderer") or "",
+            "source_scope": kept.get("source_scope") or [],
+            "scope": kept.get("gadget_scope") or {},
+        }
     if model_override:
         context[MODEL_OVERRIDE_KEY] = model_override
     return context
@@ -862,7 +884,9 @@ async def send_message(
         user_message_id=user_msg.id,
         client_request_id=payload.client_request_id,
         status="pending",
-        retrieval_context=_run_context(resolved_context, privacy, payload.web_search, model_override),
+        retrieval_context=_run_context(
+            resolved_context, privacy, payload.web_search, model_override, db_query=payload.db_query,
+        ),
         ephemeral=conv.ephemeral,
         expires_at=conv.expires_at,
     )
@@ -1037,7 +1061,9 @@ async def mutate_message(
         # Retain the original client-visible context; every server-private `_` key (privacy fence,
         # web search opt-in) is rewritten by `_run_context`. The worker rechecks its source/version
         # fences before retrieval and before remote send.
-        retrieval_context=_run_context(original_run.retrieval_context, privacy, payload.web_search, model_override),
+        retrieval_context=_run_context(
+            original_run.retrieval_context, privacy, payload.web_search, model_override, db_query=payload.db_query,
+        ),
         ephemeral=conversation.ephemeral,
         expires_at=conversation.expires_at,
     )

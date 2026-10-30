@@ -431,5 +431,10 @@ def test_keyless_forbidden_is_a_provider_rejection_not_a_credential_error():
     assert got["error_code"] == "provider_rejected" and got["retryable"] is False
     assert collection._sends_no_credential(SimpleNamespace(provider="cisa_kev", type="api"))
     assert collection._sends_no_credential(SimpleNamespace(provider=None, type="rss"))
+    # Catalog-only keyless providers (no free-provider spec) must not surface invalid_credential.
+    assert collection._sends_no_credential(SimpleNamespace(provider="youtube", type="rss"))
+    assert collection._sends_no_credential(SimpleNamespace(provider="arxiv", type="rss"))
+    assert not collection._sends_no_credential(SimpleNamespace(provider="alpha_vantage", type="api"))
+    assert not collection._sends_no_credential(SimpleNamespace(provider="mastodon", type="api"))
     assert not collection._sends_no_credential(SimpleNamespace(provider="coingecko", type="api"))
     assert not collection._sends_no_credential(SimpleNamespace(provider=None, type="api"))

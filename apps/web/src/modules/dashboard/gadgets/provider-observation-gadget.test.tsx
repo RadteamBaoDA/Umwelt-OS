@@ -5,7 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dashboardMessages } from '@/core/messages/dashboard';
 import { ProviderObservationGadget, latestPerSeries } from './provider-observation-gadget';
 
-const api = vi.hoisted(() => ({ listWorldObservationWindow: vi.fn(), getConnectorConfiguration: vi.fn() }));
+const api = vi.hoisted(() => ({ listWorldObservationWindow: vi.fn(), getConnectorConfiguration: vi.fn(), getMetricCatalog: vi.fn(), listGadgetSources: vi.fn() }));
+vi.mock('../api', async (original) => ({ ...(await original<typeof import('../api')>()), getMetricCatalog: api.getMetricCatalog, listGadgetSources: api.listGadgetSources }));
 vi.mock('@/modules/observations/api', () => ({ listWorldObservationWindow: api.listWorldObservationWindow }));
 vi.mock('@/modules/sources/api', () => ({ getConnectorConfiguration: api.getConnectorConfiguration }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
@@ -24,7 +25,48 @@ function view(gadget = instance) {
 }
 
 describe('ProviderObservationGadget', () => {
-  beforeEach(() => { vi.clearAllMocks(); api.getConnectorConfiguration.mockResolvedValue({ configuration: { schedule_interval_minutes: 30 } }); });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getConnectorConfiguration.mockResolvedValue({ configuration: { schedule_interval_minutes: 30 } });
+    api.getMetricCatalog.mockResolvedValue({ world_bank: { default_lookback_days: 3650 }, noaa_kp: { default_lookback_days: null }, binance: { default_lookback_days: 3 } });
+    api.listGadgetSources.mockResolvedValue({ items: [{ id: 's1', provider: 'noaa_kp' }], next_cursor: null });
+  });
+
+  it('queries a legacy World Bank Metric gadget without a stored lookback for about ten years', async () => {
+    api.listGadgetSources.mockResolvedValue({ items: [{ id: 's1', provider: 'world_bank' }], next_cursor: null });
+    api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: [] });
+    view({ id: 'g3', title: '', definition: { source_ids: ['s1'], scope: { metrics: [], lookback_days: null } } } as never);
+    await waitFor(() => expect(api.listWorldObservationWindow).toHaveBeenCalled());
+    const { from, to } = api.listWorldObservationWindow.mock.calls[0][0];
+    expect(Math.round((to.getTime() - from.getTime()) / 86_400_000)).toBe(3651);
+  });
+
+  it('keeps a saved Metric gadget on a fast provider at 30 days instead of narrowing to the 3-day chart default', async () => {
+    api.listGadgetSources.mockResolvedValue({ items: [{ id: 's1', provider: 'binance' }], next_cursor: null });
+    api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: [] });
+    view({ id: 'g4', title: '', definition: { source_ids: ['s1'], scope: { metrics: [], lookback_days: null } } } as never);
+    await waitFor(() => expect(api.listWorldObservationWindow).toHaveBeenCalled());
+    const { from, to } = api.listWorldObservationWindow.mock.calls[0][0];
+    expect(Math.round((to.getTime() - from.getTime()) / 86_400_000)).toBe(31);
+  });
+
+  it('reads one page only: latest-per-series needs the newest rows, not the whole window', async () => {
+    api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: [] });
+    view();
+    await waitFor(() => expect(api.listWorldObservationWindow).toHaveBeenCalled());
+    expect(api.listWorldObservationWindow.mock.calls[0][0].maxPages).toBe(1);
+  });
+
+  it('pages the source list to find the bound provider beyond the first page', async () => {
+    api.listGadgetSources.mockImplementation(async (_limit: number, cursor?: string) => cursor
+      ? { items: [{ id: 's1', provider: 'world_bank' }], next_cursor: null }
+      : { items: [{ id: 'other', provider: 'noaa_kp' }], next_cursor: 'c2' });
+    api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: [] });
+    view({ id: 'g4', title: '', definition: { source_ids: ['s1'], scope: { metrics: [] } } } as never);
+    await waitFor(() => expect(api.listWorldObservationWindow).toHaveBeenCalled());
+    const { from, to } = api.listWorldObservationWindow.mock.calls[0][0];
+    expect(Math.round((to.getTime() - from.getTime()) / 86_400_000)).toBe(3651);
+  });
 
   it('shows Fear & Greed with Alternative.me attribution and separate times', async () => {
     api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: [{ ...base, id: 'o1', provider: 'alternative_me', metric: 'fear_greed_index', value: 42, unit: 'index', observed_at: '2026-10-09T00:00:00Z', published_at: '2026-10-09T00:05:00Z' }] });
@@ -51,12 +93,12 @@ describe('ProviderObservationGadget', () => {
     await waitFor(() => expect(screen.getByText(/Stale/)).toBeTruthy());
   });
 
-  it('keeps the maximum 366-day lookback within the API window limit', async () => {
+  it('keeps the maximum 3660-day lookback within the API window limit', async () => {
     api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: [] });
-    view({ id: 'g2', title: '', definition: { source_ids: ['s1'], scope: { metrics: [], lookback_days: 366 } } } as never);
+    view({ id: 'g2', title: '', definition: { source_ids: ['s1'], scope: { metrics: [], lookback_days: 3660 } } } as never);
     await waitFor(() => expect(api.listWorldObservationWindow).toHaveBeenCalled());
     const { from, to } = api.listWorldObservationWindow.mock.calls[0][0] as { from: Date; to: Date };
-    expect(to.getTime() - from.getTime()).toBe(366 * 86_400_000);
+    expect(to.getTime() - from.getTime()).toBe(3660 * 86_400_000);
   });
 
   it('shows an error when no value was ever loaded', async () => {
@@ -79,7 +121,8 @@ describe('latestPerSeries', () => {
     api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: [{ ...base, id: 'o1', provider: 'frankfurter', metric: 'fx_reference_rate', symbol: 'USD/VND', value: 25831.15, unit: 'VND per USD', observed_at: '2026-10-08T00:00:00Z' }] });
     view();
     expect(await screen.findByText('USD/VND')).toBeTruthy();
-    expect(screen.getByText('25831.15 VND per USD')).toBeTruthy();
+    // The visible text is locale-formatted (compact); the exact provider value stays in the accessible label.
+    expect(screen.getByLabelText('25831.15 VND per USD')).toBeTruthy();
     expect(screen.getByTestId('observation-row').className).toContain('flex-wrap');
   });
 });

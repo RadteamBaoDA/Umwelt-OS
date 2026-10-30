@@ -41,6 +41,11 @@ from modules.chat.citations import (
     renumber_citation_markers,
     validate_answer_citations,
 )
+from modules.chat.db_query import (
+    TOOL_QUERY_COLLECTED_DATA,
+    execute_db_query_tool,
+    should_auto_enable_db_query,
+)
 from modules.chat.generative_ui import (
     TERMINAL_UI_TOOLS,
     TOOL_READ_SKILL,
@@ -1077,12 +1082,29 @@ async def run_response_generation(
             skill_names = list_skills()
             # Trip images are offered only when the owner allowed remote widget media and the turn is not local-only.
             trip_images_on = media.media_permitted(ai_config, local_only=local_only_turn)
+            db_query_on = should_auto_enable_db_query(user_prompt, req_params)
             ui_tools: list[dict[str, Any]] | None = build_chat_tool_specs(
                 include_read_skill=bool(skill_names), include_trip_images=trip_images_on,
                 include_todos=True, include_user_input=True, include_templates=True, include_theme=True,
+                include_db_query=db_query_on,
             )
             ui_locale = await _owner_locale(session, job_scope)
-            ui_system_text = system_text + "\n\n" + build_generative_ui_system_prompt(
+            gadget_meta = req_params.get("_gadget_scope") if isinstance(req_params.get("_gadget_scope"), dict) else None
+            gadget_note = ""
+            if gadget_meta:
+                gadget_note = (
+                    f"\n\nThe user opened this chat from Dashboard gadget {gadget_meta.get('title')!r} "
+                    f"(renderer={gadget_meta.get('renderer')!r}, scope={json.dumps(gadget_meta.get('scope') or {})}). "
+                    f"Call `{TOOL_QUERY_COLLECTED_DATA}` when you need current or historical observations/records "
+                    f"from the gadget's bound data sources."
+                )
+            elif db_query_on:
+                gadget_note = (
+                    f"\n\nDatabase query tool `{TOOL_QUERY_COLLECTED_DATA}` is enabled for this turn. "
+                    "Use `mode='structured'` for filters/aggregations or `mode='sql'` for read-only SELECT queries "
+                    "against `scoped_observations` and `scoped_documents`, and cite any returned `[n]` markers."
+                )
+            ui_system_text = system_text + gadget_note + "\n\n" + build_generative_ui_system_prompt(
                 locale=ui_locale, local_only=local_only_turn, skills=skill_names, remote_media=trip_images_on,
                 todos=True, templates=True, theme=True,
             )
@@ -1414,6 +1436,8 @@ async def run_response_generation(
             known_data = {TOOL_READ_SKILL, TOOL_REQUEST_USER_INPUT, *LOCAL_DATA_TOOLS}
             if trip_images_on:
                 known_data.add(TOOL_TRIP_IMAGES)
+            if db_query_on:
+                known_data.add(TOOL_QUERY_COLLECTED_DATA)
             for extra in calls:
                 if extra["name"] not in TERMINAL_UI_TOOLS and extra["name"] not in known_data:
                     logger.warning("Ignoring unknown tool call %r for run %s", extra["name"][:64], response_id)
@@ -1434,7 +1458,7 @@ async def run_response_generation(
                 logger.warning("Generative UI part cap (%d) reached for run %s; extra widgets ignored", max_parts, response_id)
             # Calls we answer, in model order: widgets, bounded data tools, bounded input requests.
             handled: list[dict[str, str]] = []
-            reads = trips = todo_calls = asks = 0
+            reads = trips = todo_calls = asks = db_queries = 0
             for c in calls:
                 name = c["name"]
                 if id(c) in part_of or id(c) in invalid_of:
@@ -1444,6 +1468,9 @@ async def run_response_generation(
                     handled.append(c)
                 elif name == TOOL_TRIP_IMAGES and trip_images_on and trips < MAX_TRIP_IMAGE_CALLS_PER_ROUND:
                     trips += 1
+                    handled.append(c)
+                elif name == TOOL_QUERY_COLLECTED_DATA and db_query_on and db_queries < MAX_SKILL_CALLS_PER_ROUND:
+                    db_queries += 1
                     handled.append(c)
                 elif name in LOCAL_DATA_TOOLS and todo_calls < MAX_SKILL_CALLS_PER_ROUND:
                     todo_calls += 1
@@ -1490,6 +1517,25 @@ async def run_response_generation(
                         secret=settings.csrf_signing_secret.get_secret_value(),
                         subject=f"{run_workspace_id}:{run_actor_id}",
                     )
+                elif name == TOOL_QUERY_COLLECTED_DATA:
+                    try:
+                        parsed_db_args = json.loads(c["arguments"] or "{}")
+                        if not isinstance(parsed_db_args, dict):
+                            parsed_db_args = {}
+                    except json.JSONDecodeError:
+                        parsed_db_args = {}
+                    async with session_factory() as db_tool_session:
+                        content = await execute_db_query_tool(
+                            db_tool_session,
+                            parsed_db_args,
+                            scope=job_scope,
+                            multi_workspace_enabled=settings.multi_workspace_enabled,
+                            expected_access_fence=access_fence,
+                            retrieval_context=req_params,
+                            allow_local_only=local_only_turn,
+                            evidence_list=answer_context.evidence,
+                            redis=redis,
+                        )
                 elif name in LOCAL_DATA_TOOLS:
                     todo_result = await _run_todos(name, c["arguments"])
                     if todo_result is None:
@@ -1519,6 +1565,8 @@ async def run_response_generation(
         # Only evidence the answer actually cites becomes a citation, in first-cited order.
         # Combined numbering: evidence 1..k, web k+1..k+m. Documents are validated as before; a cited web
         # number becomes a server-built WebCitation numbered after the kept documents. Uncited results drop.
+        if not web_results:
+            evidence_count = len(answer_context.evidence)
         total_count = evidence_count + len(web_results)
         cited_numbers = parse_citation_markers(accumulated_text, total_count)
         doc_numbers = [n for n in cited_numbers if n <= evidence_count]

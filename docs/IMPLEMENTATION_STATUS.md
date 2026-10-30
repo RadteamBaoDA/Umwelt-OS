@@ -1,4 +1,13 @@
 <!-- gadget-templates-status:start -->
+## Dashboard gadget templates and ownership - 2026-10-29, in progress
+
+- The Dashboard Add flow reads the system template catalog and shows only templates whose renderer is available. The common templates are Feed, Message list, Text, Table, Video, Chart, Map, Related signals, Highlights, Watchlist, Tasks, Goals, Daily brief, Weather, Metric and Activity. Each picker item has a decorative SVG sample; planned renderers stay hidden.
+- Adding a gadget selects an active, compatible source already configured in the current workspace. The picker cannot enable or create sources. Existing backend validation, revision handling and add-reservation compensation still own persistence and failure cleanup.
+- Removed the Dashboard & Gadget Settings entry points and settings library. Dashboard owns layout/presets, gadget templates, topics and highlight rules; old `/settings/dashboard` links redirect to Dashboard. Numeric observations use locale formatting and compact notation for large values, while preserving units/currency, raw-value accessibility text and added precision for small values.
+- Updated the design-system guide and canonical specification to reflect Dashboard ownership. `./scripts/dev.ps1 build` passed: Next.js compiled, TypeScript completed, 40 static pages generated, and six Docker images built. Its first attempt stopped at the Next.js security advisory gate; the prescribed retry continued with the advisory warning. No tests, lint or standalone typecheck run under the UI implementation-stage restriction. Browser, runtime, provider and E2E acceptance remain pending.
+
+### Historical baseline (2026-10-23)
+
 ## Gadget templates and unified editor - 2026-10-23, branch feature/fix-ui, uncommitted
 
 - 13 built-in gadget templates (`GET /api/v1/gadget-templates`) and per-renderer datasource rules (`source_mode`, `source_providers` on `GET /gadget-renderers`), validated on definition create/patch (patch only when `source_ids` or the renderer change) and on preset apply. One `GadgetEditor` serves Settings > Gadget library, the Dashboard Add dialog and the Configure modal; the datasource picker lists enabled sources plus not-yet-enabled built-ins and enables them inline. `POST .../instances` no longer requires `group_id` (default group "General" is used or created). Add flow deletes the just-created definition when the instance cannot be created.
@@ -1193,3 +1202,9 @@ Docker integration/E2E, live providers, actual runtime erasure/recovery and depl
 ## Scoped MCP collector enabled - 2026-10-28
 
 `POST /sources/{id}/collect` no longer returns the 503 "contract pending" stub for `mcp` sources: the native backend queues a request run by the worker (`_run_mcp`, fence loss now fails closed and `McpCollectionError` settles as a non-retryable code), and `POST /sources/{id}/mcp-collect` runs `mcp.collect(..., request_ref=...)`, which renews the admission at every fence and settles the request with a single ingestion proof. Verified by unit tests only; Docker integration/E2E and live MCP servers not run.
+
+
+## Gadget template flow and chart history from observation revisions - 2026-10-29
+
+Implemented (uncommitted, pending owner review/commit): gadget templates flow in the dashboard. Chart history now comes from observation revisions, with no new deletion job. Binance, CoinGecko (collection clock) and disease.sh keep one fixed external id per series, so each collection is a new revision with its own `observed_at`. `GET /api/v1/observations?history=true` (`ObservationQuery.history`, default false) also returns superseded revisions inside the window, de-duplicated per (source, provider, scope discriminator, metric, symbol, region, unit, coordinates, observed_at) keeping the latest accepted revision (ties use the current-selection key accepted_at, ingestion id), under the same authorization, scan and page caps and `observed_at desc` order; superseded document versions are accepted only in this mode. FinanceChart requests history; Metric and every other caller stay current-only. Existing retention (`purge_expired_datasource_data`) deletes non-current revisions past the source cutoff and keeps current rows; catalog default lookbacks keep history within the 500-row page cap (binance 15 min x 3 days = 288). Pre-existing growth, unchanged: coinpaprika, iss_position, openweathermap and openaq mint one current row (and document) per sample and are not purged. Validation: unit suites (history window executed on SQLite, evidence fences on a fake session), lint and typecheck; `tests/integration/test_observation_history.py` is collect-only. Residual risk: Docker integration/E2E and live providers were not run; the history-mode PostgreSQL plan is unverified at volume.
+

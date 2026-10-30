@@ -237,6 +237,7 @@ def _sandbox_schema() -> dict[str, Any]:
 def build_chat_tool_specs(
     *, include_read_skill: bool, include_trip_images: bool = False, include_todos: bool = False,
     include_user_input: bool = False, include_templates: bool = False, include_theme: bool = False,
+    include_db_query: bool = False,
 ) -> list[dict[str, Any]]:
     """Build the OpenAI-format `tools` list for a generative-UI chat turn.
 
@@ -247,6 +248,7 @@ def build_chat_tool_specs(
         include_user_input: Whether to expose the non-terminal `request_user_input` (pause for a user answer).
         include_templates: Whether to expose the three non-terminal template tools (list, apply, clear pending).
         include_theme: Whether to expose the non-terminal `set_theme` tool.
+        include_db_query: Whether to expose the non-terminal `query_collected_data` database query tool.
 
     Returns:
         Fresh (caller-mutable) list of function specs whose parameters come from the pydantic models.
@@ -313,6 +315,10 @@ def build_chat_tool_specs(
             ),
             "parameters": SetThemeArgs.model_json_schema(),
         }})
+    if include_db_query:
+        from modules.chat.db_query import build_db_query_tool_spec
+
+        specs.append(build_db_query_tool_spec())
     return copy.deepcopy(specs)
 
 

@@ -146,6 +146,8 @@ export function ChatSession({
   const [themeRequest, setThemeRequest] = React.useState<'light' | 'dark' | 'system' | null>(null);
   const [inputRequest, setInputRequest] = React.useState<{ request: InputRequest; state: InputRequestState; label?: string } | null>(null);
   const [webSearchOn, setWebSearchOn] = React.useState(false);
+  const [dbQueryOn, setDbQueryOn] = React.useState(false);
+  const dbQueryEffective = dbQueryOn || chatCtrl.context?.kind === 'gadget';
   const [isStreaming, setIsStreaming] = React.useState<boolean>(false);
   const [isPending, setIsPending] = React.useState<boolean>(false);
   const [activeResponseId, setActiveResponseId] = React.useState<string | null>(null);
@@ -601,11 +603,13 @@ export function ChatSession({
           client_request_id: envelope.clientRequestId,
           ...(envelope.content !== undefined ? { content: envelope.content } : {}),
           ...(webSearchRequested ? { web_search: true } : {}),
+          ...(dbQueryEffective ? { db_query: true } : {}),
           ...(modelChoice ? { provider_id: modelChoice.providerId, model: modelChoice.model } : {}),
         },
         session.csrfToken,
       );
       setWebSearchOn(false);
+      setDbQueryOn(false);
       chatCtrl.clearPendingMessageMutation(targetConversationId, envelope.clientRequestId);
       if (isCurrentView()) {
         setEditingMessageId(null);
@@ -633,7 +637,7 @@ export function ChatSession({
           : t(chatFailureKey(mutationError, 'revisionFailed')));
       }
     }
-  }, [chatCtrl, conversationId, isPending, isStreaming, messages, mode, modelChoice, queryClient, session.csrfToken, streamResponseRun, t, webSearchUsable, webSearchOn]);
+  }, [chatCtrl, conversationId, dbQueryEffective, isPending, isStreaming, messages, mode, modelChoice, queryClient, session.csrfToken, streamResponseRun, t, webSearchUsable, webSearchOn]);
 
   /** Opens the full Chat composer with a user message's content for an append-only edit. */
   const handleEditMessage = React.useCallback((message: ChatMessage) => {
@@ -802,12 +806,14 @@ export function ChatSession({
             client_request_id: clientRequestId,
             context: sendContext ?? undefined,
             ...(mode === 'full' && webSearchUsable && webSearchOn ? { web_search: true } : {}),
+            ...(dbQueryEffective ? { db_query: true } : {}),
             ...(modelChoice ? { provider_id: modelChoice.providerId, model: modelChoice.model } : {}),
           },
           session.csrfToken,
         );
         accepted = true;
         setWebSearchOn(false);
+        setDbQueryOn(false);
         if (attachments.items.length && canUpdateCurrentView()) attachments.clear();
 
         selectionStage = false;
@@ -868,6 +874,7 @@ export function ChatSession({
       streamResponseRun,
       webSearchUsable,
       webSearchOn,
+      dbQueryEffective,
       modelChoice,
       attachments,
       pendingProfileRun,
@@ -917,6 +924,7 @@ export function ChatSession({
     setStreamingUi([]);
     setInputRequest(null);
     setWebSearchOn(false);
+    setDbQueryOn(false);
     setIsStreaming(false);
     setIsPending(false);
   }, [chatCtrl]);
@@ -1160,6 +1168,7 @@ export function ChatSession({
           } : undefined}
           sendBlockedBy={mode === 'full' && attachments.sendBlock ? ATTACHMENT_STATUS_ID : null}
           webSearch={mode === 'full' && WEB_SEARCH_SEND_ENABLED ? { available: webSearchAvailable, provider: WEB_SEARCH_PROVIDER_LABELS[aiSettings.data?.web_search_provider ?? ''] ?? t('webSearchProviderGeneric'), profileBlocked: webSearchProfileBlocked, enabled: webSearchOn, onChange: setWebSearchOn } : undefined}
+          dbQuery={!webSearchProfileBlocked ? { enabled: dbQueryEffective, onChange: setDbQueryOn } : undefined}
         />
       </div>
     </PromptBridgeProvider>

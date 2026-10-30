@@ -149,7 +149,7 @@ function getCachedDateFormat(locale: string, options: Intl.DateTimeFormatOptions
  * Formats a numeric value according to currency, unit, and locale.
  *
  * @param value The number to format.
- * @param options Currency, unit, locale, and precision options.
+ * @param options Currency, unit, locale, precision, and optional compact notation for large values.
  * @returns Localized formatted string.
  */
 export function formatChartValue(
@@ -159,6 +159,7 @@ export function formatChartValue(
     unit?: string;
     locale?: AppLocaleId;
     precision?: number;
+    compact?: boolean;
   },
 ): string {
   if (value === null || value === undefined || isNaN(value)) {
@@ -168,13 +169,16 @@ export function formatChartValue(
   const locale = options?.locale ?? 'en-us';
   const canonicalLocale = normalizeFormattingLocale(locale);
   const precision = options?.precision ?? 2;
+  const compact = Boolean(options?.compact && Math.abs(value) >= 1000);
+  const maximumFractionDigits = compact ? Math.min(precision, 1) : precision;
 
   if (options?.currency) {
     try {
       return getCachedNumberFormat(canonicalLocale, {
         style: 'currency',
         currency: options.currency,
-        maximumFractionDigits: precision,
+        ...(compact ? { notation: 'compact' as const } : {}),
+        maximumFractionDigits,
         minimumFractionDigits: 0,
       }).format(value);
     } catch {
@@ -185,12 +189,14 @@ export function formatChartValue(
   if (options?.unit === '%' || options?.unit === 'percent') {
     return getCachedNumberFormat(canonicalLocale, {
       style: 'percent',
-      maximumFractionDigits: precision,
+      ...(compact ? { notation: 'compact' as const } : {}),
+      maximumFractionDigits,
     }).format(value > 1 ? value / 100 : value);
   }
 
   const formatted = getCachedNumberFormat(canonicalLocale, {
-    maximumFractionDigits: precision,
+    ...(compact ? { notation: 'compact' as const } : {}),
+    maximumFractionDigits,
   }).format(value);
 
   return options?.unit ? `${formatted} ${options.unit}` : formatted;

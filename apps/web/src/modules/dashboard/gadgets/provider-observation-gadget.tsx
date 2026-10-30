@@ -2,12 +2,14 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
+import { formatChartValue } from '@/core/charts/recharts-wrapper';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { listWorldObservationWindow, type WorldObservation } from '@/modules/observations/api';
 import { getConnectorConfiguration } from '@/modules/sources/api';
 import { isStale, periodKind } from '@/modules/sources/freshness';
 import type { GadgetInstance } from '../api';
+import { METRIC_FALLBACK_LOOKBACK_DAYS, useEffectiveLookback } from './use-effective-lookback';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 
 /** Per-provider presentation: display name and attribution link shown next to the value. */
@@ -34,6 +36,21 @@ export function latestPerSeries(items: WorldObservation[]): WorldObservation[] {
   return [...latest.values()].slice(0, 20);
 }
 
+/** Formats an observation by locale while retaining its provider supplied currency or unit. */
+function formatObservationValue(item: WorldObservation, locale: ReturnType<typeof useDisplayPreferences>['locale']): string {
+  if (item.value === null) return '—';
+  const smallValuePrecision = item.value !== 0 && Math.abs(item.value) < 0.0001
+    ? Math.min(10, Math.ceil(-Math.log10(Math.abs(item.value))) + 2)
+    : 4;
+  return formatChartValue(item.value, {
+    currency: item.currency ?? undefined,
+    unit: item.currency ? undefined : item.unit,
+    locale,
+    precision: item.currency || item.unit === '%' || item.unit === 'percent' ? 2 : smallValuePrecision,
+    compact: true,
+  });
+}
+
 /**
  * Generic provider observation gadget (Fear & Greed, FX, GDP, BTC price, USGS quakes). Shows the
  * latest value with provider attribution, FX reference date / annual period, separate observed,
@@ -47,16 +64,18 @@ export function ProviderObservationGadget({ instance }: { instance: GadgetInstan
   const sourceId = definition.source_ids?.[0] ?? '';
   const metrics = definition.scope?.metrics ?? [];
   const symbols = definition.scope?.symbols ?? [];
-  const lookbackDays = Math.min(definition.scope?.lookback_days ?? 30, 366);
+  // Unset lookback follows the bound provider's catalog default (annual World Bank ~10 years), never below 30 days.
+  const { lookbackDays: rawLookback, ready: lookbackReady } = useEffectiveLookback(sourceId, definition.scope?.lookback_days, METRIC_FALLBACK_LOOKBACK_DAYS, true);
+  const lookbackDays = Math.min(rawLookback, 3660);
   const query = useQuery({
     queryKey: ['world-observations', 'provider', instance.id, sourceId, metrics, symbols, lookbackDays],
     queryFn: ({ signal }) => {
       const to = new Date(Date.now() + 86_400_000);
-      // `to` runs one day ahead (provider clock skew); keep the whole window within the API's 366-day maximum.
-      const from = new Date(to.getTime() - Math.min(lookbackDays + 1, 366) * 86_400_000);
-      return listWorldObservationWindow({ sourceIds: [sourceId], metrics, symbols, from, to }, signal);
+      // `to` runs one day ahead (provider clock skew); keep the whole window within the API's 3660-day maximum.
+      const from = new Date(to.getTime() - Math.min(lookbackDays + 1, 3660) * 86_400_000);
+      return listWorldObservationWindow({ sourceIds: [sourceId], metrics, symbols, from, to, maxPages: 1 }, signal);
     },
-    enabled: Boolean(sourceId), staleTime: 60_000,
+    enabled: Boolean(sourceId) && lookbackReady, staleTime: 60_000,
   });
   const sourceQuery = useQuery({ queryKey: ['connector-configuration', sourceId], queryFn: ({ signal }) => getConnectorConfiguration(sourceId, signal), enabled: Boolean(sourceId), staleTime: 300_000 });
   const items = latestPerSeries((query.data?.items ?? []).filter((item) => item.source_id === sourceId));
@@ -84,7 +103,9 @@ export function ProviderObservationGadget({ instance }: { instance: GadgetInstan
           <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1" data-testid="observation-row">
             <span className="min-w-0 break-words font-medium">{item.symbol ?? item.region ?? item.metric}</span>
             <span className="flex flex-wrap items-baseline gap-x-2 font-mono text-base">
-              <span className="whitespace-nowrap">{item.value === null ? t('weatherMissingValue') : `${item.value} ${item.unit}`}</span>
+              <span className="whitespace-nowrap" title={item.value === null ? undefined : `${item.value} ${item.currency ?? item.unit}`} aria-label={item.value === null ? t('weatherMissingValue') : `${item.value} ${item.currency ?? item.unit}`}>
+                {formatObservationValue(item, display.locale)}
+              </span>
               {presentation && <a className="font-sans text-xs text-muted-foreground underline" href={presentation.href} target="_blank" rel="noreferrer">{t('providerObsAttribution', { provider: presentation.name })}</a>}
             </span>
           </div>
