@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { test, expect } from './fixtures';
 import { RESULTS_DIR } from './run-paths';
 import {
-  BUILTINS, WIZARD_CASES, connectWizardSource, deleteSources, enableBuiltinViaSettings, escapeRe, findSources, writeHeaders,
+  BUILTINS, WIZARD_CASES, connectWizardSource, deleteSources, enableBuiltinViaSettings, escapeRe, findSources, hasLiveKeys, liveKey, writeHeaders,
 } from './sources-helpers';
 
 /**
@@ -18,6 +18,8 @@ import {
  * and cleanup. Everything created is named with PREFIX so cleanup never touches other data.
  */
 const PREFIX = 'e2e-dash';
+// Live keyed providers (`E2E_KEY_*`): the key is typed into the wizard, so traces/screenshots/videos would record it.
+if (hasLiveKeys()) test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 const DASHBOARD = `${PREFIX} datasources`;
 /**
  * Remote-throttled providers: GDELT answers 429 to an IP for minutes after a burst (checked 2026-10-26). Waiting the full
@@ -99,6 +101,13 @@ const GADGETS: Gadget[] = [
   ...['rest', 'web', 'nasa_eonet', 'sec_edgar', 'openalex', 'arxiv', 'huggingface', 'github_releases', 'gdacs_events', 'nws_alerts',
     'emsc_quakes', 'launch_library', 'bmkg_quakes', 'satnogs_observations', 'noaa_kp', 'oecd_cli', 'iss_position', 'disease_sh', 'ioda', 'nvd']
     .map((id) => gadget(id, 'table_panel')),
+  // Keyed providers: only planned when the owner supplied a live key (data shapes: modules/connectors/data_shapes.py).
+  ...(liveKey('finnhub_news') ? [gadget('finnhub_news', 'news_feed')] : []),
+  ...(liveKey('newsapi') ? [gadget('newsapi', 'news_feed')] : []),
+  ...(liveKey('fred') ? [gadget('fred', 'finance_chart', { symbol: 'DGS10' })] : []), // measurement + series
+  ...(liveKey('openweathermap') ? [gadget('openweathermap', 'provider_observation')] : []), // measurement, not a series
+  ...(liveKey('openaq') ? [gadget('openaq', 'provider_observation')] : []),
+  ...(liveKey('nasa_firms') ? [gadget('nasa_firms', 'table_panel')] : []), // event + measurement hotspots
 ];
 
 const wizardCase = (id: string) => WIZARD_CASES.find((c) => c.id === id);
@@ -222,10 +231,18 @@ async function fillCatalogFields(dialog: Locator, g: Gadget) {
 async function addGadget(page: Page, g: Gadget) {
   await openDashboard(page);
   await page.getByRole('button', { name: 'Edit layout' }).click();
-  await page.getByRole('button', { name: 'Add gadget', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Add gadget to dashboard' });
+  // The dialog occasionally misses the first click while the edit toolbar is still settling; retry the open once.
+  await page.getByRole('button', { name: 'Add gadget', exact: true }).click();
+  if (!(await dialog.waitFor({ state: 'visible', timeout: 10_000 }).then(() => true, () => false))) {
+    await page.getByRole('button', { name: 'Add gadget', exact: true }).click();
+    await expect(dialog).toBeVisible();
+  }
   // Display-type tiles come first; a tile with no compatible source would be a link to Settings, so it must be a button here.
-  await dialog.getByRole('button', { name: new RegExp(`^${escapeRe(TILE_LABEL[g.renderer])}\\b`) }).click();
+  // With ~55 live gadgets refetching, the template list ("Loading gadgets") can outlast the 15 s action timeout.
+  const tile = dialog.getByRole('button', { name: new RegExp(`^${escapeRe(TILE_LABEL[g.renderer])}\\b`) });
+  await expect(tile).toBeVisible({ timeout: 60_000 });
+  await tile.click();
   const name = new RegExp(`^${escapeRe(pickerName(g.id))}`);
   await dialog.getByRole('radio', { name }).or(dialog.getByRole('checkbox', { name })).first().click();
   await fillCatalogFields(dialog, g);
@@ -402,6 +419,8 @@ test.describe('dashboard', () => {
   });
 
   test('cleanup', async ({ page }) => {
+    // E2E_KEEP_DATA leaves the built dashboard for a following spec (screens-capture) in the same disposable run.
+    test.skip(!!process.env.E2E_KEEP_DATA, 'E2E_KEEP_DATA set: keep sources and dashboard');
     // Owner writes need a same-origin Origin header, which writeHeaders derives from the current page URL.
     await page.goto('/dashboard');
     const headers = await writeHeaders(page);

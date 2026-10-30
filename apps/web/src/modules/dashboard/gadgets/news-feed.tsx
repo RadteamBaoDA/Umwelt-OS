@@ -1,11 +1,11 @@
 'use client';
 
-import Link from 'next/link';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { DetailDialog, type DetailTarget } from '@/modules/detail/detail-dialog';
 import { StoryList } from '@/modules/news/story-list';
 import type { GadgetInstance } from '../api';
+import { GadgetNotice } from './gadget-notice';
 
 /** Props for the source-scoped News story gadget. */
 export interface NewsFeedProps {
@@ -60,18 +60,14 @@ export function NewsFeed({ instance }: NewsFeedProps) {
         </div>
       ) : null}
       {sourceIds.length === 0 ? (
-        <div role="status" className="rounded-md border border-border bg-muted/20 p-3 text-sm text-muted-foreground">
-          <p>{t('sourceSelectionRequired')}</p>
-          <Link href="/settings/sources" className="mt-2 inline-flex min-h-11 items-center text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-            {t('configureSources')}
-          </Link>
-        </div>
+        <GadgetNotice kind="setup" message={t('sourceSelectionRequired')} action={{ href: '/settings/sources', label: t('configureSources') }} />
       ) : (
         <StoryList
           sourceIds={sourceIds}
           query={query}
           limit={filters.limit ?? 25}
           showTrends={showTrends}
+          embedded
           onSelectStory={(storyId, trigger) => {
             returnFocusRef.current = trigger;
             setSelected({ kind: 'story', id: storyId, sourceGadget: instance.id, sourceIds: [...sourceIds] });

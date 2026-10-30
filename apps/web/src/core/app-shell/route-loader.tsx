@@ -11,8 +11,12 @@ const POLL_MS = 100;
 const STABLE_POLLS = 4;
 /** Any skeleton, busy state, pending dashboard marker, or page spinner means rendering is incomplete. */
 const BUSY_SELECTOR = '.skeleton, [aria-busy="true"]:not([data-route-loader]), [data-dashboard-ready="false"], .animate-spin:not([data-route-loader] *)';
-/** Hard cap for non-dashboard routes so a stuck query cannot trap the owner behind the overlay. */
-const MAX_BLOCK_MS = 10_000;
+/**
+ * Cap on how long the opaque overlay may cover a non-dashboard route once it has arrived. Pages that poll (news, sources)
+ * never reach "no fetch in flight", and every page renders its own skeletons, so holding a bare spinner longer only hides
+ * usable content. Short enough to feel instant, long enough to cover the first paint of lazy chunks.
+ */
+const MAX_BLOCK_MS = 1_200;
 /** A click that never changes the pathname (cancelled by a leave guard, hash-only, failed navigation) releases the overlay after this. */
 const NO_ARRIVAL_MS = 3_000;
 /** Polling/background queries that must not hold the overlay open. */
@@ -23,9 +27,9 @@ const BACKGROUND_KEYS = new Set(['shell-api-health']);
  *
  * Opens on a click to a same-origin link with a different pathname (before the route even resolves) or on any pathname
  * change (programmatic navigation), and closes only after the new route has arrived and no tracked react-query fetch is
- * in flight and no skeleton/spinner remains in the DOM for STABLE_POLLS consecutive polls. Dashboard routes also wait
- * for the selected dashboard's explicit readiness marker uncapped; the general cap starts only once it is ready.
- * Also covers initial loads.
+ * in flight and no skeleton/spinner remains in the DOM for STABLE_POLLS consecutive polls. Non-dashboard routes are force-closed MAX_BLOCK_MS after arrival even if polling queries keep fetching. Dashboard routes instead wait
+ * for the selected dashboard's explicit readiness marker (uncapped) and close as soon as it is ready: gadgets render
+ * their own loading states, so many live gadgets never hold the overlay. Also covers initial loads.
  *
  * @returns The overlay while a route transition is loading, otherwise null.
  */
@@ -66,22 +70,19 @@ export function RouteLoader() {
   useEffect(() => {
     if (from === null) return;
     if (arrived && isDashboardRoute) {
-      // The dashboard's own readiness marker is never capped, so the overlay cannot hide it mid-load. Once it is ready,
-      // gadgets get the general cap: many live gadgets keep refetching and would otherwise hold the overlay indefinitely.
-      let cap: number | undefined;
+      // The readiness marker is never capped, so the overlay cannot hide a dashboard mid-load; once ready it closes
+      // immediately because gadget fetches (possibly dozens, refetching) show their own loading states.
       const wait = window.setInterval(() => {
-        if (cap === undefined && document.querySelector('[data-dashboard-ready="true"]')) {
-          cap = window.setTimeout(() => setFrom(null), MAX_BLOCK_MS);
-        }
+        if (document.querySelector('[data-dashboard-ready="true"]')) setFrom(null);
       }, POLL_MS);
-      return () => { window.clearInterval(wait); window.clearTimeout(cap); };
+      return () => window.clearInterval(wait);
     }
     const cap = window.setTimeout(() => setFrom(null), arrived ? MAX_BLOCK_MS : NO_ARRIVAL_MS);
     return () => window.clearTimeout(cap);
   }, [from, arrived, isDashboardRoute]);
 
   useEffect(() => {
-    if (!arrived || fetching > 0) return;
+    if (!arrived || isDashboardRoute || fetching > 0) return;
     // Query state alone is not enough: lazy chunks, Suspense fallbacks and disabled queries render skeletons without fetching.
     let stable = 0;
     const poll = window.setInterval(() => {
@@ -89,7 +90,7 @@ export function RouteLoader() {
       if (stable >= STABLE_POLLS) setFrom(null);
     }, POLL_MS);
     return () => window.clearInterval(poll);
-  }, [arrived, fetching, pathname]);
+  }, [arrived, isDashboardRoute, fetching, pathname]);
 
   return from === null ? null : <RouteSpinner />;
 }

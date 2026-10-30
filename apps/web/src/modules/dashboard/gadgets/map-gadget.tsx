@@ -10,6 +10,8 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { listGeospatialObservations } from '@/modules/observations/api';
 import type { GadgetInstance } from '../api';
 import { buildMapLayers, projectMapFeatures } from '../map-layers';
+import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
+import { formatMetricLabel } from './metric-label';
 
 const FlatMap = lazy(() => import('./flat-map').then((module) => ({ default: module.FlatMap })));
 const GlobeMap = lazy(() => import('./globe-map').then((module) => ({ default: module.GlobeMap })));
@@ -93,25 +95,25 @@ export function MapGadget({ instance, isEditMode = false }: { instance: GadgetIn
       <div className="min-w-0 flex-1"><h2 aria-label={instance.title || t('mapTitle')} title={instance.title || t('mapTitle')} className="line-clamp-2 break-words text-sm font-semibold">{instance.title || t('mapTitle')}</h2><p className="line-clamp-2 break-words text-xs text-muted-foreground">{t('mapRange', { days })}</p></div>
       <span aria-label={engine === 'globe' ? t('mapGlobeEngine') : t('mapFlatEngine')} title={engine === 'globe' ? t('mapGlobeEngine') : t('mapFlatEngine')} className="line-clamp-2 max-w-[40%] min-w-0 shrink text-right text-xs text-muted-foreground break-words">{engine === 'globe' ? t('mapGlobeEngine') : t('mapFlatEngine')}</span>
     </header>
-    {!precise && <p role="status" className="line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('mapPreciseDisabled')}</p>}
-    {precise && sourceIds.length === 0 && <p role="status" className="line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('mapSourceRequired')}</p>}
-    {precise && sourceIds.length > 0 && observations.isPending && <p role="status" className="line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('observationLoading')}</p>}
-    {observations.isError && <p role="alert" className="line-clamp-2 shrink-0 break-words text-xs text-destructive">{t('observationLoadFailed')}</p>}
-    <div ref={plotRef} role="group" className="relative min-h-48 shrink-0 flex-1 overflow-hidden rounded border border-border" aria-label={t('mapPlotLabel')}>
+    {!precise && <GadgetNotice kind="setup" message={t('mapPreciseDisabled')} className="shrink-0 px-0 py-1 text-xs" />}
+    {precise && sourceIds.length === 0 && <GadgetNotice kind="setup" message={t('mapSourceRequired')} className="shrink-0 px-0 py-1 text-xs" />}
+    {precise && sourceIds.length > 0 && observations.isPending && <GadgetSkeleton variant="chart" label={t('observationLoading')} className="shrink-0 px-0 py-1" />}
+    {observations.isError && <GadgetNotice kind="error" message={t('observationLoadFailed')} className="shrink-0 px-0 py-1 text-xs" />}
+    <div ref={plotRef} role="group" className={`relative min-h-48 shrink-0 flex-1 overflow-hidden rounded border border-border`} aria-label={t('mapPlotLabel')}>
       {mapOnDemand && <div className="flex h-full flex-col items-start justify-center gap-2 p-3"><p className="text-xs text-muted-foreground">{t('mapOnDemand')}</p><Button type="button" variant="outline" className="min-h-11" onClick={() => setMapRequested(true)}>{t('mapOpen')}</Button></div>}
       {canRenderEngine && engine === 'globe'
         ? <Suspense fallback={<p role="status" className="p-2 text-xs text-muted-foreground">{t('mapRendererLoading')}</p>}><GlobeMap features={points} selectedFeatureId={selectedFeatureId} onSelectFeature={selectFeature} width={size.width} height={size.height} visible={visible} interactive={!isEditMode} /></Suspense>
         : canRenderEngine && <Suspense fallback={<p role="status" className="p-2 text-xs text-muted-foreground">{t('mapRendererLoading')}</p>}><FlatMap features={points} selectedFeatureId={selectedFeatureId} onSelectFeature={selectFeature} width={size.width} height={size.height} visible={visible} interactive={!isEditMode} /></Suspense>}
       {isPhone && mapRequested && <Button type="button" variant="outline" className="absolute right-2 top-2 z-10 min-h-11" onClick={() => setMapRequested(false)}>{t('mapHide')}</Button>}
-      {selected && <p className="absolute bottom-2 left-2 max-w-[90%] rounded bg-card/90 px-2 py-1 text-xs">{selected.metric} · {selected.value ?? t('weatherMissingValue')} {selected.unit} · {selected.region ?? selected.provider}<span className="block">{t('mapSourceIdentity')}: {selected.source_id} · {t('mapQuality')}: {selected.quality}</span>{selected.document_version_number ? <Link className="underline" href={`/knowledge/documents/${selected.document_id}?version=${selected.document_version_number}#cited-revision`}>{t('mapOpenRevision', { version: selected.document_version_number })}</Link> : <span>{t('mapRevisionUnavailable')}</span>}</p>}
+      {selected && <p className="absolute bottom-2 left-2 max-w-[90%] rounded bg-card/90 px-2 py-1 text-xs">{formatMetricLabel(selected.metric, t)} · {selected.value ?? t('weatherMissingValue')} {selected.unit} · {selected.region ?? selected.provider}<span className="block">{t('mapSourceIdentity')}: {selected.source_id} · {t('mapQuality')}: {selected.quality}</span>{selected.document_version_number ? <Link className="underline" href={`/knowledge/documents/${selected.document_id}?version=${selected.document_version_number}#cited-revision`}>{t('mapOpenRevision', { version: selected.document_version_number })}</Link> : <span>{t('mapRevisionUnavailable')}</span>}</p>}
     </div>
     <div className="flex min-h-0 flex-1 flex-col">
       <h3 className="line-clamp-2 break-words text-xs font-semibold">{t('mapEvidenceList', { count: features.length })}</h3>
-      {!points.length && precise && !observations.isPending && <p role="status" className="line-clamp-2 shrink-0 break-words py-2 text-xs text-muted-foreground">{activeLayer?.reason === 'privacy_opt_in_required' ? t('mapPreciseDisabled') : activeLayer?.reason === 'no_source_selected' ? t('mapSourceRequired') : activeLayer?.enabled === false ? t('mapObservationLayerDisabled') : t('observationEmpty')}</p>}
+      {!points.length && precise && !observations.isPending && <GadgetNotice kind="empty" message={activeLayer?.reason === 'privacy_opt_in_required' ? t('mapPreciseDisabled') : activeLayer?.reason === 'no_source_selected' ? t('mapSourceRequired') : activeLayer?.enabled === false ? t('mapObservationLayerDisabled') : t('observationEmpty')} className="shrink-0 px-0 py-2 text-xs" />}
       <ul className="min-h-0 flex-1 divide-y divide-border overflow-y-auto" aria-label={t('mapEvidenceListLabel')}>
         {features.map((feature) => <li key={feature.feature_id}>
           <button type="button" onClick={() => setSelectedFeatureId(feature.feature_id)} aria-pressed={feature.feature_id === selectedFeatureId} className="flex w-full items-start justify-between gap-2 py-1.5 text-left text-xs hover:bg-muted/30">
-            <span className="min-w-0 truncate">{feature.metric} · {feature.region ?? feature.provider}<time className="block text-[10px] text-muted-foreground" dateTime={feature.observed_at}>{formatDateTime(feature.observed_at, display.locale, display.timezone)}</time></span>
+            <span className="min-w-0 truncate">{formatMetricLabel(feature.metric, t)} · {feature.region ?? feature.provider}<time className="block text-[10px] text-muted-foreground" dateTime={feature.observed_at}>{formatDateTime(feature.observed_at, display.locale, display.timezone)}</time></span>
             <span className="shrink-0 font-mono">{feature.value ?? '—'} {feature.unit}</span>
           </button>
         </li>)}

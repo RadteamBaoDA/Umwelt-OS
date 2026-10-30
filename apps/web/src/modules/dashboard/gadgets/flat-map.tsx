@@ -6,6 +6,7 @@ import { OrthographicView } from '@deck.gl/core';
 import { feature } from 'topojson-client';
 import worldTopology from 'world-atlas/countries-110m.json';
 import type { Topology } from 'topojson-specification';
+import type { FeatureCollection } from 'geojson';
 import { useTranslations } from 'next-intl';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { MapFeature } from '../map-layers';
@@ -33,8 +34,43 @@ function readDeckColor(token: string, fallback: string, alpha: number): [number,
   return rgb ? [rgb[0], rgb[1], rgb[2], alpha] : [23, 106, 74, alpha];
 }
 
-/** Convert the bundled Natural Earth topology once; flat rendering does not fetch tiles or a basemap. */
-const landGeometry = feature(worldTopology as unknown as Topology, 'land');
+/**
+ * Unwrap a ring continuously across the antimeridian: walk the points keeping a running +/-360 offset that
+ * absorbs every raw longitude jump larger than 180 degrees, so western longitudes of rings that do not
+ * actually wrap (e.g. -17 in the Afro-Eurasia land ring) stay put. If the whole ring ends up entirely beyond
+ * +/-180 it is shifted back into range. Pure; returns the input when no jump exists.
+ *
+ * @param ring Closed ring of [lon, lat, ...] positions.
+ * @returns Ring with continuous longitudes.
+ */
+export function unwrapRing(ring: number[][]): number[][] {
+  let offset = 0;
+  const out = ring.map((point, i) => {
+    const step = i > 0 ? point[0] - ring[i - 1][0] : 0;
+    if (step > 180) offset -= 360;
+    else if (step < -180) offset += 360;
+    return [point[0] + offset, ...point.slice(1)];
+  });
+  if (offset === 0 && out.every((p, i) => p[0] === ring[i][0])) return ring;
+  const lons = out.map((p) => p[0]);
+  const shift = Math.min(...lons) > 180 ? -360 : Math.max(...lons) < -180 ? 360 : 0;
+  return shift ? out.map(([lon, ...rest]) => [lon + shift, ...rest]) : out;
+}
+
+/** Convert the bundled Natural Earth topology once, with antimeridian rings unwrapped; no tiles or basemap are fetched. */
+const landGeometry = (() => {
+  const collection = feature(worldTopology as unknown as Topology, 'land') as unknown as {
+    features: { geometry: { type: string; coordinates: number[][][] | number[][][][] } }[];
+  };
+  for (const { geometry } of collection.features) {
+    if (geometry.type === 'Polygon') {
+      geometry.coordinates = (geometry.coordinates as number[][][]).map(unwrapRing);
+    } else if (geometry.type === 'MultiPolygon') {
+      geometry.coordinates = (geometry.coordinates as number[][][][]).map((poly) => poly.map(unwrapRing));
+    }
+  }
+  return collection as unknown as FeatureCollection;
+})();
 
 /** Render a local equirectangular plot whose 192px floor does not shrink beneath map controls. */
 export function FlatMap({ features, selectedFeatureId, onSelectFeature, width, height, visible, interactive }: FlatMapProps) {
@@ -62,7 +98,7 @@ export function FlatMap({ features, selectedFeatureId, onSelectFeature, width, h
     contextHandlersRef.current = null;
   }, []);
 
-  const views = useMemo(() => [new OrthographicView({ id: 'world-flat' })], []);
+  const views = useMemo(() => [new OrthographicView({ id: 'world-flat', flipY: false })], []);
   const zoom = Math.log2(Math.max(1, Math.min(width / 360, height / 180)));
   const layers = useMemo(() => [
     new GeoJsonLayer({
@@ -71,8 +107,8 @@ export function FlatMap({ features, selectedFeatureId, onSelectFeature, width, h
       filled: true,
       stroked: true,
       pickable: false,
-      getFillColor: readDeckColor('--bg', '#e5e7eb', 180),
-      getLineColor: readDeckColor('--line', '#a8b0ba', 220),
+      getFillColor: readDeckColor('--active', '#e8ece8', 255),
+      getLineColor: readDeckColor('--control', '#cfd5d0', 255),
       lineWidthMinPixels: 0.55,
     }),
     new ScatterplotLayer<MapFeature>({

@@ -109,7 +109,7 @@ export function BuiltinTermsFields({ builtin, use, onUseChange, realtimeMode, on
     <h3 className="m-0 text-base font-semibold">{t('builtinDialogTitle', { name: builtin.label })}</h3>
     <p className="text-muted-foreground">{t('builtinTermsHint')}</p>
     <p><strong>{t('guideAttribution')}:</strong> {builtin.attribution}</p>
-    <p><a className="text-accent underline" href={safeHttpUrl(builtin.terms_url)} target="_blank" rel="noopener noreferrer">{t('providerTerms')}</a> · {t('termsVersion')}: {builtin.terms_checked_on}</p>
+    <p><a className="text-foreground underline underline-offset-2" href={safeHttpUrl(builtin.terms_url)} target="_blank" rel="noopener noreferrer">{t('providerTerms')}</a> · {t('termsVersion')}: {builtin.terms_checked_on}</p>
     {builtin.eligibility === 'review' && <p role="note">{t('builtinOperatorNote')}</p>}
     <div className="field"><Label htmlFor="builtin-declared-use">{t('termsDeclaredUse')}</Label>
       <Select value={use} onValueChange={(value) => onUseChange(value as DeclaredUse)}>

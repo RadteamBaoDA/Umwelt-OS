@@ -22,7 +22,7 @@ function ChatPageContent() {
   const t = useTranslations('chat');
   const chatCtrl = useChatController();
   const [mobileView, setMobileView] = React.useState<'history' | 'chat'>('chat');
-  const [historyCollapsed, setHistoryCollapsed] = React.useState(true);
+  const [historyCollapsed, setHistoryCollapsed] = React.useState(false); // 280px history region is open by default on desktop
 
   const handleSelectConversation = React.useCallback(
     (id: string) => {
@@ -57,12 +57,12 @@ function ChatPageContent() {
   }, [detail?.messages]);
 
   return (
-    <div className="flex min-h-0 flex-1 shrink! basis-0 w-full min-w-0 rounded-[18px] border border-border bg-surface overflow-hidden">
+    <div className="flex min-h-0 flex-1 shrink! basis-0 w-full min-w-0 overflow-hidden bg-surface">
       {/* Sidebar history on desktop; toggleable on mobile */}
       <div
         id="chat-history-sidebar"
         className={`${
-          mobileView === 'history' ? 'flex w-full' : historyCollapsed ? 'hidden md:flex md:w-12' : 'hidden md:flex md:w-[260px]'
+          mobileView === 'history' ? 'flex w-full' : historyCollapsed ? 'hidden md:flex md:w-12' : 'hidden md:flex md:w-[280px]'
         } shrink-0 border-r border-border h-full`}
       >
         {historyCollapsed && mobileView !== 'history' ? (
@@ -93,7 +93,7 @@ function ChatPageContent() {
         } flex-1 min-w-0 flex-col h-full`}
       >
         {/* Mobile view switch header */}
-        <div className="lg:hidden flex items-center justify-between gap-2 p-2 border-b border-border bg-background">
+        <div className="min-[1100px]:hidden flex items-center justify-between gap-2 p-2 border-b border-border bg-background">
           <Button
             type="button"
             variant="outline"

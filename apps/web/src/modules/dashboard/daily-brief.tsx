@@ -69,7 +69,7 @@ export function DailyBrief() {
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3.5">
       <header className="flex flex-wrap items-center justify-between gap-2">
         <DateSelector />
-        {canReadOwnerWorkspace && context.data && <span className="rounded bg-secondary px-2 py-0.5 text-xs font-semibold">{t(`relation_${context.data.relation}`)}</span>}
+        {canReadOwnerWorkspace && context.data && context.data.relation !== 'today' && <span className="rounded bg-secondary px-2 py-0.5 text-xs font-semibold">{t(`relation_${context.data.relation}`)}</span>}
       </header>
 
       {!canReadOwnerWorkspace && <SharedBriefs date={date} timezone={timezone} />}
@@ -82,7 +82,7 @@ export function DailyBrief() {
           <section aria-labelledby="saved-brief-heading" className="space-y-2 border-b border-border pb-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 id="saved-brief-heading" className="flex items-center gap-1.5 text-sm font-semibold">
-                <Sparkles className="h-4 w-4 text-primary" aria-hidden />
+                <Sparkles className="h-4 w-4 text-muted-foreground" aria-hidden />
                 {t('savedBrief')}
               </h3>
               {brief && <span className="text-xs text-muted-foreground">{t('revisionMeta', { revision: brief.revision, total: context.data.brief_revisions, time: formatDateTime(brief.generated_at, display.locale, display.timezone) })}</span>}

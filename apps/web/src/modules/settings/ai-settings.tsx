@@ -269,42 +269,42 @@ export function AISettingsWorkspace() {
   };
   /** Sets the chat role's reasoning effort on the current draft. */
   const pickEffort = (effort: ReasoningEffort) => { if (defaults.chat) set({ defaults: { ...defaults, chat: { ...defaults.chat, reasoning_effort: effort } } }); };
-  const advancedClass = 'rounded-lg border border-border bg-card';
-  const summaryClass = 'flex min-h-[52px] cursor-pointer items-center px-5 font-bold';
+  const advancedClass = 'border-t border-border';
+  const summaryClass = 'flex min-h-11 cursor-pointer items-center font-semibold';
   return <div className="flex flex-col gap-5">
-    <SettingsPageHeader eyebrow={t('eyebrow')} title={t('title')} description={t('description')} status={<p className="m-0 text-sm text-muted-foreground" role="status">{save.isPending ? t('saving') : dirty ? t('unsaved') : t('saved')}</p>} />
+    <SettingsPageHeader eyebrow={t('eyebrow')} title={t('title')} description={t('description')} status={<p className="m-0 text-sm text-muted-foreground" role="status">{save.isPending ? t('saving') : dirty ? t('unsaved') : save.isSuccess ? t('saved') : ''}</p>} />
     <form className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); save.mutate(saved); }}>
       <SettingsSection title={t('providersSection')}>
-        <p className="text-muted-foreground m-0 text-xs">{t('providersHelp')}</p>
+        <p className="text-muted-foreground m-0 text-sm">{t('providersHelp')}</p>
         <ProviderEditor providers={saved.providers} savedIds={savedIds} secrets={secrets} disabled={save.isPending} discoveringId={discoveringId} discoverError={discoverError} discovered={discovered} t={t as never}
           onChange={(providers) => set({ providers })} onSecret={(id, secret) => setSecrets({ ...secrets, [id]: secret })} onDiscover={(provider) => discover.mutate(provider)} />
       </SettingsSection>
       <SettingsSection title={t('modelsSection')}>
-        <p className="text-muted-foreground m-0 text-xs">{t('modelsHelp')}</p>
+        <p className="text-muted-foreground m-0 text-sm">{t('modelsHelp')}</p>
         <ModelsPanel providers={saved.providers} discovered={discovered} modelTests={shownTests} checkedAt={checkedAt} details={testDetails} disabled={save.isPending} onChange={changeModels} onTestModel={(provider, model) => testModel.mutate({ provider, model })} t={t as never} />
         <ModelDefaults providers={saved.providers} defaults={defaults} disabled={save.isPending} embeddingStatus={embeddingStatus} onPick={pickDefault} onEffort={pickEffort} t={t as never} />
-        {embeddingDimsChanged && <p className="error m-0 text-xs" role="status">{t('dimensionsChangedWarning')}</p>}
+        {embeddingDimsChanged && <p className="error m-0 text-sm" role="status">{t('dimensionsChangedWarning')}</p>}
       </SettingsSection>
       <details className={advancedClass}><summary className={summaryClass}>{t('embeddingsTitle')}</summary>
-        <div className="flex flex-col gap-3 px-5 pb-5">
+        <div className="flex flex-col gap-3 pb-5">
           <p className="text-muted-foreground m-0">{t('embeddingsPurpose')}</p>
-          <p className="text-muted-foreground m-0 text-xs">{t('embeddingsWhyShown')}</p>
+          <p className="text-muted-foreground m-0 text-sm">{t('embeddingsWhyShown')}</p>
           {embeddingMapping?.model && <p className="m-0">{t('embeddingsModel', { model: embeddingMapping.model, dimensions: embeddingMapping.dimensions ?? 0 })}</p>}
           {embeddingsAvailable
             ? <><div className="flex flex-wrap items-center gap-2"><CapabilityChip status={capabilityStatus('embedding', 'embeddings')} label={capabilityLabel('embeddings')} t={t} />
               {/* The role probe reads the saved mapping, so unsaved edits must be saved first. */}
               <Button type="button" variant="outline" disabled={save.isPending || dirty || embeddingProbe.isPending} onClick={() => embeddingProbe.mutate()}>{t('modelTest')}</Button></div>
-              <p className="text-muted-foreground m-0 text-xs">{t('embeddingsTestHelp')}</p></>
+              <p className="text-muted-foreground m-0 text-sm">{t('embeddingsTestHelp')}</p></>
             : <><p className="label m-0">{t('embeddingsUnavailable')}</p><p className="text-muted-foreground m-0">{t(embeddingMapping?.model ? 'embeddingsReasonConsent' : 'embeddingsReasonNoModel')}</p><p className="text-muted-foreground m-0">{t('embeddingsLexicalFallback')}</p></>}</div>
       </details>
       <details className={advancedClass}><summary className={summaryClass}>{t('budgetsTitle')}</summary>
-        <div className="flex flex-col gap-3 px-5 pb-5">
+        <div className="flex flex-col gap-3 pb-5">
           <label className="field max-w-xs"><span className="label">{t('timeout')}</span><Input type="number" disabled={save.isPending} min={5} max={180} value={saved.request_timeout_seconds} onChange={(event) => set({ request_timeout_seconds: Number(event.target.value) })} /></label>
           <p className="text-muted-foreground m-0">{t('budgetsUnavailable')}</p>
         </div>
       </details>
       <details className={advancedClass}><summary className={summaryClass}>{t('privacyTitle')}</summary>
-        <div className="flex flex-col gap-3 px-5 pb-5">
+        <div className="flex flex-col gap-3 pb-5">
           <p className="text-muted-foreground m-0">{t('endpointGrantHelp')}</p>
           <p className="text-muted-foreground m-0">{t('localProvidersNote')}</p>
           <CheckboxField><Checkbox id="ai-remote-reasoning" disabled={save.isPending} checked={saved.privacy.allow_remote_reasoning} onCheckedChange={(checked) => setPrivacy({ allow_remote_reasoning: checked === true })} /><label htmlFor="ai-remote-reasoning">{t('allowRemoteReasoning')}</label></CheckboxField>
@@ -321,7 +321,7 @@ export function AISettingsWorkspace() {
         <Button type="button" variant="outline" disabled={save.isPending || !dirty} onClick={cancelChanges}>{t('cancelChanges')}</Button><Button type="submit" disabled={save.isPending || !dirty || embeddingStatus !== 'idle'}>{t('saveButton')}</Button>
       </SettingsActions>
     </form>
-    <details className={advancedClass}><summary className={summaryClass}>{t('agentsAutomations')}</summary><div className="px-5 pb-5"><AgentSettingsWorkspace /><AutomationSettings /></div></details>
+    <details className={advancedClass}><summary className={summaryClass}>{t('agentsAutomations')}</summary><div className="pb-5"><AgentSettingsWorkspace /><AutomationSettings /></div></details>
   </div>;
 }
 

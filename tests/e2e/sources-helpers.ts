@@ -1,7 +1,22 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import type { Locator, Page } from '@playwright/test';
 import { expect } from './fixtures';
 
 type Outcome = { ok: boolean; text: string };
+
+// Resolve from this file, not the cwd: `npm run test:e2e` runs Playwright from apps/web. Never overrides real env vars.
+const ENV_FILE = path.resolve(__dirname, '../../.env.e2e-real');
+if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
+
+/**
+ * Owner-supplied live key for a keyed provider: `E2E_KEY_<ID_UPPER>` from the environment or the gitignored
+ * repo-root `.env.e2e-real`. Returns undefined when unset/blank so callers fall back to the dummy-key scenario.
+ * Callers must never render, log or screenshot the value.
+ */
+export function liveKey(providerId: string): string | undefined {
+  return process.env[`E2E_KEY_${providerId.toUpperCase()}`]?.trim() || undefined;
+}
 
 /** Headers an owner write needs: Playwright's request context sends no Origin (browsers do). */
 export async function writeHeaders(page: Page) {
@@ -89,7 +104,21 @@ export type WizardCase = {
   key?: string;
   /** Scope/URL inputs for the Choose-data step: element id -> value. */
   fields?: Record<string, string>;
+  /** True when `key` is an owner-supplied live key (never render or log it). */
+  live?: boolean;
 };
+
+/**
+ * Keyed provider scenario: with a live owner key (`liveKey`) it must fetch records with that key; otherwise it keeps the
+ * dummy-key scenario that must fail cleanly. `live` marks the live variant so specs can hide the key from artifacts.
+ */
+function keyedCase(id: string, card: string, fields?: Record<string, string>): WizardCase {
+  const key = liveKey(id);
+  return key ? { id, card, expect: 'fetch', key, fields, live: true } : { id, card, expect: 'rejects', key: 'dummy-e2e-key', fields };
+}
+
+/** True when any keyed provider has a live key, so specs must switch off traces/screenshots/videos. */
+export const hasLiveKeys = (): boolean => ['fred', 'finnhub_news', 'newsapi', 'openweathermap', 'openaq', 'nasa_firms', 'alpha_vantage'].some((id) => liveKey(id));
 
 export const WIZARD_CASES: WizardCase[] = [
   { id: 'rest', card: 'REST API', expect: 'fetch', fields: { 'source-config-url': 'https://hn.algolia.com/api/v1/search?query=oil&tags=story', 'source-items-path': 'hits', 'source-id-field': 'objectID', 'source-content-field': 'title', 'source-title-field': 'title' } },
@@ -104,14 +133,14 @@ export const WIZARD_CASES: WizardCase[] = [
   { id: 'youtube', card: 'YouTube', expect: 'fetch', fields: { 'source-scope-youtube_channel_id': 'UC_x5XG1OV2P6uZZ5FSM9Ttw' } },
   { id: 'open_meteo', card: 'Open-Meteo forecast', expect: 'fetch', fields: { 'source-scope-weather_latitude': '21.03', 'source-scope-weather_longitude': '105.85', 'source-scope-weather_timezone': 'Asia/Ho_Chi_Minh', 'source-scope-weather_metrics': 'temperature_2m' } },
   { id: 'coingecko', card: 'CoinGecko', expect: 'fetch', key: 'dummy-e2e-key' }, // Demo tier answers the keyless simple/price call even with an unrecognised key,
-  { id: 'finnhub_news', card: 'Finnhub market news', expect: 'rejects', key: 'dummy-e2e-key' },
-  { id: 'newsapi', card: 'NewsAPI', expect: 'rejects', key: 'dummy-e2e-key' },
-  { id: 'fred', card: 'FRED series', expect: 'rejects', key: 'dummy-e2e-key', fields: { 'source-scope-fred_series_id': 'DGS10' } },
-  { id: 'openweathermap', card: 'OpenWeather', expect: 'rejects', key: 'dummy-e2e-key', fields: { 'source-scope-owm_latitude': '21.03', 'source-scope-owm_longitude': '105.85' } },
-  { id: 'openaq', card: 'OpenAQ', expect: 'rejects', key: 'dummy-e2e-key', fields: { 'source-scope-openaq_location_id': '8118' } },
-  { id: 'nasa_firms', card: 'NASA FIRMS', expect: 'rejects', key: 'dummy-e2e-key', fields: { 'source-scope-firms_country': 'VNM' } },
-  { id: 'alpha_vantage', card: 'Alpha Vantage', expect: 'fetch', // IBM daily data is served for any key string (verified by curl)
-     key: 'dummy-e2e-key', fields: { 'source-scope-market_symbols': 'IBM', 'source-scope-market_currency': 'USD', 'source-scope-market_exchange_timezone': 'America/New_York' } },
+  keyedCase('finnhub_news', 'Finnhub market news'),
+  keyedCase('newsapi', 'NewsAPI'),
+  keyedCase('fred', 'FRED series', { 'source-scope-fred_series_id': 'DGS10' }),
+  keyedCase('openweathermap', 'OpenWeather', { 'source-scope-owm_latitude': '21.03', 'source-scope-owm_longitude': '105.85' }),
+  keyedCase('openaq', 'OpenAQ', { 'source-scope-openaq_location_id': '8118' }),
+  keyedCase('nasa_firms', 'NASA FIRMS', { 'source-scope-firms_country': 'VNM' }),
+  { id: 'alpha_vantage', card: 'Alpha Vantage', expect: 'fetch', // IBM daily data is served for any key string (verified by curl); a live key is used when set
+     key: liveKey('alpha_vantage') ?? 'dummy-e2e-key', live: !!liveKey('alpha_vantage'), fields: { 'source-scope-market_symbols': 'IBM', 'source-scope-market_currency': 'USD', 'source-scope-market_exchange_timezone': 'America/New_York' } },
 ];
 
 

@@ -6,10 +6,10 @@ import { forwardRef, type ButtonHTMLAttributes } from 'react';
 /**
  * Build the shared button classes for the New York shadcn variant and size contract.
  * The literal `button` class preserves existing selectors; semantic tokens own its colors,
- * and every size retains the 44px minimum touch target.
+ * and every size is 36px on fine pointers and 44px on coarse pointers (`pointer-coarse:`).
  */
 export const buttonVariants = cva(
-  'button inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-[9px] border-0 text-[15px] font-bold transition-colors disabled:cursor-progress disabled:opacity-[0.65] aria-disabled:cursor-not-allowed aria-disabled:opacity-[0.65] [&_svg]:shrink-0',
+  'button inline-flex min-h-9 pointer-coarse:min-h-11 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md border-0 text-sm font-medium transition-colors disabled:cursor-progress disabled:opacity-[0.65] aria-disabled:cursor-not-allowed aria-disabled:opacity-[0.65] [&_svg]:shrink-0',
   {
     variants: {
       variant: {
@@ -21,10 +21,10 @@ export const buttonVariants = cva(
         link: 'bg-transparent text-primary underline-offset-4 hover:underline',
       },
       size: {
-        default: 'px-4 py-2.5',
+        default: 'px-4 py-2',
         sm: 'px-3 py-2 text-sm',
-        lg: 'px-6 py-3',
-        icon: 'min-w-11 min-h-11 p-0',
+        lg: 'px-6 py-2.5',
+        icon: 'min-w-9 min-h-9 pointer-coarse:min-w-11 pointer-coarse:min-h-11 p-0',
       },
     },
     defaultVariants: {

@@ -24,6 +24,30 @@ export const RENDERER_MIN_SIZES: Record<string, { minW: number; minH: number }> 
   weather: { minW: 4, minH: 3 },
   research: { minW: 4, minH: 4 },
   github_project: { minW: 6, minH: 4 },
+  provider_observation: { minW: 4, minH: 3 },
+  intelligence_panel: { minW: 8, minH: 6 },
+};
+
+/** Preferred first-placement size for new gadgets (mirrors server DEFAULT_SIZES); never below the minimum. */
+export const RENDERER_DEFAULT_SIZES: Record<string, { defaultW: number; defaultH: number }> = {
+  news_feed: { defaultW: 6, defaultH: 8 },
+  telegram_feed: { defaultW: 6, defaultH: 8 },
+  text_panel: { defaultW: 6, defaultH: 5 },
+  table_panel: { defaultW: 10, defaultH: 7 },
+  video_panel: { defaultW: 8, defaultH: 7 },
+  finance_chart: { defaultW: 8, defaultH: 6 },
+  personal_context: { defaultW: 5, defaultH: 5 },
+  map: { defaultW: 12, defaultH: 9 },
+  intelligence_panel: { defaultW: 10, defaultH: 7 },
+  highlights: { defaultW: 5, defaultH: 5 },
+  watch_rules: { defaultW: 5, defaultH: 5 },
+  tasks: { defaultW: 5, defaultH: 6 },
+  goals: { defaultW: 5, defaultH: 6 },
+  daily_brief: { defaultW: 8, defaultH: 7 },
+  weather: { defaultW: 5, defaultH: 5 },
+  provider_observation: { defaultW: 5, defaultH: 4 },
+  research: { defaultW: 5, defaultH: 5 },
+  github_project: { defaultW: 8, defaultH: 6 },
 };
 
 /** Default fallback minimum size if renderer is unlisted. */

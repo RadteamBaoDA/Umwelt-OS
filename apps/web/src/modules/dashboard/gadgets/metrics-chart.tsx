@@ -179,7 +179,7 @@ export function MetricsChart({
             {/* Change delta with visible sign, percentage, and text tag (not color only) */}
             <div
               className={`inline-flex items-center gap-0.5 text-xs font-mono font-semibold ${
-                isPositive ? 'text-primary' : 'text-destructive'
+                isPositive ? 'text-positive' : 'text-destructive'
               }`}
             >
               {isPositive ? (

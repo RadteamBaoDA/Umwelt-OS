@@ -132,7 +132,7 @@ def test_create_and_rename_legacy_definition_and_counts(client: Any, monkeypatch
 
 
 def test_preset_alias_preview_and_apply_bind_sources_and_seed_scope(client: Any) -> None:
-    """The retired id finance_variant previews/applies as finance: unbound -> source_unbound, bound -> seeded scope."""
+    """The retired id finance_variant previews/applies as finance: proposed sources by default, explicit -> seeded scope."""
     http, session, kinds = client
     kp, news = uuid4(), uuid4()
     kinds[kp], kinds[news] = KINDS["kp"], KINDS["news"]
@@ -140,7 +140,8 @@ def test_preset_alias_preview_and_apply_bind_sources_and_seed_scope(client: Any)
     unbound = http.post("/api/v1/dashboard-presets/finance_variant/preview", json={"slot_sources": {}})
     assert unbound.status_code == 200, unbound.text
     assert unbound.json()["preset_id"] == "finance"
-    assert [w["code"] for s in unbound.json()["slots"] for w in s["warnings"]] == ["source_unbound", "source_unbound"]
+    proposed = {s["slot_id"]: s["source_ids"] for s in unbound.json()["slots"]}
+    assert proposed == {"finance_chart": [str(kp)], "news_feed": [str(news)]}
 
     body = {"slot_sources": {"finance_chart": [str(kp)], "news_feed": [str(news)]}}
     preview = http.post("/api/v1/dashboard-presets/finance_variant/preview", json=body)

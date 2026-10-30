@@ -11,6 +11,8 @@ import { isStale, periodKind } from '@/modules/sources/freshness';
 import type { GadgetInstance } from '../api';
 import { METRIC_FALLBACK_LOOKBACK_DAYS, useEffectiveLookback } from './use-effective-lookback';
 import { useReportGadgetFreshness } from '../gadget-freshness';
+import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
+import { formatMetricLabel } from './metric-label';
 
 /** Per-provider presentation: display name and attribution link shown next to the value. */
 export const PROVIDER_PRESENTATION: Record<string, { name: string; href: string }> = {
@@ -82,11 +84,11 @@ export function ProviderObservationGadget({ instance }: { instance: GadgetInstan
   useReportGadgetFreshness(items.reduce<string | null>((max, item) => (!max || item.collected_at > max ? item.collected_at : max), null));
   const fmt = (value: string) => formatDateTime(value, display.locale, display.timezone);
 
-  if (!sourceId) return <p role="status" className="p-3 text-sm text-muted-foreground">{t('providerObsSourceRequired')}</p>;
-  if (query.isPending) return <p role="status" className="p-3 text-sm text-muted-foreground">{t('observationLoading')}</p>;
+  if (!sourceId) return <GadgetNotice kind="setup" message={t('providerObsSourceRequired')} />;
+  if (query.isPending) return <GadgetSkeleton variant="metric" label={t('observationLoading')} />;
   // No last good value to fall back on: plain error.
-  if (!items.length && query.isError) return <p role="alert" className="p-3 text-sm text-destructive">{t('observationLoadFailed')}</p>;
-  if (!items.length) return <p role="status" className="p-3 text-sm text-muted-foreground">{t('observationEmpty')}</p>;
+  if (!items.length && query.isError) return <GadgetNotice kind="error" message={t('observationLoadFailed')} />;
+  if (!items.length) return <GadgetNotice kind="empty" message={t('observationEmpty')} />;
 
   const interval = sourceQuery.data?.configuration.schedule_interval_minutes;
   const lastCollected = items.reduce((max, item) => (item.collected_at > max ? item.collected_at : max), items[0].collected_at);
@@ -101,7 +103,7 @@ export function ProviderObservationGadget({ instance }: { instance: GadgetInstan
         const kind = periodKind(item.provider);
         return <li key={item.id} className="space-y-1 py-2 text-sm">
           <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1" data-testid="observation-row">
-            <span className="min-w-0 break-words font-medium">{item.symbol ?? item.region ?? item.metric}</span>
+            <span className="min-w-0 break-words font-medium">{item.symbol ?? item.region ?? formatMetricLabel(item.metric, t)}</span>
             <span className="flex flex-wrap items-baseline gap-x-2 font-mono text-base">
               <span className="whitespace-nowrap" title={item.value === null ? undefined : `${item.value} ${item.currency ?? item.unit}`} aria-label={item.value === null ? t('weatherMissingValue') : `${item.value} ${item.currency ?? item.unit}`}>
                 {formatObservationValue(item, display.locale)}

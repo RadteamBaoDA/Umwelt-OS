@@ -270,16 +270,16 @@ export function GadgetFrame({
         tabIndex={0}
         aria-label={t('gadgetScrollRegionLabel', { title: displayTitle })}
         onClick={isEditMode ? onSelect : undefined}
-        className={`dashboard-gadget group relative h-full w-full gap-0 rounded-lg py-0 shadow-xs transition-shadow overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+        className={`dashboard-gadget group relative h-full w-full gap-0 rounded-lg py-0 overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
           isSelected ? 'ring-2 ring-primary border-primary' : 'border-border'
         } ${isDragging ? 'opacity-40 shadow-lg scale-[0.99]' : ''} ${
           isResizing ? 'ring-1 ring-primary/60' : ''
         }`}
       >
         {/* Gadget Header (artboard): one row with title, status badges and actions. */}
-        <header ref={headerRef} className={`flex shrink-0 items-center gap-2 px-3.5 py-1.5 border-b border-border select-none ${isEditMode ? 'bg-muted/20' : 'bg-card'}`}>
+        <header ref={headerRef} className={`@container flex shrink-0 items-center gap-2 px-3.5 py-1.5 border-b border-border select-none ${isEditMode ? 'bg-muted/20' : 'bg-card'}`}>
           <div
-            className={`flex min-w-0 max-w-[65%] shrink-0 items-center gap-2 ${isEditMode ? 'cursor-grab active:cursor-grabbing hover:bg-muted/30' : ''}`}
+            className={`flex min-w-0 flex-1 items-center gap-2 ${isEditMode ? 'cursor-grab active:cursor-grabbing hover:bg-muted/30' : ''}`}
             onPointerDown={isEditMode ? onDragHandlePointerDown : undefined}
           >
             {isEditMode && <GripHorizontal className="w-4 h-4 text-muted-foreground shrink-0 opacity-70 group-hover:opacity-100" />}
@@ -289,8 +289,7 @@ export function GadgetFrame({
           </div>
 
           {/* Status badges share the row; overflow is clipped so streaming counts never change grid height. */}
-          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden whitespace-nowrap">
-            {freshnessLabel && <Badge variant="outline" className="shrink-0 text-[11px] text-muted-foreground" title={freshnessTitle}>{freshnessLabel}</Badge>}
+          <div className="hidden min-w-0 shrink items-center gap-1.5 overflow-hidden whitespace-nowrap @[22rem]:flex">
             {unreadCount > 0 && <Badge className="shrink-0 px-1.5 text-[11px]" title={ts('frameUnread', { count: unreadCount })}>{t('unreadBadge', { count: unreadCount })}</Badge>}
             {ruleMatch?.matched && <Badge variant="outline" className="shrink-0 gap-1 border-primary/30 bg-primary/10 text-[11px] text-foreground" title={ruleMatch.reason || t('ruleMatchFallback')}><AlertTriangle className="w-3 h-3" /><span>{t('ruleMatchBadge')}</span></Badge>}
             {effectiveSeverity && <Badge variant={effectiveSeverity === 'critical' ? 'destructive' : 'outline'} className={`shrink-0 text-[10px] font-bold uppercase tracking-wider ${effectiveSeverity === 'info' ? 'text-muted-foreground' : ''}`}>{effectiveSeverity === 'critical' ? t('severityCritical') : effectiveSeverity === 'warning' ? t('severityWarning') : t('severityInfo')}</Badge>}
@@ -310,8 +309,8 @@ export function GadgetFrame({
                 size="sm"
                 className="h-8 gap-1.5 rounded-md px-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
               >
-                <Sparkles className="size-3.5 text-primary" aria-hidden="true" />
-                <span className="hidden sm:inline">{t('askWithUmwelt')}</span>
+                <Sparkles className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                <span className="hidden @[26rem]:inline">{t('askWithUmwelt')}</span>
               </Button>
             )}
             {/* Expand / Maximize modal trigger */}
@@ -369,7 +368,7 @@ export function GadgetFrame({
         <div ref={inlineScrollRef} className="dashboard-gadget-body min-h-0 flex-1 overflow-auto overscroll-contain" style={{ minHeight: bodyFloor }}>
         {/* Queue controls scroll inside this fixed-floor body and never change the grid geometry. */}
         {readingQueueCount > 0 && onApplyReadingQueue && (
-          <div className="px-3 py-1.5 bg-primary/10 border-b border-primary/20 text-primary text-xs flex items-center justify-between">
+          <div className="px-3 py-1.5 bg-raised border-b border-rule text-foreground text-xs flex items-center justify-between">
             <span className="font-medium">
               {t('readingUpdatesQueued', { count: readingQueueCount })}
             </span>
@@ -385,6 +384,10 @@ export function GadgetFrame({
 
         <div ref={inlineHostRef} className="h-full min-h-full min-w-0" />
         </div>
+        {/* Provenance footer: a fixed one-line row inside the flex column; hidden when freshness is unknown. */}
+        {freshnessLabel && (
+          <p className="m-0 shrink-0 truncate border-t border-rule px-3.5 py-1 text-[11px] leading-4 text-muted-foreground" title={freshnessTitle} data-testid="gadget-provenance">{freshnessLabel}</p>
+        )}
       </Card>
 
       {/* Expanded Modal View (preserves filters, scroll position and local state) */}

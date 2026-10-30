@@ -9,6 +9,7 @@ import {
   Plus,
   Sparkles,
   Trash2,
+  X,
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
@@ -62,6 +63,7 @@ import {
 import {
   DashboardGrid,
   doPlacementsOverlap,
+  RENDERER_DEFAULT_SIZES,
   RENDERER_MIN_SIZES,
 } from './dashboard-grid';
 import { getGadgetReadingBodyFloor } from './widget-registry';
@@ -73,6 +75,7 @@ import { HighlightRuleEditor } from '@/modules/settings/highlight-rule-editor';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
 import { listSources, sourceKeys } from '@/modules/sources/api';
+import { FreshnessStrip } from './freshness-strip';
 
 /**
  * Finds the first free non-overlapping integer rectangle on the 20-column grid.
@@ -106,6 +109,36 @@ function findFreeCoordinates(
 }
 
 const MAX_LAYOUT_ROWS = 100_000;
+
+/**
+ * Packs placements top-left without holes in reading order (y, then x), keeping each w/h.
+ * Pure: returns a new array in the input's order; a placement that cannot be re-seated keeps its coordinates.
+ *
+ * @param placements Current draft placements.
+ * @param columns Grid column count.
+ */
+export function packPlacements(placements: DashboardPlacement[], columns: number): DashboardPlacement[] {
+  const packed: DashboardPlacement[] = [];
+  const moved = new Map<string, DashboardPlacement>();
+  for (const p of [...placements].sort((a, b) => a.y - b.y || a.x - b.x)) {
+    const spot = findFreeCoordinates(packed, p.w, p.h, columns);
+    const next = spot ? { ...p, ...spot } : { ...p };
+    packed.push(next);
+    moved.set(p.instance_id, next);
+  }
+  return placements.map((p) => moved.get(p.instance_id)!);
+}
+
+const MOBILE_NOTICE_KEY = 'umwelt.dashboard.mobileNoticeDismissed';
+
+/** Formats an epoch-ms timestamp as a localized relative age ("5 minutes ago"). */
+function formatRelativeAge(ms: number, locale: string): string {
+  const diffMin = Math.round((ms - Date.now()) / 60_000);
+  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' });
+  if (Math.abs(diffMin) < 60) return rtf.format(diffMin, 'minute');
+  if (Math.abs(diffMin) < 1440) return rtf.format(Math.round(diffMin / 60), 'hour');
+  return rtf.format(Math.round(diffMin / 1440), 'day');
+}
 
 const MOBILE_QUERY = '(max-width: 720px)';
 /** Subscribes to the phone-width media query. */
@@ -357,6 +390,8 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
     && (dashboardId ? dashboards.some((dashboard) => dashboard.id === dashboardId) : dashboards.length === 0);
   // Adjust state while rendering (not in an effect) on the false -> true transition, so the dialog opens exactly once.
   const [manageLinkSeen, setManageLinkSeen] = useState(false);
+  // Stale-source detail list stays collapsed until the owner asks for it.
+  const [staleDetailsOpen, setStaleDetailsOpen] = useState(false);
   if (manageLinkReady !== manageLinkSeen) {
     setManageLinkSeen(manageLinkReady);
     if (manageLinkReady) {
@@ -412,6 +447,11 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
     enabled: Boolean(activeDashboard),
   });
   const dashboardSourceIds = new Set(activeDashboard?.instances.flatMap((i) => i.definition.source_ids) ?? []);
+  const dashboardSources = useMemo(
+    () => (sourcesQuery.data?.items ?? []).filter((s) => dashboardSourceIds.has(s.id) && s.status === 'active'),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sourcesQuery.data, activeDashboard],
+  );
   const staleSources = (sourcesQuery.data?.items ?? []).filter((s) =>
     dashboardSourceIds.has(s.id) && s.status === 'active' && s.last_error_at
     && (!s.last_success_at || Date.parse(s.last_error_at) > Date.parse(s.last_success_at)));
@@ -554,6 +594,30 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
     }
   }, [editOrigin, history, historyIndex]);
 
+  const tidiedPlacements = useMemo(() => packPlacements(draftPlacements, layoutColumns), [draftPlacements, layoutColumns]);
+  const canTidyLayout = currentBreakpoint === 'desktop' && !sameLayout(tidiedPlacements, draftPlacements);
+
+  /** Applies the packed layout through the normal draft/history path so Undo works. */
+  const handleTidyLayout = useCallback(() => {
+    if (canTidyLayout) pushHistory(tidiedPlacements);
+  }, [canTidyLayout, pushHistory, tidiedPlacements]);
+
+  // Lazy read: the notice only renders on the mobile media path, which is client-only, so no hydration mismatch.
+  const [mobileNoticeDismissed, setMobileNoticeDismissed] = useState(() => {
+    try { return typeof window !== 'undefined' && window.localStorage.getItem(MOBILE_NOTICE_KEY) === '1'; } catch { return false; }
+  });
+  /** Persists the dismissal of the mobile reading-sizes notice. */
+  const dismissMobileNotice = useCallback(() => {
+    setMobileNoticeDismissed(true);
+    try { window.localStorage.setItem(MOBILE_NOTICE_KEY, '1'); } catch { /* storage unavailable: dismissal lasts this session */ }
+  }, []);
+
+  /** Newest successful collection across sources, for the title summary; null when unknown. */
+  const lastUpdatedAt = useMemo(() => {
+    const times = (sourcesQuery.data?.items ?? []).map((s) => (s.last_success_at ? Date.parse(s.last_success_at) : NaN)).filter(Number.isFinite);
+    return times.length ? Math.max(...times) : null;
+  }, [sourcesQuery.data]);
+
   /** Captures the owner layout session and exact geometry before starting an asynchronous save. */
   const captureLayoutSaveRequest = useCallback((): LayoutSaveRequest | null => {
     if (!activeDashboard || mobileProjectionUnavailable) {
@@ -616,18 +680,35 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
   });
   const layoutOperationPending = saveLayoutMutation.isPending || membershipMutationsPending > 0;
 
+  /**
+   * Resolves the rectangle a new gadget will occupy: the roomy renderer default when it fits the
+   * draft, otherwise the true minimum. Mobile spans all columns with max(computed floor, default) height.
+   * Returns null when not even the minimum fits.
+   */
+  const resolveAddSize = useCallback((renderer: string): { width: number; height: number } | null => {
+    const minimum = RENDERER_MIN_SIZES[renderer] ?? { minW: 4, minH: 3 };
+    const preferred = RENDERER_DEFAULT_SIZES[renderer] ?? { defaultW: minimum.minW, defaultH: minimum.minH };
+    const defaultW = Math.max(preferred.defaultW, minimum.minW);
+    const defaultH = Math.max(preferred.defaultH, minimum.minH);
+    const floorHeight = gridMetrics
+      ? Math.max(minimum.minH, Math.ceil((getGadgetReadingBodyFloor(renderer) + gridMetrics.frameHeaderHeight + 2 + 12) / gridMetrics.stride))
+      : minimum.minH;
+    const candidates = currentBreakpoint === 'mobile'
+      ? [{ width: layoutColumns, height: Math.max(floorHeight, defaultH) }]
+      : [
+        { width: Math.min(defaultW, layoutColumns), height: defaultH },
+        { width: Math.min(minimum.minW, layoutColumns), height: minimum.minH },
+      ];
+    return candidates.find((size) => findFreeCoordinates(draftPlacements, size.width, size.height, layoutColumns)) ?? null;
+  }, [currentBreakpoint, draftPlacements, gridMetrics, layoutColumns]);
+
   /** Checks bounded space before a quick definition or instance can be created. */
   const canAddGadgetInstance = useCallback((renderer: string): boolean => {
     if (!activeDashboard || layoutOperationPending || membershipOperationCountRef.current > 0) return false;
-    const minimum = RENDERER_MIN_SIZES[renderer] ?? { minW: 4, minH: 3 };
-    const width = currentBreakpoint === 'mobile' ? layoutColumns : Math.min(minimum.minW, layoutColumns);
-    const height = currentBreakpoint === 'mobile' && gridMetrics
-      ? Math.max(minimum.minH, Math.ceil((getGadgetReadingBodyFloor(renderer) + gridMetrics.frameHeaderHeight + 2 + 12) / gridMetrics.stride))
-      : minimum.minH;
-    if (findFreeCoordinates(draftPlacements, width, height, layoutColumns)) return true;
+    if (resolveAddSize(renderer)) return true;
     setSaveError(t('noFreeDashboardSpace'));
     return false;
-  }, [activeDashboard, currentBreakpoint, draftPlacements, gridMetrics, layoutColumns, layoutOperationPending, t]);
+  }, [activeDashboard, layoutOperationPending, resolveAddSize, t]);
 
   /** Reconciles an already-committed membership response without rebinding its local draft owner. */
   const reconcileMembershipDashboard = useCallback((requestedDashboardId: string, updated: Dashboard) => {
@@ -644,11 +725,9 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
   /** Reserves owner identity and a unique operation before quick-definition network work begins. */
   const beginAddGadgetInstance = useCallback((renderer: string): string | null => {
     if (!activeDashboard || !canAddGadgetInstance(renderer) || membershipOperationCountRef.current > 0) return null;
-    const minimum = RENDERER_MIN_SIZES[renderer] ?? { minW: 4, minH: 3 };
-    const width = currentBreakpoint === 'mobile' ? layoutColumns : Math.min(minimum.minW, layoutColumns);
-    const height = currentBreakpoint === 'mobile' && gridMetrics
-      ? Math.max(minimum.minH, Math.ceil((getGadgetReadingBodyFloor(renderer) + gridMetrics.frameHeaderHeight + 2 + 12) / gridMetrics.stride))
-      : minimum.minH;
+    const size = resolveAddSize(renderer);
+    if (!size) return null;
+    const { width, height } = size;
     const reservationId = `dashboard-add-${++addReservationSequenceRef.current}`;
     addReservationsRef.current.set(reservationId, {
       dashboardId: activeDashboard.id,
@@ -662,7 +741,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
     membershipOperationCountRef.current += 1;
     setMembershipMutationsPending((pending) => pending + 1);
     return reservationId;
-  }, [activeDashboard, canAddGadgetInstance, currentBreakpoint, gridMetrics, layoutColumns]);
+  }, [activeDashboard, canAddGadgetInstance, currentBreakpoint, layoutColumns, resolveAddSize]);
 
   /** Releases one Add reservation idempotently after either stage of creation finishes. */
   const releaseAddReservation = useCallback((reservationId: string) => {
@@ -1036,8 +1115,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
       {/* Page header (Dashboard artboard): eyebrow, switcher-as-title, meta and actions */}
       <div className="flex flex-wrap items-end gap-3">
         <div className="mr-auto flex min-w-0 flex-col gap-0.5">
-          <span className="text-[13px] font-bold uppercase tracking-[0.12em] text-primary">{t('title')}</span>
-          <h1 className="m-0 min-w-0 text-[30px] font-bold leading-tight tracking-[-0.04em] text-foreground">
+          <h1 className="m-0 min-w-0 text-2xl font-semibold leading-tight tracking-[-0.02em] text-foreground">
           
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -1045,7 +1123,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
                 type="button"
                 disabled={layoutOperationPending}
                 aria-label={t('switchDashboard')}
-                className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-transparent bg-transparent py-0 pl-0 pr-2 text-left text-[30px] font-bold leading-tight tracking-[-0.04em] text-foreground hover:bg-primary/10"
+                className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-transparent bg-transparent py-0 pl-0 pr-2 text-left text-2xl font-semibold leading-tight tracking-[-0.02em] text-foreground hover:bg-primary/10"
               >
                 <span className="truncate">{activeDashboard?.name ?? t('title')}</span>
                 <ChevronDown className="size-5 text-muted-foreground" aria-hidden="true" />
@@ -1058,7 +1136,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
                   disabled={layoutOperationPending}
                   onClick={() => requestSwitchDashboard(dash.id)}
                   className={`text-xs flex items-center justify-between ${
-                    dash.id === selectedDashboardId ? 'font-bold text-primary' : ''
+                    dash.id === selectedDashboardId ? 'font-semibold text-foreground' : ''
                   }`}
                 >
                   <span className="truncate">{dash.name}</span>
@@ -1111,12 +1189,20 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
                 onClick={() => setPresetPickerOpen(true)}
                 className="text-xs gap-2"
               >
-                <Sparkles className="w-3.5 h-3.5 text-primary" />
+                <Sparkles className="w-3.5 h-3.5 text-muted-foreground" />
                 <span>{t('presets')}</span>
               </DropdownMenuItem>}
             </DropdownMenuContent>
           </DropdownMenu>
           </h1>
+          {(lastUpdatedAt !== null || staleSources.length > 0) && (
+            <p className="m-0 text-sm text-muted-foreground">
+              {[
+                lastUpdatedAt !== null ? t('summaryUpdated', { time: formatRelativeAge(lastUpdatedAt, display.locale) }) : null,
+                staleSources.length > 0 ? t('staleSourcesSummary', { count: staleSources.length }) : null,
+              ].filter(Boolean).join(' · ')}
+            </p>
+          )}
         </div>
         {!isAdminViewer && <Button
           type="button"
@@ -1132,8 +1218,9 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
           {t('manageTopicsAndHighlights')}
         </Button>}
       </div>
+      <FreshnessStrip sources={dashboardSources} locale={display.locale} />
       {/* Group tabs: rendered only when the dashboard has groups */}
-      {activeDashboard && activeDashboard.groups.length > 0 && (
+      {activeDashboard && activeDashboard.groups.length > 1 && (
         <div className="flex flex-wrap items-center gap-3 border-b border-border pb-2">
           {(
             <Tabs value={activeGroupId} onValueChange={setActiveGroupId} className="h-8">
@@ -1168,9 +1255,12 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
         </p>
       )}
 
-      {activeDashboard && currentBreakpoint === 'mobile' && !editMode && !mobileProjectionUnavailable && readablePlacements && (
-        <p role="status" className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
-          {t('mobileReadingProjection')}
+      {activeDashboard && currentBreakpoint === 'mobile' && !editMode && !mobileProjectionUnavailable && readablePlacements && !mobileNoticeDismissed && (
+        <p role="status" className="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
+          <span className="min-w-0 flex-1">{t('mobileReadingProjection')}</span>
+          <button type="button" aria-label={t('dismissNotice')} onClick={dismissMobileNotice} className="shrink-0 rounded p-0.5 hover:bg-primary/10">
+            <X className="size-4" aria-hidden="true" />
+          </button>
         </p>
       )}
 
@@ -1187,6 +1277,8 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
           onSave={handleSave}
           onCancel={requestExitEdit}
           onUndo={handleUndo}
+          onTidyLayout={handleTidyLayout}
+          canTidyLayout={canTidyLayout}
           onRedo={handleRedo}
           onUseReadableMobileSizes={() => {
             if (currentBreakpoint === 'mobile' && readablePlacements) pushHistory(readablePlacements);
@@ -1268,24 +1360,41 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
       )}
 
       {activeDashboard && staleSources.length > 0 && (
-        <section aria-label={t('staleSourcesTitle')} className="space-y-2 rounded-md border border-border bg-card p-3 text-sm">
-          <h2 className="text-sm font-semibold">{t('staleSourcesTitle')}</h2>
-          <ul className="space-y-2">
-            {staleSources.map((s) => (
-              <li key={s.id} className="space-y-0.5">
-                <p>{t('staleSourceLine', { name: s.name, code: s.last_error_code ?? s.collection_error_code ?? s.processing_error_code ?? '—' })}</p>
-                <p className="text-xs text-muted-foreground">
-                  {t('staleSourceTimes', {
-                    success: s.last_success_at ? formatDateTime(s.last_success_at, display.locale, display.timezone) : t('staleSourceNever'),
-                    error: formatDateTime(s.last_error_at!, display.locale, display.timezone),
-                  })}
-                </p>
-              </li>
-            ))}
-          </ul>
-          <Link href="/settings/sources" className="inline-flex min-h-11 items-center text-xs font-semibold text-primary underline underline-offset-4">
-            {t('openSourceStatus')}
-          </Link>
+        <section aria-label={t('staleSourcesTitle')} className="space-y-2 rounded-md border border-border bg-card px-3 py-1 text-sm">
+          {/* One summary line; the per-source detail list is a disclosure so it never dominates the page. */}
+          <div className="flex flex-wrap items-center gap-x-2">
+            <h2 className="text-sm font-semibold">{t('staleSourcesSummary', { count: staleSources.length })}</h2>
+            <span aria-hidden="true" className="text-muted-foreground">·</span>
+            <Link href="/settings/sources" className="inline-flex min-h-11 items-center text-xs font-semibold text-primary underline underline-offset-4">
+              {t('staleSourcesReview')}
+            </Link>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="ml-auto"
+              aria-expanded={staleDetailsOpen}
+              aria-controls="stale-sources-details"
+              onClick={() => setStaleDetailsOpen((open) => !open)}
+            >
+              {t('staleSourcesDetails')}
+            </Button>
+          </div>
+          {staleDetailsOpen && (
+            <ul id="stale-sources-details" className="space-y-2 pb-2">
+              {staleSources.map((s) => (
+                <li key={s.id} className="space-y-0.5">
+                  <p>{t('staleSourceLine', { name: s.name, code: s.last_error_code ?? s.collection_error_code ?? s.processing_error_code ?? '—' })}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {t('staleSourceTimes', {
+                      success: s.last_success_at ? formatDateTime(s.last_success_at, display.locale, display.timezone) : t('staleSourceNever'),
+                      error: formatDateTime(s.last_error_at!, display.locale, display.timezone),
+                    })}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
       )}
 

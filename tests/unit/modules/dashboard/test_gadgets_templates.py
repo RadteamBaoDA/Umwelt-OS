@@ -51,8 +51,8 @@ def test_watch_rules_accepts_any_sources() -> None:
     gadgets.validate_renderer_sources("watch_rules", [("bbc_world", "rss"), ("hn_top", "api")])
 
 
-def test_gadget_templates_route_is_no_store_and_parses() -> None:
-    """GET /api/v1/gadget-templates returns 200, Cache-Control no-store and valid GadgetTemplateRead items."""
+def test_gadget_templates_route_is_cacheable_and_parses() -> None:
+    """GET /api/v1/gadget-templates returns 200, Cache-Control private max-age and valid GadgetTemplateRead items."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -65,7 +65,7 @@ def test_gadget_templates_route_is_no_store_and_parses() -> None:
         app.dependency_overrides[dep.dependency] = lambda: None
     response = TestClient(app).get("/api/v1/gadget-templates")
     assert response.status_code == 200
-    assert "no-store" in response.headers["cache-control"]
+    assert "max-age=3600" in response.headers["cache-control"]
     items = [GadgetTemplateRead.model_validate(item) for item in response.json()]
     assert len(items) == len(gadgets.TEMPLATES)
 

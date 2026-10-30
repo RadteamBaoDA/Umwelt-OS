@@ -73,6 +73,19 @@ export type GadgetFilters = {
   show_precise_locations?: boolean;
 };
 
+/**
+ * Names the filter fields a list gadget cannot honour. The server returns every filter with defaults
+ * (for example map_engine null, show_precise_locations false), so only fields holding a set value count.
+ * @param filters Filters persisted on the gadget definition.
+ * @returns Unsupported field names with a non-default value, in object order.
+ */
+export function unsupportedListFilters(filters: GadgetFilters): string[] {
+  return Object.entries(filters)
+    .filter(([key]) => !['keywords', 'exclude_keywords', 'limit'].includes(key))
+    .filter(([, value]) => value !== null && value !== undefined && value !== false && !(Array.isArray(value) && value.length === 0))
+    .map(([key]) => key);
+}
+
 /** Non-executable highlight configuration; it does not imply notification execution. */
 export type HighlightRule = {
   id: string;
@@ -367,12 +380,12 @@ export function deleteGadgetDefinition(id: string, expectedRevision: number, csr
 
 /** Lists fixed renderer configuration metadata and minimum geometry, not runtime implementations. */
 export function listGadgetRenderers(signal?: AbortSignal) {
-  return apiRequest<GadgetRenderer[]>('/api/v1/gadget-renderers', { signal });
+  return apiRequest<GadgetRenderer[]>('/api/v1/gadget-renderers', { signal, priority: 'high' });
 }
 
 /** Lists the fixed catalog of named gadget templates; display text is localized by template id. */
 export function listGadgetTemplates(signal?: AbortSignal) {
-  return apiRequest<GadgetTemplate[]>('/api/v1/gadget-templates', { signal });
+  return apiRequest<GadgetTemplate[]>('/api/v1/gadget-templates', { signal, priority: 'high' });
 }
 
 /** Metrics and symbol rules one provider exposes to measurement gadgets. */
@@ -398,7 +411,7 @@ export type ProviderMetrics = {
 
 /** Counts, per renderer id, the active sources whose data shapes the renderer can read. */
 export function listCompatibleSourceCounts(signal?: AbortSignal) {
-  return apiRequest<Record<string, number>>('/api/v1/gadget-renderers/compatible-counts', { signal });
+  return apiRequest<Record<string, number>>('/api/v1/gadget-renderers/compatible-counts', { signal, priority: 'high' });
 }
 
 /** Fetches the per-provider metric catalog keyed by provider id. */

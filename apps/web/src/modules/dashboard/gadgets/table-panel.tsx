@@ -9,6 +9,7 @@ import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge/api';
 import type { GadgetInstance } from '../api';
+import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 
 /** Props for the source-backed table gadget. */
 export interface TablePanelProps {
@@ -50,6 +51,8 @@ export function TablePanel({ instance }: TablePanelProps) {
         <Button
           type="button"
           size="sm"
+          // Quiet outline at rest; primary only once rows are selected.
+          variant={selected.length === 0 ? 'outline' : 'default'}
           disabled={selected.length === 0}
           onClick={() => openDrawer({ context: {
             kind: 'selection',
@@ -64,10 +67,10 @@ export function TablePanel({ instance }: TablePanelProps) {
       {staleSelections.length > 0 && (
         <p role="status" className="text-xs text-muted-foreground">{t('selectionChanged', { count: staleSelections.length })}</p>
       )}
-      {sourceIds.length === 0 ? <p role="status" className="text-sm text-muted-foreground">{t('gadgetDataEmpty')}</p>
-        : query.isPending ? <p role="status" className="text-sm text-muted-foreground">{t('gadgetDataLoading')}</p>
-          : query.isError ? <p role="alert" className="text-sm text-destructive">{t('gadgetDataLoadFailed')}</p>
-            : records.length === 0 ? <p role="status" className="text-sm text-muted-foreground">{t('gadgetDataEmpty')}</p>
+      {sourceIds.length === 0 ? <GadgetNotice kind="setup" message={t('gadgetDataEmpty')} />
+        : query.isPending ? <GadgetSkeleton variant="table" label={t('gadgetDataLoading')} />
+          : query.isError ? <GadgetNotice kind="error" message={t('gadgetDataLoadFailed')} />
+            : records.length === 0 ? <GadgetNotice kind="empty" message={t('gadgetDataEmpty')} />
               : (
                 <div className="min-h-0 flex-1 overflow-auto">
                   <table className="w-full text-left text-xs">

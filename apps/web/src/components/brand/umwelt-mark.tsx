@@ -2,12 +2,12 @@ import { cn } from 'cn';
 
 /**
  * Umwelt-OS functional-circle mark: two open arcs (perception in, action out) and a centre dot (the self).
- * Draws with `currentColor`, so wrap it in a token colour class (default `text-primary`, the accent token). Minimum size 16px.
+ * Draws with `currentColor`, so wrap it in a token colour class (default `text-data`, the accent token). Minimum size 16px.
  * Decorative by default; pass `title` to expose it as an image.
  */
 export function UmweltMark({ size = 24, title, className }: { size?: number; title?: string; className?: string }) {
   const thick = size <= 32 ? 2.8 : 2.4;
-  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={cn('shrink-0 text-primary', className)}
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={cn('shrink-0 text-data', className)}
     role={title ? 'img' : undefined} aria-label={title} aria-hidden={title ? undefined : true} focusable="false">
     <g transform="rotate(-45 12 12)" stroke="currentColor" strokeWidth={thick} strokeLinecap="round">
       <path d="M3.54 8.92A9 9 0 0 1 20.46 8.92" />

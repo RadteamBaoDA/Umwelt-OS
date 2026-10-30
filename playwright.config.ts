@@ -16,8 +16,9 @@ export default defineConfig({
   retries: 0,
   reporter: [['line'], ['html', { open: 'never', outputFolder: REPORT_DIR }]],
   outputDir: RESULTS_DIR,
-  globalTimeout: 60 * 60_000,
-  maxFailures: 10,
+  // Overridable for long one-off sweeps (datasources + screens capture); defaults are the CI budget.
+  globalTimeout: Number(process.env.E2E_GLOBAL_TIMEOUT_MIN ?? 60) * 60_000,
+  maxFailures: Number(process.env.E2E_MAX_FAILURES ?? 10),
   expect: { timeout: 10_000 },
   use: {
     ...devices['Desktop Chrome'],

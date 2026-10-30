@@ -318,9 +318,9 @@ export function PlanCard({
 
                 <div className="flex shrink-0 items-center gap-1.5">
                   {isCompleted ? (
-                    <CheckCircle2Icon className="size-4 text-primary" aria-hidden="true" />
+                    <CheckCircle2Icon className="size-4 text-data" aria-hidden="true" />
                   ) : isInProgress ? (
-                    <CircleDotIcon className="size-4 text-primary animate-pulse" aria-hidden="true" />
+                    <CircleDotIcon className="size-4 text-data animate-pulse" aria-hidden="true" />
                   ) : (
                     <ClockIcon className="size-4 text-muted-foreground" aria-hidden="true" />
                   )}

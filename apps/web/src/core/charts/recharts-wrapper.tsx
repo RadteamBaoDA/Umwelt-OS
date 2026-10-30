@@ -2,7 +2,7 @@
 
 import { useTheme } from 'next-themes';
 import { useTranslations } from 'next-intl';
-import React, { useEffect, useId, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Area,
   AreaChart,
@@ -200,6 +200,71 @@ export function formatChartValue(
   }).format(value);
 
   return options?.unit ? `${formatted} ${options.unit}` : formatted;
+}
+
+/** Fixed Y-axis width (px): fits compact labels such as "-77.2K" at 11px so ticks never wrap or clip. */
+const Y_AXIS_WIDTH = 52;
+
+/**
+ * Computes a Y domain padded around the plotted values so a series far from zero (e.g. a 77,194 price) is not
+ * flattened by a zero-based axis. Flat series get a padding proportional to their magnitude (or 1 at zero).
+ *
+ * @param data Chart rows.
+ * @param series Series whose dataKeys are plotted.
+ * @returns [min, max] with 10% range padding, or ['auto','auto'] when no finite value exists.
+ */
+export function paddedYDomain(data: ChartDataPoint[], series: ChartSeries[]): [number | 'auto', number | 'auto'] {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const row of data) {
+    for (const s of series) {
+      const v = Number(row[s.dataKey] ?? row.value);
+      if (Number.isFinite(v)) {
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+    }
+  }
+  if (min === Infinity) return ['auto', 'auto'];
+  const pad = max > min ? (max - min) * 0.1 : Math.abs(max) * 0.01 || 1;
+  return [min - pad, max + pad];
+}
+
+/** Assumed upper bound of ticks across the Y domain; a conservative (smaller) step yields more digits. */
+const Y_TICK_COUNT = 5;
+
+/**
+ * Formats a Y tick compactly without unit or currency (the header already shows them) so it stays on one line.
+ * When the plotted domain span is known, fraction digits follow the tick step (in the compact unit) so adjacent
+ * ticks over a narrow range never collapse to the same label (e.g. "77.5K" repeated).
+ *
+ * @param value Tick value.
+ * @param locale Application locale.
+ * @param span Optional numeric Y-domain span (max - min); omit to use one compact fraction digit.
+ * @returns Compact localized number, e.g. "77.2K" or "77.37K" for a narrow span.
+ */
+export function formatYTick(value: number, locale: AppLocaleId, span?: number): string {
+  if (!span || !Number.isFinite(span) || span <= 0 || !Number.isFinite(value)) {
+    return formatChartValue(value, { locale, precision: 2, compact: true });
+  }
+  const abs = Math.abs(value);
+  const scale = abs >= 1e9 ? 1e9 : abs >= 1e6 ? 1e6 : abs >= 1e3 ? 1e3 : 1;
+  const step = span / Y_TICK_COUNT / scale;
+  const digits = Math.min(4, Math.max(0, Math.ceil(-Math.log10(step) - 1e-9)));
+  return getCachedNumberFormat(normalizeFormattingLocale(locale), {
+    ...(abs >= 1000 ? { notation: 'compact' as const } : {}),
+    maximumFractionDigits: digits,
+  }).format(value);
+}
+
+/**
+ * Returns the numeric span of a padded Y domain.
+ *
+ * @param domain Domain from {@link paddedYDomain}.
+ * @returns max - min, or undefined when the domain is not numeric.
+ */
+function domainSpan(domain: [number | 'auto', number | 'auto']): number | undefined {
+  return typeof domain[0] === 'number' && typeof domain[1] === 'number' ? domain[1] - domain[0] : undefined;
 }
 
 /**
@@ -436,7 +501,7 @@ export interface BaseAreaChartProps {
 }
 
 /**
- * Theme-aware area chart with smooth gradient fills and localized formatting.
+ * Theme-aware area chart with a flat low-opacity fill (no gradient), padded Y domain and localized formatting.
  *
  * @param props Data points, series configuration, currency/unit, and styling.
  * @returns Accessible area chart component.
@@ -454,10 +519,10 @@ export function BaseAreaChart({
 }: BaseAreaChartProps) {
   const { resolvedTheme } = useTheme();
   const display = useDisplayPreferences();
-  const gradientId = useId();
 
   const isDark = resolvedTheme === 'dark';
   const colors = useMemo(() => getChartColors(isDark), [isDark]);
+  const yDomain = useMemo(() => paddedYDomain(data, series), [data, series]);
 
   if (!data || data.length === 0) {
     return <ChartEmptyState title={emptyTitle} message={emptyMessage} />;
@@ -467,25 +532,7 @@ export function BaseAreaChart({
     <>
       <ChartAccessibleTable data={data} series={series} />
       <RechartsContainer height={height}>
-        <AreaChart data={data} margin={{ top: 10, right: 10, left: -15, bottom: 0 }}>
-          <defs>
-            {series.map((s, idx) => {
-              const color = s.color || colors.series[idx % colors.series.length];
-              return (
-                <linearGradient
-                  key={s.dataKey}
-                  id={`${gradientId}-${s.dataKey}`}
-                  x1="0"
-                  y1="0"
-                  x2="0"
-                  y2="1"
-                >
-                  <stop offset="5%" stopColor={color} stopOpacity={0.4} />
-                  <stop offset="95%" stopColor={color} stopOpacity={0.02} />
-                </linearGradient>
-              );
-            })}
-          </defs>
+        <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
           {showGrid && (
             <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />
           )}
@@ -504,14 +551,9 @@ export function BaseAreaChart({
             fontSize={11}
             tickLine={false}
             axisLine={false}
-            tickFormatter={(val) =>
-              formatChartValue(val, {
-                currency,
-                unit,
-                locale: display.locale,
-                precision: 0,
-              })
-            }
+            width={Y_AXIS_WIDTH}
+            domain={yDomain}
+            tickFormatter={(val) => formatYTick(val, display.locale, domainSpan(yDomain))}
           />
           <Tooltip
             content={
@@ -534,8 +576,8 @@ export function BaseAreaChart({
                 name={s.name}
                 stroke={color}
                 strokeWidth={2}
-                fillOpacity={1}
-                fill={`url(#${gradientId}-${s.dataKey})`}
+                fill={color}
+                fillOpacity={0.12}
               />
             );
           })}
@@ -579,6 +621,7 @@ export function BaseLineChart({
   const display = useDisplayPreferences();
   const isDark = resolvedTheme === 'dark';
   const colors = useMemo(() => getChartColors(isDark), [isDark]);
+  const yDomain = useMemo(() => paddedYDomain(data, series), [data, series]);
 
   if (!data || data.length === 0) {
     return <ChartEmptyState title={emptyTitle} message={emptyMessage} />;
@@ -588,7 +631,7 @@ export function BaseLineChart({
     <>
       <ChartAccessibleTable data={data} series={series} />
       <RechartsContainer height={height}>
-        <LineChart data={data} margin={{ top: 10, right: 10, left: -15, bottom: 0 }}>
+        <LineChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
           {showGrid && (
             <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />
           )}
@@ -607,14 +650,9 @@ export function BaseLineChart({
             fontSize={11}
             tickLine={false}
             axisLine={false}
-            tickFormatter={(val) =>
-              formatChartValue(val, {
-                currency,
-                unit,
-                locale: display.locale,
-                precision: 0,
-              })
-            }
+            width={Y_AXIS_WIDTH}
+            domain={yDomain}
+            tickFormatter={(val) => formatYTick(val, display.locale, domainSpan(yDomain))}
           />
           <Tooltip
             content={
@@ -691,7 +729,7 @@ export function BaseBarChart({
     <>
       <ChartAccessibleTable data={data} series={series} />
       <RechartsContainer height={height}>
-        <BarChart data={data} margin={{ top: 10, right: 10, left: -15, bottom: 0 }}>
+        <BarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
           {showGrid && (
             <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />
           )}
@@ -710,14 +748,9 @@ export function BaseBarChart({
             fontSize={11}
             tickLine={false}
             axisLine={false}
-            tickFormatter={(val) =>
-              formatChartValue(val, {
-                currency,
-                unit,
-                locale: display.locale,
-                precision: 0,
-              })
-            }
+            width={Y_AXIS_WIDTH}
+            domain={[0, 'auto']}
+            tickFormatter={(val) => formatYTick(val, display.locale)}
           />
           <Tooltip
             content={

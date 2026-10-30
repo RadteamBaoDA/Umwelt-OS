@@ -326,13 +326,14 @@ async def test_personal_preset_previews_ready(monkeypatch: pytest.MonkeyPatch) -
 
 @pytest.mark.asyncio
 async def test_finance_preset_ready_with_compatible_source_active(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A compatible active source exists but is unbound: the chart slot warns source_unbound (not ready); news needs setup."""
+    """A compatible active source is proposed for the chart slot (ready, seeded); news has none so needs setup."""
     from modules.dashboard.schemas import PresetPreviewRequest
 
     _preview_stubs(monkeypatch, [("noaa_kp", "api")])
     preview = await public.preview_preset(
         None, "finance", PresetPreviewRequest(slot_sources={}), scope=None, multi_workspace_enabled=False)  # type: ignore[arg-type]
-    assert _codes(preview, "finance_chart") == ["source_unbound"]
+    chart = next(s for s in preview.slots if s.slot_id == "finance_chart")
+    assert _codes(preview, "finance_chart") == [] and len(chart.source_ids) == 1
     assert _codes(preview, "news_feed") == ["missing_source"]
 
 
@@ -593,7 +594,7 @@ async def test_preview_scope_required_only_for_finance_chart_slots(monkeypatch: 
 
 def test_preset_definition_names_use_display_names() -> None:
     """Preset-created definition names use the en-us renderer display name, not the raw renderer id."""
-    assert public.preset_definition_name("Finance", "finance_chart") == "Finance · Chart"
-    assert public.preset_definition_name("Overview", "news_feed") == "Overview · Feed"
-    assert public.preset_definition_name("Overview", "map") == "Overview · Map"
-    assert public.preset_definition_name("X", "unknown_thing") == "X · unknown_thing"
+    assert public.preset_definition_name("finance_chart") == "Chart"
+    assert public.preset_definition_name("news_feed") == "Feed"
+    assert public.preset_definition_name("map") == "Map"
+    assert public.preset_definition_name("unknown_thing") == "unknown_thing"

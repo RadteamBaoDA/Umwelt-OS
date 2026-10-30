@@ -78,7 +78,7 @@ export function ModelsPanel({ providers, discovered, modelTests, checkedAt = {},
             <Button type="button" variant="outline" disabled={disabled || state === 'pending' || !testRoleByType[model.type] || !owner.base_url} aria-label={t('modelTestAria', { id: model.id })} onClick={() => onTestModel(owner, model)}>{t('modelTest')}</Button>
             <Button type="button" variant="outline" disabled={disabled} aria-label={t('modelRemove', { id: model.id })} onClick={() => patch(owner.id, (owner.models ?? []).filter((item) => item.id !== model.id))}><Trash2 className="size-4" aria-hidden="true" /></Button>
             <ModelTestChip state={state} t={t} />
-            {state && state !== 'pending' && checkedAt[modelTestKey(owner.id, model.id)] && <span className="text-muted-foreground text-xs">{t('modelCheckedAt', { time: new Date(checkedAt[modelTestKey(owner.id, model.id)]).toLocaleString() })}</span>}
+            {state && state !== 'pending' && checkedAt[modelTestKey(owner.id, model.id)] && <span className="text-muted-foreground text-sm">{t('modelCheckedAt', { time: new Date(checkedAt[modelTestKey(owner.id, model.id)]).toLocaleString() })}</span>}
             {state && state !== 'pending' && state !== 'supported' && details[modelTestKey(owner.id, model.id)] && <Tooltip>
               <TooltipTrigger asChild><button type="button" className="text-destructive inline-flex" aria-label={details[modelTestKey(owner.id, model.id)]}><Info className="size-4" aria-hidden="true" /></button></TooltipTrigger>
               <TooltipContent className="max-w-sm break-words">{details[modelTestKey(owner.id, model.id)]}</TooltipContent>
@@ -87,7 +87,7 @@ export function ModelsPanel({ providers, discovered, modelTests, checkedAt = {},
         </TableRow>;
       })}</TableBody>
     </Table></TooltipProvider>}
-    <p className="text-muted-foreground m-0 text-xs">{t('modelTypesHelp')}</p>
+    <p className="text-muted-foreground m-0 text-sm">{t('modelTypesHelp')}</p>
   </div>;
 }
 
@@ -109,15 +109,15 @@ export function ModelDefaults({ providers, defaults, disabled, embeddingStatus, 
     </SelectContent></Select></label>;
   const chats = entries((m) => m.type === 'llm');
   return <div className="flex flex-col gap-3">
-    <h3 className="m-0 text-base font-bold">{t('defaultsTitle')}</h3>
-    <p className="text-muted-foreground m-0 text-xs">{t('defaultsHelp')}</p>
+    <h3 className="m-0 text-base font-semibold">{t('defaultsTitle')}</h3>
+    <p className="text-muted-foreground m-0 text-sm">{t('defaultsHelp')}</p>
     <FieldGrid>
       {field('chat', t('chatModel'), chats)}
       {onEffort && <label className="field"><span className="label">{t('reasoningEffort')}</span>
         <Select disabled={disabled || !defaults.chat?.model} value={defaults.chat?.reasoning_effort ?? 'off'} onValueChange={(next) => onEffort(next as ReasoningEffort)}><SelectTrigger aria-label={t('reasoningEffort')}><SelectValue /></SelectTrigger><SelectContent>
           {efforts.map((item) => <SelectItem key={item} value={item}>{t(`effort${item[0].toUpperCase()}${item.slice(1)}`)}</SelectItem>)}
         </SelectContent></Select>
-        <span className="text-muted-foreground text-xs">{t('reasoningEffortHelp')}</span></label>}
+        <span className="text-muted-foreground text-sm">{t('reasoningEffortHelp')}</span></label>}
       {field('brief', t('briefModel'), chats, { id: same, label: t('sameAsChat') })}
       {field('background', t('backgroundModel'), entries((m) => m.type === 'background' || m.type === 'llm'), { id: same, label: t('sameAsBrief') })}
       {field('embedding', t('embeddingModel'), entries((m) => m.type === 'embedding'))}
@@ -125,8 +125,8 @@ export function ModelDefaults({ providers, defaults, disabled, embeddingStatus, 
       {field('vision', t('visionModel'), entries((m) => m.type === 'llm' && m.vision === true), { id: none, label: t('noneOption') })}
     </FieldGrid>
     <div role="status" aria-live="polite">
-      {embeddingStatus === 'checking' && <p className="text-muted-foreground m-0 text-xs">{t('embeddingChecking')}</p>}
-      {embeddingStatus === 'error' && <p className="error m-0 text-xs" role="alert">{t('embeddingProbeFailed')}</p>}
+      {embeddingStatus === 'checking' && <p className="text-muted-foreground m-0 text-sm">{t('embeddingChecking')}</p>}
+      {embeddingStatus === 'error' && <p className="error m-0 text-sm" role="alert">{t('embeddingProbeFailed')}</p>}
     </div>
   </div>;
 }

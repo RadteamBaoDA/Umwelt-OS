@@ -10,9 +10,9 @@ export function WorkspaceSwitcher() {
   const t = useTranslations('workspaces');
   const { workspaces, selection, selectWorkspace } = useWorkspace();
   if (!selection) return null;
-  return <div className="flex items-center gap-2">
+  return <div className="flex min-w-0 items-center gap-2">
     <Select value={selection.id} onValueChange={selectWorkspace}>
-    <SelectTrigger aria-label={t('switcherLabel')} className="max-w-48 sm:max-w-56"><SelectValue /></SelectTrigger>
+    <SelectTrigger aria-label={t('switcherLabel')} className="min-w-0 max-w-28 sm:max-w-56"><SelectValue /></SelectTrigger>
     <SelectContent>{workspaces.map((w) => <SelectItem key={w.id} value={w.id}>
       {w.name}{w.role === 'member' ? ` · ${t('memberBadge')}` : ''}
     </SelectItem>)}</SelectContent>

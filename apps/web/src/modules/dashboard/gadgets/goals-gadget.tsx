@@ -6,7 +6,8 @@ import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { apiRequest } from '@/core/api';
 import { useWorkspace } from '@/core/workspace-context';
-import type { GadgetInstance } from '../api';
+import { unsupportedListFilters, type GadgetInstance } from '../api';
+import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { GoalForm } from '@/modules/goals/goal-form';
 import { GoalList } from '@/modules/goals/goal-list';
 import { GoalDetail } from '@/modules/goals/goal-detail';
@@ -33,11 +34,11 @@ export function GoalsGadget({ instance, proposal }: GoalsGadgetProps) {
   const definition = instance.definition;
   const ids = definition.scope.source_item_ids ?? [];
   const filters = definition.filters;
-  const unsupported = Object.keys(filters).filter((key) => !['keywords', 'exclude_keywords', 'limit'].includes(key));
+  const unsupported = unsupportedListFilters(filters);
   const scopeKey = `${instance.id}:${definition.id}:${definition.revision}`;
-  if (unsupported.length) return <div role="status" className="p-3 text-sm text-destructive">{t('unsupportedGoalFilters', { fields: unsupported.join(', ') })}</div>;
-  if (session.isLoading) return <p role="status" className="p-3 text-sm text-muted-foreground">{t('loadingSession')}</p>;
-  if (!session.data) return <p role="alert" className="p-3 text-sm text-destructive">{t('sessionUnavailable')}</p>;
+  if (unsupported.length) return <GadgetNotice kind="error" message={t('unsupportedGoalFilters', { fields: unsupported.join(', ') })} />;
+  if (session.isLoading) return <GadgetSkeleton variant="list" label={t('loadingSession')} />;
+  if (!session.data) return <GadgetNotice kind="error" message={t('sessionUnavailable')} />;
   const token = session.data.csrfToken;
   if (linkedTaskId) return linkedTask.data
     ? <TaskDetail task={linkedTask.data} csrfToken={token} onClose={() => setLinkedTaskId(null)} onTaskChanged={() => { void linkedTask.refetch(); }} />

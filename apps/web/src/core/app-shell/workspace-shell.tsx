@@ -5,8 +5,8 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslations } from 'next-intl';
-import { LayoutDashboard, MessageSquare, PanelLeftClose, PanelLeftOpen, Settings, type LucideIcon } from 'lucide-react';
-import { UmweltLogo } from '@/components/brand/umwelt-mark';
+import { LayoutDashboard, MessageSquare, Settings, type LucideIcon } from 'lucide-react';
+import { UmweltLogo, UmweltMark } from '@/components/brand/umwelt-mark';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -88,7 +88,7 @@ function ChatTriggerButton() {
       title={t('quickChat')}
       aria-label={t('quickChat')}
     >
-      <MessageSquare className="size-4 text-primary" aria-hidden="true" />
+      <MessageSquare className="size-4 text-muted-foreground" aria-hidden="true" />
       <span className="hidden sm:inline">{t('quickChat')}</span>
     </Button>
   );
@@ -103,9 +103,9 @@ let ownerSignOutInFlight = false;
 
 /**
  * Render the authenticated app shell with session, route, and responsive main-navigation state.
- * The sidebar starts expanded, stays in its chosen state across route changes, and resets on reload;
- * CSS restores its labels and hides the toggle at tablet and mobile widths. The shell keeps the header,
- * navigation, and connection footer fixed while `.workspace-main` owns page scrolling.
+ * Navigation is a 56px icon rail (logo at its top, tooltip plus accessible name per destination) beside a 48px top bar;
+ * at 720px and below the rail becomes the labelled bottom bar. The shell keeps the header,
+ * navigation, and top-bar connection status fixed while `.workspace-main` owns page scrolling.
  * @param children The current route content rendered inside the main scroll region.
  */
 export function WorkspaceShell({ children }: { children: ReactNode }) {
@@ -120,7 +120,6 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   const [accountOpen, setAccountOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const sessionEndedRef = useRef(false);
   /** Set while the owner's own logout is in flight: the server has revoked the session, so 401s are expected. */
@@ -232,20 +231,18 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   }, [adminViewerPrivateRedirect, adminViewerSettingsRedirect, memberSettingsRedirect, router]);
 
   if (session.isPending) return <div className="shell">
-    <header className="topbar"><Link href="/login" className="brand-name" aria-label="Umwelt-OS"><UmweltLogo /></Link></header>
+    <header className="topbar"><Link href="/login" className="brand-name" aria-label="Umwelt-OS"><UmweltLogo /></Link><ConnectionFooter apiStatus="connecting" realtimeStatus={realtime.status} onRetry={() => apiHealth.refetch()} retrying={apiHealth.isFetching} /></header>
     <main id="main-content" tabIndex={-1} className="page"><div className="status-panel skeleton" aria-label={t('loadingWorkspace')} /></main>
-    <ConnectionFooter apiStatus="connecting" realtimeStatus={realtime.status} onRetry={() => apiHealth.refetch()} retrying={apiHealth.isFetching} />
   </div>;
   if (session.isError || !session.data) {
     const expired = session.error instanceof ApiError && session.error.status === 401;
     return <div className="shell">
-      <header className="topbar"><Link href="/login" className="brand-name" aria-label="Umwelt-OS"><UmweltLogo /></Link></header>
+      <header className="topbar"><Link href="/login" className="brand-name" aria-label="Umwelt-OS"><UmweltLogo /></Link><ConnectionFooter apiStatus={expired ? 'expired' : online ? 'unavailable' : 'clientOffline'} realtimeStatus={realtime.status} onRetry={() => apiHealth.refetch()} retrying={apiHealth.isFetching} /></header>
       <main id="main-content" tabIndex={-1} className="page"><section className="status-panel">
       <h1>{expired ? t('expiredTitle') : t('workspaceUnavailable')}</h1>
       <p className="text-muted-foreground">{expired ? t('expiredHelp') : t('workspaceUnavailableHelp')}</p>
       <Button variant="outline" onClick={() => session.refetch()}>{t('retry')}</Button>
       </section></main>
-      <ConnectionFooter apiStatus={expired ? 'expired' : online ? 'unavailable' : 'clientOffline'} realtimeStatus={realtime.status} onRetry={() => apiHealth.refetch()} retrying={apiHealth.isFetching} />
     </div>;
   }
 
@@ -267,30 +264,13 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   return <SessionContext.Provider value={session.data}>
       <div className="shell">
         <a href="#main-content" className="skip-link">{t('skipToContent')}</a>
-        <div className="workspace" data-nav-collapsed={sidebarCollapsed}>
+        <div className="workspace">
           <TooltipProvider delayDuration={300}>
             <nav id="workspace-nav" className="workspace-nav" aria-label={t('mainNavigation')}>
               <div className="workspace-nav-header">
-                <Link href="/dashboard" className="brand-name workspace-brand" aria-label="Umwelt-OS"><UmweltLogo /></Link>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="workspace-nav-toggle"
-                      aria-label={t(sidebarCollapsed ? 'expandSidebar' : 'collapseSidebar')}
-                      aria-controls="workspace-nav-links"
-                      aria-expanded={!sidebarCollapsed}
-                      onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
-                    >
-                      {sidebarCollapsed ? <PanelLeftOpen aria-hidden="true" /> : <PanelLeftClose aria-hidden="true" />}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent className="workspace-nav-tooltip" side="right">{t(sidebarCollapsed ? 'expandSidebar' : 'collapseSidebar')}</TooltipContent>
-                </Tooltip>
+                <Link href="/dashboard" className="brand-name workspace-brand" aria-label="Umwelt-OS"><UmweltMark /></Link>
               </div>
-              <div id="workspace-nav-links" className="workspace-nav-links">
+              <div className="workspace-nav-links">
                 {visibleMainNavigation.map((item) => {
                   const Icon = navigationIcons[item.id];
                   const link = <Link
@@ -299,19 +279,25 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
                     aria-current={active === item.id ? 'page' : undefined}
                     className="workspace-nav-link"
                   >
-                    <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <Icon className="size-[18px] shrink-0" aria-hidden="true" />
                     <span className="workspace-nav-label">{t(item.messageKey)}</span>
                   </Link>;
-                  return sidebarCollapsed ? <Tooltip key={item.id}>
+                  return <Tooltip key={item.id}>
                     <TooltipTrigger asChild>{link}</TooltipTrigger>
                     <TooltipContent className="workspace-nav-tooltip" side="right">{t(item.messageKey)}</TooltipContent>
-                  </Tooltip> : link;
+                  </Tooltip>;
                 })}
               </div>
             </nav>
           </TooltipProvider>
           <div className="workspace-column">
           <header className="topbar">
+            <ConnectionFooter
+              apiStatus={!online ? 'clientOffline' : apiHealth.isFetching && apiHealth.isError ? 'reconnecting' : apiHealth.isPending ? 'connecting' : apiHealth.isError ? 'unavailable' : 'connected'}
+              realtimeStatus={realtime.status}
+              onRetry={() => apiHealth.refetch()}
+              retrying={apiHealth.isFetching}
+            />
             <div className="top-actions">
               {pathname.startsWith('/dashboard/') && visibleMainNavigation.some((item) => item.id === 'chat') && <ChatTriggerButton />}
               <CommandPalette />
@@ -325,12 +311,6 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
             : children}</main>
           </div>
         </div>
-        <ConnectionFooter
-          apiStatus={!online ? 'clientOffline' : apiHealth.isFetching && apiHealth.isError ? 'reconnecting' : apiHealth.isPending ? 'connecting' : apiHealth.isError ? 'unavailable' : 'connected'}
-          realtimeStatus={realtime.status}
-          onRetry={() => apiHealth.refetch()}
-          retrying={apiHealth.isFetching}
-        />
         {logout.error && <p className="error" role="alert">{t('signOutFailed')}</p>}
         <PreferencesDialog
           open={preferencesOpen}

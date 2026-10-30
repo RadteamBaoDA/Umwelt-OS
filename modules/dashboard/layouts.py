@@ -53,22 +53,53 @@ def validate_layout(
                 raise ValueError("layout rectangles cannot overlap")
 
 
+def find_free_position(
+    occupied: Sequence[tuple[int, int, int, int]], columns: int, width: int, height: int
+) -> tuple[int, int] | None:
+    """Return the first row-major (x, y) where a width x height rectangle misses every (x, y, w, h).
+
+    A free rectangle first appears at y=0 or an existing rectangle's bottom; 100 placements and
+    20 columns cap the candidate scan at 2,020 positions. Returns None when nothing fits.
+    """
+    y_candidates = sorted({0, *(y + h for _x, y, _w, h in occupied)})
+    return next((
+        (x, y)
+        for y in y_candidates
+        if y + height <= MAX_LAYOUT_ROWS
+        for x in range(columns - width + 1)
+        if not any(
+            x < ox + ow and ox < x + width and y < oy + oh and oy < y + height
+            for ox, oy, ow, oh in occupied
+        )
+    ), None)
+
+
 def default_desktop_layout(
-    minimum_sizes: Mapping[UUID, tuple[int, int]], columns: int = MAX_COLUMNS
+    sizes: Mapping[UUID, tuple[int, int]],
+    columns: int = MAX_COLUMNS,
+    minimum_sizes: Mapping[UUID, tuple[int, int]] | None = None,
 ) -> list[LayoutItem]:
-    """Pack renderer-minimum rectangles in stable input order, wrapping at the column edge."""
+    """Pack rectangles of `sizes` in stable input order, wrapping at the column edge.
+
+    The last rectangle of every row is widened to end exactly at `columns` (never narrower, so
+    minimums still hold); rows keep their own heights, so nothing overlaps.
+
+    `sizes` may be roomier renderer defaults; the result is validated against `minimum_sizes`
+    (the true renderer minimums) when given, otherwise against `sizes` itself.
+    """
+    minimum_sizes = sizes if minimum_sizes is None else minimum_sizes
     if type(columns) is not int or not 1 <= columns <= MAX_COLUMNS:
         raise ValueError("columns must be an integer from 1 through 20")
-    if len(minimum_sizes) > MAX_LAYOUT_ITEMS:
+    if len(sizes) > MAX_LAYOUT_ITEMS:
         raise ValueError("a dashboard cannot contain more than 100 placements")
 
     placements: list[LayoutItem] = []
     x = 0
     y = 0
     row_height = 0
-    for instance_id, (width, height) in minimum_sizes.items():
+    for instance_id, (width, height) in sizes.items():
         if width < 1 or height < 1 or width > columns:
-            raise ValueError("renderer minimum cannot fit configured desktop columns")
+            raise ValueError("renderer size cannot fit configured desktop columns")
         if x + width > columns:
             y += row_height
             x = 0
@@ -80,22 +111,35 @@ def default_desktop_layout(
         )
         x += width
         row_height = max(row_height, height)
+    # Stretch the last rectangle of each row to the column edge so rows have no ragged right gap.
+    last_in_row: dict[int, int] = {}
+    for index, item in enumerate(placements):
+        last_in_row[item.y] = index
+    for index in last_in_row.values():
+        item = placements[index]
+        placements[index] = item.model_copy(update={"w": columns - item.x})
     validate_layout(placements, columns, minimum_sizes)
     return placements
 
 
 def default_mobile_layout(
-    minimum_sizes: Mapping[UUID, tuple[int, int]], columns: int = MAX_COLUMNS
+    sizes: Mapping[UUID, tuple[int, int]],
+    columns: int = MAX_COLUMNS,
+    minimum_sizes: Mapping[UUID, tuple[int, int]] | None = None,
 ) -> list[LayoutItem]:
-    """Stack each gadget full-width in stable input order with its renderer minimum height."""
+    """Stack each gadget full-width in stable input order using the height from `sizes`.
+
+    `minimum_sizes` (true renderer minimums) is used for validation when given, else `sizes`.
+    """
+    minimum_sizes = sizes if minimum_sizes is None else minimum_sizes
     if type(columns) is not int or not 1 <= columns <= MAX_COLUMNS:
         raise ValueError("columns must be an integer from 1 through 20")
-    if len(minimum_sizes) > MAX_LAYOUT_ITEMS:
+    if len(sizes) > MAX_LAYOUT_ITEMS:
         raise ValueError("a dashboard cannot contain more than 100 placements")
 
     placements: list[LayoutItem] = []
     y = 0
-    for instance_id, (minimum_width, height) in minimum_sizes.items():
+    for instance_id, (minimum_width, height) in sizes.items():
         if minimum_width > columns:
             raise ValueError("renderer minimum cannot fit configured mobile columns")
         if y + height > MAX_LAYOUT_ROWS:

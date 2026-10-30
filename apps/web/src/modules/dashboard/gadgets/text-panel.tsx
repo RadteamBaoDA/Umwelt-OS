@@ -5,6 +5,7 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import type { GadgetInstance } from '../api';
+import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge/api';
 
 /** Props for the TextPanel gadget component. */
@@ -36,7 +37,7 @@ export function TextPanel({ instance, content }: TextPanelProps) {
     <div className="flex flex-col h-full bg-card text-card-foreground p-3.5 space-y-3 overflow-y-auto">
       <div className="flex items-center justify-between text-xs text-muted-foreground border-b border-border pb-2">
         <div className="flex items-center gap-1.5 font-medium">
-          <FileText className="w-3.5 h-3.5 text-primary" />
+          <FileText className="w-3.5 h-3.5 text-muted-foreground" />
           <span>{t('textPanelTitle')}</span>
         </div>
         <span className="font-mono text-[10px]">{t('gadgetRevision', { revision: definition.revision })}</span>
@@ -44,15 +45,15 @@ export function TextPanel({ instance, content }: TextPanelProps) {
 
       {content ? (
         <div className="text-xs leading-relaxed text-foreground/90 whitespace-pre-wrap font-sans">{content}</div>
-      ) : sourceIds.length === 0 ? <p role="status" className="text-sm text-muted-foreground">{t('gadgetDataEmpty')}</p>
-        : query.isPending ? <p role="status" className="text-sm text-muted-foreground">{t('gadgetDataLoading')}</p>
-        : query.isError ? <p role="alert" className="text-sm text-destructive">{t('gadgetDataLoadFailed')}</p>
+      ) : sourceIds.length === 0 ? <GadgetNotice kind="setup" message={t('gadgetDataEmpty')} />
+        : query.isPending ? <GadgetSkeleton variant="list" label={t('gadgetDataLoading')} />
+        : query.isError ? <GadgetNotice kind="error" message={t('gadgetDataLoadFailed')} />
           : query.data?.items.length ? query.data.items.slice(0, 5).map((item) => (
             <section key={item.document_version_id} className="space-y-1">
               <h3 className="text-xs font-semibold">{item.title}</h3>
               <p className="text-xs leading-relaxed text-foreground/90 whitespace-pre-wrap">{item.excerpt}</p>
             </section>
-          )) : <p role="status" className="text-sm text-muted-foreground">{t('gadgetDataEmpty')}</p>}
+          )) : <GadgetNotice kind="empty" message={t('gadgetDataEmpty')} />}
     </div>
   );
 }

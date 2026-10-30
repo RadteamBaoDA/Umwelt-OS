@@ -8,7 +8,6 @@ import {
   Plus,
   RotateCw,
   Search,
-  ShieldAlert,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import React, { useState } from 'react';
@@ -19,6 +18,7 @@ import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import type { GadgetInstance, HighlightRule } from '../api';
 import { evaluateGadgetHighlights } from '../api';
+import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 
 /** Single monitored rule or target symbol entry on the watchlist table. */
 export interface WatchlistItem {
@@ -100,7 +100,7 @@ export function WatchlistGadget({
       {/* Header bar */}
       <div className="flex items-center justify-between border-b border-border pb-2 text-xs">
         <div className="flex items-center gap-1.5 font-medium text-muted-foreground">
-          <Eye className="w-3.5 h-3.5 text-primary" />
+          <Eye className="w-3.5 h-3.5 text-muted-foreground" />
           <span>
             {daily('monitoredRules', { count: items.length })}
           </span>
@@ -144,17 +144,11 @@ export function WatchlistGadget({
       )}
 
       {/* Empty State */}
-      {matchesQuery.isPending && highlightRules.length > 0 && definition.source_ids.length > 0 && <p role="status" className="text-sm text-muted-foreground">{t('gadgetDataLoading')}</p>}
-      {matchesQuery.isError && <p role="alert" className="text-sm text-destructive">{t('gadgetDataLoadFailed')}</p>}
+      {matchesQuery.isPending && highlightRules.length > 0 && definition.source_ids.length > 0 && <GadgetSkeleton variant="table" label={t('gadgetDataLoading')} />}
+      {matchesQuery.isError && <GadgetNotice kind="error" message={t('gadgetDataLoadFailed')} />}
       {!(matchesQuery.isPending && highlightRules.length > 0 && definition.source_ids.length > 0)
         && !matchesQuery.isError && filteredItems.length === 0 && (
-        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground">
-          <ShieldAlert className="w-8 h-8 mb-2 opacity-50" />
-          <p className="text-xs font-semibold text-foreground mb-1">{daily('watchlistEmpty')}</p>
-          <p className="text-[11px] max-w-xs text-muted-foreground">
-            {daily('watchlistEmptyDetail')}
-          </p>
-        </div>
+        <GadgetNotice kind="empty" message={`${daily('watchlistEmpty')}. ${daily('watchlistEmptyDetail')}`} />
       )}
 
       {/* Watchlist Table */}

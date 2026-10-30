@@ -6,7 +6,8 @@ import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { apiRequest } from '@/core/api';
 import { useWorkspace } from '@/core/workspace-context';
-import type { GadgetInstance } from '../api';
+import { unsupportedListFilters, type GadgetInstance } from '../api';
+import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { TaskForm } from '@/modules/tasks/task-form';
 import { TaskList } from '@/modules/tasks/task-list';
 import { TaskDetail } from '@/modules/tasks/task-detail';
@@ -25,11 +26,11 @@ export function TasksGadget({ instance }: TasksGadgetProps) {
   const definition = instance.definition;
   const ids = definition.scope.source_item_ids ?? [];
   const filters = definition.filters;
-  const unsupported = Object.keys(filters).filter((key) => !['keywords', 'exclude_keywords', 'limit'].includes(key));
+  const unsupported = unsupportedListFilters(filters);
   const scopeKey = `${instance.id}:${definition.id}:${definition.revision}`;
-  if (unsupported.length) return <div role="status" className="p-3 text-sm text-destructive">{t('unsupportedTaskFilters', { fields: unsupported.join(', ') })}</div>;
-  if (session.isLoading) return <p role="status" className="p-3 text-sm text-muted-foreground">{t('loadingSession')}</p>;
-  if (!session.data) return <p role="alert" className="p-3 text-sm text-destructive">{t('sessionUnavailable')}</p>;
+  if (unsupported.length) return <GadgetNotice kind="error" message={t('unsupportedTaskFilters', { fields: unsupported.join(', ') })} />;
+  if (session.isLoading) return <GadgetSkeleton variant="list" label={t('loadingSession')} />;
+  if (!session.data) return <GadgetNotice kind="error" message={t('sessionUnavailable')} />;
   const token = session.data.csrfToken;
   return <section className="flex h-full min-h-0 flex-col gap-3 overflow-auto p-3">
     {definition.source_ids.length > 0 && <p role="status" className="rounded border border-border p-2 text-xs text-muted-foreground">{t('taskSourceFilterUnavailable', { count: definition.source_ids.length })}</p>}

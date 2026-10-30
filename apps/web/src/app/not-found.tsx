@@ -9,7 +9,7 @@ export default function NotFound() {
       <section className="auth-panel">
         <h1>{t('notFoundTitle')}</h1>
         <p className="muted">{t('notFoundBody')}</p>
-        <Link className="text-accent underline" href="/">{t('home')}</Link>
+        <Link className="text-foreground underline underline-offset-2" href="/">{t('home')}</Link>
       </section>
     </main>
   );

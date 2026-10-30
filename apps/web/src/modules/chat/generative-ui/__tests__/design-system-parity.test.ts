@@ -52,15 +52,15 @@ describe('Design System Token Parity & Stylesheet Generation', () => {
 
   it('maps OpenIntelligentUI CSS variables to Umwelt-OS tokens in light and dark themes', () => {
     expect(UMWELT_LIGHT_TOKENS['--color-background-primary']).toBe('#ffffff');
-    expect(UMWELT_LIGHT_TOKENS['--color-background-secondary']).toBe('#f4f5f2');
+    expect(UMWELT_LIGHT_TOKENS['--color-background-secondary']).toBe('#f2f5f2');
     expect(UMWELT_LIGHT_TOKENS['--color-text-primary']).toBe('#17211c');
-    expect(UMWELT_LIGHT_TOKENS['--color-text-secondary']).toBe('#69756e');
+    expect(UMWELT_LIGHT_TOKENS['--color-text-secondary']).toBe('#5c6660');
     expect(UMWELT_LIGHT_TOKENS['--color-accent-primary']).toBe('#176a4a');
 
-    expect(UMWELT_DARK_TOKENS['--color-background-primary']).toBe('#1d2621');
-    expect(UMWELT_DARK_TOKENS['--color-background-secondary']).toBe('#141a17');
+    expect(UMWELT_DARK_TOKENS['--color-background-primary']).toBe('#161a17');
+    expect(UMWELT_DARK_TOKENS['--color-background-secondary']).toBe('#0e110f');
     expect(UMWELT_DARK_TOKENS['--color-text-primary']).toBe('#edf3ee');
-    expect(UMWELT_DARK_TOKENS['--color-text-secondary']).toBe('#a1afa6');
+    expect(UMWELT_DARK_TOKENS['--color-text-secondary']).toBe('#a7b1aa');
     expect(UMWELT_DARK_TOKENS['--color-accent-primary']).toBe('#77c69c');
 
     expect(OPEN_INTELLIGENT_UI_TOKEN_ALIASES['--color-background-primary']).toBe('var(--surface)');
@@ -72,14 +72,14 @@ describe('Design System Token Parity & Stylesheet Generation', () => {
     const darkCss = buildSandboxStylesheet('dark');
 
     expect(lightCss).toContain('color-scheme: light;');
-    expect(lightCss).toContain('--bg: #f4f5f2;');
+    expect(lightCss).toContain('--bg: #f2f5f2;');
     expect(lightCss).toContain('--color-background-primary: #ffffff;');
     expect(lightCss).toContain('svg text.t');
     expect(lightCss).toContain('@keyframes fadeSlideIn');
 
     expect(darkCss).toContain('color-scheme: dark;');
-    expect(darkCss).toContain('--bg: #141a17;');
-    expect(darkCss).toContain('--color-background-primary: #1d2621;');
+    expect(darkCss).toContain('--bg: #0e110f;');
+    expect(darkCss).toContain('--color-background-primary: #161a17;');
 
     expect(THEME_CSS).toContain('@media (prefers-color-scheme: dark)');
     expect(SVG_CLASSES_CSS).toContain('.c-teal');

@@ -141,6 +141,27 @@ _RENDERERS_BY_ID = {descriptor.id: descriptor for descriptor in RENDERERS}
 _PRESETS_BY_ID = {preset.id: preset for preset in PRESETS}
 
 
+# Preferred first-placement size (width x height, 20-column grid); never below the renderer minimum.
+DEFAULT_SIZES: Mapping[str, tuple[int, int]] = {
+    "news_feed": (6, 8), "telegram_feed": (6, 8), "text_panel": (6, 5), "table_panel": (10, 7),
+    "video_panel": (8, 7), "finance_chart": (8, 6), "personal_context": (5, 5), "map": (12, 9),
+    "intelligence_panel": (10, 7), "highlights": (5, 5), "watch_rules": (5, 5), "tasks": (5, 6),
+    "goals": (5, 6), "daily_brief": (8, 7), "weather": (5, 5), "provider_observation": (5, 4),
+    "research": (5, 5), "github_project": (8, 6),
+}
+
+
+def renderer_default_size(renderer_id: str) -> tuple[int, int]:
+    """Return the roomy (width, height) for a new gadget, falling back to the renderer minimum.
+
+    Raises KeyError for unknown renderers. The result is clamped so it is never smaller than the
+    minimum, which remains the only size used for layout validation.
+    """
+    descriptor = renderer_descriptor(renderer_id)
+    width, height = DEFAULT_SIZES.get(renderer_id, (0, 0))
+    return max(width, descriptor.minimum_width), max(height, descriptor.minimum_height)
+
+
 def renderer_descriptor(renderer_id: str) -> RendererDescriptor:
     """Return known saved-configuration metadata or raise KeyError for unknown renderer IDs."""
     return _RENDERERS_BY_ID[renderer_id]
@@ -314,3 +335,22 @@ def _check_templates() -> None:
 
 
 _check_templates()
+
+
+def propose_slot_sources(
+    renderer_id: str, active: Sequence[tuple[UUID, str | None, str]], *, multi_limit: int = 3,
+) -> list[UUID]:
+    """Pick default source ids for one renderer from ``(id, provider, type)`` active-source tuples. Pure.
+
+    ``none`` renderers bind nothing; ``single`` binds one, ``multi`` up to ``multi_limit``. Only sources whose
+    data shapes intersect ``accepted_shapes`` qualify (None accepts all). Order is deterministic:
+    sources with a provider rank before provider-less generic sources (rss/web/rest pages), then
+    ``(provider or "", type, id)`` since no provider preference list exists and names are not in the tuple.
+    """
+    descriptor = renderer_descriptor(renderer_id)
+    if descriptor.source_mode == "none":
+        return []
+    accepted = descriptor.accepted_shapes
+    ranked = sorted((item for item in active if accepted is None or source_data_shapes(item[1], item[2]) & accepted),
+                    key=lambda item: (item[1] is None, item[1] or "", item[2], str(item[0])))
+    return [item[0] for item in ranked[: 1 if descriptor.source_mode == "single" else multi_limit]]

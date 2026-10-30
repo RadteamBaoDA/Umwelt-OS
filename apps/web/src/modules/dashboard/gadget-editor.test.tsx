@@ -86,6 +86,13 @@ describe('GadgetEditor', () => {
     expect(screen.queryByText(gadgetSettingsMessages['en-us'].compatibleCountsFailed)).toBeNull();
   });
 
+  it('renders tiles while compatible counts are still pending', async () => {
+    api.listCompatibleSourceCounts.mockReturnValue(new Promise(() => {}));
+    wrap();
+    expect(await screen.findByRole('button', { name: /Metric/ })).toBeTruthy();
+    expect(screen.queryByText('2 compatible datasources')).toBeNull();
+  });
+
   it('zero-count tile links to filtered sources', async () => {
     api.listGadgetRenderers.mockResolvedValue([...renderers, financeRenderer]);
     api.listGadgetTemplates.mockResolvedValue([...templates, backendTemplate('chart')]);

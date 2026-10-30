@@ -351,9 +351,9 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
   const client = useQueryClient();
   const nameId = useId();
   const limitId = useId();
-  const renderers = useQuery({ queryKey: dashboardKeys.renderers, queryFn: ({ signal }) => listGadgetRenderers(signal) });
-  const templates = useQuery({ queryKey: dashboardKeys.templates, queryFn: ({ signal }) => listGadgetTemplates(signal), enabled: !definition });
-  const catalogQuery = useQuery({ queryKey: dashboardKeys.metricCatalog, queryFn: ({ signal }) => getMetricCatalog(signal), staleTime: 300_000 });
+  const renderers = useQuery({ queryKey: dashboardKeys.renderers, queryFn: ({ signal }) => listGadgetRenderers(signal), staleTime: Infinity });
+  const templates = useQuery({ queryKey: dashboardKeys.templates, queryFn: ({ signal }) => listGadgetTemplates(signal), enabled: !definition, staleTime: Infinity });
+  const catalogQuery = useQuery({ queryKey: dashboardKeys.metricCatalog, queryFn: ({ signal }) => getMetricCatalog(signal), staleTime: Infinity });
   const counts = useQuery({ queryKey: dashboardKeys.compatibleCounts, queryFn: ({ signal }) => listCompatibleSourceCounts(signal), enabled: !definition });
   const [choice, setChoice] = useState<string | null>(definition ? definition.renderer : null);
   const { rows: sourceRows } = useSourceRows();

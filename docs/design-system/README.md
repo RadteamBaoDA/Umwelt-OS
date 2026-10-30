@@ -16,35 +16,36 @@ A private personal-intelligence workspace: calm, dense, honest about what it kno
 ## Visual foundations
 
 ### Color
-- Canvas is `bg`; content lives on `surface` panels; text is `text`, supporting copy `muted`, all borders `line`.
-- `accent` is the only brand hue. Spend it on: the one primary action per section, links and text buttons, checked/selected controls, focus rings. Never as a decorative card fill.
-- Text on an `accent` fill uses `on-accent` (white in light, `#102117` in dark — the dark accent is light).
+- Canvas is `bg`; content lives on `surface` panels, with `raised` for hover rows and user turns and `active` for the selected nav item or list row. Text is `text`, supporting copy `muted`; card edges are `line`, row rules `rule`, input borders `control`.
+- `primary` is near-black ink (inverted in dark) and fills the one primary button per section. `accent` is the data green: a chart's main series, the newest data, focus rings and checked controls (`text-data` / `bg-data`). Never as chrome or a decorative card fill.
+- Text on a `primary` fill uses `primary-foreground` (white in light, `#0e110f` in dark).
+- `positive` / `negative` and the `pill-*` pairs mark state, always with a sign or word.
 - `danger` only for errors and destructive actions, always with words.
-- shadcn primitives read the Tailwind aliases (`color-background`, `color-border`, `color-ring`, …). Note the trap: Tailwind's `bg-accent` is `color-accent` → `bg` (a quiet hover fill), not the brand green.
-- Feature code never passes literal colors; add a semantic token instead. Planned but not yet in code: `chart-1…5` series colors and `market-positive/negative/neutral` (always with sign + text, never color alone).
-- `muted` on `bg` in light is ~4.4:1, just under AA. Prefer `muted` on `surface`.
+- shadcn primitives read the Tailwind aliases (`color-background`, `color-border`, `color-ring`, …). Note the trap: Tailwind's `bg-accent` is `color-accent` → `bg` (a quiet hover fill), not the data green (use `text-data`).
+- Feature code never passes literal colors; add a semantic token instead. `chart-1…5` are accent, ink, two greys and a dashed accent: one hue per chart.
+- `muted` holds at least 4.5:1 on `bg` and `surface` in both themes (5.4:1 on `bg` in light).
 
 ### Type
-- One family, `sans` (Inter → system UI stack). Inter is named but not shipped; most machines render the system face. Don't introduce a second family.
+- One family, `sans` (Inter → system UI stack). Inter is self-hosted through `next/font/google` (downloaded at build, served from this origin). Don't introduce a second family. Figures use tabular numerals (`.tabular`, and every `table`).
 - Page: `eyebrow` (accent, uppercase) → `page-title` → body in `muted`. Sub-panels use `section-title`. Overlays use `dialog-title`.
-- Body is 15px / 1.6. Labels are `label` (13px / 650). Status and timestamps `meta` or `caption`, in `muted`.
+- Body is 14px / 1.5; page titles 24/600. Labels are `label` (13px / 650). Status and timestamps `meta` or `caption`, in `muted`.
 - The wordmark is the text "Umwelt-OS" in `brand-name` (800, −0.03em). There is no logo file.
 
 ### Space, size, layout
-- Scale `space-1…space-6` (4/8/12/16/24/32px). Every control is at least `control-height` (44px).
-- Shell fills 100% width — no centred max-width. Desktop: `nav-width` (180px) column + `minmax(0, 1fr)` main, `space-5` gap. Under 720px the nav becomes a horizontal scroller and two-column detail grids stack.
+- Scale `space-1…space-6` (4/8/12/16/24/32px). Controls are `control-height` 36px on fine pointers and 44px on coarse pointers (`pointer-coarse:` / `@media (pointer: coarse)`); bottom-nav tabs and theme options stay 44px or taller.
+- Shell fills 100% width — no centred max-width. Desktop: a `nav-width` (56px) icon rail (logo at its top, tooltip labels) + a 48px top bar + `minmax(0, 1fr)` main. At 720px and below the rail becomes a labelled bottom bar and two-column detail grids stack.
 - Respect safe-area insets on shell padding and dialogs; content uses `min-height: 100dvh`, never fixed height with hidden overflow.
 - Main navigation is exactly **Dashboard / Chat / Settings**. Settings owns data sources, models and system prompts; dashboard layouts, gadget templates, topics and highlight rules are managed from Dashboard. Account, theme and language live only in the user menu.
 
 ### Shape and depth
-- Radii nest outward: `radius-sm` items inside `radius-md` controls inside `radius-lg` sub-panels inside `radius-panel` panels.
-- Separate with 1px `line` borders, not shadows. Shadows exist only on raised layers: `shadow-popover` (menus, select), `shadow-dialog` (modals), `shadow-panel` (auth card, nearly invisible).
+- Radii are 8 (cards, gadgets, panels), 6 (buttons, inputs) and 4 (chips, menu items); dialogs and Sheet use 12.
+- Separate with 1px `line` borders; no resting shadows. Shadows exist only on floating layers: `shadow-popover` (menus, select) and `shadow-dialog` (modals).
 - Empty states: dashed `line` border, `radius-lg`, `muted` text.
 
 ### States
 - Focus: 3px outline of `accent` at 40% opacity, 2px offset, on every interactive element (shadcn primitives use a 2px `color-ring` ring). Never remove it.
 - Disabled: opacity .55–.65 and `not-allowed` cursor; a submitting button shows `progress`.
-- Selected: nav item becomes a `surface` pill with a `line` border; option cards get an `accent` border plus a 9% `accent` tint.
+- Selected: nav item takes the `active` fill with ink icon; option cards get an `accent` border plus a 9% `accent` tint.
 - Loading: a shimmering skeleton between `surface` and `line`, `radius-panel`. All animation is cut under `prefers-reduced-motion`.
 
 ### Themes

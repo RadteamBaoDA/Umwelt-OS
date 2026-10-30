@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures';
-import { collectedRecordCount, connectWizardSource, deleteSources, findSources, openWizard, WIZARD_CASES } from './sources-helpers';
+import { collectedRecordCount, connectWizardSource, deleteSources, findSources, hasLiveKeys, openWizard, WIZARD_CASES } from './sources-helpers';
 
 /**
  * Walks the "Connect a source" wizard to its last step ("Save and test fetch") for every provider card it offers as
@@ -7,6 +7,9 @@ import { collectedRecordCount, connectWizardSource, deleteSources, findSources, 
  * Keyed providers use a dummy key (no real keys exist in the disposable stack) and must fail with a readable
  * `Test fetch failed: <code>` message instead of crashing. Public network access is required for the `fetch` cases.
  */
+// Live keyed providers (`E2E_KEY_*`) are typed into the wizard: keep traces/screenshots/videos off so the key is never recorded.
+if (hasLiveKeys()) test.use({ trace: 'off', screenshot: 'off', video: 'off' });
+
 /** Optional `E2E_ONLY=id1,id2` narrows the table while debugging a single provider. */
 const only = process.env.E2E_ONLY?.split(",");
 

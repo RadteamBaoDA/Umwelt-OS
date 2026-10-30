@@ -55,7 +55,7 @@ function DialogOverlay({
 /** Classes for the default centered card and the full-screen variant; `full` fills the dynamic viewport and scrolls its own body. */
 const dialogSizeClass = {
   default:
-    "top-[50%] left-[50%] max-h-[calc(100dvh-2rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] rounded-lg border p-6 sm:max-w-lg",
+    "top-[50%] left-[50%] max-h-[calc(100dvh-2rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] rounded-xl border p-6 sm:max-w-lg",
   full:
     "inset-0 h-dvh max-h-dvh w-screen max-w-none translate-x-0 translate-y-0 rounded-none border-0 p-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] sm:p-6",
 } as const

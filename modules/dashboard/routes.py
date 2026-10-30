@@ -61,6 +61,15 @@ WorkspaceRead = Annotated[WorkspaceContext | AdminWorkspaceReadContext, Depends(
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 
+def _static_cache(response: Response) -> None:
+    """Mark build-time constant catalogs (renderers, templates, metric catalog) cacheable for an hour.
+
+    They contain no owner data and change only on deploy, so the browser can skip the request when the
+    gadget dialog reopens instead of queueing it behind live gadget polling.
+    """
+    response.headers["Cache-Control"] = "private, max-age=3600"
+
+
 def _no_store(response: Response) -> None:
     """Prevent private configuration and lifecycle metadata from entering shared caches."""
     response.headers["Cache-Control"] = "private, no-store"
@@ -273,14 +282,14 @@ async def delete_definition(definition_id: UUID, expected_revision: Annotated[in
 @router.get("/gadget-renderers", response_model=list[RendererRead])
 async def list_renderers(response: Response) -> list[RendererRead]:
     """Return renderer adapter metadata and minimum geometry without runtime acceptance claims."""
-    _no_store(response)
+    _static_cache(response)
     return public.renderer_reads()
 
 
 @router.get("/gadget-templates", response_model=list[GadgetTemplateRead])
 async def list_gadget_templates(response: Response) -> list[GadgetTemplateRead]:
     """Return generic gadget display templates and their renderer compatibility metadata."""
-    _no_store(response)
+    _static_cache(response)
     return public.list_templates()
 
 
@@ -295,7 +304,7 @@ async def gadget_compatible_counts(session: Session, scope: WorkspaceRead, reque
 @router.get("/gadget-metric-catalog", response_model=dict[str, ProviderMetricsRead])
 async def gadget_metric_catalog(response: Response) -> dict[str, dict[str, Any]]:
     """Return the static per-provider metric catalog used by the gadget editor."""
-    _no_store(response)
+    _static_cache(response)
     return public.metric_catalog_read()
 
 

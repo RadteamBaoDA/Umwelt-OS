@@ -4,6 +4,7 @@ import { ExternalLink, Video } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import React from 'react';
 import type { GadgetInstance } from '../api';
+import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { useQuery } from '@tanstack/react-query';
 import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge/api';
 
@@ -55,16 +56,16 @@ export function VideoPanel({ instance }: VideoPanelProps) {
     <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-y-auto">
       <div className="flex items-center justify-between text-xs text-muted-foreground border-b border-border pb-2">
         <div className="flex items-center gap-1.5 font-medium">
-          <Video className="w-3.5 h-3.5 text-primary" />
+          <Video className="w-3.5 h-3.5 text-muted-foreground" />
           <span>{daily('videoStream')}</span>
         </div>
         <span className="font-mono text-[10px]">{daily('streamCount', { count: items.length })}</span>
       </div>
 
-      {sourceIds.length === 0 && <p role="status" className="text-sm text-muted-foreground">{dashboard('videoSourcesRequired')}</p>}
-      {sourceIds.length > 0 && query.isPending && <p role="status" className="text-sm text-muted-foreground">{dashboard('gadgetDataLoading')}</p>}
-      {query.isError && <p role="alert" className="text-sm text-destructive">{dashboard('gadgetDataLoadFailed')}</p>}
-      {sourceIds.length > 0 && !query.isPending && !query.isError && items.length === 0 && <p role="status" className="text-sm text-muted-foreground">{dashboard('videoRecordsEmpty')}</p>}
+      {sourceIds.length === 0 && <GadgetNotice kind="setup" message={dashboard('videoSourcesRequired')} />}
+      {sourceIds.length > 0 && query.isPending && <GadgetSkeleton variant="list" label={dashboard('gadgetDataLoading')} />}
+      {query.isError && <GadgetNotice kind="error" message={dashboard('gadgetDataLoadFailed')} />}
+      {sourceIds.length > 0 && !query.isPending && !query.isError && items.length === 0 && <GadgetNotice kind="empty" message={dashboard('videoRecordsEmpty')} />}
       <div className="space-y-2.5">
         {items.map((video) => (
           <div

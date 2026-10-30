@@ -1700,26 +1700,21 @@ async def create_instance(session: AsyncSession, dashboard_id: UUID, payload: In
             layout_row = DashboardLayout(dashboard_id=dashboard_id, breakpoint=breakpoint, columns=20)
             session.add(layout_row)
         current = sorted((item for item in existing if item.breakpoint == breakpoint), key=lambda item: (item.y, item.x, str(item.instance_id)))
-        width = descriptor.minimum_width if breakpoint == "desktop" else layout_row.columns
-        height = descriptor.minimum_height
         if descriptor.minimum_width > layout_row.columns:
             raise ValueError("Renderer minimum does not fit the configured layout columns")
-        # A free rectangle first appears at y=0 or an existing rectangle's bottom; 100 placements
-        # and 20 columns cap this row-major candidate scan at 2,020 positions.
-        y_candidates = sorted({0, *(item.y + item.h for item in current)})
-        position = next((
-            (x, y)
-            for y in y_candidates
-            if y + height <= 100_000
-            for x in range(layout_row.columns - width + 1)
-            if not any(
-                x < item.x + item.w and item.x < x + width
-                and y < item.y + item.h and item.y < y + height
-                for item in current
-            )
-        ), None)
-        if position is None:
+        default_width, default_height = gadgets.renderer_default_size(definition.renderer)
+        occupied = [(item.x, item.y, item.w, item.h) for item in current]
+        if breakpoint == "desktop":
+            # Prefer the roomy default; fall back to the true minimum when only that fits.
+            candidates = [(min(default_width, layout_row.columns), default_height),
+                          (descriptor.minimum_width, descriptor.minimum_height)]
+        else:
+            candidates = [(layout_row.columns, default_height)]
+        found = next(((size, pos) for size in candidates
+                      if (pos := layouts.find_free_position(occupied, layout_row.columns, *size)) is not None), None)
+        if found is None:
             raise ValueError("No free layout position remains")
+        (width, height), position = found
         x, y = position
         session.add(GadgetPlacement(dashboard_id=dashboard_id, breakpoint=breakpoint, instance_id=instance.id, x=x, y=y, w=width, h=height))
     revision = _bump(dashboard)
@@ -1922,9 +1917,13 @@ _RENDERER_DISPLAY_NAMES = {
 }
 
 
-def preset_definition_name(preset_name: str, renderer_id: str) -> str:
-    """Name a preset-created definition ``<preset> · <template name>``; unknown renderers keep their id. Pure."""
-    return f"{preset_name} · {_RENDERER_DISPLAY_NAMES.get(renderer_id, renderer_id)}"
+def preset_definition_name(renderer_id: str) -> str:
+    """Name a preset-created definition after its template only; unknown renderers keep their id. Pure.
+
+    Instances have no title of their own and show the definition name, so the dashboard/preset name
+    must not be a prefix (it repeated on every gadget). Definition names carry no uniqueness constraint.
+    """
+    return _RENDERER_DISPLAY_NAMES.get(renderer_id, renderer_id)
 
 
 def preset_catalog() -> list[DashboardPresetRead]:
@@ -1938,12 +1937,27 @@ async def preview_preset(
     session: AsyncSession, preset_id: str, payload: PresetPreviewRequest, *,
     scope: Scope, multi_workspace_enabled: bool,
 ) -> PresetPreviewRead:
-    """Resolve an explicit owner source selection into a canonical, nonpersistent preview."""
+    """Resolve owner source choices into a canonical, nonpersistent preview.
+
+    Slots without explicit sources get deterministic proposals (``gadgets.propose_slot_sources``) from the
+    owner's active in-scope sources; the proposal is part of ``slots`` and thus of the fingerprint, and
+    ``apply_preset`` recomputes it, so a changed source set yields ``preview_changed``.
+    """
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     preset = gadgets.dashboard_preset(preset_id)
     preset_id = preset.id  # alias ids share the canonical slot keys and fingerprint
     gadgets.validate_preset_slot_sources(preset_id, payload.slot_sources)
-    selected = sorted({source_id for values in payload.slot_sources.values() for source_id in values}, key=str)
+    # Explicit payload choices stay authoritative; slots left without any get the best active sources proposed.
+    active_kinds: tuple[tuple[UUID, str | None, str], ...] = ()
+    if any(not payload.slot_sources.get(slot.slot_id) and gadgets.renderer_descriptor(slot.renderer).source_mode != "none"
+           for slot in preset.slots):
+        active_kinds = await sources.list_active_source_kinds(
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    slot_source_ids: dict[str, list[UUID]] = {
+        slot.slot_id: list(payload.slot_sources.get(slot.slot_id) or gadgets.propose_slot_sources(slot.renderer, active_kinds))
+        for slot in preset.slots
+    }
+    selected = sorted({source_id for values in slot_source_ids.values() for source_id in values}, key=str)
     states: dict[UUID, Any] = {}
     for offset in range(0, len(selected), 32):
         states.update(await _source_states(session, selected[offset : offset + 32], scope=scope,
@@ -1957,11 +1971,9 @@ async def preview_preset(
         if target is None:
             raise DashboardMissing
         target_revision = target.revision
-    # Active-source kinds are read lazily: only a source slot left without explicit sources needs them.
-    active_shapes: list[frozenset[Any]] | None = None
     slots: list[dict[str, Any]] = []
     for slot in preset.slots:
-        source_ids = list(payload.slot_sources.get(slot.slot_id, []))
+        source_ids = slot_source_ids[slot.slot_id]
         descriptor = gadgets.renderer_descriptor(slot.renderer)
         warnings = _renderer_warnings(slot.renderer)
         resolved = []
@@ -1977,15 +1989,8 @@ async def preview_preset(
             except gadgets.GadgetConfigError:
                 warnings.append({"code": "source_incompatible", "setup_group": "data_sources"})
         elif not source_ids and descriptor.source_mode != "none":
-            # Slots without explicit sources are never ready: source_unbound (pick one) or missing_source (add one).
-            if active_shapes is None:
-                kinds = await sources.list_active_source_kinds(
-                    session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-                active_shapes = [source_data_shapes(provider, kind) for _id, provider, kind in kinds]
-            accepted = descriptor.accepted_shapes
-            compatible = any(accepted is None or shape & accepted for shape in active_shapes)
-            # Compatible sources exist but none is chosen: apply would bind nothing, so the slot is not ready.
-            warnings.append({"code": "source_unbound" if compatible else "missing_source", "setup_group": "data_sources"})
+            # Nothing was chosen and nothing compatible could be proposed: the owner must add a source.
+            warnings.append({"code": "missing_source", "setup_group": "data_sources"})
         # A single bound measurement source seeds the chart scope; otherwise the gadget shows its setup message.
         slot_scope = (gadgets.preset_slot_scope(slot.renderer, known[0].provider)
                       if len(source_ids) == 1 and len(known) == 1 and not any(w["code"] == "source_incompatible" for w in warnings)
@@ -2005,8 +2010,12 @@ async def preview_preset(
          gadgets.renderer_descriptor(slot["renderer"]).minimum_height)
         for slot in slots
     }
-    desktop = layouts.default_desktop_layout(minimums)
-    mobile = layouts.default_mobile_layout(minimums)
+    defaults = {
+        key: gadgets.renderer_default_size(slot["renderer"])
+        for key, slot in zip(minimums, slots, strict=True)
+    }
+    desktop = layouts.default_desktop_layout(defaults, minimum_sizes=minimums)
+    mobile = layouts.default_mobile_layout(defaults, minimum_sizes=minimums)
     slot_ids_by_uuid = {
         uuid5(NAMESPACE_URL, f"bbd-os-dashboard-preset:{preset_id}:{slot['slot_id']}"): slot["slot_id"]
         for slot in slots
@@ -2049,6 +2058,15 @@ async def apply_preset(
     ), scope=scope, multi_workspace_enabled=multi_workspace_enabled)).model_dump(mode="python")
     if current["preview_fingerprint"] != payload.preview_fingerprint:
         raise DashboardConflict("preview_changed", "Preset preview changed; review it again", dashboard.revision if dashboard else None)
+    # Proposed (not payload-supplied) sources get the same lock and datasource-rule checks as explicit ones.
+    proposed_ids = [sid for slot in current["slots"] for sid in slot["source_ids"]
+                    if sid not in {x for values in payload.slot_sources.values() for x in values}]
+    if proposed_ids:
+        await _lock_selected_sources(session, proposed_ids, require_active=True, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
+        for slot in current["slots"]:
+            await _validate_selected_sources(session, slot["renderer"], slot["source_ids"], scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled)
     # Seeded measurement scopes must satisfy the bound provider's catalog before they are persisted.
     for slot in current["slots"]:
         if slot["scope"]:
@@ -2087,7 +2105,7 @@ async def apply_preset(
     created_instances: list[tuple[GadgetInstance, GadgetDefinition, Any]] = []
     for index, slot in enumerate(current["slots"]):
         descriptor = gadgets.renderer_descriptor(slot["renderer"])
-        definition = GadgetDefinition(workspace_id=scope.workspace_id, owner_id=owner_id, name=preset_definition_name(current["name"], slot["renderer"]), renderer=slot["renderer"],
+        definition = GadgetDefinition(workspace_id=scope.workspace_id, owner_id=owner_id, name=preset_definition_name(slot["renderer"]), renderer=slot["renderer"],
             source_ids=[str(item) for item in slot["source_ids"]], scope=slot["scope"], filters={"keywords": [], "exclude_keywords": [], "limit": 25}, highlight_rules=[])
         session.add(definition)
         await session.flush()
@@ -2097,8 +2115,9 @@ async def apply_preset(
         await session.flush()
         created_instances.append((instance, definition, descriptor))
     minimums = {instance.id: (descriptor.minimum_width, descriptor.minimum_height) for instance, _, descriptor in created_instances}
-    desktop = layouts.default_desktop_layout(minimums)
-    mobile = layouts.default_mobile_layout(minimums)
+    defaults = {instance.id: gadgets.renderer_default_size(definition.renderer) for instance, definition, _ in created_instances}
+    desktop = layouts.default_desktop_layout(defaults, minimum_sizes=minimums)
+    mobile = layouts.default_mobile_layout(defaults, minimum_sizes=minimums)
     for breakpoint, items in (("desktop", desktop), ("mobile", mobile)):
         assert dashboard is not None
         session.add_all([

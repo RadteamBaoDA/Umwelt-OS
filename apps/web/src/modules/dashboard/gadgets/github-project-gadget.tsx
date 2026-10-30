@@ -10,6 +10,7 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { getGitHubSummary } from '@/modules/sources/api';
 import { listTimeline } from '@/modules/timeline/api';
 import type { GadgetInstance } from '../api';
+import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 
 /** Returns the provider URL only when it is a plain github.com https link. */
 function safeGithubUrl(value: unknown): string | null {
@@ -48,9 +49,9 @@ export function GithubProjectGadget({ instance }: { instance: GadgetInstance }) 
     staleTime: 30_000,
   });
 
-  if (!sourceId) return <p role="status" className="p-3 text-sm text-muted-foreground">{t('gadgetNoSource')}</p>;
+  if (!sourceId) return <GadgetNotice kind="setup" message={t('gadgetNoSource')} />;
   if (summary.error && (summary.error as { status?: number }).status === 404) {
-    return <p role="alert" className="p-3 text-sm text-destructive">{t('gadgetNotGithub')}</p>;
+    return <GadgetNotice kind="error" message={t('gadgetNotGithub')} />;
   }
   const counts = summary.data?.resource_counts;
   const items = events.data ?? [];
@@ -85,7 +86,7 @@ export function GithubProjectGadget({ instance }: { instance: GadgetInstance }) 
         <p className="text-[11px] text-muted-foreground">{t('liveNotVerified')}</p>
       )}
       <h3 className="text-xs font-semibold text-muted-foreground">{t('recentActivity')}</h3>
-      {events.isLoading && <p role="status" className="text-xs text-muted-foreground">{t('summaryLoading')}</p>}
+      {events.isLoading && <GadgetSkeleton variant="list" label={t('summaryLoading')} className="px-0" />}
       {events.isError && (
         <div role="alert" className="text-xs text-destructive">
           {t('loadError')}{' '}
@@ -93,7 +94,7 @@ export function GithubProjectGadget({ instance }: { instance: GadgetInstance }) 
         </div>
       )}
       {!events.isLoading && !events.isError && items.length === 0 && (
-        <p className="text-xs text-muted-foreground">{t('noActivity')}</p>
+        <GadgetNotice kind="empty" message={t('noActivity')} className="px-0 py-1 text-xs" />
       )}
       {items.length > 0 && (
         <ol className="min-h-0 flex-1 space-y-2 overflow-y-auto">

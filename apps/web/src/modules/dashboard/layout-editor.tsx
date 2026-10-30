@@ -64,6 +64,10 @@ export interface LayoutEditorProps {
   onUndo: () => void;
   /** Callback fired to re-apply undone layout snapshot. */
   onRedo: () => void;
+  /** Packs the draft top-left without holes; omitted hides the action. */
+  onTidyLayout?: () => void;
+  /** False when tidying would not move any gadget. */
+  canTidyLayout?: boolean;
   /** Optional explicit adoption of the current local readable mobile projection. */
   onUseReadableMobileSizes?: () => void;
   /** True only after a complete measured readable projection is available. */
@@ -120,6 +124,8 @@ export function LayoutEditor({
   onCancel,
   onUndo,
   onRedo,
+  onTidyLayout,
+  canTidyLayout = false,
   onUseReadableMobileSizes,
   canUseReadableMobileSizes = false,
   onOpenPresetPicker,
@@ -211,6 +217,11 @@ export function LayoutEditor({
           <Redo2 className="size-4" aria-hidden="true" />{t('redo')}
         </Button>
         <span aria-hidden="true" className="mx-1 h-7 w-px bg-border" />
+        {onTidyLayout && (
+          <Button type="button" variant="outline" className="min-h-11" disabled={!canTidyLayout || isSaving} onClick={onTidyLayout}>
+            {t('tidyLayout')}
+          </Button>
+        )}
         {onUseReadableMobileSizes && (
           <Button type="button" variant="outline" className="min-h-11" disabled={!canUseReadableMobileSizes || isSaving} onClick={onUseReadableMobileSizes}>
             {t('useReadableMobileSizes')}

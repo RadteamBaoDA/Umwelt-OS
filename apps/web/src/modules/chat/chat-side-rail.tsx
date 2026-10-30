@@ -43,7 +43,7 @@ export function ChatSideRail({ citations, context }: { citations: Citation[]; co
   const t = useTranslations('chat');
   const [collapsed, setCollapsed] = React.useState(true);
   return (
-    <aside id="chat-evidence-rail" aria-label={t('railLabel')} className={`hidden shrink-0 flex-col overflow-y-auto border-l border-border bg-surface lg:flex ${collapsed ? 'w-12 items-center p-0' : 'w-[300px] p-3'}`}>
+    <aside id="chat-evidence-rail" aria-label={t('railLabel')} className={`hidden shrink-0 flex-col overflow-y-auto border-l border-border bg-surface min-[1100px]:flex ${collapsed ? 'w-12 items-center p-0' : 'w-[320px] p-3'}`}>
       <Button type="button" variant="ghost" size="icon" className="size-11 shrink-0" onClick={() => setCollapsed((value) => !value)} aria-label={collapsed ? t('expandRail') : t('collapseRail')} aria-expanded={!collapsed} aria-controls={collapsed ? undefined : 'chat-evidence-rail-content'}>
         {collapsed ? <PanelRightOpen aria-hidden="true" /> : <PanelRightClose aria-hidden="true" />}
       </Button>
@@ -63,7 +63,7 @@ export function ChatSourcesSheet({ citations, context }: { citations: Citation[]
   return (
     <Sheet>
       <SheetTrigger asChild>
-        <Button type="button" variant="outline" className="min-h-11 gap-2 px-3 text-xs lg:hidden" aria-label={t('railOpen')}>
+        <Button type="button" variant="outline" className="min-h-11 gap-2 px-3 text-xs min-[1100px]:hidden" aria-label={t('railOpen')}>
           <BookOpenIcon className="size-4" aria-hidden="true" />
           <span>{t('railSources')}{citations.length > 0 ? ` (${citations.length})` : ''}</span>
         </Button>

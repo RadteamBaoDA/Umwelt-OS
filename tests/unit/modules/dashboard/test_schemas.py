@@ -226,17 +226,17 @@ class TestGridCoordinatesAndLayoutValidation:
         # First item starts at (0, 0)
         assert layout[0].instance_id == id1
         assert (layout[0].x, layout[0].y) == (0, 0)
-        assert (layout[0].w, layout[0].h) == (12, 4)
+        assert (layout[0].w, layout[0].h) == (20, 4)  # last (only) rect of row 1 stretches to the edge
 
         # Second item wraps to x=0, y=4
         assert layout[1].instance_id == id2
         assert (layout[1].x, layout[1].y) == (0, 4)
-        assert (layout[1].w, layout[1].h) == (10, 6)
+        assert (layout[1].w, layout[1].h) == (10, 6)  # not last in its row
 
         # Third item fits on second row at x=10, y=4
         assert layout[2].instance_id == id3
         assert (layout[2].x, layout[2].y) == (10, 4)
-        assert (layout[2].w, layout[2].h) == (8, 4)
+        assert (layout[2].w, layout[2].h) == (10, 4)  # stretched from 8 to the edge
 
     def test_default_mobile_layout_stacking(self) -> None:
         """Verify default_mobile_layout stacks all gadgets full-width (w=20) sequentially."""

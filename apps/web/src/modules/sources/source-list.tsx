@@ -46,12 +46,18 @@ function SourceAction({ label, icon, onClick, disabled = false, expanded }: {
 }) {
   return <Tooltip>
     <TooltipTrigger asChild>
-      <Button type="button" size="icon" variant="outline" aria-label={label} aria-expanded={expanded} disabled={disabled} onClick={onClick}>
+      <Button type="button" size="icon" variant="ghost" aria-label={label} aria-expanded={expanded} disabled={disabled} onClick={onClick}>
         {icon}
       </Button>
     </TooltipTrigger>
     <TooltipContent>{label}</TooltipContent>
   </Tooltip>;
+}
+
+/** Turns a machine error code such as `invalid_credential` into sentence-case words ("Invalid credential") for display. */
+export function humanizeCode(code: string): string {
+  const words = code.replace(/[_-]+/g, ' ').trim().toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 /** Formats an optional ISO timestamp with the supplied application locale and time zone, returning the supplied fallback when absent. */
@@ -230,11 +236,13 @@ function SourceEntry({
             </Badge>
           )}
         </div>
-        <p className="text-muted-foreground">{providerLabel(source.provider, t, catalogLabel) ?? source.type}</p>
-        {(source.collection_error_code || source.processing_error_code) && <p className="error">{t('collectionError')}: {source.collection_error_code ?? t('noError')} · {t('processingError')}: {source.processing_error_code ?? t('noError')}</p>}
+        <p className="m-0 text-sm text-muted-foreground">{providerLabel(source.provider, t, catalogLabel) ?? source.type}</p>
+        {(source.collection_error_code || source.processing_error_code) && <p className="m-0 text-sm text-negative">{source.collection_error_code
+          ? t('errorLine', { kind: t('collectionError'), reason: humanizeCode(source.collection_error_code) })
+          : t('errorLine', { kind: t('processingError'), reason: humanizeCode(source.processing_error_code ?? '') })}</p>}
       </th>
       <td className={cell}>
-        <Badge variant="outline" className={rowState === 'active' ? 'border-primary text-primary' : rowState === 'error' || rowState === 'savedNotActive' ? 'border-destructive text-destructive' : undefined}>{t(chipKey[rowState])}</Badge>
+        <Badge variant="outline" className={rowState === 'active' ? 'border-positive text-positive' : rowState === 'error' || rowState === 'savedNotActive' ? 'border-destructive text-destructive' : undefined}>{t(chipKey[rowState])}</Badge>
         {connector && activation.data?.error_code && <p className="text-muted-foreground">{activation.data.error_code}</p>}
         {connector && activation.data && <p className="text-muted-foreground">{t('activationState')}: {t(({ queued: 'stateQueued', provisioning: 'stateProvisioning', active: 'active', saved_not_active: 'stateSavedNotActive', reconciliation_required: 'stateReconciliationRequired', disabled: 'stateDisabled' } as Record<string, string>)[activation.data.state] ?? 'stateUnknown')}</p>}
       </td>
@@ -243,14 +251,14 @@ function SourceEntry({
       <td className={cell}>{mobileLabel('colIndexed')}{formatDate(source.indexed_at, display.locale, display.timezone, t('never'))}</td>
       <td className={cell}>
         <TooltipProvider delayDuration={300}>
-        <div className="flex flex-wrap gap-2" role="group" aria-label={t('sourceActions', { name: source.name })}>
+        <div className="flex flex-nowrap gap-1" role="group" aria-label={t('sourceActions', { name: source.name })}>
           {connector && rowState === 'savedNotActive' && source.status !== 'archived' && <SourceAction label={t('retryActivation')} icon={<RefreshCw size={16} />} disabled={busy} onClick={() => onEdit(source)} />}
           {connector && source.status !== 'archived' && <SourceAction label={t('configure')} icon={<Settings2 size={16} />} onClick={() => onEdit(source)} />}
           {connector && source.status === 'active' && activation.data?.state === 'active' && <SourceAction label={collect.isPending ? t('collecting') : t('collectNow')} icon={<Download size={16} />} disabled={collect.isPending || busy} onClick={() => collect.mutate()} />}
           {!editedHere && source.status !== 'archived' && <SourceAction label={busy ? t(source.status === 'paused' ? 'resuming' : 'pausing') : t(source.status === 'paused' ? 'resume' : 'pause')} icon={source.status === 'paused' ? <Play size={16} /> : <Pause size={16} />} disabled={busy} onClick={toggleStatus} />}
           {!editedHere && !purged && <DisconnectDialog sourceId={source.id} name={source.name} archived={source.status === 'archived'} disabled={busy} triggerLabel={busy ? t('disconnecting') : t(source.status === 'archived' ? 'disconnectDelete' : 'disconnectAction')} onConfirm={(deleteData) => { confirmedRef.current = true; everConfirmedRef.current = true; void disconnect(deleteData); }}
             onCloseAutoFocus={(event) => { if (!confirmedRef.current) return; confirmedRef.current = false; event.preventDefault(); nameCellRef.current?.focus(); }}
-            trigger={<Button type="button" size="icon" variant="outline" aria-label={busy ? t('disconnecting') : t(source.status === 'archived' ? 'disconnectDelete' : 'disconnectAction')} disabled={busy}><span aria-hidden="true">{source.status === 'archived' ? <Trash2 size={16} /> : <Unplug size={16} />}</span></Button>} />}
+            trigger={<Button type="button" size="icon" variant="ghost" aria-label={busy ? t('disconnecting') : t(source.status === 'archived' ? 'disconnectDelete' : 'disconnectAction')} disabled={busy}><span aria-hidden="true">{source.status === 'archived' ? <Trash2 size={16} /> : <Unplug size={16} />}</span></Button>} />}
           {connector && <SourceAction label={t('showHistory')} icon={<History size={16} />} expanded={historyOpen} onClick={() => setHistoryOpen(true)} />}
         </div>
         </TooltipProvider>
@@ -377,12 +385,13 @@ export function SourceList() {
   return <div className="sources-list">
     <header className="sources-page-header">
       <div className="min-w-0">
-        <h1 ref={headingRef} tabIndex={-1} className="m-0 text-[30px] font-bold tracking-[-.04em] outline-none focus-visible:ring-2 focus-visible:ring-ring">{t('title')}</h1>
-        <p className="mt-2 mb-0 text-muted-foreground">{t('description')}</p>
+        <h1 ref={headingRef} tabIndex={-1} className="m-0 text-2xl font-semibold tracking-[-.02em] outline-none focus-visible:ring-2 focus-visible:ring-ring">{t('title')}</h1>
+        <p className="mt-2 mb-0 text-sm text-muted-foreground">{t('description')}</p>
       </div>
-      <div className="form-actions source-list-actions" role="group" aria-label={t('tableToolbar')}>
-        <Button size="sm" disabled={allBuiltinsAdded} title={allBuiltinsAdded ? t('addBuiltinAllAdded') : undefined} onClick={() => transition({ kind: 'builtin' })}>{t('addBuiltin')}</Button>
-        <Button size="sm" variant="outline" onClick={() => transition({ kind: 'connector' })}>{t('addConnector')}</Button>
+      {/* One primary action; every other add flow stays a visible secondary button so each keeps its accessible name. */}
+      <div className="flex flex-wrap items-center justify-end gap-2 max-[720px]:justify-start" role="group" aria-label={t('tableToolbar')}>
+        <Button size="sm" onClick={() => transition({ kind: 'connector' })}>{t('addConnector')}</Button>
+        <Button size="sm" variant="outline" disabled={allBuiltinsAdded} title={allBuiltinsAdded ? t('addBuiltinAllAdded') : undefined} onClick={() => transition({ kind: 'builtin' })}>{t('addBuiltin')}</Button>
         <Button size="sm" variant="outline" onClick={() => transition({ kind: 'manual' })}>{t('addManual')}</Button>
         <Button size="sm" variant="outline" onClick={() => transition({ kind: 'manual_import', purpose: 'notes' })}>{t('addNotes')}</Button>
         <Button size="sm" variant="outline" onClick={() => transition({ kind: 'manual_import', purpose: 'personal_finance' })}>{t('addFinance')}</Button>

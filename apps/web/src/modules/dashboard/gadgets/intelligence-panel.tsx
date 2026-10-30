@@ -7,6 +7,8 @@ import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { getCiiAvailability, getCorrelations } from '../intelligence-api';
 import type { GadgetInstance } from '../api';
+import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
+import { formatReasonLabel } from './metric-label';
 
 /** Display bounded, evidence-backed co-occurrence and the explicit unavailable CII method state. */
 export function IntelligencePanel({ instance }: { instance: GadgetInstance }) {
@@ -43,9 +45,9 @@ export function IntelligencePanel({ instance }: { instance: GadgetInstance }) {
     </header>
     <section aria-labelledby={`correlation-${instance.id}`} className="space-y-2">
       <h3 id={`correlation-${instance.id}`} className="text-xs font-semibold">{t('correlationTitle')}</h3>
-      {regions.length === 0 && <p role="status" className="text-xs text-muted-foreground">{t('correlationRegionRequired')}</p>}
-      {correlation.isPending && <p role="status" className="text-xs text-muted-foreground">{t('observationLoading')}</p>}
-      {correlation.isError && <p role="alert" className="text-xs text-destructive">{t('intelligenceLoadFailed')}</p>}
+      {regions.length === 0 && <GadgetNotice kind="setup" message={t('correlationRegionRequired')} className="px-0 py-1 text-xs" />}
+      {regions.length > 0 && correlation.isPending && <GadgetSkeleton variant="list" label={t('observationLoading')} className="px-0" />}
+      {correlation.isError && <GadgetNotice kind="error" message={t('intelligenceLoadFailed')} className="px-0 py-1 text-xs" />}
       {correlation.data && <>
         <p className="text-xs text-muted-foreground">{t('correlationMethod', { method: correlation.data.method_version })} · {t('correlationInterpretation')}</p>
         {correlation.data.missing_domains.length > 0 && <p role="status" className="text-xs text-muted-foreground">{t('correlationMissingDomains', { domains: correlation.data.missing_domains.join(', ') })}</p>}
@@ -54,7 +56,7 @@ export function IntelligencePanel({ instance }: { instance: GadgetInstance }) {
             {t('correlationCoverageLine', { domain, count: coverage.signal_count, truncated: coverage.truncated ? t('correlationYes') : t('correlationNo'), omitted: coverage.omitted_source_count })}
           </li>)}
         </ul>
-        {correlation.data.uncertainty_reasons.length > 0 && <p role="status" className="text-xs text-muted-foreground">{t('correlationUncertainty', { reasons: correlation.data.uncertainty_reasons.join(', ') })}</p>}
+        {correlation.data.uncertainty_reasons.length > 0 && <p role="status" className="text-xs text-muted-foreground">{t('correlationUncertainty', { reasons: correlation.data.uncertainty_reasons.map((reason) => formatReasonLabel(reason, t)).join(' ') })}</p>}
         {correlation.data.groups.length === 0 ? <p className="text-xs text-muted-foreground">{t('correlationEmpty')}</p> : <ul className="divide-y divide-border">
           {correlation.data.groups.slice(0, visibleGroups).map((group) => <li key={`${group.region}:${group.window_start}`} className="py-2 text-xs">
             <div className="flex items-center justify-between gap-2"><span className="font-medium">{group.region}</span><time dateTime={group.window_start} className="text-muted-foreground">{formatDateTime(group.window_start, display.locale, display.timezone)}</time></div>
@@ -68,9 +70,9 @@ export function IntelligencePanel({ instance }: { instance: GadgetInstance }) {
     </section>
     <section aria-labelledby={`cii-${instance.id}`} className="space-y-1 border-t border-border pt-3">
       <h3 id={`cii-${instance.id}`} className="text-xs font-semibold">{t('ciiPanelTitle')}</h3>
-      {cii.isPending && <p role="status" className="text-xs text-muted-foreground">{t('observationLoading')}</p>}
-      {cii.isError && <p role="alert" className="text-xs text-destructive">{t('intelligenceLoadFailed')}</p>}
-      {cii.data && <p role="status" className="text-xs text-muted-foreground">{t('ciiUnavailableReason', { reason: cii.data.availability })} {cii.data.requested_countries.length > 0 ? t('ciiRequestedCountries', { countries: cii.data.requested_countries.join(', ') }) : t('ciiNoCountries')}</p>}
+      {cii.isPending && <GadgetSkeleton variant="metric" label={t('observationLoading')} className="px-0" />}
+      {cii.isError && <GadgetNotice kind="error" message={t('intelligenceLoadFailed')} className="px-0 py-1 text-xs" />}
+      {cii.data && <p role="status" className="text-xs text-muted-foreground">{formatReasonLabel(cii.data.availability, t)} {cii.data.requested_countries.length > 0 ? t('ciiRequestedCountries', { countries: cii.data.requested_countries.join(', ') }) : t('ciiNoCountries')}</p>}
     </section>
   </section>;
 }

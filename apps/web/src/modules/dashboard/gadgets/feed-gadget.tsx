@@ -25,6 +25,7 @@ import { useChatController } from '@/core/app-shell/chat-controller';
 import { documentKeys, listGadgetDocumentProjections, setGadgetDocumentInteraction } from '@/modules/knowledge/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { NewsFeed } from './news-feed';
+import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { dashboardKeys, listGadgetSources, type GadgetInstance } from '../api';
 
 /** Feed item model supporting documents, news articles, and telegram messages. */
@@ -467,32 +468,22 @@ function FeedStream({
 
       {/* Loading Skeleton */}
       {docsQuery.isLoading && feedItems.length === 0 && (
-        <div className="flex-1 space-y-2 p-1 animate-pulse">
-          <div className="h-16 bg-muted/20 rounded-lg" />
-          <div className="h-16 bg-muted/20 rounded-lg" />
-          <div className="h-16 bg-muted/20 rounded-lg" />
-        </div>
+        <GadgetSkeleton variant="list" label={t('gadgetDataLoading')} className="flex-1" />
       )}
 
       {docsQuery.isError && !docsQuery.isFetchNextPageError && (
-        <p role="alert" className="text-xs text-destructive">{t('feedLoadError')}</p>
+        <GadgetNotice kind="error" message={t('feedLoadError')} />
       )}
 
       {/* Empty State */}
       {!docsQuery.isLoading && !docsQuery.isError && (!docsQuery.hasNextPage || filtering) && displayedItems.length === 0 && (
-        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground">
-          <Newspaper className="w-8 h-8 mb-2 opacity-50" />
-            <p className="text-xs font-semibold text-foreground mb-1">{t('feedEmptyTitle')}</p>
-          <p className="text-xs max-w-xs text-muted-foreground">
-            {needle || sourceFilter !== 'all'
-              ? t('feedNoMatch')
-              : serverFiltered
-              ? t('feedNoServerMatch')
-              : onlyUnread
+        <GadgetNotice kind="empty" message={`${t('feedEmptyTitle')}. ${needle || sourceFilter !== 'all'
+          ? t('feedNoMatch')
+          : serverFiltered
+            ? t('feedNoServerMatch')
+            : onlyUnread
               ? t('feedCaughtUp')
-              : t('feedEmptyDetail')}
-          </p>
-        </div>
+              : t('feedEmptyDetail')}`} />
       )}
 
       {/* Stream Items List */}
