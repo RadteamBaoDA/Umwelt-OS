@@ -2,6 +2,7 @@
 
 import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
+import { useErrorCodeLabel } from '@/core/error-codes';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Download, History, Pause, Play, RefreshCw, Settings2, Trash2, Unplug } from 'lucide-react';
@@ -11,7 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { AppLocaleId, normalizeFormattingLocale } from '@/core/i18n';
+import { AppLocaleId, formatTimeZoneLabel, normalizeFormattingLocale } from '@/core/i18n';
 import { useGuardedNavigation } from '@/core/guarded-navigation';
 import {
   connectorKeys,
@@ -176,6 +177,7 @@ function SourceEntry({
   onRemoved: () => void;
 }) {
   const t = useTranslations('sources');
+  const errorLabel = useErrorCodeLabel();
   const display = useDisplayPreferences();
   const { csrfToken } = useWorkspaceSession();
   const queryClient = useQueryClient();
@@ -220,16 +222,20 @@ function SourceEntry({
     active: 'statusActive', paused: 'statusPaused', archived: 'statusArchived', savedNotActive: 'stateSavedNotActive', error: 'stateError', reconnect: 'stateReconnect',
   };
   const hasDetail = Boolean(collectResult || operationId || error || collect.error || activation.isError);
-  const cell = 'px-3 py-3 align-top text-sm max-[720px]:block max-[720px]:px-0 max-[720px]:py-1';
-  const mobileLabel = (key: 'colSchedule' | 'colCollected' | 'colIndexed') => <span className="text-muted-foreground mr-1 min-[721px]:hidden">{t(key)}:</span>;
+  const cell = 'px-3 py-3 align-top text-sm max-[1023px]:block max-[1023px]:px-0 max-[1023px]:py-1';
+  /** Shows a quiet dash for unknown times while keeping "Not recorded" available to screen readers. */
+  const dateOrDash = (value: string | null) => value
+    ? formatDate(value, display.locale, display.timezone, '')
+    : <><span aria-hidden="true" className="text-muted-foreground">—</span><span className="sr-only">{t('never')}</span></>;
+  const mobileLabel = (key: 'colSchedule' | 'colCollected' | 'colIndexed') => <span className="text-muted-foreground mr-1 min-[1024px]:hidden">{t(key)}:</span>;
   return <>
-    <tr className="border-b border-border max-[720px]:mb-3 max-[720px]:block max-[720px]:rounded-lg max-[720px]:border max-[720px]:p-3">
+    <tr className="border-b border-border max-[1023px]:block max-[1023px]:py-3">
       <th scope="row" ref={nameCellRef} tabIndex={-1} className={`${cell} font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}>
         <div className="flex flex-wrap items-center gap-2">
           <strong>{source.name}</strong>
           {effectiveRealtimeMode && (
             <Badge
-              variant={effectiveRealtimeMode === 'realtime' ? 'default' : 'secondary'}
+              variant="outline"
               data-testid="source-realtime-badge"
             >
               {t(effectiveRealtimeMode === 'realtime' ? 'badgeRealtime' : 'badgeNearRealtime')}
@@ -238,17 +244,17 @@ function SourceEntry({
         </div>
         <p className="m-0 text-sm text-muted-foreground">{providerLabel(source.provider, t, catalogLabel) ?? source.type}</p>
         {(source.collection_error_code || source.processing_error_code) && <p className="m-0 text-sm text-negative">{source.collection_error_code
-          ? t('errorLine', { kind: t('collectionError'), reason: humanizeCode(source.collection_error_code) })
-          : t('errorLine', { kind: t('processingError'), reason: humanizeCode(source.processing_error_code ?? '') })}</p>}
+          ? t('errorLine', { kind: t('collectionError'), reason: errorLabel(source.collection_error_code) })
+          : t('errorLine', { kind: t('processingError'), reason: errorLabel(source.processing_error_code ?? '') })}</p>}
       </th>
       <td className={cell}>
         <Badge variant="outline" className={rowState === 'active' ? 'border-positive text-positive' : rowState === 'error' || rowState === 'savedNotActive' ? 'border-destructive text-destructive' : undefined}>{t(chipKey[rowState])}</Badge>
-        {connector && activation.data?.error_code && <p className="text-muted-foreground">{activation.data.error_code}</p>}
-        {connector && activation.data && <p className="text-muted-foreground">{t('activationState')}: {t(({ queued: 'stateQueued', provisioning: 'stateProvisioning', active: 'active', saved_not_active: 'stateSavedNotActive', reconciliation_required: 'stateReconciliationRequired', disabled: 'stateDisabled' } as Record<string, string>)[activation.data.state] ?? 'stateUnknown')}</p>}
+        {connector && activation.data?.error_code && <p className="text-muted-foreground">{errorLabel(activation.data.error_code)}</p>}
+        {connector && activation.data && activation.data.state !== 'active' && <p className="text-muted-foreground">{t('activationState')}: {t(({ queued: 'stateQueued', provisioning: 'stateProvisioning', active: 'active', saved_not_active: 'stateSavedNotActive', reconciliation_required: 'stateReconciliationRequired', disabled: 'stateDisabled' } as Record<string, string>)[activation.data.state] ?? 'stateUnknown')}</p>}
       </td>
-      <td className={cell}>{mobileLabel('colSchedule')}{connector ? `${schedule}${timezone ? ` · ${timezone}` : ''}` : '—'}</td>
-      <td className={cell}>{mobileLabel('colCollected')}{formatDate(source.collected_at, display.locale, display.timezone, t('never'))}</td>
-      <td className={cell}>{mobileLabel('colIndexed')}{formatDate(source.indexed_at, display.locale, display.timezone, t('never'))}</td>
+      <td className={cell}>{mobileLabel('colSchedule')}{connector ? `${schedule}${timezone ? ` · ${formatTimeZoneLabel(timezone, display.locale)}` : ''}` : '—'}</td>
+      <td className={cell}>{mobileLabel('colCollected')}{dateOrDash(source.collected_at)}</td>
+      <td className={cell}>{mobileLabel('colIndexed')}{dateOrDash(source.indexed_at)}</td>
       <td className={cell}>
         <TooltipProvider delayDuration={300}>
         <div className="flex flex-nowrap gap-1" role="group" aria-label={t('sourceActions', { name: source.name })}>
@@ -264,7 +270,7 @@ function SourceEntry({
         </TooltipProvider>
       </td>
     </tr>
-    {hasDetail && <tr className="max-[720px]:block"><td colSpan={6} className="px-3 pb-4 max-[720px]:block max-[720px]:px-0">
+    {hasDetail && <tr className="max-[1023px]:block"><td colSpan={6} className="px-3 pb-4 max-[1023px]:block max-[1023px]:px-0">
       {collectResult && <p className="text-muted-foreground" role="status">{t('collectResult', { status: collectResult.status })}{!collectResult.hasRun ? ` ${t('noRunId')}` : ''}</p>}
       {operationId && <PurgeProgress operationId={operationId} onSucceeded={onPurgeFinished} />}
       {(error || collect.error || activation.isError) && <p className="error" role="alert">{t('actionFailed')}{activation.isError && ` · ${t('stateUnknown')}`}</p>}
@@ -389,7 +395,7 @@ export function SourceList() {
         <p className="mt-2 mb-0 text-sm text-muted-foreground">{t('description')}</p>
       </div>
       {/* One primary action; every other add flow stays a visible secondary button so each keeps its accessible name. */}
-      <div className="flex flex-wrap items-center justify-end gap-2 max-[720px]:justify-start" role="group" aria-label={t('tableToolbar')}>
+      <div className="flex flex-wrap items-center justify-end gap-2 max-[1023px]:justify-start" role="group" aria-label={t('tableToolbar')}>
         <Button size="sm" onClick={() => transition({ kind: 'connector' })}>{t('addConnector')}</Button>
         <Button size="sm" variant="outline" disabled={allBuiltinsAdded} title={allBuiltinsAdded ? t('addBuiltinAllAdded') : undefined} onClick={() => transition({ kind: 'builtin' })}>{t('addBuiltin')}</Button>
         <Button size="sm" variant="outline" onClick={() => transition({ kind: 'manual' })}>{t('addManual')}</Button>
@@ -407,7 +413,7 @@ export function SourceList() {
     {items.length > 0 && <SourcesTable filter={filter} counts={counts} onFilterChange={setFilter}>
       {visible.map((source) => {
         const configuration = configurationBySourceId.get(source.id);
-        return <SourceEntry key={source.id} source={source} schedule={configuration?.data ? scheduleLabel(configuration.data.configuration.schedule_interval_minutes, t) : t('scheduleUnknown')} timezone={configuration?.data?.configuration.timezone ?? null} realtimeMode={configuration?.data?.configuration.realtime_mode ?? null} operationId={operations[source.id] ?? ''} editingId={dialog?.kind === 'edit' ? dialog.source.id : null} onPurgeStarted={(id) => setOperations((current) => ({ ...current, [source.id]: id }))} purged={Boolean(purged[source.id])} onPurgeFinished={() => { if (purged[source.id]) return; setPurged((current) => ({ ...current, [source.id]: true })); void refresh(); }} onEdit={(value) => transition({ kind: 'edit', source: value })} onChanged={() => { void refresh(); }} onRemoved={() => headingRef.current?.focus()} />;
+        return <SourceEntry key={source.id} source={source} schedule={configuration?.data ? scheduleLabel(configuration.data.configuration.schedule_interval_minutes, t) : configuration?.isPending ? '—' : t('scheduleUnknown')} timezone={configuration?.data?.configuration.timezone ?? null} realtimeMode={configuration?.data?.configuration.realtime_mode ?? null} operationId={operations[source.id] ?? ''} editingId={dialog?.kind === 'edit' ? dialog.source.id : null} onPurgeStarted={(id) => setOperations((current) => ({ ...current, [source.id]: id }))} purged={Boolean(purged[source.id])} onPurgeFinished={() => { if (purged[source.id]) return; setPurged((current) => ({ ...current, [source.id]: true })); void refresh(); }} onEdit={(value) => transition({ kind: 'edit', source: value })} onChanged={() => { void refresh(); }} onRemoved={() => headingRef.current?.focus()} />;
       })}
     </SourcesTable>}
     {items.length > 0 && visible.length === 0 && <p className="empty-state">{t('emptyFiltered')}</p>}

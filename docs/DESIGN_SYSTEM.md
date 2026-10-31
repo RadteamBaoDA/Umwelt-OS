@@ -18,7 +18,7 @@ Main navigation contains exactly **Dashboard / Chat / Settings**. Settings keeps
 
 | Product element | shadcn component/composition | Required behavior |
 | --- | --- | --- |
-| App navigation | Sidebar + Button/NavigationMenu as appropriate | Three main destinations, current-route state, mobile collapse |
+| App navigation | 56px icon rail + Button/Tooltip | Three main destinations, current-route state, labelled bottom nav at 720px and below |
 | App header | Logo/home link + Button + DropdownMenu | Logo left; login/user icon right; account actions include User settings and sign out |
 | Login screen | Card, Label, Input, Button, Alert | Reuse existing authentication; translated pending/error/session-expired states; no application data before authentication |
 | Connection footer | Badge, status text, Button | Client-to-server/API and realtime states separately; accessible live status; retry when appropriate; never infer source freshness from transport health |
@@ -27,7 +27,7 @@ Main navigation contains exactly **Dashboard / Chat / Settings**. Settings keeps
 | Gadget management | Dashboard Add/Configure dialogs using Card, Tabs, Select/Combobox, Input, Label and form components | Generic display template + compatible renderer; select existing active workspace sources; never create or activate a source from gadget setup |
 | General user preferences | **Dialog**, RadioGroup, Select, Button | Theme/language preview, Save, Cancel, translated labels/errors |
 | Quick chat | **Sheet**, ScrollArea, Textarea, Button | Right side, large width, New chat/messages/composer/close only |
-| Full Chat page | Sidebar/list, ScrollArea, Textarea, Sheet on mobile | History, open thread, search/manage history, context and advanced controls |
+| Full Chat page | History list, ScrollArea, Textarea, Sheet on mobile | History, open thread, search/manage history, context and advanced controls |
 | Data tables | Table; shadcn Data Table recipe when needed | Semantic header/cells; sort/filter/pagination only when useful |
 | Financial charts | ChartContainer, ChartTooltip, ChartLegend + Recharts | Explicit sizing, locale-aware axes/tooltips, timestamps/units, accessible alternative |
 | Destructive actions | AlertDialog | Explicit consequence and affected items |
@@ -47,21 +47,25 @@ Use shadcn primitives rather than hand-built substitutes. Business components su
 
 Use CSS-variable theming from shadcn. Maintain values centrally for light (`:root`) and dark (`.dark` on `html`), with Tailwind v4 mappings. Do not pass literal colors through feature components.
 
-| Token family | Use |
+| Token | Use |
 | --- | --- |
-| background / foreground | App canvas and primary text |
-| card / card-foreground | Gadget and content surfaces |
-| popover / popover-foreground | Menus, tooltip/dialog surfaces |
-| primary / primary-foreground | Main actions and selected controls |
-| secondary, muted, accent with foreground pairs | Secondary surfaces/text and interactive states |
-| destructive | Destructive action/error semantics |
-| border / input / ring | Separation, editable controls and keyboard focus |
-| sidebar tokens | Navigation surfaces, selection and borders |
-| chart-1 … chart-5 | Stable series identities and legend swatches |
-| market-positive / market-negative / market-neutral | Financial direction, always with sign/text/shape |
-| radius | Common component radius; derive smaller/larger variants centrally |
+| bg | App canvas behind the top bar, rail and panels (`color-muted` alias) |
+| surface | Panels, cards, dialogs, sheets, popovers, input fills (`color-background`, `color-card`, `color-popover`) |
+| raised, active | Hover rows and user turns; selected nav item or row (`color-accent` / `color-secondary` map to active) |
+| text / muted | Primary and supporting text (`color-foreground`, `color-muted-foreground`) |
+| line, rule, control | Hairline panel edges (`color-border`); row rules and flat loading bars; input and outline-button borders (`color-input`) |
+| primary / primary-foreground | Near-black ink fill for the one main action per section; links are ink too |
+| accent (`color-data`, `color-ring`) | The data green: chart main series, newest data, focus rings, checked controls. Never chrome or button fill |
+| positive / negative, danger | Financial direction and OK/error state, always with a sign or word; danger for errors and destructive actions |
+| status-success / status-warning | Connection dot in the top bar |
+| pill-positive / pill-negative / pill-warning (+ foreground) | Status pills |
+| chart-1 … chart-5 | Stable series identities and legend swatches (green, ink, two greys, dashed green) |
+| radius | 8 (cards, panels, gadgets, popovers), 6 (buttons, inputs), 4 (chips, menu items), 12 (dialogs, Sheet) |
+| control height | 36px on fine pointers, 44px on coarse pointers |
 
-Start with shadcn neutral surfaces and the established component sizing. Use compact editorial density, restrained borders, one main action per section, and a consistent spacing scale (4/8/12/16/24/32px). Chart colors remain series encodings, not decoration for every card. Use tabular numerals for prices/quantities. Supporting text must remain readable, touch controls about 44px, and focus rings visible.
+Values live in `apps/web/src/app/globals.css` and are mirrored in `docs/design-system/tokens.json`; change both together. Feature code uses semantic tokens only.
+
+Use compact editorial density, hairline borders with no resting shadows (shadows only on floating layers), one main action per section, and a consistent spacing scale (4/8/12/16/24/32px). Chart colors remain series encodings, not decoration for every card. Use tabular numerals for prices/quantities. Supporting text must remain readable, touch targets 44px on coarse pointers (36px otherwise), and focus rings visible.
 
 Avoid broad global selectors such as `.button`, `button { ... }` or `.input` overriding generated component behavior. Typography/layout styles must not break portal content. Dialog, Sheet, Tooltip and Select rendered under `body` must inherit the active root tokens and language.
 
@@ -125,7 +129,7 @@ Changes are previewed until saved.
 
 ## 8. Viewport, layout and overlays
 
-The application owns 100% width with no centered max-width around the entire shell. The document never scrolls: `.shell` is `height: 100dvh` (with a `100vh` fallback) and `overflow: hidden`, so the header, the main nav and the connection footer stay fixed and only the body content region scrolls. The header is a fixed 64px bar with `surface` background, a bottom `line` border and 24px side padding. Below it `.workspace` is a `flex: 1 1 0; min-height: 0; overflow: hidden` row with 24px padding and 24px gap: a 180px main nav that can collapse to 64px (the active item is a `surface` pill with a `line` border) and `.workspace-main` (`flex: 1 1 0; min-width: 0; min-height: 0; overflow-y: auto`), the only scroll container of the shell. The desktop main nav shows Lucide icons with labels when expanded and icons with accessible tooltips when collapsed. Under 840px the workspace becomes a column, the collapse control is hidden, and the nav stays a labeled horizontal strip above the scrolling content. The connection footer is a fixed `flex: 0 0 auto` bar at the bottom. Settings pages render inside one `surface` panel (18px radius, `line` border, `overflow: hidden`) whose 230px inner nav column and 32px-padded content column replace any per-page outer panel; under 720px the inner nav becomes the Settings section Select. Preserve a `100vh` fallback, safe-area padding, and a mobile content inset for bottom navigation (fixed at 720px and below). Pages must not add their own full-height scroll or sticky offsets for the shell; they scroll inside `.workspace-main`. Avoid further nested scroll regions; where one is unavoidable, give flex/grid children `min-height: 0`. Login, setup and onboarding use the same 64px header and footer with a centered 420px card (18px radius, 32px padding). Main columns use `minmax(0, 1fr)`/`min-width: 0` to prevent chart and table overflow.
+The application owns 100% width with no centered max-width around the entire shell. The document never scrolls: `.shell` is `height: 100dvh` (with a `100vh` fallback) and `overflow: hidden`; only `.workspace-main` scrolls. The top bar is 48px tall, sits on the `bg` ground without a border, and carries the search trigger, a connection status dot (`status-success` / `status-warning` / `danger`, label in the tooltip), and the user menu. Below it `.workspace` is a row: a 56px icon rail (logo at the top, Lucide icons with tooltip labels, active item on the `active` fill) and `.workspace-main` (`flex: 1 1 0; min-width: 0; min-height: 0; overflow-y: auto; padding: 24px`). At 720px and below the rail becomes a fixed labelled bottom nav, the workspace stacks in a column, and the content gets a bottom inset for the nav plus safe-area padding. Settings pages render inside one `surface` panel (8px radius, `line` border, `overflow: hidden`) with a 230px inner nav column and a 32px-padded content column; under 720px the inner nav becomes the Settings section Select. Pages must not add their own full-height scroll or sticky offsets for the shell. Avoid further nested scroll regions; where one is unavoidable, give flex/grid children `min-height: 0`. Login, setup and onboarding use a centered 420px card (8px radius, 32px padding). Main columns use `minmax(0, 1fr)`/`min-width: 0` to prevent chart and table overflow.
 
 Every dashboard content block is a gadget, including the globe/map, highlights, watch rules and personal context. They share the same grid, add/remove, move, resize and Save/Cancel lifecycle. App header/footer, navigation and layout controls remain shell elements. Map filters belong inside the map gadget.
 
@@ -135,13 +139,13 @@ Use built-in shadcn portal/overlay stacking. Settings Dialog and quick-chat Shee
 
 ## 9. Implementation and delivery boundaries
 
-Current source inspection: Next.js/React/TypeScript + Tailwind v4, React Hook Form, Zod are present; package manifest does not yet include shadcn-generated primitives, Recharts, next-themes or next-intl. `RootLayout` currently has `lang="en"`; existing CSS has fixed shell max-width and `body[data-theme]`. These are migration targets, not already completed work.
+Current status: shadcn/ui (new-york, Radix) primitives are present in `apps/web/src/components/ui`, with Tailwind v4 tokens in `globals.css`, next-themes (class strategy) and the two locale catalogs under `apps/web/src/core/messages/`. Remaining work is tracked in `docs/IMPLEMENTATION_STATUS.md`.
 
 Implementation order: adopt minimum shadcn components/tokens → theme + i18n/preferences → shell and settings Dialog → gadget compositions → quick/full chat adaptation → Recharts financial gadgets. Inspect existing preference/API owners before creating alternatives. Keep existing data/auth/permission contracts intact.
 
 Update `OSS_USED.md` and README at delivery with the actual versions, source/port locations, licenses and setup, including shadcn/Radix/Recharts/next-themes/next-intl and the relevant transitive inventory. Do not list a design-only dependency as already installed in production.
 
-During the production code stage, follow repository policy: code + build only; no tests, lint or standalone typecheck. When the deferred test stage is authorized, cover theme boot/system changes, both locales and portal translations, Save/Cancel/failure behavior, reload persistence, mobile viewport/keyboard, chart units/gaps/freshness and chat continuity. Report build evidence separately from runtime behavior.
+Validation follows AGENTS.md: ESLint and TypeScript checks (`npx eslint`, `npx tsc --noEmit`) and Vitest for frontend changes, Playwright for end-to-end flows. Cover theme boot/system changes, both locales and portal translations, Save/Cancel/failure behavior, reload persistence, mobile viewport/keyboard, chart units/gaps/freshness and chat continuity. Report build evidence separately from runtime behavior.
 
 ## Official references
 

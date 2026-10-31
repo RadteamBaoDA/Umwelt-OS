@@ -88,7 +88,7 @@ export function DocumentDeletionReceiptPanel({ operationId }: { operationId: str
           ? t('documentDeletionAggregateSucceeded')
           : t('documentDeletionLoading');
 
-  return <section aria-labelledby="document-deletion-title" className="rounded-lg border border-border bg-card p-4 text-card-foreground shadow-sm">
+  return <section aria-labelledby="document-deletion-title" className="rounded-lg border border-border bg-card p-4 text-card-foreground">
     <h1 id="document-deletion-title" ref={headingRef} tabIndex={-1} className="text-lg font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{t('documentDeletionTitle')}</h1>
     {receipt?.immediate_access_revoked === true && <p className="mt-2 text-sm text-muted-foreground">{t('documentDeletionAccessRevoked')}</p>}
     <p className="mt-3" role={receipt?.status === 'failed' || scopeUnavailable || memoryUnresolved || agentUnresolved || materializationUnresolved || briefUnresolved ? 'alert' : 'status'} aria-live={receipt?.status === 'failed' || scopeUnavailable || memoryUnresolved || agentUnresolved || materializationUnresolved || briefUnresolved ? 'assertive' : 'polite'}>{summary}</p>
@@ -118,7 +118,7 @@ export function DocumentDeletionReceiptPanel({ operationId }: { operationId: str
       <Button type="button" variant="outline" disabled={operation.isFetching} onClick={() => void operation.refetch()}>
         {operation.isFetching ? t('documentDeletionRefreshing') : t('documentDeletionRefresh')}
       </Button>
-      <Link className="inline-flex min-h-11 items-center rounded-md px-3 text-sm underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" href="/knowledge/documents">{t('documentDeletionBackToList')}</Link>
+      <Link className="inline-flex min-h-9 pointer-coarse:min-h-11 items-center rounded-md px-3 text-sm underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" href="/knowledge/documents">{t('documentDeletionBackToList')}</Link>
     </div>
   </section>;
 }

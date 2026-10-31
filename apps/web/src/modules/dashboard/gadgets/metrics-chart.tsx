@@ -17,6 +17,7 @@ import {
   BaseAreaChart,
   BaseBarChart,
   BaseLineChart,
+  ChartHistoryNote,
   formatChartValue,
   type ChartDataPoint,
   type ChartSeries,
@@ -165,20 +166,22 @@ export function MetricsChart({
       {/* Top Header: Symbol, Value, Change & Controls */}
       <div className="flex shrink-0 items-start justify-between border-b border-border pb-2.5">
         <div className="space-y-1">
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono">
-            <span className="font-bold text-foreground">{targetSymbol}</span>
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums">
+            <span className="font-semibold text-foreground">{targetSymbol}</span>
             <span>•</span>
             <span>{providerDelay || daily('freshnessUnknown')}</span>
           </div>
 
           <div className="flex items-baseline gap-2">
-            <span className="text-xl font-bold font-mono tracking-tight text-foreground">
-              {formatChartValue(currentValue, { currency, unit, locale: display.locale })}
+            <span className="text-2xl font-bold tabular-nums tracking-tight text-foreground">
+              {formatChartValue(currentValue, { currency, unit: currency ? unit : undefined, locale: display.locale })}
             </span>
+            {/* Non-currency units are secondary to the figure itself. */}
+            {!currency && unit && <span className="text-xs text-muted-foreground">{unit}</span>}
 
             {/* Change delta with visible sign, percentage, and text tag (not color only) */}
             <div
-              className={`inline-flex items-center gap-0.5 text-xs font-mono font-semibold ${
+              className={`inline-flex items-center gap-0.5 text-xs tabular-nums font-semibold ${
                 isPositive ? 'text-positive' : 'text-destructive'
               }`}
             >
@@ -191,7 +194,7 @@ export function MetricsChart({
                 {isPositive ? '+' : ''}
                 {changePercent === null ? '—' : `${changePercent.toFixed(2)}%`}
               </span>
-              <span className="text-[10px] text-muted-foreground font-normal">
+              <span className="text-xs text-muted-foreground font-normal">
                 ({isPositive ? '+' : ''}
                 {formatChartValue(changeValue, { currency, unit, locale: display.locale })})
               </span>
@@ -206,7 +209,7 @@ export function MetricsChart({
             onClick={() => setChartKind('area')}
             className={`p-1 rounded text-xs transition-colors ${
               chartKind === 'area'
-                ? 'bg-card text-primary font-bold shadow-xs'
+                ? 'bg-card text-primary font-semibold'
                 : 'text-muted-foreground hover:text-foreground'
             }`}
             title={ts('chartArea')}
@@ -219,7 +222,7 @@ export function MetricsChart({
             onClick={() => setChartKind('line')}
             className={`p-1 rounded text-xs transition-colors ${
               chartKind === 'line'
-                ? 'bg-card text-primary font-bold shadow-xs'
+                ? 'bg-card text-primary font-semibold'
                 : 'text-muted-foreground hover:text-foreground'
             }`}
             title={ts('chartLine')}
@@ -232,7 +235,7 @@ export function MetricsChart({
             onClick={() => setChartKind('bar')}
             className={`p-1 rounded text-xs transition-colors ${
               chartKind === 'bar'
-                ? 'bg-card text-primary font-bold shadow-xs'
+                ? 'bg-card text-primary font-semibold'
                 : 'text-muted-foreground hover:text-foreground'
             }`}
             title={ts('chartBar')}
@@ -251,9 +254,9 @@ export function MetricsChart({
               key={range}
               type="button"
               onClick={() => setTimeRange(range)}
-              className={`px-1.5 py-0.5 rounded text-[11px] font-mono transition-colors ${
+              className={`px-1.5 py-0.5 rounded text-[11px] tabular-nums transition-colors ${
                 timeRange === range
-                  ? 'bg-primary/20 text-primary font-bold'
+                  ? 'bg-primary/20 text-primary font-semibold'
                   : 'text-muted-foreground hover:text-foreground'
               }`}
             >
@@ -262,8 +265,8 @@ export function MetricsChart({
           ))}
         </div>
 
-        <span className="text-[10px] text-muted-foreground font-mono">
-          {visiblePoints.length} observations
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {t('chartObservationCount', { count: visiblePoints.length })}
         </span>
       </div>
 
@@ -300,6 +303,7 @@ export function MetricsChart({
           />
         )}
       </div>
+      <div className="shrink-0"><ChartHistoryNote data={chartData} /></div>
     </div>
   );
 }

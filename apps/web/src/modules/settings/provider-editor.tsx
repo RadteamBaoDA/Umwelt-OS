@@ -116,7 +116,7 @@ export function ProviderEditor({ providers, savedIds, secrets, disabled, discove
       const hostHint = provider.kind === 'ollama' || provider.kind === 'lmstudio';
       return <div key={provider.id} className="flex flex-col gap-3 rounded-lg border border-border p-4" data-testid={`provider-${provider.id}`}>
         <div className="flex flex-wrap items-center gap-2">
-          <h3 className="m-0 mr-auto text-base font-bold">{provider.label || provider.id}</h3>
+          <h3 className="m-0 mr-auto text-base font-semibold">{provider.label || provider.id}</h3>
           {provider.local && <Badge variant="outline">{t('providerLocal')}</Badge>}
           {provider.policy_denied && <Badge variant="destructive">{t('providerPolicyDenied')}</Badge>}
           <Button type="button" variant="outline" disabled={disabled} aria-label={t('providerDelete', { label: provider.label || provider.id })} onClick={() => onChange(providers.filter((item) => item.id !== provider.id))}><Trash2 className="size-4" aria-hidden="true" /></Button>

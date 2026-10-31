@@ -43,8 +43,8 @@ export function OnboardingPage() {
     onSuccess: (value) => client.setQueryData(['onboarding-progress'], value),
   });
 
-  if (progress.isPending) return <section className="rounded-xl border bg-card p-6 skeleton" aria-label={t('loading')} />;
-  if (progress.isError || !progress.data) return <section className="rounded-xl border bg-card p-6" aria-labelledby="onboarding-title">
+  if (progress.isPending) return <section className="rounded-lg border bg-card p-6 skeleton" aria-label={t('loading')} />;
+  if (progress.isError || !progress.data) return <section className="rounded-lg border bg-card p-6" aria-labelledby="onboarding-title">
     <h1 id="onboarding-title">{t('title')}</h1><p className="error" role="alert">{t('loadFailed')}</p>
     <Button type="button" variant="outline" onClick={() => progress.refetch()}>{t('retry')}</Button>
   </section>;
@@ -91,7 +91,7 @@ export function OnboardingPage() {
   /** Saves the selected next step before allowing the owner to continue. */
   const move = (step: OnboardingStep, dataChoice = progress.data.data_choice) => save.mutate({ step, dataChoice });
   const stepContent = currentStep.id === 'ai_privacy'
-    ? <><h2>{t('aiTitle')}</h2><p>{t('aiText')}</p><p role="status">{status(aiReady, ai.isPending || ai.isError)} · {ai.isError && networkUnavailable(ai.error) ? t('offline') : ai.isPending || ai.isError ? t('unknown') : t(aiReady ? 'aiReady' : 'aiNeedsSetup')}</p><Button asChild variant="outline"><Link href="/settings/models">{t('openAiSettings')}</Link></Button></>
+    ? <><h2>{t('aiTitle')}</h2><p>{t('aiText')}</p><p role="status">{aiReady && !ai.isPending && !ai.isError ? `${status(aiReady, false)} · ` : ai.isPending || ai.isError ? `${status(aiReady, true)} · ` : ''}{ai.isError && networkUnavailable(ai.error) ? t('offline') : ai.isPending || ai.isError ? t('unknown') : t(aiReady ? 'aiReady' : 'aiNeedsSetup')}</p><Button asChild variant="outline"><Link href="/settings/models">{t('openAiSettings')}</Link></Button></>
     : currentStep.id === 'capability'
       ? <><h2>{t('capabilityTitle')}</h2><p>{t('capabilityText')}</p><p role="status">{status(chatCapability && chatDefault?.destination === 'remote', aiUnresolved)} · {ai.isError && networkUnavailable(ai.error) ? t('offline') : aiUnresolved ? t('unknown') : chatCapability ? t('capabilityReady') : t('capabilityNeedsProbe')}</p><Button asChild variant="outline"><Link href="/settings/models">{t('openAiSettings')}</Link></Button></>
       : currentStep.id === 'sources'
@@ -111,8 +111,8 @@ export function OnboardingPage() {
             const current = !done && step.id === currentStep.id;
             return <li key={step.id}>
               <button type="button" aria-current={current ? 'step' : undefined} disabled={save.isPending || done || position > currentIndex} onClick={() => move(step.id)}
-                className={`flex min-h-11 w-full items-start gap-3 rounded-[9px] border px-3 py-2.5 text-left text-sm disabled:cursor-default ${current ? 'border-border bg-card' : 'border-transparent hover:bg-secondary'}`}>
-                <span aria-hidden="true" className={`inline-flex size-6 shrink-0 items-center justify-center rounded-full border text-xs font-bold ${complete ? 'border-primary bg-primary text-primary-foreground' : current ? 'border-primary text-primary' : 'border-border text-muted-foreground'}`}>{complete ? <CheckIcon className="size-3.5" /> : position + 1}</span>
+                className={`flex min-h-9 pointer-coarse:min-h-11 w-full items-start gap-3 rounded-md border px-3 py-2.5 text-left text-sm disabled:cursor-default ${current ? 'border-border bg-card' : 'border-transparent hover:bg-secondary'}`}>
+                <span aria-hidden="true" className={`w-5 shrink-0 text-sm tabular-nums ${complete ? 'text-primary' : current ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}>{complete ? <CheckIcon className="size-3.5" /> : position + 1}</span>
                 <span className="grid"><strong className={current ? 'font-semibold' : 'font-medium'}>{t(step.label)}</strong><span className="text-muted-foreground text-xs">{t(complete ? 'stepDone' : current ? 'stepCurrent' : 'stepUpcoming')}</span></span>
               </button>
             </li>;
@@ -120,12 +120,12 @@ export function OnboardingPage() {
         </ol>
         <p className="text-muted-foreground mt-3 text-xs">{t('personalSourcesNote')}</p>
       </nav>
-      <section className="flex min-w-0 flex-[999_1_560px] flex-col gap-6 rounded-[18px] border border-border bg-card p-8 max-[720px]:p-5" aria-labelledby="onboarding-title">
-        <header><span className="brand">{t('eyebrow')}</span><h1 id="onboarding-title" className="mt-1 mb-1 text-[30px] font-bold leading-tight tracking-[-0.04em]">{t('title')}</h1><p className="text-muted-foreground m-0">{t('description')}</p><p role="status" aria-live="polite" className="mt-2 mb-0 text-sm font-semibold">{save.isPending ? t('saving') : done ? t('finished') : t('progress', { current: currentIndex + 1, total: steps.length })}</p></header>
-        <div className="grid gap-4" aria-live="polite">{stepContent}</div>
+      <section className="flex min-w-0 flex-[999_1_560px] flex-col gap-6 rounded-lg border border-border bg-card p-6 max-[720px]:p-4" aria-labelledby="onboarding-title">
+        <header><h1 id="onboarding-title" className="mt-0 mb-1 text-2xl font-semibold leading-tight">{t('title')}</h1><p className="text-muted-foreground m-0">{t('description')}</p><p role="status" aria-live="polite" className="mt-2 mb-0 text-sm font-semibold">{save.isPending ? t('saving') : done ? t('finished') : t('progress', { current: currentIndex + 1, total: steps.length })}</p></header>
+        <div className="grid justify-items-start gap-4 [&>h2]:m-0 [&>h2]:text-lg [&>h2]:font-semibold" aria-live="polite">{stepContent}</div>
         {save.error && <p className="error" role="alert">{t('saveFailed')}</p>}
         {!done && <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-5">
-          <Button type="button" variant="outline" disabled={save.isPending || currentIndex <= 0} onClick={() => move(steps[currentIndex - 1].id)}>{t('previous')}</Button>
+          {currentIndex > 0 && <Button type="button" variant="outline" disabled={save.isPending} onClick={() => move(steps[currentIndex - 1].id)}>{t('previous')}</Button>}
           <Button type="button" disabled={save.isPending || (currentStep.id === 'sample_or_import' && progress.data.data_choice === null)} onClick={() => move(steps[Math.min(steps.length - 1, currentIndex + 1)].id)}>
             {currentStep.id === 'indexing' ? t('finish') : t('next')}
           </Button>

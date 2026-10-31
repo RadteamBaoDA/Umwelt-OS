@@ -1,6 +1,6 @@
 'use client';
 
-import { CheckboxField, FieldGrid, SettingsActions, SettingsPageHeader, SettingsSection } from './settings-layout';
+import { CheckboxField, FieldGrid, SettingsActions, SettingsPageHeader } from './settings-layout';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'next-intl';
@@ -39,7 +39,7 @@ export function TranslationSettings() {
   return (
     <div className="flex flex-col gap-5">
       <SettingsPageHeader eyebrow={tShell('settings')} title={t('settingsTitle')} description={t('settingsHelp')} />
-      <SettingsSection title={t('settingsTitle')}>
+      <section className="flex min-w-0 flex-col gap-4 border-t border-border pt-6">
         {query.isError ? <p role="alert" className="error m-0">{t('loadFailed')}</p> : null}
         <CheckboxField>
           <Checkbox id="translation-enable" checked={enabled} disabled={readOnly || !query.data} onCheckedChange={(checked) => setEnabled(checked === true)} />
@@ -64,7 +64,7 @@ export function TranslationSettings() {
             <Button type="button" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>{t('save')}</Button>
           </SettingsActions>
         )}
-      </SettingsSection>
+      </section>
     </div>
   );
 }

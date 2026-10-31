@@ -10,7 +10,7 @@ import { ToolRendering } from '../components/tool-rendering';
 import { DemoGallery } from '../templates/demo-gallery';
 import { GALLERY_DEMOS, STARTER_DEMO_IDS } from '../templates/gallery-demos';
 import { SEED_HTML_TEMPLATES } from '../templates/seed-html-templates';
-import { DesktopTipModal, StarterSuggestions } from '../templates/shell-extras';
+import { StarterSuggestions } from '../templates/shell-extras';
 import { SaveTemplateButton, TemplateLibrary } from '../templates/template-library';
 import { listUserTemplates, saveUserTemplate, setTemplateAccount } from '../templates/template-store';
 
@@ -115,32 +115,6 @@ describe('StarterSuggestions', () => {
     expect(screen.getAllByTestId('template-chip')).toHaveLength(4);
     await user.click(screen.getByText(chatMessages['vi-vi'].shellDemoTripTitle));
     expect(onSendPrompt).toHaveBeenCalledWith(chatMessages['vi-vi'].shellDemoTripPrompt);
-  });
-});
-
-describe('DesktopTipModal', () => {
-  /** Stubs matchMedia so the viewport reads as phone-sized or desktop-sized. */
-  const stubViewport = (narrow: boolean) =>
-    vi.stubGlobal('matchMedia', (q: string) => ({ matches: narrow && q.includes('max-width'), addEventListener() {}, removeEventListener() {} }));
-
-  it('shows below sm, dismisses into sessionStorage and stays hidden after', async () => {
-    window.sessionStorage.clear();
-    stubViewport(true);
-    const user = userEvent.setup();
-    const { unmount } = render(<DesktopTipModal locale="en-us" />);
-    expect(await screen.findByTestId('desktop-tip-modal')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Got it' }));
-    expect(screen.queryByTestId('desktop-tip-modal')).not.toBeInTheDocument();
-    unmount();
-    render(<DesktopTipModal locale="en-us" />);
-    expect(screen.queryByTestId('desktop-tip-modal')).not.toBeInTheDocument();
-  });
-
-  it('stays hidden on desktop widths', () => {
-    window.sessionStorage.clear();
-    stubViewport(false);
-    render(<DesktopTipModal locale="en-us" />);
-    expect(screen.queryByTestId('desktop-tip-modal')).not.toBeInTheDocument();
   });
 });
 

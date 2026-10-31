@@ -54,6 +54,16 @@ function formatObservationValue(item: WorldObservation, locale: ReturnType<typeo
 }
 
 /**
+ * Split an observation into a prominent value and a small unit suffix. Bounded index units such as
+ * "index (0-100)" render as "/ 100"; a plain "index" unit gets no suffix; other units stay inline in the value.
+ */
+function splitObservationValue(item: WorldObservation, locale: ReturnType<typeof useDisplayPreferences>['locale']): { valueText: string; suffix: string | null } {
+  const bounded = !item.currency && item.value !== null ? /^index\s*\(\s*0\s*-\s*(\d+)\s*\)$/i.exec(item.unit ?? '') : null;
+  if (bounded) return { valueText: formatChartValue(item.value as number, { locale, precision: 4, compact: true }), suffix: `/ ${bounded[1]}` };
+  return { valueText: formatObservationValue(item, locale), suffix: null };
+}
+
+/**
  * Generic provider observation gadget (Fear & Greed, FX, GDP, BTC price, USGS quakes). Shows the
  * latest value with provider attribution, FX reference date / annual period, separate observed,
  * published and collected times, a stale flag after two polling intervals, and keeps the last good
@@ -82,6 +92,7 @@ export function ProviderObservationGadget({ instance }: { instance: GadgetInstan
   const sourceQuery = useQuery({ queryKey: ['connector-configuration', sourceId], queryFn: ({ signal }) => getConnectorConfiguration(sourceId, signal), enabled: Boolean(sourceId), staleTime: 300_000 });
   const items = latestPerSeries((query.data?.items ?? []).filter((item) => item.source_id === sourceId));
   useReportGadgetFreshness(items.reduce<string | null>((max, item) => (!max || item.collected_at > max ? item.collected_at : max), null));
+  /** Formats an observation timestamp with the display locale and timezone. */
   const fmt = (value: string) => formatDateTime(value, display.locale, display.timezone);
 
   if (!sourceId) return <GadgetNotice kind="setup" message={t('providerObsSourceRequired')} />;
@@ -101,22 +112,24 @@ export function ProviderObservationGadget({ instance }: { instance: GadgetInstan
       {items.map((item) => {
         const presentation = PROVIDER_PRESENTATION[item.provider];
         const kind = periodKind(item.provider);
+        const { valueText, suffix } = splitObservationValue(item, display.locale);
         return <li key={item.id} className="space-y-1 py-2 text-sm">
           <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1" data-testid="observation-row">
             <span className="min-w-0 break-words font-medium">{item.symbol ?? item.region ?? formatMetricLabel(item.metric, t)}</span>
-            <span className="flex flex-wrap items-baseline gap-x-2 font-mono text-base">
-              <span className="whitespace-nowrap" title={item.value === null ? undefined : `${item.value} ${item.currency ?? item.unit}`} aria-label={item.value === null ? t('weatherMissingValue') : `${item.value} ${item.currency ?? item.unit}`}>
-                {formatObservationValue(item, display.locale)}
+            <span className="flex flex-wrap items-baseline gap-x-1.5 tabular-nums">
+              <span className="whitespace-nowrap text-2xl font-semibold" title={item.value === null ? undefined : `${item.value} ${item.currency ?? item.unit}`} aria-label={item.value === null ? t('weatherMissingValue') : `${item.value} ${item.currency ?? item.unit}`}>
+                {valueText}
               </span>
-              {presentation && <a className="font-sans text-xs text-muted-foreground underline" href={presentation.href} target="_blank" rel="noreferrer">{t('providerObsAttribution', { provider: presentation.name })}</a>}
+              {suffix && <span className="font-sans text-xs text-muted-foreground">{suffix}</span>}
             </span>
           </div>
           {kind === 'referenceDate' && item.reference_date && <p className="text-xs text-muted-foreground">{t('providerObsReferenceDate', { date: item.reference_date })}</p>}
           {kind === 'annualPeriod' && item.period && <p className="text-xs text-muted-foreground">{t('providerObsPeriod', { period: item.period })}</p>}
-          <dl className="grid grid-cols-1 gap-x-3 text-xs text-muted-foreground sm:grid-cols-3">
+          <dl className="flex flex-col text-xs text-muted-foreground">
             <div><dt className="inline">{t('providerObsObserved')}: </dt><dd className="inline"><time dateTime={item.observed_at}>{fmt(item.observed_at)}</time></dd></div>
-            <div><dt className="inline">{t('providerObsPublished')}: </dt><dd className="inline">{item.published_at ? <time dateTime={item.published_at}>{fmt(item.published_at)}</time> : t('providerObsNotProvided')}</dd></div>
+            {item.published_at && <div><dt className="inline">{t('providerObsPublished')}: </dt><dd className="inline"><time dateTime={item.published_at}>{fmt(item.published_at)}</time></dd></div>}
             <div><dt className="inline">{t('observationCollectedAt')}: </dt><dd className="inline"><time dateTime={item.collected_at}>{fmt(item.collected_at)}</time></dd></div>
+            {presentation && <div><a className="underline" href={presentation.href} target="_blank" rel="noreferrer">{t('providerObsAttribution', { provider: presentation.name })}</a></div>}
           </dl>
         </li>;
       })}

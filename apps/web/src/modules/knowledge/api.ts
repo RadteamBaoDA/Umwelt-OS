@@ -74,7 +74,11 @@ export type GraphStatus = { mapping_id: string; document_version_id: string; epi
 export type EntityTimelineResult = { canonical_entity_id: string; timeline: import('@/modules/timeline/api').TimelinePageResult; graph_statuses: GraphStatus[] };
 
 /** Lists documents from the knowledge API in pages of 50 and appends the opaque cursor when provided. */
-export function listDocuments(cursor?: string, sourceId?: string) { const query = new URLSearchParams({ limit: '50' }); if (cursor) query.set('cursor', cursor); if (sourceId) query.set('source_id', sourceId); return apiRequest<DocumentPage>(`/api/v1/documents?${query}`); }
+/**
+ * Fetch one page of the owner/member document list.
+ * @param excludeMeasurements Ask the server to omit measurement-provider records (ISS position, prices).
+ */
+export function listDocuments(cursor?: string, sourceId?: string, excludeMeasurements = false) { const query = new URLSearchParams({ limit: '50' }); if (cursor) query.set('cursor', cursor); if (sourceId) query.set('source_id', sourceId); if (excludeMeasurements) query.set('exclude_measurements', 'true'); return apiRequest<DocumentPage>(`/api/v1/documents?${query}`); }
 /** Reads current active source records through the owner-validated dashboard projection. */
 export function listGadgetDocumentProjections(sourceIds: string[], channelIds: string[] = [], cursor?: string, filters: { language?: string; since?: string } = {}) {
   const query = new URLSearchParams({ limit: '100' });

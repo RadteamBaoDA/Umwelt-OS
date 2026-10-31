@@ -84,6 +84,7 @@ export function CommandPalette() {
   useEffect(() => {
     openRef.current = open;
     if (!open) return;
+    /** Mirrors navigator connectivity into palette state. */
     const sync = () => setOnline(navigator.onLine);
     sync();
     window.addEventListener('online', sync);
@@ -150,7 +151,9 @@ export function CommandPalette() {
   }, [query, scope, moduleAvailability.data, docs.data, entities.data, events.data, conversations.data, selection?.role, wantsDocs, wantsEntities, wantsEvents, wantsConversations, t, tc, setDraft, openDrawer, selectConversation, navigate]);
 
   const active = options.length ? Math.min(activeIndex, options.length - 1) : -1;
+  /** Builds the DOM id for the option at an index (used for aria-activedescendant). */
   const optionId = (index: number) => `palette-option-${options[index]?.id}`;
+  /** Maps a palette option group to its localized heading. */
   const groupLabel = (group: PaletteOption['group']) => group === 'goTo' ? tc('paletteGoTo') : group === 'actions' ? tc('paletteActions') : group === 'documents' ? tc('paletteDocuments') : group === 'entities' ? tc('paletteEntities') : group === 'events' ? tc('paletteEvents') : tc('paletteConversations');
   const groups = options.reduce<{ group: PaletteOption['group']; items: { option: PaletteOption; index: number }[] }[]>((acc, option, index) => {
     const last = acc[acc.length - 1];
@@ -177,7 +180,7 @@ export function CommandPalette() {
   return <>
     <Button type="button" variant="outline" className="search-trigger" onClick={() => setOpen(true)} aria-label={t('searchOrRun')} aria-keyshortcuts="Control+K Meta+K"><SearchIcon className="size-4" aria-hidden="true" /><span className="search-label">{t('searchOrRun')}</span><kbd>Ctrl K</kbd></Button>
     <Dialog open={open} onOpenChange={(next) => { if (next) setOpen(true); else { setOpen(false); setFilter(''); setScope('all'); setActiveIndex(0); } }}>
-      <DialogContent className="top-24 translate-y-0 gap-0 overflow-hidden rounded-2xl bg-surface p-0 sm:max-w-[680px]" closeLabel={t('close')} onOpenAutoFocus={(event) => { event.preventDefault(); inputRef.current?.focus(); }}>
+      <DialogContent className="top-24 translate-y-0 gap-0 overflow-hidden rounded-xl bg-surface p-0 sm:max-w-[680px]" closeLabel={t('close')} onOpenAutoFocus={(event) => { event.preventDefault(); inputRef.current?.focus(); }}>
         <DialogTitle className="sr-only">{tc('paletteTitle')}</DialogTitle>
         <DialogDescription className="sr-only">{t('workspaceCommands')}</DialogDescription>
         <div className="flex items-center gap-3 border-b border-border px-4 pr-12">
@@ -199,7 +202,7 @@ export function CommandPalette() {
         </div>
         <div role="tablist" aria-label={tc('paletteScopes')} className="flex flex-wrap items-center gap-1.5 border-b border-border px-4 py-2.5">
           {scopes.map((item) => (
-            <button key={item} type="button" role="tab" aria-selected={scope === item} className={`inline-flex h-[22px] items-center rounded-full border px-2 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${scope === item ? 'border-primary text-primary' : 'border-border text-muted-foreground hover:text-foreground'}`} onClick={() => { setScope(item); setActiveIndex(0); inputRef.current?.focus(); }}>{tc(scopeKeys[item])}</button>
+            <button key={item} type="button" role="tab" aria-selected={scope === item} className={`inline-flex h-[22px] items-center rounded-[4px] border px-2 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${scope === item ? 'border-primary text-primary' : 'border-border text-muted-foreground hover:text-foreground'}`} onClick={() => { setScope(item); setActiveIndex(0); inputRef.current?.focus(); }}>{tc(scopeKeys[item])}</button>
           ))}
           {mode && <span className="ml-auto text-xs text-muted-foreground">{mode === 'lexical' ? tc('paletteLexical') : tc('paletteHybrid')}</span>}
         </div>
@@ -210,7 +213,7 @@ export function CommandPalette() {
                 <div className="px-3 pb-1 pt-2.5 text-xs font-semibold text-muted-foreground" aria-hidden="true">{groupLabel(group)}</div>
                 {items.map(({ option, index }) => {
                   return (
-                    <div key={option.id} id={optionId(index)} role="option" aria-selected={index === active} aria-disabled={option.disabledReason ? true : undefined} className={`flex min-h-11 items-center gap-3 rounded-md px-3 py-1.5 text-sm text-foreground ${index === active ? 'bg-background' : ''} ${option.disabledReason ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'}`} onMouseMove={() => setActiveIndex(index)} onClick={() => { if (!option.disabledReason) option.run(); }}>
+                    <div key={option.id} id={optionId(index)} role="option" aria-selected={index === active} aria-disabled={option.disabledReason ? true : undefined} className={`flex min-h-9 pointer-coarse:min-h-11 items-center gap-3 rounded-md px-3 py-1.5 text-sm text-foreground ${index === active ? 'bg-background' : ''} ${option.disabledReason ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'}`} onMouseMove={() => setActiveIndex(index)} onClick={() => { if (!option.disabledReason) option.run(); }}>
                       <span className="min-w-0 flex-1 truncate">{option.label}</span>
                       {option.badge && !option.disabledReason && <Badge variant="outline" className="shrink-0 text-muted-foreground">{option.badge}</Badge>}
                       {(option.disabledReason || option.meta) && <span className="max-w-[45%] shrink-0 truncate text-xs text-muted-foreground">{option.disabledReason ?? option.meta}</span>}

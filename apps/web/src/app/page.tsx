@@ -26,6 +26,6 @@ export default function HomePage() {
     else if (setup.data && session.isError) router.replace('/login');
   }, [router, setup.data, session.data, session.isError]);
 
-  if (setup.isError) return <main className="page"><section className="auth-panel"><span className="brand">Umwelt-OS</span><h1>{ts('apiUnreachable')}</h1><p className="text-muted-foreground">{ts('apiUnreachableHint')}</p></section></main>;
+  if (setup.isError) return <main className="page"><section className="auth-panel"><h1>{ts('apiUnreachable')}</h1><p className="text-muted-foreground">{ts('apiUnreachableHint')}</p></section></main>;
   return <main className="page"><div className="skeleton" style={{ width: 'min(100%, 480px)' }} aria-label={ts('loading')} /></main>;
 }

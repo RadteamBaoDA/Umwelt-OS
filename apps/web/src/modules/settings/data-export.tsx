@@ -38,11 +38,9 @@ export function DataExportSettings() {
   return <section className="mt-8 space-y-6 border-t border-border pt-6" aria-labelledby="data-export-title">
     <div>
       <h2 id="data-export-title" className="text-lg font-semibold">{t('title')}</h2>
-      <p className="text-muted-foreground mt-1 text-sm">{t('description')}</p>
     </div>
     <div className="space-y-3">
-      <h3 className="font-semibold">{t('portableTitle')}</h3>
-      <p className="text-muted-foreground text-sm">{t('portableDescription')}</p>
+      <p className="text-muted-foreground text-sm">{t('description')}</p>
       <div className="flex flex-wrap gap-3">
         {(['json', 'markdown', 'csv'] as const).map((format) => <Button
           key={format}

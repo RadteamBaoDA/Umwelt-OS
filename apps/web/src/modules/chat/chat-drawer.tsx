@@ -44,11 +44,11 @@ export function ChatDrawer() {
       <SheetContent
         side="right"
         showCloseButton={false}
-        className="p-0 flex flex-col h-full w-full sm:w-[65vw] sm:max-w-[56rem] md:max-w-[56rem] lg:max-w-[56rem] xl:max-w-[56rem] bg-surface border-l border-border shadow-2xl focus:outline-none"
+        className="p-0 flex flex-col h-full w-full sm:w-[65vw] sm:max-w-[56rem] md:max-w-[56rem] lg:max-w-[56rem] xl:max-w-[56rem] bg-surface border-l border-border shadow-[var(--shadow-popover)] focus:outline-none"
       >
-        <SheetHeader className="sr-only">
+        <SheetHeader className="border-b border-border px-4 py-3 pr-16 text-left">
           <SheetTitle>{t('quickChat')}</SheetTitle>
-          <SheetDescription>{t('emptyStateDescription')}</SheetDescription>
+          <SheetDescription className="sr-only">{t('emptyStateDescription')}</SheetDescription>
         </SheetHeader>
 
         {/* 44px ghost close (QuickChat.dc.html); SheetClose keeps Radix focus return and Escape handling. */}

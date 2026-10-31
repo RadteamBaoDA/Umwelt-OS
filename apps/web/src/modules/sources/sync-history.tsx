@@ -10,6 +10,7 @@ import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { AppLocaleId, normalizeFormattingLocale } from '@/core/i18n';
 import { isStale } from './freshness';
+import { useErrorCodeLabel } from '@/core/error-codes';
 import { connectorKeys, getSourceIngestion, IngestionRun, IngestionRunStatus, retryRun, Source, sourceKeys } from './api';
 
 /** Formats an ISO timestamp with the supplied application locale and time zone. */
@@ -124,22 +125,23 @@ function RunRow({ run, source, t, locale, timezone, retryPending, onRetry }: {
   retryPending: boolean;
   onRetry: (stageKey: string) => void;
 }) {
+  const errorLabel = useErrorCodeLabel();
   const hasActiveStage = run.stages.some((stage) => ['pending', 'queued', 'running', 'retrying'].includes(stage.status));
   return <TableRow>
-    <TableCell className="font-mono text-xs">{run.run_id}</TableCell>
+    <TableCell className="text-xs tabular-nums" title={run.run_id}>{run.run_id.slice(0, 8)}</TableCell>
     <TableCell>{formatDate(run.created_at, locale, timezone)}</TableCell>
     <TableCell>{t(statusKey(run.status))}</TableCell>
     <TableCell className="min-w-64 whitespace-normal">
       <div className="grid gap-2">{run.stages.map((stage) => <details key={stage.stage_key} className="rounded border border-border px-2 py-1">
         <summary className="cursor-pointer">{stage.stage_key === 'normalize' ? t('normalizeStage') : stage.stage_key}: {t(statusKey(stage.status))}</summary>
         <div className="grid gap-1 pt-2 text-xs text-muted-foreground">
-          <span>{t('runAttempts', { count: stage.attempts })}{stage.error_code ? ` · ${stage.error_code}` : ''}</span>
+          <span>{t('runAttempts', { count: stage.attempts })}{stage.error_code ? ` · ${errorLabel(stage.error_code)}` : ''}</span>
           {stage.result_count !== null && <span>{t(stage.stage_key === 'normalize' || stage.stage_key === 'parse_file' ? 'chunkCount' : 'resultCount')}: {stage.result_count}</span>}
           {stage.stage_key === 'normalize' && <span>{t('normalizedCount')}: {stage.normalized_count} · {t('selectedCurrentCount')}: {stage.selected_current_count} · {t('duplicateCount')}: {stage.duplicate_count} · {t('skippedCount')}: {stage.skipped_count} · {t('failedCount')}: {stage.failed_count} · {t('pendingCount')}: {stage.pending_count}</span>}
           {stage.status === 'failed' && run.status === 'failed' && source.status === 'active' && !hasActiveStage && <Button type="button" size="sm" variant="outline" disabled={retryPending} onClick={() => onRetry(stage.stage_key)}>{t('runRetryStage', { stage: stage.stage_key })}</Button>}
         </div>
       </details>)}</div>
     </TableCell>
-    <TableCell className="whitespace-normal">{run.error_code ? `${t('runError')}: ${run.error_code}` : '—'}</TableCell>
+    <TableCell className="whitespace-normal">{run.error_code ? `${t('runError')}: ${errorLabel(run.error_code)}` : '—'}</TableCell>
   </TableRow>;
 }

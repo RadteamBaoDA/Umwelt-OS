@@ -23,7 +23,7 @@ from modules.connectors.registry import normalize
 
 MAX_BYTES = 25 * 1024 * 1024
 _job_lock = asyncio.Lock()
-app = FastAPI(title="BBD-OS bounded browser collector")
+app = FastAPI(title="Umwelt-OS bounded browser collector")
 _SERVICE_INSTANCE_ID = str(uuid7())
 _agent_read_tasks: dict[UUID, tuple[AgentReadRequest, asyncio.Task[list[dict[str, object]]]]] = {}
 _BROWSER_CONTROL_URL = "http://172.29.250.10:8000/api/v1/browser-control"

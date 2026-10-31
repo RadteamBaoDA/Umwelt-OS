@@ -1469,7 +1469,7 @@ export function ConnectorEditor({
 
   /** Formats provider availability and unsupported-operation information for the connector catalog. */
   const catalogStatus = (entry: ConnectorCatalogEntry) => entry.availability === 'available' || entry.availability === 'implemented'
-    ? t('available') : entry.availability === 'requires_credentials' ? t('credentialsRequired') : entry.availability === 'planned' ? t('planned') : t('unavailable');
+    ? '' : entry.availability === 'requires_credentials' ? t('needsCredentials') : entry.availability === 'planned' ? t('planned') : t('unavailable');
 
   return <section className={embedded ? 'source-editor flex flex-col gap-4' : 'source-editor flex flex-col gap-4 rounded-lg border border-border bg-card p-5'} aria-label={sourceId ? t('editTitle') : t('setupTitle')}>
     {(!sourceId || embedded) && <div hidden={embedded && step !== 'provider'} className="flex flex-col gap-4">
@@ -1479,15 +1479,14 @@ export function ConnectorEditor({
       {Boolean(shapeFilter?.length) && catalogQuery.isSuccess && !sourceId && !(catalog.some((entry) => entry.kind !== 'manual_import' && entry.kind !== 'group'))
         && <p role="status" className="text-muted-foreground">{t('shapeFilterNone')} {onClearFilter && <Button variant="outline" size="sm" onClick={onClearFilter}>{t('shapeFilterClear')}</Button>}</p>}
       {catalog.length > 0 && groupCatalog(catalog.filter((entry) => entry.kind !== 'manual_import' && entry.kind !== 'group')).map(([group, entries]) => <SettingsSection key={group} title={t(PROVIDER_GROUP_KEY[group])}>
-        <div className="source-provider-grid !m-0" role="group" aria-label={t(PROVIDER_GROUP_KEY[group])}>
+        <div className="source-provider-grid !m-0 !grid-cols-[repeat(auto-fill,minmax(14rem,1fr))]" role="group" aria-label={t(PROVIDER_GROUP_KEY[group])}>
         {entries.map((entry) => {
           const localProvider = entry.provider_id;
           const supported = entry.kind !== 'manual_import' && Boolean(entry.source_type && entry.code_available) && ['available', 'implemented', 'requires_credentials'].includes(entry.availability) && isProvider(localProvider);
           const added = addedBuiltinIds.has(localProvider);
-          return <Button key={entry.provider_id} type="button" variant="outline" className={`source-provider h-auto min-w-0 flex-col items-start justify-start overflow-hidden whitespace-normal break-words text-left font-normal${provider === localProvider ? ' is-selected' : ''}`} disabled={!supported || locked || added || Boolean(sourceId)} onClick={() => { if (!supported || !isProvider(localProvider)) return; selectProvider(localProvider, entry); }}>
+          return <Button key={entry.provider_id} type="button" variant="outline" className={`source-provider h-auto min-h-24 min-w-0 flex-col items-start justify-start overflow-hidden whitespace-normal break-words text-left font-normal${provider === localProvider ? ' is-selected' : ''}`} disabled={!supported || locked || added || Boolean(sourceId)} onClick={() => { if (!supported || !isProvider(localProvider)) return; selectProvider(localProvider, entry); }}>
             <strong>{providerKey(entry.provider_id) === 'provider' ? entry.label : t(providerKey(entry.provider_id))}</strong>
-            <span>{catalogStatus(entry)} · {entry.code_available ? t('codeAvailable') : t('codeUnavailable')}</span>
-            {entry.requires_service === 'browser' && <small>{t('browserServiceRequired')}</small>}
+            {(catalogStatus(entry) || !entry.code_available) && <span>{[catalogStatus(entry), entry.code_available ? '' : t('codeUnavailable')].filter(Boolean).join(' · ')}</span>}
             {added && <Badge variant="secondary">{t('builtinAdded')}</Badge>}
             {!supported && <small>{t('providerUnavailableReason')}</small>}
           </Button>;
@@ -1526,7 +1525,7 @@ export function ConnectorEditor({
         </div>}
         {!embedded && <ol aria-label={t('stepperLabel')} className="m-0 grid list-none grid-cols-3 gap-3 p-0 max-[720px]:grid-cols-1">
           {steps.map((step) => <li key={step.id}>
-            <a href={`#source-step-${step.id}`} aria-current={currentStep === step.id ? 'step' : undefined} className={`flex min-h-11 flex-col rounded-lg border p-3 no-underline ${currentStep === step.id ? 'border-primary' : 'border-border'}`}>
+            <a href={`#source-step-${step.id}`} aria-current={currentStep === step.id ? 'step' : undefined} className={`flex min-h-9 pointer-coarse:min-h-11 flex-col rounded-lg border p-3 no-underline ${currentStep === step.id ? 'border-primary' : 'border-border'}`}>
               <strong>{step.title}</strong><span className="text-muted-foreground text-sm">{step.status}</span>
             </a>
           </li>)}
@@ -1599,7 +1598,7 @@ export function ConnectorEditor({
                   const selectedIds = provider === 'google_mail' ? configuration.google_mail_label_ids ?? []
                     : provider === 'google_calendar' ? configuration.google_calendar_ids ?? [] : configuration.google_drive_ids ?? [];
                   const checkboxId = `google-resource-${resource.id}`;
-                  return <div key={resource.id} className="flex min-h-11 items-center justify-between gap-3 rounded-md border border-border p-2">
+                  return <div key={resource.id} className="flex min-h-9 pointer-coarse:min-h-11 items-center justify-between gap-3 rounded-md border border-border p-2">
                     <CheckboxField>
                       <Checkbox id={checkboxId} disabled={locked} checked={selectedIds.includes(resource.id)} onCheckedChange={(checked) => toggleGoogleResource(resource.id, checked === true)} />
                       <Label htmlFor={checkboxId}>{resource.name}{resource.mime_type ? <span className="ml-2 text-xs text-muted-foreground">{resource.kind === 'folder' ? t('googleDriveFolder') : resource.mime_type}</span> : null}</Label>
@@ -1751,7 +1750,7 @@ export function ConnectorEditor({
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
-        {showStep('verify') && revision > 0 && <SettingsSection title={<>{t('activationState')}: {t(({ queued: 'stateQueued', provisioning: 'stateProvisioning', saved_not_active: 'stateSavedNotActive', reconciliation_required: 'stateReconciliationRequired', disabled: 'stateDisabled', active: 'active' } as Record<string, string>)[visibleActivationState] ?? 'stateUnknown')}</>}>
+        {showStep('verify') && revision > 0 && (visibleActivationState !== 'active' || Boolean(source?.collection_error_code) || activationQuery.isError || Boolean(visibleActivationError) || sourceStatus === 'paused') && <SettingsSection title={<>{t('activationState')}: {visibleActivationState === 'active' && source?.collection_error_code ? t('activeCollectionFailed') : t(({ queued: 'stateQueued', provisioning: 'stateProvisioning', saved_not_active: 'stateSavedNotActive', reconciliation_required: 'stateReconciliationRequired', disabled: 'stateDisabled', active: 'active' } as Record<string, string>)[visibleActivationState] ?? 'stateUnknown')}</>}>
           {activationQuery.isError && <p className="error">{t('activationRefreshFailed')}</p>}
           {visibleActivationError && <p className="error">{t('activationError')}: {visibleActivationError}</p>}
           {visibleActivationState === 'saved_not_active' && <p className="text-muted-foreground">{t('savedInactive')}</p>}

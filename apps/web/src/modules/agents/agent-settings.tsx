@@ -111,7 +111,7 @@ export function AgentSettingsWorkspace() {
       </header>
       <AgentList profiles={profiles.data ?? []} selectedId={selectedId} onSelect={setSelectedId} />
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(18rem,.8fr)]">
-        <form className="space-y-4 rounded-xl border border-border bg-surface p-4" onSubmit={(event) => { event.preventDefault(); if (draft) save.mutate(draft); }}>
+        <form className="space-y-4 rounded-lg border border-border bg-surface p-4" onSubmit={(event) => { event.preventDefault(); if (draft) save.mutate(draft); }}>
           <h3 className="font-semibold text-foreground">{t(profileTitleKeys[draft.id] ?? 'agentProfileKnowledge')}</h3>
           {draft.unavailable_reasons.map((reason) => <p key={reason} className="text-sm text-muted-foreground">{t((reasonKeys[reason] ?? 'agentUnavailableReason') as 'agentUnavailableReason', { reason })}</p>)}
           <label className="flex items-center gap-2 text-sm text-foreground">
@@ -158,7 +158,7 @@ export function AgentSettingsWorkspace() {
             <Button type="button" variant="outline" disabled={save.isPending} onClick={() => setDraft(selected ? { ...selected, allowed_tools: [...selected.allowed_tools], source_ids: [...selected.source_ids] } : null)}>{t('agentCancel')}</Button>
           </div>
         </form>
-        <aside className="space-y-3 rounded-xl border border-border bg-surface p-4">
+        <aside className="space-y-3 rounded-lg border border-border bg-surface p-4">
           <h3 className="font-semibold text-foreground">{t('agentHistory')}</h3>
           <p className="text-xs text-muted-foreground">{t('agentHistoryBound')}</p>
           {runs.data?.items.length ? <p className="text-xs text-muted-foreground">{t('agentRunSummary', {

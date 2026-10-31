@@ -4,7 +4,7 @@ import { useTranslations } from 'next-intl';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DashboardPlacement, GadgetInstance } from './api';
 import { GadgetFrame } from './gadget-frame';
-import { projectReadableMobilePlacements, resolveGadgetRenderer } from './widget-registry';
+import { projectReadableMobilePlacements, projectTabletPlacements, resolveGadgetRenderer, TABLET_GRID_COLUMNS } from './widget-registry';
 
 /** Known minimum integer dimensions for standard gadget renderers. */
 export const RENDERER_MIN_SIZES: Record<string, { minW: number; minH: number }> = {
@@ -126,6 +126,8 @@ export interface DashboardGridProps {
   visibleInstanceIds: string[];
   /** Shows the width-derived local mobile reading projection while viewing. */
   isMobileView?: boolean;
+  /** Shows the read-only two-column tablet flow of the desktop layout while viewing. */
+  isTabletView?: boolean;
   /** Reports the current local readable projection for explicit owner adoption. */
   onReadableProjectionChange?: (placements: DashboardPlacement[] | null) => void;
   /** Reports root width-derived unit metrics for new mobile instance default heights. */
@@ -188,6 +190,7 @@ export function DashboardGrid({
   placements,
   visibleInstanceIds,
   isMobileView = false,
+  isTabletView = false,
   onReadableProjectionChange,
   onGridMetricsChange,
   columns = 20,
@@ -539,9 +542,26 @@ export function DashboardGrid({
     : null,
   [cellSize, columnCount, frameHeaderHeight, instances, isMobileView, placements]);
   const projectionMeasurementReady = gridMetrics !== null && frameHeaderHeight > 0;
-  const displayPlacements = isMobileView && !isEditMode
-    ? readableProjection ?? effectivePlacements
-    : effectivePlacements;
+  // Tablet flow is view-only on the desktop layout; editing keeps the 20-column geometry.
+  const tabletActive = isTabletView && !isEditMode && !isMobileView && breakpoint === 'desktop';
+  const tabletMetrics = useMemo(
+    () => (tabletActive ? getGridUnitMetrics(gridWidth, TABLET_GRID_COLUMNS) : null),
+    [gridWidth, tabletActive],
+  );
+  const tabletProjection = useMemo(
+    () => (tabletActive && tabletMetrics && gridMetrics && frameHeaderHeight > 0
+      ? projectTabletPlacements(placements, instances, gridMetrics.cellSize, tabletMetrics.cellSize, frameHeaderHeight)
+      : null),
+    [frameHeaderHeight, gridMetrics, instances, placements, tabletActive, tabletMetrics],
+  );
+  const tabletRendering = tabletActive && tabletProjection !== null && tabletMetrics !== null;
+  const renderColumns = tabletRendering ? TABLET_GRID_COLUMNS : columnCount;
+  const renderCell = tabletRendering ? tabletMetrics.cellSize : cellSize;
+  const displayPlacements = tabletRendering
+    ? tabletProjection
+    : isMobileView && !isEditMode
+      ? readableProjection ?? effectivePlacements
+      : effectivePlacements;
 
   // Calculate highest row to render adequate grid background in edit mode and view projection.
   const maxRow = useMemo(() => {
@@ -573,7 +593,7 @@ export function DashboardGrid({
   const liveText = gesture
     ? `${t('positionLabel', { x: gesture.currentPlacement.x + 1, y: gesture.currentPlacement.y + 1, w: gesture.currentPlacement.w, h: gesture.currentPlacement.h })}. ${gestureNotice}`
     : announcement;
-  const gridMinHeight = maxRow * cellSize + Math.max(0, maxRow - 1) * GRID_GAP_PX;
+  const gridMinHeight = maxRow * renderCell + Math.max(0, maxRow - 1) * GRID_GAP_PX;
   // Cap rendered edit-mode guide rows so a placement with a large y coordinate (up to MAX_LAYOUT_ROWS) cannot allocate millions of DOM nodes.
   const renderRows = Math.min(maxRow, 200);
 
@@ -583,8 +603,8 @@ export function DashboardGrid({
       className={`relative w-full ${isEditMode ? 'select-none' : ''}`}
       style={{
         display: 'grid',
-        gridTemplateColumns: `repeat(${columnCount}, ${cellSize}px)`,
-        gridAutoRows: `${cellSize}px`,
+        gridTemplateColumns: `repeat(${renderColumns}, ${renderCell}px)`,
+        gridAutoRows: `${renderCell}px`,
         gap: `${GRID_GAP_PX}px`,
         minHeight: `${gridMinHeight}px`,
       }}
@@ -609,7 +629,7 @@ export function DashboardGrid({
       {isEditMode && (
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute -top-5 left-0 grid text-[10px] leading-none text-muted-foreground"
+          className="pointer-events-none absolute -top-5 left-0 grid text-[11px] leading-none text-muted-foreground"
           style={{ gridTemplateColumns: `repeat(${columnCount}, ${cellSize}px)`, gap: `${GRID_GAP_PX}px` }}
         >
           {Array.from({ length: columnCount }).map((_, i) => (
@@ -621,7 +641,7 @@ export function DashboardGrid({
       {isEditMode && (
         <div
           aria-hidden="true"
-          className="absolute inset-0 pointer-events-none rounded-xl border border-dashed border-border/40 grid"
+          className="absolute inset-0 pointer-events-none rounded-lg border border-dashed border-border/40 grid"
           style={{
             gridTemplateColumns: `repeat(${columnCount}, ${cellSize}px)`,
             gridAutoRows: `${cellSize}px`,
@@ -658,7 +678,7 @@ export function DashboardGrid({
               zIndex: isGestureTarget ? 30 : 10,
               visibility: projectionPending ? 'hidden' : undefined,
             }}
-            className={`relative flex flex-col min-h-0 min-w-0 rounded-xl ${isGestureTarget ? (overlapCount > 0 ? 'outline outline-2 outline-destructive' : 'outline outline-2 outline-primary') : ''}`}
+            className={`relative flex flex-col min-h-0 min-w-0 rounded-lg ${isGestureTarget ? (overlapCount > 0 ? 'outline outline-2 outline-destructive' : 'outline outline-2 outline-primary') : ''}`}
           >
             <GadgetFrame
               instance={instance}
@@ -713,11 +733,11 @@ export function DashboardGrid({
 
             {/* Live tooltip showing integer coordinates during gesture */}
             {isGestureTarget && (
-              <div className={`absolute -top-7 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded text-[11px] shadow-md z-40 max-w-xs pointer-events-none ${overlapCount > 0 ? 'bg-destructive text-destructive-foreground' : 'bg-foreground text-background'}`}>
+              <div className={`absolute -top-7 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded text-[11px] shadow-[var(--shadow-popover)] z-40 max-w-xs pointer-events-none ${overlapCount > 0 ? 'bg-destructive text-destructive-foreground' : 'bg-foreground text-background'}`}>
                 {gesture.type === 'resize' ? (
-                  <span className="font-mono font-semibold">{t('resizingLabel', { w: placement.w, h: placement.h })}</span>
+                  <span className="tabular-nums font-semibold">{t('resizingLabel', { w: placement.w, h: placement.h })}</span>
                 ) : null}
-                <span className={gesture.type === 'resize' ? 'ml-2 font-mono' : 'font-mono'}>{t('positionLabel', {
+                <span className={gesture.type === 'resize' ? 'ml-2 tabular-nums' : 'tabular-nums'}>{t('positionLabel', {
                   x: placement.x + 1,
                   y: placement.y + 1,
                   w: placement.w,

@@ -157,6 +157,7 @@ export function LayoutEditor({
   const addDefinition = useCallback(async (definition: Pick<GadgetDefinition, 'id' | 'renderer' | 'revision'>) => {
     // Empty means "let the server pick or create the default group".
     const finalGroupId = targetGroupId || groups[0]?.id || undefined;
+    /** Rolls back partially applied layout changes after a failed save. */
     const compensate = async () => {
       try {
         await deleteGadgetDefinition(definition.id, definition.revision, session.csrfToken);
@@ -199,9 +200,9 @@ export function LayoutEditor({
   return (
     <>
       {/* Top Edit Toolbar (DashboardEdit artboard): title + edit state left, explicit Cancel / Save right */}
-      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card px-4 py-3">
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-4 py-3">
         <div className="mr-auto flex min-w-0 flex-col">
-          <strong className="text-[15px] font-bold text-foreground">{t('editingTitle', { name: dashboardName })}</strong>
+          <strong className="text-[15px] font-semibold text-foreground">{t('editingTitle', { name: dashboardName })}</strong>
           <span role="status" className="flex items-center text-xs text-muted-foreground">
             <span className={`mr-1.5 inline-block size-2 rounded-full ${isDirty ? 'bg-primary' : 'bg-border'}`} aria-hidden="true" />
             {isDirty ? <>{t('unsavedChanges')} {'·'} </> : null}
@@ -210,39 +211,39 @@ export function LayoutEditor({
           </span>
         </div>
 
-        <Button type="button" variant="outline" className="min-h-11" disabled={!canUndo || isSaving} onClick={onUndo}>
+        <Button type="button" variant="outline" disabled={!canUndo || isSaving} onClick={onUndo}>
           <Undo2 className="size-4" aria-hidden="true" />{t('undo')}
         </Button>
-        <Button type="button" variant="outline" className="min-h-11" disabled={!canRedo || isSaving} onClick={onRedo}>
+        <Button type="button" variant="outline" disabled={!canRedo || isSaving} onClick={onRedo}>
           <Redo2 className="size-4" aria-hidden="true" />{t('redo')}
         </Button>
         <span aria-hidden="true" className="mx-1 h-7 w-px bg-border" />
         {onTidyLayout && (
-          <Button type="button" variant="outline" className="min-h-11" disabled={!canTidyLayout || isSaving} onClick={onTidyLayout}>
+          <Button type="button" variant="outline" disabled={!canTidyLayout || isSaving} onClick={onTidyLayout}>
             {t('tidyLayout')}
           </Button>
         )}
         {onUseReadableMobileSizes && (
-          <Button type="button" variant="outline" className="min-h-11" disabled={!canUseReadableMobileSizes || isSaving} onClick={onUseReadableMobileSizes}>
+          <Button type="button" variant="outline" disabled={!canUseReadableMobileSizes || isSaving} onClick={onUseReadableMobileSizes}>
             {t('useReadableMobileSizes')}
           </Button>
         )}
-        <Button type="button" variant="outline" className="min-h-11" disabled={isSaving} onClick={() => { setAddError(null); setAddDialogOpen(true); }}>
+        <Button type="button" variant="outline" disabled={isSaving} onClick={() => { setAddError(null); setAddDialogOpen(true); }}>
           <Plus className="size-4" aria-hidden="true" />{t('addGadget')}
         </Button>
         {onAddGroup && (
-          <Button type="button" variant="outline" className="min-h-11" disabled={isSaving} onClick={onAddGroup}>
+          <Button type="button" variant="outline" disabled={isSaving} onClick={onAddGroup}>
             <FolderPlus className="size-4" aria-hidden="true" />{t('addGroup')}
           </Button>
         )}
-        <Button type="button" variant="outline" className="min-h-11" disabled={isSaving} onClick={onOpenPresetPicker}>
+        <Button type="button" variant="outline" disabled={isSaving} onClick={onOpenPresetPicker}>
           <LayoutTemplate className="size-4" aria-hidden="true" />{t('presets')}
         </Button>
         <span aria-hidden="true" className="mx-1 h-7 w-px bg-border" />
-        <Button type="button" variant="outline" className="min-h-11" disabled={isSaving} onClick={onCancel}>
+        <Button type="button" variant="outline" disabled={isSaving} onClick={onCancel}>
           {t('cancelEdit')}
         </Button>
-        <Button type="button" className="min-h-11 font-semibold" disabled={isSaving || !isDirty} onClick={onSave}>
+        <Button type="button" className="font-semibold" disabled={isSaving || !isDirty} onClick={onSave}>
           {isSaving ? t('saving') : <><Check className="size-4" aria-hidden="true" />{t('saveLayout')}</>}
         </Button>
       </div>
@@ -306,7 +307,7 @@ export function LayoutEditor({
             <Button
               type="button"
               disabled={isSaving}
-              className="w-full sm:w-auto text-xs font-bold"
+              className="w-full sm:w-auto text-xs font-semibold"
               onClick={() => onDirtyModalResolution('save')}
             >
               {t('saveAndContinue')}

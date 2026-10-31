@@ -94,14 +94,15 @@ export function N8nSettingsWorkspace() {
   const test = useMutation({
     mutationFn: () => apiRequest<TestResult>('/api/v1/settings/n8n/test', { method: 'POST', headers, body: JSON.stringify({ service_url: currentUrl.trim() || null, api_key: apiKey.value }) }),
   });
-  if (query.isPending) return <section className="rounded-xl border bg-card p-6 skeleton" aria-label={t('loading')} />;
-  if (query.isError || !saved) return <section className="rounded-xl border bg-card p-6"><h1>{t('unavailable')}</h1><p className="error">{t(apiFailureKey(query.error) ?? 'loadFailed')}</p><Button variant="outline" onClick={() => query.refetch()}>{t('retry')}</Button></section>;
+  if (query.isPending) return <section className="rounded-lg border bg-card p-6 skeleton" aria-label={t('loading')} />;
+  if (query.isError || !saved) return <section className="rounded-lg border bg-card p-6"><h1>{t('unavailable')}</h1><p className="error">{t(apiFailureKey(query.error) ?? 'loadFailed')}</p><Button variant="outline" onClick={() => query.refetch()}>{t('retry')}</Button></section>;
   const dirty = enabled !== null && enabled !== saved.enabled || url !== null && url !== (saved.service_url ?? '') || action(apiKey) !== 'unchanged' || action(token) !== 'unchanged';
   const result = test.data;
   /** Copies the callback base URL; clipboard may be unavailable or denied, so failure is surfaced instead of thrown. */
   const copy = async () => { try { await navigator.clipboard.writeText(saved.callback_base_url); setCopied('ok'); } catch { setCopied('failed'); } };
   const source = (value: Source) => <Badge variant="outline">{t(`source_${value}` as 'source_none')}</Badge>;
-  const state = (configured: boolean) => `${t('status')} ${configured ? t('configured') : t('notConfigured')}. ${t('neverShown')}`;
+  // The source badge in the section title already says whether a value is set; only explain write-only behaviour when one is saved.
+  const state = (configured: boolean) => (configured ? t('neverShown') : '');
   return <div className="flex flex-col gap-5">
     <SettingsPageHeader eyebrow={t('eyebrow')} title={t('title')} description={t('description')} status={<p className="m-0 text-sm text-muted-foreground" role="status">{save.isPending ? t('saving') : dirty ? t('unsaved') : t('saved')}</p>} />
     <form className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); save.mutate(saved); }}>
@@ -115,15 +116,14 @@ export function N8nSettingsWorkspace() {
           <Button type="button" variant="outline" onClick={copy}>{t('copy')}</Button>
           {copied === 'idle' ? null : <span className="text-sm text-muted-foreground" role="status">{copied === 'ok' ? t('copied') : t('copyFailed')}</span>}
         </div>
-        <p className="m-0 text-xs text-muted-foreground">{t('webhookToken')}: {state(saved.webhook_token_configured)}</p>
         <p className="m-0 text-xs text-muted-foreground" role="note">{t('collectorNote')}</p>
       </SettingsSection>
       <SettingsSection title={<span className="flex flex-wrap items-center gap-2">{t('serviceUrl')}{source(saved.service_url_source)}</span>}>
-        <label className="field"><span className="label">{t('serviceUrl')}</span><Input type="url" disabled={save.isPending} value={currentUrl} onChange={(event) => setUrl(event.target.value)} /></label>
+        <label className="field"><span className="label sr-only">{t('serviceUrl')}</span><Input type="url" disabled={save.isPending} value={currentUrl} onChange={(event) => setUrl(event.target.value)} /></label>
         <p className="m-0 text-xs text-muted-foreground">{t('serviceUrlHelp')}</p>
       </SettingsSection>
       <SettingsSection title={<span className="flex flex-wrap items-center gap-2">{t('apiKey')}{source(saved.api_key_source)}</span>}>
-        <SecretField id="n8n-api-key" label={t('apiKey')} value={apiKey.value} onValue={(value) => setApiKey({ value, removed: value ? false : apiKey.removed })} removed={apiKey.removed} onRemoved={(removed) => setApiKey({ value: removed ? '' : apiKey.value, removed })} configured={saved.api_key_configured} disabled={save.isPending} placeholder={t('keepSaved')} removeLabel={t('removeApiKey')} status={state(saved.api_key_configured)} />
+        <SecretField hideLabel id="n8n-api-key" label={t('apiKey')} value={apiKey.value} onValue={(value) => setApiKey({ value, removed: value ? false : apiKey.removed })} removed={apiKey.removed} onRemoved={(removed) => setApiKey({ value: removed ? '' : apiKey.value, removed })} configured={saved.api_key_configured} disabled={save.isPending} placeholder={saved.api_key_configured ? t('keepSaved') : t('enterValue')} removeLabel={t('removeApiKey')} status={state(saved.api_key_configured)} />
         <div className="flex flex-wrap items-center gap-3">
           <Button type="button" variant="outline" disabled={test.isPending} onClick={() => test.mutate()}>{test.isPending ? t('testing') : t('test')}</Button>
           {result ? <p className={result.ok ? 'm-0 text-sm text-muted-foreground' : 'error m-0'} role="status">{result.ok ? t('testOk') : t(`testError_${result.error ?? 'unknown'}` as 'testError_unknown', { code: result.detail ?? '' })}</p> : null}
@@ -131,7 +131,7 @@ export function N8nSettingsWorkspace() {
         </div>
       </SettingsSection>
       <SettingsSection title={<span className="flex flex-wrap items-center gap-2">{t('webhookToken')}{source(saved.webhook_token_source)}</span>}>
-        <SecretField id="n8n-webhook-token" label={t('webhookToken')} value={token.value} onValue={(value) => setToken({ value, removed: value ? false : token.removed })} removed={token.removed} onRemoved={(removed) => setToken({ value: removed ? '' : token.value, removed })} configured={saved.webhook_token_configured} disabled={save.isPending} placeholder={t('keepSaved')} removeLabel={t('removeWebhookToken')} status={state(saved.webhook_token_configured)} />
+        <SecretField hideLabel id="n8n-webhook-token" label={t('webhookToken')} value={token.value} onValue={(value) => setToken({ value, removed: value ? false : token.removed })} removed={token.removed} onRemoved={(removed) => setToken({ value: removed ? '' : token.value, removed })} configured={saved.webhook_token_configured} disabled={save.isPending} placeholder={saved.webhook_token_configured ? t('keepSaved') : t('enterValue')} removeLabel={t('removeWebhookToken')} status={state(saved.webhook_token_configured)} />
         <p className="m-0 text-xs text-muted-foreground" role="note">{t('tokenWarning')}</p>
       </SettingsSection>
       {save.isError ? <p className="error" role="alert">{t(apiFailureKey(save.error) ?? 'saveFailed')}</p> : null}

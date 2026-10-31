@@ -2,6 +2,7 @@
 
 import { useTranslations } from 'next-intl';
 import type { ReactNode } from 'react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { Source } from './api';
 
@@ -31,7 +32,7 @@ export function matchesFilter(state: SourceRowState, filter: SourceFilter): bool
   return state === 'error' || state === 'reconnect' || state === 'savedNotActive';
 }
 
-/** Filter tabs with loaded-row counts plus a semantic table; rows at 720px and below collapse into stacked cards. */
+/** Filter tabs with loaded-row counts plus a semantic table; rows below 1024px collapse into stacked cards. */
 export function SourcesTable({ filter, counts, onFilterChange, children }: {
   filter: SourceFilter;
   counts: Record<SourceFilter, number>;
@@ -41,19 +42,24 @@ export function SourcesTable({ filter, counts, onFilterChange, children }: {
   const t = useTranslations('sources');
   const labels: Record<SourceFilter, string> = { all: t('filterAll'), active: t('filterActive'), paused: t('filterPaused'), attention: t('filterAttention'), archived: t('filterArchived') };
   return <div className="grid gap-3">
-    <Tabs value={filter} onValueChange={(value) => onFilterChange(value as SourceFilter)}>
-      <TabsList aria-label={t('filterLabel')} className="h-auto max-w-full flex-wrap">
-        {(Object.keys(labels) as SourceFilter[]).map((key) => <TabsTrigger key={key} value={key} className="min-h-11">{labels[key]} {counts[key]}</TabsTrigger>)}
+    {/* Below 640px a Select replaces the tabs (same state) so no filter is hidden behind horizontal scroll. */}
+    <Select value={filter} onValueChange={(value) => onFilterChange(value as SourceFilter)}>
+      <SelectTrigger aria-label={t('filterLabel')} className="w-full sm:hidden"><SelectValue /></SelectTrigger>
+      <SelectContent>{(Object.keys(labels) as SourceFilter[]).map((key) => <SelectItem key={key} value={key}>{labels[key]} {counts[key]}</SelectItem>)}</SelectContent>
+    </Select>
+    <Tabs value={filter} onValueChange={(value) => onFilterChange(value as SourceFilter)} className="max-sm:hidden">
+      <TabsList aria-label={t('filterLabel')} className="h-auto max-w-full justify-start overflow-x-auto [scrollbar-width:none]">
+        {(Object.keys(labels) as SourceFilter[]).map((key) => <TabsTrigger key={key} value={key} className="min-h-9 shrink-0 pointer-coarse:min-h-11">{labels[key]} {counts[key]}</TabsTrigger>)}
       </TabsList>
     </Tabs>
-    <table className="w-full border-collapse text-left max-[720px]:block">
+    <table className="w-full border-collapse text-left max-[1023px]:block">
       <caption className="sr-only">{t('tableCaption')}</caption>
-      <thead className="max-[720px]:sr-only">
+      <thead className="max-[1023px]:sr-only">
         <tr className="border-b border-border">
           {(['colSource', 'colState', 'colSchedule', 'colCollected', 'colIndexed', 'colActions'] as const).map((key) => <th key={key} scope="col" className="text-muted-foreground px-3 py-2 text-sm font-medium">{t(key)}</th>)}
         </tr>
       </thead>
-      <tbody className="max-[720px]:block">{children}</tbody>
+      <tbody className="max-[1023px]:block">{children}</tbody>
     </table>
     <p className="text-muted-foreground text-sm">{t('neverHelp')}</p>
   </div>;

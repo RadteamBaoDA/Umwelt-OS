@@ -47,25 +47,29 @@ export function ModelsPanel({ providers, discovered, modelTests, checkedAt = {},
   const provider = providers.find((item) => item.id === providerId) ?? providers[0];
   const added = new Set((provider?.models ?? []).map((item) => item.id));
   const options = (provider ? discovered[provider.id] ?? [] : []).filter((id) => !added.has(id));
+  // With no provider the add row is inert; the "Add a provider first" note below explains why.
+  const noProvider = providers.length === 0;
+  const noProviderNote = noProvider ? 'models-no-provider-note' : undefined;
   const rows = providers.flatMap((item) => (item.models ?? []).map((model) => ({ provider: item, model })));
   /** Replaces one provider's model list. */
   const patch = (id: string, models: ProviderModel[]) => onChange(providers.map((item) => (item.id === id ? { ...item, models } : item)));
   return <div className="flex flex-col gap-3">
-    <div className="grid items-end gap-2 sm:grid-cols-[10rem_1fr_12rem_auto]">
+    <div className="grid items-end gap-2 sm:grid-cols-[minmax(0,10rem)_minmax(9rem,1fr)_minmax(0,11rem)_auto]">
       <div className="field"><span className="label">{t('providerColumn')}</span>
-        <Select disabled={disabled || providers.length === 0} value={provider?.id ?? ''} onValueChange={(id) => { setProviderId(id); setPending(''); }}><SelectTrigger aria-label={t('providerColumn')}><SelectValue placeholder={t('providersEmpty')} /></SelectTrigger><SelectContent>{providers.map((item) => <SelectItem key={item.id} value={item.id}>{item.label || item.id}</SelectItem>)}</SelectContent></Select></div>
-      <div className="field"><span className="label">{t('modelColumn')}</span>
-        <SearchableSelect aria-label={t('modelColumn')} value={pending} options={options} disabled={disabled || options.length === 0} placeholder={t('selectModel')} searchLabel={t('modelPickerSearch')} emptyLabel={t('modelPickerEmpty')} onValueChange={(id) => {
+        <Select disabled={disabled || providers.length === 0} value={provider?.id ?? ''} onValueChange={(id) => { setProviderId(id); setPending(''); }}><SelectTrigger aria-label={t('providerColumn')} aria-describedby={noProviderNote}><SelectValue placeholder={t('providersNone')} /></SelectTrigger><SelectContent>{providers.map((item) => <SelectItem key={item.id} value={item.id}>{item.label || item.id}</SelectItem>)}</SelectContent></Select></div>
+      {/* minmax(0,1fr): let the model picker shrink inside its track instead of overflowing into Type at tablet widths. */}
+      <div className="field grid-cols-[minmax(0,1fr)]"><span className="label">{t('modelColumn')}</span>
+        <SearchableSelect aria-label={t('modelColumn')} aria-describedby={noProviderNote} value={pending} options={options} disabled={disabled || options.length === 0} placeholder={t('selectModel')} searchLabel={t('modelPickerSearch')} emptyLabel={t('modelPickerEmpty')} onValueChange={(id) => {
           // Legacy guesses (vision/asr/tts) fold into Chat; a vision-looking id also pre-ticks the vision flag.
           const guess = guessModelType(id);
           setPending(id); setType((selectableModelTypes as readonly string[]).includes(guess) ? guess : 'llm'); setVision(guess === 'vision');
         }} /></div>
       <div className="field"><span className="label">{t('typeColumn')}</span>
-        <Select disabled={disabled} value={type} onValueChange={(next) => setType(next as ModelType)}><SelectTrigger aria-label={t('typeColumn')}><SelectValue /></SelectTrigger><SelectContent>{selectableModelTypes.map((item) => <SelectItem key={item} value={item}>{t(`type_${item}`)}</SelectItem>)}</SelectContent></Select></div>
+        <Select disabled={disabled || noProvider} value={type} onValueChange={(next) => setType(next as ModelType)}><SelectTrigger aria-label={t('typeColumn')} aria-describedby={noProviderNote}><SelectValue /></SelectTrigger><SelectContent>{selectableModelTypes.map((item) => <SelectItem key={item} value={item}>{t(`type_${item}`)}</SelectItem>)}</SelectContent></Select></div>
       <Button type="button" variant="outline" disabled={disabled || !provider || !pending} onClick={() => { patch(provider!.id, [...(provider!.models ?? []), type === 'llm' && vision ? { id: pending, type, vision: true } : { id: pending, type }]); setPending(''); setVision(false); }}><Plus className="size-4" aria-hidden="true" /> {t('modelAdd')}</Button>
-      {type === 'llm' && <label className="flex items-center gap-2 text-sm sm:col-span-4"><Checkbox disabled={disabled} checked={vision} onCheckedChange={(next) => setVision(next === true)} />{t('modelVision')}</label>}
+      {type === 'llm' && <label className="flex items-center gap-2 text-sm sm:col-span-4"><Checkbox disabled={disabled || noProvider} aria-describedby={noProviderNote} checked={vision} onCheckedChange={(next) => setVision(next === true)} />{t('modelVision')}</label>}
     </div>
-    {rows.length === 0 ? <p className="text-muted-foreground m-0">{t('modelsEmpty')}</p> : <TooltipProvider delayDuration={200}><Table aria-label={t('modelsTable')}>
+    {rows.length === 0 ? <p id={noProvider ? 'models-no-provider-note' : undefined} className="text-muted-foreground m-0">{t(providers.length === 0 ? 'modelsNoProvider' : 'modelsEmpty')}</p> : <TooltipProvider delayDuration={200}><Table aria-label={t('modelsTable')}>
       <TableHeader><TableRow><TableHead>{t('providerColumn')}</TableHead><TableHead>{t('modelColumn')}</TableHead><TableHead>{t('typeColumn')}</TableHead><TableHead>{t('visionColumn')}</TableHead><TableHead>{t('actionsColumn')}</TableHead></TableRow></TableHeader>
       <TableBody>{rows.map(({ provider: owner, model }) => {
         const state = modelTests[modelTestKey(owner.id, model.id)];
@@ -99,7 +103,7 @@ export function ModelDefaults({ providers, defaults, disabled, embeddingStatus, 
   const entries = (filter: (m: ProviderModel) => boolean) => all.filter((e) => filter(e.model));
   const refOf = (m: Mapping | null | undefined) => (m?.model ? modelTestKey(mappingProviderId(m.provider_id, providers), m.model) : '');
   const field = (slot: DefaultSlot, label: string, list: ReturnType<typeof entries>, extra?: { id: string; label: string }) => <label className="field" key={slot}><span className="label">{label}</span>
-    <Select disabled={disabled || (list.length === 0 && !extra)} value={refOf(defaults[slot]) || extra?.id || undefined} onValueChange={(next) => {
+    <Select disabled={disabled || all.length === 0 || (list.length === 0 && !extra)} value={refOf(defaults[slot]) || extra?.id || undefined} onValueChange={(next) => {
       if (next === none || next === same) return onPick(slot, null, '');
       const hit = list.find((e) => modelTestKey(e.provider.id, e.model.id) === next);
       if (hit) onPick(slot, hit.provider, hit.model.id);

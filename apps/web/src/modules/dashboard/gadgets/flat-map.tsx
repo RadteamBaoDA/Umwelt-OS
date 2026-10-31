@@ -72,6 +72,18 @@ const landGeometry = (() => {
   return collection as unknown as FeatureCollection;
 })();
 
+/**
+ * Orthographic zoom that fits the whole world (360 x 180 degrees, Antarctica included) inside the canvas
+ * with ~8% padding on the limiting axis. The view is centered on [0, 0], the mid lon/lat of the world.
+ *
+ * @param width Canvas width in px.
+ * @param height Canvas height in px.
+ * @returns log2 zoom for deck.gl's OrthographicView (1 unit = 1 degree).
+ */
+export function fitZoom(width: number, height: number): number {
+  return Math.log2(Math.min(width / 360, height / 180) * 0.92);
+}
+
 /** Render a local equirectangular plot whose 192px floor does not shrink beneath map controls. */
 export function FlatMap({ features, selectedFeatureId, onSelectFeature, width, height, visible, interactive }: FlatMapProps) {
   const t = useTranslations('dashboard');
@@ -99,7 +111,7 @@ export function FlatMap({ features, selectedFeatureId, onSelectFeature, width, h
   }, []);
 
   const views = useMemo(() => [new OrthographicView({ id: 'world-flat', flipY: false })], []);
-  const zoom = Math.log2(Math.max(1, Math.min(width / 360, height / 180)));
+  const zoom = fitZoom(width, height);
   const layers = useMemo(() => [
     new GeoJsonLayer({
       id: 'natural-earth-land',

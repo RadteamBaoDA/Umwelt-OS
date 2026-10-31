@@ -236,7 +236,7 @@ export function MeetingTimePicker({
   return (
     <Card
       data-testid="generative-meeting-time-picker"
-      className="my-2 w-full max-w-md border-border bg-surface text-foreground shadow-sm"
+      className="my-2 w-full max-w-md border-border bg-surface text-foreground"
     >
       <CardHeader className="gap-1.5 border-b border-border pb-4">
         <div className="flex items-center justify-between gap-2">
@@ -256,7 +256,7 @@ export function MeetingTimePicker({
             </div>
           </div>
           {timezone && (
-            <Badge variant="outline" className="font-mono text-xs">
+            <Badge variant="outline" className="tabular-nums text-xs">
               {timezone}
             </Badge>
           )}
@@ -291,7 +291,7 @@ export function MeetingTimePicker({
                   <div className="text-sm font-semibold text-foreground">{slot.date}</div>
                   <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
                     <ClockIcon className="size-3.5 shrink-0" aria-hidden="true" />
-                    <span className="font-mono">{slot.time}</span>
+                    <span className="tabular-nums">{slot.time}</span>
                   </div>
                 </div>
 

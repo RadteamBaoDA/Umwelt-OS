@@ -72,7 +72,7 @@ export function GadgetSettings({
         <DialogHeader className="border-b border-border p-4">
           <div className="flex items-center gap-2">
             <Settings className="size-4 text-primary" aria-hidden="true" />
-            <DialogTitle className="text-base font-bold">{t('configureGadgetTitle')}</DialogTitle>
+            <DialogTitle className="text-base font-semibold">{t('configureGadgetTitle')}</DialogTitle>
           </div>
           <DialogDescription className="text-xs text-muted-foreground">
             {tg('configureDescription', { renderer: rendererName(tg, instance.definition.renderer) })}

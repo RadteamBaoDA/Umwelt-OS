@@ -34,7 +34,7 @@ export interface GadgetNoticeProps {
  */
 export function GadgetNotice({ kind, message, action, className }: GadgetNoticeProps) {
   const isError = kind === 'error';
-  const actionClass = 'inline-flex min-h-11 items-center text-sm text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+  const actionClass = 'inline-flex min-h-9 pointer-coarse:min-h-11 items-center text-sm text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
   return (
     <div
       role={isError ? 'alert' : 'status'}
@@ -43,7 +43,7 @@ export function GadgetNotice({ kind, message, action, className }: GadgetNoticeP
     >
       <p className="break-words">{message}</p>
       {action?.href ? <Link href={action.href} className={actionClass}>{action.label}</Link>
-        : action?.onClick ? <Button type="button" variant="link" className="h-auto min-h-11 p-0" onClick={action.onClick}>{action.label}</Button>
+        : action?.onClick ? <Button type="button" variant="link" className="h-auto p-0" onClick={action.onClick}>{action.label}</Button>
           : null}
     </div>
   );
@@ -65,7 +65,7 @@ export interface GadgetSkeletonProps {
  * loading message stays available as a visually hidden `role="status"` text.
  */
 export function GadgetSkeleton({ variant, label, className }: GadgetSkeletonProps) {
-  const block = 'rounded bg-muted motion-safe:animate-pulse';
+  const block = 'rounded bg-rule motion-safe:animate-pulse';
   return (
     <div role="status" className={cn('p-3', className)}>
       <span className="sr-only">{label}</span>

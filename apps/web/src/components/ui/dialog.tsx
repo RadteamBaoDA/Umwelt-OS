@@ -82,7 +82,7 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "fixed z-50 grid gap-4 overflow-y-auto overscroll-contain bg-background shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
+          "fixed z-50 grid gap-4 overflow-y-auto overscroll-contain bg-background shadow-[var(--shadow-popover)] duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
           dialogSizeClass[size],
           size === "default" && "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
           className

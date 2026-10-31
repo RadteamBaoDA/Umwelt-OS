@@ -2,9 +2,7 @@
 export const exportMessages = {
   'en-us': {
     title: 'Data export',
-    description: 'Download a portable copy of supported owner data.',
-    portableTitle: 'Portable owner data',
-    portableDescription: 'Exports include retained document versions and eligible conversation history. Credentials, raw files, graph state, workflow secrets, and deployment identity are excluded. This is not a restorable instance backup.',
+    description: 'Exports include your documents (with their saved versions) and eligible chat history. Passwords, API keys, original files and workflow secrets are not included. This is a copy of your content, not a full backup you can restore from.',
     json: 'Download JSON',
     markdown: 'Download Markdown',
     csv: 'Download CSV',
@@ -13,9 +11,7 @@ export const exportMessages = {
   },
   'vi-vi': {
     title: 'Xuất dữ liệu',
-    description: 'Tải bản sao dữ liệu chủ sở hữu được hỗ trợ.',
-    portableTitle: 'Dữ liệu chủ sở hữu có thể di chuyển',
-    portableDescription: 'Bản xuất gồm phiên bản tài liệu được lưu và lịch sử hội thoại đủ điều kiện. Thông tin xác thực, tệp thô, trạng thái đồ thị, bí mật quy trình và danh tính triển khai sẽ bị loại trừ. Đây không phải bản sao lưu có thể khôi phục toàn bộ hệ thống.',
+    description: 'Bản xuất gồm tài liệu của bạn (kèm các phiên bản đã lưu) và lịch sử trò chuyện đủ điều kiện. Mật khẩu, khóa API, tệp gốc và bí mật quy trình không được đưa vào. Đây là bản sao nội dung, không phải bản sao lưu đầy đủ để khôi phục.',
     json: 'Tải JSON',
     markdown: 'Tải Markdown',
     csv: 'Tải CSV',

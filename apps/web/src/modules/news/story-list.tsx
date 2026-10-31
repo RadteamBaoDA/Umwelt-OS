@@ -1,7 +1,8 @@
 'use client';
 
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { ArrowUpRight, RefreshCw } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
@@ -13,6 +14,7 @@ import { TranslatedBadge } from '@/modules/translations/translated-badge';
 import { TranslationNote } from '@/modules/translations/translation-note';
 import { useContentTranslation } from '@/modules/translations/use-content-translation';
 import { safeHttpUrl } from '@/core/safe-url';
+import { cleanExcerpt } from './excerpt';
 import type { Story } from './story-types';
 
 /** Props for the source-scoped story gadget renderer. */
@@ -24,6 +26,8 @@ export type StoryListProps = {
   showTrends?: boolean;
   /** Rendered inside a dashboard gadget frame: no own title row, card border or per-story cards. */
   embedded?: boolean;
+  /** Page mode: element (e.g. in the page title row) that receives the translated badge and refresh button instead of an own header. */
+  actionsHost?: HTMLElement | null;
   onSelectStory: (storyId: string, trigger: HTMLButtonElement) => void;
 };
 
@@ -39,7 +43,7 @@ export type StoryListProps = {
  * @returns A paged story list with optional matching-scope trends and detail selection.
  */
 export function StoryList({
-  sourceIds, topicId, query, limit = 25, showTrends = true, embedded = false, onSelectStory,
+  sourceIds, topicId, query, limit = 25, showTrends = true, embedded = false, actionsHost, onSelectStory,
 }: StoryListProps) {
   const t = useTranslations('news');
   const display = useDisplayPreferences();
@@ -70,33 +74,52 @@ export function StoryList({
   const [showOriginal, setShowOriginal] = useState(false);
   const shown = (story: Story) => (showOriginal ? undefined : translation.results.get(story.id)?.translation ?? undefined);
 
-  // Embedded gadgets show the partial-data notice as one muted line after the stories so it never precedes them.
-  const hasPartialRelevance = stories.some((s) => s.relevance_state === 'partial');
-  const incompleteNotice = incompleteReasons.size || hasPartialRelevance ? (
-    <div role="status" className="space-y-1 text-xs text-muted-foreground">
-      {incompleteReasons.size ? <p>{t('partialData')}</p> : null}
-      {hasPartialRelevance ? <p>* {t('unavailable')}</p> : null}
-      {[...incompleteReasons].map((reason) => <p key={reason}>{incompleteLabel(reason)}</p>)}
-    </div>
+  // Embedded gadgets show the partial-data notice in the slim top meta row.
+  const incompleteNotice = incompleteReasons.size ? (
+    <p role="status" className="text-xs text-muted-foreground" title={[...incompleteReasons].map(incompleteLabel).join(' ') || undefined}>{t('incompleteNotice')}</p>
   ) : null;
+
+  // A relevance score identical on every visible story carries no ranking signal, so it is hidden.
+  // Compare the rounded percentage actually displayed: 0.331 and 0.334 both read "33%".
+  // Near-flat scores (spread under 10 percentage points) are noise too, so require a visible spread.
+  const scores = stories.flatMap((s) => (s.relevance == null ? [] : [Math.round(s.relevance * 100)]));
+  const relevanceVaries = scores.length > 1 && Math.max(...scores) - Math.min(...scores) >= 10;
+
+  const refreshButton = (
+    <Button variant="ghost" size="icon" className={embedded ? 'size-6' : undefined} onClick={() => { void storiesQuery.refetch(); if (showTrends) void trendQuery.refetch(); }} aria-label={t('retry')}>
+      <RefreshCw className={`${embedded ? 'size-3.5' : 'size-4'} ${storiesQuery.isFetching ? 'animate-spin' : ''}`} />
+    </Button>
+  );
+
+  const pageActions: ReactNode = (
+    <>
+      {translation.results.size ? <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} /> : null}
+      {refreshButton}
+    </>
+  );
 
   return (
     <section className={embedded
       ? 'flex h-full min-h-0 flex-col gap-2 overflow-auto bg-card px-3 pb-3 text-card-foreground'
-      : 'flex h-full min-h-0 flex-col gap-3 overflow-auto rounded-lg border border-border bg-card p-3 text-card-foreground'}>
-      <header className={embedded ? 'flex items-center justify-end gap-2' : 'flex items-center justify-between border-b border-border pb-2'}>
-        {embedded ? null : <h2 className="text-sm font-semibold">{t('title')}</h2>}
-        {translation.results.size ? <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} /> : null}
-        <Button variant="ghost" size="icon" className={embedded ? 'size-8' : undefined} onClick={() => { void storiesQuery.refetch(); if (showTrends) void trendQuery.refetch(); }} aria-label={t('retry')}>
-          <RefreshCw className={`${embedded ? 'size-3.5' : 'size-4'} ${storiesQuery.isFetching ? 'animate-spin' : ''}`} />
-        </Button>
-      </header>
+      : 'flex h-full min-h-0 flex-col gap-3 overflow-auto bg-card text-card-foreground'}>
+      {embedded ? (
+        // Slim meta row: partial-data notice on the left, translated badge + refresh on the right (no overlap with stories).
+        <div className="flex h-6 shrink-0 items-center justify-between gap-2">
+          <div className="min-w-0 truncate">{incompleteNotice}</div>
+          <div className="flex items-center gap-1">
+            {translation.results.size ? <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} /> : null}
+            {refreshButton}
+          </div>
+        </div>
+      ) : actionsHost ? createPortal(pageActions, actionsHost) : (
+        <header className="flex items-center justify-end gap-1 border-b border-border pb-2">{pageActions}</header>
+      )}
 
       {showTrends && trendItems.length ? (
         <section aria-label={t('trends')} className="space-y-2">
           <h3 className="text-xs font-medium text-muted-foreground">{t('trends')}</h3>
           {trendItems.slice(0, 5).map((trend) => (
-            <Button key={trend.story_id} type="button" variant="ghost" onClick={(event) => onSelectStory(trend.story_id, event.currentTarget)} className="h-auto min-h-11 w-full flex-col items-stretch justify-start whitespace-normal rounded-md border border-border p-2 text-left text-sm font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <Button key={trend.story_id} type="button" variant="ghost" onClick={(event) => onSelectStory(trend.story_id, event.currentTarget)} className="h-auto w-full flex-col items-stretch justify-start whitespace-normal rounded-md border border-border p-2 text-left text-sm font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               <span className="block text-sm font-medium">{trend.title}</span>
               <span className="text-xs text-muted-foreground">
                 {t('current24h')}: {trend.current_count} · {trend.low_baseline ? t('lowBaseline') : `${trend.ratio?.toFixed(1)}×`}
@@ -117,25 +140,26 @@ export function StoryList({
       ) : null}
       {!storiesQuery.isPending && !storiesQuery.isError && stories.length === 0 ? <p className="text-sm text-muted-foreground">{t('empty')}</p> : null}
 
-      <ol className={embedded ? 'divide-y divide-border' : 'space-y-2'}>
+      <ol className="divide-y divide-border">
         {stories.map((story: Story) => (
           <li key={story.id}>
-            <Button type="button" variant="ghost" onClick={(event) => onSelectStory(story.id, event.currentTarget)} className={`h-auto min-h-11 w-full flex-col items-stretch justify-start whitespace-normal text-left text-sm font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${embedded ? 'rounded-none px-0 py-3' : 'rounded-md border border-border p-3'}`}>
+            <Button type="button" variant="ghost" onClick={(event) => onSelectStory(story.id, event.currentTarget)} className={`h-auto w-full flex-col items-stretch justify-start whitespace-normal text-left text-sm font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-none px-0 py-3`}>
               <span className="flex items-start justify-between gap-2">
                 <span className="font-medium leading-snug">{shown(story)?.title ?? story.title}</span>
                 <ArrowUpRight aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
               </span>
-              <span className="mt-1 line-clamp-3 block text-sm text-muted-foreground">{shown(story)?.excerpt ?? story.excerpt}</span>
+              <span className="mt-1 line-clamp-3 text-sm text-muted-foreground">{cleanExcerpt(shown(story)?.title ?? story.title, shown(story)?.excerpt ?? story.excerpt)}</span>
               {!translation.results.has(story.id) && <TranslationNote issue={translation.issues.get(story.id)} />}
               <span className="mt-2 block text-xs text-muted-foreground">
                 {[
-                  t('sources', { count: story.source_count }),
-                  t('evidence', { count: story.evidence_count }),
+                  // A lone source with a lone item carries no information, so only larger counts are shown.
+                  ...(story.source_count === 1 && story.evidence_count === 1 ? [] : [
+                    t('sources', { count: story.source_count }),
+                    t('evidence', { count: story.evidence_count }),
+                  ]),
                   formatDateTime(story.observed_at, display.locale, display.timezone),
                 ].join(' · ')}
-                {story.relevance !== null ? ` · ${t('relevance')} ${Math.round(story.relevance * 100)}%` : null}
-                {/* The asterisk is explained once by the list-level note, not repeated per story. */}
-                {story.relevance !== null && story.relevance_state === 'partial' ? <span aria-label={t('unavailable')} title={t('unavailable')}>*</span> : null}
+                {story.relevance !== null && relevanceVaries ? ` · ${t('relevance')} ${Math.round(story.relevance * 100)}%` : null}
               </span>
               {story.incomplete_reasons.map((reason) => (
                 <span key={reason} className="mt-1 block text-xs text-muted-foreground">{incompleteLabel(reason)}</span>
@@ -145,7 +169,6 @@ export function StoryList({
           </li>
         ))}
       </ol>
-      {embedded ? incompleteNotice : null}
       {!storiesQuery.isError && storiesQuery.hasNextPage ? (
         <Button variant="outline" onClick={() => { void storiesQuery.fetchNextPage(); }} disabled={storiesQuery.isFetchingNextPage}>
           {storiesQuery.isFetchingNextPage ? t('loading') : t('loadMore')}
@@ -162,7 +185,7 @@ function Attribution({ story }: { story: Story }) {
   if (!item?.publisher) return null;
   const href = safeHttpUrl(item.url);
   return (
-    <p className="mt-1 px-1 text-xs text-muted-foreground" title={item.license_label ?? undefined}>
+    <p className="mt-1 text-xs text-muted-foreground" title={item.license_label ?? undefined}>
       {t('publisher')}: {href ? <a className="text-foreground underline underline-offset-2" href={href} target="_blank" rel="noopener noreferrer" title={item.license_label ?? undefined}>{item.publisher}</a> : item.publisher}
     </p>
   );

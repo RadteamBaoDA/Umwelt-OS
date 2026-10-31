@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('@deck.gl/react', () => ({ DeckGL: () => null }));
 vi.mock('@deck.gl/layers', () => ({ GeoJsonLayer: class {}, ScatterplotLayer: class {} }));
 vi.mock('@deck.gl/core', () => ({ OrthographicView: class {} }));
-import { unwrapRing } from './flat-map';
+import { fitZoom, unwrapRing } from './flat-map';
 
 const lons = (ring: number[][]) => ring.map((p) => p[0]);
 
@@ -24,5 +24,13 @@ describe('unwrapRing', () => {
     expect(out[0][0]).toBe(-17);
     expect(lons(out)).toEqual([-17, 30, 180, 190]);
     expect(lons(out).every((v, i, a) => i === 0 || Math.abs(v - a[i - 1]) <= 180)).toBe(true);
+  });
+});
+
+describe('fitZoom', () => {
+  it('fits both axes with padding', () => {
+    const z = 2 ** fitZoom(720, 300);
+    expect(360 * z).toBeLessThanOrEqual(720);
+    expect(180 * z).toBeLessThan(300);
   });
 });

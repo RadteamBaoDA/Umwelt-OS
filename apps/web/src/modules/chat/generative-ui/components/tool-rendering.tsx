@@ -66,7 +66,7 @@ export function ToolRendering({
     <div
       role="alert"
       data-testid="generative-ui-invalid-payload"
-      className="rounded-xl border border-destructive bg-surface p-3 text-sm text-destructive"
+      className="rounded-lg border border-destructive bg-surface p-3 text-sm text-destructive"
     >
       {catalog.genUiInvalidPayload}
     </div>

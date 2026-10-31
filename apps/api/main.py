@@ -152,7 +152,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Hardening: interactive API docs expose the full schema; serve them only in dev/test.
     app = FastAPI(
-        title="BBD-OS",
+        title="Umwelt-OS",
         lifespan=lifespan,
         docs_url="/docs" if app_settings.is_dev else None,
         redoc_url="/redoc" if app_settings.is_dev else None,

@@ -309,11 +309,11 @@ export function PresetPicker({
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col p-0 gap-0 overflow-hidden">
         <DialogHeader className="p-6 pb-4 border-b border-border">
-          <div className="flex items-center gap-2 text-primary font-semibold text-sm tracking-wide uppercase">
+          <div className="flex items-center gap-2 text-primary font-semibold text-sm">
             <LayoutTemplate className="w-4 h-4" />
             <span>{t('presetPickerTitle')}</span>
           </div>
-          <DialogTitle className="text-xl font-bold">{t('presetPickerTitle')}</DialogTitle>
+          <DialogTitle className="text-xl font-semibold">{t('presetPickerTitle')}</DialogTitle>
           <DialogDescription className="text-muted-foreground text-sm">
             {t('presetPickerDesc')}
           </DialogDescription>
@@ -324,7 +324,7 @@ export function PresetPicker({
           <div className="space-y-3">
             <h3 className="text-sm font-semibold text-foreground flex items-center justify-between">
               <span>{t('selectPreset')}</span>
-              {presetsQuery.isLoading && <span className="text-xs text-muted-foreground animate-pulse">{ts('ppLoading')}</span>}
+              {presetsQuery.isLoading && <span className="text-xs text-muted-foreground motion-safe:animate-pulse">{ts('ppLoading')}</span>}
             </h3>
 
             <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
@@ -337,7 +337,7 @@ export function PresetPicker({
                     onClick={() => handleSelectPreset(preset)}
                     className={`w-full text-left p-3.5 rounded-lg border transition-all flex items-start justify-between gap-3 ${
                       isSelected
-                        ? 'border-primary bg-primary/10 shadow-sm'
+                        ? 'border-primary bg-primary/10'
                         : 'border-border bg-card hover:bg-primary/5'
                     }`}
                   >
@@ -370,14 +370,14 @@ export function PresetPicker({
             ) : (
               <div className="space-y-4 flex-1">
                 <div>
-                  <h4 className="text-base font-bold text-foreground flex items-center gap-2">
+                  <h4 className="text-base font-semibold text-foreground flex items-center gap-2">
                     <span>{selectedPreset.label}</span>
                     <span className="text-xs font-normal text-muted-foreground">
                       ({t('presetGadgetsCount', { count: selectedPreset.slots.length })})
                     </span>
                   </h4>
                   {previewMutation.isPending && (
-                    <p className="text-xs text-muted-foreground animate-pulse mt-1">
+                    <p className="text-xs text-muted-foreground motion-safe:animate-pulse mt-1">
                       {t('previewingPreset')}
                     </p>
                   )}
@@ -417,7 +417,7 @@ export function PresetPicker({
                                   <span className="flex shrink-0 items-center gap-2">
                                     <span className="font-semibold text-destructive">{t('slotNeedsSetup')}</span>
                                     {/* Renderers that bind no sources have nothing to configure in Sources. */}
-                                    {descriptor?.source_mode !== 'none' && needsSourcesPage && <Link href={descriptor ? sourcesLinkFor(descriptor) : '/settings/sources'} className="inline-flex min-h-11 items-center text-primary underline underline-offset-4">{t('slotConfigure')}</Link>}
+                                    {descriptor?.source_mode !== 'none' && needsSourcesPage && <Link href={descriptor ? sourcesLinkFor(descriptor) : '/settings/sources'} className="inline-flex min-h-9 pointer-coarse:min-h-11 items-center text-primary underline underline-offset-4">{t('slotConfigure')}</Link>}
                                   </span>
                                 )}
                               </div>
@@ -465,7 +465,7 @@ export function PresetPicker({
                           onClick={() => handleApplyMode('create')}
                           className={`p-2.5 text-xs font-medium rounded-md border text-center transition-colors ${
                             applyMode === 'create'
-                              ? 'border-primary bg-primary/10 font-bold text-foreground'
+                              ? 'border-primary bg-primary/10 font-semibold text-foreground'
                               : 'border-border text-muted-foreground hover:bg-primary/5'
                           }`}
                         >
@@ -477,7 +477,7 @@ export function PresetPicker({
                           onClick={() => handleApplyMode('replace')}
                           className={`p-2.5 text-xs font-medium rounded-md border text-center transition-colors ${
                             applyMode === 'replace'
-                              ? 'border-destructive bg-destructive/10 font-bold text-destructive'
+                              ? 'border-destructive bg-destructive/10 font-semibold text-destructive'
                               : 'border-border text-muted-foreground hover:bg-primary/5 disabled:opacity-40'
                           }`}
                         >

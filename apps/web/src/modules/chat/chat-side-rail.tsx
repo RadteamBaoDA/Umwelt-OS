@@ -34,14 +34,16 @@ function RailTabs({ citations, context }: { citations: Citation[]; context: Chat
 }
 
 /**
- * Evidence sidebar for the full Chat page; it starts collapsed and toggles the full Sources, Activity, and Context panel at desktop widths.
+ * Evidence rail (320px) for the full Chat page from 1100px up. It is open whenever the conversation has cited sources or attached context, can be tucked into a 48px strip, and renders nothing when it has no data.
  *
  * @param props - Current conversation citations and attached context.
  * @returns Collapsible desktop evidence sidebar.
  */
 export function ChatSideRail({ citations, context }: { citations: Citation[]; context: ChatContext | null }) {
   const t = useTranslations('chat');
-  const [collapsed, setCollapsed] = React.useState(true);
+  const [collapsed, setCollapsed] = React.useState(false);
+  // No rail data (nothing cited, no attached context): the region collapses away entirely instead of showing an empty panel.
+  if (citations.length === 0 && !context) return null;
   return (
     <aside id="chat-evidence-rail" aria-label={t('railLabel')} className={`hidden shrink-0 flex-col overflow-y-auto border-l border-border bg-surface min-[1100px]:flex ${collapsed ? 'w-12 items-center p-0' : 'w-[320px] p-3'}`}>
       <Button type="button" variant="ghost" size="icon" className="size-11 shrink-0" onClick={() => setCollapsed((value) => !value)} aria-label={collapsed ? t('expandRail') : t('collapseRail')} aria-expanded={!collapsed} aria-controls={collapsed ? undefined : 'chat-evidence-rail-content'}>
@@ -60,10 +62,12 @@ export function ChatSideRail({ citations, context }: { citations: Citation[]; co
  */
 export function ChatSourcesSheet({ citations, context }: { citations: Citation[]; context: ChatContext | null }) {
   const t = useTranslations('chat');
+  // Mirror the inline rail: nothing to show yet, so no trigger that would open an empty sheet.
+  if (citations.length === 0 && !context) return null;
   return (
     <Sheet>
       <SheetTrigger asChild>
-        <Button type="button" variant="outline" className="min-h-11 gap-2 px-3 text-xs min-[1100px]:hidden" aria-label={t('railOpen')}>
+        <Button type="button" variant="outline" className="gap-2 px-3 text-xs min-[1100px]:hidden" aria-label={t('railOpen')}>
           <BookOpenIcon className="size-4" aria-hidden="true" />
           <span>{t('railSources')}{citations.length > 0 ? ` (${citations.length})` : ''}</span>
         </Button>

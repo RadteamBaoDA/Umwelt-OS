@@ -61,8 +61,8 @@ export function VizRouterCard() {
     onSuccess: (value) => { if (value.ok) setDecisionModels(value.models.map((item) => item.id)); },
   });
   const test = useMutation({ mutationFn: () => apiRequest<TestResult>('/api/v1/settings/viz-router/test', { method: 'POST', headers }) });
-  if (query.isPending) return <section className="rounded-xl border bg-card p-6 skeleton" aria-label={t('loading')} />;
-  if (query.isError || !saved || !view) return <section className="rounded-xl border bg-card p-6"><p className="error">{t(apiFailureKey(query.error) ?? 'loadFailed')}</p><Button variant="outline" onClick={() => query.refetch()}>{t('retry')}</Button></section>;
+  if (query.isPending) return <section className="rounded-lg border bg-card p-6 skeleton" aria-label={t('loading')} />;
+  if (query.isError || !saved || !view) return <section className="rounded-lg border bg-card p-6"><p className="error">{t(apiFailureKey(query.error) ?? 'loadFailed')}</p><Button variant="outline" onClick={() => query.refetch()}>{t('retry')}</Button></section>;
   const dirty = Object.keys(draft).length > 0 || Boolean(key) || removed;
   const provider = providers.find((item) => item.id === (view.provider_id ?? 'default')) ?? providers[0];
   // Decision models first (the intended type); legacy chat models stay selectable for back-compat.

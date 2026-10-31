@@ -232,7 +232,7 @@ export function BuiltinWizard({ onClose, onChanged, shapeFilter, onClearFilter, 
         // Compatible built-ins that are all already added/paused read as "all added", not "none compatible".
         && <p role="status" className="text-muted-foreground">{(builtins.data ?? []).some((row) => matchesShapes(row.data_shapes, shapeFilter)) ? t('addBuiltinAllAdded') : t('shapeFilterNoBuiltin')} {onAddConnector && !(builtins.data ?? []).some((row) => matchesShapes(row.data_shapes, shapeFilter)) && <Button variant="outline" size="sm" onClick={onAddConnector}>{t('addConnector')}</Button>} {onClearFilter && <Button variant="outline" size="sm" onClick={onClearFilter}>{t('shapeFilterClear')}</Button>}</p>}
       {groupByCategory((builtins.data ?? []).filter((row) => matchesShapes(row.data_shapes, shapeFilter))).map(([category, rows]) => <div key={category} className="flex flex-col gap-2" role="group" aria-label={t(CATEGORY_KEY[category])}>
-        <h3 className="m-0 text-sm font-semibold uppercase text-muted-foreground">{t(CATEGORY_KEY[category])}</h3>
+        <h3 className="m-0 text-sm font-semibold text-muted-foreground">{t(CATEGORY_KEY[category])}</h3>
         {rows.map((row) => {
           const added = row.source_id !== null;
           const tier = row.realtime_tier ?? 'near_realtime';

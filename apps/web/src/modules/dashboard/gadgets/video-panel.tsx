@@ -1,6 +1,6 @@
 'use client';
 
-import { ExternalLink, Video } from 'lucide-react';
+import { ExternalLink } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import React from 'react';
 import type { GadgetInstance } from '../api';
@@ -54,36 +54,25 @@ export function VideoPanel({ instance }: VideoPanelProps) {
 
   return (
     <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-y-auto">
-      <div className="flex items-center justify-between text-xs text-muted-foreground border-b border-border pb-2">
-        <div className="flex items-center gap-1.5 font-medium">
-          <Video className="w-3.5 h-3.5 text-muted-foreground" />
-          <span>{daily('videoStream')}</span>
-        </div>
-        <span className="font-mono text-[10px]">{daily('streamCount', { count: items.length })}</span>
+      <div className="flex items-center justify-end text-xs text-muted-foreground border-b border-border pb-2">
+        <span className="tabular-nums">{daily('streamCount', { count: items.length })}</span>
       </div>
 
-      {sourceIds.length === 0 && <GadgetNotice kind="setup" message={dashboard('videoSourcesRequired')} />}
-      {sourceIds.length > 0 && query.isPending && <GadgetSkeleton variant="list" label={dashboard('gadgetDataLoading')} />}
-      {query.isError && <GadgetNotice kind="error" message={dashboard('gadgetDataLoadFailed')} />}
-      {sourceIds.length > 0 && !query.isPending && !query.isError && items.length === 0 && <GadgetNotice kind="empty" message={dashboard('videoRecordsEmpty')} />}
-      <div className="space-y-2.5">
+      {sourceIds.length === 0 && <GadgetNotice kind="setup" className="p-0" message={dashboard('videoSourcesRequired')} />}
+      {sourceIds.length > 0 && query.isPending && <GadgetSkeleton variant="list" className="p-0" label={dashboard('gadgetDataLoading')} />}
+      {query.isError && <GadgetNotice kind="error" className="p-0" message={dashboard('gadgetDataLoadFailed')} />}
+      {sourceIds.length > 0 && !query.isPending && !query.isError && items.length === 0 && <GadgetNotice kind="empty" className="p-0" message={dashboard('videoRecordsEmpty')} action={{ href: '/settings/sources', label: dashboard('gadgetConfigureAction') }} />}
+      <ul className="divide-y divide-border">
         {items.map((video) => (
-          <div
-            key={video.id}
-            className="rounded-lg border border-border bg-card p-2.5 space-y-2 hover:bg-muted/15 transition-colors"
-          >
-            <a href={video.videoUrl} target="_blank" rel="noopener noreferrer" aria-label={video.title} className="flex items-center gap-2 text-xs text-primary underline">
-              <ExternalLink className="w-3.5 h-3.5" />
-              {daily('videoStream')}
+          <li key={video.id} className="py-2">
+            <a href={video.videoUrl} target="_blank" rel="noopener noreferrer" className="flex items-start gap-2 text-xs font-semibold text-primary underline underline-offset-4">
+              <ExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <span className="line-clamp-2">{video.title}</span>
             </a>
-
-            <div className="space-y-0.5">
-              <h5 className="text-xs font-semibold text-foreground line-clamp-1">{video.title}</h5>
-              <p className="text-[10px] text-muted-foreground font-mono">{video.channel}</p>
-            </div>
-          </div>
+            {video.channel && <p className="mt-0.5 pl-5 text-xs text-muted-foreground">{video.channel}</p>}
+          </li>
         ))}
-      </div>
+      </ul>
     </div>
   );
 }

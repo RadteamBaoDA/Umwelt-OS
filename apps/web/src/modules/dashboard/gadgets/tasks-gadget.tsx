@@ -35,7 +35,8 @@ export function TasksGadget({ instance }: TasksGadgetProps) {
   return <section className="flex h-full min-h-0 flex-col gap-3 overflow-auto p-3">
     {definition.source_ids.length > 0 && <p role="status" className="rounded border border-border p-2 text-xs text-muted-foreground">{t('taskSourceFilterUnavailable', { count: definition.source_ids.length })}</p>}
     {selected ? <TaskDetail task={selected} csrfToken={token} onClose={() => setSelected(null)} onTaskChanged={setSelected} /> : creating && !isAdminViewer ? <TaskForm csrfToken={token} onSuccess={() => setCreating(false)} onCancel={() => setCreating(false)} /> : <>
-      <header className="flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">{instance.title || t('tasksTitle')}</h2>{!isAdminViewer && <Button type="button" size="sm" onClick={() => setCreating(true)}>{t('newTask')}</Button>}</header>
+      {/* The gadget frame already shows the title; only the create action remains. */}
+      <header className="flex items-center justify-end gap-2">{!isAdminViewer && <Button type="button" size="sm" onClick={() => setCreating(true)}>{t('newTask')}</Button>}</header>
       <TaskList csrfToken={token} ids={ids.length ? ids : undefined} filters={filters} limit={filters.limit ?? 50} cacheScope={scopeKey} onSelectTask={setSelected} />
     </>}
   </section>;

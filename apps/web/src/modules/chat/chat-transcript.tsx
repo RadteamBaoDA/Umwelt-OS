@@ -4,7 +4,7 @@ import { messageUiParts, uiPartKey, type UiPart } from './generative-ui-parts';
 import * as React from 'react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
-import { AlertCircleIcon, ArrowDownIcon, BotIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, RefreshCwIcon } from 'lucide-react';
+import { AlertCircleIcon, ArrowDownIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, RefreshCwIcon } from 'lucide-react';
 import type { ChatMessage, Citation, WebSearchOutcome } from '@/modules/chat/api';
 import { Button } from '@/components/ui/button';
 import { CitationPanel, webHost } from './citation-panel';
@@ -16,9 +16,9 @@ import { useCopyMessage } from './use-copy-message';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
 import { ToolRendering } from './generative-ui/components/tool-rendering';
-import { GenerativeUIStarterGallery } from './generative-ui/templates';
 import { SaveTemplateButton } from './generative-ui/templates/template-library';
-import { ChatShellTools, StarterSuggestions } from './generative-ui/templates/shell-extras';
+import { genUiCopy, resolveWidgetLocale } from './generative-ui/copy';
+import type { AppLocaleId } from '@/core/i18n';
 import { useRevealBlocks } from './reveal-blocks';
 import type { GenerativeUIPayload } from './generative-ui/sandbox/schema';
 
@@ -52,6 +52,40 @@ function WebSearchNotice({ outcome }: { outcome?: WebSearchOutcome | null }) {
   );
 }
 
+/** Workspace-relevant starter prompts as chat message keys (title shown, prompt sent). */
+const STARTER_PROMPTS = [
+  { title: 'starterNewsTitle', prompt: 'starterNewsPrompt' },
+  { title: 'starterWatchlistTitle', prompt: 'starterWatchlistPrompt' },
+  { title: 'starterBtcTitle', prompt: 'starterBtcPrompt' },
+] as const;
+
+/**
+ * Composer-first empty state: one sentence about what Chat can do with this workspace plus three starter prompts
+ * as plain outline buttons. Prompts are workspace-relevant message keys; selecting one sends it like a typed message.
+ *
+ * @param props - Send callback and active locale.
+ * @returns Left-aligned intro block with a labelled prompt group.
+ */
+function EmptyIntro({ onSendPrompt, locale }: { onSendPrompt: (prompt: string) => void; locale?: AppLocaleId }) {
+  const t = useTranslations('chat');
+  const copy = genUiCopy(resolveWidgetLocale(locale));
+  return (
+    <div className="my-auto flex flex-col gap-4 py-8">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-lg font-semibold text-foreground">{t('emptyStateTitle')}</h2>
+        <p className="max-w-prose text-sm text-muted-foreground">{t('emptyStateDescription')}</p>
+      </div>
+      <div data-testid="starter-suggestions" role="group" aria-label={copy.shellSuggestionsLabel} className="flex flex-wrap gap-2">
+        {STARTER_PROMPTS.map(({ title, prompt }) => (
+          <Button key={title} type="button" variant="outline" className="h-auto whitespace-normal text-left" onClick={() => onSendPrompt(t(prompt))}>
+            {t(title)}
+          </Button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /**
  * Compact numbered source links for the quick-chat drawer, where the full citation panel is not shown.
  * Encodes document path parameters and validates external web URLs before rendering navigation links.
@@ -64,7 +98,7 @@ function CitationChips({ citations }: { citations: Citation[] }) {
   return (
     <ol aria-label={t('sourceLinks')} className="mt-1 flex flex-wrap gap-2 border-t border-border pt-2 text-xs">
       {citations.map((citation, index) => {
-        const chipClass = 'inline-flex min-h-11 max-w-[14rem] items-center gap-1 rounded-md border border-border px-2 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+        const chipClass = 'inline-flex min-h-9 pointer-coarse:min-h-11 max-w-[14rem] items-center gap-1 rounded-md border border-border px-2 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
         if (citation.sourceType === 'web') {
           const href = safeHttpUrl(citation.url);
           return (
@@ -207,29 +241,17 @@ export function ChatTranscript({
       aria-busy={isStreaming || isPending}
       aria-label={t('title')}
     >
-      {mode === 'full' && onSendPrompt && <ChatShellTools locale={locale} />}
+      {/* Readable measure: one centred 720px column inside the transcript region. */}
+      <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col gap-4">
 
       {/* Starter gallery is only for a brand-new view: once a conversation exists it never reappears between turns. */}
       {!conversationId && messages.length === 0 && !streamingText && streamingUi.length === 0 && !isPending && (
-        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground my-auto gap-6">
-          <div className="flex flex-col items-center">
-            <div className="size-12 rounded-full bg-primary/10 text-primary flex items-center justify-center mb-3">
-              <BotIcon className="size-6" />
-            </div>
-            <h3 className="text-base font-semibold text-foreground mb-1">
-              {t('emptyStateTitle')}
-            </h3>
-            <p className="text-xs max-w-sm text-muted-foreground leading-normal">
-              {t('emptyStateDescription')}
-            </p>
+        onSendPrompt ? <EmptyIntro onSendPrompt={onSendPrompt} locale={locale} /> : (
+          <div className="my-auto flex flex-col gap-1 py-8">
+            <h2 className="text-base font-semibold text-foreground">{t('emptyStateTitle')}</h2>
+            <p className="text-sm text-muted-foreground">{t('emptyStateDescription')}</p>
           </div>
-          {mode === 'full' && onSendPrompt && (
-            <div className="w-full max-w-3xl text-left">
-              <GenerativeUIStarterGallery onSelectPrompt={onSendPrompt} locale={locale} />
-            </div>
-          )}
-          {mode === 'full' && onSendPrompt && <StarterSuggestions onSendPrompt={onSendPrompt} locale={locale} />}
-        </div>
+        )
       )}
 
       {messages.map((msg) => {
@@ -255,10 +277,10 @@ export function ChatTranscript({
             key={msg.id}
             data-role={msg.role}
             data-message-id={msg.id}
-            className={`flex flex-col gap-2.5 ${isUser ? 'ml-auto max-w-[80%] items-end' : 'mr-auto max-w-[88%]'}`}
+            className={`flex flex-col gap-2.5 ${isUser ? 'ml-auto max-w-[80%] items-end' : 'mr-auto w-full'}`}
           >
             <div
-              className={isUser ? 'rounded-xl border border-border bg-background px-4 py-3 text-sm text-foreground' : 'text-sm text-foreground'}
+              className={isUser ? 'rounded-lg bg-raised px-4 py-3 text-sm text-foreground' : 'text-sm text-foreground'}
             >
               <span className="sr-only">{isUser ? t('userSpeaker') : msg.model_identity || t('assistantFallback')}</span>
 
@@ -353,19 +375,19 @@ export function ChatTranscript({
 
       {/* Pending status indicator */}
       {isPending && !streamingText && !streamingReasoning && streamingUi.length === 0 && (
-        <div className="mr-auto flex max-w-[88%] items-center gap-2 text-xs text-muted-foreground">
-          <Loader2Icon className="size-4 animate-spin text-primary" />
+        <div className="mr-auto flex w-full items-center gap-2 text-xs text-muted-foreground">
+          <Loader2Icon className="size-4 animate-spin text-muted-foreground" />
           <span>{t('thinking')}</span>
         </div>
       )}
 
       {/* Active streaming assistant bubble */}
       {(streamingText || streamingReasoning || streamingUi.length > 0 || isStreaming) && (
-        <div className="mr-auto flex max-w-[88%] flex-col gap-2.5">
+        <div className="mr-auto flex w-full flex-col gap-2.5">
           <div className="text-sm text-foreground">
             <div className="flex items-center gap-2 text-xs text-muted-foreground mb-0.5">
-              <span className="inline-flex items-center gap-1.5 text-xs text-primary">
-                <span className="size-2 rounded-full bg-primary animate-pulse" />
+              <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                <span className="size-2 rounded-full bg-data animate-pulse" />
                 {t('streaming')}
               </span>
             </div>
@@ -414,7 +436,7 @@ export function ChatTranscript({
           )}
         </div>
       )}
-
+      </div>
     </div>
       {!isAtBottom && (
         <Button
@@ -422,7 +444,7 @@ export function ChatTranscript({
           variant="outline"
           size="sm"
           onClick={jumpToLatest}
-          className="absolute bottom-3 left-1/2 z-10 min-h-8 -translate-x-1/2 gap-1 rounded-full bg-surface px-3 text-xs shadow-md"
+          className="absolute bottom-3 left-1/2 z-10 min-h-8 -translate-x-1/2 gap-1 rounded-full bg-surface px-3 text-xs"
         >
           <ArrowDownIcon className="size-3.5" aria-hidden="true" />
           {t('jumpToLatest')}

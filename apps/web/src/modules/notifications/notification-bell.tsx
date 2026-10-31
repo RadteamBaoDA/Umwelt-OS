@@ -42,7 +42,7 @@ export function NotificationBell() {
       <DropdownMenuTrigger asChild>
         <Button type="button" variant="outline" size="icon" aria-label={t('open', { count: unread })}>
           <Bell className="h-4 w-4" aria-hidden />
-          {unread > 0 && <span className="text-xs font-bold" aria-hidden>{unread > 99 ? '99+' : unread}</span>}
+          {unread > 0 && <span className="text-xs font-semibold" aria-hidden>{unread > 99 ? '99+' : unread}</span>}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-80 max-w-[calc(100vw-2rem)]">
@@ -55,9 +55,9 @@ export function NotificationBell() {
             onSelect={() => { if (!item.read_at && session.data) markRead.mutate(item.id); }}
           >
             <Link href={safeLink(item.link)} className="flex flex-col items-start gap-0.5">
-              <span className="text-xs font-semibold">{!item.read_at && <span className="mr-1 rounded bg-primary px-1 text-[10px] text-primary-foreground">{t('unread')}</span>}{titleOf(item)}</span>
+              <span className="text-xs font-semibold">{!item.read_at && <span className="mr-1 rounded bg-primary px-1 text-[11px] text-primary-foreground">{t('unread')}</span>}{titleOf(item)}</span>
               {!t.has(`kind_${item.kind.replace(/\W/g, '_')}`) && item.body && <span className="text-xs text-muted-foreground">{item.body}</span>}
-              <span className="text-[10px] text-muted-foreground">{formatDateTime(item.created_at, display.locale, display.timezone)}</span>
+              <span className="text-[11px] text-muted-foreground">{formatDateTime(item.created_at, display.locale, display.timezone)}</span>
             </Link>
           </DropdownMenuItem>
         ))}

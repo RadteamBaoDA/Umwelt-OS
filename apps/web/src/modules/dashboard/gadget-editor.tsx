@@ -290,8 +290,8 @@ function HighlightRulesField({ rules, onChange }: { rules: HighlightRule[]; onCh
   };
   return <div className="space-y-2.5 border-t border-border pt-3">
     <div className="flex items-center justify-between">
-      <span className="text-xs font-bold">{ts('gsRules', { count: rules.length })}</span>
-      <span className="font-mono text-[10px] text-muted-foreground">{ts('gsRulesHint')}</span>
+      <span className="text-xs font-semibold">{ts('gsRules', { count: rules.length })}</span>
+      <span className="font-mono text-[11px] text-muted-foreground">{ts('gsRulesHint')}</span>
     </div>
     {rules.length > 0 && <ul className="space-y-1.5">{rules.map((rule) => <li key={rule.id} className="flex items-center justify-between rounded-lg border border-border p-2 text-xs">
       <span className="flex min-w-0 items-center gap-2">
@@ -579,7 +579,7 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
               <span className="block text-xs text-muted-foreground">{templateDescription(item.renderer, t)}</span>
               {count !== null && <span className="block text-xs text-muted-foreground">{count === 0 ? t('addCompatibleSource') : t('compatibleCount', { count })}</span>}</span>
           </>;
-          const tileClass = 'flex min-h-11 w-full items-center gap-3 rounded-lg border border-border p-3 text-left hover:border-primary focus-visible:outline-2';
+          const tileClass = 'flex min-h-9 pointer-coarse:min-h-11 w-full items-center gap-3 rounded-lg border border-border p-3 text-left hover:border-primary focus-visible:outline-2';
           // A zero count means choosing this tile could never be saved, so it routes to the filtered Sources page instead.
           return [<li key={item.id}>{count === 0
             ? <Link href={sourcesLinkFor(info)} className={tileClass}>{body}</Link>

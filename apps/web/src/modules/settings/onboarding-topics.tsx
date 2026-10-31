@@ -49,7 +49,7 @@ export function OnboardingTopics() {
     {topics.data ? <div className="flex flex-wrap gap-2" role="group" aria-label={t('topicsTitle')}>
       {PRESETS.map((preset) => {
         const pressed = topics.data.some((topic) => ownsPreset(topic, preset.id) && topic.is_active);
-        return <Button key={preset.id} type="button" size="sm" className="min-h-11" variant={pressed ? 'default' : 'outline'} aria-pressed={pressed}
+        return <Button key={preset.id} type="button" size="sm" variant={pressed ? 'default' : 'outline'} aria-pressed={pressed}
           disabled={toggle.isPending} onClick={() => toggle.mutate(preset)}>{t(preset.label)}</Button>;
       })}
     </div> : null}

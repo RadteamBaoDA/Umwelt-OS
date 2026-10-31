@@ -8,7 +8,7 @@ MAX_PROMPT_CHARS = 4000
 # (injection guard, citation rules, schema/marker rules) after the resolved text.
 DEFAULT_SYSTEM_PROMPTS: dict[str, str] = {
     "chat": (
-        "You are BBD-OS Assistant, a personal intelligence assistant. "
+        "You are Umwelt-OS Assistant, a personal intelligence assistant. "
         "Answer the user's inquiry accurately and factually based on the retrieved context below."
     ),
     "brief": "You write a concise personal daily brief (at most 150 words, plain text).",

@@ -2,6 +2,8 @@
 
 import { useTranslations } from 'next-intl';
 import { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
+import { UmweltLogo } from '@/components/brand/umwelt-mark';
 import { Button } from '@/components/ui/button';
 import { ApiError } from '@/core/api';
 import { scanPickSession, submitPick, type PickOption } from './api';
@@ -55,12 +57,14 @@ export function PickPhone() {
   const message = { loading: t('phoneLoading'), done: t('phoneDone'), invalid: t('phoneInvalid'), error: t('phoneError'), tooMany: t('phoneTooMany'), options: '' }[phase];
   return (
     <main className="mx-auto flex min-h-dvh max-w-sm flex-col justify-center gap-4 p-6">
-      <h1 className="text-xl font-semibold">{t('phoneTitle')}</h1>
+      <UmweltLogo />
+      <h1 className="text-xl font-semibold">{phase === 'invalid' ? t('phoneExpiredTitle') : t('phoneTitle')}</h1>
       {phase === 'options' ? options.map((option) => (
         <Button key={option.index} type="button" variant="outline" className="h-14 text-base" onClick={() => choose(option.index)}>
           {option.label}
         </Button>
       )) : <p role="status" className="text-sm text-muted-foreground">{message}</p>}
+      {(phase === 'invalid' || phase === 'error' || phase === 'tooMany') && <Link href="/" className="text-sm font-medium underline underline-offset-4">{t('goToDashboard')}</Link>}
     </main>
   );
 }

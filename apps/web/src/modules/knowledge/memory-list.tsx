@@ -265,15 +265,16 @@ export function MemoryList() {
   // Counts cover only rows the list itself would show (server verifies each row). Past the cap (or while searching) the server sends
   // no numbers; counts_capped marks the cap case; "All" also includes decision/procedural kinds that have no chip.
   const kindCounts = countsQuery.data?.kind_counts ?? null;
+  /** Counts memories of the given filter type. */
   const countFor = (key: MemoryFilterType) =>
     kindCounts ? (key === 'all' ? Object.values(kindCounts).reduce((a, b) => a + b, 0) : (kindCounts[key] ?? 0)) : null;
 
   return (
-    <section className="rounded-xl border bg-card p-6 space-y-6" aria-labelledby="memory-title">
+    <section className="rounded-lg border bg-card p-6 space-y-6" aria-labelledby="memory-title">
       <div className="section-heading flex flex-wrap items-start justify-between gap-4">
         <div className="grid gap-1">
-          <Link href="/chat" className="inline-flex min-h-11 w-fit items-center gap-1 text-sm font-semibold text-primary underline-offset-4 hover:underline"><ArrowLeftIcon aria-hidden="true" className="size-4" />{t('backToChat')}</Link>
-          <h1 id="memory-title" className="m-0 text-[30px] font-bold tracking-[-.04em]">{t('title')}</h1>
+          <Link href="/chat" className="inline-flex min-h-9 pointer-coarse:min-h-11 w-fit items-center gap-1 text-sm font-semibold text-primary underline-offset-4 hover:underline"><ArrowLeftIcon aria-hidden="true" className="size-4" />{t('backToChat')}</Link>
+          <h1 id="memory-title" className="m-0 text-2xl font-semibold">{t('title')}</h1>
           <p className="text-muted-foreground text-sm text-muted-foreground">{t('subtitle')} {t('memoryNote')}</p>
         </div>
         <div className="form-actions">
@@ -285,7 +286,7 @@ export function MemoryList() {
       {/* Filter and search toolbar */}
       <div className="flex flex-wrap items-center gap-3">
         <Tabs value={filterType} onValueChange={(next) => setFilterType(next as MemoryFilterType)}>
-          <TabsList aria-label={t('filterByType')} className="h-auto gap-0.5 rounded-lg p-0.5">
+          <TabsList aria-label={t('filterByType')} className="h-auto">
             {(['all', 'fact', 'preference', 'instruction'] as const).map((typeKey) => {
               const n = countFor(typeKey);
               return (
@@ -306,7 +307,7 @@ export function MemoryList() {
         <div className="ms-auto w-full min-[720px]:w-[280px]">
           <Input
             type="search"
-            className="min-h-11"
+            className="min-h-9 pointer-coarse:min-h-11"
             aria-label={t('searchMemories')}
             placeholder={t('searchMemories')}
             value={searchQuery}
@@ -336,12 +337,9 @@ export function MemoryList() {
         {memoriesQuery.isSuccess && items.length === 0 && (
           <div className="empty-state rounded-lg border border-dashed border-border bg-card p-8 text-center">
             <h3 className="mb-1 text-base font-semibold">{t('emptyTitle')}</h3>
-            <p className="mx-auto mb-4 max-w-md text-sm text-muted-foreground">
+            <p className="mx-auto max-w-md text-sm text-muted-foreground">
               {t('emptyDescription')}
             </p>
-            <Button onClick={() => setCreateDialogOpen(true)}>
-              {t('addMemory')}
-            </Button>
           </div>
         )}
 

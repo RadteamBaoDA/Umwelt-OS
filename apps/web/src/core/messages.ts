@@ -38,6 +38,7 @@ import { sharingMessages } from './messages/sharing';
 import { translationsMessages } from './messages/translations';
 import { uiSweepMessages } from './messages/ui-sweep';
 import { routeErrorsMessages } from './messages/route-errors';
+import { errorCodesMessages } from './messages/error-codes';
 import { globalSettingsMessages } from './messages/global-settings';
 
 /**
@@ -83,6 +84,7 @@ export const messages = {
     pick: pickMessages['en-us'],
     workspaces: workspacesMessages['en-us'],
     globalSettings: globalSettingsMessages['en-us'],
+    errorCodes: errorCodesMessages['en-us'],
     workspaceMembers: workspaceMembersMessages['en-us'],
     sharing: sharingMessages['en-us'],
     translations: translationsMessages['en-us'],
@@ -127,6 +129,7 @@ export const messages = {
     pick: pickMessages['vi-vi'],
     workspaces: workspacesMessages['vi-vi'],
     globalSettings: globalSettingsMessages['vi-vi'],
+    errorCodes: errorCodesMessages['vi-vi'],
     workspaceMembers: workspaceMembersMessages['vi-vi'],
     sharing: sharingMessages['vi-vi'],
     translations: translationsMessages['vi-vi'],

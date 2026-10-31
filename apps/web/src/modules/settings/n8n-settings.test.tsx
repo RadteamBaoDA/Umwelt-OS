@@ -83,7 +83,7 @@ describe('n8n settings', () => {
     render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><QueryClientProvider client={client}><N8nSettingsWorkspace /></QueryClientProvider></NextIntlClientProvider>);
     expect(await screen.findByText('From environment')).toBeTruthy();
     expect(screen.getByText('Saved here')).toBeTruthy();
-    expect(screen.getByText(/re-provisioning/)).toBeTruthy();
+    expect(screen.getByText(/setting up your existing workflows again/)).toBeTruthy();
     await userEvent.type(screen.getByLabelText('Service URL'), 'https://n8n.example');
     await userEvent.type(screen.getByLabelText('API key'), 'k1');
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));

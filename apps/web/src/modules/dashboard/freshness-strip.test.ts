@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeFreshnessTick, jitterPx } from './freshness-strip';
+import { computeFreshnessTick, groupFreshnessTicks, jitterPx } from './freshness-strip';
 
 const NOW = Date.parse('2026-10-30T12:00:00Z');
 const base = { id: 's', name: 'S', last_success_at: null, last_error_at: null, last_error_code: null, collection_error_code: null, next_due_at: null };
@@ -33,5 +33,19 @@ describe('jitterPx', () => {
   it('offsets ticks sharing a position so they stay visible', () => {
     const t = computeFreshnessTick({ ...base, last_success_at: '2026-10-30T12:00:00Z' }, NOW);
     expect([0, 1, 2, 3].map((i) => jitterPx([t, t, t, t], i))).toEqual([0, 2, -2, 0]);
+  });
+});
+
+describe('groupFreshnessTicks', () => {
+  it('folds clamped ticks into one overdue group and counts statuses', () => {
+    const ticks = [
+      computeFreshnessTick({ ...base, id: 'a', last_success_at: '2026-10-30T12:00:00Z' }, NOW),
+      computeFreshnessTick({ ...base, id: 'b', last_success_at: '2026-10-28T00:00:00Z' }, NOW),
+      computeFreshnessTick({ ...base, id: 'c' }, NOW),
+    ];
+    const grouped = groupFreshnessTicks(ticks);
+    expect(grouped.inWindow.map((x) => x.id)).toEqual(['a']);
+    expect(grouped.overdue.map((x) => x.id)).toEqual(['b', 'c']);
+    expect(grouped.counts).toEqual({ fresh: 1, stale: 2, failing: 0 });
   });
 });

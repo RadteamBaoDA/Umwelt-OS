@@ -203,7 +203,7 @@ export function PlanCard({
   return (
     <Card
       data-testid="generative-plan-card"
-      className="my-2 w-full max-w-2xl border-border bg-surface text-foreground shadow-sm"
+      className="my-2 w-full max-w-2xl border-border bg-surface text-foreground"
     >
       <CardHeader className="gap-2 border-b border-border pb-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -216,7 +216,7 @@ export function PlanCard({
           <Badge
             variant="secondary"
             data-testid="plan-progress-counter"
-            className="font-mono text-xs"
+            className="tabular-nums text-xs"
           >
             {copy.progressLabel(completedCount, totalCount)}
           </Badge>

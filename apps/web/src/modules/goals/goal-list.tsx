@@ -8,13 +8,15 @@ import { fetchGoals, fetchGoalsByIds } from './api';
 import type { Goal, GoalPage } from './types';
 
 /** Renders one bounded owner cursor page or explicit IDs and exposes detail/create actions. */
-export function GoalList({ onSelectGoal, onCreateGoal, ids, filters, limit = 50, cacheScope = 'page' }: {
+export function GoalList({ onSelectGoal, onCreateGoal, ids, filters, limit = 50, cacheScope = 'page', hideTitle = false }: {
   onSelectGoal?: (goal: Goal) => void;
   onCreateGoal?: () => void;
   ids?: string[];
   filters?: { keywords?: string[]; exclude_keywords?: string[] };
   limit?: number;
   cacheScope?: string;
+  /** Keeps the heading for assistive tech only when a surrounding frame already shows the title. */
+  hideTitle?: boolean;
 }) {
   const t = useTranslations('taskGoal');
   const goalStatusLabels = { active: t('goalStatusActive'), completed: t('goalStatusCompleted'), paused: t('goalStatusPaused'), cancelled: t('goalStatusCancelled') };
@@ -52,14 +54,14 @@ export function GoalList({ onSelectGoal, onCreateGoal, ids, filters, limit = 50,
     if (!result.isError && result.data && result.data.pages.length > pageIndex + 1) setActivePage({ key: pageKey, index: pageIndex + 1 });
   };
   return <section className="flex flex-col gap-3">
-    <header className="flex items-center justify-between gap-2"><h2 className="text-lg font-semibold">{t('goalsTitle')}</h2>{onCreateGoal && <Button size="sm" onClick={onCreateGoal}>{t('newGoal')}</Button>}</header>
+    <header className="flex items-center justify-between gap-2"><h2 className={hideTitle ? 'sr-only' : 'text-lg font-semibold'}>{t('goalsTitle')}</h2>{onCreateGoal && <Button size="sm" onClick={onCreateGoal}>{t('newGoal')}</Button>}</header>
     {query.isLoading && <p role="status" className="py-5 text-sm text-muted-foreground">{t('loadingGoals')}</p>}
     {query.isError && <div role="alert" className="text-sm text-destructive">{t('goalLoadFailed')} <Button type="button" variant="outline" size="sm" onClick={() => void query.refetch()}>{t('retry')}</Button></div>}
     {!!missing.length && <p role="status" className="text-xs text-muted-foreground">{t('missingGoalIds', { ids: missing.join(', ') })}</p>}
     {boundedIds.length < (ids?.length ?? 0) && <p role="status" className="text-xs text-muted-foreground">{t('selectedIdsTruncated', { count: (ids?.length ?? 0) - boundedIds.length, limit: 100 })}</p>}
-    {!query.isLoading && !query.isError && goals.length === 0 && <p className="py-5 text-sm text-muted-foreground">{canAdvance ? t('noGoalsThisPage') : t('noGoals')}</p>}
+    {!query.isLoading && !query.isError && goals.length === 0 && <p className="py-5 text-sm text-muted-foreground">{canAdvance ? t('noGoalsThisPage') : !ids && !include.length && !exclude.length ? t('noGoalsYet') : t('noGoals')}</p>}
     <ul className="grid grid-cols-1 gap-2 md:grid-cols-2">{goals.map((goal) => <li key={goal.id}><button type="button" onClick={() => onSelectGoal?.(goal)} className="w-full rounded-lg border border-border p-3 text-left hover:bg-primary/30"><span className="flex justify-between gap-2"><strong className="truncate text-sm">{goal.title}</strong><span className="text-xs text-muted-foreground">{goalStatusLabels[goal.status]}</span></span><span className="mt-1 block text-xs text-muted-foreground">{t('goalSummary', { progress: goal.progress, count: goal.milestones.length, deadline: goal.deadline ?? t('noDeadline') })}</span><span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-secondary"><span className="block h-full bg-primary" style={{ width: `${Math.min(100, Math.max(0, goal.progress))}%` }} /></span></button></li>)}</ul>
-    {!boundedIds.length && (query.data?.pages.length ?? 0) > 0 && <p className="text-xs text-muted-foreground">{t('ownerPageNumber', { page: pageIndex + 1 })} · {t('pageResultBound', { count: pageSize })}</p>}
+    {!boundedIds.length && (pageIndex > 0 || canAdvance) && <p className="text-xs text-muted-foreground">{t('ownerPageNumber', { page: pageIndex + 1 })} · {t('pageResultBound', { count: pageSize })}</p>}
     {pageIndex > 0 && <Button type="button" variant="outline" disabled={query.isFetchingNextPage} onClick={() => setActivePage({ key: pageKey, index: pageIndex - 1 })}>{t('previousPage')}</Button>}
     {canAdvance && !boundedIds.length && <Button type="button" variant="outline" disabled={query.isFetchingNextPage} onClick={() => void loadNextOwnerPage()}>{query.isFetchingNextPage ? t('loading') : t('nextOwnerPage')}</Button>}
   </section>;

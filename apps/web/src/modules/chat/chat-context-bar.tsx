@@ -74,7 +74,7 @@ function ContextPicker({ open, onOpenChange, current, onConfirm }: { open: boole
             const already = taken.has(hit.document_id);
             const checked = already || picked.has(hit.document_id);
             return (
-              <label key={hit.document_id} className="flex min-h-11 cursor-pointer items-start gap-2 rounded-md px-2 py-2 text-sm hover:bg-secondary">
+              <label key={hit.document_id} className="flex min-h-9 pointer-coarse:min-h-11 cursor-pointer items-start gap-2 rounded-md px-2 py-2 text-sm hover:bg-secondary">
                 <Checkbox checked={checked} disabled={already || (!checked && picked.size >= room)} onCheckedChange={() => toggle(hit)} className="mt-0.5" />
                 <span className="min-w-0"><span className="block truncate font-medium">{hit.title}</span><span className="block truncate text-xs text-muted-foreground">{hit.source.name}</span></span>
               </label>
@@ -155,7 +155,7 @@ export function ChatContextBar({ context, onRemove, onChange, variant = 'bar', p
         : label && chip('ctx', label, onRemove, context?.kind === 'document' ? context.resource_id : undefined)}
       <span role="status" className="sr-only">{announce}</span>
       {canPick && variant !== 'badges' && (
-        <Button type="button" variant="outline" size="sm" className="min-h-11" data-add-context disabled={items.length >= MAX_ITEMS} onClick={() => setOpen(true)}>
+        <Button type="button" variant="outline" size="sm" data-add-context disabled={items.length >= MAX_ITEMS} onClick={() => setOpen(true)}>
           <PlusIcon className="size-3.5" aria-hidden="true" />{t('addContext')}
         </Button>
       )}

@@ -224,7 +224,7 @@ export function GadgetFrame({
       <div className="flex flex-col h-full justify-between p-4 bg-card text-card-foreground">
         <div className="space-y-3">
           <div className="flex items-center justify-between text-xs text-muted-foreground border-b border-border pb-2">
-            <span className="font-mono uppercase tracking-wider">{definition.renderer}</span>
+            <span>{definition.renderer}</span>
             <span>{definition.source_ids.length} sources linked</span>
           </div>
 
@@ -244,7 +244,7 @@ export function GadgetFrame({
                 return (
                   <span
                     key={key}
-                    className="px-1.5 py-0.5 rounded bg-muted/30 text-muted-foreground font-mono"
+                    className="px-1.5 py-0.5 rounded bg-muted/30 text-muted-foreground"
                   >
                     {key}: {values.join(', ')}
                   </span>
@@ -256,7 +256,7 @@ export function GadgetFrame({
 
         <div className="pt-3 border-t border-border mt-3 text-xs text-muted-foreground flex items-center justify-between">
           <span className="italic">{ts('frameLive')}</span>
-          <span className="font-mono text-[10px]">rev.{definition.revision}</span>
+          <span className="tabular-nums text-xs">rev.{definition.revision}</span>
         </div>
       </div>
     );
@@ -272,7 +272,7 @@ export function GadgetFrame({
         onClick={isEditMode ? onSelect : undefined}
         className={`dashboard-gadget group relative h-full w-full gap-0 rounded-lg py-0 overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
           isSelected ? 'ring-2 ring-primary border-primary' : 'border-border'
-        } ${isDragging ? 'opacity-40 shadow-lg scale-[0.99]' : ''} ${
+        } ${isDragging ? 'opacity-40 shadow-[var(--shadow-popover)] scale-[0.99]' : ''} ${
           isResizing ? 'ring-1 ring-primary/60' : ''
         }`}
       >
@@ -292,8 +292,8 @@ export function GadgetFrame({
           <div className="hidden min-w-0 shrink items-center gap-1.5 overflow-hidden whitespace-nowrap @[22rem]:flex">
             {unreadCount > 0 && <Badge className="shrink-0 px-1.5 text-[11px]" title={ts('frameUnread', { count: unreadCount })}>{t('unreadBadge', { count: unreadCount })}</Badge>}
             {ruleMatch?.matched && <Badge variant="outline" className="shrink-0 gap-1 border-primary/30 bg-primary/10 text-[11px] text-foreground" title={ruleMatch.reason || t('ruleMatchFallback')}><AlertTriangle className="w-3 h-3" /><span>{t('ruleMatchBadge')}</span></Badge>}
-            {effectiveSeverity && <Badge variant={effectiveSeverity === 'critical' ? 'destructive' : 'outline'} className={`shrink-0 text-[10px] font-bold uppercase tracking-wider ${effectiveSeverity === 'info' ? 'text-muted-foreground' : ''}`}>{effectiveSeverity === 'critical' ? t('severityCritical') : effectiveSeverity === 'warning' ? t('severityWarning') : t('severityInfo')}</Badge>}
-            {definition.warnings && definition.warnings.length > 0 && <Badge variant="secondary" className="shrink-0 gap-0.5 text-[10px]" title={ts('frameSetupTitle')}><Info className="w-3 h-3" /><span>{t('setupRequired')}</span></Badge>}
+            {effectiveSeverity && <Badge variant={effectiveSeverity === 'critical' ? 'destructive' : 'outline'} className={`shrink-0 text-xs font-semibold ${effectiveSeverity === 'info' ? 'text-muted-foreground' : ''}`}>{effectiveSeverity === 'critical' ? t('severityCritical') : effectiveSeverity === 'warning' ? t('severityWarning') : t('severityInfo')}</Badge>}
+            {definition.warnings && definition.warnings.length > 0 && <Badge variant="secondary" className="shrink-0 gap-0.5 text-xs" title={ts('frameSetupTitle')}><Info className="w-3 h-3" /><span>{t('setupRequired')}</span></Badge>}
           </div>
 
           {/* Action controls cannot start title dragging. */}
@@ -374,7 +374,6 @@ export function GadgetFrame({
             </span>
             <Button
               type="button"
-              className="min-h-11"
               onClick={onApplyReadingQueue}
             >
               {t('showUpdates')}
@@ -392,7 +391,7 @@ export function GadgetFrame({
 
       {/* Expanded Modal View (preserves filters, scroll position and local state) */}
       <Dialog open={isExpanded} onOpenChange={setIsExpanded}>
-        <DialogContent closeLabel={t('close')} onCloseAutoFocus={(event) => { event.preventDefault(); expandTriggerRef.current?.focus(); }} className="flex h-[calc(100dvh-4rem)] max-h-[calc(100dvh-4rem)] w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden rounded-2xl p-0 sm:max-w-[1240px]">
+        <DialogContent closeLabel={t('close')} onCloseAutoFocus={(event) => { event.preventDefault(); expandTriggerRef.current?.focus(); }} className="flex h-[calc(100dvh-4rem)] max-h-[calc(100dvh-4rem)] w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden rounded-lg p-0 sm:max-w-[1240px]">
           <DialogHeader className="shrink-0 gap-0 border-b border-border py-4 pl-6 pr-16 text-left">
             <DialogTitle className="text-lg font-semibold leading-snug">{displayTitle}</DialogTitle>
             <DialogDescription className="text-xs text-muted-foreground">

@@ -73,7 +73,7 @@ import { GadgetSettings } from './gadget-settings';
 import { TopicSettings } from '@/modules/news/topic-settings';
 import { HighlightRuleEditor } from '@/modules/settings/highlight-rule-editor';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { formatDateTime } from '@/core/i18n';
+import { formatDateTime, formatTimeZoneLabel } from '@/core/i18n';
 import { listSources, sourceKeys } from '@/modules/sources/api';
 import { FreshnessStrip } from './freshness-strip';
 
@@ -149,6 +149,15 @@ function subscribeMobileMedia(onChange: () => void): () => void {
 }
 /** Reads the current phone-width match. */
 function getMobileMedia(): boolean { return window.matchMedia(MOBILE_QUERY).matches; }
+const TABLET_QUERY = '(min-width: 721px) and (max-width: 1099px)';
+/** Subscribes to the tablet-width media query. */
+function subscribeTabletMedia(onChange: () => void): () => void {
+  const media = window.matchMedia(TABLET_QUERY);
+  media.addEventListener('change', onChange);
+  return () => media.removeEventListener('change', onChange);
+}
+/** Reads the current tablet-width match. */
+function getTabletMedia(): boolean { return window.matchMedia(TABLET_QUERY).matches; }
 /** Server render assumes desktop. */
 function getServerMobileMedia(): boolean { return false; }
 
@@ -373,6 +382,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
 
   // Responsive breakpoint tracking
   const isMobile = useSyncExternalStore(subscribeMobileMedia, getMobileMedia, getServerMobileMedia);
+  const isTablet = useSyncExternalStore(subscribeTabletMedia, getTabletMedia, getServerMobileMedia);
 
   // Fetch dashboards list
   const dashboardsQuery = useQuery({
@@ -1123,7 +1133,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
                 type="button"
                 disabled={layoutOperationPending}
                 aria-label={t('switchDashboard')}
-                className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-transparent bg-transparent py-0 pl-0 pr-2 text-left text-2xl font-semibold leading-tight tracking-[-0.02em] text-foreground hover:bg-primary/10"
+                className="inline-flex min-h-9 pointer-coarse:min-h-11 items-center gap-2 rounded-lg border border-transparent bg-transparent py-0 pl-0 pr-2 text-left text-2xl font-semibold leading-tight tracking-[-0.02em] text-foreground hover:bg-primary/10"
               >
                 <span className="truncate">{activeDashboard?.name ?? t('title')}</span>
                 <ChevronDown className="size-5 text-muted-foreground" aria-hidden="true" />
@@ -1140,7 +1150,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
                   }`}
                 >
                   <span className="truncate">{dash.name}</span>
-                  <span className="text-[10px] text-muted-foreground font-mono">
+                  <span className="text-xs text-muted-foreground tabular-nums">
                     r.{dash.revision}
                   </span>
                 </DropdownMenuItem>
@@ -1207,14 +1217,14 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
         {!isAdminViewer && <Button
           type="button"
           variant={isEditMode ? 'default' : 'outline'}
-          className="min-h-11 font-semibold"
+          className="font-semibold"
           disabled={layoutOperationPending || (!canEditLayout && !isEditMode)}
           onClick={() => { if (isEditMode) requestExitEdit(); else setIsEditMode(true); }}
         >
           {isEditMode ? <Eye className="w-4 h-4" aria-hidden="true" /> : <Edit3 className="w-4 h-4" aria-hidden="true" />}
           <span>{isEditMode ? t('finishEditing') : t('toggleEdit')}</span>
         </Button>}
-        {isOwner && <Button type="button" variant="outline" className="min-h-11" onClick={() => setManagementDialogOpen(true)}>
+        {isOwner && <Button type="button" variant="outline" onClick={() => setManagementDialogOpen(true)}>
           {t('manageTopicsAndHighlights')}
         </Button>}
       </div>
@@ -1304,33 +1314,33 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
 
       {/* Main Grid Canvas or Empty State */}
       {!activeDashboard ? (
-        <section className="dashboard-empty flex flex-wrap items-center gap-6 rounded-xl border border-dashed border-border bg-card p-8">
+        <section className="dashboard-empty flex flex-wrap items-center gap-6 rounded-lg border border-dashed border-border bg-card p-8">
           <div className="min-w-0 flex-[1_1_360px]">
-            <h2 className="m-0 mb-1 text-xl font-bold leading-snug text-foreground">{t('noDashboardsYet')}</h2>
+            <h2 className="m-0 mb-1 text-xl font-semibold leading-snug text-foreground">{t('noDashboardsYet')}</h2>
             <p className="m-0 text-sm text-muted-foreground">{t('noDashboardsDesc')}</p>
           </div>
           {!isAdminViewer && <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" className="min-h-11" onClick={() => setPresetPickerOpen(true)}>
+            <Button type="button" variant="outline" onClick={() => setPresetPickerOpen(true)}>
               <Sparkles className="size-4" aria-hidden="true" />
               {t('presets')}
             </Button>
-            <Button type="button" className="min-h-11 font-semibold" onClick={() => setCreateDashboardOpen(true)}>
+            <Button type="button" className="font-semibold" onClick={() => setCreateDashboardOpen(true)}>
               <Plus className="size-4" aria-hidden="true" />
               {t('createFirstDashboard')}
             </Button>
           </div>}
         </section>
       ) : visibleInstances.length === 0 ? (
-        <section className="dashboard-empty flex flex-wrap items-center gap-6 rounded-xl border border-dashed border-border bg-card p-8">
+        <section className="dashboard-empty flex flex-wrap items-center gap-6 rounded-lg border border-dashed border-border bg-card p-8">
           <div className="min-w-0 flex-[1_1_360px]">
-            <h2 className="m-0 mb-1 text-xl font-bold leading-snug text-foreground">{t('emptyTitle')}</h2>
+            <h2 className="m-0 mb-1 text-xl font-semibold leading-snug text-foreground">{t('emptyTitle')}</h2>
             <p className="m-0 text-sm text-muted-foreground">{t('emptyDesc')}</p>
           </div>
           {!isAdminViewer && <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" className="min-h-11" disabled={!canEditLayout} onClick={() => { setIsEditMode(true); }}>
+            <Button type="button" variant="outline" disabled={!canEditLayout} onClick={() => { setIsEditMode(true); }}>
               {t('startEmpty')}
             </Button>
-            <Button type="button" className="min-h-11 font-semibold" onClick={() => setPresetPickerOpen(true)}>
+            <Button type="button" className="font-semibold" onClick={() => setPresetPickerOpen(true)}>
               {t('choosePreset')}
             </Button>
           </div>}
@@ -1341,6 +1351,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
           placements={mobileProjectionUnavailable ? [] : draftPlacements}
           visibleInstanceIds={visibleInstances.map((instance) => instance.id)}
           isMobileView={currentBreakpoint === 'mobile'}
+          isTabletView={isTablet}
           onReadableProjectionChange={setReadablePlacements}
           onGridMetricsChange={setGridMetrics}
           columns={layoutColumns}
@@ -1365,7 +1376,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
           <div className="flex flex-wrap items-center gap-x-2">
             <h2 className="text-sm font-semibold">{t('staleSourcesSummary', { count: staleSources.length })}</h2>
             <span aria-hidden="true" className="text-muted-foreground">·</span>
-            <Link href="/settings/sources" className="inline-flex min-h-11 items-center text-xs font-semibold text-primary underline underline-offset-4">
+            <Link href="/settings/sources" className="inline-flex min-h-9 pointer-coarse:min-h-11 items-center text-xs font-semibold text-primary underline underline-offset-4">
               {t('staleSourcesReview')}
             </Link>
             <Button
@@ -1400,8 +1411,8 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
 
       {activeDashboard && (
         <p className="flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
-          <span>{t('timesShownIn', { timezone: display.timezone })}</span>
-          <Link href="/settings/sources" className="inline-flex min-h-11 items-center text-primary underline underline-offset-4">
+          <span>{t('timesShownIn', { timezone: formatTimeZoneLabel(display.timezone, display.locale) })}</span>
+          <Link href="/settings/sources" className="inline-flex min-h-9 pointer-coarse:min-h-11 items-center text-foreground underline underline-offset-4">
             {t('openSourceStatus')}
           </Link>
         </p>
@@ -1455,7 +1466,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
             <Button
               type="button"
               disabled={!newDashboardName.trim() || createDashboardMutation.isPending}
-              className="text-xs font-bold"
+              className="text-xs font-semibold"
               onClick={() => createDashboardMutation.mutate(newDashboardName.trim())}
             >
               {t('create')}
@@ -1495,7 +1506,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
             <Button
               type="button"
               disabled={!renameValue.trim() || renameMutation.isPending}
-              className="text-xs font-bold"
+              className="text-xs font-semibold"
               onClick={() => renameMutation.mutate(renameValue.trim())}
             >
               {t('save')}
@@ -1527,7 +1538,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
             <Button
               type="button"
               disabled={deleteMutation.isPending}
-              className="text-xs font-bold bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              className="text-xs font-semibold bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => deleteMutation.mutate()}
             >
               {t('delete')}
@@ -1568,7 +1579,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
             <Button
               type="button"
               disabled={!newGroupName.trim() || addGroupMutation.isPending || layoutOperationPending}
-              className="text-xs font-bold"
+              className="text-xs font-semibold"
               onClick={() => addGroupMutation.mutate(newGroupName.trim())}
             >
               {t('create')}
@@ -1592,8 +1603,8 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
           </DialogHeader>
           <Tabs value={managementTab} onValueChange={(value) => setManagementTab(value as 'topics' | 'rules')}>
             <TabsList aria-label={t('manageTopicsAndHighlights')}>
-              <TabsTrigger value="topics" className="min-h-11">{t('manageTopics')}</TabsTrigger>
-              <TabsTrigger value="rules" className="min-h-11">{t('manageHighlights')}</TabsTrigger>
+              <TabsTrigger value="topics" className="min-h-9 pointer-coarse:min-h-11">{t('manageTopics')}</TabsTrigger>
+              <TabsTrigger value="rules" className="min-h-9 pointer-coarse:min-h-11">{t('manageHighlights')}</TabsTrigger>
             </TabsList>
             <TabsContent value="topics" className="pt-4"><TopicSettings csrfToken={session.csrfToken} /></TabsContent>
             <TabsContent value="rules" className="pt-4"><HighlightRuleEditor /></TabsContent>

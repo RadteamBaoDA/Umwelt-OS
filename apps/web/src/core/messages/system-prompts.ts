@@ -2,7 +2,7 @@
 export const systemPromptsMessages = {
   'en-us': {
     eyebrow: 'AI', title: 'System prompts', description: 'Edit the instructions sent to the model for each AI feature. Reset restores the built-in default.',
-    note: 'Safety and output-format rules (untrusted-content guard, citations, JSON schema, translation markers) are appended automatically and cannot be edited.',
+    note: 'Safety rules, citations and the answer format are added automatically and cannot be edited.',
     loading: 'Loading system prompts', unavailable: 'System prompts unavailable', loadFailed: 'Could not load system prompts.', retry: 'Retry',
     unauthorized: 'Please sign in again to continue.', forbidden: 'This action is not allowed for this account.',
     conflict: 'Prompts changed elsewhere. Reload and try again.', serviceUnavailable: 'The service is unavailable. Try again shortly.',
@@ -17,7 +17,7 @@ export const systemPromptsMessages = {
   },
   'vi-vi': {
     eyebrow: 'AI', title: 'System prompt', description: 'Chỉnh chỉ dẫn gửi tới mô hình cho từng tính năng AI. Khôi phục sẽ dùng lại mặc định có sẵn.',
-    note: 'Các quy tắc an toàn và định dạng đầu ra (chống nội dung không tin cậy, trích dẫn, JSON schema, marker dịch) được tự động nối thêm và không thể sửa.',
+    note: 'Quy tắc an toàn, trích dẫn và định dạng câu trả lời được thêm tự động và không thể sửa.',
     loading: 'Đang tải system prompt', unavailable: 'System prompt không khả dụng', loadFailed: 'Không thể tải system prompt.', retry: 'Thử lại',
     unauthorized: 'Hãy đăng nhập lại để tiếp tục.', forbidden: 'Tài khoản này không được phép thực hiện thao tác này.',
     conflict: 'Prompt đã thay đổi ở nơi khác. Hãy tải lại và thử lại.', serviceUnavailable: 'Dịch vụ không khả dụng. Hãy thử lại sau.',

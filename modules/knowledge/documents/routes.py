@@ -174,14 +174,18 @@ async def list_documents(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: str | None = None,
     source_id: UUID | None = None,
+    exclude_measurements: bool = False,
 ) -> DocumentList | MemberDocumentList:
     """Page retained roots after real workspace admission; members see only granted Documents.
+
+    ``exclude_measurements`` hides measurement-provider records (ISS position, prices).
 
     Public query applies Source deletion scope before paging. Response send fencing is W4;
     selected identity never enables pending provider/gadget/deletion/citation handlers.
     """
     items, next_cursor = await public.list_documents(session, limit, cursor, source_id,
-        scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+        scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        exclude_measurements=exclude_measurements)
     if scope.role == "member":
         await _gate_member_read(request, session, scope, tuple(item.id for item in items))
         return MemberDocumentList(items=[as_member_document_read(item) for item in items], next_cursor=next_cursor)

@@ -18,7 +18,7 @@ const renderPanel = (props: Parameters<typeof Panel>[0]) => render(<NextIntlClie
 describe('models panel', () => {
   it('shows the empty state until a model is added', () => {
     renderPanel({ providers: [{ ...cloud, models: [] }] });
-    expect(screen.getByText('Run Discover on a provider, then add the models you want.')).toBeTruthy();
+    expect(screen.getByText('Discover models from a provider.')).toBeTruthy();
   });
 
   it('adds a discovered model with an auto-guessed type', async () => {

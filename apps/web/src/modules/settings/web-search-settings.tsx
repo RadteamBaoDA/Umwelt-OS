@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { Plus } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -45,8 +46,8 @@ export function WebSearchSettingsWorkspace() {
       body: JSON.stringify({ provider: entry.provider, endpoint: entry.endpoint || null, api_key: entry.key }),
     }),
   });
-  if (query.isPending) return <section className="rounded-xl border bg-card p-6 skeleton" aria-label={t('loading')} />;
-  if (query.isError || !saved || !view) return <section className="rounded-xl border bg-card p-6"><h1>{t('unavailable')}</h1><p className="error">{t(apiFailureKey(query.error) ?? 'loadFailed')}</p><Button variant="outline" onClick={() => query.refetch()}>{t('retry')}</Button></section>;
+  if (query.isPending) return <section className="rounded-lg border bg-card p-6 skeleton" aria-label={t('loading')} />;
+  if (query.isError || !saved || !view) return <section className="rounded-lg border bg-card p-6"><h1>{t('unavailable')}</h1><p className="error">{t(apiFailureKey(query.error) ?? 'loadFailed')}</p><Button variant="outline" onClick={() => query.refetch()}>{t('retry')}</Button></section>;
   /** Resolve saved credential status by endpoint so reordering does not move secrets between targets. */
   const configured = (entry: DraftEntry) => saved.providers.some((item) => item.endpoint === entry.endpoint && item.credential_configured);
   /** Check whether this draft can use a new or retained credential, or is keyless. */
@@ -63,10 +64,11 @@ export function WebSearchSettingsWorkspace() {
     change({ ...view, providers });
   };
   return <div className="flex flex-col gap-5">
-    <SettingsPageHeader eyebrow={t('eyebrow')} title={t('title')} description={t('description')} status={<p className="m-0 text-sm text-muted-foreground" role="status">{save.isPending ? t('saving') : draft ? t('unsaved') : t('saved')}</p>} />
+    <SettingsPageHeader eyebrow={t('eyebrow')} title={t('title')} description={t('description')} status={<p className="m-0 text-sm text-muted-foreground" role="status">{save.isPending ? t('saving') : draft ? t('unsaved') : save.isSuccess ? t('saved') : ''}</p>} />
     <form className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); save.mutate(view); }}>
       <SettingsSection title={t('provider')}>
-        <p className="m-0 text-sm text-muted-foreground">{t('fallbackNote')}</p>
+        {view.providers.length > 1 ? <p className="m-0 text-sm text-muted-foreground">{t('fallbackNote')}</p> : null}
+        {view.providers.length === 0 ? <p id="web-search-no-providers" className="m-0 text-sm text-muted-foreground">{t('noProviders')}</p> : null}
         {view.providers.map((entry, index) => <div key={index} className="flex flex-col gap-3 rounded-lg border p-4">
           <FieldGrid>
             <label className="field"><span className="label">{t('provider')}</span><Select disabled={save.isPending} value={entry.provider} onValueChange={(provider) => changeEntry(index, { provider: provider as Provider })}><SelectTrigger aria-label={t('providerAt', { number: index + 1 })}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="tavily">Tavily</SelectItem><SelectItem value="brave">Brave</SelectItem><SelectItem value="searxng">SearXNG</SelectItem><SelectItem value="omniroute">OmniRoute</SelectItem></SelectContent></Select></label>
@@ -82,9 +84,9 @@ export function WebSearchSettingsWorkspace() {
             {testedIndex === index && test.isError ? <p className="error m-0" role="alert">{t(apiFailureKey(test.error) ?? 'requestFailed')}</p> : null}
           </div>
         </div>)}
-        <Button type="button" variant="outline" disabled={save.isPending || view.providers.length >= 4} onClick={() => change({ ...view, providers: [...view.providers, { provider: 'tavily', endpoint: null, credential_configured: false, destination_id: null, key: '', removed: false }] })}>{t('addFallback')}</Button>
-        <CheckboxField><Checkbox id="web-search-allow" disabled={save.isPending} checked={view.allow_remote_web_search} onCheckedChange={(checked) => change({ ...view, allow_remote_web_search: checked === true })} /><label htmlFor="web-search-allow">{t('allowRemote')}</label></CheckboxField>
-        <p className="m-0 text-xs text-muted-foreground">{t('envNote')}</p>
+        <Button type="button" variant="outline" className="self-start" disabled={save.isPending || view.providers.length >= 4} onClick={() => change({ ...view, providers: [...view.providers, { provider: 'tavily', endpoint: null, credential_configured: false, destination_id: null, key: '', removed: false }] })}><Plus className="size-4" aria-hidden="true" />{t('addFallback')}</Button>
+        <CheckboxField><Checkbox id="web-search-allow" aria-describedby={view.providers.length === 0 ? 'web-search-no-providers' : undefined} disabled={save.isPending || view.providers.length === 0} checked={view.allow_remote_web_search} onCheckedChange={(checked) => change({ ...view, allow_remote_web_search: checked === true })} /><label htmlFor="web-search-allow">{t('allowRemote')}</label></CheckboxField>
+        {view.providers.length > 0 ? <p className="m-0 text-xs text-muted-foreground">{t('envNote')}</p> : null}
       </SettingsSection>
       {save.isError ? <p className="error" role="alert">{t(apiFailureKey(save.error) ?? 'saveFailed')}</p> : null}
       <SettingsActions>

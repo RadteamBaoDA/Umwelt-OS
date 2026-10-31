@@ -430,7 +430,7 @@ export function OpenGenerativeUIRenderer({
       labels={labels}
     >
       <div
-        className="relative w-full overflow-hidden rounded-xl border border-border bg-surface transition-[height] duration-200 ease-out"
+        className="relative w-full overflow-hidden rounded-lg border border-border bg-surface transition-[height] duration-200 ease-out"
         style={{ height: `${effectiveHeight}px` }}
         data-testid="sandboxed-ui-container"
         data-stage={stage}
@@ -442,7 +442,7 @@ export function OpenGenerativeUIRenderer({
             aria-live="polite"
             className={
               hasHtmlContent
-                ? 'pointer-events-none absolute top-2 left-3 z-10 inline-flex items-center gap-1.5 rounded-md border border-border bg-surface/90 px-2.5 py-1 text-xs font-medium text-muted-foreground shadow-xs backdrop-blur-xs'
+                ? 'pointer-events-none absolute top-2 left-3 z-10 inline-flex items-center gap-1.5 rounded-md border border-border bg-surface/90 px-2.5 py-1 text-xs font-medium text-muted-foreground backdrop-blur-xs'
                 : 'absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-surface/95 p-6 text-center text-sm text-muted-foreground'
             }
             data-testid="sandboxed-ui-placeholder"
@@ -469,7 +469,7 @@ export function OpenGenerativeUIRenderer({
         {/* Provenance cue: this widget is model-generated code running in an isolated iframe. */}
         <span
           data-testid="sandboxed-ui-badge"
-          className="pointer-events-none absolute bottom-1.5 right-2 z-10 rounded-md border border-border bg-surface/90 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+          className="pointer-events-none absolute bottom-1.5 right-2 z-10 rounded-md border border-border bg-surface/90 px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground"
         >
           {genUiCopy().sandboxedBadge}
         </span>

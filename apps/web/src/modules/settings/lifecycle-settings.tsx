@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { apiRequest } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 
@@ -48,7 +49,7 @@ export function LifecycleSettings() {
       <p className="text-muted-foreground text-sm">{t('modulesDescription')}</p>
       {modules.data?.modules.map((module) => <label key={module.id} className="flex items-center justify-between gap-4 border-b border-border py-2 text-sm">
         <span>{module.name}{module.blocked_by.length > 0 && <span className="text-muted-foreground block">{t('blockedBy')}: {module.blocked_by.join(', ')}</span>}</span>
-        <input aria-label={`${module.name}: ${module.enabled ? t('enabled') : t('disabled')}`} type="checkbox" checked={module.enabled} disabled={toggleModule.isPending || module.blocked_by.length > 0} onChange={() => toggleModule.mutate({ state: modules.data!, module })} />
+        <Checkbox aria-label={`${module.name}: ${module.enabled ? t('enabled') : t('disabled')}`} checked={module.enabled} disabled={toggleModule.isPending || module.blocked_by.length > 0} onCheckedChange={() => toggleModule.mutate({ state: modules.data!, module })} />
       </label>)}
       {modules.isError && <p role="alert" className="text-destructive">{t('lifecycleLoadFailed')}</p>}
       {toggleModule.isError && <p role="alert" className="text-destructive">{t('moduleSaveFailed')}</p>}

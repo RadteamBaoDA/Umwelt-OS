@@ -39,6 +39,7 @@ from modules.news.stories import (
     _fuzzy_candidate,
     _identity_keys,
     _initial_signal_provenance,
+    _plain_excerpt,
     _tokens,
     cluster_observation,
 )
@@ -210,6 +211,20 @@ class TestStoryClustering:
             assert result is None
 
     @pytest.mark.asyncio
+    async def test_cluster_observation_skips_measurement_providers(self) -> None:
+        """Measurement records (weather, ISS, prices) never become news stories."""
+        session = AsyncMock()
+        session.scalar.return_value = None
+        session.add = MagicMock()
+        proj = self._sample_projection()
+        measurement = SimpleNamespace(data_kind="measurement")
+        with patch("modules.knowledge.documents.public.get_news_document_projection", return_value=proj), \
+                patch("modules.news.stories.get_provider_spec", return_value=measurement):
+            result = await cluster_observation(session, document_id=proj.document_id, expected_source_generation=1, **KW)
+        assert result is None
+        session.add.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_cluster_observation_idempotent_replay(self) -> None:
         """cluster_observation returns existing story_id without creating duplicate observations."""
         session = AsyncMock()
@@ -375,3 +390,19 @@ class TestStoryDetailCursor:
         with pytest.raises(HTTPException) as exc:
             _decode_detail_cursor(token, FENCE, story_id, ())
         assert exc.value.status_code == 422
+
+
+def test_plain_excerpt_strips_title_and_markdown() -> None:
+    """Leading title copies and Markdown markers are removed from excerpts."""
+    assert _plain_excerpt("US approves sale", "US approves sale. The **American-made** [jets](http://x) ![i](y)") == "The American-made jets"
+    assert _plain_excerpt("T", "### Misc Changes\n- fix(turbopack) `x`") == "Misc Changes fix(turbopack) x"
+
+
+def test_plain_excerpt_strips_release_label_and_inline_heading() -> None:
+    """Release feeds' "Tag:" label, repeated title and inline ### markers are removed."""
+    assert _plain_excerpt("v16.5.0-canary.34", "Tag: v16.5.0-canary.34 ### Credits Thanks") == "Credits Thanks"
+
+
+def test_plain_excerpt_truncates_at_word_boundary() -> None:
+    """Long text is cut on a word boundary within the limit."""
+    assert _plain_excerpt("", "alpha beta gamma", limit=12) == "alpha beta"

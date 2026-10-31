@@ -7,7 +7,7 @@ A private personal-intelligence workspace: calm, dense, honest about what it kno
   - "Connection status does not indicate source freshness."
   - "Could not refresh the document list. Your update notice is still available; try again."
 - **Name the exact state.** Distinguish *Connecting*, *Reconnecting*, *Client offline*, *Server unreachable*, *Session expired* — don't collapse them into "Error". Transport health never implies data freshness.
-- **Sentence case** for every label, button, title and menu item ("Sign in again", "Apply filters", "Load more events"). Uppercase appears only in the `eyebrow` style.
+- **Sentence case** for every label, button, title and menu item ("Sign in again", "Apply filters", "Load more events"). There is no uppercase kicker style.
 - **Second person, imperative.** "Choose both dates and make the end date later than the start date." No "we", no "oops", no exclamation marks, no emoji.
 - **Two languages, one catalog.** Every visible and accessible string comes from the `en-us` / `vi-vi` message catalogs (normalised to `en-US` / `vi-VN`). Use ICU plurals and interpolation (`{count, plural, one {# new document update} other {…}}`); never concatenate translated fragments. Vietnamese strings run ~20–30% longer — let buttons and nav wrap, never truncate.
 - **Translate chrome, not content.** Source titles, entity names, tickers, URLs and user messages stay as written.
@@ -27,8 +27,8 @@ A private personal-intelligence workspace: calm, dense, honest about what it kno
 
 ### Type
 - One family, `sans` (Inter → system UI stack). Inter is self-hosted through `next/font/google` (downloaded at build, served from this origin). Don't introduce a second family. Figures use tabular numerals (`.tabular`, and every `table`).
-- Page: `eyebrow` (accent, uppercase) → `page-title` → body in `muted`. Sub-panels use `section-title`. Overlays use `dialog-title`.
-- Body is 14px / 1.5; page titles 24/600. Labels are `label` (13px / 650). Status and timestamps `meta` or `caption`, in `muted`.
+- Page: `page-title` → body in `muted` (no eyebrow kicker above titles). Sub-panels use `section-title`. Overlays use `dialog-title`.
+- Body is 14px / 1.5; page titles 24/600. Labels are `label` (13px / 600). Status and timestamps `meta` or `caption`, in `muted`.
 - The wordmark is the text "Umwelt-OS" in `brand-name` (800, −0.03em). There is no logo file.
 
 ### Space, size, layout
@@ -39,14 +39,18 @@ A private personal-intelligence workspace: calm, dense, honest about what it kno
 
 ### Shape and depth
 - Radii are 8 (cards, gadgets, panels), 6 (buttons, inputs) and 4 (chips, menu items); dialogs and Sheet use 12.
-- Separate with 1px `line` borders; no resting shadows. Shadows exist only on floating layers: `shadow-popover` (menus, select) and `shadow-dialog` (modals).
+- Separate with 1px `line` borders; no resting shadows on any control (inputs, textareas, cards). Shadows exist only on floating layers: `shadow-popover` (menus, select) and `shadow-dialog` (modals).
 - Empty states: dashed `line` border, `radius-lg`, `muted` text.
+
+### Links and tabs
+- Links are ink (`text`), underlined on hover and focus-visible; green stays for data only.
+- Tabs are an underline style: transparent list with a `line` bottom border, no trigger background, and a 2px ink underline on the active tab.
 
 ### States
 - Focus: 3px outline of `accent` at 40% opacity, 2px offset, on every interactive element (shadcn primitives use a 2px `color-ring` ring). Never remove it.
 - Disabled: opacity .55–.65 and `not-allowed` cursor; a submitting button shows `progress`.
 - Selected: nav item takes the `active` fill with ink icon; option cards get an `accent` border plus a 9% `accent` tint.
-- Loading: a shimmering skeleton between `surface` and `line`, `radius-panel`. All animation is cut under `prefers-reduced-motion`.
+- Loading: flat `rule` bars (no gradient or shimmer); an optional opacity pulse runs only when motion is allowed.
 
 ### Themes
 - `light` and `dark`, plus a `system` preference (default). The root `.dark` class is the single authority (next-themes `attribute="class"`); set `color-scheme` so native controls match.

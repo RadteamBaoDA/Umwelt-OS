@@ -25,6 +25,7 @@ function safeGithubUrl(value: unknown): string | null {
  */
 export function GithubProjectGadget({ instance }: { instance: GadgetInstance }) {
   const t = useTranslations('github');
+  const tDash = useTranslations('dashboard');
   const display = useDisplayPreferences();
   const definition = instance.definition;
   const sourceId = definition.source_ids?.[0] ?? '';
@@ -49,7 +50,7 @@ export function GithubProjectGadget({ instance }: { instance: GadgetInstance }) 
     staleTime: 30_000,
   });
 
-  if (!sourceId) return <GadgetNotice kind="setup" message={t('gadgetNoSource')} />;
+  if (!sourceId) return <GadgetNotice kind="setup" message={t('gadgetNoSource')} action={{ href: '/settings/sources', label: tDash('gadgetConfigureAction') }} />;
   if (summary.error && (summary.error as { status?: number }).status === 404) {
     return <GadgetNotice kind="error" message={t('gadgetNotGithub')} />;
   }
@@ -76,7 +77,7 @@ export function GithubProjectGadget({ instance }: { instance: GadgetInstance }) 
         <dl className="grid grid-cols-4 gap-2 text-center">
           {([['issues', counts.issues], ['pullRequests', counts.pull_requests], ['commits', counts.commits], ['releases', counts.releases]] as const).map(([key, value]) => (
             <div key={key} className="rounded-md border border-border p-1.5">
-              <dt className="text-[10px] text-muted-foreground">{t(key)}</dt>
+              <dt className="text-[11px] text-muted-foreground">{t(key)}</dt>
               <dd className="text-sm font-semibold">{value}</dd>
             </div>
           ))}
@@ -94,7 +95,7 @@ export function GithubProjectGadget({ instance }: { instance: GadgetInstance }) 
         </div>
       )}
       {!events.isLoading && !events.isError && items.length === 0 && (
-        <GadgetNotice kind="empty" message={t('noActivity')} className="px-0 py-1 text-xs" />
+        <GadgetNotice kind="empty" message={t('noActivity')} action={{ href: '/settings/sources', label: tDash('gadgetConfigureAction') }} className="my-auto px-0 py-1 text-xs" />
       )}
       {items.length > 0 && (
         <ol className="min-h-0 flex-1 space-y-2 overflow-y-auto">

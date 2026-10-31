@@ -35,8 +35,8 @@ export function ApprovalCard({ approval, busy = false, disabled = false, onDecis
   const expired = approval.status === 'pending' && Date.parse(approval.expires_at) <= now;
   const pending = approval.status === 'pending' && Boolean(approval.arguments) && !expired;
   return (
-    <section aria-labelledby={`approval-${approval.id}`} className="flex flex-col gap-2.5 rounded-xl border border-primary bg-card p-4 text-sm">
-      <span className="text-[13px] font-extrabold uppercase tracking-[0.12em] text-primary">{t('approvalNeeded')}</span>
+    <section aria-labelledby={`approval-${approval.id}`} className="flex flex-col gap-2.5 rounded-lg border border-primary bg-card p-4 text-sm">
+      <span className="text-[13px] font-semibold text-primary">{t('approvalNeeded')}</span>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 id={`approval-${approval.id}`} className="text-[15px] font-semibold text-foreground">{t('approvalTitle')}</h2>

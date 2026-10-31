@@ -124,9 +124,9 @@ export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
 
       {/* Loading Skeleton */}
       {entitiesQuery.isLoading && entities.length === 0 && (
-        <div className="flex-1 space-y-2.5 p-1 animate-pulse">
-          <div className="h-14 bg-muted/20 rounded-lg" />
-          <div className="h-14 bg-muted/20 rounded-lg" />
+        <div className="flex-1 space-y-2.5 p-1 motion-safe:animate-pulse">
+          <div className="h-14 bg-rule rounded-lg" />
+          <div className="h-14 bg-rule rounded-lg" />
         </div>
       )}
 
@@ -167,7 +167,7 @@ export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
                     </Link>
                   </div>
 
-                  <span className="px-1.5 py-0.2 rounded text-[10px] font-bold uppercase tracking-wider bg-muted/40 text-muted-foreground shrink-0">
+                  <span className="px-1.5 py-0.2 rounded text-xs font-semibold bg-muted/40 text-muted-foreground shrink-0">
                     {entity.type}
                   </span>
                 </div>
@@ -179,7 +179,7 @@ export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
                 )}
 
                 {/* Aliases & Metadata bar */}
-                <div className="flex items-center justify-between text-[10px] text-muted-foreground pt-1 border-t border-border/50">
+                <div className="flex items-center justify-between text-xs text-muted-foreground pt-1 border-t border-border/50">
                   <div className="flex items-center gap-1 overflow-hidden">
                     {entity.aliases && entity.aliases.length > 0 ? (
                       <span className="truncate">
@@ -189,7 +189,7 @@ export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
                       <span>Revision {entity.revision}</span>
                     )}
                   </div>
-                  {lastSeen && <span className="font-mono shrink-0">Seen {lastSeen}</span>}
+                  {lastSeen && <span className="tabular-nums shrink-0">Seen {lastSeen}</span>}
                 </div>
               </article>
             );

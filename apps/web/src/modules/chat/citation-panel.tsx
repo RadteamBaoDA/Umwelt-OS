@@ -54,15 +54,15 @@ export function CitationPanel({
     <div
       className={
         variant === 'standalone'
-          ? 'flex flex-col gap-3 p-4 rounded-xl border border-border bg-surface shadow-md'
+          ? 'flex flex-col gap-3 p-4 rounded-lg border border-border bg-surface'
           : variant === 'card'
-            ? 'flex flex-col gap-2 p-3 rounded-lg border border-border bg-surface/70 mt-2'
+            ? 'flex flex-col gap-1 mt-2'
             : 'flex flex-col gap-2 mt-2 pt-2 border-t border-border/60'
       }
     >
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-          <FileTextIcon className="size-3.5 text-primary" />
+        <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+          <FileTextIcon className="size-3.5" />
           <span>{t('citations')} ({itemsToRender.length})</span>
         </div>
         {onClose && (
@@ -79,13 +79,14 @@ export function CitationPanel({
             const isWeb = citation.sourceType === 'web';
             const href = isWeb ? safeHttpUrl(citation.url) : `/knowledge/documents/${encodeURIComponent(citation.documentId)}?${new URLSearchParams({ versionId: citation.documentVersionId, chunkId: citation.chunkId })}#cited-chunk`;
             const when = !isWeb && citation.observedAt ? formatDateTime(citation.observedAt, locale, timezone) : null;
-            const linkClass = 'inline-flex min-h-11 items-center gap-1 text-[13px] font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+            const linkClass = 'inline-flex min-h-9 pointer-coarse:min-h-11 items-center gap-1 text-[13px] font-medium text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
             return (
-              <div key={`${isWeb ? 'web' : citation.chunkId}-${idx}`} className="flex flex-col gap-1 rounded-[10px] border border-border bg-background p-3 text-xs">
+              <div key={`${isWeb ? 'web' : citation.chunkId}-${idx}`} data-testid="rail-source" className="flex flex-col gap-1 rounded-md border-b border-rule px-2 py-2 text-xs hover:bg-active focus-within:bg-active">
                 <span className="flex items-center gap-2">
-                  <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-md bg-primary/10 px-[5px] text-xs font-semibold text-primary">{idx + 1}</span>
+                  <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-sm bg-raised px-[5px] text-xs font-semibold text-foreground">{idx + 1}</span>
                   <strong className="line-clamp-2 text-sm font-semibold text-foreground">{citation.title}</strong>
                 </span>
+                {citation.quote && <span className="line-clamp-1 text-xs text-muted-foreground">{citation.quote}</span>}
                 <span className="text-xs text-muted-foreground">{isWeb ? webHost(citation.url) : [t('document'), when].filter(Boolean).join(' · ')}</span>
                 {href && (isWeb
                   ? <a href={href} target="_blank" rel="noopener noreferrer nofollow" className={linkClass} aria-label={t('openWebResultFor', { host: webHost(citation.url) })}>{t('openWebResult')}<ExternalLinkIcon className="size-3" aria-hidden="true" /></a>
@@ -110,7 +111,7 @@ export function CitationPanel({
                 <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground pt-1 border-t border-border/40">
                   <span className="truncate">{webHost(citation.url)}</span>
                   {href && (
-                    <a href={href} target="_blank" rel="noopener noreferrer nofollow" className="inline-flex min-h-11 shrink-0 items-center gap-1 text-primary hover:underline" aria-label={t('openWebResultFor', { host: webHost(citation.url) })}>
+                    <a href={href} target="_blank" rel="noopener noreferrer nofollow" className="inline-flex min-h-9 pointer-coarse:min-h-11 shrink-0 items-center gap-1 text-primary hover:underline" aria-label={t('openWebResultFor', { host: webHost(citation.url) })}>
                       <span>{t('openWebResult')}</span><ExternalLinkIcon className="size-3" aria-hidden="true" />
                     </a>
                   )}

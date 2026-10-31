@@ -96,5 +96,12 @@ describe('Design System Token Parity & Stylesheet Generation', () => {
     expect(buildCspMetaTag('https://app.test')).toContain("connect-src 'none'");
     expect(OPEN_GEN_UI_DESIGN_SKILL).toContain('--color-background-primary');
     expect(OPEN_GEN_UI_DESIGN_SKILL).toContain('.c-teal');
+    expect(OPEN_GEN_UI_DESIGN_SKILL).not.toMatch(/9px|18px|font-serif/);
+    expect(THEME_CSS).toContain('--radius-card: 8px;');
+    expect(THEME_CSS).toContain('--radius-dialog: 12px;');
+    expect(THEME_CSS).not.toContain('--font-serif');
+    expect(FORM_STYLES_WITH_STAGGER_CSS).toContain('font-size: 14px;');
+    expect(FORM_STYLES_WITH_STAGGER_CSS).not.toContain('scale(0.98)');
+    expect(SVG_CLASSES_CSS).not.toMatch(/#2563eb|#60a5fa|#534AB7/i);
   });
 });

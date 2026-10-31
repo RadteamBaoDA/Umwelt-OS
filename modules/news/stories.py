@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
+from modules.connectors.provider_specs import get_provider_spec
 from modules.knowledge.documents import public as documents
 from modules.knowledge.documents.models import Document
 from modules.knowledge.entities import public as entities
@@ -69,6 +70,36 @@ class LiveStoryRows(list[tuple[NewsStory, list[NewsObservation], list[StoryEvide
         self.next_candidate = next_candidate
         self.candidate_keys = candidate_keys or {}
         self.next_evidence = next_evidence
+
+
+_MD_IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_MD_LINE_MARK = re.compile(r"^[ \t]*(?:#{1,6}[ \t]+|[-*+][ \t]+|>[ \t]?)", re.MULTILINE)
+_MD_INLINE_MARK = re.compile(r"[*_`]+")
+_MD_INLINE_HEADING = re.compile(r"(?:^|\s)#{1,6}\s+")
+_RELEASE_PREFIX = re.compile(r"^(?:tag|release|version)\s*:\s*", re.IGNORECASE)
+
+
+def _plain_excerpt(title: str, text_value: str, limit: int = 1000) -> str:
+    """Return bounded plain text for a story excerpt.
+
+    Strips Markdown markers (headings, bullets, emphasis, backticks, links, images), collapses
+    whitespace, drops a leading copy of ``title`` (case/whitespace-insensitive, ignoring trailing
+    punctuation) and truncates at a word boundary to at most ``limit`` characters. Pure; never raises.
+    """
+    plain = _MD_IMAGE.sub("", text_value)
+    plain = _MD_LINK.sub(lambda m: m.group(1), plain)
+    plain = _MD_LINE_MARK.sub("", plain)
+    plain = " ".join(_MD_INLINE_HEADING.sub(" ", _MD_INLINE_MARK.sub("", plain)).split())
+    # Release feeds prefix the body with "Tag: <title>"; drop the label so the title copy below matches.
+    plain = _RELEASE_PREFIX.sub("", plain)
+    head = " ".join(title.split()).rstrip(" .:!?-–—…")
+    if head and plain.casefold().startswith(head.casefold()):
+        plain = plain[len(head):].lstrip(" .:!?-–—…")
+    if len(plain) > limit:
+        cut = plain[:limit]
+        plain = (cut.rsplit(" ", 1)[0] if " " in cut and plain[limit] != " " else cut).rstrip()
+    return plain
 
 
 def _canonical_url(value: str | None) -> str | None:
@@ -137,6 +168,12 @@ async def cluster_observation(
     ))
     if prior is not None:
         return prior.story_id
+    # Measurements (weather, ISS position, prices) are observations, not articles: keep them out of stories.
+    spec = get_provider_spec(projection.provider)
+    if (spec is not None and spec.data_kind == "measurement") or (
+        projection.provider_metadata is not None and projection.provider_metadata.world_data is not None
+    ):
+        return None
     representative = projection.chunks[0]
     incomplete_reasons: list[str] = []
     if projection.chunks_truncated:
@@ -151,7 +188,7 @@ async def cluster_observation(
         entity_ids = []
         incomplete_reasons.append("entity_membership_limit")
     title = " ".join(projection.title.split())[:500] or "Untitled"
-    excerpt = representative.content[:1000]
+    excerpt = _plain_excerpt(title, representative.content)
     observed_at = projection.observed_at.astimezone(UTC)
     identities = _identity_keys(projection.canonical_url, projection.content_hash)
     kind, key = identities[0]
@@ -475,7 +512,7 @@ async def _live_story_rows(
             document_id=current.document_id, document_version_id=current.document_version_id,
             chunk_id=chunk.id, source_id=current.source_id, source_name=current.source_name,
             source_type=current.source_type, provider=current.provider, url=_canonical_url(current.canonical_url),
-            title=current.title, excerpt=chunk.content[:1000], observed_at=current.observed_at,
+            title=current.title, excerpt=_plain_excerpt(current.title, chunk.content), observed_at=current.observed_at,
             published_at=current.published_at, **_attribution(current.provider_metadata),
         )
         existing = grouped.setdefault(story.id, (story, [], []))

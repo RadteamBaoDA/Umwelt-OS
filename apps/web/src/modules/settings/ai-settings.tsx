@@ -184,6 +184,7 @@ export function AISettingsWorkspace() {
     mutationFn: async ({ provider, model }: { provider: ProviderRead; model: ProviderModel }): Promise<Capability> => {
       const slot = testRoleByType[model.type];
       if (!slot) return Promise.reject(new Error('untestable'));
+      /** Sends a JSON POST to an AI capability endpoint and returns the updated capability. */
       const post = (path: string, body: object) => apiRequest<Capability>(path, { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       // Evidence is stored server-side, so the provider and model must exist there and use the stored key.
       const persisted = query.data?.providers.find((item) => item.id === provider.id)?.models.some((item) => item.id === model.id && item.type === 'llm');
@@ -219,8 +220,8 @@ export function AISettingsWorkspace() {
       .then(() => setModelTests((current) => { const { [key]: _done, ...rest } = current; return rest; }))
       .catch(() => undefined);
   }
-  if (query.isPending) return <section className="rounded-xl border bg-card p-6 skeleton" aria-label={t('loading')} />;
-  if (query.isError || !saved) return <section className="rounded-xl border bg-card p-6"><h1>{t('unavailable')}</h1><p className="error">{describeError(query.error, t, 'loadFailed')}</p><Button variant="outline" onClick={() => query.refetch()}>{t('retry')}</Button></section>;
+  if (query.isPending) return <section className="rounded-lg border bg-card p-6 skeleton" aria-label={t('loading')} />;
+  if (query.isError || !saved) return <section className="rounded-lg border bg-card p-6"><h1>{t('unavailable')}</h1><p className="error">{describeError(query.error, t, 'loadFailed')}</p><Button variant="outline" onClick={() => query.refetch()}>{t('retry')}</Button></section>;
   /** Applies a partial update to the AI settings draft. */
   const set = (patch: Partial<AISettings>) => setDraft({ ...saved, ...patch });
   /** Merges a partial privacy update into the current AI settings draft. */
@@ -252,6 +253,7 @@ export function AISettingsWorkspace() {
     if (!window.confirm(t('discardDraft'))) return;
     try { sessionStorage.removeItem(draftStorageKey); } catch { /* storage unavailable */ } setDraft(null); setSecrets({}); setRestoredSecret(false); save.reset(); draftProbe.reset(); discover.reset(); setDiscoverError(null);
   };
+  /** Localizes a capability kind name. */
   const capabilityLabel = (kind: string) => t(`capability${kind[0].toUpperCase()}${kind.slice(1)}` as 'capabilityChat');
   // The backend requires embedding dimensions, so a chosen embedding model blocks Save until its probe supplies them.
   const embeddingStatus: 'idle' | 'checking' | 'error' = !embeddingMapping?.model || embeddingMapping.dimensions != null ? 'idle' : draftProbe.isPending ? 'checking' : 'error';
@@ -270,17 +272,15 @@ export function AISettingsWorkspace() {
   /** Sets the chat role's reasoning effort on the current draft. */
   const pickEffort = (effort: ReasoningEffort) => { if (defaults.chat) set({ defaults: { ...defaults, chat: { ...defaults.chat, reasoning_effort: effort } } }); };
   const advancedClass = 'border-t border-border';
-  const summaryClass = 'flex min-h-11 cursor-pointer items-center font-semibold';
+  const summaryClass = 'flex min-h-9 pointer-coarse:min-h-11 cursor-pointer items-center font-semibold';
   return <div className="flex flex-col gap-5">
     <SettingsPageHeader eyebrow={t('eyebrow')} title={t('title')} description={t('description')} status={<p className="m-0 text-sm text-muted-foreground" role="status">{save.isPending ? t('saving') : dirty ? t('unsaved') : save.isSuccess ? t('saved') : ''}</p>} />
     <form className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); save.mutate(saved); }}>
-      <SettingsSection title={t('providersSection')}>
-        <p className="text-muted-foreground m-0 text-sm">{t('providersHelp')}</p>
+      <SettingsSection title={t('providersSection')} description={t('providersHelp')}>
         <ProviderEditor providers={saved.providers} savedIds={savedIds} secrets={secrets} disabled={save.isPending} discoveringId={discoveringId} discoverError={discoverError} discovered={discovered} t={t as never}
           onChange={(providers) => set({ providers })} onSecret={(id, secret) => setSecrets({ ...secrets, [id]: secret })} onDiscover={(provider) => discover.mutate(provider)} />
       </SettingsSection>
-      <SettingsSection title={t('modelsSection')}>
-        <p className="text-muted-foreground m-0 text-sm">{t('modelsHelp')}</p>
+      <SettingsSection title={t('modelsSection')} description={t('modelsHelp')}>
         <ModelsPanel providers={saved.providers} discovered={discovered} modelTests={shownTests} checkedAt={checkedAt} details={testDetails} disabled={save.isPending} onChange={changeModels} onTestModel={(provider, model) => testModel.mutate({ provider, model })} t={t as never} />
         <ModelDefaults providers={saved.providers} defaults={defaults} disabled={save.isPending} embeddingStatus={embeddingStatus} onPick={pickDefault} onEffort={pickEffort} t={t as never} />
         {embeddingDimsChanged && <p className="error m-0 text-sm" role="status">{t('dimensionsChangedWarning')}</p>}
@@ -333,6 +333,7 @@ function CapabilityChip({ status, label, t }: { status: string | null; label: st
 
 /** Localized failure text plus the HTTP status and server detail when the API supplied them. */
 function describeError(error: unknown, t: (key: never) => string, fallback: string): string {
+  /** Resolves a user-facing message for an API error, falling back to the given key. */
   const base = (t as (key: string) => string)(apiFailureKey(error) ?? fallback);
   if (!(error instanceof ApiError)) return base;
   const detail = error.message && error.message !== String(error.status) ? `: ${error.message}` : '';

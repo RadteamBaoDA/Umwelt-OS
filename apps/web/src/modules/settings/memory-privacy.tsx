@@ -1,6 +1,6 @@
 'use client';
 
-import { SettingsPageHeader } from './settings-layout';
+import { SettingsActions, SettingsPageHeader } from './settings-layout';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'next-intl';
@@ -65,7 +65,7 @@ export function MemoryPrivacySettings() {
   if (query.isPending) {
     return (
       <section
-        className="rounded-xl border bg-card p-6 skeleton h-48 rounded-lg"
+        className="rounded-lg border bg-card p-6 skeleton h-48 rounded-lg"
         aria-label={ts('loadingMemoryPrivacy')}
       />
     );
@@ -74,7 +74,7 @@ export function MemoryPrivacySettings() {
   if (query.isError) {
     return (
       <section className="space-y-4">
-        <h1 className="text-xl font-bold">{t('title')}</h1>
+        <h1 className="text-xl font-semibold">{t('title')}</h1>
         <p className="text-destructive text-sm" role="alert">
           {query.error instanceof ApiError ? query.error.message : t('saveFailed')}
         </p>
@@ -207,19 +207,19 @@ export function MemoryPrivacySettings() {
           </p>
         )}
 
-        <div className="flex items-center gap-3">
+        <SettingsActions>
+          {saveMutation.isSuccess && !isDirty && (
+            <span className="text-xs text-muted-foreground" role="status">
+              {t('saved')}
+            </span>
+          )}
           <Button
             type="submit"
             disabled={saveMutation.isPending || !isDirty}
           >
             {saveMutation.isPending ? t('saving') : t('saveButton')}
           </Button>
-          {saveMutation.isSuccess && !isDirty && (
-            <span className="text-xs text-muted-foreground" role="status">
-              {t('saved')}
-            </span>
-          )}
-        </div>
+        </SettingsActions>
       </form>
 
       {/* Durable Purge Options */}
@@ -227,7 +227,7 @@ export function MemoryPrivacySettings() {
         <div>
           <h2 className="text-lg font-semibold">{t('purgeTitle')}</h2>
           <p className="text-xs text-muted-foreground">
-            Durable deletion operations permanently erase records from the system.
+            {t('purgeHelp')}
           </p>
         </div>
 

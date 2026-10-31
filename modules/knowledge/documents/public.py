@@ -51,6 +51,7 @@ from core.workspaces.schemas import (
     Scope,
     WorkspaceContext,
 )
+from modules.connectors.provider_specs import FREE_PROVIDER_SPECS
 from modules.knowledge.documents.models import (
     Document,
     DocumentChunk,
@@ -3889,13 +3890,16 @@ def _decode_document_owner_cursor(
 
 async def list_documents(
     session: AsyncSession, limit: int, cursor: str | None, source_id: UUID | None, *,
-    scope: Scope, multi_workspace_enabled: bool,
+    scope: Scope, multi_workspace_enabled: bool, exclude_measurements: bool = False,
 ) -> tuple[list[Document], str | None]:
     """Page <=100 retained owner roots, constraining workspace/Source before limit and cursor.
 
     Preserve created-time/UUID descending keyset semantics; optional foreign Source yields
     an empty page. Members cannot enumerate IDs/counts. Data-purged Sources are excluded,
     while paused/connector-only archived metadata remains readable. No locks or commit.
+    ``exclude_measurements`` hides records from Sources whose provider spec has
+    ``data_kind == "measurement"`` (ISS position, prices, weather): they are observations, not
+    documents. It only narrows the scoped set, so cursors and paging semantics are unchanged.
     """
     if not isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext)):
         raise TypeError("Document list requires a workspace owner")
@@ -3906,6 +3910,10 @@ async def list_documents(
     statement = select(Document).where(*_document_scope(scope, allow_member=True))
     if source_id is not None:
         statement = statement.where(Document.source_id == source_id)
+    if exclude_measurements:
+        measurement_providers = [spec.id for spec in FREE_PROVIDER_SPECS if spec.data_kind == "measurement"]
+        statement = statement.where(Document.source_id.not_in(
+            select(Source.id).where(Source.provider.in_(measurement_providers))))
     statement = statement.order_by(desc(Document.created_at), desc(Document.id))
     if cursor is not None:
         timestamp, identifier = decode_cursor(_decode_document_owner_cursor(

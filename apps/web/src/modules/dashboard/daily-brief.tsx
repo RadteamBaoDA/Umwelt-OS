@@ -23,7 +23,7 @@ function WidgetSummary({ widget }: { widget: DailyWidgetData }) {
   const display = useDisplayPreferences();
   const titles = widget.items.slice(0, 5).map((item) => String(item.title));
   return (
-    <section aria-label={t(widget.title_key)} className="rounded-lg border border-border p-2.5 text-xs">
+    <section aria-label={t(widget.title_key)} className="py-2.5 text-xs">
       <header className="flex items-center justify-between gap-2">
         <h4 className="font-semibold">{t(widget.title_key)}</h4>
         <span className="text-muted-foreground">{t('itemCount', { count: widget.items.length })}</span>
@@ -115,7 +115,7 @@ export function DailyBrief() {
           <section aria-labelledby="current-records-heading" className="space-y-2">
             <h3 id="current-records-heading" className="text-sm font-semibold">{t('currentRecords')}</h3>
             <p className="text-xs text-muted-foreground">{t('currentRecordsNote', { time: formatDateTime(context.data.widgets_updated_at, display.locale, display.timezone) })}</p>
-            <div className="grid gap-2 sm:grid-cols-2">
+            <div className="divide-y divide-border">
               {context.data.widgets.map((widget) => <WidgetSummary key={widget.id} widget={widget} />)}
             </div>
           </section>

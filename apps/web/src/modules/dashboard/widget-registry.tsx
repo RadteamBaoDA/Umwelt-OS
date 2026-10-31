@@ -145,6 +145,57 @@ export function projectReadableMobilePlacements(
   return placements.map((placement) => byPlacementId.get(placement.instance_id)!);
 }
 
+/** Tablet reading grid: 8 square tracks form two 4-track columns. */
+export const TABLET_GRID_COLUMNS = 8;
+/** Desktop width (of 20 columns) from which a gadget spans both tablet columns. */
+export const TABLET_FULL_WIDTH_FROM = 12;
+
+/**
+ * Builds a read-only two-column tablet flow from the desktop layout (never persisted).
+ * Gadgets keep desktop reading order (y, then x, then id); each spans one tablet column, or both
+ * when its desktop width is at least TABLET_FULL_WIDTH_FROM. Heights keep the desktop pixel height
+ * converted to tablet units, then the shared readable-floor pass (the mobile projection) raises
+ * them to each renderer's reading floor and resolves collisions.
+ *
+ * @param placements Complete desktop placements (20-column units).
+ * @param instances Dashboard instances owning those placements.
+ * @param desktopCellSize Desktop unit size in px at the current width.
+ * @param tabletCellSize Tablet unit size in px at the current width.
+ * @param frameHeaderHeight Measured gadget frame header height in px.
+ * @returns Tablet placements in input order, or null when geometry is invalid or unmeasured.
+ */
+export function projectTabletPlacements(
+  placements: DashboardPlacement[],
+  instances: GadgetInstance[],
+  desktopCellSize: number,
+  tabletCellSize: number,
+  frameHeaderHeight: number,
+): DashboardPlacement[] | null {
+  if (!(desktopCellSize > 0) || !(tabletCellSize > 0)) return null;
+  const half = TABLET_GRID_COLUMNS / 2;
+  const ordered = [...placements].sort((a, b) =>
+    a.y - b.y || a.x - b.x || a.instance_id.localeCompare(b.instance_id));
+  const colHeights = [0, 0];
+  const flowed = ordered.map((source): DashboardPlacement => {
+    const px = source.h * (desktopCellSize + 12) - 12;
+    const h = Math.max(2, Math.ceil((px + 12) / (tabletCellSize + 12)));
+    if (source.w >= TABLET_FULL_WIDTH_FROM) {
+      const y = Math.max(colHeights[0], colHeights[1]);
+      colHeights[0] = colHeights[1] = y + h;
+      return { ...source, x: 0, y, w: TABLET_GRID_COLUMNS, h };
+    }
+    const col = colHeights[1] < colHeights[0] ? 1 : 0;
+    const y = colHeights[col];
+    colHeights[col] += h;
+    return { ...source, x: col * half, y, w: half, h };
+  });
+  const projected = projectReadableMobilePlacements(
+    flowed, instances, TABLET_GRID_COLUMNS, tabletCellSize, frameHeaderHeight);
+  if (!projected) return null;
+  const byId = new Map(projected.map((p) => [p.instance_id, p]));
+  return placements.map((p) => byId.get(p.instance_id)!);
+}
+
 /**
  * Resolves the React component responsible for rendering a given gadget renderer ID.
  *

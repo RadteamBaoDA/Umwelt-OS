@@ -44,7 +44,7 @@ export function EventDetail({ event, locale, timezone, entityNames }: {
     if (event.end_date) occurred += ` – ${formatCalendarDate(event.end_date)}`;
   }
 
-  return <article className="rounded-xl border bg-card p-4 text-card-foreground flex flex-col gap-3" aria-labelledby={`event-${event.id}-title`}>
+  return <article className="rounded-lg border bg-card p-4 text-card-foreground flex flex-col gap-3" aria-labelledby={`event-${event.id}-title`}>
     <div><p className="text-muted-foreground">{event.type}{event.subtype ? ` · ${event.subtype}` : ''} · {event.origin === 'derived' ? t('derived') : t('manual')}</p>
       <h2 id={`event-${event.id}-title`}>{event.title}</h2>{event.summary && <p>{event.summary}</p>}</div>
     <dl className="timeline-times">

@@ -10,6 +10,7 @@ import { listWorldObservationWindow } from '@/modules/observations/api';
 import { CHART_FALLBACK_LOOKBACK_DAYS, useEffectiveLookback } from './use-effective-lookback';
 import { MetricsChart, type MetricsChartProps } from './metrics-chart';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
+import { formatProviderName } from './metric-label';
 
 /** Props for the FinanceChart gadget component. */
 export interface FinanceChartProps extends Omit<MetricsChartProps, 'instance'> {
@@ -72,7 +73,7 @@ export function FinanceChart(props: FinanceChartProps) {
   // A symbol-keyed provider (same rule as backend readiness `scope_required`) with no configured symbol never draws
   // whichever single series happens to exist: the owner must choose one, so the result does not depend on how many exist.
   const symbolRequired = !symbol && observations.isSuccess && rows.length > 0 && rows.every((item) => item.provider && catalog.data?.[item.provider]?.symbol_keyed === true);
-  if (!sourceId || unseeded || symbolRequired || (observations.isSuccess && mixedSeries)) return <GadgetNotice kind="setup" message={t('financeSourceSymbolRequired')} />;
+  if (!sourceId || unseeded || symbolRequired || (observations.isSuccess && mixedSeries)) return <GadgetNotice kind="setup" message={t('financeSourceSymbolRequired')} action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }} />;
   // A legacy chart (no metrics, symbol set) plots `close`; no rows there is plain no-data, not an unchosen series.
   if (!definition.scope?.metrics?.length && observations.isSuccess && rows.length === 0) return <GadgetNotice kind="empty" message={t('observationEmpty')} />;
   if (observations.isPending || catalog.isPending) return <GadgetSkeleton variant="chart" label={t('observationLoading')} />;
@@ -80,6 +81,6 @@ export function FinanceChart(props: FinanceChartProps) {
   if (!comparable) return <GadgetNotice kind="empty" message={t('observationMixedUnits')} />;
   return <>
     {observations.data?.truncated && <p role="status" className="px-3 pt-2 text-xs text-muted-foreground">{t('observationTruncated')}</p>}
-    <MetricsChart {...props} initialData={points} currency={selected?.currency ?? undefined} unit={selected?.currency ? undefined : selected?.unit} providerDelay={selected ? `${selected.provider_delay_seconds == null ? t('observationProviderDelayUnknown') : `${selected.provider_delay_seconds}s`} · ${t('observationCollectedAt')} ${formatDateTime(selected.collected_at, display.locale, selected.timezone ?? display.timezone)} · ${selected.timezone ?? 'UTC'}${selected.provider ? ` · ${selected.provider}` : ''}` : undefined} />
+    <MetricsChart {...props} initialData={points} currency={selected?.currency ?? undefined} unit={selected?.currency ? undefined : selected?.unit} providerDelay={selected ? `${selected.provider_delay_seconds == null ? '' : `${selected.provider_delay_seconds}s · `}${t('observationCollectedAt')} ${formatDateTime(selected.collected_at, display.locale, selected.timezone ?? display.timezone)}${selected.provider ? ` · ${formatProviderName(selected.provider)}` : ''}` : undefined} />
   </>;
 }

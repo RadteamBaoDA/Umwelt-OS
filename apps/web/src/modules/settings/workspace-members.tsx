@@ -89,7 +89,7 @@ export function WorkspaceMembers() {
     onSettled: refresh,
   });
 
-  if (!selection) return <section className="rounded-xl border bg-card p-6 skeleton" aria-label={t('loading')} />;
+  if (!selection) return <section className="rounded-lg border bg-card p-6 skeleton" aria-label={t('loading')} />;
   if (!isOwner) return <SettingsPageHeader eyebrow={tShell('settings')} title={t('title')} description={t('ownerOnly')} />;
 
   const error = create.error ?? revoke.error ?? remove.error;
@@ -134,7 +134,7 @@ export function WorkspaceMembers() {
       </div>
     </form></SettingsSection>
 
-    {link && <div className="grid gap-2 rounded-xl border border-border bg-secondary p-4" role="status">
+    {link && <div className="grid gap-2 rounded-lg border border-border bg-secondary p-4" role="status">
       <h3 className="text-sm font-semibold">{t('linkHeading')}</h3>
       <p className="text-muted-foreground text-xs">{t('linkHelp')}</p>
       <div className="flex flex-wrap gap-2">
@@ -152,7 +152,7 @@ export function WorkspaceMembers() {
         : invitationRows.length === 0 ? <p className="text-muted-foreground">{t('noInvitations')}</p>
           : <ul className="grid gap-2">{invitationRows.map((row) => {
             const status = invitationStatus(row);
-            return <li key={row.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-border px-4 py-3">
+            return <li key={row.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-border px-4 py-3">
               <span className="min-w-0 flex-1 break-all text-sm font-medium">{row.email}</span>
               <span className="text-muted-foreground text-xs">{statusLabel[status]}{status === 'pending' ? ` · ${t('expiresOn', { date: format.dateTime(new Date(row.expires_at), { dateStyle: 'medium' }) })}` : ''}</span>
               {status === 'pending' && <Button type="button" variant="outline" size="sm" onClick={() => setPending({ kind: 'revoke', id: row.id })}>{t('revoke')}</Button>}
@@ -164,8 +164,8 @@ export function WorkspaceMembers() {
     <SettingsSection title={t('membersHeading')}>
       {members.isError ? listError(() => void members.refetch()) : members.isPending ? <p className="text-muted-foreground">{t('loading')}</p>
         : memberRows.length === 0 ? <p className="text-muted-foreground">{t('noMembers')}</p>
-          : <ul className="grid gap-2">{memberRows.map((row) => <li key={row.user_id} className="flex flex-wrap items-center gap-3 rounded-xl border border-border px-4 py-3">
-            <span className="min-w-0 flex-1 break-all text-sm font-medium">{row.email ?? t('unknownEmail')}</span>
+          : <ul className="grid gap-2">{memberRows.map((row) => <li key={row.user_id} className="flex flex-wrap items-center gap-3 rounded-lg border border-border px-4 py-3">
+            <span className="min-w-0 flex-1 break-all text-sm font-medium">{row.email ?? (row.role === 'owner' ? t('localOwner') : t('unknownEmail'))}</span>
             <span className="text-muted-foreground text-xs">{row.role === 'owner' ? t('roleOwner') : t('roleMember')}</span>
             {row.role === 'member' && <Button type="button" variant="outline" size="sm" onClick={() => setPending({ kind: 'remove', id: row.user_id })}>{t('remove')}</Button>}
           </li>)}</ul>}

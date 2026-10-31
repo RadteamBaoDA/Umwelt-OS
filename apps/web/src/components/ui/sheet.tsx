@@ -123,7 +123,7 @@ function SheetContent({
       <DialogPrimitive.Content
         data-slot="sheet-content"
         className={cn(
-          "fixed z-50 flex flex-col bg-background shadow-2xl transition-transform duration-300 ease-in-out outline-none",
+          "fixed z-50 flex flex-col bg-background shadow-[var(--shadow-popover)] transition-transform duration-300 ease-in-out outline-none",
           sideClasses[side],
           side === "right" && "w-full sm:max-w-xl md:max-w-2xl lg:max-w-3xl xl:max-w-4xl",
           className

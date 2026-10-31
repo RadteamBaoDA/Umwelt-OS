@@ -9,7 +9,7 @@ import { forwardRef, type ButtonHTMLAttributes } from 'react';
  * and every size is 36px on fine pointers and 44px on coarse pointers (`pointer-coarse:`).
  */
 export const buttonVariants = cva(
-  'button inline-flex min-h-9 pointer-coarse:min-h-11 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md border-0 text-sm font-medium transition-colors disabled:cursor-progress disabled:opacity-[0.65] aria-disabled:cursor-not-allowed aria-disabled:opacity-[0.65] [&_svg]:shrink-0',
+  'button inline-flex min-h-9 pointer-coarse:min-h-11 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md border-0 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 aria-busy:cursor-progress aria-disabled:cursor-not-allowed aria-disabled:opacity-[0.65] [&_svg]:shrink-0',
   {
     variants: {
       variant: {
@@ -18,7 +18,7 @@ export const buttonVariants = cva(
         outline: 'border border-input bg-transparent text-foreground hover:bg-secondary hover:text-secondary-foreground',
         secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
         ghost: 'bg-transparent text-foreground hover:bg-secondary hover:text-secondary-foreground',
-        link: 'bg-transparent text-primary underline-offset-4 hover:underline',
+        link: 'bg-transparent text-primary underline underline-offset-4',
       },
       size: {
         default: 'px-4 py-2',

@@ -45,6 +45,7 @@ export function ShareDialog({ resourceType, resourceId, resourceRevision, semant
   const enabled = isOwner && Boolean(workspaceId);
   const members = useQuery({ queryKey: shareKeys.members(workspaceId), queryFn: () => listWorkspaceMembers(workspaceId), enabled });
   const shares = useQuery({ queryKey: shareKeys.list(workspaceId, resourceType, resourceId), queryFn: () => listShares(workspaceId, resourceType, resourceId), enabled });
+  /** Refetches sharing state after a mutation. */
   const refresh = () => Promise.all([
     client.invalidateQueries({ queryKey: shareKeys.members(workspaceId) }),
     client.invalidateQueries({ queryKey: shareKeys.list(workspaceId, resourceType, resourceId) }),

@@ -77,7 +77,7 @@ export function TemplateCard({
   return (
     <Card
       data-testid={`template-card-${template.id}`}
-      className="flex flex-col justify-between gap-3 border-border bg-surface py-4 text-foreground shadow-sm transition-colors hover:border-primary/50"
+      className="flex flex-col justify-between gap-3 border-border bg-surface py-4 text-foreground transition-colors hover:border-primary/50"
     >
       <CardHeader className="gap-2 px-4 pb-0">
         <div className="flex items-center justify-between gap-2">

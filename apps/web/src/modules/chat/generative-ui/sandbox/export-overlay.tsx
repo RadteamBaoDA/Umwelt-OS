@@ -137,7 +137,7 @@ export function ExportOverlay({
     <div className="group relative w-full" data-testid="generative-ui-export-overlay">
       {exportable && (
         <div
-          className=" absolute top-2 right-2 z-10 flex items-center gap-1.5 rounded-md border border-border bg-surface/95 p-1 opacity-90 shadow-sm backdrop-blur-xs transition-opacity group-hover:opacity-100 focus-within:opacity-100"
+          className=" absolute top-2 right-2 z-10 flex items-center gap-1.5 rounded-md border border-border bg-surface/95 p-1 opacity-90 backdrop-blur-xs transition-opacity group-hover:opacity-100 focus-within:opacity-100"
           data-testid="generative-ui-toolbar"
         >
           <Button

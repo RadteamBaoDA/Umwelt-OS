@@ -353,7 +353,7 @@ export function TableCatalog({
   return (
     <Card
       data-testid="generative-table-catalog"
-      className="my-2 w-full max-w-3xl border-border bg-surface text-foreground shadow-sm"
+      className="my-2 w-full max-w-3xl border-border bg-surface text-foreground"
     >
       <CardHeader className="gap-3 border-b border-border pb-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -372,7 +372,7 @@ export function TableCatalog({
           </div>
           <div className="flex items-center gap-1.5">
             {isSample && <SampleDataBadge locale={resolvedLocale} />}
-            <Badge variant="outline" className="font-mono text-xs">
+            <Badge variant="outline" className="tabular-nums text-xs">
             {copy.rowCountLabel(filteredAndSortedRows.length, resolvedRows.length)}
             </Badge>
           </div>
@@ -481,7 +481,7 @@ export function TableCatalog({
                                 col.format === 'currency' ||
                                 col.format === 'number' ||
                                 col.format === 'percent'
-                                  ? 'font-mono'
+                                  ? 'tabular-nums'
                                   : undefined
                               }
                             >

@@ -106,6 +106,56 @@ Proof: vitest for the touched gadgets, `tsc`, eslint, and one e2e capture compar
 - Finance chart: y-domain, compact ticks and flat fill are unverified on real data (the diag runs had no sources).
 - Flat map: verified (right way up, no antimeridian streaks).
 
+## Design-system unification and slop audit (2026-10-31)
+
+Four review rounds (Opus, read-only) against six criteria: ledger consistency, no slop tells, layout/responsive, actionable states, gadgets/maps/charts, clean console. Each round was fixed and re-captured (`after7` → `after10`).
+
+- **Closing verification (2026-10-31, rounds 8–11):** the round-7 backlog and every P2 found in rounds 8–10 are fixed.
+  - The full capture `after16` (e2e 128/0) passed review round 10 with no P0 or P1. That round raised 7 more P2s.
+  - Those 7 P2s were fixed and checked against `after17`, a screens-only capture (21/0, round 11). One leftover from that check, the 768 px Models field overlap, was fixed and checked against `after18` (11/0).
+  - The console is clean in every capture.
+  - Known residual: the CVE severity badge is covered by a render test. The live captures carried no severity word, so it has not been seen on screen.
+- **Final verdict (after13, round 7, 2026-10-31):** no P0 or P1 left and all six criteria pass on a capture of the current code. e2e: 128 passed, 0 failed. Console is clean. Rounds 5–7 also fixed:
+  - the old "BBD-OS Assistant" prompt
+  - raw values in Global settings
+  - the chart's false "UTC" label
+  - a literal backspace in the severity regex
+  - the 2-column tablet dashboard
+  - the settings select below 1024 px
+  - the removed chat banner
+  - always-underlined link buttons
+- **Round-7 P2 backlog:**
+  - the timeline status line duplicates the empty state
+  - disabled checkboxes have no visual cue
+  - chart hour format and the under-1h range note
+  - the globe in an empty map card
+  - jargon on secondary screens (Memory page, MCP, Prompts, System export, Onboarding)
+  - the source wizard subtitle repeats step 1
+  - the 390 chat header "←" character
+  - the Personal data permissions stub tab
+  - "Last indexed: Not recorded" noise
+  - collapsible filters on mobile Search/Timeline
+- **Earlier verdict (after10):** no P0 or P1 left, all six criteria pass. Console is clean.
+- **after10 e2e:** 114 passed, 6 skipped, 3 failed. All three failures were remote: arXiv, and a transient example.com rejection that blocked the `web` source and its table gadget.
+- **Fixed across the rounds:**
+  - Global CSS: border reset, ink links, flat skeletons, underline tabs, no resting shadows, radii 8/6/4 (12 for dialogs), 36/44 px controls, nothing under 11 px.
+  - Docs: rewritten `tokens.json`, the design-system README and `DESIGN_SYSTEM.md`.
+  - GenUI tokens aligned with the app.
+  - News excerpts cleaned in the backend and frontend; measurement records no longer become stories.
+  - Developer copy, raw enums and IANA zone ids replaced with plain language.
+  - Contradictory status copy removed.
+  - Top bar at 768 px; chart ticks; flat-map fit; weather order; Quick chat matches the Chat page; 390 px tabs scroll or become selects.
+- **P2 backlog (deferred):**
+  - A tablet (2-column) dashboard layout mode at 768 px.
+  - News page refresh in the title row.
+  - Measurement records listed in Documents (backend data model).
+  - Highlights empty copy reuses the watchlist text.
+  - Search "Load more sources" placement.
+  - Web-search settings shows the env var name.
+  - Onboarding step 1 shows an enabled "Previous step".
+  - The 390 px freshness strip is cramped.
+  - Error codes are humanized in English only.
+
 ## Order and status
 
 | Step | Status |

@@ -46,8 +46,9 @@ export function GoalsGadget({ instance, proposal }: GoalsGadgetProps) {
   return <section className="flex h-full min-h-0 flex-col gap-3 overflow-auto p-3">
     {definition.source_ids.length > 0 && <p role="status" className="rounded border border-border p-2 text-xs text-muted-foreground">{t('goalSourceFilterUnavailable', { count: definition.source_ids.length })}</p>}
     {selected ? !isAdminViewer && proposal && selected.id === proposal.goalId ? <ProposalReview goal={selected} proposal={proposal.proposal} csrfToken={token} onClose={() => setSelected(null)} /> : <GoalDetail goal={selected} csrfToken={token} onClose={() => setSelected(null)} onEditLinkedTask={setLinkedTaskId} /> : creating && !isAdminViewer ? <GoalForm csrfToken={token} onSuccess={() => setCreating(false)} onCancel={() => setCreating(false)} /> : <>
-      <header className="flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">{instance.title || t('goalsTitle')}</h2>{!isAdminViewer && <Button type="button" size="sm" onClick={() => setCreating(true)}>{t('newGoal')}</Button>}</header>
-      <GoalList ids={ids.length ? ids : undefined} filters={filters} limit={filters.limit ?? 50} cacheScope={scopeKey} onSelectGoal={setSelected} />
+      {/* The gadget frame already shows the title; only the create action remains. */}
+      <header className="flex items-center justify-end gap-2">{!isAdminViewer && <Button type="button" size="sm" onClick={() => setCreating(true)}>{t('newGoal')}</Button>}</header>
+      <GoalList hideTitle ids={ids.length ? ids : undefined} filters={filters} limit={filters.limit ?? 50} cacheScope={scopeKey} onSelectGoal={setSelected} />
       {proposal && <p className="text-xs text-muted-foreground">{t('proposalAvailable')}</p>}
     </>}
   </section>;

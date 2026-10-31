@@ -83,8 +83,8 @@ export const sourceGuideSteps = {
     },
     open_meteo: {
       s1: 'Look up the latitude and longitude of the place you want (any map site shows them).',
-      s2: 'Enter them in Latitude and Longitude, plus an IANA time zone such as Asia/Ho_Chi_Minh.',
-      s3: 'List the hourly metrics you want, separated by commas (for example temperature_2m).',
+      s2: 'Enter them in Latitude and Longitude, plus your local time zone.',
+      s3: 'List the hourly metrics you want, separated by commas (for example temperature or humidity).',
       s4: 'Open-Meteo is free for non-commercial use and needs no key. Press Test connection, then activate.',
     },
     google_news: {
@@ -222,8 +222,8 @@ export const sourceGuideSteps = {
     },
     open_meteo: {
       s1: 'Tra vĩ độ và kinh độ của nơi bạn muốn (trang bản đồ nào cũng hiển thị).',
-      s2: 'Nhập vào Vĩ độ và Kinh độ, cùng múi giờ IANA như Asia/Ho_Chi_Minh.',
-      s3: 'Liệt kê các chỉ số theo giờ cần lấy, cách nhau bằng dấu phẩy (ví dụ temperature_2m).',
+      s2: 'Nhập vào Vĩ độ và Kinh độ, cùng múi giờ địa phương của bạn.',
+      s3: 'Liệt kê các chỉ số theo giờ cần lấy, cách nhau bằng dấu phẩy (ví dụ nhiệt độ hoặc độ ẩm).',
       s4: 'Open-Meteo miễn phí cho mục đích phi thương mại và không cần khóa. Nhấn Kiểm tra kết nối, rồi kích hoạt.',
     },
     google_news: {

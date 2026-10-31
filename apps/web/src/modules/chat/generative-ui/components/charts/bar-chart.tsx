@@ -245,7 +245,7 @@ export function GenerativeBarChart({
     <ExportOverlay title={title} html={exportHtml} ready={normalizedData.length > 0}>
     <Card
       data-testid="generative-bar-chart"
-      className="my-2 w-full max-w-2xl border-border bg-surface text-foreground shadow-sm"
+      className="my-2 w-full max-w-2xl border-border bg-surface text-foreground"
     >
       <CardHeader className="gap-1.5 border-b border-border pb-4">
         <div className="flex items-center justify-between gap-2">
@@ -265,7 +265,7 @@ export function GenerativeBarChart({
           <div className="flex items-center gap-1.5">
             {isSample && <SampleDataBadge locale={resolvedLocale} />}
             {(currency || unit) && (
-              <Badge variant="outline" className="font-mono text-xs">
+              <Badge variant="outline" className="tabular-nums text-xs">
                 {currency ?? unit}
               </Badge>
             )}
@@ -495,7 +495,7 @@ export function GenerativeBarChart({
                       aria-hidden="true"
                     />
                     <span className="text-muted-foreground">{String(row.timestamp)}:</span>
-                    <span className="font-mono font-semibold text-foreground">
+                    <span className="tabular-nums font-semibold text-foreground">
                       {formatChartValue(rawVal, {
                         currency: primarySeries.currency ?? currency,
                         unit: primarySeries.unit ?? unit,

@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { AlertTriangleIcon } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { useEffect, useState, type FormEvent } from 'react';
@@ -125,11 +126,13 @@ export function InviteAccept() {
   const invalid = needsPassword && (tooShort || mismatch);
   const probing = state.present && session.isPending;
 
+  /** Validates the form and submits the invite acceptance; ignores repeat submits while pending. */
   function submit(event: FormEvent) {
     event.preventDefault();
     setTouched(true);
     if (!invalid) accept.mutate();
   }
+  /** Discards the invite token and local form state, then returns to login. */
   function cancel() { clearInviteToken(); setPassword(''); setConfirm(''); router.replace('/login'); }
 
   const errorKey: FailureKey | null = accept.error ? failureKey(accept.error, signedIn) : google.error ? 'inviteGoogleFailed' : null;
@@ -139,10 +142,13 @@ export function InviteAccept() {
     <main id="main-content" className="flex flex-1 items-center justify-center px-4 py-10 sm:py-12">
       <section aria-labelledby="invite-title" className="auth-panel flex flex-col gap-6">
         <div className="grid gap-1">
-          <h1 id="invite-title" className="text-3xl font-bold leading-tight tracking-tight">{t('inviteTitle')}</h1>
+          <h1 id="invite-title" className="text-2xl font-semibold leading-tight">{t('inviteTitle')}</h1>
           <p className="text-muted-foreground">{t('inviteIntro')}</p>
         </div>
-        {state.checked && !state.present && <p role="alert" className="rounded-xl border border-destructive px-4 py-3 text-sm text-destructive">{t('inviteMissing')}</p>}
+        {state.checked && !state.present && <>
+          <p role="alert" className="rounded-lg border border-destructive px-4 py-3 text-sm text-destructive">{t('inviteMissing')}</p>
+          <Link href="/login" className="text-sm font-medium underline underline-offset-4">{t('inviteGoToLogin')}</Link>
+        </>}
         {state.present && !probing && <form className="grid gap-4" onSubmit={submit} noValidate>
           {signedIn && <p role="status" className="text-muted-foreground text-sm">{t('inviteSignedIn')}</p>}
           {state.google && <p role="status" className="text-muted-foreground text-sm">{t('inviteGoogleReady')}</p>}
@@ -161,9 +167,10 @@ export function InviteAccept() {
               {touched && mismatch && <span className="error" role="alert">{t('invitePasswordMismatch')}</span>}
             </div>
           </>}
-          {errorKey && <div role="alert" className="flex items-start gap-3 rounded-xl border border-destructive px-4 py-3 text-sm text-destructive">
+          {errorKey && <div role="alert" className="flex items-start gap-3 rounded-lg border border-destructive px-4 py-3 text-sm text-destructive">
             <AlertTriangleIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0" /><span>{t(errorKey)}</span>
           </div>}
+          {errorKey === 'inviteUnavailable' && <Link href="/login" className="text-sm font-medium underline underline-offset-4">{t('inviteGoToLogin')}</Link>}
           <Button type="submit" className="w-full" disabled={accept.isPending}>{accept.isPending ? t('inviteAccepting') : t('inviteAccept')}</Button>
           {!signedIn && !state.google && googleStatus.data?.configured && <Button type="button" variant="outline" className="w-full" disabled={google.isPending} onClick={() => google.mutate()}>{t('inviteGoogle')}</Button>}
           <Button type="button" variant="ghost" className="w-full" onClick={cancel}>{t('inviteCancel')}</Button>

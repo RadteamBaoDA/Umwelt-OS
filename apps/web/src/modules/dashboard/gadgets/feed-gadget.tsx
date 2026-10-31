@@ -15,6 +15,7 @@ import { useLocale, useTranslations } from 'next-intl';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -119,10 +120,10 @@ export function FeedGadget(props: FeedGadgetProps) {
   return (
     <Tabs value={tab} onValueChange={(value) => setTab(value as 'items' | 'stories')} className="flex h-full min-h-0 flex-col">
       <TabsList aria-label={t('feedTabs')} className="h-auto justify-start gap-1 rounded-none bg-transparent p-0 px-3 pt-2">
-        <TabsTrigger value="items" className="min-h-11 rounded-none border-b-2 border-transparent text-xs text-muted-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
+        <TabsTrigger value="items" className="min-h-9 pointer-coarse:min-h-11 rounded-none border-b-2 border-transparent text-xs text-muted-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
           {t('feedTabItems')}
         </TabsTrigger>
-        <TabsTrigger value="stories" className="min-h-11 rounded-none border-b-2 border-transparent text-xs text-muted-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
+        <TabsTrigger value="stories" className="min-h-9 pointer-coarse:min-h-11 rounded-none border-b-2 border-transparent text-xs text-muted-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
           {t('feedTabStories')}
         </TabsTrigger>
       </TabsList>
@@ -145,6 +146,7 @@ const WINDOW_HOURS: Record<string, number> = { '24h': 24, '7d': 168, '30d': 720 
 // Keep in sync with FEED_LANGUAGES in modules/knowledge/documents/public.py.
 const FEED_LANGUAGES = ['en', 'vi', 'fr', 'de', 'es', 'pt', 'it', 'ru', 'ja', 'ko', 'zh', 'id', 'th'];
 
+/** Renders the scrollable feed item stream with selection and Ask AI affordances. */
 function FeedStream({
   instance,
   initialItems,
@@ -178,6 +180,7 @@ function FeedStream({
   const [timeWindow, setTimeWindowRaw] = useState('any');
   // Lower bound captured when the window is chosen, so every page and refetch shares it.
   const [windowSince, setWindowSince] = useState<string | undefined>();
+  /** Updates the feed time window filter. */
   const setTimeWindow = (value: string) => {
     const hours = WINDOW_HOURS[value];
     setWindowSince(hours ? windowStart(hours) : undefined);
@@ -238,6 +241,7 @@ function FeedStream({
       }
     },
   });
+  /** Hides or restores the given Telegram identities from the feed. */
   const setHidden = (items: SelectedTelegramIdentity[], hidden: boolean) => {
     setHiddenIds((current) => {
       const next = new Set(current);
@@ -306,6 +310,8 @@ function FeedStream({
   );
   const filtering = onlyUnread || sourceFilter !== 'all' || needle !== '';
   const serverFiltered = language !== 'any' || timeWindow !== 'any';
+  // Search/language/time controls are noise on a settled empty feed with nothing active to clear.
+  const showFilters = docsQuery.isLoading || feedItems.length > 0 || filtering || serverFiltered;
   React.useEffect(() => onUnreadCountChange?.(unreadCount), [onUnreadCountChange, unreadCount]);
 
   // Server pages can be short or fully hidden: while nothing is visible and a cursor exists, pull
@@ -328,13 +334,14 @@ function FeedStream({
             type="button"
             variant={onlyUnread ? 'default' : 'ghost'}
             size="sm"
+            className={onlyUnread ? undefined : '-ml-3'}
             aria-pressed={onlyUnread}
             onClick={() => setOnlyUnread((prev) => !prev)}
           >
             {t('unreadOnly')} ({feedItems.length})
           </Button>
           {unreadCount > 0 && (
-            <span className="px-2 rounded-full text-xs font-bold bg-primary/20 text-primary">
+            <span className="px-2 rounded-full text-xs font-semibold bg-primary/20 text-primary">
             {t('unreadCount', { count: unreadCount })}
             </span>
           )}
@@ -355,6 +362,7 @@ function FeedStream({
       </div>
 
       {/* Search and source filters apply to the loaded items only */}
+      {showFilters && (
       <div className="flex flex-wrap items-center gap-2">
         <Input
           type="search"
@@ -400,6 +408,7 @@ function FeedStream({
           </SelectContent>
         </Select>
       </div>
+      )}
       {filtering && <p className="text-xs text-muted-foreground">{t('feedFiltersNote')}</p>}
 
       {selectedTelegramItems.length > 0 && (
@@ -409,7 +418,6 @@ function FeedStream({
             type="button"
             size="sm"
             variant="outline"
-            className="min-h-11"
             onClick={() => openDrawer({ context: {
               kind: 'selection',
               items: selectedTelegramItems.map(({ sourceId, documentId, documentVersionId }) => ({
@@ -421,7 +429,6 @@ function FeedStream({
             type="button"
             size="sm"
             variant="outline"
-            className="min-h-11"
             disabled={interactionMutation.isPending}
             onClick={() => selectedTelegramItems.forEach((item) => interactionMutation.mutate({ id: item.documentId, versionNumber: item.versionNumber, read: true }))}
           >{t('feedMarkRead')}</Button>
@@ -429,7 +436,6 @@ function FeedStream({
             type="button"
             size="sm"
             variant="outline"
-            className="min-h-11"
             disabled={interactionMutation.isPending}
             onClick={() => selectedTelegramItems.forEach((item) => interactionMutation.mutate({ id: item.documentId, versionNumber: item.versionNumber, bookmarked: true }))}
           >{t('feedSave')}</Button>
@@ -437,10 +443,9 @@ function FeedStream({
             type="button"
             size="sm"
             variant="outline"
-            className="min-h-11"
             onClick={() => { setHidden(selectedTelegramItems, true); setSelectedTelegram({}); }}
           >{t('feedNotRelevant')}</Button>
-          <Button type="button" size="sm" variant="ghost" className="min-h-11" onClick={() => setSelectedTelegram({})}>{t('feedClear')}</Button>
+          <Button type="button" size="sm" variant="ghost" onClick={() => setSelectedTelegram({})}>{t('feedClear')}</Button>
         </div>
       )}
 
@@ -453,7 +458,6 @@ function FeedStream({
             type="button"
             size="sm"
             variant="ghost"
-            className="min-h-11"
             aria-disabled={interactionMutation.isPending || undefined}
             onClick={() => { if (!interactionMutation.isPending) setHidden(lastHidden, false); }}
           >{undoFailed ? t('feedUndoRetry') : t('feedUndo')}</Button>
@@ -468,11 +472,11 @@ function FeedStream({
 
       {/* Loading Skeleton */}
       {docsQuery.isLoading && feedItems.length === 0 && (
-        <GadgetSkeleton variant="list" label={t('gadgetDataLoading')} className="flex-1" />
+        <GadgetSkeleton variant="list" label={t('gadgetDataLoading')} className="flex-1 px-0" />
       )}
 
       {docsQuery.isError && !docsQuery.isFetchNextPageError && (
-        <GadgetNotice kind="error" message={t('feedLoadError')} />
+        <GadgetNotice kind="error" message={t('feedLoadError')} className="px-0" />
       )}
 
       {/* Empty State */}
@@ -483,7 +487,7 @@ function FeedStream({
             ? t('feedNoServerMatch')
             : onlyUnread
               ? t('feedCaughtUp')
-              : t('feedEmptyDetail')}`} />
+              : t('feedEmptyDetail')}`} action={needle || sourceFilter !== 'all' || serverFiltered || onlyUnread ? undefined : { href: '/settings/sources', label: t('gadgetConfigureAction') }} className="px-0" />
       )}
 
       {/* Stream Items List */}
@@ -503,7 +507,7 @@ function FeedStream({
                 className={`p-2.5 rounded-lg border transition-all space-y-1.5 ${
                   isRead
                     ? 'border-border/60 bg-card/60 opacity-80'
-                    : 'border-border bg-card hover:bg-muted/15 shadow-xs'
+                    : 'border-border bg-card hover:bg-muted/15'
                 }`}
               >
                 <div className="flex items-start justify-between gap-2">
@@ -521,7 +525,7 @@ function FeedStream({
                   </div>
 
                   {!isRead && (
-                    <span className="px-2 rounded text-xs font-bold bg-primary/20 text-primary uppercase tracking-wider shrink-0">
+                    <span className="px-2 rounded text-xs font-semibold bg-primary/20 text-primary shrink-0">
                       {t('unreadBadge')}
                     </span>
                   )}
@@ -535,12 +539,11 @@ function FeedStream({
 
                 {item.documentVersionId && item.sourceId && (
                   <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       aria-label={t('selectRecord', { title: item.title })}
                       checked={Boolean(selectedTelegram[item.id])}
-                      onChange={(event) => setSelectedTelegram((current) => {
-                        if (!event.target.checked) {
+                      onCheckedChange={(next) => setSelectedTelegram((current) => {
+                        if (next !== true) {
                           const next = { ...current };
                           delete next[item.id];
                           return next;
@@ -583,7 +586,7 @@ function FeedStream({
                       {item.collectedAt && <p>{t('telegramCollectedAt', { time: formatDateTime(item.collectedAt, display.locale, display.timezone) })}</p>}
                       {item.editedAt && <p>{t('telegramEditedAt', { time: formatDateTime(item.editedAt, display.locale, display.timezone) })}</p>}
                     </div>
-                  ) : <span className="font-mono">{formattedTime}</span>}
+                  ) : <span className="tabular-nums">{formattedTime}</span>}
 
                   <div className="flex items-center gap-2">
                     {isTelegram && item.documentVersionId && item.sourceId && (
@@ -651,7 +654,7 @@ function FeedStream({
           type="button"
           variant="outline"
           size="sm"
-          className="min-h-11 self-center"
+          className="self-center"
           disabled={docsQuery.isFetchingNextPage}
           onClick={() => docsQuery.fetchNextPage()}
         >{docsQuery.isFetchingNextPage ? t('feedLoadingMore') : t('feedLoadMore')}</Button>

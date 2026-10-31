@@ -53,7 +53,7 @@ export function TemplateChip({
   return (
     <div
       data-testid={template ? `template-chip-${template.id}` : 'template-chip'}
-      className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-1 py-0.5 text-xs text-foreground shadow-xs"
+      className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-1 py-0.5 text-xs text-foreground"
     >
       <Button
         type="button"
@@ -65,7 +65,7 @@ export function TemplateChip({
         <SparklesIcon className="size-3.5 text-primary" aria-hidden="true" />
         <span>{displayLabel}</span>
         {displayCategory && (
-          <Badge variant="secondary" className="ml-1 text-[10px]">
+          <Badge variant="secondary" className="ml-1 text-[11px]">
             {displayCategory}
           </Badge>
         )}

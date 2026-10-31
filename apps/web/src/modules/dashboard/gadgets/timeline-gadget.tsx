@@ -77,7 +77,7 @@ export function TimelineGadget({ instance, initialEvents }: TimelineGadgetProps)
     <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-y-auto overflow-x-hidden">
       {/* Header bar with total events and link to full timeline page */}
       <div className="flex items-center justify-between border-b border-border pb-2 text-xs">
-        <span className="text-muted-foreground font-mono">
+        <span className="text-muted-foreground tabular-nums">
           {events.length} chronological {events.length === 1 ? 'event' : 'events'}
         </span>
         <div className="flex items-center gap-1.5">
@@ -105,10 +105,10 @@ export function TimelineGadget({ instance, initialEvents }: TimelineGadgetProps)
 
       {/* Loading Skeleton */}
       {timelineQuery.isLoading && events.length === 0 && (
-        <div className="flex-1 space-y-3 p-2 animate-pulse">
-          <div className="h-4 bg-muted/30 rounded w-3/4" />
-          <div className="h-12 bg-muted/20 rounded" />
-          <div className="h-12 bg-muted/20 rounded" />
+        <div className="flex-1 space-y-3 p-2 motion-safe:animate-pulse">
+          <div className="h-4 bg-rule rounded w-3/4" />
+          <div className="h-12 bg-rule rounded" />
+          <div className="h-12 bg-rule rounded" />
         </div>
       )}
 
@@ -151,10 +151,10 @@ export function TimelineGadget({ instance, initialEvents }: TimelineGadgetProps)
 
                   <div className="space-y-1">
                     {/* Timestamp & origin badges */}
-                    <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground font-mono">
+                    <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground tabular-nums">
                       <span>{formattedDate}</span>
                       <div className="flex items-center gap-1">
-                        <span className="px-1 py-0.2 rounded bg-muted/30 text-foreground font-sans uppercase">
+                        <span className="px-1 py-0.2 rounded bg-muted/30 text-foreground font-sans">
                           {evt.type}
                         </span>
                         {evt.origin === 'derived' && (
@@ -187,7 +187,7 @@ export function TimelineGadget({ instance, initialEvents }: TimelineGadgetProps)
                           <Link
                             key={idx}
                             href={`/knowledge/entities/${p.entity_id}`}
-                            className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.2 rounded bg-muted/20 hover:bg-muted/40 text-muted-foreground transition-colors"
+                            className="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.2 rounded bg-muted/20 hover:bg-muted/40 text-muted-foreground transition-colors"
                           >
                             <LinkIcon className="w-2.5 h-2.5" />
                             <span>{p.role || 'Participant'}</span>

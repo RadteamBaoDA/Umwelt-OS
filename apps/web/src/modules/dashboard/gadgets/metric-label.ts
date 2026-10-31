@@ -25,3 +25,15 @@ export function formatReasonLabel(code: string, t: LabelTranslator): string {
   const key = `reason_${code}`;
   return t.has(key) ? t(key) : t('reason_unknown');
 }
+
+const PROVIDER_NAMES: Record<string, string> = {
+  binance: 'Binance', coingecko: 'CoinGecko', alpha_vantage: 'Alpha Vantage', frankfurter: 'Frankfurter', yahoo: 'Yahoo Finance',
+};
+
+/**
+ * Display name for a provider id: known providers use their brand spelling, anything else is humanized
+ * (`some_provider` -> "Some provider") so a raw id is never shown. Pure.
+ */
+export function formatProviderName(id: string): string {
+  return PROVIDER_NAMES[id] ?? sentenceCase(id);
+}

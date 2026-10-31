@@ -5,6 +5,8 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Source } from '@/modules/sources/api';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** Active-id sentinel for the single folded marker of sources older than 24 h. */
+const OVERDUE_ID = '__overdue__';
 const FRESH_FALLBACK_MS = 2 * 60 * 60 * 1000;
 
 /** Freshness class of one source tick. */
@@ -75,6 +77,24 @@ export function jitterPx(ticks: readonly FreshnessTick[], index: number): number
 }
 
 /**
+ * Splits ticks for rendering: ticks inside the 24 h window stay individual, every older or
+ * never-collected tick folds into one overdue marker so a row of identical clamped brackets
+ * does not pile up at the left edge.
+ *
+ * @param ticks All ticks in render order.
+ * @returns Individual in-window ticks, the folded overdue ticks, and per-status counts.
+ */
+export function groupFreshnessTicks(ticks: readonly FreshnessTick[]): {
+  inWindow: FreshnessTick[];
+  overdue: FreshnessTick[];
+  counts: Record<FreshnessStatus, number>;
+} {
+  const counts: Record<FreshnessStatus, number> = { fresh: 0, stale: 0, failing: 0 };
+  for (const tick of ticks) counts[tick.status] += 1;
+  return { inWindow: ticks.filter((tick) => !tick.clamped), overdue: ticks.filter((tick) => tick.clamped), counts };
+}
+
+/**
  * Formats a past instant as a localized relative phrase.
  *
  * @param ms Epoch milliseconds of the event.
@@ -110,26 +130,41 @@ export function FreshnessStrip({ sources, locale }: { sources: readonly TickSour
   }, []);
   const ticks = useMemo(() => sources.map((s) => computeFreshnessTick(s, now)), [sources, now]);
   if (ticks.length === 0) return null;
-  const count = (status: FreshnessStatus) => ticks.filter((tick) => tick.status === status).length;
+  const { inWindow, overdue, counts } = groupFreshnessTicks(ticks);
+  /** Returns how many sources are in the given freshness status. */
+  const count = (status: FreshnessStatus) => counts[status];
+  // The overdue marker takes the worst status among its members so a failing source is never hidden.
+  /** Formats the time since a source last succeeded, or the never-synced label. */
   const ago = (tick: FreshnessTick) => (tick.lastSuccessMs !== null ? formatAgo(tick.lastSuccessMs, locale) : t('staleSourceNever'));
-  const active = ticks.find((tick) => tick.id === activeId) ?? null;
-  const tooltip = active
+  const overdueActive = activeId === OVERDUE_ID;
+  const active = overdueActive ? null : ticks.find((tick) => tick.id === activeId) ?? null;
+  const activePosition = overdueActive ? 0 : active?.position ?? 0;
+  const tooltip = overdueActive
+    ? overdue.map((tick) => `${tick.name} · ${ago(tick)}`).join(' - ')
+    : active
     ? [
       t('freshnessTooltip', { name: active.name, time: ago(active) }),
       active.status === 'failing' ? t('staleSourceLine', { name: active.name, code: active.errorCode ?? '-' }) : null,
     ].filter(Boolean).join(' - ')
     : null;
+  const legend = (['fresh', 'stale', 'failing'] as const)
+    .filter((status) => count(status) > 0)
+    .map((status) => ({
+      status,
+      label: t(status === 'fresh' ? 'freshnessLegendFresh' : status === 'stale' ? 'freshnessLegendStale' : 'freshnessLegendFailing', { count: count(status) }),
+    }));
 
   return (
+    <div className="flex w-full flex-col items-stretch gap-1 text-xs text-muted-foreground min-[721px]:flex-row min-[721px]:items-start min-[721px]:gap-3">
     <div
       role="group"
       aria-label={t('freshnessSummary', { total: ticks.length, fresh: count('fresh'), stale: count('stale'), failing: count('failing') })}
       data-testid="freshness-strip"
-      className="relative h-9 w-full text-[11px] text-muted-foreground"
+      className="relative h-9 min-w-0 min-[721px]:flex-1"
     >
       {/* 1px baseline at y=16px; ticks sit above it and labels in their own row below so they never overlap. */}
       <div className="absolute inset-x-0 top-4 h-px" style={{ background: 'var(--control)' }} aria-hidden="true" />
-      {ticks.map((tick, index) => (
+      {inWindow.map((tick, index) => (
         <button
           key={tick.id}
           type="button"
@@ -139,29 +174,46 @@ export function FreshnessStrip({ sources, locale }: { sources: readonly TickSour
           onFocus={() => setActiveId(tick.id)}
           onBlur={() => setActiveId(null)}
           className="absolute top-0 flex h-4 w-4 -translate-x-1/2 items-end justify-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          style={{ left: `calc(0.5rem + (100% - 1rem) * ${tick.position / 100} + ${jitterPx(ticks, index)}px)` }}
+          style={{ left: `calc(0.5rem + (100% - 1rem) * ${tick.position / 100} + ${jitterPx(inWindow, index)}px)` }}
         >
-          <span
-            aria-hidden="true"
-            className="block"
-            style={tick.clamped
-              ? { width: 8, height: 12, borderRadius: 1, border: `1.5px solid ${STATUS_COLOR[tick.status]}`, background: 'transparent' }
-              : { width: 2, height: 12, borderRadius: 1, background: STATUS_COLOR[tick.status] }}
-          />
+          <span aria-hidden="true" className="block" style={{ width: 3, height: 12, borderRadius: 1, background: STATUS_COLOR[tick.status] }} />
         </button>
       ))}
       <span aria-hidden="true" className="absolute bottom-0 left-0">{t('freshnessAxisHours', { hours: 24 })}</span>
       <span aria-hidden="true" className="absolute bottom-0 left-1/2 hidden -translate-x-1/2 sm:block">{t('freshnessAxisHours', { hours: 12 })}</span>
       <span aria-hidden="true" className="absolute bottom-0 right-0">{t('freshnessAxisNow')}</span>
-      {active && tooltip && (
+      {(active || overdueActive) && tooltip && (
         <span
           role="tooltip"
-          className="pointer-events-none absolute top-7 z-20 max-w-xs -translate-x-1/2 rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-sm"
-          style={{ left: `clamp(8rem, calc(0.5rem + (100% - 1rem) * ${active.position / 100}), calc(100% - 8rem))` }}
+          className="pointer-events-none absolute top-7 z-20 max-w-xs -translate-x-1/2 rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground"
+          style={{ left: `clamp(8rem, calc(0.5rem + (100% - 1rem) * ${activePosition / 100}), calc(100% - 8rem))` }}
         >
           {tooltip}
         </span>
       )}
+    </div>
+    <p data-testid="freshness-legend" className="m-0 flex shrink-0 flex-wrap items-center justify-start gap-x-2.5 max-[720px]:order-first min-[721px]:justify-end gap-y-0.5 pt-0.5 text-xs tabular-nums">
+      {overdue.length > 0 && (
+        <button
+          type="button"
+          aria-label={`${t('freshnessOverdue', { count: overdue.length })}: ${overdue.map((tick) => tick.name).join(', ')}`}
+          onMouseEnter={() => setActiveId(OVERDUE_ID)}
+          onMouseLeave={() => setActiveId(null)}
+          onFocus={() => setActiveId(OVERDUE_ID)}
+          onBlur={() => setActiveId(null)}
+          className="inline-flex items-center gap-1 whitespace-nowrap rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <span aria-hidden="true" className="block" style={{ width: 8, height: 8, borderRadius: '50%', border: `1.5px solid ${STATUS_COLOR.stale}`, background: 'transparent' }} />
+          <span aria-hidden="true" className="text-xs tabular-nums leading-none text-muted-foreground">{t('freshnessOverdue', { count: overdue.length })}</span>
+        </button>
+      )}
+      {legend.map((entry) => (
+        <span key={entry.status} className="inline-flex items-center gap-1 whitespace-nowrap">
+          <span aria-hidden="true" className="block h-2 w-2 rounded-full" style={{ background: STATUS_COLOR[entry.status] }} />
+          {entry.label}
+        </span>
+      ))}
+    </p>
     </div>
   );
 }

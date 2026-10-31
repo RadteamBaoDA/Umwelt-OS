@@ -20,3 +20,17 @@ export function formatDateTime(value: string | Date, locale: AppLocaleId, timezo
     timeZone: timezone,
   }).format(value instanceof Date ? value : new Date(value));
 }
+
+/**
+ * Renders an IANA zone id as a short offset label (e.g. "GMT+7") for user-facing copy.
+ * Falls back to the raw zone id when the zone or locale is rejected by Intl.
+ */
+export function formatTimeZoneLabel(timezone: string, locale: AppLocaleId): string {
+  try {
+    const part = new Intl.DateTimeFormat(normalizeFormattingLocale(locale), { timeZone: timezone, timeZoneName: 'short' })
+      .formatToParts(new Date()).find((p) => p.type === 'timeZoneName');
+    return part?.value ?? timezone;
+  } catch {
+    return timezone;
+  }
+}

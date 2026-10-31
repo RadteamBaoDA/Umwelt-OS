@@ -93,7 +93,7 @@ export function EntityReviewCard({ item }: { item: ReviewItem }) {
   /** Renders the review candidate endpoint label from the supplied endpoint state. */
   const endpoint = (value: ReviewItem['source_endpoint']) => value && <span>{value.state === 'assigned' && value.entity_id ? <Link href={`/knowledge/entities/${value.entity_id}`}>{value.entity_name ?? t('unnamedEntity')} · {value.entity_type ? t(`type_${value.entity_type}` as 'type_person') : t('unknownValue')}</Link> : value.state === 'ambiguous' ? t('endpointAmbiguous') : t('endpointUnassigned')}{value.membership_id && <small> · {t('membership')} {value.membership_id}</small>}</span>;
 
-  return <li className="rounded-xl border bg-card p-4 text-card-foreground">
+  return <li className="rounded-lg border bg-card p-4 text-card-foreground">
     <strong>{item.candidate_name}</strong><p>{item.reason}</p>
     <small className="text-muted-foreground">{item.kind === 'entity' ? t('entityCandidate') : t('relationshipCandidate')} · {statuses[item.status] ?? item.status}{!item.actionable ? ` · ${t('displayOnly')}` : ''}</small>
     {item.kind === 'relationship' && item.relationship_type && <p>{t('relationshipType')}: {item.relationship_type}</p>}

@@ -103,6 +103,10 @@ export interface ChatSessionProps {
   onRenameConversation?: () => void;
   /** Opens the delete confirmation for the open conversation (full mode header). */
   onDeleteConversation?: () => void;
+  /** Full-mode header slot before the title (e.g. the mobile History switch), so the page needs no second header row. */
+  headerLeading?: React.ReactNode;
+  /** Full-mode header slot after the controls (e.g. the Sources sheet trigger on narrow viewports). */
+  headerTrailing?: React.ReactNode;
   /** Optional callback to close the drawer presentation when hosted inside ChatDrawer. */
   onCloseDrawer?: () => void;
 }
@@ -128,6 +132,8 @@ export function ChatSession({
   mode = 'drawer',
   onRenameConversation,
   onDeleteConversation,
+  headerLeading,
+  headerTrailing,
 }: ChatSessionProps) {
   const t = useTranslations('chat');
   const tAgents = useTranslations('aiSettings');
@@ -981,8 +987,9 @@ export function ChatSession({
       <div className="flex flex-col h-full bg-background relative overflow-hidden">
         {/* Session header if inside drawer or full mode */}
         <div className={`flex flex-wrap items-center justify-between gap-2 border-b border-border bg-surface shrink-0 ${mode === 'drawer' ? 'px-4 py-3 pr-14' : 'px-5 py-3'}`}>
+          {mode === 'full' && headerLeading}
           {mode === 'full' ? (
-            <h1 className="min-w-0 flex-1 truncate text-lg font-semibold text-foreground">
+            <h1 className="min-w-32 flex-1 truncate text-lg font-semibold text-foreground">
               {conversationDetail?.title || t('title')}
             </h1>
           ) : null}
@@ -993,8 +1000,8 @@ export function ChatSession({
               <>
                 {/* sm and up: inline buttons. Below sm they collapse into one "More" menu so the header never overflows at 375px. */}
                 <div className="hidden items-center gap-2 sm:flex">
-                  {onRenameConversation && <Button type="button" variant="outline" className="min-h-11" onClick={onRenameConversation}>{t('renameConversation')}</Button>}
-                  {onDeleteConversation && <Button type="button" variant="outline" className="min-h-11 text-destructive" onClick={onDeleteConversation}>{t('delete')}</Button>}
+                  {onRenameConversation && <Button type="button" variant="outline" onClick={onRenameConversation}>{t('renameConversation')}</Button>}
+                  {onDeleteConversation && <Button type="button" variant="outline" className="text-destructive" onClick={onDeleteConversation}>{t('delete')}</Button>}
                 </div>
                 <div className="sm:hidden">
                   <DropdownMenu>
@@ -1027,12 +1034,13 @@ export function ChatSession({
             <Button
               type="button"
               onClick={handleNewChat}
-              className={`secondary inline-flex min-h-11 items-center gap-2 px-4 text-sm font-semibold transition-colors ${mode === 'full' ? 'hidden' : ''}`}
+              className={`secondary inline-flex min-h-9 pointer-coarse:min-h-11 items-center gap-2 px-4 text-sm font-semibold transition-colors ${mode === 'full' ? 'hidden' : ''}`}
               title={t('newChat')}
             >
               <PlusIcon className="size-4" />
               <span>{t('newChat')}</span>
             </Button>
+            {mode === 'full' && headerTrailing}
           </div>
         </div>
 

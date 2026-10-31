@@ -59,7 +59,7 @@ def workflow_state(cursor: str | None) -> dict[str, str | None]:
 
 def workflow_name(source_id: UUID, operation_id: UUID) -> str:
     """Build a deterministic source-scoped name for one provisioning operation."""
-    return f"BBD-OS connector {source_id} {operation_id.hex}"
+    return f"Umwelt-OS connector {source_id} {operation_id.hex}"
 
 
 def workflow_webhook_path(source_id: UUID, source_type: str) -> str:
@@ -139,12 +139,12 @@ def build_workflow(
             node["parameters"]["path"] = workflow_webhook_path(source.id, source.type)
             node.setdefault("credentials", {}).setdefault("httpHeaderAuth", {})
             node["credentials"]["httpHeaderAuth"].update(
-                {"id": manual_credential_id, "name": "BBD-OS manual trigger"}
+                {"id": manual_credential_id, "name": "Umwelt-OS manual trigger"}
             )
         elif node.get("name") in collector_names:
             node.setdefault("credentials", {}).setdefault("httpHeaderAuth", {})
             node["credentials"]["httpHeaderAuth"].update(
-                {"id": collector_credential_id, "name": "BBD-OS MCP source collector" if source.type == "mcp" else "BBD-OS source collector"}
+                {"id": collector_credential_id, "name": "Umwelt-OS MCP source collector" if source.type == "mcp" else "Umwelt-OS source collector"}
             )
         elif node.get("name") == "Fetch REST pages":
             if provider_credential_id:
@@ -152,7 +152,7 @@ def build_workflow(
                 node["parameters"]["genericAuthType"] = "httpHeaderAuth"
                 node.setdefault("credentials", {})["httpHeaderAuth"] = {
                     "id": provider_credential_id,
-                    "name": "BBD-OS provider credential",
+                    "name": "Umwelt-OS provider credential",
                 }
             else:
                 node["parameters"]["authentication"] = "none"

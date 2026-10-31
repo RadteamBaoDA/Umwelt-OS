@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
-import { AppLocaleId, ThemePreference } from '@/core/i18n';
+import { AppLocaleId, ThemePreference, formatTimeZoneLabel } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import type { PreferenceValues } from '@/core/preferences';
 
@@ -44,6 +44,12 @@ function isValidTimezone(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Human label for a zone option, e.g. "GMT+7 · Ho Chi Minh"; the stored value stays the IANA id. */
+function timezoneItemLabel(zone: string, locale: AppLocaleId): string {
+  const city = (zone.split('/').pop() ?? zone).replace(/_/g, ' ');
+  return `${formatTimeZoneLabel(zone, locale)} · ${city}`;
 }
 
 /** Lists IANA time zones from the platform, always including the current value so an unlisted saved zone stays selectable. */
@@ -292,9 +298,9 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
             <Label htmlFor="preference-timezone">{t('timezone')}</Label>
             <Select value={draft.timezone} onValueChange={(next) => setDraft({ ...draft, timezone: next })}>
               <SelectTrigger id="preference-timezone" aria-describedby="preference-timezone-help"><SelectValue /></SelectTrigger>
-              <SelectContent>{timezoneOptions(draft.timezone).map((zone) => <SelectItem key={zone} value={zone}>{zone}</SelectItem>)}</SelectContent>
+              <SelectContent>{timezoneOptions(draft.timezone).map((zone) => <SelectItem key={zone} value={zone}>{timezoneItemLabel(zone, draft.locale)}</SelectItem>)}</SelectContent>
             </Select>
-            <p id="preference-timezone-help" className="text-muted-foreground text-xs">{t('timezoneHelp')} {t('scheduleTimezoneNote')}</p>
+            <p id="preference-timezone-help" className="text-muted-foreground text-xs">{t('scheduleTimezoneNote')}</p>
           </div>
         </fieldset>
         <p className="text-muted-foreground" role="status">{save.isPending ? t('saving') : dirty ? t('unsaved') : t('saved')}</p>

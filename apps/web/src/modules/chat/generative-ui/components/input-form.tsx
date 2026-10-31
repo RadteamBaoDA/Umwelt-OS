@@ -163,7 +163,7 @@ export function InputForm({ title, description, fields, submitLabel, disabled, l
   };
 
   return (
-    <Card data-testid="generative-input-form" className="my-2 w-full max-w-md border-border bg-surface text-foreground shadow-sm">
+    <Card data-testid="generative-input-form" className="my-2 w-full max-w-md border-border bg-surface text-foreground">
       <form onSubmit={handleSubmit} noValidate aria-label={title}>
         <CardHeader className="gap-1.5 border-b border-border pb-4">
           <div className="flex items-center gap-2">

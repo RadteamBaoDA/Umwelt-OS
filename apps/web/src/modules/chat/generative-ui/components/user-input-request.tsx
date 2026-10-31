@@ -86,7 +86,7 @@ export function UserInputRequest({
           : null;
 
   return (
-    <Card data-testid="user-input-request" className="my-2 w-full max-w-md border-border bg-surface shadow-sm">
+    <Card data-testid="user-input-request" className="my-2 w-full max-w-md border-border bg-surface">
       <CardHeader>
         <CardTitle className="text-base font-semibold text-foreground">{request.prompt}</CardTitle>
       </CardHeader>

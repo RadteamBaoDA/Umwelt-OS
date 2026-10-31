@@ -165,7 +165,7 @@ export function GenerativePieChart({
     <ExportOverlay title={title} html={exportHtml} ready={normalizedSlices.length > 0}>
     <Card
       data-testid="generative-pie-chart"
-      className="my-2 w-full max-w-2xl border-border bg-surface text-foreground shadow-sm"
+      className="my-2 w-full max-w-2xl border-border bg-surface text-foreground"
     >
       <CardHeader className="gap-1.5 border-b border-border pb-4">
         <div className="flex items-center justify-between gap-2">
@@ -185,7 +185,7 @@ export function GenerativePieChart({
           <div className="flex items-center gap-1.5">
             {isSample && <SampleDataBadge locale={resolvedLocale} />}
             {normalizedSlices.length > 0 && (
-              <Badge variant="secondary" className="font-mono text-xs">
+              <Badge variant="secondary" className="tabular-nums text-xs">
                 {copy.totalLabel}:{' '}
                 {formatChartValue(totalValue, {
                   currency,
@@ -282,7 +282,7 @@ export function GenerativePieChart({
                       />
                       <span className="truncate font-medium text-foreground">{slice.name}</span>
                     </div>
-                    <div className="flex shrink-0 items-center gap-1.5 font-mono">
+                    <div className="flex shrink-0 items-center gap-1.5 tabular-nums">
                       <span className="font-semibold text-foreground">
                         {formatChartValue(slice.value, {
                           currency,

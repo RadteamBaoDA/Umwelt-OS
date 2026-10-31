@@ -3,10 +3,13 @@
 import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import React, { useMemo, useState } from 'react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
+import { cleanExcerpt } from '@/modules/news/excerpt';
 import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge/api';
 import type { GadgetInstance } from '../api';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
@@ -23,6 +26,14 @@ type SelectedRecordIdentity = {
   documentVersionId: string;
   versionNumber: number;
 };
+
+const SEVERITY = /^(.*?)[\s:|\-–—]*\b(LOW|MEDIUM|HIGH|CRITICAL)\s*$/;
+
+/** Splits a trailing all-caps severity word from a record title so it can render as a badge. */
+function splitSeverity(title: string): { title: string; severity?: 'low' | 'medium' | 'high' | 'critical' } {
+  const match = SEVERITY.exec(title);
+  return match && match[1] ? { title: match[1], severity: match[2].toLowerCase() as 'low' | 'medium' | 'high' | 'critical' } : { title };
+}
 
 /** Render current source records in a bounded scroll root and Ask AI with exact selected versions. */
 export function TablePanel({ instance }: TablePanelProps) {
@@ -67,28 +78,29 @@ export function TablePanel({ instance }: TablePanelProps) {
       {staleSelections.length > 0 && (
         <p role="status" className="text-xs text-muted-foreground">{t('selectionChanged', { count: staleSelections.length })}</p>
       )}
-      {sourceIds.length === 0 ? <GadgetNotice kind="setup" message={t('gadgetDataEmpty')} />
-        : query.isPending ? <GadgetSkeleton variant="table" label={t('gadgetDataLoading')} />
-          : query.isError ? <GadgetNotice kind="error" message={t('gadgetDataLoadFailed')} />
-            : records.length === 0 ? <GadgetNotice kind="empty" message={t('gadgetDataEmpty')} />
+      {sourceIds.length === 0 ? <GadgetNotice kind="setup" className="p-0" message={t('gadgetDataEmpty')} />
+        : query.isPending ? <GadgetSkeleton variant="table" className="p-0" label={t('gadgetDataLoading')} />
+          : query.isError ? <GadgetNotice kind="error" className="p-0" message={t('gadgetDataLoadFailed')} />
+            : records.length === 0 ? <GadgetNotice kind="empty" className="p-0" message={t('gadgetDataEmpty')} />
               : (
-                <div className="min-h-0 flex-1 overflow-auto">
-                  <table className="w-full text-left text-xs">
+                <div className="min-h-0 flex-1 overflow-x-auto overflow-y-auto">
+                  <table className="w-full min-w-[28rem] text-left text-xs">
                     <thead><tr className="border-b border-border text-muted-foreground">
                       <th scope="col" className="p-2">{t('selectRow')}</th>
                       <th scope="col" className="p-2">{t('recordTitle')}</th>
                       <th scope="col" className="p-2">{t('recordDate')}</th>
                     </tr></thead>
                     <tbody>
-                      {records.map((record) => (
+                      {records.map((record) => {
+                        const shown = splitSeverity(record.title);
+                        return (
                         <tr key={record.document_id} className="border-b border-border/60 align-top">
                           <td className="p-2">
-                            <input
-                              type="checkbox"
+                            <Checkbox
                               aria-label={t('selectRecord', { title: record.title })}
                               checked={selectedIds.has(record.document_id)}
-                              onChange={(event) => setSelectedRecords((current) => {
-                                if (!event.target.checked) {
+                              onCheckedChange={(next) => setSelectedRecords((current) => {
+                                if (next !== true) {
                                   const next = { ...current };
                                   delete next[record.document_id];
                                   return next;
@@ -104,12 +116,13 @@ export function TablePanel({ instance }: TablePanelProps) {
                             />
                           </td>
                           <td className="p-2">
-                            <p className="font-medium">{record.title}</p>
-                            <p className="mt-1 line-clamp-2 text-muted-foreground">{record.excerpt}</p>
+                            <p className="font-medium">{shown.title}{shown.severity && <Badge variant="outline" className="ml-2 align-middle">{t(`severity_${shown.severity}`)}</Badge>}</p>
+                            <p className="mt-1 line-clamp-2 text-muted-foreground">{cleanExcerpt(record.title, record.excerpt)}</p>
                           </td>
                           <td className="whitespace-nowrap p-2 text-muted-foreground">{formatDateTime(record.published_at ?? record.observed_at, display.locale, display.timezone)}</td>
                         </tr>
-                      ))}
+                      );
+                      })}
                     </tbody>
                   </table>
                 </div>

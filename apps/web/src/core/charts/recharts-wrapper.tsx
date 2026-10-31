@@ -227,7 +227,38 @@ export function paddedYDomain(data: ChartDataPoint[], series: ChartSeries[]): [n
   }
   if (min === Infinity) return ['auto', 'auto'];
   const pad = max > min ? (max - min) * 0.1 : Math.abs(max) * 0.01 || 1;
-  return [min - pad, max + pad];
+  // Snap to a 1/2/5 x 10^n step so ticks are round and distinct when formatted.
+  const step = niceStep((max - min + 2 * pad) / 4);
+  return [Math.floor((min - pad) / step) * step, Math.ceil((max + pad) / step) * step];
+}
+
+/**
+ * Rounds a raw step up to the next 1, 2 or 5 times a power of ten.
+ *
+ * @param raw Positive raw step.
+ * @returns Nice step >= raw.
+ */
+function niceStep(raw: number): number {
+  const pow = 10 ** Math.floor(Math.log10(raw));
+  const f = raw / pow;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * pow;
+}
+
+/**
+ * Builds explicit Y ticks at the nice step used by {@link paddedYDomain}.
+ *
+ * @param domain Snapped domain.
+ * @returns Tick values, or undefined when the domain is not numeric.
+ */
+export function yTicks(domain: [number | 'auto', number | 'auto']): number[] | undefined {
+  const [lo, hi] = domain;
+  if (typeof lo !== 'number' || typeof hi !== 'number' || hi <= lo) return undefined;
+  // 5.01 keeps a 5-step snapped domain on its own step instead of rounding up to double it.
+  const step = niceStep((hi - lo) / 5.01);
+  const out: number[] = [];
+  // Rounding to 12 significant digits avoids float drift such as 0.30000000000000004.
+  for (let v = lo; v <= hi + step / 1e6; v += step) out.push(Number(v.toPrecision(12)));
+  return out;
 }
 
 /** Assumed upper bound of ticks across the Y domain; a conservative (smaller) step yields more digits. */
@@ -253,6 +284,7 @@ export function formatYTick(value: number, locale: AppLocaleId, span?: number): 
   const digits = Math.min(4, Math.max(0, Math.ceil(-Math.log10(step) - 1e-9)));
   return getCachedNumberFormat(normalizeFormattingLocale(locale), {
     ...(abs >= 1000 ? { notation: 'compact' as const } : {}),
+    minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   }).format(value);
 }
@@ -304,6 +336,50 @@ export function formatChartTimestamp(
   } catch {
     return String(timestamp);
   }
+}
+
+/**
+ * Build an x-axis tick formatter for a chart: time-of-day labels when the data spans under 48h (day labels
+ * would repeat), day labels otherwise, and an empty string for a label identical to the previous tick so
+ * the axis never prints the same text twice. Stateful per call; create one per render (ticks arrive in order).
+ *
+ * @param data Chart points; only `timestamp` is read.
+ * @param locale Current application locale.
+ * @param timezone Target timezone identifier.
+ * @returns Formatter suitable for recharts `tickFormatter`.
+ */
+export function makeXTickFormatter(
+  data: ChartDataPoint[],
+  locale: AppLocaleId,
+  timezone: string,
+): (val: string | number) => string {
+  const times = data.map((p) => new Date(p.timestamp).getTime()).filter((n) => !isNaN(n));
+  const intraday = times.length > 1 && Math.max(...times) - Math.min(...times) < 48 * 3_600_000;
+  let last = '';
+  return (val) => {
+    const date = new Date(val);
+    const label = intraday && !isNaN(date.getTime())
+      ? getCachedDateFormat(normalizeFormattingLocale(locale), { hour: 'numeric', minute: '2-digit', timeZone: timezone }).format(date)
+      : formatChartTimestamp(val, locale, timezone, 'compact');
+    if (label === last) return '';
+    last = label;
+    return label;
+  };
+}
+
+/**
+ * Muted note shown under a time-series chart when its points span under an hour (or fewer than two distinct
+ * times), so a flat or single-point line is not read as a trend. The chart itself stays visible.
+ *
+ * @param props Chart points; only `timestamp` is read.
+ * @returns The note, or null when there is enough history.
+ */
+export function ChartHistoryNote({ data }: { data: ChartDataPoint[] }) {
+  const t = useTranslations('dashboard');
+  const times = data.map((p) => new Date(p.timestamp).getTime()).filter((n) => !isNaN(n));
+  const span = times.length > 1 ? Math.max(...times) - Math.min(...times) : 0;
+  if (span >= 3_600_000) return null;
+  return <p className="mt-1 text-[11px] text-muted-foreground">{t('chartHistoryShort')}</p>;
 }
 
 /**
@@ -365,9 +441,9 @@ export function ChartCustomTooltip({
   if (!active || !payload || payload.length === 0) return null;
 
   return (
-    <div className="rounded-lg border border-border bg-card p-2.5 shadow-md text-card-foreground text-xs min-w-[140px] z-50">
+    <div className="rounded-lg border border-border bg-card p-2.5 shadow-[var(--shadow-popover)] text-card-foreground text-xs min-w-[140px] z-50">
       {label !== undefined && (
-        <div className="text-[11px] text-muted-foreground mb-1.5 font-mono">
+        <div className="text-[11px] text-muted-foreground mb-1.5 tabular-nums">
           {formatChartTimestamp(label, locale, timezone, 'full')}
         </div>
       )}
@@ -381,7 +457,7 @@ export function ChartCustomTooltip({
               />
               <span className="text-muted-foreground truncate">{item.name || item.dataKey}</span>
             </div>
-            <span className="font-semibold font-mono text-foreground">
+            <span className="font-semibold tabular-nums text-foreground">
               {typeof item.value === 'number'
                 ? formatChartValue(item.value, { currency, unit, locale })
                 : String(item.value ?? '—')}
@@ -390,9 +466,9 @@ export function ChartCustomTooltip({
         ))}
       </div>
       {providerDelay && (
-        <div className="mt-2 pt-1.5 border-t border-border/60 text-[10px] text-muted-foreground flex items-center justify-between">
+        <div className="mt-2 pt-1.5 border-t border-border/60 text-xs text-muted-foreground flex items-center justify-between">
           <span>{ts('chFreshness')}</span>
-          <span className="font-mono">{providerDelay}</span>
+          <span className="tabular-nums">{providerDelay}</span>
         </div>
       )}
     </div>
@@ -470,7 +546,7 @@ export function RechartsContainer({
   if (!isMounted) {
     return (
       <div
-        className={`w-full flex items-center justify-center bg-card/50 animate-pulse rounded-lg ${className}`}
+        className={`w-full flex items-center justify-center bg-rule motion-safe:animate-pulse rounded-lg ${className}`}
         style={{ height, minHeight }}
       >
         <span className="sr-only">{ts('chLoading')}</span>
@@ -532,7 +608,7 @@ export function BaseAreaChart({
     <>
       <ChartAccessibleTable data={data} series={series} />
       <RechartsContainer height={height}>
-        <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+        <AreaChart data={data} margin={{ top: 10, right: 32, left: 0, bottom: 0 }}>
           {showGrid && (
             <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />
           )}
@@ -542,9 +618,7 @@ export function BaseAreaChart({
             fontSize={11}
             tickLine={false}
             axisLine={{ stroke: colors.grid }}
-            tickFormatter={(val) =>
-              formatChartTimestamp(val, display.locale, display.timezone, 'compact')
-            }
+            tickFormatter={makeXTickFormatter(data, display.locale, display.timezone)}
           />
           <YAxis
             stroke={colors.axisText}
@@ -553,6 +627,7 @@ export function BaseAreaChart({
             axisLine={false}
             width={Y_AXIS_WIDTH}
             domain={yDomain}
+            ticks={yTicks(yDomain)}
             tickFormatter={(val) => formatYTick(val, display.locale, domainSpan(yDomain))}
           />
           <Tooltip
@@ -576,6 +651,8 @@ export function BaseAreaChart({
                 name={s.name}
                 stroke={color}
                 strokeWidth={2}
+                // Fifth series reuses hue 1 at wrap-around; dashing keeps it distinguishable.
+                strokeDasharray={idx % colors.series.length === 4 ? '5 3' : undefined}
                 fill={color}
                 fillOpacity={0.12}
               />
@@ -631,7 +708,7 @@ export function BaseLineChart({
     <>
       <ChartAccessibleTable data={data} series={series} />
       <RechartsContainer height={height}>
-        <LineChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+        <LineChart data={data} margin={{ top: 10, right: 32, left: 0, bottom: 0 }}>
           {showGrid && (
             <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />
           )}
@@ -641,9 +718,7 @@ export function BaseLineChart({
             fontSize={11}
             tickLine={false}
             axisLine={{ stroke: colors.grid }}
-            tickFormatter={(val) =>
-              formatChartTimestamp(val, display.locale, display.timezone, 'compact')
-            }
+            tickFormatter={makeXTickFormatter(data, display.locale, display.timezone)}
           />
           <YAxis
             stroke={colors.axisText}
@@ -652,6 +727,7 @@ export function BaseLineChart({
             axisLine={false}
             width={Y_AXIS_WIDTH}
             domain={yDomain}
+            ticks={yTicks(yDomain)}
             tickFormatter={(val) => formatYTick(val, display.locale, domainSpan(yDomain))}
           />
           <Tooltip
@@ -675,6 +751,8 @@ export function BaseLineChart({
                 name={s.name}
                 stroke={color}
                 strokeWidth={2}
+                // Fifth series reuses hue 1 at wrap-around; dashing keeps it distinguishable.
+                strokeDasharray={idx % colors.series.length === 4 ? '5 3' : undefined}
                 dot={false}
                 activeDot={{ r: 4, strokeWidth: 1 }}
               />
@@ -729,7 +807,7 @@ export function BaseBarChart({
     <>
       <ChartAccessibleTable data={data} series={series} />
       <RechartsContainer height={height}>
-        <BarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+        <BarChart data={data} margin={{ top: 10, right: 32, left: 0, bottom: 0 }}>
           {showGrid && (
             <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />
           )}
@@ -739,9 +817,7 @@ export function BaseBarChart({
             fontSize={11}
             tickLine={false}
             axisLine={{ stroke: colors.grid }}
-            tickFormatter={(val) =>
-              formatChartTimestamp(val, display.locale, display.timezone, 'compact')
-            }
+            tickFormatter={makeXTickFormatter(data, display.locale, display.timezone)}
           />
           <YAxis
             stroke={colors.axisText}

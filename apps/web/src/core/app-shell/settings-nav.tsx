@@ -16,7 +16,7 @@ const primaryIds = new Set(['data-sources', 'ai-router', 'system-prompts']);
 
 /**
  * Settings panel: a surface card (18px radius, line border) with a 230px inner nav column and the page content on the right.
- * Under 720px the nav column is replaced by the "Settings section" Select; `links` must already be filtered by role and module availability.
+ * Under 1024px the nav column is replaced by the "Settings section" Select; `links` must already be filtered by role and module availability.
  *
  * @param links Visible settings destinations in display order (design groups first, then Members, Translation, Memory, System).
  * @param pathname Current route, used to mark the active entry.
@@ -46,12 +46,19 @@ export function SettingsPanel({ links, pathname, children }: { links: Navigation
   </div>;
 }
 
-/** Sources | MCP | Personal data permissions tabs, rendered by the shell on every /settings/sources route. */
+/**
+ * Sources | MCP | Personal data permissions tabs, rendered by the shell on every /settings/sources route.
+ * The long permissions label is swapped for a short visible one below 480px (CSS) so the tabs stay on one row;
+ * the link keeps the full text as its accessible name.
+ */
 export function SourcesSubNav({ pathname }: { pathname: string }) {
   const t = useTranslations('shell');
   return <nav className="sub-tabs" aria-label={t('sourcesNavigation')}>
     {sourcesSubNavigation.map((item) => {
       const on = item.exact ? pathname === item.href : groupActive(pathname, item.href);
+      if (item.messageKey === 'permissionsTab') {
+        return <Link key={item.id} href={item.href} aria-current={on ? 'page' : undefined} aria-label={t('permissionsTab')}><span className="tab-full">{t('permissionsTab')}</span><span className="tab-short" aria-hidden="true">{t('permissionsTabShort')}</span></Link>;
+      }
       return <Link key={item.id} href={item.href} aria-current={on ? 'page' : undefined}>{t(item.messageKey)}</Link>;
     })}
   </nav>;

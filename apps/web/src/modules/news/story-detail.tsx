@@ -157,7 +157,7 @@ export function StoryDetail({ storyId, sourceIds, onBack, onClose }: StoryDetail
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h4 className="text-sm font-medium">{item.title}</h4>
               {safeHttpUrl(item.url) ? (
-                <a href={safeHttpUrl(item.url)} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center gap-1 text-xs text-primary underline-offset-4 hover:underline">
+                <a href={safeHttpUrl(item.url)} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-9 pointer-coarse:min-h-11 items-center gap-1 text-xs text-primary underline-offset-4 hover:underline">
                   {t('openSource')}<ExternalLink aria-hidden="true" className="size-3" />
                 </a>
               ) : null}
@@ -200,9 +200,9 @@ export function StoryDetail({ storyId, sourceIds, onBack, onClose }: StoryDetail
       </div>
       {story ? (
         <footer className="mt-auto flex flex-wrap items-center gap-2 border-t border-border pt-3">
-          <Button asChild variant="outline" className="min-h-11"><Link href="/dashboard?manage=highlights" onClick={onClose}>{d('createRule')}</Link></Button>
+          <Button asChild variant="outline"><Link href="/dashboard?manage=highlights" onClick={onClose}>{d('createRule')}</Link></Button>
           <span className="flex-1" />
-          <Button type="button" className="min-h-11" disabled={!evidence.length} onClick={askAi}>{d('askAiAboutThis')}</Button>
+          <Button type="button" disabled={!evidence.length} onClick={askAi}>{d('askAiAboutThis')}</Button>
         </footer>
       ) : null}
     </section>

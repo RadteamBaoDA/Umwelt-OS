@@ -5,7 +5,7 @@
 
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
-import { ArrowUpIcon, CloudIcon, DatabaseIcon, FileTextIcon, GlobeIcon, PaperclipIcon, PlusIcon, SendIcon, SquareIcon } from 'lucide-react';
+import { ArrowUpIcon, CloudIcon, DatabaseIcon, FileTextIcon, GlobeIcon, PaperclipIcon, PlusIcon, SquareIcon } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
@@ -170,84 +170,14 @@ export function ChatComposer({
       readOnly={disabled}
       aria-disabled={disabled || undefined}
       rows={2}
-      className={isFull
-        // Full layout: the surrounding box owns the border and focus ring, so the field itself is borderless.
-        ? 'block max-h-[200px] min-h-14 w-full resize-none overflow-y-auto bg-transparent px-1 py-1 text-base text-foreground outline-none placeholder:text-muted-foreground aria-disabled:opacity-50 sm:text-[15px]'
-        : 'block max-h-[200px] min-h-14 w-full resize-none overflow-y-auto rounded-lg border border-border bg-background p-3 text-base text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring aria-disabled:opacity-50 sm:text-[15px]'}
+      // The surrounding box owns the border and focus ring in both layouts, so the field itself is borderless.
+      className="block max-h-[200px] min-h-14 w-full resize-none overflow-y-auto bg-transparent px-1 py-1 text-base text-foreground outline-none placeholder:text-muted-foreground aria-disabled:opacity-50 sm:text-[15px]"
       aria-label={t('composerPlaceholder')}
     />
   );
-  const stopButton = (
-    <Button
-      type="button"
-      variant="outline"
-      onClick={onStop}
-      data-testid="chat-stop"
-      className="min-h-11 border-destructive text-destructive hover:text-destructive"
-      aria-label={t('stopGenerating')}
-    >
-      <SquareIcon className="size-3.5 fill-current" />
-      <span className="hidden sm:inline">{t('stop')}</span>
-    </Button>
-  );
-  const sendButton = (
-    <Button
-      type="button"
-      onClick={handleSend}
-      // aria-disabled (not disabled) keeps Send focusable so its blocked reason stays reachable;
-      // handleSend is the click guard.
-      aria-disabled={!canSend}
-      className="min-h-11 aria-disabled:cursor-not-allowed aria-disabled:opacity-40"
-      data-testid="chat-send"
-      aria-label={t('send')}
-      aria-describedby={sendBlockedBy ?? undefined}
-    >
-      <SendIcon className="size-4" />
-      <span className="hidden sm:inline">{t('send')}</span>
-    </Button>
-  );
-
-  if (!isFull) {
-    return (
-      <div className="relative flex flex-wrap items-end gap-2 border-t border-border bg-surface p-4 shrink-0 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-nowrap">
-        {/* Below sm the picker takes its own row above the textarea so Send keeps room beside it. */}
-        {modelPicker && <div className="order-first w-full sm:order-none sm:w-auto"><ModelPicker picker={modelPicker} disabled={isStreaming || disabled} /></div>}
-        {dbQuery && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button id={COMPOSER_MENU_ID} type="button" variant="ghost" size="icon" className="min-h-11 rounded-full text-muted-foreground" aria-label={t('composerMenu')} disabled={disabled}>
-                <PlusIcon className="size-4" aria-hidden="true" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" side="top">
-              <DropdownMenuCheckboxItem
-                id="chat-db-query"
-                checked={dbQuery.enabled}
-                disabled={isStreaming || disabled}
-                onSelect={(e) => e.preventDefault()}
-                onCheckedChange={(checked) => dbQuery.onChange(checked === true)}
-              >
-                <DatabaseIcon className="size-3.5 text-muted-foreground" aria-hidden="true" />
-                {t('dbQueryToggle')}
-              </DropdownMenuCheckboxItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-        {dbQuery?.enabled && (
-          <Badge variant="secondary" className="shrink-0 gap-1 text-[11px]" data-testid="chat-db-query-badge">
-            <DatabaseIcon className="size-3" aria-hidden="true" />
-            {t('dbQueryBadge')}
-          </Badge>
-        )}
-        <div className="min-w-0 flex-1">{textarea}</div>
-        {isStreaming ? stopButton : sendButton}
-      </div>
-    );
-  }
-
-  // Round icon-only controls for the full layout; the aria-labels keep them named for assistive tech.
+  // Round icon-only controls shared by the Chat page and the quick chat sheet; the aria-labels keep them named for assistive tech.
   const roundStop = (
-    <Button type="button" variant="outline" size="icon" onClick={onStop} className="rounded-full border-destructive text-destructive hover:text-destructive" data-testid="chat-stop" aria-label={t('stopGenerating')}>
+    <Button type="button" variant="outline" size="icon" onClick={onStop} className="border-negative text-negative hover:text-negative" data-testid="chat-stop" aria-label={t('stopGenerating')}>
       <SquareIcon className="size-3.5 fill-current" aria-hidden="true" />
     </Button>
   );
@@ -257,7 +187,7 @@ export function ChatComposer({
       size="icon"
       onClick={handleSend}
       aria-disabled={!canSend}
-      className="rounded-full aria-disabled:cursor-not-allowed aria-disabled:opacity-40"
+      className="aria-disabled:cursor-not-allowed aria-disabled:opacity-40"
       data-testid="chat-send"
       aria-label={t('send')}
       aria-describedby={sendBlockedBy ?? undefined}
@@ -265,12 +195,56 @@ export function ChatComposer({
       <ArrowUpIcon className="size-4" aria-hidden="true" />
     </Button>
   );
+  if (!isFull) {
+    // Drawer mirrors the Chat page: one bordered box with the borderless field on top and "+", model and send in a toolbar row.
+    return (
+      <div className="relative shrink-0 border-t border-border bg-surface p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+        <div className="flex w-full flex-col gap-2 rounded-lg border border-control bg-surface p-3 focus-within:ring-2 focus-within:ring-data">
+          {textarea}
+          <div className="flex items-center gap-2">
+            {dbQuery && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button id={COMPOSER_MENU_ID} type="button" variant="ghost" size="icon" className="text-muted-foreground" aria-label={t('composerMenu')} disabled={disabled}>
+                    <PlusIcon className="size-4" aria-hidden="true" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" side="top">
+                  <DropdownMenuCheckboxItem
+                    id="chat-db-query"
+                    checked={dbQuery.enabled}
+                    disabled={isStreaming || disabled}
+                    onSelect={(e) => e.preventDefault()}
+                    onCheckedChange={(checked) => dbQuery.onChange(checked === true)}
+                  >
+                    <DatabaseIcon className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                    {t('dbQueryToggle')}
+                  </DropdownMenuCheckboxItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+            {dbQuery?.enabled && (
+              <Badge variant="secondary" className="shrink-0 gap-1 text-[11px]" data-testid="chat-db-query-badge">
+                <DatabaseIcon className="size-3" aria-hidden="true" />
+                {t('dbQueryBadge')}
+              </Badge>
+            )}
+            <span className="min-w-0 flex-1" />
+            {modelPicker && <ModelPicker picker={modelPicker} disabled={isStreaming || disabled} />}
+            {isStreaming ? roundStop : roundSend}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const modelText = modelLabel ? t('modelLine', { model: modelLabel }) : null;
   const webSearchChecked = !!webSearch && webSearch.available && !webSearch.profileBlocked && webSearch.enabled;
 
   return (
-    <div className="relative shrink-0 border-t border-border bg-surface px-3 py-3 sm:px-5 sm:py-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-      <div className="flex flex-col gap-2 rounded-2xl border border-border bg-background p-3 focus-within:ring-2 focus-within:ring-ring">
+    <div className="relative shrink-0 bg-surface px-3 py-3 sm:px-5 sm:py-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+      {/* The one floating element: a single bordered field, 12px radius, 720px measure matching the transcript. */}
+      <div className="mx-auto flex w-full max-w-[720px] flex-col gap-2 rounded-lg border border-control bg-surface p-3 focus-within:ring-2 focus-within:ring-data">
         {contextBar}
         {attachments}
         {textarea}
@@ -278,7 +252,7 @@ export function ChatComposer({
           {menu && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button id={COMPOSER_MENU_ID} type="button" variant="ghost" size="icon" className="rounded-full text-muted-foreground" aria-label={t('composerMenu')} disabled={disabled}>
+                <Button id={COMPOSER_MENU_ID} type="button" variant="ghost" size="icon" className="text-muted-foreground" aria-label={t('composerMenu')} disabled={disabled}>
                   <PlusIcon className="size-4" aria-hidden="true" />
                 </Button>
               </DropdownMenuTrigger>

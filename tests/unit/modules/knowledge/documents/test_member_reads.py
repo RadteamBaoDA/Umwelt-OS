@@ -56,6 +56,20 @@ async def test_member_list_has_grant_subquery_before_limit() -> None:
 
 
 @pytest.mark.asyncio
+async def test_exclude_measurements_filters_measurement_provider_sources_before_limit() -> None:
+    session = _Session()
+    with patch.object(public, "read_access_fence", AsyncMock(return_value=FENCE)):
+        await public.list_documents(session, 10, None, None, scope=SCOPE, multi_workspace_enabled=True,
+                                    exclude_measurements=True)
+        await public.list_documents(session, 10, None, None, scope=SCOPE, multi_workspace_enabled=True)
+    sql = _sql(session.statements[0])
+    assert "documents.source_id NOT IN (SELECT sources.id" in sql
+    assert sql.index("NOT IN (SELECT sources.id") < sql.index("LIMIT")
+    assert "sources.provider IN" in sql
+    assert "NOT IN (SELECT sources.id" not in _sql(session.statements[1])
+
+
+@pytest.mark.asyncio
 async def test_owner_list_has_no_grant_subquery() -> None:
     session = _Session()
     granted = MagicMock(return_value=GRANTS)

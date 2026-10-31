@@ -24,6 +24,7 @@ type AIProviders = { providers?: { id: string; label?: string; models?: { id: st
 
 const STORAGE_KEY = 'umwelt.chat.model';
 const DEFAULT_VALUE = '__default__';
+/** Builds a stable provider+model reference key for an option. */
 const refOf = (o: { providerId: string; model: string }) => `${o.providerId}\u0000${o.model}`;
 
 /** Reads the remembered pick; storage can be blocked (private window), so any failure means "default". */
@@ -79,7 +80,7 @@ export function ModelPicker({ picker, disabled = false }: { picker: ChatModelPic
       value={picker.value ? refOf(picker.value) : DEFAULT_VALUE}
       onValueChange={(next) => picker.onChange(picker.options.find((o) => refOf(o) === next) ?? null)}
     >
-      <SelectTrigger aria-label={t('modelPickerLabel')} className="h-8 w-auto max-w-48 min-w-0 text-xs">
+      <SelectTrigger aria-label={t('modelPickerLabel')} className="h-8 w-auto max-w-48 min-w-0 border-0 bg-transparent text-xs text-muted-foreground shadow-none hover:bg-active">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>

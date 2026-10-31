@@ -5,8 +5,8 @@ export const SHARE_ALT = `${SHARE_TITLE} - ${SHARE_TAGLINE}`;
 export const SHARE_SIZE = { width: 1200, height: 630 } as const;
 
 // Hex values mirror the design system light theme (apps/web/src/app/globals.css, docs/design-system/tokens.json):
-// --bg #f4f5f2, --text #17211c, --accent #176a4a. next/og cannot resolve CSS variables.
-const BG = '#f4f5f2';
+// --bg #f2f5f2, --text #17211c, --accent #176a4a. next/og cannot resolve CSS variables.
+const BG = '#f2f5f2';
 const TEXT = '#17211c';
 const ACCENT = '#176a4a';
 

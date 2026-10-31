@@ -123,7 +123,7 @@ export function ExplainerCards({ locale }: ExplainerCardsProps) {
         <Card
           key={pillar.id}
           data-testid={`explainer-card-${pillar.id}`}
-          className="gap-2 border-border bg-surface py-3.5 text-foreground shadow-xs"
+          className="gap-2 border-border bg-surface py-3.5 text-foreground"
         >
           <CardHeader className="gap-1.5 px-4 pb-0">
             <div className="flex items-center gap-2">

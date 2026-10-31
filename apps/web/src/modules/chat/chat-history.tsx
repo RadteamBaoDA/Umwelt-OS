@@ -68,6 +68,7 @@ export function ChatHistory({
 
   // Grouping uses the calendar day in the owner's preference timezone (not the browser's); the server orders newest first.
   const groupedConversations = React.useMemo(() => {
+    /** Formats a date as a YYYY-MM-DD key in the display timezone for day grouping. */
     const dayKey = (date: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(date);
     const today = dayKey(new Date());
     const groups = { today: [] as Conversation[], earlier: [] as Conversation[] };
@@ -87,7 +88,7 @@ export function ChatHistory({
           <Button
             type="button"
             onClick={onNewConversation}
-            className="flex min-h-11 min-w-0 flex-1 items-center justify-center gap-2 text-sm font-semibold"
+            className="flex min-w-0 flex-1 items-center justify-center gap-2 text-sm font-semibold"
           >
             <PlusIcon className="size-4" aria-hidden="true" />
             <span>{t('newChat')}</span>
@@ -100,7 +101,7 @@ export function ChatHistory({
         </div>
 
         <div className="relative">
-          <SearchIcon className="absolute left-2.5 top-3.5 size-4 text-muted-foreground pointer-events-none" aria-hidden="true" />
+          <SearchIcon className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground pointer-events-none" aria-hidden="true" />
           <Input
             type="search"
             value={searchQuery}
@@ -115,7 +116,7 @@ export function ChatHistory({
             }}
             placeholder={t('searchConversations')}
             aria-label={t('searchConversations')}
-            className="pl-8 min-h-11 text-sm bg-background"
+            className="pl-8 text-sm"
           />
         </div>
       </div>
@@ -155,14 +156,14 @@ export function ChatHistory({
               return (
                 <div
                   key={conv.id}
-                  className={`group flex items-center gap-1 rounded-lg border text-sm ${isActive ? 'border-border bg-background font-semibold text-foreground' : 'border-transparent text-foreground hover:bg-background'}`}
+                  className={`group flex items-center gap-1 rounded-md text-sm ${isActive ? 'bg-active font-semibold text-foreground' : 'text-foreground hover:bg-raised'}`}
                 >
                   <Button
                     type="button"
                     variant="ghost"
                     onClick={() => onSelectConversation(conv.id)}
                     aria-current={isActive ? 'true' : undefined}
-                    className="h-auto min-h-11 min-w-0 flex-1 justify-start whitespace-normal rounded-lg p-2 text-left font-[inherit] hover:bg-transparent"
+                    className="h-auto min-w-0 flex-1 justify-start whitespace-normal rounded-lg p-2 text-left font-[inherit] hover:bg-transparent"
                   >
                     <span className="min-w-0 flex-1">
                       <span className="block truncate">{conv.title || t('untitledConversation')}</span>

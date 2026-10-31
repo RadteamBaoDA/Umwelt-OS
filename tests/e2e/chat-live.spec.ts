@@ -221,6 +221,8 @@ test.describe('chat (real stack, fake model)', () => {
     await expect(page.getByText(ANSWER)).toBeVisible();
     await settled(page);
     const history = page.locator('[aria-controls="chat-history-sidebar"]').first();
+    // History opens by default on desktop; collapse it so the header actions are exercised on their own.
+    if (await history.getAttribute('aria-expanded') === 'true') await history.click();
     await expect(history).toHaveAttribute('aria-expanded', 'false');
 
     const renamed = `e2e-renamed-${testInfo.workerIndex}-${Date.now()}`;
@@ -274,9 +276,6 @@ test.describe('chat mobile 375x812', () => {
   test('header More actions menu, no horizontal overflow, drawer composer usable', async ({ page }) => {
     await configureFakeModel(page);
     await page.goto('/chat');
-    // First visit on a narrow viewport shows a modal "Better on a larger screen" notice.
-    const gotIt = page.getByRole('button', { name: 'Got it' });
-    await gotIt.waitFor({ state: 'visible', timeout: 8000 }).then(() => gotIt.click()).catch(() => undefined);
     await send(page, '[think] mobile check');
     await expect(page.getByText(ANSWER)).toBeVisible();
     await settled(page);

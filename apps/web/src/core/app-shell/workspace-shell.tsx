@@ -89,7 +89,7 @@ function ChatTriggerButton() {
       aria-label={t('quickChat')}
     >
       <MessageSquare className="size-4 text-muted-foreground" aria-hidden="true" />
-      <span className="hidden sm:inline">{t('quickChat')}</span>
+      <span className="chat-trigger-label hidden sm:inline">{t('quickChat')}</span>
     </Button>
   );
 }

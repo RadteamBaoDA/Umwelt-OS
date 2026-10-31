@@ -7,7 +7,7 @@ import { ChatSession } from '@/modules/chat/chat-session';
 import { ChatHistory } from '@/modules/chat/chat-history';
 import { useConversationActions } from '@/modules/chat/conversation-actions';
 import { Button } from '@/components/ui/button';
-import { PanelLeftOpen, Plus } from 'lucide-react';
+import { ArrowLeft, PanelLeftOpen, Plus } from 'lucide-react';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { ChatSideRail, ChatSourcesSheet } from '@/modules/chat/chat-side-rail';
 import { chatKeys, getConversation, type Citation } from '@/modules/chat/api';
@@ -92,27 +92,22 @@ function ChatPageContent() {
           mobileView === 'chat' ? 'flex' : 'hidden md:flex'
         } flex-1 min-w-0 flex-col h-full`}
       >
-        {/* Mobile view switch header */}
-        <div className="min-[1100px]:hidden flex items-center justify-between gap-2 p-2 border-b border-border bg-background">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setMobileView('history')}
-            className="md:hidden min-h-11 px-3 py-1.5 text-xs font-semibold"
-          >
-            ← {t('history')}
-          </Button>
-          <span className="min-w-0 flex-1 text-xs font-semibold text-muted-foreground truncate">
-            {chatCtrl.activeConversationId ? t('activeConversation') : t('newChat')}
-          </span>
-          <ChatSourcesSheet citations={citations} context={chatCtrl.context} />
-        </div>
-
         <div className="flex-1 min-h-0 flex flex-col">
           <ChatSession
             conversationId={chatCtrl.activeConversationId}
             onConversationCreated={(id) => chatCtrl.setActiveConversationId(id)}
             mode="full"
+            headerLeading={(
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setMobileView('history')}
+                className="md:hidden min-h-9 pointer-coarse:min-h-11 gap-1.5 px-3 py-1.5 text-xs font-semibold"
+              >
+                <ArrowLeft aria-hidden="true" className="size-3.5" />{t('history')}
+              </Button>
+            )}
+            headerTrailing={<ChatSourcesSheet citations={citations} context={chatCtrl.context} />}
             onRenameConversation={chatCtrl.activeConversationId
               ? () => conversationActions.rename({ id: chatCtrl.activeConversationId!, title: detail?.title ?? '' })
               : undefined}

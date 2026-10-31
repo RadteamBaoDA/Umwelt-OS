@@ -109,7 +109,7 @@ export function WatchlistGadget({
         <div className="flex items-center gap-1">
           {highlightRules.length > 0 && (
             <span
-              className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-muted/30 text-muted-foreground"
+              className="px-1.5 py-0.2 rounded text-xs font-semibold bg-muted/30 text-muted-foreground"
               title={daily('highlightRulesApplied', { count: highlightRules.length })}
             >
               {daily('ruleCount', { count: highlightRules.length })}
@@ -144,11 +144,11 @@ export function WatchlistGadget({
       )}
 
       {/* Empty State */}
-      {matchesQuery.isPending && highlightRules.length > 0 && definition.source_ids.length > 0 && <GadgetSkeleton variant="table" label={t('gadgetDataLoading')} />}
-      {matchesQuery.isError && <GadgetNotice kind="error" message={t('gadgetDataLoadFailed')} />}
+      {matchesQuery.isPending && highlightRules.length > 0 && definition.source_ids.length > 0 && <GadgetSkeleton variant="table" className="p-0" label={t('gadgetDataLoading')} />}
+      {matchesQuery.isError && <GadgetNotice kind="error" className="p-0" message={t('gadgetDataLoadFailed')} />}
       {!(matchesQuery.isPending && highlightRules.length > 0 && definition.source_ids.length > 0)
         && !matchesQuery.isError && filteredItems.length === 0 && (
-        <GadgetNotice kind="empty" message={`${daily('watchlistEmpty')}. ${daily('watchlistEmptyDetail')}`} />
+        <GadgetNotice kind="empty" className="p-0" message={definition.renderer === 'highlights' ? daily('highlightsEmpty') : `${daily('watchlistEmpty')}. ${daily('watchlistEmptyDetail')}`} action={onAddRule ? { label: daily('addRule'), onClick: onAddRule } : { href: '/settings/sources', label: t('gadgetConfigureAction') }} />
       )}
 
       {/* Watchlist Table */}
@@ -179,7 +179,7 @@ export function WatchlistGadget({
                     {/* Target column */}
                     <td className="py-2 pl-1 align-top">
                       <div className="font-semibold text-foreground">{item.target}</div>
-                      <div className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">
+                      <div className="text-xs text-muted-foreground tabular-nums">
                         {item.targetType}
                       </div>
                     </td>
@@ -194,7 +194,7 @@ export function WatchlistGadget({
                           {item.matchReason}
                         </div>
                       )}
-                      <div className="text-[10px] text-muted-foreground/70 font-mono mt-0.5">
+                      <div className="text-xs text-muted-foreground/70 tabular-nums mt-0.5">
                         Matched: {lastMatched} ({item.matchCount}x)
                       </div>
                     </td>
@@ -204,7 +204,7 @@ export function WatchlistGadget({
                       {/* Visible text severity badge */}
                       <div>
                         <span
-                          className={`inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold uppercase tracking-wider ${
+                          className={`inline-flex items-center px-1.5 py-0.2 rounded text-xs font-semibold ${
                             item.severity === 'critical'
                               ? 'bg-destructive/15 text-destructive border border-destructive/30'
                               : item.severity === 'warning'
@@ -224,11 +224,11 @@ export function WatchlistGadget({
                       {/* State badge */}
                       <div>
                         <span
-                          className={`inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-medium font-mono ${
+                          className={`inline-flex items-center px-1.5 py-0.2 rounded text-xs font-medium tabular-nums ${
                             item.status === 'alert'
-                              ? 'text-destructive font-bold'
+                              ? 'text-destructive font-semibold'
                               : item.status === 'matched'
-                              ? 'text-foreground font-bold'
+                              ? 'text-foreground font-semibold'
                               : 'text-muted-foreground'
                           }`}
                         >
