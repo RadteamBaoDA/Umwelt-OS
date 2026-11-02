@@ -105,9 +105,9 @@ export const sourceGuideSteps = {
     },
     coingecko: {
       s1: 'Create a free account at coingecko.com/en/api and add a Demo API key in the developer dashboard.',
-      s2: 'Copy the key (it starts with CG-) and paste it into the API key field; it is encrypted and never shown again.',
+      s2: 'Save this source with the Demo API key, then search CoinGecko and select up to 20 coins. Existing sources continue with Bitcoin until changed.',
       s3: 'Accept the terms below. Show the “Powered by CoinGecko” credit wherever you share the data.',
-      s4: 'Press Test connection, then activate the source.',
+      s4: 'Press Test connection, then activate the source. Each collection reads USD prices for the selected coins.',
     },
     fred: {
       s1: 'Create a free account at fredaccount.stlouisfed.org and request an API key under My Account.',
@@ -244,9 +244,9 @@ export const sourceGuideSteps = {
     },
     coingecko: {
       s1: 'Tạo tài khoản miễn phí tại coingecko.com/en/api và thêm khóa API Demo trong trang quản trị nhà phát triển.',
-      s2: 'Sao chép khóa (bắt đầu bằng CG-) và dán vào trường Khóa API; khóa được mã hóa và không hiển thị lại.',
+      s2: 'Lưu nguồn cùng API key Demo, rồi tìm trên CoinGecko và chọn tối đa 20 coin. Nguồn cũ tiếp tục dùng Bitcoin đến khi bạn đổi.',
       s3: 'Chấp nhận điều khoản bên dưới. Hiển thị ghi công “Powered by CoinGecko” ở mọi nơi bạn chia sẻ dữ liệu.',
-      s4: 'Nhấn Kiểm tra kết nối, rồi kích hoạt nguồn.',
+      s4: 'Nhấn Kiểm tra kết nối, rồi kích hoạt nguồn. Mỗi lần thu thập lấy giá USD của các coin đã chọn.',
     },
     fred: {
       s1: 'Tạo tài khoản miễn phí tại fredaccount.stlouisfed.org và yêu cầu khóa API trong mục My Account.',

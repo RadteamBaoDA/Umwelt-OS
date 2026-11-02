@@ -20,14 +20,14 @@ from modules.connectors.provider_specs import (
 class CatalogEntry(BaseModel):
     """Describe source kind and readiness evidence separately from runtime acceptance.
 
-    Manual imports use existing upload receipts and never enter scheduler dispatch. Code presence
+    Code presence
     grants neither runtime acceptance nor contextual provider eligibility.
     """
 
     model_config = ConfigDict(frozen=True)
 
     provider_id: str
-    kind: Literal["connector", "group", "preset", "manual_import"] = "connector"
+    kind: Literal["connector", "group", "preset"] = "connector"
     label: str
     auth_methods: tuple[str, ...]
     scope_fields: tuple[str, ...]
@@ -81,8 +81,6 @@ class CatalogEntry(BaseModel):
         Native provider identity alone is insufficient: a source type may be
         registered before its scheduler adapter exists.
         """
-        if self.kind == "manual_import":
-            return True
         if self.provider_id in GENERIC_CATALOG_SOURCE_TYPES:
             return True
         if is_native_provider(self.provider_id):
@@ -94,9 +92,7 @@ class CatalogEntry(BaseModel):
     @computed_field(return_type=str | None)  # type: ignore[prop-decorator]  # pydantic computed_field over property
     @property
     def source_type(self) -> str | None:
-        """Return the registered source type, including manual imports outside connector dispatch."""
-        if self.kind == "manual_import":
-            return "manual"
+        """Return the registered source type for this provider, if any."""
         return PROVIDER_SOURCE_TYPES.get(self.provider_id, GENERIC_CATALOG_SOURCE_TYPES.get(self.provider_id))
 
 
@@ -356,16 +352,14 @@ _ENTRIES = (
     *(
         CatalogEntry(
             provider_id=provider_id, label=label, auth_methods=auth_methods,
-            kind="manual_import" if provider_id in {"notes", "personal_finance"} else "connector",
-            scope_fields=(), collection_modes=("manual_import",) if provider_id in {"notes", "personal_finance"} else (), supports_history=False,
+            kind="connector",
+            scope_fields=(), collection_modes=(), supports_history=False,
             supports_edit=False, supports_delete=False, availability=availability,
             availability_reason=reason, history_description=None,
             evidence_status=evidence,
             requires_service=None,
         )
         for provider_id, label, auth_methods, availability, reason, evidence in (
-            ("notes", "Notes (Markdown import)", ("none",), "available", "Markdown files use the existing owner-scoped upload and durable ingestion receipt; no server directory is read.", "manual_import"),
-            ("personal_finance", "Personal finance (OFX/CSV import)", ("none",), "available", "Owner-supplied OFX/CSV is normalized through the existing manual import receipt; no bank connection or transaction execution is provided.", "manual_import"),
             ("notion", "Notion", ("oauth2",), "planned", "OAuth and collection capability remain open.", "unverified"),
             ("slack", "Slack", ("oauth2",), "planned", "OAuth and collection capability remain open.", "unverified"),
         )
@@ -508,11 +502,6 @@ _ENTRIES = tuple(
 _ENTRIES = tuple(
     entry.model_copy(update={"kind": "preset"})
     if entry.provider_id in _SPECS and entry.kind == "connector" else entry
-    for entry in _ENTRIES
-)
-_ENTRIES = tuple(
-    entry.model_copy(update={"collection_modes": ("manual_import",)})
-    if entry.kind == "manual_import" else entry
     for entry in _ENTRIES
 )
 

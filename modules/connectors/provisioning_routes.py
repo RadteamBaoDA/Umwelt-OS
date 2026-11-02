@@ -18,9 +18,11 @@ from core.workspaces.public import lock_access_fence
 from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
 from modules.connectors import (
     catalog,
+    coin_catalog,
     collection,
     provider_terms,
     provisioning,
+    quota,
     registry,
     scheduler,
 )
@@ -35,6 +37,7 @@ from modules.connectors.credentials import (
     CredentialEncryptionUnavailable,
     N8nCredentials,
     decrypt_native_token,
+    decrypt_rest_secret,
     encrypt_native_token,
     encrypt_rest_secret,
     secret_fingerprint,
@@ -47,6 +50,7 @@ from modules.connectors.models import (
 )
 from modules.connectors.n8n import N8nApi
 from modules.connectors.provider_specs import TERMS_INELIGIBLE
+from modules.connectors.providers import rest
 from modules.connectors.public import (
     ConnectorConfig,
     NativeCredentialSnapshot,
@@ -63,6 +67,16 @@ router = APIRouter(prefix="/api/v1/connectors", tags=["connectors"])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 OwnerWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
+
+
+def _invalid_detail(prefix: str, exc: Exception) -> str:
+    """Return the 422 detail for a rejected connector configuration.
+
+    Registry and serializer checks raise plain ``ValueError`` with fixed, value-free sentences (for example the
+    missing field names), so that sentence is appended to tell the owner what to fix. Pydantic ``ValidationError``
+    and other subclasses can echo submitted values, so only the fixed prefix is returned for them.
+    """
+    return f"{prefix}: {exc}" if type(exc) is ValueError else prefix
 
 
 async def _owner_access(session: AsyncSession, request: Request, scope: WorkspaceContext, *, expected: AccessFence | None = None) -> AccessFence:
@@ -364,12 +378,12 @@ async def validate_draft_configuration(
     try:
         source_configuration = serialize_source_configuration(source, payload.configuration)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail="Draft provider configuration is invalid") from exc
+        raise HTTPException(status_code=422, detail=_invalid_detail("Draft provider configuration is invalid", exc)) from exc
     candidate = source.model_copy(update={"configuration": source_configuration})
     try:
         data = registry.validate(candidate)
     except (KeyError, TypeError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail="Draft connector configuration is invalid") from exc
+        raise HTTPException(status_code=422, detail=_invalid_detail("Draft connector configuration is invalid", exc)) from exc
     checks: tuple[str, ...]
     bot_id: str | None = None
     scope_verified: bool | None = None
@@ -459,6 +473,98 @@ async def _source(session: AsyncSession, source_id: UUID, *, scope: Scope, multi
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
     return source
+
+
+class CoinSearchRead(BaseModel):
+    """CoinGecko catalog matches; IDs are the source configuration keys."""
+
+    items: list[coin_catalog.Coin]
+
+
+@router.get("/{source_id}/coingecko/coins", response_model=CoinSearchRead)
+async def search_coingecko_coins(
+    source_id: UUID, session: Session, request: Request, _owner: OwnerRead,
+    q: str = Query(min_length=2, max_length=80),
+) -> CoinSearchRead:
+    """Search CoinGecko's public catalog for one owner source with a current Demo key.
+
+    A cache miss uses the connector terms gate and commits one shared quota debit immediately
+    before the fixed-host request. Source, access, terms, and credential revisions are checked
+    again after DNS resolution; no key or provider payload is written to the quota ledger.
+    """
+    settings = request.app.state.settings
+    multi = settings.multi_workspace_enabled
+    scope = _owner
+    access_fence = await _owner_access(session, request, scope)
+    source = await _source(session, source_id, scope=scope, multi_workspace_enabled=multi)
+    if source.provider != "coingecko" or source.status not in {"active", "paused"}:
+        raise HTTPException(status_code=422, detail="Source is not an editable CoinGecko datasource")
+    row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi, scope=scope)
+    credential = await session.get(ConnectorRestCredential, source_id)
+    if (row is None or credential is None or credential.state != "ready"
+            or credential.encrypted_secret is None or credential.header_name != "x-cg-demo-api-key"
+            or credential.source_generation != source.generation
+            or credential.configuration_revision != row.desired_revision):
+        raise HTTPException(status_code=409, detail="Save a CoinGecko Demo API key before searching coins")
+    terms_revision = await provider_terms.require_terms_eligible(session, source)
+    source_generation, configuration_revision = source.generation, row.desired_revision
+    credential_revision, operation_id = row.credential_revision, credential.operation_id
+    ciphertext = credential.encrypted_secret
+    try:
+        encryption_key = settings.connector_credential_encryption_key.get_secret_value()
+        secret = decrypt_rest_secret(
+            encryption_key, ciphertext, source_id=source_id, operation_id=operation_id,
+            source_generation=source_generation, configuration_revision=configuration_revision,
+            header_name="x-cg-demo-api-key",
+        )
+    except CredentialEncryptionUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Stored CoinGecko key is unavailable; re-enter it") from exc
+    fingerprint = quota.credential_fingerprint(secret, deployment_key=encryption_key)
+    await session.rollback()  # Release the owner/Source read transaction before DNS or provider I/O.
+
+    async def before_send() -> None:
+        """Recheck the original owner, source, terms and key then debit the shared budget before wire send."""
+        try:
+            await _owner_access(session, request, scope, expected=access_fence)
+            current = await _source(session, source_id, scope=scope, multi_workspace_enabled=multi)
+            current_row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi, scope=scope)
+            current_credential = await session.get(ConnectorRestCredential, source_id)
+            if (current.status not in {"active", "paused"} or current.provider != "coingecko"
+                    or current.generation != source_generation or current_row is None
+                    or current_row.desired_revision != configuration_revision
+                    or current_row.credential_revision != credential_revision
+                    or current_credential is None or current_credential.state != "ready"
+                    or current_credential.operation_id != operation_id
+                    or current_credential.header_name != "x-cg-demo-api-key"):
+                raise HTTPException(status_code=409, detail="CoinGecko source or key changed; search again")
+            if await provider_terms.require_terms_eligible(session, current) != terms_revision:
+                raise HTTPException(status_code=409, detail="CoinGecko terms changed; search again")
+            await quota.debit_send(
+                session, provider_id="coingecko", workspace_id=scope.workspace_id,
+                request_id=uuid7(), admission_token=uuid7(), attempt=0, send_sequence=1,
+                request_target="coingecko:coins/list", credential=fingerprint,
+            )
+            await session.commit()
+        except BaseException:
+            await session.rollback()
+            raise
+
+    try:
+        coins = await coin_catalog.load_catalog(secret, before_send)
+    except quota.QuotaDeferred as exc:
+        raise HTTPException(status_code=429, detail="CoinGecko request budget is exhausted; try again later") from exc
+    except ProviderRateLimited as exc:
+        await quota.defer_provider(session, provider_id="coingecko", until=exc.next_eligible_at, credential=fingerprint)
+        await session.commit()
+        raise HTTPException(status_code=429, detail="CoinGecko is rate limiting catalog requests; try again later") from exc
+    except rest.ProviderHttpError as exc:
+        detail = "CoinGecko rejected the Demo API key" if exc.status_code in {401, 403} else "CoinGecko coin catalog is unavailable"
+        raise HTTPException(status_code=502, detail=detail) from exc
+    except (rest.CollectionIncomplete, rest.UnsafeDestination, ValueError, TimeoutError, httpx.HTTPError) as exc:
+        raise HTTPException(status_code=502, detail="CoinGecko coin catalog is unavailable") from exc
+    finally:
+        await session.rollback()
+    return CoinSearchRead(items=coin_catalog.search_catalog(coins, q))
 
 
 @router.get("/catalog")
@@ -629,7 +735,7 @@ async def validate_configuration(
             await session.rollback()
             await validate_public_url(data["url"])
     except (KeyError, TypeError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail="Connector configuration is invalid") from exc
+        raise HTTPException(status_code=422, detail=_invalid_detail("Connector configuration is invalid", exc)) from exc
     row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
     if row is None:
         raise HTTPException(status_code=409, detail="Save connector configuration before validation")

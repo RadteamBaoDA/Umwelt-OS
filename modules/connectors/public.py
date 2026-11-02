@@ -251,6 +251,43 @@ def is_native_provider(provider: str | None) -> TypeGuard[str]:
     return _is_native_provider(provider)
 
 
+class CoinGeckoAsset(BaseModel):
+    """One selected catalog coin; its ID is the stable source identity, not its reusable ticker."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=2, max_length=64, pattern=r"^[a-z0-9-]+$")
+    symbol: str = Field(min_length=1, max_length=32)
+    name: str = Field(min_length=1, max_length=128)
+    series_symbol: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, value: str) -> str:
+        """Keep catalog display names printable and trimmed before they become stored UI labels."""
+        if value != value.strip() or not value.isprintable():
+            raise ValueError("CoinGecko asset name must be printable and trimmed")
+        return value
+
+    @field_validator("symbol")
+    @classmethod
+    def valid_symbol(cls, value: str) -> str:
+        """Keep the provider's displayed ticker printable and single-line; it never enters request URLs."""
+        if value != value.strip() or not value.isprintable():
+            raise ValueError("CoinGecko symbol must be printable and trimmed")
+        return value
+
+    @model_validator(mode="after")
+    def set_series_symbol(self) -> "CoinGeckoAsset":
+        """Derive the stable observation key; reject a client-supplied key that differs from the ID."""
+        from modules.connectors.providers.crypto import coingecko_series_symbol
+
+        expected = coingecko_series_symbol(self.id)
+        if self.series_symbol is not None and self.series_symbol != expected:
+            raise ValueError("CoinGecko series symbol does not match the coin ID")
+        self.series_symbol = expected
+        return self
+
+
 class ConnectorConfig(BaseModel):
     """Validate bounded source scopes, per-provider mappings, timezone, and schedule settings.
 
@@ -291,6 +328,7 @@ class ConnectorConfig(BaseModel):
     github_history_days: StrictInt = Field(default=90, ge=1, le=365)
     telegram_chat_ids: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=100)
     market_symbols: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=5)
+    coingecko_assets: tuple["CoinGeckoAsset", ...] | None = Field(default=None, min_length=1, max_length=20)
     market_currency: str | None = Field(default=None, min_length=3, max_length=3, pattern=r"^[A-Z]{3}$")
     market_exchange_timezone: str | None = Field(default=None, min_length=1, max_length=64)
     weather_latitude: float | None = Field(default=None, ge=-90, le=90)
@@ -461,6 +499,8 @@ class ConnectorConfig(BaseModel):
             or any(not re.fullmatch(r"[A-Z0-9.^_-]{1,20}", symbol) for symbol in self.market_symbols)
         ):
             raise ValueError("Market symbols must be unique uppercase provider symbols")
+        if self.coingecko_assets is not None and len({asset.id for asset in self.coingecko_assets}) != len(self.coingecko_assets):
+            raise ValueError("CoinGecko asset IDs must be unique")
         if self.market_symbols is not None and self.schedule_interval_minutes not in (None, 1440):
             raise ValueError("Alpha Vantage collection must be scheduled at most once per day")
         if (self.market_currency is None) != (self.market_exchange_timezone is None):

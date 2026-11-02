@@ -100,3 +100,28 @@ def test_registry_requires_full_scope_and_rejects_raw_urls():
                 {**ok, "news_site": "evil.com"}):
         with pytest.raises(ValueError):
             registry.validate(_source(**bad))
+
+
+def test_registry_names_each_missing_scope_field_without_values():
+    from modules.connectors import registry
+
+    source = _source(news_query="economy", news_locale="vi-VN")
+    source.configuration.pop("history_mode")
+    with pytest.raises(ValueError, match=r"^Missing required fields: news_site, history_mode$"):
+        registry.validate(source)
+
+
+def test_invalid_detail_appends_only_plain_value_errors():
+    from pydantic import BaseModel, ValidationError
+
+    from modules.connectors.provisioning_routes import _invalid_detail
+
+    assert _invalid_detail("Draft connector configuration is invalid", ValueError("Missing required fields: news_site")) == (
+        "Draft connector configuration is invalid: Missing required fields: news_site")
+
+    class Probe(BaseModel):
+        n: int
+
+    with pytest.raises(ValidationError) as caught:
+        Probe(n="secret-value")
+    assert _invalid_detail("Draft connector configuration is invalid", caught.value) == "Draft connector configuration is invalid"

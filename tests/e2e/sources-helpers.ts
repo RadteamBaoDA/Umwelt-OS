@@ -190,10 +190,11 @@ export const BUILTINS: [id: string, label: string][] = [
   ['nvd', 'NVD recent CVEs'],
 ];
 
-/** Opens the "Connect a source" wizard dialog from the sources settings page. */
+/** Opens the "Add datasource" > "Connect an API" wizard dialog from the sources settings page. */
 export async function openWizard(page: Page) {
   await page.goto('/settings/sources');
-  await page.getByRole('button', { name: 'Connect a source' }).click();
+  await page.getByRole('button', { name: 'Add datasource' }).click();
+  await page.getByRole('menuitem', { name: /Connect an API/ }).click();
   return page.getByRole('dialog');
 }
 
@@ -223,12 +224,13 @@ export async function connectWizardSource(page: Page, c: WizardCase, name: strin
 }
 
 /**
- * Enables one built-in through "Add built-in" (pick, terms, enable, test fetch) and returns the fetch outcome with the
+ * Enables one built-in through "Add datasource" > "Built-in feed" (pick, terms, enable, test fetch) and returns the fetch outcome with the
  * created source id (null when the server did not create one). The caller owns cleanup.
  */
 export async function enableBuiltinViaSettings(page: Page, id: string, label: string, timeout = 120_000): Promise<Outcome & { sourceId: string | null }> {
   await page.goto('/settings/sources');
-  await page.getByRole('button', { name: 'Add built-in' }).click();
+  await page.getByRole('button', { name: 'Add datasource' }).click();
+  await page.getByRole('menuitem', { name: /Built-in feed/ }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('button', { name: new RegExp(`^${escapeRe(label)}`) }).click();
   const next = dialog.getByRole('button', { name: 'Next', exact: true });

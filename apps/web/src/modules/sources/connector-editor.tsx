@@ -23,7 +23,7 @@ import { AppLocaleId, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useGuardedNavigation } from '@/core/guarded-navigation';
 import { useWorkspace } from '@/core/workspace-context';
-import { ProviderGuide, ProviderScope, ProviderTerms, type NativeProvider } from './provider-scope';
+import { ProviderGuide, ProviderScope, ProviderTerms, ScopeHint, type NativeProvider } from './provider-scope';
 import { GitHubSummary } from './github-summary';
 import { McpCollectionEditor } from './mcp-collection-editor';
 import {
@@ -170,8 +170,8 @@ function providerKey(providerId: string): string {
     telegram: 'providerTelegram', alpha_vantage: 'providerAlphaVantage', coingecko: 'providerCoinGecko', open_meteo: 'providerOpenMeteo', google_news: 'providerGoogleNews', openalex: 'providerOpenAlex', reddit: 'providerReddit', hacker_news: 'providerHackerNews',
     mastodon: 'providerMastodon', bluesky: 'providerBluesky', x: 'providerX', vietnamese_press: 'providerVietnamesePress',
     gdelt_government: 'providerGdelt', finance: 'providerFinance', weather_disaster_climate: 'providerWeather', cyber_cve: 'providerCyber',
-    map_osint: 'providerMapOsint', browser: 'providerBrowser', notes: 'providerNotes', health: 'providerHealth',
-    personal_finance: 'providerPersonalFinance', iot: 'providerIot', notion: 'providerNotion', slack: 'providerSlack',
+    map_osint: 'providerMapOsint', browser: 'providerBrowser', health: 'providerHealth',
+    iot: 'providerIot', notion: 'providerNotion', slack: 'providerSlack',
     home_assistant: 'providerHomeAssistant',
     bbc_world: 'providerBbcWorld', vnexpress_business: 'providerVnexpressBusiness', dantri_news: 'providerDantriNews', thanhnien_news: 'providerThanhnienNews', tuoitre_news: 'providerTuoitreNews', hn_top: 'providerHnTop', gdelt_economy: 'providerGdeltEconomy',
     world_bank: 'providerWorldBank', frankfurter: 'providerFrankfurter', ecb: 'providerEcb', binance: 'providerBinance',
@@ -256,6 +256,53 @@ function sourceErrorDetail(cause: unknown): string {
   const message = cause.status < 500 && !Array.isArray(cause.details) && !cause.message.includes('\n') ? cause.message.slice(0, 300) : '';
   return [`HTTP ${cause.status}`, cause.code, message, ...fields].filter(Boolean).join(' | ');
 }
+
+/** One configuration field the server rejected, with a coarse reason the editor can localize. */
+type ScopeIssue = { field: string; reason: 'required' | 'format' | 'tooLong' | 'range' | 'invalid' };
+
+/** Maps a Pydantic error type to the coarse reason shown next to the field label. */
+function issueReason(type: string): ScopeIssue['reason'] {
+  if (type === 'missing' || type === 'string_too_short' || type === 'too_short') return 'required';
+  if (type === 'string_too_long' || type === 'too_long') return 'tooLong';
+  if (/^(greater|less)_than/.test(type)) return 'range';
+  if (/pattern|literal|enum|url|int_|float_|bool_|string_type|value_error/.test(type)) return 'format';
+  return 'invalid';
+}
+
+/**
+ * Extracts per-field problems from a 422: Pydantic `loc` paths under `configuration` and the registry's
+ * value-free "Missing required fields: a, b" sentence. Only schema field names are read, never submitted values.
+ */
+function scopeIssues(cause: unknown): ScopeIssue[] {
+  if (!(cause instanceof ApiError) || cause.status !== 422) return [];
+  const issues = new Map<string, ScopeIssue>();
+  if (Array.isArray(cause.details)) for (const item of cause.details as unknown[]) {
+    const issue = item as { loc?: unknown; type?: unknown } | null;
+    if (!issue || !Array.isArray(issue.loc) || typeof issue.type !== 'string') continue;
+    const at = issue.loc.indexOf('configuration');
+    const field = at >= 0 ? issue.loc[at + 1] : undefined;
+    if (typeof field === 'string' && !issues.has(field)) issues.set(field, { field, reason: issueReason(issue.type) });
+  }
+  const missing = /Missing required fields: ([a-z0-9_, ]+)/.exec(cause.message)?.[1];
+  for (const field of missing?.split(',').map((name) => name.trim()).filter(Boolean) ?? []) issues.set(field, { field, reason: 'required' });
+  return [...issues.values()].slice(0, 10);
+}
+
+/** Form label message key for each configuration field, so a server issue names the field the owner sees. */
+const FIELD_LABEL_KEYS: Record<string, string> = {
+  news_query: 'newsQuery', news_site: 'newsSite', news_locale: 'newsLocale', sec_cik: 'secCik', sec_contact_email: 'secContactEmail',
+  scholarly_query: 'scholarlyQuery', fred_series_id: 'fredSeriesId', owm_latitude: 'weatherLatitude', owm_longitude: 'weatherLongitude',
+  openaq_location_id: 'openaqLocationId', firms_country: 'firmsCountry', youtube_channel_id: 'youtubeChannelId', arxiv_category: 'arxivCategory',
+  huggingface_author: 'huggingfaceAuthor', bluesky_actor: 'blueskyActor', reddit_subreddit: 'redditSubreddit',
+  mastodon_instance_url: 'mastodonInstanceUrl', mastodon_account: 'mastodonAccount', mastodon_hashtag: 'mastodonHashtag',
+  x_account: 'xAccount', x_query: 'xQuery', github_owner: 'githubOwner', github_repository: 'githubRepository', github_history_days: 'githubHistoryDays',
+  telegram_chat_ids: 'telegramChannelIds', market_symbols: 'marketSymbols', market_currency: 'marketCurrency', market_exchange_timezone: 'marketExchangeTimezone',
+  weather_latitude: 'weatherLatitude', weather_longitude: 'weatherLongitude', weather_timezone: 'weatherTimezone', weather_metrics: 'weatherMetrics',
+  notion_page_ids: 'notionPageIds', slack_channel_ids: 'slackChannelIds', feed_url: 'sourceUrl', url: 'pageUrl', items_path: 'itemsPath',
+  id_field: 'idField', title_field: 'titleField', content_field: 'contentField', updated_field: 'updatedField', fhir_base_url: 'fhirBaseUrl',
+  fhir_patient_id: 'fhirPatientId', ha_base_url: 'homeAssistantBaseUrl', ha_entity_ids: 'homeAssistantEntityIds', timezone: 'timezone',
+  history_mode: 'history', schedule_interval_minutes: 'schedule',
+};
 
 /** Pause and Disconnect controls for the editor header, sharing handlers and the confirmation dialog with the source list rows. */
 function EditorSourceActions({ source, activation, disabled, onChanged, onPurgeStarted, onClose, onBusyChange }: {
@@ -356,7 +403,8 @@ export function ConnectorEditor({
   const requestController = useRef<AbortController | null>(null);
   const busyRef = useRef('');
   const draftVersion = useRef(0);
-  const [configuration, setConfiguration] = useState<ConnectorConfig>(() => defaultConfiguration(initialProvider));
+  const [issues, setIssues] = useState<ScopeIssue[]>([]);
+  const [draftConfiguration, setConfiguration] = useState<ConnectorConfig>(() => defaultConfiguration(initialProvider));
   const [scopeResetEpoch, setScopeResetEpoch] = useState(0);
   const [authMethod, setAuthMethod] = useState<'none' | 'http_header' | 'telegram_bot_token'>(source?.provider === 'telegram' ? 'telegram_bot_token' : 'none');
   const [authHeaderName, setAuthHeaderName] = useState('Authorization');
@@ -506,6 +554,12 @@ export function ConnectorEditor({
   });
   const catalogQuery = useQuery({ queryKey: connectorKeys.catalog, queryFn: ({ signal }) => getConnectorCatalog(signal) });
   const currentEntry = (catalogQuery.data ?? []).find((entry) => entry.provider_id === provider);
+  // A source is created before its first save, so an unsaved one (revision 0) reloads with an empty server
+  // configuration. Layer the provider defaults under the draft so required scope (e.g. Google News site, locale
+  // and history mode) is never silently missing; values the owner typed or cleared still win.
+  const configuration = useMemo<ConnectorConfig>(() => (revision === 0 && currentEntry
+    ? { ...defaultConfiguration(provider, currentEntry), ...draftConfiguration } : draftConfiguration),
+  [revision, currentEntry, provider, draftConfiguration]);
   const termsGated = isPreset(currentEntry) && Boolean(sourceId);
   const termsQuery = useQuery({ queryKey: connectorKeys.terms(sourceId), queryFn: ({ signal }) => getProviderTerms(sourceId, signal), enabled: termsGated });
   const termsBlocked = isPreset(currentEntry) && (!termsGated || termsQuery.data?.eligible !== true);
@@ -617,7 +671,7 @@ export function ConnectorEditor({
     setValidation(null);
     setNotice('');
     setError('');
-    setErrorDetail('');
+    setErrorDetail(''); setIssues([]);
     if (isPreset(entry) && (!name.trim() || name === currentEntry?.label)) setName(entry.label);
     markDraftChanged();
   }
@@ -834,6 +888,7 @@ export function ConnectorEditor({
       ...(provider === 'telegram' ? { secret_action: telegramSecretAction, ...(replaceTelegramToken ? { secret } : {}) } : {}) };
     const submittedVersion = draftVersion.current;
     setError('');
+    setErrorDetail(''); setIssues([]);
     setNotice('');
     try {
       const result = await validateDraftConnector(id, draft, token.controller.signal);
@@ -842,6 +897,7 @@ export function ConnectorEditor({
     } catch (cause) {
       if (requestIsCurrent(token)) {
         setError(cause instanceof ApiError && cause.status === 503 ? 'validationOutcomeUnknown' : errorText(cause));
+        setErrorDetail(sourceErrorDetail(cause)); setIssues(scopeIssues(cause));
         if (cause instanceof ApiError && cause.status === 409) setConflict(true);
       }
     } finally {
@@ -855,7 +911,7 @@ export function ConnectorEditor({
     const draft = { ...settings, configuration: { ...configuration } };
     const submittedVersion = draftVersion.current;
     setError('');
-    setErrorDetail('');
+    setErrorDetail(''); setIssues([]);
     setNotice('');
     try {
       const id = await ensureSource(token);
@@ -910,7 +966,7 @@ export function ConnectorEditor({
     } catch (cause) {
       if (requestIsCurrent(token)) {
         setError(errorText(cause));
-        setErrorDetail(sourceErrorDetail(cause));
+        setErrorDetail(sourceErrorDetail(cause)); setIssues(scopeIssues(cause));
         saveFailCode.current = cause instanceof ApiError ? cause.code ?? `http_${cause.status}` : 'request_failed';
         if (cause instanceof ApiError && cause.status === 409) setConflict(true);
         if (cause instanceof ApiError && cause.status >= 500) { setConflict(true); setError('reloadFailed'); }
@@ -986,7 +1042,7 @@ export function ConnectorEditor({
         setError('');
       } else {
         setError(errorText(cause));
-        setErrorDetail(sourceErrorDetail(cause));
+        setErrorDetail(sourceErrorDetail(cause)); setIssues(scopeIssues(cause));
         saveFailCode.current = cause instanceof ApiError ? cause.code ?? `http_${cause.status}` : 'request_failed';
       }
       setNotice(t('savedInactive'));
@@ -1401,7 +1457,7 @@ export function ConnectorEditor({
     try {
       return await ensureSource(token);
     } catch (cause) {
-      if (requestIsCurrent(token)) { setError(errorText(cause)); setErrorDetail(sourceErrorDetail(cause)); }
+      if (requestIsCurrent(token)) { setError(errorText(cause)); setErrorDetail(sourceErrorDetail(cause)); setIssues(scopeIssues(cause)); }
       return null;
     } finally {
       endRequest(token);
@@ -1420,8 +1476,8 @@ export function ConnectorEditor({
     const stillCurrent = () => verifyController.current === controller && !controller.signal.aborted;
     const fail = (code: string) => { if (stillCurrent()) setVerify({ phase: 'failed', code }); };
     saveFailCode.current = null;
-    setErrorDetail('');
-    const verifyDeadline = Date.now() + VERIFY_TOTAL_MS; // eslint-disable-line react-hooks/purity -- event handler, not render
+    setErrorDetail(''); setIssues([]);
+    const verifyDeadline = Date.now() + VERIFY_TOTAL_MS;
     setVerify({ phase: 'saving' });
     try {
       let id = sourceId;
@@ -1447,7 +1503,7 @@ export function ConnectorEditor({
       else fail(final.error_code ?? final.status);
     } catch (cause) {
       if (!stillCurrent()) return;
-      setErrorDetail(sourceErrorDetail(cause));
+      setErrorDetail(sourceErrorDetail(cause)); setIssues(scopeIssues(cause));
       fail(cause instanceof ApiError ? cause.code ?? `http_${cause.status}` : 'request_failed');
     }
   }
@@ -1510,13 +1566,13 @@ export function ConnectorEditor({
       {!embedded && <header className="section-heading"><div><h2>{t('setupTitle')}</h2><p className="text-muted-foreground">{t('stepConnect')}</p></div></header>}
       {catalogQuery.isPending && <p className="text-muted-foreground">{t('loading')}</p>}
       {catalogQuery.isError && <p className="error" role="alert">{t('loadFailed')} <Button variant="outline" onClick={() => catalogQuery.refetch()}>{t('retry')}</Button></p>}
-      {Boolean(shapeFilter?.length) && catalogQuery.isSuccess && !sourceId && !(catalog.some((entry) => entry.kind !== 'manual_import' && entry.kind !== 'group'))
+      {Boolean(shapeFilter?.length) && catalogQuery.isSuccess && !sourceId && !(catalog.some((entry) => entry.kind !== 'group'))
         && <p role="status" className="text-muted-foreground">{t('shapeFilterNone')} {onClearFilter && <Button variant="outline" size="sm" onClick={onClearFilter}>{t('shapeFilterClear')}</Button>}</p>}
-      {catalog.length > 0 && groupCatalog(catalog.filter((entry) => entry.kind !== 'manual_import' && entry.kind !== 'group')).map(([group, entries]) => <SettingsSection key={group} title={t(PROVIDER_GROUP_KEY[group])}>
+      {catalog.length > 0 && groupCatalog(catalog.filter((entry) => entry.kind !== 'group')).map(([group, entries]) => <SettingsSection key={group} title={t(PROVIDER_GROUP_KEY[group])}>
         <div className="source-provider-grid !m-0 !grid-cols-[repeat(auto-fill,minmax(14rem,1fr))]" role="group" aria-label={t(PROVIDER_GROUP_KEY[group])}>
         {entries.map((entry) => {
           const localProvider = entry.provider_id;
-          const supported = entry.kind !== 'manual_import' && Boolean(entry.source_type && entry.code_available) && ['available', 'implemented', 'requires_credentials'].includes(entry.availability) && isProvider(localProvider);
+          const supported = Boolean(entry.source_type && entry.code_available) && ['available', 'implemented', 'requires_credentials'].includes(entry.availability) && isProvider(localProvider);
           const added = addedBuiltinIds.has(localProvider);
           return <Button key={entry.provider_id} type="button" variant="outline" className={`source-provider h-auto min-h-14 min-w-0 flex-col items-start justify-center overflow-hidden whitespace-normal break-words text-left font-normal${provider === localProvider ? ' is-selected' : ''}`} disabled={!supported || locked || added || Boolean(sourceId)} onClick={() => { if (!supported || !isProvider(localProvider)) return; selectProvider(localProvider, entry); }}>
             <strong>{providerKey(entry.provider_id) === 'provider' ? entry.label : t(providerKey(entry.provider_id))}</strong>
@@ -1553,7 +1609,8 @@ export function ConnectorEditor({
       {configurationQuery.isError && <div className="error" role="alert">{t(errorText(configurationQuery.error) as 'conflict' | 'configurationInvalid' | 'serviceUnavailable' | 'sourceNameRequired' | 'actionFailed')} <Button variant="outline" onClick={() => configurationQuery.refetch()}>{t('retry')}</Button></div>}
       {configurationQuery.isSuccess && <>
         {provider === 'mcp' ? <div hidden={!showStep('connect')}><McpCollectionEditor sourceId={sourceId} sourceStatus={sourceStatus} onDraftChange={setDirty} onChanged={() => { void queryClient.invalidateQueries({ queryKey: connectorKeys.configuration(sourceId) }); void queryClient.invalidateQueries({ queryKey: connectorKeys.activation(sourceId) }); onChanged(); }} /></div> : <>
-        {showStep('verify') && revision > 0 && (visibleActivationState === 'saved_not_active' || visibleActivationState === 'reconciliation_required' || Boolean(visibleActivationError)) && <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive p-4" role="status">
+        {/* A verify run saves (saved_not_active) then activates (queued); hide interim activation state until it settles. */}
+        {showStep('verify') && revision > 0 && !verifyBusy && (visibleActivationState === 'saved_not_active' || visibleActivationState === 'reconciliation_required' || Boolean(visibleActivationError)) && <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive p-4" role="status">
           <p><strong>{t('activationIssueTitle')}</strong> {t('savedInactive')}{visibleActivationError ? ` ${t('activationError')}: ${visibleActivationError}` : ''}</p>
           {!dirty && <Button variant="outline" disabled={locked || termsBlocked} onClick={retryActivation}>{busyAction === 'activate' ? t('enabling') : t('retryActivation')}</Button>}
         </div>}
@@ -1645,21 +1702,21 @@ export function ConnectorEditor({
           </div>
           : provider === 'health' ? <FieldGrid>
             <div className="field"><Label htmlFor="fhir-base-url">{t('fhirBaseUrl')}</Label><Input id="fhir-base-url" type="url" maxLength={512} value={configuration.fhir_base_url ?? ''} onChange={(event) => changeConfiguration('fhir_base_url', event.target.value)} /><small className="text-muted-foreground">{t('localEndpointHelp')}</small></div>
-            <div className="field"><Label htmlFor="fhir-patient-id">{t('fhirPatientId')}</Label><Input id="fhir-patient-id" maxLength={128} value={configuration.fhir_patient_id ?? ''} onChange={(event) => changeConfiguration('fhir_patient_id', event.target.value)} /></div>
+            <div className="field"><Label htmlFor="fhir-patient-id">{t('fhirPatientId')}</Label><Input id="fhir-patient-id" maxLength={128} aria-describedby="source-hint-fhir_patient_id" value={configuration.fhir_patient_id ?? ''} onChange={(event) => changeConfiguration('fhir_patient_id', event.target.value)} /><ScopeHint field="fhir_patient_id" /></div>
           </FieldGrid>
           : provider === 'home_assistant' ? <FieldGrid>
             <div className="field"><Label htmlFor="ha-base-url">{t('homeAssistantBaseUrl')}</Label><Input id="ha-base-url" type="url" maxLength={512} value={configuration.ha_base_url ?? ''} onChange={(event) => changeConfiguration('ha_base_url', event.target.value)} /><small className="text-muted-foreground">{t('localEndpointHelp')}</small></div>
             <div className="field"><Label htmlFor="ha-entity-ids">{t('homeAssistantEntityIds')}</Label><Input id="ha-entity-ids" value={(configuration.ha_entity_ids ?? []).join(', ')} onChange={(event) => changeConfiguration('ha_entity_ids', event.target.value.split(',').map((value) => value.trim()).filter(Boolean).slice(0, 500))} /><small className="text-muted-foreground">{t('homeAssistantEntityIdsHelp')}</small></div>
           </FieldGrid>
           : currentEntry && isPreset(currentEntry) && currentEntry.scope_fields.length === 0 ? <p className="text-muted-foreground">{t('fixedScope')}</p> : isNativeEntry(currentEntry)
-            ? <ProviderScope key={`${sourceId}:${provider}:${revision}:${sourceGeneration}:${scopeResetEpoch}`} provider={provider as NativeProvider} configuration={configuration} disabled={locked} resetEpoch={scopeResetEpoch} onChange={changeConfiguration} />
-            : provider === 'rss' ? <div className="field"><Label htmlFor="source-feed-url">{t('sourceUrl')}</Label><Input id="source-feed-url" type="url" value={configuration.feed_url ?? ''} onChange={(event) => changeConfiguration('feed_url', event.target.value)} /></div> : <div className="field"><Label htmlFor="source-config-url">{provider === 'rest' ? t('apiUrl') : t('pageUrl')}</Label><Input id="source-config-url" type="url" value={configuration.url ?? ''} onChange={(event) => changeConfiguration('url', event.target.value)} /></div>}
+            ? <ProviderScope key={`${sourceId}:${provider}:${revision}:${sourceGeneration}:${scopeResetEpoch}`} provider={provider as NativeProvider} sourceId={sourceId} credentialConfigured={providerCredentialConfigured} configuration={configuration} disabled={locked} resetEpoch={scopeResetEpoch} onChange={changeConfiguration} />
+            : provider === 'rss' ? <div className="field"><Label htmlFor="source-feed-url">{t('sourceUrl')}</Label><Input id="source-feed-url" type="url" aria-describedby="source-hint-feed_url" value={configuration.feed_url ?? ''} onChange={(event) => changeConfiguration('feed_url', event.target.value)} /><ScopeHint field="feed_url" /></div> : <div className="field"><Label htmlFor="source-config-url">{provider === 'rest' ? t('apiUrl') : t('pageUrl')}</Label><Input id="source-config-url" type="url" aria-describedby="source-hint-url" value={configuration.url ?? ''} onChange={(event) => changeConfiguration('url', event.target.value)} /><ScopeHint field="url" /></div>}
           {provider === 'rest' && <FieldGrid>
-            <div className="field"><Label htmlFor="source-items-path">{t('itemsPath')}</Label><Input id="source-items-path" maxLength={256} value={configuration.items_path ?? ''} onChange={(event) => changeConfiguration('items_path', event.target.value)} /></div>
-            <div className="field"><Label htmlFor="source-id-field">{t('idField')}</Label><Input id="source-id-field" maxLength={128} value={configuration.id_field ?? ''} onChange={(event) => changeConfiguration('id_field', event.target.value)} /></div>
-            <div className="field"><Label htmlFor="source-title-field">{t('titleField')}</Label><Input id="source-title-field" maxLength={128} value={configuration.title_field ?? ''} onChange={(event) => changeConfiguration('title_field', event.target.value)} /></div>
-            <div className="field"><Label htmlFor="source-content-field">{t('contentField')}</Label><Input id="source-content-field" maxLength={128} value={configuration.content_field ?? ''} onChange={(event) => changeConfiguration('content_field', event.target.value)} /></div>
-            <div className="field"><Label htmlFor="source-updated-field">{t('updatedField')}</Label><Input id="source-updated-field" maxLength={128} value={configuration.updated_field ?? ''} onChange={(event) => changeConfiguration('updated_field', event.target.value)} /></div>
+            <div className="field"><Label htmlFor="source-items-path">{t('itemsPath')}</Label><Input id="source-items-path" maxLength={256} aria-describedby="source-hint-items_path" value={configuration.items_path ?? ''} onChange={(event) => changeConfiguration('items_path', event.target.value)} /><ScopeHint field="items_path" /></div>
+            <div className="field"><Label htmlFor="source-id-field">{t('idField')}</Label><Input id="source-id-field" maxLength={128} aria-describedby="source-hint-id_field" value={configuration.id_field ?? ''} onChange={(event) => changeConfiguration('id_field', event.target.value)} /><ScopeHint field="id_field" /></div>
+            <div className="field"><Label htmlFor="source-title-field">{t('titleField')}</Label><Input id="source-title-field" maxLength={128} aria-describedby="source-hint-title_field" value={configuration.title_field ?? ''} onChange={(event) => changeConfiguration('title_field', event.target.value)} /><ScopeHint field="title_field" /></div>
+            <div className="field"><Label htmlFor="source-content-field">{t('contentField')}</Label><Input id="source-content-field" maxLength={128} aria-describedby="source-hint-content_field" value={configuration.content_field ?? ''} onChange={(event) => changeConfiguration('content_field', event.target.value)} /><ScopeHint field="content_field" /></div>
+            <div className="field"><Label htmlFor="source-updated-field">{t('updatedField')}</Label><Input id="source-updated-field" maxLength={128} aria-describedby="source-hint-updated_field" value={configuration.updated_field ?? ''} onChange={(event) => changeConfiguration('updated_field', event.target.value)} /><ScopeHint field="updated_field" /></div>
           </FieldGrid>}
           {/* Validation lives with the scope/URL it checks; running it earlier always fails for scoped and generic sources. */}
           <div className="form-actions"><Button variant="outline" disabled={locked} onClick={validateDraft}>{busyAction === 'validate' ? t('validating') : t('validateDraft')}</Button></div>
@@ -1668,7 +1725,7 @@ export function ConnectorEditor({
           <div id="source-step-collect" hidden={!showStep('collect')} className="scroll-mt-4"><SettingsSection title={t('panelSchedule')} description={t('panelScheduleHint')}>
           <FieldGrid>
           <div className="field"><Label htmlFor="source-schedule">{t('schedule')}</Label><Select value={String(configuration.schedule_interval_minutes)} onValueChange={(value) => changeConfiguration('schedule_interval_minutes', Number(value) as ConnectorConfig['schedule_interval_minutes'])}><SelectTrigger id="source-schedule"><SelectValue /></SelectTrigger><SelectContent>{(provider === 'alpha_vantage' ? [1440] : intervals).map((minutes) => <SelectItem key={minutes} value={String(minutes)}>{t('everyMinutes', { minutes })}</SelectItem>)}</SelectContent></Select></div>
-          <div className="field"><Label htmlFor="source-timezone">{t('timezone')}</Label><Input id="source-timezone" value={configuration.timezone} onChange={(event) => changeConfiguration('timezone', event.target.value)} /></div>
+          <div className="field"><Label htmlFor="source-timezone">{t('timezone')}</Label><Input id="source-timezone" aria-describedby="source-hint-timezone" value={configuration.timezone} onChange={(event) => changeConfiguration('timezone', event.target.value)} /><ScopeHint field="timezone" /></div>
           <div className="field"><Label htmlFor="source-realtime-mode">{t('trackingModeLabel')}</Label><Select value={configuration.realtime_mode ?? currentEntry?.realtime_tier ?? 'near_realtime'} onValueChange={(value) => changeConfiguration('realtime_mode', value as RealtimeMode)}><SelectTrigger id="source-realtime-mode"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="realtime">{t('trackingModeRealtime')}</SelectItem><SelectItem value="near_realtime">{t('trackingModeNearRealtime')}</SelectItem></SelectContent></Select><small className="text-muted-foreground">{t('trackingModeHelp')}</small></div>
           </FieldGrid>
             {isNativeEntry(currentEntry) && <>
@@ -1742,7 +1799,11 @@ export function ConnectorEditor({
           </div>
         </SettingsSection>}
         {showStep('choose') && currentEntry?.quota_limits && <SettingsSection title={t('quota')}><p className="m-0 text-sm">{Object.entries(currentEntry.quota_limits).map(([key, value]) => `${key}: ${value}`).join(' · ')}</p></SettingsSection>}
-        {error && <p className="error" role="alert">{t(error as 'conflict' | 'configurationInvalid' | 'serviceUnavailable' | 'validationOutcomeUnknown' | 'sourceNameRequired' | 'actionFailed' | 'reloadFailed' | 'builtinAlreadyAdded' | 'redditConnectionFailed' | 'redditDisconnectFailed')}{errorDetail && ` | ${errorDetail}`}</p>}
+        {error && <p className="error" role="alert">{error === 'configurationInvalid' && issues.length > 0 ? t('issuesTitle') : t(error as 'conflict' | 'configurationInvalid' | 'serviceUnavailable' | 'validationOutcomeUnknown' | 'sourceNameRequired' | 'actionFailed' | 'reloadFailed' | 'builtinAlreadyAdded' | 'redditConnectionFailed' | 'redditDisconnectFailed')}{errorDetail && ` | ${errorDetail}`}</p>}
+        {/* Each rejected field by its form label, so the owner knows exactly which input to fix. */}
+        {issues.length > 0 && <ul className="error m-0 list-disc pl-5" data-testid="scope-issues">
+          {issues.map((issue) => <li key={issue.field}>{t.has(FIELD_LABEL_KEYS[issue.field] ?? '') ? t(FIELD_LABEL_KEYS[issue.field] as 'history') : issue.field}: {t(({ required: 'issueRequired', format: 'issueFormat', tooLong: 'issueTooLong', range: 'issueRange', invalid: 'issueInvalid' } as const)[issue.reason])}</li>)}
+        </ul>}
         {notice && <p className="text-muted-foreground" role="status">{notice}</p>}
         {conflict && <SettingsSection title={t('conflict')}>
           <div role="group" aria-label={t('conflict')}><Button variant="outline" disabled={locked} onClick={reloadServerConfiguration}>{t('reloadDiscard')}</Button></div>
@@ -1784,7 +1845,7 @@ export function ConnectorEditor({
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
-        {showStep('verify') && revision > 0 && (visibleActivationState !== 'active' || Boolean(source?.collection_error_code) || activationQuery.isError || Boolean(visibleActivationError) || sourceStatus === 'paused') && <SettingsSection title={<>{t('activationState')}: {visibleActivationState === 'active' && source?.collection_error_code ? t('activeCollectionFailed') : t(({ queued: 'stateQueued', provisioning: 'stateProvisioning', saved_not_active: 'stateSavedNotActive', reconciliation_required: 'stateReconciliationRequired', disabled: 'stateDisabled', active: 'active' } as Record<string, string>)[visibleActivationState] ?? 'stateUnknown')}</>}>
+        {showStep('verify') && revision > 0 && !verifyBusy && (visibleActivationState !== 'active' || Boolean(source?.collection_error_code) || activationQuery.isError || Boolean(visibleActivationError) || sourceStatus === 'paused') && <SettingsSection title={<>{t('activationState')}: {visibleActivationState === 'active' && source?.collection_error_code ? t('activeCollectionFailed') : t(({ queued: 'stateQueued', provisioning: 'stateProvisioning', saved_not_active: 'stateSavedNotActive', reconciliation_required: 'stateReconciliationRequired', disabled: 'stateDisabled', active: 'active' } as Record<string, string>)[visibleActivationState] ?? 'stateUnknown')}</>}>
           {activationQuery.isError && <p className="error">{t('activationRefreshFailed')}</p>}
           {visibleActivationError && <p className="error">{t('activationError')}: {visibleActivationError}</p>}
           {visibleActivationState === 'saved_not_active' && <p className="text-muted-foreground">{t('savedInactive')}</p>}

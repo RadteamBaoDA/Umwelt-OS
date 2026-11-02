@@ -15,6 +15,8 @@ const api = vi.hoisted(() => ({
   listGadgetSources: vi.fn(), listCompatibleSourceCounts: vi.fn(), listGadgetRenderers: vi.fn(), listGadgetTemplates: vi.fn(), createGadgetDefinition: vi.fn(), patchGadgetDefinition: vi.fn(), getMetricCatalog: vi.fn(),
 }));
 vi.mock('./api', async (original) => ({ ...(await original<typeof import('./api')>()), ...api }));
+const sourceApi = vi.hoisted(() => ({ getConnectorConfiguration: vi.fn() }));
+vi.mock('@/modules/sources/api', async (original) => ({ ...(await original<typeof import('@/modules/sources/api')>()), ...sourceApi }));
 
 import { ApiError } from '@/core/api';
 import gadgetRenderers from '@/test/fixtures/gadget-renderers.json';
@@ -59,6 +61,8 @@ const wrap = (props: Partial<React.ComponentProps<typeof GadgetEditor>> = {}) =>
 
 beforeEach(() => {
   [...Object.values(api), onSaved].forEach((mock) => mock.mockReset());
+  sourceApi.getConnectorConfiguration.mockReset();
+  sourceApi.getConnectorConfiguration.mockResolvedValue({ configuration: { coingecko_assets: [{ id: 'bitcoin', name: 'Bitcoin', symbol: 'BTC', series_symbol: 'BITCOIN' }] } });
   api.listGadgetRenderers.mockResolvedValue(renderers);
   api.listGadgetTemplates.mockResolvedValue(templates);
   api.getMetricCatalog.mockResolvedValue(catalog);
@@ -426,14 +430,28 @@ describe('GadgetEditor', () => {
     expect(api.createGadgetDefinition.mock.calls[0][0].scope.symbols).toEqual(['USD/VND']);
   });
 
-  it('keeps symbols the new provider also suggests when the datasource changes', async () => {
+  it('clears the old ticker when switching to owner-configured CoinGecko IDs', async () => {
     api.listGadgetSources.mockResolvedValue({ items: [source('p1', 'Paprika', 'coinpaprika', ['measurement']), source('c1', 'Gecko', 'coingecko', ['measurement'])], next_cursor: null });
     api.createGadgetDefinition.mockResolvedValue({ id: 'n1' });
     await pickChart('Paprika');
     await userEvent.click(screen.getByRole('radio', { name: /Gecko/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Save to library' }));
     await waitFor(() => expect(api.createGadgetDefinition).toHaveBeenCalled());
-    expect(api.createGadgetDefinition.mock.calls[0][0].scope.symbols).toEqual(['BTC']);
+    expect(api.createGadgetDefinition.mock.calls[0][0].scope.symbols).toEqual([]);
+  });
+
+  it('selects separate CoinGecko IDs even when two coins share a ticker', async () => {
+    api.listGadgetSources.mockResolvedValue({ items: [source('c1', 'Gecko', 'coingecko', ['measurement'])], next_cursor: null });
+    sourceApi.getConnectorConfiguration.mockResolvedValue({ configuration: { coingecko_assets: [
+      { id: 'bitcoin', name: 'Bitcoin', symbol: 'BTC', series_symbol: 'BITCOIN' },
+      { id: 'wrapped-bitcoin', name: 'Wrapped Bitcoin', symbol: 'BTC', series_symbol: 'WRAPPED-BITCOIN' },
+    ] } });
+    api.createGadgetDefinition.mockResolvedValue({ id: 'n1' });
+    await pickChart('Gecko');
+    await userEvent.click(await screen.findByRole('button', { name: /Wrapped Bitcoin \(BTC\)/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save to library' }));
+    await waitFor(() => expect(api.createGadgetDefinition).toHaveBeenCalled());
+    expect(api.createGadgetDefinition.mock.calls[0][0].scope.symbols).toEqual(['WRAPPED-BITCOIN']);
   });
 
   it('preselects the first catalog metric and the first suggested symbol when a fixed-symbol source is picked for a chart', async () => {

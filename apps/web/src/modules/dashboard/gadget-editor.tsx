@@ -25,6 +25,7 @@ import {
   type GadgetDefinition, type GadgetRenderer, type HighlightRule, type ProviderMetrics,
 } from './api';
 import { TEMPLATE_KIND_BY_RENDERER, templateName } from '@/core/renderer-labels';
+import { getConnectorConfiguration, type CoinGeckoCoin } from '@/modules/sources/api';
 import { GadgetTemplateSample } from './gadget-template-sample';
 import { CHART_FALLBACK_LOOKBACK_DAYS, METRIC_FALLBACK_LOOKBACK_DAYS } from './gadgets/use-effective-lookback';
 import { sourcesLinkFor } from './sources-link';
@@ -271,6 +272,19 @@ function SymbolPicker({ suggested, value, onChange, labelId }: { suggested: stri
   </div>;
 }
 
+/** Picks the stable CoinGecko ID represented by each collected series and labels duplicate tickers explicitly. */
+function CoinGeckoSymbolPicker({ assets, value, onChange, labelId }: { assets: CoinGeckoCoin[]; value: string[]; onChange: (next: string[]) => void; labelId: string }) {
+  return <ul className="grid max-h-48 gap-1 overflow-y-auto" aria-labelledby={labelId}>
+    {assets.map((coin) => {
+      const symbol = coin.series_symbol ?? coin.id.toUpperCase();
+      const selected = value.includes(symbol);
+      return <li key={coin.id}><Button type="button" variant={selected ? 'secondary' : 'outline'} className="h-auto min-h-9 w-full justify-start whitespace-normal text-left pointer-coarse:min-h-11" aria-pressed={selected} onClick={() => onChange(selected ? value.filter((item) => item !== symbol) : [...value, symbol])}>
+        {coin.name} ({coin.symbol}) · {coin.id}{selected ? ' ✓' : ''}
+      </Button></li>;
+    })}
+  </ul>;
+}
+
 /**
  * Highlight-rule subform: lists the draft rules and adds keyword rules with a severity and notify flag.
  * Rules are plain local state; the editor only persists them when this list was touched.
@@ -400,6 +414,9 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
   const fields = fieldsFor(renderer);
   // Catalog entry of the first selected datasource's provider; absent means the free-text fallbacks stay in place.
   const provider = sourceRows.find((row) => row.id === sourceIds[0])?.provider ?? null;
+  const coinSource = sourceIds[0] ?? '';
+  const coinConfiguration = useQuery({ queryKey: ['coingecko-gadget-source', coinSource], queryFn: ({ signal }) => getConnectorConfiguration(coinSource, signal), enabled: provider === 'coingecko' && Boolean(coinSource) });
+  const coinAssets = provider === 'coingecko' && coinConfiguration.data ? coinConfiguration.data.configuration.coingecko_assets ?? [{ id: 'bitcoin', symbol: 'BTC', name: 'Bitcoin', series_symbol: 'BTC' }] : null;
   const entry = provider ? catalogQuery.data?.[provider] : undefined;
   const showSymbols = fields.has('symbols') && entry?.symbol_keyed === true;
   // Provider unknown (catalog failed, source absent from the loaded page, provider not in the catalog): symbols stay visible
@@ -475,7 +492,8 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
     if (fields.has('symbols')) {
       let nextSymbols = splitList(symbols, true);
       // Changed provider: keep only symbols it suggests; a provider without suggestions cannot validate any.
-      if (providerChanged) nextSymbols = nextSymbols.filter((symbol) => nextEntry.suggested_symbols.includes(symbol));
+      if (providerOf(next[0]) === 'coingecko' && next[0] !== sourceIds[0]) nextSymbols = [];
+      else if (providerChanged) nextSymbols = nextSymbols.filter((symbol) => nextEntry.suggested_symbols.includes(symbol));
       if (renderer === 'finance_chart' && nextSymbols.length === 0 && nextEntry.symbol_keyed && nextEntry.seed_symbol && nextEntry.suggested_symbols.length > 0) {
         nextSymbols = [nextEntry.suggested_symbols[0]];
       }
@@ -613,7 +631,8 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
       </div>}
       {showSymbols && entry && <div data-field="symbols" className="space-y-1.5">
         <Label id={`${nameId}-sym-label`} className="text-xs font-semibold">{t('symbolsLabel')}</Label>
-        <SymbolPicker labelId={`${nameId}-sym-label`} suggested={entry.suggested_symbols} value={splitList(symbols, true)} onChange={(next) => setSymbols(next.join(', '))} />
+        {coinAssets ? <CoinGeckoSymbolPicker labelId={`${nameId}-sym-label`} assets={coinAssets} value={splitList(symbols, true)} onChange={(next) => setSymbols(next.join(', '))} />
+          : <SymbolPicker labelId={`${nameId}-sym-label`} suggested={entry.suggested_symbols} value={splitList(symbols, true)} onChange={(next) => setSymbols(next.join(', '))} />}
         {!entry.seed_symbol && <p className="text-xs text-muted-foreground">{t('symbolsOwnerHint')}</p>}
         {fieldError('symbols') && <p role="alert" className="text-xs text-destructive">{fieldError('symbols')}</p>}
       </div>}

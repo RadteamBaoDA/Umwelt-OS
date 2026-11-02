@@ -4,7 +4,7 @@ import { test, expect } from './fixtures';
 import { connectWizardSource, deleteSources, escapeRe, findSources, writeHeaders, type WizardCase } from './sources-helpers';
 
 /**
- * Social (Bluesky, Mastodon) and import (Notes, Personal finance, plain manual upload) datasources end to end: each is
+ * Social (Bluesky, Mastodon) datasources and the default-Uploads document upload end to end: each is
  * connected through the real UI, then one Dashboard gets a Table panel gadget per source that must render the records.
  * Needs outbound public network access to public.api.bsky.app and mastodon.social; use the disposable stack only.
  * Everything created is named with PREFIX so cleanup never touches other data. `SOC_ONLY=id1,id2` narrows a debug run.
@@ -23,7 +23,7 @@ const SOCIAL: WizardCase[] = [
   { id: 'bluesky', card: 'Bluesky', expect: 'fetch', fields: { 'source-scope-bluesky_actor': 'bsky.app' } },
   { id: 'mastodon', card: 'Mastodon', expect: 'fetch', fields: { 'source-scope-mastodon_instance_url': 'https://mastodon.social', 'source-scope-mastodon_account': 'Mastodon' } },
 ];
-const IDS = ['bluesky', 'mastodon', 'notes', 'finance', 'manual'] as const;
+const IDS = ['bluesky', 'mastodon'] as const;
 const sourceName = (id: string) => `${PREFIX} ${id}`;
 
 /** Opens the e2e dashboard by id (resolved through the API so tests stay independent of each other). */
@@ -95,19 +95,6 @@ async function expectUploadIngested(page: Page) {
   console.log(`RESULT upload :: ${(await page.getByText(/Chunked:/).innerText()).trim()}`);
 }
 
-/** Creates a manual-import source (Notes or Personal finance) through its settings button and uploads a fixture. */
-async function importViaWizard(page: Page, button: string, id: string, file: string) {
-  await page.goto('/settings/sources');
-  await page.getByRole('button', { name: button, exact: true }).click();
-  const dialog = page.getByRole('dialog');
-  await dialog.getByLabel('Source name').fill(sourceName(id));
-  await dialog.getByRole('button', { name: 'Next', exact: true }).click();
-  await dialog.locator('#upload-file').setInputFiles(path.join(FIXTURES, file));
-  await dialog.getByRole('button', { name: 'Upload', exact: true }).click();
-  await expectUploadIngested(page);
-  await dialog.getByRole('button', { name: 'Done', exact: true }).click();
-}
-
 test.describe('social and import datasources', () => {
   test('clean slate', async ({ page }) => {
     await deleteSources(page, PREFIX);
@@ -124,36 +111,16 @@ test.describe('social and import datasources', () => {
     });
   }
 
-  test('source notes (Markdown import)', async ({ page }) => {
-    test.skip(!selected('notes'));
+  test('documents upload without a source lands in the default Uploads source', async ({ page }) => {
+    test.skip(!selected('upload'));
     test.setTimeout(180_000);
-    await importViaWizard(page, 'Import Notes', 'notes', 'soc-notes.md');
-    expect((await findSources(page, sourceName('notes'))).length, 'source created').toBe(1);
-  });
-
-  test('source personal finance (CSV import)', async ({ page }) => {
-    test.skip(!selected('finance'));
-    test.setTimeout(180_000);
-    await importViaWizard(page, 'Import Personal Finance', 'finance', 'soc-finance.csv');
-    expect((await findSources(page, sourceName('finance'))).length, 'source created').toBe(1);
-  });
-
-  test('source manual file upload', async ({ page }) => {
-    test.skip(!selected('manual'));
-    test.setTimeout(180_000);
-    await page.goto('/settings/sources');
-    await page.getByRole('button', { name: 'New manual source', exact: true }).click();
-    const dialog = page.getByRole('dialog');
-    await dialog.getByLabel('Source name').fill(sourceName('manual'));
-    await dialog.getByRole('button', { name: 'Save source', exact: true }).click();
-    await expect(dialog).toBeHidden({ timeout: 30_000 });
     await page.goto('/knowledge/documents');
     await page.getByRole('button', { name: 'Upload file', exact: true }).click();
-    await page.locator('#upload-source').click();
-    await page.getByRole('option', { name: sourceName('manual'), exact: true }).click();
     await page.locator('#upload-file').setInputFiles(path.join(FIXTURES, 'soc-document.md'));
     await page.getByRole('button', { name: 'Upload', exact: true }).click();
     await expectUploadIngested(page);
+    await page.goto('/settings/sources');
+    await expect(page.getByText('Uploads', { exact: true }).first()).toBeVisible();
   });
 });
 

@@ -66,10 +66,15 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
             "github": {"github_history_days"},
             "mastodon": {"mastodon_account", "mastodon_hashtag"},
             "x": {"x_account", "x_query"},
+            "coingecko": {"coingecko_assets"},  # absent on legacy BTC/USD sources
         }.get(source.provider, set())
         required_scope_fields = scope_fields - optional_scope_fields
-        if raw_keys & required_scope_fields != required_scope_fields or source.configuration.get("history_mode") != expected_history:
-            raise ValueError("Provider scope and history mode are required")
+        # Name the missing schema keys (never values) so the editor can point the owner at each empty field.
+        missing = sorted(required_scope_fields - raw_keys)
+        if source.configuration.get("history_mode") != expected_history:
+            missing.append("history_mode")
+        if missing:
+            raise ValueError(f"Missing required fields: {', '.join(missing)}")
         config = configuration(source)
         if config.timeout_seconds > 30:
             raise ValueError("Native provider request timeout cannot exceed 30 seconds")
@@ -109,7 +114,7 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
     if set(source.configuration or {}) & {
         "youtube_channel_id", "arxiv_category", "huggingface_author", "bluesky_actor",
         "github_owner", "github_repository", "include_issues", "include_pulls", "include_commits", "include_releases", "telegram_chat_ids", "history_mode",
-        "market_symbols", "market_currency", "market_exchange_timezone", "weather_latitude", "weather_longitude", "weather_timezone", "weather_metrics",
+        "market_symbols", "market_currency", "market_exchange_timezone", "coingecko_assets", "weather_latitude", "weather_longitude", "weather_timezone", "weather_metrics",
         "news_query", "news_site", "news_locale", "sec_cik", "sec_contact_email", "scholarly_query",
         "fred_series_id", "owm_latitude", "owm_longitude", "openaq_location_id", "firms_country",
         "google_mail_label_ids", "google_mail_history_days", "google_calendar_ids", "google_drive_ids",

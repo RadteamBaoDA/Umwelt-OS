@@ -8,7 +8,7 @@ import type { Source } from './api';
 
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 't' }) }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
-const api = vi.hoisted(() => ({ archiveSource: vi.fn(), createManualSource: vi.fn() }));
+const api = vi.hoisted(() => ({ archiveSource: vi.fn() }));
 vi.mock('./api', async (original) => ({ ...(await original<typeof import('./api')>()), ...api }));
 // Hoisted test control: what the mocked editor reports after "run-verify".
 const control = vi.hoisted(() => ({ verifyResult: { phase: 'succeeded' } as { phase: string; code?: string } }));
@@ -105,19 +105,5 @@ describe('SourceWizard edit flow', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(onClose).toHaveBeenCalled();
     expect(api.archiveSource).not.toHaveBeenCalled();
-  });
-});
-
-describe('SourceWizard manual flow', () => {
-  it('keeps Save disabled until a name is entered, then creates the source with graph/RAG disabled and closes', async () => {
-    api.createManualSource.mockResolvedValue({ id: 'm1' });
-    renderWizard({ kind: 'manual' });
-    expect(screen.getByRole('button', { name: 'Save source' }).hasAttribute('disabled')).toBe(true);
-    expect(screen.queryByLabelText(/Build knowledge graph/)).toBeNull();
-    expect(screen.queryByLabelText(/Index for Q&A/)).toBeNull();
-    await userEvent.type(screen.getByLabelText('Source name'), 'Notes');
-    await userEvent.click(screen.getByRole('button', { name: 'Save source' }));
-    await waitFor(() => expect(api.createManualSource).toHaveBeenCalledWith('Notes', 't', { graph_enabled: false, rag_index_enabled: false }));
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 });

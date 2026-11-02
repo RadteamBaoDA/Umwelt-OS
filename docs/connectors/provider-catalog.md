@@ -32,8 +32,8 @@ below have not been accepted against live services in this implementation pass.
 - **Other and account connectors:** generic `rss`, `web`, `rest`, and `mcp`; GitHub App and public
   releases; Mastodon, X, YouTube, arXiv, Hugging Face, Telegram; Google Gmail, Calendar and Drive;
   FHIR R4 `health`; Home Assistant; Notion and Slack; and Open-Meteo.
-- **Manual imports:** `notes` accepts Markdown through the existing upload receipt. `personal_finance`
-  accepts OFX 1/2 or UTF-8 CSV with the exact columns `account_id, transaction_id, date, amount,
+- **Manual imports:** Documents upload (no catalog entry) accepts Markdown notes, and
+  finance mode accepts OFX 1/2 or UTF-8 CSV with the exact columns `account_id, transaction_id, date, amount,
   currency, description`; dates must be ISO `YYYY-MM-DD`, and money is parsed as `Decimal`. Imports
   remain in a local-only manual source and do not connect to a bank or create transactions.
 
@@ -108,8 +108,6 @@ Generated from `modules/connectors/catalog.py` and `modules/connectors/provider_
 | `telegram` | `requires_credentials` | unknown | - | yes | no | - | - |
 | `alpha_vantage` | `requires_credentials` | personal | supported | yes | no | 1440 | 2026-10-07 |
 | `open_meteo` | `implemented` | unknown | - | yes | no | - | - |
-| `notes` | `available` | unknown | - | yes | no | - | - |
-| `personal_finance` | `available` | unknown | - | yes | no | - | - |
 | `notion` | `requires_credentials` | unknown | - | yes | no | - | - |
 | `slack` | `requires_credentials` | unknown | - | yes | no | - | - |
 | `bbc_world` | `implemented` | review | supported | yes | no | 30 | 2026-10-07 |

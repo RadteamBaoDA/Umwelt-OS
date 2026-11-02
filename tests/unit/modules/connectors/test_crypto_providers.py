@@ -4,6 +4,7 @@ from modules.connectors.providers.crypto import (
     BINANCE_URL,
     COINGECKO_URL,
     coingecko_request,
+    coingecko_series_symbol,
     map_binance,
     map_coingecko,
     map_coinpaprika,
@@ -140,6 +141,59 @@ def test_coingecko_key_only_in_header():
     for bad in ("", " k", "k\n", "x" * 300):
         with pytest.raises(ProviderPayloadError):
             coingecko_request(bad)
+    # Provider ticker punctuation is display metadata; the request uses validated CoinGecko IDs only.
+    assert "bitcoin-cash" in coingecko_request("k", assets=(("bitcoin-cash", "BCH.C", "USD"),)).url
+
+
+def test_coingecko_configured_assets_share_one_request_and_keep_distinct_series():
+    from modules.connectors.providers.keyed import KEYED
+
+    cfg = {"coingecko_assets": [
+        {"id": "bitcoin", "symbol": "BTC", "name": "Bitcoin"},
+        {"id": "bitcoin-cash", "symbol": "BTC", "name": "Bitcoin Cash"},
+    ]}
+    row = KEYED["coingecko"]
+    request = row.build("demo-key", cfg)
+    assert request.url.endswith("ids=bitcoin,bitcoin-cash&vs_currencies=usd")
+    assert request.headers == {"x-cg-demo-api-key": "demo-key"}
+    records = row.mapper({"bitcoin": {"usd": 5}, "bitcoin-cash": {"usd": 2}}, NOW, cfg)
+    assert [wd(record)["symbol"] for record in records] == ["BITCOIN", "BITCOIN-CASH"]
+    assert [wd(record)["provider_fields"]["coin_id"] for record in records] == ["bitcoin", "bitcoin-cash"]
+    assert [record.provider_id for record in records] == ["coingecko:bitcoin:USD", "coingecko:bitcoin-cash:USD"]
+
+
+def test_coingecko_selected_missing_price_rejects_whole_collection():
+    from modules.connectors.providers.keyed import KEYED
+
+    cfg = {"coingecko_assets": [{"id": "bitcoin", "symbol": "BTC", "name": "Bitcoin"},
+                                {"id": "ethereum", "symbol": "ETH", "name": "Ethereum"}]}
+    for payload in ({"bitcoin": {"usd": 5}},
+                    {"bitcoin": {"usd": 5}, "ethereum": {"usd": None}}):
+        with pytest.raises(ProviderPayloadError, match="coingecko_price_missing"):
+            KEYED["coingecko"].mapper(payload, NOW, cfg)
+
+
+def test_coingecko_long_id_has_bounded_stable_series_symbol():
+    from modules.connectors.public import ConnectorConfig
+
+    coin_id = "a-very-long-but-valid-coingecko-asset-identifier-1234567890"
+    key = coingecko_series_symbol(coin_id)
+    assert len(key) == 40 and key.startswith("A-VERY-LONG-BUT-VALID-COINGECK")
+    cfg = ConnectorConfig.model_validate({"coingecko_assets": [{"id": coin_id, "symbol": "LONG", "name": "Long Coin"}]})
+    assert cfg.coingecko_assets[0].series_symbol == key
+    assert ConnectorConfig.model_validate(cfg.model_dump(mode="json")).coingecko_assets[0].series_symbol == key
+
+
+def test_coingecko_config_rejects_duplicate_or_untrusted_assets():
+    from pydantic import ValidationError
+
+    from modules.connectors.public import ConnectorConfig
+
+    good = {"id": "bitcoin", "symbol": "BTC", "name": "Bitcoin"}
+    for assets in ([good, good], [{**good, "id": "Bitcoin"}], [{**good, "series_symbol": "ETHEREUM"}],
+                   [good] * 21, []):
+        with pytest.raises(ValidationError):
+            ConnectorConfig.model_validate({"coingecko_assets": assets})
 
 
 def test_body_dispatch_and_urls_match_catalog():

@@ -280,7 +280,7 @@ Each entry gives what the source collects, prerequisites, cadence, quota and att
   ```
 
   Up to five symbols per source. Currency and exchange timezone are explicit because the response does not establish them. The response is daily, not realtime.
-- **`coingecko`**: registered, requires an owner-supplied Demo API key (see Setup step 4). One `simple/price` call for bitcoin/usd per run. Code presence only; not runtime verified.
+- **`coingecko`**: registered, requires an owner-supplied Demo API key (see Setup step 4). Search the provider coin catalog after saving the source and key, then select up to 20 CoinGecko IDs. One `simple/price` call collects each selected coin's USD price per run. Sources without an asset list retain the legacy bitcoin/usd default. The catalog and collection code have not been verified against a live provider.
 
 Not verified for any provider in this document: test connection output, sample records, and last-successful-collection behaviour. These need a runtime check.
 

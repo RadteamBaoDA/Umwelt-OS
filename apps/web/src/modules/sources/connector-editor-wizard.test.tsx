@@ -4,7 +4,8 @@ import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sourcesMessages } from '@/core/messages/sources';
-import type { ConnectorCatalogEntry, ConnectorConfiguration } from './api';
+import type { ConnectorCatalogEntry, ConnectorConfiguration, Source } from './api';
+import { ApiError } from '@/core/api';
 import type { DataShape } from '@/core/data-shapes';
 import type { EditorActions, EditorSnapshot, EditorStep } from './connector-editor';
 
@@ -28,7 +29,7 @@ const entry = (provider_id: string, label: string, source_type: 'rss' | 'api' | 
 } as unknown as ConnectorCatalogEntry);
 const shaped = (item: ConnectorCatalogEntry, data_shapes: string[]) => ({ ...item, data_shapes }) as ConnectorCatalogEntry;
 const googleNews = { ...entry('google_news', 'Google News RSS', 'rss'), kind: 'preset', scope_fields: ['news_query', 'news_site', 'news_locale'],
-  example_config: { ...{ timeout_seconds: 30, timezone: 'UTC', schedule_interval_minutes: 30 }, news_query: 'Vietnam economy', news_site: 'any', news_locale: 'en-US' } } as unknown as ConnectorCatalogEntry;
+  example_config: { ...{ timeout_seconds: 30, timezone: 'UTC', schedule_interval_minutes: 30, history_mode: 'returned_snapshot' }, news_query: 'Vietnam economy', news_site: 'any', news_locale: 'en-US' } } as unknown as ConnectorCatalogEntry;
 const catalog = [entry('rest', 'REST API', 'api'), shaped(entry('rss', 'RSS / Atom', 'rss'), ['news']), shaped(entry('binance', 'Binance', 'api'), ['measurement']), entry('coingecko', 'CoinGecko', 'api'), entry('telegram', 'Telegram', 'api'), googleNews];
 const baseConfig = { timeout_seconds: 30, timezone: 'UTC', schedule_interval_minutes: 30, history_mode: 'returned_snapshot' };
 const serverConfig = (provider: string | null): ConnectorConfiguration => ({
@@ -41,13 +42,13 @@ let actions: { current: EditorActions | null };
 let snapshot: EditorSnapshot | null;
 
 /** Mounts the embedded editor and returns a helper that switches the wizard step like the shell does. */
-function mount(initial: EditorStep = 'provider', shapeFilter?: DataShape[]) {
+function mount(initial: EditorStep = 'provider', shapeFilter?: DataShape[], source?: Source) {
   actions = { current: null };
   snapshot = null;
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const ui = (step: EditorStep) => <QueryClientProvider client={client}>
     <NextIntlClientProvider locale="en-US" messages={{ sources: sourcesMessages['en-us'] }}>
-      <ConnectorEditor shapeFilter={shapeFilter} onClose={() => undefined} onChanged={() => undefined} registerTransitionGuard={() => undefined} step={step} actionsRef={actions} onSnapshot={(s) => { snapshot = s; }} />
+      <ConnectorEditor source={source} shapeFilter={shapeFilter} onClose={() => undefined} onChanged={() => undefined} registerTransitionGuard={() => undefined} step={step} actionsRef={actions} onSnapshot={(s) => { snapshot = s; }} />
     </NextIntlClientProvider>
   </QueryClientProvider>;
   const view = render(ui(initial));
@@ -119,6 +120,20 @@ describe('ConnectorEditor wizard gating', () => {
     await waitFor(() => expect(snapshot?.chooseOk).toBe(false));
     await userEvent.type(query, 'oil price');
     await waitFor(() => expect(snapshot?.chooseOk).toBe(true));
+  });
+
+  it('reopens an unsaved source with defaults and names each rejected field by its label', async () => {
+    // A source created at step 1 but never saved reloads with an empty configuration at revision 0.
+    api.getMonotonicConnectorConfiguration.mockResolvedValue({ ...serverConfig('google_news'), source_type: 'rss', configuration: {} });
+    api.validateDraftConnector.mockRejectedValue(new ApiError(422, 'Draft connector configuration is invalid: Missing required fields: news_site, history_mode'));
+    mount('choose', undefined, { id: 's1', name: 'News', type: 'rss', provider: 'google_news', status: 'active' } as unknown as Source);
+    await userEvent.click(await screen.findByRole('button', { name: 'Validate draft' }));
+    await waitFor(() => expect(api.validateDraftConnector).toHaveBeenCalled());
+    const sent = api.validateDraftConnector.mock.calls[0][1].configuration;
+    expect(sent).toMatchObject({ news_query: 'Vietnam economy', news_site: 'any', news_locale: 'en-US', history_mode: 'returned_snapshot' });
+    const issues = await screen.findByTestId('scope-issues');
+    expect(issues.textContent).toContain('Publisher site: required');
+    expect(screen.getByText(/Fix these fields/)).toBeTruthy();
   });
 
   it('sends no header auth or secret when a native provider is validated', async () => {

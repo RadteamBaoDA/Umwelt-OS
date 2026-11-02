@@ -2,7 +2,7 @@ import { test, expect } from './fixtures';
 import { collectedRecordCount, connectWizardSource, deleteSources, findSources, hasLiveKeys, openWizard, WIZARD_CASES } from './sources-helpers';
 
 /**
- * Walks the "Connect a source" wizard to its last step ("Save and test fetch") for every provider card it offers as
+ * Walks the "Add datasource" > "Connect an API" wizard to its last step ("Save and test fetch") for every provider card it offers as
  * Available, then asserts the real outcome. Keyless providers must fetch records from the live public endpoint.
  * Keyed providers use a dummy key (no real keys exist in the disposable stack) and must fail with a readable
  * `Test fetch failed: <code>` message instead of crashing. Public network access is required for the `fetch` cases.

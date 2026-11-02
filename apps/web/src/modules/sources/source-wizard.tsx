@@ -1,21 +1,16 @@
 'use client';
 
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { useRef, useState, type ReactNode } from 'react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { archiveSource, createManualSource, sourceKeys, type Source } from './api';
+import { archiveSource, sourceKeys, type Source } from './api';
 import { ConnectorEditor, type EditorActions, type EditorSnapshot, type EditorStep } from './connector-editor';
 import { GitHubWebhookStatus } from './github-summary';
-import { SettingsSection } from '@/modules/settings/settings-layout';
 import type { DataShape } from '@/core/data-shapes';
-import type { SourceAiOptions } from './source-ai-toggles';
-import { Upload } from '@/modules/ingestion/upload';
 
 /** One wizard step: stable id, display title, and whether the owner may leave it forward in add mode. */
 export type WizardStepDef = { id: string; title: string; valid: boolean };
@@ -192,54 +187,10 @@ function ConnectorWizard({ source, onClose, onChanged, registerTransitionGuard, 
   </WizardShell>;
 }
 
-/** One-step wizard for manual sources: a name only, since manual sources never fetch data. */
-function ManualWizard({ onClose, onChanged, purpose = null }: {
-  onClose: () => void;
-  onChanged: () => void;
-  purpose?: 'notes' | 'personal_finance' | null;
-}) {
-  const t = useTranslations('sources');
-  const { csrfToken } = useWorkspaceSession();
-  const queryClient = useQueryClient();
-  const [name, setName] = useState(() => purpose === 'notes' ? t('notesSourceName') : purpose === 'personal_finance' ? t('financeSourceName') : '');
-  const [createdSourceId, setCreatedSourceId] = useState('');
-  const [aiOptions] = useState<SourceAiOptions>({ graph_enabled: false, rag_index_enabled: false });
-  const trimmed = name.trim();
-  const create = useMutation({
-    mutationFn: () => createManualSource(trimmed, csrfToken, aiOptions),
-    onSuccess: async (source) => {
-      await queryClient.invalidateQueries({ queryKey: sourceKeys.all });
-      if (purpose) { setCreatedSourceId(source.id); onChanged(); }
-      else { onChanged(); onClose(); }
-    },
-  });
-  /** Creates the local-only manual source before showing the existing durable upload flow. */
-  async function createBeforeImport(): Promise<boolean> {
-    if (!purpose || !trimmed || create.isPending) return false;
-    try { await create.mutateAsync(); return true; } catch { return false; }
-  }
-  const steps: WizardStepDef[] = purpose
-    ? [{ id: 'name', title: t('stepManualName'), valid: Boolean(trimmed) }, { id: 'import', title: t('stepManualImport'), valid: true }]
-    : [{ id: 'name', title: t('stepManualName'), valid: Boolean(trimmed) }];
-  const stepIndex = purpose && createdSourceId ? 1 : 0;
-  const description = purpose === 'notes' ? t('manualNotesHint') : purpose === 'personal_finance' ? t('manualFinanceHint') : t('manualNoFetch');
-  return <WizardShell title={purpose ? t(purpose === 'notes' ? 'wizardTitleNotes' : 'wizardTitleFinance') : t('wizardTitleManual')}
-    mode="add" steps={steps} stepIndex={stepIndex} onStepChange={() => undefined} busy={create.isPending}
-    onNext={purpose && !createdSourceId ? createBeforeImport : undefined} onRequestClose={onClose}
-    final={{ label: purpose ? t('done') : create.isPending ? t('saving') : t('saveSource'), disabled: purpose ? !createdSourceId : !trimmed, onClick: () => { if (!purpose && trimmed) create.mutate(); else onClose(); } }}>
-    {stepIndex === 0 ? <form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); if (purpose) void createBeforeImport(); else if (trimmed && !create.isPending) create.mutate(); }}>
-      <SettingsSection title={t('panelIdentity')} description={description}>
-        <div className="field"><Label htmlFor="source-name">{t('sourceName')}</Label><Input id="source-name" autoFocus maxLength={200} value={name} onChange={(event) => setName(event.target.value)} /></div>
-      </SettingsSection>
-      {create.error && <p className="error" role="alert">{t('actionFailed')}</p>}
-    </form> : createdSourceId && purpose ? <Upload initialMode={purpose === 'notes' ? 'notes' : 'finance'} initialSourceId={createdSourceId} /> : null}
-  </WizardShell>;
-}
+/** Which flow the dialog runs: a new connector or editing an existing source. */
+export type SourceWizardRequest = { kind: 'connector' } | { kind: 'edit'; source: Source };
 
-/** Which flow the dialog runs: a new connector, a new manual source, or editing an existing connector. */
-export type SourceWizardRequest = { kind: 'connector' } | { kind: 'manual' } | { kind: 'manual_import'; purpose: 'notes' | 'personal_finance' } | { kind: 'edit'; source: Source };
-
-/** Opens the full-screen add/edit dialog for the requested connector or manual flow. */
+/** Opens the full-screen add/edit dialog for the requested connector flow. */
 export function SourceWizard({ request, onClose, onChanged, registerTransitionGuard, shapeFilter, onClearFilter }: {
   request: SourceWizardRequest;
   onClose: () => void;
@@ -248,7 +199,5 @@ export function SourceWizard({ request, onClose, onChanged, registerTransitionGu
   shapeFilter?: DataShape[];
   onClearFilter?: () => void;
 }) {
-  if (request.kind === 'manual') return <ManualWizard onClose={onClose} onChanged={onChanged} />;
-  if (request.kind === 'manual_import') return <ManualWizard onClose={onClose} onChanged={onChanged} purpose={request.purpose} />;
   return <ConnectorWizard source={request.kind === 'edit' ? request.source : null} onClose={onClose} onChanged={onChanged} registerTransitionGuard={registerTransitionGuard} shapeFilter={shapeFilter} onClearFilter={onClearFilter} />;
 }

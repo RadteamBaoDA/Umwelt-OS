@@ -15,7 +15,7 @@ PROVIDER_SOURCE_TYPES = MappingProxyType({
     "bbc_world": "rss", "vnexpress_business": "rss", "dantri_news": "rss", "thanhnien_news": "rss", "tuoitre_news": "rss", "hn_top": "api", "gdelt_economy": "api",
     "world_bank": "api", "frankfurter": "api", "ecb": "api", "binance": "api",
     "alternative_me": "api", "usgs": "api", "coinpaprika": "api", "nasa_eonet": "api", "cisa_kev": "api",
-    "coingecko": "api",  # fixed endpoint; owner-supplied API key lives in connector_rest_credentials
+    "coingecko": "api",  # owner-selected assets; Demo key lives in connector_rest_credentials
     "google_news": "rss",  # scoped free preset: URL is built server-side from validated query/site/locale
     "google_mail": "email", "google_calendar": "calendar", "google_drive": "api",
     "health": "api", "home_assistant": "api",
@@ -38,11 +38,11 @@ PROVIDER_SOURCE_TYPES = MappingProxyType({
 })
 FIXED_SCOPE_PROVIDERS = frozenset(PROVIDER_SOURCE_TYPES) - frozenset({
     "youtube", "arxiv", "huggingface", "bluesky", "reddit", "mastodon", "x", "github_releases", "github", "telegram", "alpha_vantage", "open_meteo", "google_news", "sec_edgar",
-    "google_mail", "google_calendar", "google_drive", "health", "home_assistant", "notion", "slack", "openalex", "fred", "openweathermap", "openaq", "nasa_firms",
+    "google_mail", "google_calendar", "google_drive", "health", "home_assistant", "notion", "slack", "openalex", "fred", "openweathermap", "openaq", "nasa_firms", "coingecko",
 })
 # Free presets collected only by the gated shared executor (fixed-endpoint presets plus the scoped Google News preset).
 GATED_EXECUTOR_PROVIDERS = FIXED_SCOPE_PROVIDERS | {
-    "bluesky", "reddit", "mastodon", "x", "google_news", "google_mail", "google_calendar", "google_drive", "health", "home_assistant", "notion", "slack", "sec_edgar", "openalex", "fred", "openweathermap", "openaq", "nasa_firms",
+    "bluesky", "reddit", "mastodon", "x", "google_news", "google_mail", "google_calendar", "google_drive", "health", "home_assistant", "notion", "slack", "sec_edgar", "openalex", "fred", "openweathermap", "openaq", "nasa_firms", "coingecko",
 }
 PROVIDER_SCOPE_FIELDS = MappingProxyType({
     "youtube": frozenset({"youtube_channel_id"}), "arxiv": frozenset({"arxiv_category"}),
@@ -58,6 +58,7 @@ PROVIDER_SCOPE_FIELDS = MappingProxyType({
     }),
     "telegram": frozenset({"telegram_chat_ids"}),
     "alpha_vantage": frozenset({"market_symbols", "market_currency", "market_exchange_timezone"}),
+    "coingecko": frozenset({"coingecko_assets"}),
     "open_meteo": frozenset({"weather_latitude", "weather_longitude", "weather_timezone", "weather_metrics"}),
     "google_news": frozenset({"news_query", "news_site", "news_locale"}),
     "sec_edgar": frozenset({"sec_cik", "sec_contact_email"}),

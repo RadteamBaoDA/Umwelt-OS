@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import { describe, expect, it, vi } from 'vitest';
 import { sourcesMessages } from '@/core/messages/sources';
@@ -37,6 +37,17 @@ describe('Google News RSS scope form', () => {
     fireEvent.click(screen.getByLabelText('Publisher site'));
     fireEvent.click(await screen.findByRole('option', { name: 'reuters.com' }));
     expect(onChange).toHaveBeenCalledWith('news_site', 'reuters.com');
+  });
+
+  it('describes the query syntax under the input and links it for assistive technology', () => {
+    view('en-us', { ...base, news_query: '' });
+    const query = screen.getByLabelText('Search query');
+    const hint = document.getElementById(query.getAttribute('aria-describedby')!)!;
+    expect(hint.textContent).toMatch(/OR/);
+    expect(hint.textContent).toMatch(/site:/);
+    cleanup();
+    view('vi-vi', { ...base, news_query: '' });
+    expect(document.getElementById('source-hint-news_query')!.textContent).toMatch(/ngoặc kép/);
   });
 
   it('localizes the labels in Vietnamese', () => {

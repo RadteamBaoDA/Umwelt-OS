@@ -5,6 +5,7 @@ observed at collection time with ``timestamp_basis="collection"``. Optional prov
 adapters chosen explicitly by the owner; there is no fallback between them.
 """
 
+import hashlib
 import re
 from datetime import datetime
 from decimal import Decimal
@@ -36,6 +37,16 @@ DEFAULT_COINGECKO_ASSETS: tuple[tuple[str, str, str], ...] = (
 )
 _SYMBOL_RE = re.compile(r"^[A-Z0-9]{2,20}$")
 _COIN_ID_RE = re.compile(r"^[a-z0-9-]{2,64}$")
+
+
+def coingecko_series_symbol(coin_id: str) -> str:
+    """Map a CoinGecko ID to a stable uppercase observation key within the 40-character DB bound."""
+    if not _COIN_ID_RE.fullmatch(coin_id):
+        raise ProviderPayloadError("coingecko_scope_mismatch")
+    if len(coin_id) <= 40:
+        return coin_id.upper()
+    # A long provider ID still needs a distinct series key without widening the existing observation column.
+    return f"{coin_id[:31].upper()}-{hashlib.sha256(coin_id.encode()).hexdigest()[:8].upper()}"
 
 
 def binance_request(
@@ -82,7 +93,9 @@ def coingecko_request(
     coin_ids: list[str] = []
     quotes: list[str] = []
     for coin_id, symbol, quote in assets:
-        if not _COIN_ID_RE.fullmatch(coin_id) or not _SYMBOL_RE.fullmatch(symbol) or not _SYMBOL_RE.fullmatch(quote):
+        if (not _COIN_ID_RE.fullmatch(coin_id) or not isinstance(symbol, str)
+                or not 1 <= len(symbol) <= 32 or symbol != symbol.strip() or not symbol.isprintable()
+                or not _SYMBOL_RE.fullmatch(quote)):
             raise ProviderPayloadError("coingecko_scope_mismatch")
         if coin_id not in coin_ids:
             coin_ids.append(coin_id)
@@ -242,8 +255,9 @@ def map_coingecko(
     collected_at: datetime,
     *,
     assets: tuple[tuple[str, str, str], ...] = DEFAULT_COINGECKO_ASSETS,
+    symbol_by_id: bool = False,
 ) -> list[IngestionRecord]:
-    """Map configured CoinGecko simple-price asset rows; status/error objects fail even on HTTP 200."""
+    """Map each selected USD asset; status/error or missing selected prices fail the whole collection."""
     if not assets:
         raise ProviderPayloadError("coingecko_scope_mismatch")
     if not isinstance(payload, dict):
@@ -263,11 +277,13 @@ def map_coingecko(
         quote_key = quote_ccy.lower()
         coin = payload.get(coin_id)
         if not isinstance(coin, dict) or quote_key not in coin:
-            raise ProviderPayloadError("coingecko_scope_mismatch")
+            raise ProviderPayloadError("coingecko_price_missing" if symbol_by_id else "coingecko_scope_mismatch")
         try:
             price = None if coin[quote_key] is None else positive_decimal(coin[quote_key])
         except ValueError as exc:
             raise ProviderPayloadError("coingecko_price_invalid") from exc
+        if symbol_by_id and price is None:
+            raise ProviderPayloadError("coingecko_price_missing")
         text = "null" if price is None else decimal_text(price)
         fields: dict[str, str | float | int | None] = {"coin_id": coin_id, "quote": quote_ccy}
         if "last_updated_at" in coin:  # only when the owner-approved include_last_updated_at is in use
@@ -282,7 +298,8 @@ def map_coingecko(
             content=f"CoinGecko {symbol}/{quote_ccy}: {'not reported' if price is None else text + ' ' + quote_ccy}",
             title=f"{symbol} price (CoinGecko)", observed_at=observed_at, collected_at=collected_at,
             version=content_version("coingecko", coin_id, quote_ccy, fields.get("last_updated_at"), text),
-            metric="spot_price", value=price, unit=quote_ccy, currency=quote_ccy, symbol=symbol,
+            metric="spot_price", value=price, unit=quote_ccy, currency=quote_ccy,
+            symbol=coingecko_series_symbol(coin_id) if symbol_by_id else symbol,
             quality="provider_reported", timestamp_basis=basis, modified_at=modified, provider_fields=fields,  # type: ignore[arg-type]
         ))
     return records

@@ -3,7 +3,7 @@ import { test, expect } from './fixtures';
 import { BUILTINS, collectedRecordCount, deleteSources, enableBuiltinViaSettings, findSources } from './sources-helpers';
 
 /**
- * Adds every keyless fixed-scope built-in through "Add built-in" (pick, terms, enable, test fetch) and asserts that the
+ * Adds every keyless fixed-scope built-in through "Add datasource" > "Built-in feed" (pick, terms, enable, test fetch) and asserts that the
  * live public endpoint produced records. Mirrors `BUILTIN_PROVIDERS` in modules/connectors/provider_specs.py; a drift
  * check at the end of the file fails when the server offers a built-in missing from this table.
  * Requires outbound public network access from the disposable stack.

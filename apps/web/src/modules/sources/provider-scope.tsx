@@ -10,24 +10,29 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { formatDateTime } from '@/core/i18n';
+import { ApiError } from '@/core/api';
 import { safeHttpUrl } from '@/core/safe-url';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { acknowledgeProviderTerms, connectorKeys, getProviderTerms, type ConnectorCatalogEntry, type ConnectorConfig, type DeclaredUse, type Source } from './api';
+import { acknowledgeProviderTerms, connectorKeys, getProviderTerms, searchCoinGeckoCoins, type CoinGeckoCoin, type ConnectorCatalogEntry, type ConnectorConfig, type DeclaredUse, type Source } from './api';
 import { isStale, periodKind } from './freshness';
 
-export type NativeProvider = 'youtube' | 'arxiv' | 'huggingface' | 'reddit' | 'bluesky' | 'mastodon' | 'x' | 'github' | 'github_releases' | 'telegram' | 'alpha_vantage' | 'open_meteo' | 'google_news' | 'sec_edgar' | 'openalex' | 'fred' | 'openweathermap' | 'openaq' | 'nasa_firms' | 'notion' | 'slack';
+export type NativeProvider = 'youtube' | 'arxiv' | 'huggingface' | 'reddit' | 'bluesky' | 'mastodon' | 'x' | 'github' | 'github_releases' | 'telegram' | 'alpha_vantage' | 'coingecko' | 'open_meteo' | 'google_news' | 'sec_edgar' | 'openalex' | 'fred' | 'openweathermap' | 'openaq' | 'nasa_firms' | 'notion' | 'slack';
 
 /** Renders bounded native-provider scopes, including Reddit subreddits and selected Notion pages/Slack channels; values stay in the revision-fenced draft. */
 export function ProviderScope({
   provider,
   configuration,
   disabled,
+  sourceId,
+  credentialConfigured,
   resetEpoch,
   onChange,
 }: {
   provider: NativeProvider;
   configuration: ConnectorConfig;
   disabled: boolean;
+  sourceId?: string;
+  credentialConfigured?: boolean;
   resetEpoch: number;
   onChange: <K extends keyof ConnectorConfig>(key: K, value: ConnectorConfig[K]) => void;
 }) {
@@ -77,7 +82,8 @@ export function ProviderScope({
   const field = (key: keyof ConnectorConfig, label: string, value: string, update: (value: string) => void, props: { maxLength?: number; pattern?: string } = {}) => (
     <div className="field" key={key}>
       <Label htmlFor={`source-scope-${key}`}>{label}</Label>
-      <Input id={`source-scope-${key}`} value={value} disabled={disabled} required onChange={(event) => update(event.target.value)} {...props} />
+      <Input id={`source-scope-${key}`} value={value} disabled={disabled} required aria-describedby={`source-hint-${key}`} onChange={(event) => update(event.target.value)} {...props} />
+      <ScopeHint field={key} />
     </div>
   );
 
@@ -129,15 +135,18 @@ export function ProviderScope({
     {/* Account and hashtag are mutually exclusive on the server, so each is optional here and the empty one is sent as undefined. */}
     <div className="field">
       <Label htmlFor="source-scope-mastodon_instance_url">{t('mastodonInstanceUrl')}</Label>
-      <Input id="source-scope-mastodon_instance_url" type="url" required maxLength={512} disabled={disabled} value={configuration.mastodon_instance_url ?? ''} onChange={(event) => onChange('mastodon_instance_url', event.target.value.trim() || undefined)} />
+      <Input id="source-scope-mastodon_instance_url" type="url" required maxLength={512} disabled={disabled} value={configuration.mastodon_instance_url ?? ''} aria-describedby="source-hint-mastodon_instance_url" onChange={(event) => onChange('mastodon_instance_url', event.target.value.trim() || undefined)} />
+      <ScopeHint field="mastodon_instance_url" />
     </div>
     <div className="field">
       <Label htmlFor="source-scope-mastodon_account">{t('mastodonAccount')}</Label>
-      <Input id="source-scope-mastodon_account" maxLength={320} disabled={disabled} required={!configuration.mastodon_hashtag} value={configuration.mastodon_account ?? ''} onChange={(event) => onChange('mastodon_account', event.target.value.trim() || undefined)} />
+      <Input id="source-scope-mastodon_account" maxLength={320} disabled={disabled} required={!configuration.mastodon_hashtag} value={configuration.mastodon_account ?? ''} aria-describedby="source-hint-mastodon_account" onChange={(event) => onChange('mastodon_account', event.target.value.trim() || undefined)} />
+      <ScopeHint field="mastodon_account" />
     </div>
     <div className="field">
       <Label htmlFor="source-scope-mastodon_hashtag">{t('mastodonHashtag')}</Label>
-      <Input id="source-scope-mastodon_hashtag" maxLength={100} disabled={disabled} required={!configuration.mastodon_account} value={configuration.mastodon_hashtag ?? ''} onChange={(event) => onChange('mastodon_hashtag', event.target.value.trim().replace(/^#/, '') || undefined)} />
+      <Input id="source-scope-mastodon_hashtag" maxLength={100} disabled={disabled} required={!configuration.mastodon_account} value={configuration.mastodon_hashtag ?? ''} aria-describedby="source-hint-mastodon_hashtag" onChange={(event) => onChange('mastodon_hashtag', event.target.value.trim().replace(/^#/, '') || undefined)} />
+      <ScopeHint field="mastodon_hashtag" />
     </div>
     <small className="text-muted-foreground">{t('mastodonHelp')}</small>
   </>;
@@ -145,11 +154,13 @@ export function ProviderScope({
     {/* The server requires exactly one of account or search query; each is optional here and the empty one is sent as undefined. */}
     <div className="field">
       <Label htmlFor="source-scope-x_account">{t('xAccount')}</Label>
-      <Input id="source-scope-x_account" maxLength={16} disabled={disabled} required={!configuration.x_query} value={configuration.x_account ?? ''} onChange={(event) => onChange('x_account', event.target.value.trim().replace(/^@/, '') || undefined)} />
+      <Input id="source-scope-x_account" maxLength={16} disabled={disabled} required={!configuration.x_query} value={configuration.x_account ?? ''} aria-describedby="source-hint-x_account" onChange={(event) => onChange('x_account', event.target.value.trim().replace(/^@/, '') || undefined)} />
+      <ScopeHint field="x_account" />
     </div>
     <div className="field">
       <Label htmlFor="source-scope-x_query">{t('xQuery')}</Label>
-      <Input id="source-scope-x_query" maxLength={512} disabled={disabled} required={!configuration.x_account} value={configuration.x_query ?? ''} onChange={(event) => onChange('x_query', event.target.value.trim() || undefined)} />
+      <Input id="source-scope-x_query" maxLength={512} disabled={disabled} required={!configuration.x_account} value={configuration.x_query ?? ''} aria-describedby="source-hint-x_query" onChange={(event) => onChange('x_query', event.target.value.trim() || undefined)} />
+      <ScopeHint field="x_query" />
     </div>
     <small className="text-muted-foreground">{t('xScopeHelp')}</small>
   </>;
@@ -165,7 +176,8 @@ export function ProviderScope({
       </CheckboxField>)}
       <div className="field">
         <Label htmlFor="source-scope-github_history_days">{t('githubHistoryDays')}</Label>
-        <Input id="source-scope-github_history_days" type="number" min={1} max={365} value={configuration.github_history_days ?? 90} disabled={disabled} onChange={(event) => onChange('github_history_days', Number(event.target.value))} />
+        <Input id="source-scope-github_history_days" type="number" min={1} max={365} value={configuration.github_history_days ?? 90} disabled={disabled} aria-describedby="source-hint-github_history_days" onChange={(event) => onChange('github_history_days', Number(event.target.value))} />
+        <ScopeHint field="github_history_days" />
       </div>
     </>}
   </>;
@@ -174,6 +186,7 @@ export function ProviderScope({
     {field('market_currency', t('marketCurrency'), configuration.market_currency ?? '', (value) => onChange('market_currency', value.toUpperCase()), { maxLength: 3, pattern: '[A-Z]{3}' })}
     {field('market_exchange_timezone', t('marketExchangeTimezone'), configuration.market_exchange_timezone ?? '', (value) => onChange('market_exchange_timezone', value), { maxLength: 64 })}
   </>;
+  if (provider === 'coingecko') return <CoinGeckoPicker sourceId={sourceId ?? ''} credentialConfigured={credentialConfigured ?? false} disabled={disabled} assets={configuration.coingecko_assets} onChange={(assets) => onChange('coingecko_assets', assets)} />;
   if (provider === 'open_meteo') return <>
     <LocationButton disabled={disabled} onLocate={(latitude, longitude) => {
       onChange('weather_latitude', latitude);
@@ -222,6 +235,45 @@ export function ProviderScope({
   </div>;
 }
 
+/** Chooses up to twenty CoinGecko IDs; the stored ID distinguishes assets with the same ticker symbol. */
+function CoinGeckoPicker({ sourceId, credentialConfigured, disabled, assets, onChange }: { sourceId: string; credentialConfigured: boolean; disabled: boolean; assets?: CoinGeckoCoin[]; onChange: (assets: CoinGeckoCoin[]) => void }) {
+  const t = useTranslations('sources');
+  const selected = assets ?? [{ id: 'bitcoin', symbol: 'BTC', name: 'Bitcoin' }];
+  const [search, setSearch] = useState('');
+  const [query, setQuery] = useState('');
+  useEffect(() => {
+    const timer = setTimeout(() => setQuery(search.trim()), 350);
+    return () => clearTimeout(timer);
+  }, [search]);
+  const ready = Boolean(sourceId && credentialConfigured);
+  const coins = useQuery({
+    queryKey: connectorKeys.coingeckoCoins(sourceId, query),
+    queryFn: ({ signal }) => searchCoinGeckoCoins(sourceId, query, signal),
+    enabled: ready && query.length >= 2,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  return <div className="field">
+    <Label htmlFor="source-scope-coingecko-search">{t('coingeckoCoins')}</Label>
+    <ul className="grid gap-1" aria-label={t('coingeckoSelected')}>
+      {selected.map((coin) => <li key={coin.id} className="flex items-center justify-between gap-2 rounded-md border border-border p-2 text-sm">
+        <span className="min-w-0 break-words">{coin.name} ({coin.symbol}) <span className="text-muted-foreground">{coin.id}</span></span>
+        <Button type="button" variant="outline" size="sm" disabled={disabled || selected.length === 1} onClick={() => onChange(selected.filter((item) => item.id !== coin.id))} aria-label={t('coingeckoRemove', { name: coin.name })}>{t('coingeckoRemoveButton')}</Button>
+      </li>)}
+    </ul>
+    <Input id="source-scope-coingecko-search" value={search} maxLength={80} disabled={disabled || !ready || selected.length >= 20} placeholder={t('coingeckoSearchPlaceholder')} onChange={(event) => setSearch(event.target.value)} aria-describedby="source-scope-coingecko-help" />
+    <small id="source-scope-coingecko-help" className="text-muted-foreground">{ready ? t('coingeckoSearchHelp') : t('coingeckoSaveKeyFirst')}</small>
+    {selected.length >= 20 && <small className="text-muted-foreground">{t('coingeckoLimit')}</small>}
+    {coins.isPending && query.length >= 2 && ready && <small role="status" className="text-muted-foreground">{t('loading')}</small>}
+    {coins.isError && <small role="alert" className="text-destructive">{t(coins.error instanceof ApiError && coins.error.status === 409 ? 'coingeckoKeyNeedsRefresh' : coins.error instanceof ApiError && coins.error.status === 429 ? 'coingeckoSearchLimited' : 'coingeckoSearchFailed')}</small>}
+    {coins.data && query.length >= 2 && <ul className="max-h-48 overflow-y-auto rounded-md border border-border" aria-label={t('coingeckoResults')}>
+      {coins.data.items.filter((coin) => !selected.some((item) => item.id === coin.id)).map((coin) => <li key={coin.id}>
+        <Button type="button" variant="ghost" className="h-auto min-h-9 w-full justify-start whitespace-normal text-left pointer-coarse:min-h-11" disabled={disabled || selected.length >= 20} onClick={() => { onChange([...selected, coin]); setSearch(''); setQuery(''); }}>{coin.name} ({coin.symbol}) · {coin.id}</Button>
+      </li>)}
+    </ul>}
+  </div>;
+}
+
 /**
  * Fills coordinates from the browser Geolocation API after an explicit owner click (the browser asks for permission).
  * Coordinates are rounded to 4 decimals (~11 m), enough for weather and within the server bounds; denial or
@@ -251,6 +303,17 @@ function LocationButton({ disabled, onLocate }: { disabled: boolean; onLocate: (
       {t(state === 'denied' ? 'locationDenied' : 'locationUnavailable')}
     </small>}
   </div>;
+}
+
+/**
+ * Input rules for one typed source field (format, delimiter, bounds, example), rendered under the input.
+ * The id `source-hint-<field>` is what the input's `aria-describedby` points at; fields without a rule render nothing.
+ */
+export function ScopeHint({ field }: { field: string }) {
+  const t = useTranslations('sources');
+  const key = `scopeHint.${field}`;
+  if (!t.has(key)) return null;
+  return <small id={`source-hint-${field}`} className="text-muted-foreground">{t(key as 'guideTitle')}</small>;
 }
 
 const GUIDE_MAX_STEPS = 8;

@@ -5,10 +5,11 @@ import { useTranslations } from 'next-intl';
 import { useErrorCodeLabel } from '@/core/error-codes';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Download, History, Pause, Play, RefreshCw, Settings2, Trash2, Unplug } from 'lucide-react';
+import { ChevronDown, Download, History, Pause, Play, RefreshCw, Settings2, Trash2, Unplug } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useDisplayPreferences } from '@/core/query-provider';
@@ -298,10 +299,10 @@ function ShapeFilterBanner({ renderer, onClear }: { renderer: string | null; onC
 }
 
 /** Which add/edit dialog is open on the sources page; null when only the table is shown. */
-type DialogState = { kind: 'builtin' } | { kind: 'connector' } | { kind: 'manual' } | { kind: 'manual_import'; purpose: 'notes' | 'personal_finance' } | { kind: 'edit'; source: Source } | null;
+type DialogState = { kind: 'builtin' } | { kind: 'connector' } | { kind: 'edit'; source: Source } | null;
 
 /**
- * Sources page header and table, with add actions beside the title and paused built-ins above the list.
+ * Sources page header and table, with the single Add datasource menu beside the title and paused built-ins above the list.
  * Every add and edit flow runs in a full-screen wizard dialog; closing it goes through the active dirty-draft guard.
  * `?source=<id>` opens that source's edit dialog once the list has loaded.
  */
@@ -394,13 +395,19 @@ export function SourceList() {
         <h1 ref={headingRef} tabIndex={-1} className="m-0 text-2xl font-semibold tracking-[-.02em] outline-none focus-visible:ring-2 focus-visible:ring-ring">{t('title')}</h1>
         <p className="mt-2 mb-0 text-sm text-muted-foreground">{t('description')}</p>
       </div>
-      {/* One primary action; every other add flow stays a visible secondary button so each keeps its accessible name. */}
+      {/* One primary "Add datasource" menu replaces the former row of add buttons; each item opens its wizard via the draft-guarded transition. */}
       <div className="flex flex-wrap items-center justify-end gap-2 max-[1023px]:justify-start" role="group" aria-label={t('tableToolbar')}>
-        <Button size="sm" onClick={() => transition({ kind: 'connector' })}>{t('addConnector')}</Button>
-        <Button size="sm" variant="outline" disabled={allBuiltinsAdded} title={allBuiltinsAdded ? t('addBuiltinAllAdded') : undefined} onClick={() => transition({ kind: 'builtin' })}>{t('addBuiltin')}</Button>
-        <Button size="sm" variant="outline" onClick={() => transition({ kind: 'manual' })}>{t('addManual')}</Button>
-        <Button size="sm" variant="outline" onClick={() => transition({ kind: 'manual_import', purpose: 'notes' })}>{t('addNotes')}</Button>
-        <Button size="sm" variant="outline" onClick={() => transition({ kind: 'manual_import', purpose: 'personal_finance' })}>{t('addFinance')}</Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild><Button size="sm">{t('addDatasource')}<ChevronDown aria-hidden="true" /></Button></DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem disabled={allBuiltinsAdded} onSelect={() => transition({ kind: 'builtin' })}>
+              <span className="flex flex-col"><span>{t('menuBuiltin')}</span><span className="text-xs text-muted-foreground">{allBuiltinsAdded ? t('addBuiltinAllAdded') : t('menuBuiltinHint')}</span></span>
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => transition({ kind: 'connector' })}>
+              <span className="flex flex-col"><span>{t('menuConnector')}</span><span className="text-xs text-muted-foreground">{t('menuConnectorHint')}</span></span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </header>
     {shapeFilter && <ShapeFilterBanner renderer={renderer} onClear={clearFilter} />}

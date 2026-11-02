@@ -56,9 +56,26 @@ describe('Sources shape filter', () => {
 
   it('builtin wizard lists only measurement built-ins', async () => {
     wrap('shapes=measurement&for=finance_chart');
-    await userEvent.click(await screen.findByRole('button', { name: 'Add built-in' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Add datasource' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Built-in feed/ }));
     expect(await screen.findByRole('button', { name: /NOAA Kp index/ })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /BBC World/ })).toBeNull();
+  });
+
+  it('offers one Add datasource menu with Built-in feed and Connect an API, each opening its wizard', async () => {
+    wrap('');
+    await screen.findByText('Existing row');
+    expect(screen.queryByRole('button', { name: /New manual source|Import Notes|Import Personal Finance/ })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Add datasource' }));
+    expect((await screen.findAllByRole('menuitem')).map((item) => item.textContent)).toEqual([
+      expect.stringContaining('Built-in feed'), expect.stringContaining('Connect an API'),
+    ]);
+    await userEvent.click(screen.getByRole('menuitem', { name: /Connect an API/ }));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Add datasource' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Built-in feed/ }));
+    expect(await screen.findByRole('button', { name: /NOAA Kp index/ })).toBeTruthy();
   });
 
   it('ignores unknown shapes', async () => {

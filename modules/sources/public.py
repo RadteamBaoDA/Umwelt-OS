@@ -524,34 +524,27 @@ CHAT_ATTACHMENTS_NAME = "Chat attachments"
 CHAT_ATTACHMENTS_SHARED_NAME = "Chat attachments (shared)"
 
 
-async def get_or_create_chat_attachments_source(
-    session: AsyncSession, *, scope: WorkspaceContext, multi_workspace_enabled: bool, shared: bool = False,
+async def _get_or_create_marked_manual_source(
+    session: AsyncSession, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+    marker: str, name: str, local_only: bool, lock_key: str,
 ) -> Source:
-    """Return one of the workspace's two server-owned Chat attachments manual sources, creating it once.
+    """Return the workspace's non-archived manual source carrying ``marker``/``local_only``, creating it once.
 
-    ``shared=False`` (the default) selects the private "Chat attachments" source (``local_only``);
-    ``shared=True`` selects "Chat attachments (shared)", which is not ``local_only`` and therefore
-    eligible for cloud chat, embeddings, extraction and briefs. Both carry the same server-set
-    marker and differ only in ``local_only``, which no owner API can change.
-
-    Access locks come first, then a transaction-scoped advisory lock (one key per workspace and
-    variant) serializes concurrent first uploads. An archived/purged source is retired history and a
-    fresh one is created; a paused one is returned so intake reports it as inactive. Commits before
-    returning.
+    Access locks come first, then a transaction-scoped advisory lock on ``lock_key`` serializes
+    concurrent first uploads. An archived/purged source is retired history and a fresh one is
+    created; a paused one is returned so intake reports it as inactive. Commits before returning.
     """
     access_fence = await _admit_source_scope(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
     )
-    variant = "shared" if shared else "private"
     await session.execute(
-        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-        {"key": f"umwelt.sources.chat_attachments.{scope.workspace_id}.{variant}"},
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": lock_key},
     )
     source = await session.scalar(
         select(Source).where(
             *_source_scope(scope),
-            Source.configuration[CHAT_ATTACHMENTS_MARKER].as_boolean().is_(True),
-            Source.local_only.is_(not shared),
+            Source.configuration[marker].as_boolean().is_(True),
+            Source.local_only.is_(local_only),
             Source.status != "archived",
         ).order_by(Source.created_at.desc()).limit(1)
     )
@@ -560,9 +553,8 @@ async def get_or_create_chat_attachments_source(
         return source
     # Built directly: create_source forces local_only for manual sources, which would break "shared".
     source = Source(
-        workspace_id=scope.workspace_id,
-        type="manual", name=CHAT_ATTACHMENTS_SHARED_NAME if shared else CHAT_ATTACHMENTS_NAME,
-        local_only=not shared, configuration={CHAT_ATTACHMENTS_MARKER: True},
+        workspace_id=scope.workspace_id, type="manual", name=name,
+        local_only=local_only, configuration={marker: True},
     )
     session.add(source)
     await session.flush()
@@ -572,6 +564,47 @@ async def get_or_create_chat_attachments_source(
     )
     await session.refresh(source)
     return source
+
+
+async def get_or_create_chat_attachments_source(
+    session: AsyncSession, *, scope: WorkspaceContext, multi_workspace_enabled: bool, shared: bool = False,
+) -> Source:
+    """Return one of the workspace's two server-owned Chat attachments manual sources, creating it once.
+
+    ``shared=False`` (the default) selects the private "Chat attachments" source (``local_only``);
+    ``shared=True`` selects "Chat attachments (shared)", which is not ``local_only`` and therefore
+    eligible for cloud chat, embeddings, extraction and briefs. Both carry the same server-set
+    marker and differ only in ``local_only``, which no owner API can change. Commits before returning.
+    """
+    variant = "shared" if shared else "private"
+    return await _get_or_create_marked_manual_source(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        marker=CHAT_ATTACHMENTS_MARKER,
+        name=CHAT_ATTACHMENTS_SHARED_NAME if shared else CHAT_ATTACHMENTS_NAME,
+        local_only=not shared,
+        lock_key=f"umwelt.sources.chat_attachments.{scope.workspace_id}.{variant}",
+    )
+
+
+DOCUMENT_UPLOADS_MARKER = "document_uploads"
+DOCUMENT_UPLOADS_NAME = "Uploads"
+
+
+async def get_or_create_uploads_source(
+    session: AsyncSession, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+) -> Source:
+    """Return the workspace's server-owned default "Uploads" manual source, creating it once.
+
+    Used by Documents uploads that name no source. The source is ``local_only`` (manual default),
+    which also satisfies the notes/finance import rule that the target be a local manual source.
+    Concurrency, archived-source and paused-source handling match the Chat attachments source.
+    Commits before returning.
+    """
+    return await _get_or_create_marked_manual_source(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        marker=DOCUMENT_UPLOADS_MARKER, name=DOCUMENT_UPLOADS_NAME, local_only=True,
+        lock_key=f"umwelt.sources.document_uploads.{scope.workspace_id}",
+    )
 
 
 async def is_chat_attachments_source(

@@ -82,6 +82,7 @@ export type ConnectorConfig = {
   github_history_days?: number;
   telegram_chat_ids?: string[];
   market_symbols?: string[];
+  coingecko_assets?: CoinGeckoCoin[];
   market_currency?: string;
   market_exchange_timezone?: string;
   weather_latitude?: number;
@@ -104,6 +105,7 @@ export type ConnectorConfig = {
   connection_id?: string;
   calls?: { grant_id: string; arguments: Record<string, unknown> }[];
 };
+export type CoinGeckoCoin = { id: string; symbol: string; name: string; series_symbol?: string };
 export type ConnectorSettings = {
   expected_revision: number;
   configuration: ConnectorConfig;
@@ -153,7 +155,7 @@ export type DraftValidation = {
 export type BuiltinCategory = 'news' | 'economy' | 'hazards' | 'space' | 'security' | 'tech';
 export type ConnectorCatalogEntry = {
   provider_id: string;
-  kind?: 'connector' | 'group' | 'preset' | 'manual_import';
+  kind?: 'connector' | 'group' | 'preset';
   source_type?: 'rss' | 'web' | 'api' | 'mcp' | 'email' | 'calendar' | 'manual' | null;
   label: string;
   auth_methods: string[];
@@ -215,6 +217,7 @@ export const connectorKeys = {
   activation: (id: string) => ['connector-activation', id] as const,
   ingestion: (id: string) => ['source-ingestion', id] as const,
   terms: (id: string) => ['connector-terms', id] as const,
+  coingeckoCoins: (id: string, query: string) => ['coingecko-coins', id, query] as const,
   builtins: ['connector-builtins'] as const,
   collection: (id: string, requestId: string) => ['source-collection-request', id, requestId] as const,
 };
@@ -231,11 +234,6 @@ export function getSourceImpact(id: string, signal?: AbortSignal) { return apiRe
 
 /** Fetches one source by its identifier. */
 export function getSource(id: string) { return apiRequest<Source>(`/api/v1/sources/${id}`); }
-
-/** Creates a manual source with the supplied name and CSRF token. */
-export function createManualSource(name: string, csrfToken: string, options?: SourceAiOptions) {
-  return apiRequest<Source>('/api/v1/sources', { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ type: 'manual', name, ...options }) });
-}
 
 /** Archives a source through the source DELETE endpoint using CSRF protection. */
 export function archiveSource(id: string, csrfToken: string) {
@@ -516,6 +514,11 @@ export type ProviderTerms = {
 };
 
 /** Owner read of the provider terms state; null when nothing has been acknowledged yet. */
+/** Searches the owner-only CoinGecko catalog for the saved source without exposing its Demo key. */
+export function searchCoinGeckoCoins(id: string, query: string, signal?: AbortSignal) {
+  return apiRequest<{ items: CoinGeckoCoin[] }>(`/api/v1/connectors/${id}/coingecko/coins?q=${encodeURIComponent(query)}`, { signal });
+}
+
 export function getProviderTerms(id: string, signal?: AbortSignal) {
   return apiRequest<ProviderTerms | null>(`/api/v1/connectors/sources/${id}/terms`, { signal });
 }

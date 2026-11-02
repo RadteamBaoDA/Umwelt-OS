@@ -25,6 +25,7 @@ from urllib.parse import quote, urlencode
 
 from modules.connectors.providers.crypto import (
     COINGECKO_KEY_HEADER,
+    DEFAULT_COINGECKO_ASSETS,
     coingecko_request,
     map_coingecko,
 )
@@ -467,12 +468,37 @@ def map_nasa_firms(body: object, collected_at: datetime, cfg: Mapping[str, Any])
     return records
 
 
+def coingecko_assets(cfg: Mapping[str, Any]) -> tuple[tuple[str, str, str], ...]:
+    """Project validated catalog selections into the USD asset tuples shared by request and mapper.
+
+    Absence preserves the legacy BTC/USD source. Explicit empty or malformed scope fails before a send.
+    """
+    configured = cfg.get("coingecko_assets")
+    if configured is None and "coingecko_assets" not in cfg:
+        return DEFAULT_COINGECKO_ASSETS
+    if not isinstance(configured, (tuple, list)) or not 1 <= len(configured) <= 20:
+        raise ProviderPayloadError("coingecko_scope_mismatch")
+    assets: list[tuple[str, str, str]] = []
+    ids: set[str] = set()
+    for row in configured:
+        if not isinstance(row, Mapping) or not isinstance(row.get("id"), str) or not isinstance(row.get("symbol"), str):
+            raise ProviderPayloadError("coingecko_scope_mismatch")
+        coin_id, symbol = row["id"], row["symbol"]
+        if coin_id in ids:
+            raise ProviderPayloadError("coingecko_scope_mismatch")
+        ids.add(coin_id)
+        assets.append((coin_id, symbol, "USD"))
+    return tuple(assets)
+
+
 # --------------------------------------------------------------------------- registry
 
 KEYED: dict[str, KeyedProvider] = {
     "coingecko": KeyedProvider(
-        COINGECKO_KEY_HEADER, lambda secret, cfg: coingecko_request(secret),
-        lambda payload, at, cfg: map_coingecko(payload, at)),
+        COINGECKO_KEY_HEADER,
+        lambda secret, cfg: coingecko_request(secret, assets=coingecko_assets(cfg)),
+        lambda payload, at, cfg: map_coingecko(
+            payload, at, assets=coingecko_assets(cfg), symbol_by_id="coingecko_assets" in cfg)),
     "fred": KeyedProvider("query:api_key", build_fred, map_fred),
     "finnhub_news": KeyedProvider("X-Finnhub-Token", build_finnhub, map_finnhub_news),
     "newsapi": KeyedProvider("X-Api-Key", build_newsapi, map_newsapi),

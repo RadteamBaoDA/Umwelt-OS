@@ -512,3 +512,40 @@ async def test_mutate_message_rechecks_current_local_only(monkeypatch: pytest.Mo
     assert caught.value.status_code == 409 and caught.value.detail["code"] == "selection_local_only"
     session.add.assert_not_called()  # no prompt, run or receipt
     _assert_nothing_persisted(session, dispatch)
+
+
+# --- default "Uploads" source ------------------------------------------------------------------
+
+async def test_get_or_create_uploads_source_creates_one_local_only_marked_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    _admit(monkeypatch)
+    session = MagicMock()
+    session.execute = AsyncMock()
+    session.scalar = AsyncMock(return_value=None)
+    session.flush = AsyncMock()
+    session.refresh = AsyncMock()
+    monkeypatch.setattr(sources_public, "commit_with_replay", AsyncMock())
+    monkeypatch.setattr(sources_public, "make_source_change", MagicMock())
+
+    source = await sources_public.get_or_create_uploads_source(session, **KW)
+
+    assert source.type == "manual" and source.local_only is True and source.name == "Uploads"
+    assert source.configuration == {"document_uploads": True} and source.workspace_id == WS
+    assert "pg_advisory_xact_lock" in str(session.execute.await_args_list[0].args[0])
+
+
+async def test_upload_without_source_id_targets_default_uploads_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    source_id, run_id = uuid4(), uuid4()
+    get = AsyncMock(return_value=SimpleNamespace(id=source_id))
+    monkeypatch.setattr(routes.sources, "get_or_create_uploads_source", get)
+    intake = AsyncMock(return_value=(SimpleNamespace(
+        id=run_id, workspace_id=WS, batch_id=uuid4(), status="queued"), uuid4()))
+    monkeypatch.setattr(routes, "_intake_upload", intake)
+
+    await routes.upload_document(_request(), _upload("a.txt", b"hi", "text/plain"), MagicMock(), SCOPE)
+
+    assert intake.await_args.args[2:4] == (SCOPE, source_id)
+    get.assert_awaited_once()
+    # An explicit source_id bypasses the default source.
+    explicit = uuid4()
+    await routes.upload_document(_request(), _upload("a.txt", b"hi", "text/plain"), MagicMock(), SCOPE, explicit)
+    assert intake.await_args.args[3] == explicit and get.await_count == 1

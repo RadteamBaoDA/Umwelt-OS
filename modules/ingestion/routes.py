@@ -274,17 +274,33 @@ async def _intake_upload(
     return run, document_id
 
 
+async def _resolve_upload_source(
+    request: Request, session: AsyncSession, scope: WorkspaceContext, source_id: UUID | None,
+) -> UUID:
+    """Return the explicit ``source_id`` or the workspace's default "Uploads" source id (created on first use)."""
+    if source_id is not None:
+        return source_id
+    source = await sources.get_or_create_uploads_source(
+        session, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
+    return source.id
+
+
 @documents_router.post("/upload", response_model=Receipt, status_code=202,
                       dependencies=[Depends(require_budget("ingest_upload", 20, 60))])
 async def upload_document(
     request: Request,
-    source_id: Annotated[UUID, Form()],
     upload: Annotated[UploadFile, File(alias="file")],
     session: Session,
     _owner: OwnerWrite,
+    source_id: Annotated[UUID | None, Form()] = None,
 ) -> Receipt:
-    """Validate and durably store a bounded upload, removing raw bytes if intake fails or deduplicates."""
+    """Validate and durably store a bounded upload, removing raw bytes if intake fails or deduplicates.
+
+    An omitted ``source_id`` targets the server-owned default "Uploads" source, created once.
+    """
     scope = _owner_scope(_owner)
+    source_id = await _resolve_upload_source(request, session, scope, source_id)
     run, _document_id = await _intake_upload(request, session, scope, source_id, upload)
     return Receipt(workspace_id=run.workspace_id, batch_id=run.batch_id, run_id=run.id, status=run.status)
 
@@ -293,10 +309,10 @@ async def upload_document(
                       dependencies=[Depends(require_budget("ingest_upload", 20, 60))])
 async def upload_finance_import(
     request: Request,
-    source_id: Annotated[UUID, Form()],
     upload: Annotated[UploadFile, File(alias="file")],
     session: Session,
     _owner: OwnerWrite,
+    source_id: Annotated[UUID | None, Form()] = None,
 ) -> Receipt:
     """Normalize a CSV/OFX into a local-only Markdown receipt under the admitted manual Source.
 
@@ -309,8 +325,10 @@ async def upload_finance_import(
     formats/records return 415/422, oversized requests return 413, and unavailable OFX support
     returns 503. The response is the existing durable Ingestion receipt; no transaction is
     written to a separate persistence model and no caller receives authority over source bytes.
+    An omitted ``source_id`` targets the server-owned default "Uploads" source.
     """
     scope = _owner_scope(_owner)
+    source_id = await _resolve_upload_source(request, session, scope, source_id)
     settings = request.app.state.settings
     byte_limit = min(settings.upload_max_bytes, MAX_IMPORT_BYTES)
     filename = upload.filename or ""
