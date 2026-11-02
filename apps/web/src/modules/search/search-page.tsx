@@ -130,13 +130,13 @@ export function SearchPage() {
         <div className="field"><Label htmlFor="search-from">{t('searchFrom')}</Label><Input id="search-from" className="h-9" type="date" {...register('dateFrom')} /></div>
         <div className="field"><Label htmlFor="search-to">{t('searchTo')}</Label><Input id="search-to" className="h-9" type="date" min={draftFrom || undefined} {...register('dateTo')} />{errors.dateTo && <p className="error" role="alert">{t('invalidDateRange')}</p>}</div>
         <div className="field"><Label htmlFor="search-type">{t('searchContentType')}</Label><Input id="search-type" placeholder={t('searchTypePlaceholder')} {...register('contentType')} /></div>
-        <div className="field"><Label htmlFor="search-mode">{t('searchMode')}</Label><Controller control={control} name="mode" render={({ field }) => <Select value={field.value} onValueChange={field.onChange}><SelectTrigger id="search-mode"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="hybrid">{t('hybridMode')}</SelectItem><SelectItem value="lexical">{t('lexicalMode')}</SelectItem></SelectContent></Select>} /></div></div>
+        <div className="field sm:col-span-2"><Label htmlFor="search-mode">{t('searchMode')}</Label><Controller control={control} name="mode" render={({ field }) => <Select value={field.value} onValueChange={field.onChange}><SelectTrigger id="search-mode"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="hybrid">{t('hybridMode')}</SelectItem><SelectItem value="lexical">{t('lexicalMode')}</SelectItem></SelectContent></Select>} /></div></div>
       <div className="field"><Label htmlFor="search-scope">{t('searchScope')}</Label><Controller control={control} name="entityScope" render={({ field }) => <Select value={field.value} onValueChange={field.onChange}><SelectTrigger id="search-scope"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{t('searchBoth')}</SelectItem><SelectItem value="documents">{t('searchDocumentsOnly')}</SelectItem></SelectContent></Select>} /></div>
       <p className="text-muted-foreground">{t('entityFiltersNotApplied')}</p>
       </FiltersDisclosure>
       <Button type="submit" className="w-auto justify-self-end" disabled={isSubmitting}>{t('search')}</Button>
     </form>
-    {index.data && <p className="mt-4 text-muted-foreground" role="status">{index.data.status === 'active' || index.data.indexed_items > 0
+    {index.data && <p className="mt-4 mb-3 text-muted-foreground" role="status">{index.data.status === 'active' || index.data.indexed_items > 0
       ? [t('semanticIndex') + ': ' + t(indexStatusKeys[index.data.status] ?? 'indexUnknownStatus'), index.data.indexed_items > 0 && t('indexedItems', { count: index.data.indexed_items }), index.data.failed_items > 0 && t('failedItems', { count: index.data.failed_items })].filter(Boolean).join(' · ')
       : index.data.failed_items > 0 ? `${t('indexPreparing')} · ${t('failedItems', { count: index.data.failed_items })}` : t('indexPreparing')}</p>}
     {index.isError && <p className="error" role="alert">{t('indexUnavailable')} <Button variant="outline" onClick={() => index.refetch()}>{t('retrySearch')}</Button></p>}

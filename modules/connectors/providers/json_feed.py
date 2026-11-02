@@ -220,8 +220,8 @@ JSON_FEEDS: dict[str, JsonFeed] = {f.provider: f for f in (
         "emsc_quakes", "EMSC",
         "https://www.seismicportal.eu/fdsnws/event/1/query?limit=50&format=json&minmag=4",
         "features", ("id",), ("properties.flynn_region",),
-        (("Magnitude", "properties.mag"), ("Depth km", "properties.depth"), ("Time", "properties.time")),
-        time="properties.lastupdate", lonlat=("properties.lon", "properties.lat"),
+        (("Magnitude", "properties.mag"), ("Depth (km)", "properties.depth")),
+        time="properties.time", lonlat=("properties.lon", "properties.lat"),
     ),
     JsonFeed(
         "launch_library", "The Space Devs Launch Library",

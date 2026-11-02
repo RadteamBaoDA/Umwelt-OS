@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import { ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { apiRequest } from '@/core/api';
 import { useTranslations } from 'next-intl';
@@ -26,8 +27,8 @@ function SystemStatus() {
   if (health.isPending) return <div className="content-panel skeleton" aria-label={ts('systemLoading')} />;
   if (health.isError) return <section className="content-panel"><h1>{ts('systemUnavailable')}</h1><p className="muted">{ts('systemReload')}</p><Button className="secondary" onClick={() => health.refetch()}>{tc('retry')}</Button></section>;
   return <div className="flex flex-col gap-5"><SettingsPageHeader eyebrow={tShell('settings')} title={ts('systemTitle')} description={ts('systemDescription')} /><SettingsSection title={ts('systemServices')}><div className="status-grid mt-0">{Object.entries(health.data.components).map(([key, component]) => <article className="status-item" key={key}><div className="status-label">{serviceLabelKeys[key] ? ts(serviceLabelKeys[key]) : humanizeCode(key)}</div><div className="status-value">{key === 'model_gateway' && component.status === 'unconfigured' ? ts('gatewayNotConfigured') : statusLabel(tg, component.status)}{component.connectivity === 'not_tested' && component.status === 'configured' ? ts('connectivityNotTested') : ''}</div></article>)}</div><p className="muted m-0" role="status">{ts('systemOverall', { status: statusLabel(tg, health.data.overall) })}</p></SettingsSection>
-    <details className="mt-8 border-t border-border pt-6">
-      <summary className="cursor-pointer text-lg font-semibold">{tOperations('advancedTitle')}</summary>
+    <details className="group mt-8 border-t border-border pt-6">
+      <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold [&::-webkit-details-marker]:hidden"><ChevronRight aria-hidden="true" className="size-4 transition-transform group-open:rotate-90" />{tOperations('advancedTitle')}</summary>
       <div className="mt-5"><OperationsPage /></div>
       <div className="mt-5"><LifecycleSettings /></div>
     </details>

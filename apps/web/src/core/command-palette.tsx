@@ -202,7 +202,7 @@ export function CommandPalette() {
         </div>
         <div role="tablist" aria-label={tc('paletteScopes')} className="flex flex-wrap items-center gap-1.5 border-b border-border px-4 py-2.5">
           {scopes.map((item) => (
-            <button key={item} type="button" role="tab" aria-selected={scope === item} className={`inline-flex h-[22px] items-center rounded-[4px] border px-2 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${scope === item ? 'border-primary text-primary' : 'border-border text-muted-foreground hover:text-foreground'}`} onClick={() => { setScope(item); setActiveIndex(0); inputRef.current?.focus(); }}>{tc(scopeKeys[item])}</button>
+            <button key={item} type="button" role="tab" aria-selected={scope === item} className={`inline-flex min-h-9 pointer-coarse:min-h-11 items-center rounded-[4px] border px-2 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${scope === item ? 'border-primary text-primary' : 'border-border text-muted-foreground hover:text-foreground'}`} onClick={() => { setScope(item); setActiveIndex(0); inputRef.current?.focus(); }}>{tc(scopeKeys[item])}</button>
           ))}
           {mode && <span className="ml-auto text-xs text-muted-foreground">{mode === 'lexical' ? tc('paletteLexical') : tc('paletteHybrid')}</span>}
         </div>
@@ -217,7 +217,7 @@ export function CommandPalette() {
                       <span className="min-w-0 flex-1 truncate">{option.label}</span>
                       {option.badge && !option.disabledReason && <Badge variant="outline" className="shrink-0 text-muted-foreground">{option.badge}</Badge>}
                       {(option.disabledReason || option.meta) && <span className="max-w-[45%] shrink-0 truncate text-xs text-muted-foreground">{option.disabledReason ?? option.meta}</span>}
-                      {index === active && !option.disabledReason && <kbd className="palette-kbd">Enter</kbd>}
+                      {index === active && !option.disabledReason && <kbd className="palette-kbd hidden sm:inline">Enter</kbd>}
                     </div>
                   );
                 })}
@@ -235,7 +235,7 @@ export function CommandPalette() {
             {failed && <p role="alert" className="text-destructive">{tc('paletteError')}</p>}
           </div>
         </div>
-        <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-border px-4 py-2.5 text-xs text-muted-foreground">
+        <div className="hidden flex-wrap gap-x-4 gap-y-1 border-t border-border px-4 py-2.5 text-xs sm:flex text-muted-foreground">
           <span><kbd className="palette-kbd">↑</kbd> <kbd className="palette-kbd">↓</kbd> {tc('paletteHintMove')}</span>
           <span><kbd className="palette-kbd">Enter</kbd> {tc('paletteHintOpen')}</span>
           <span><kbd className="palette-kbd">Esc</kbd> {tc('paletteHintClose')}</span>

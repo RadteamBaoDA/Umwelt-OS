@@ -101,7 +101,7 @@ export function StoryList({
   return (
     <section className={embedded
       ? 'flex h-full min-h-0 flex-col gap-2 overflow-auto bg-card px-3 pb-3 text-card-foreground'
-      : 'flex h-full min-h-0 flex-col gap-3 overflow-auto bg-card text-card-foreground'}>
+      : 'flex flex-col gap-3 bg-card text-card-foreground'}>
       {embedded ? (
         // Slim meta row: partial-data notice on the left, translated badge + refresh on the right (no overlap with stories).
         <div className="flex h-6 shrink-0 items-center justify-between gap-2">
@@ -148,7 +148,9 @@ export function StoryList({
                 <span className="font-medium leading-snug">{shown(story)?.title ?? story.title}</span>
                 <ArrowUpRight aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
               </span>
-              <span className="mt-1 line-clamp-3 text-sm text-muted-foreground">{cleanExcerpt(shown(story)?.title ?? story.title, shown(story)?.excerpt ?? story.excerpt)}</span>
+              {cleanExcerpt(shown(story)?.title ?? story.title, shown(story)?.excerpt ?? story.excerpt) ? (
+                <span className="mt-1 line-clamp-3 text-sm text-muted-foreground">{cleanExcerpt(shown(story)?.title ?? story.title, shown(story)?.excerpt ?? story.excerpt)}</span>
+              ) : null}
               {!translation.results.has(story.id) && <TranslationNote issue={translation.issues.get(story.id)} />}
               <span className="mt-2 block text-xs text-muted-foreground">
                 {[
@@ -185,7 +187,7 @@ function Attribution({ story }: { story: Story }) {
   if (!item?.publisher) return null;
   const href = safeHttpUrl(item.url);
   return (
-    <p className="mt-1 text-xs text-muted-foreground" title={item.license_label ?? undefined}>
+    <p className="-mt-2 pb-3 text-xs text-muted-foreground" title={item.license_label ?? undefined}>
       {t('publisher')}: {href ? <a className="text-foreground underline underline-offset-2" href={href} target="_blank" rel="noopener noreferrer" title={item.license_label ?? undefined}>{item.publisher}</a> : item.publisher}
     </p>
   );

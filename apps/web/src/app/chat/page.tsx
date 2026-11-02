@@ -57,7 +57,7 @@ function ChatPageContent() {
   }, [detail?.messages]);
 
   return (
-    <div className="flex min-h-0 flex-1 shrink! basis-0 w-full min-w-0 overflow-hidden bg-surface">
+    <div className="flex min-h-0 flex-1 shrink! basis-0 w-full min-w-0 overflow-hidden rounded-lg border border-border bg-surface">
       {/* Sidebar history on desktop; toggleable on mobile */}
       <div
         id="chat-history-sidebar"

@@ -3,7 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { formatChartValue } from '@/core/charts/recharts-wrapper';
-import { formatDateTime } from '@/core/i18n';
+import { formatDateTime, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { listWorldObservationWindow, type WorldObservation } from '@/modules/observations/api';
 import { getConnectorConfiguration } from '@/modules/sources/api';
@@ -39,6 +39,16 @@ export function latestPerSeries(items: WorldObservation[]): WorldObservation[] {
 }
 
 /** Formats an observation by locale while retaining its provider supplied currency or unit. */
+/**
+ * Formats a provider calendar date (YYYY-MM-DD) as a localized date only. The date carries no time zone,
+ * so it is read and printed in UTC to keep the same calendar day; anything unparseable is shown as given.
+ */
+function formatReferenceDate(value: string, locale: ReturnType<typeof useDisplayPreferences>['locale']): string {
+  const date = new Date(`${value}T00:00:00Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(normalizeFormattingLocale(locale), { dateStyle: 'medium', timeZone: 'UTC' }).format(date);
+}
+
 function formatObservationValue(item: WorldObservation, locale: ReturnType<typeof useDisplayPreferences>['locale']): string {
   if (item.value === null) return '—';
   const smallValuePrecision = item.value !== 0 && Math.abs(item.value) < 0.0001
@@ -123,7 +133,7 @@ export function ProviderObservationGadget({ instance }: { instance: GadgetInstan
               {suffix && <span className="font-sans text-xs text-muted-foreground">{suffix}</span>}
             </span>
           </div>
-          {kind === 'referenceDate' && item.reference_date && <p className="text-xs text-muted-foreground">{t('providerObsReferenceDate', { date: item.reference_date })}</p>}
+          {kind === 'referenceDate' && item.reference_date && <p className="text-xs text-muted-foreground">{t('providerObsReferenceDate', { date: formatReferenceDate(item.reference_date, display.locale) })}</p>}
           {kind === 'annualPeriod' && item.period && <p className="text-xs text-muted-foreground">{t('providerObsPeriod', { period: item.period })}</p>}
           <dl className="flex flex-col text-xs text-muted-foreground">
             <div><dt className="inline">{t('providerObsObserved')}: </dt><dd className="inline"><time dateTime={item.observed_at}>{fmt(item.observed_at)}</time></dd></div>

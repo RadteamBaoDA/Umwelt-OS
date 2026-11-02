@@ -62,8 +62,8 @@ const GADGET_REGISTRY: Record<string, React.ComponentType<GadgetRendererProps>> 
  * in each source renderer. They are local reading policy, not persisted/server minimum dimensions.
  */
 export const GADGET_READING_BODY_FLOORS: Record<string, number> = {
-  // The common floor matches the legacy `.skeleton { min-height: 180px }` surface in app/globals.css.
-  daily_brief: 180, tasks: 180, goals: 180,
+  // The common floor matches the legacy `.skeleton { min-height: 180px }` surface in app/globals.css; DailyBrief adds its date row and two-action row.
+  daily_brief: 240, tasks: 180, goals: 180,
   // TimelineGadget: 180px readable content baseline plus root p-3, two gaps, and fixed header.
   timeline: 264,
   // Entity/PersonalContext: 180px content baseline plus root padding, search header, and spacing.
@@ -76,8 +76,8 @@ export const GADGET_READING_BODY_FLOORS: Record<string, number> = {
   // MetricsChart: h-[140px] plot + p-3, two space-y-3 gaps, fixed chart header and range controls.
   finance_chart: 276, metrics_chart: 276,
   github_project: 204,
-  // MapGadget reserves 12rem for its plot plus 24rem for all bounded, coexisting controls and spacing.
-  weather: 204, provider_observation: 240, map: 608, intelligence_panel: 180,
+  // MapGadget reserves 12rem for its plot plus 8rem for its range header, notices, list and footer; extra notices scroll.
+  weather: 204, provider_observation: 240, map: 352, intelligence_panel: 180,
 };
 
 /** Resolves source-backed floors, scaling MapGadget's bounded controls and plot with root text size. */
@@ -86,7 +86,7 @@ export function getGadgetReadingBodyFloor(rendererId: string): number {
     const rootFontSize = typeof document === 'undefined'
       ? 16
       : Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-    return 36 * rootFontSize + 32;
+    return 20 * rootFontSize + 32;
   }
   return GADGET_READING_BODY_FLOORS[rendererId] ?? 180;
 }

@@ -78,12 +78,12 @@ function GlobalSettingsContent() {
   return <div className="flex flex-col gap-5">
     <SettingsPageHeader eyebrow={t('title')} title={t('title')} description={t('description')} />
     <SettingsSection title={t('system')}>
-      <p className="m-0 text-sm text-muted-foreground">{t('healthOnSystem')} <Link className="underline underline-offset-4 text-foreground" href="/settings/system">{t('system')}</Link></p>
+      <p className="m-0 text-sm text-muted-foreground">{t('healthOnSystem')} <Link className="underline underline-offset-4 text-foreground" href="/settings/system">{t('system')}</Link>{t('healthOnSystemEnd')}</p>
       <div className="border-t border-border pt-4">
         <h3 className="mb-3 text-sm font-semibold">{t('configuration')}</h3>
         <dl className="m-0 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
           {([['multiWorkspace', 'multi_workspace_enabled'], ['secureCookies', 'secure_cookies'], ['googleLogin', 'google_login_configured'], ['githubApp', 'github_app_configured'], ['n8n', 'n8n_configured'], ['mcpWidgets', 'mcp_widgets_enabled']] as const).map(([label, key]) => <div key={key}>
-            <dt className="text-muted-foreground">{t(label)}</dt><dd className="m-0 font-medium">{configuration.data[key] ? t('enabled') : t('disabled')}</dd>
+            <dt className="text-muted-foreground">{t(label)}</dt><dd className="m-0 font-medium">{key.endsWith('_configured') ? (configuration.data[key] ? t('st_configured') : t('st_not_configured')) : (configuration.data[key] ? t('enabled') : t('disabled'))}</dd>
           </div>)}
         </dl>
       </div>

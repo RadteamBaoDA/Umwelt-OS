@@ -109,7 +109,8 @@ export function OnboardingPage() {
           {steps.map((step, position) => {
             const complete = done || position < currentIndex;
             const current = !done && step.id === currentStep.id;
-            return <li key={step.id}>
+            // On phones only completed and current steps are listed; "Step n of N" in the header covers the rest.
+            return <li key={step.id} className={complete || current ? undefined : 'max-[720px]:hidden'}>
               <button type="button" aria-current={current ? 'step' : undefined} disabled={save.isPending || done || position > currentIndex} onClick={() => move(step.id)}
                 className={`flex min-h-9 pointer-coarse:min-h-11 w-full items-start gap-3 rounded-md border px-3 py-2.5 text-left text-sm disabled:cursor-default ${current ? 'border-border bg-card' : 'border-transparent hover:bg-secondary'}`}>
                 <span aria-hidden="true" className={`w-5 shrink-0 text-sm tabular-nums ${complete ? 'text-primary' : current ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}>{complete ? <CheckIcon className="size-3.5" /> : position + 1}</span>

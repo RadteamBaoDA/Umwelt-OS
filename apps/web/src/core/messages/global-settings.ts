@@ -2,7 +2,7 @@
 export const globalSettingsMessages = {
   'en-us': {
     title: 'Global settings', description: 'System-wide status, workspaces, and provider terms review.',
-    system: 'System status', healthOnSystem: 'Service health is on', overall: 'Overall status: {status}', service: 'Service', status: 'Status',
+    system: 'System status', healthOnSystem: 'See service health on the', healthOnSystemEnd: ' page.', overall: 'Overall status: {status}', service: 'Service', status: 'Status',
     st_ok: 'Healthy', st_healthy: 'Healthy', st_degraded: 'Degraded', st_down: 'Down', st_error: 'Error', st_unavailable: 'Unavailable', st_unconfigured: 'Not configured', st_configured: 'Configured', st_not_configured: 'Not configured',
     configuration: 'Deployment configuration', enabled: 'Enabled', disabled: 'Disabled',
     multiWorkspace: 'Multiple workspaces', secureCookies: 'Secure cookies', googleLogin: 'Google sign-in',
@@ -19,7 +19,7 @@ export const globalSettingsMessages = {
   },
   'vi-vi': {
     title: 'Cài đặt toàn hệ thống', description: 'Trạng thái hệ thống, không gian làm việc và duyệt điều khoản nhà cung cấp.',
-    system: 'Trạng thái hệ thống', healthOnSystem: 'Tình trạng dịch vụ nằm ở', overall: 'Trạng thái chung: {status}', service: 'Dịch vụ', status: 'Trạng thái',
+    system: 'Trạng thái hệ thống', healthOnSystem: 'Xem tình trạng dịch vụ tại trang', healthOnSystemEnd: '.', overall: 'Trạng thái chung: {status}', service: 'Dịch vụ', status: 'Trạng thái',
     st_ok: 'Bình thường', st_healthy: 'Bình thường', st_degraded: 'Suy giảm', st_down: 'Ngừng hoạt động', st_error: 'Lỗi', st_unavailable: 'Không khả dụng', st_unconfigured: 'Chưa cấu hình', st_configured: 'Đã cấu hình', st_not_configured: 'Chưa cấu hình',
     configuration: 'Cấu hình triển khai', enabled: 'Đã bật', disabled: 'Đã tắt',
     multiWorkspace: 'Nhiều không gian làm việc', secureCookies: 'Cookie bảo mật', googleLogin: 'Đăng nhập Google',

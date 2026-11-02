@@ -83,7 +83,7 @@ describe('ProviderObservationGadget', () => {
       { ...base, id: 'o2', provider: 'world_bank', metric: 'gdp_current_usd', value: 4e11, observed_at: '2024-01-01T00:00:00Z', period: '2024' },
     ] });
     view();
-    expect(await screen.findByText('Reference date 2026-10-08')).toBeTruthy();
+    expect(await screen.findByText('Reference date Oct 8, 2026')).toBeTruthy();
     expect(screen.getByText('Period 2024')).toBeTruthy();
   });
 

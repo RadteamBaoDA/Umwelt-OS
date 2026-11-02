@@ -34,7 +34,7 @@ export interface GadgetNoticeProps {
  */
 export function GadgetNotice({ kind, message, action, className }: GadgetNoticeProps) {
   const isError = kind === 'error';
-  const actionClass = 'inline-flex min-h-9 pointer-coarse:min-h-11 items-center text-sm text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+  const actionClass = 'inline-flex min-h-9 pointer-coarse:min-h-11 items-center text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
   return (
     <div
       role={isError ? 'alert' : 'status'}

@@ -54,7 +54,7 @@ export function WeatherPanel({ instance }: { instance: GadgetInstance }) {
         const previous = items[index - 1];
         // Day heading only when the calendar day changes, so rows carry just the time.
         const newDay = !previous || dayKey(previous.observed_at, previous.timezone ?? display.timezone) !== dayKey(item.observed_at, zone);
-        return <li key={item.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+        return <li key={item.id} className="flex items-end justify-between gap-3 py-2 text-sm">
         <span className="min-w-0">{newDay && <span className="block text-xs font-semibold text-muted-foreground">{new Intl.DateTimeFormat(formatLocale, { dateStyle: 'medium', timeZone: zone }).format(new Date(item.observed_at))}</span>}{item.metric !== items[index - 1]?.metric && <span className="block font-medium">{formatMetricLabel(item.metric, t)}</span>}<time className="block text-xs text-muted-foreground" dateTime={item.observed_at}>{new Intl.DateTimeFormat(formatLocale, { timeStyle: 'short', timeZone: zone }).format(new Date(item.observed_at))}</time></span>
         <span className="shrink-0 tabular-nums">{item.value === null || item.quality === 'missing' ? t('weatherMissingValue') : `${valueFormat.format(item.value)} ${item.unit}`}</span>
       </li>;})}

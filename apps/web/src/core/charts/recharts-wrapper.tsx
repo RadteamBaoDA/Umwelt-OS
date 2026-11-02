@@ -655,6 +655,7 @@ export function BaseAreaChart({
                 strokeDasharray={idx % colors.series.length === 4 ? '5 3' : undefined}
                 fill={color}
                 fillOpacity={0.12}
+                isAnimationActive={false}
               />
             );
           })}
@@ -755,6 +756,7 @@ export function BaseLineChart({
                 strokeDasharray={idx % colors.series.length === 4 ? '5 3' : undefined}
                 dot={false}
                 activeDot={{ r: 4, strokeWidth: 1 }}
+                isAnimationActive={false}
               />
             );
           })}
@@ -848,6 +850,7 @@ export function BaseBarChart({
                 name={s.name}
                 fill={color}
                 radius={[4, 4, 0, 0]}
+                isAnimationActive={false}
               />
             );
           })}

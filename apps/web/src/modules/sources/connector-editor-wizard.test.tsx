@@ -27,7 +27,9 @@ const entry = (provider_id: string, label: string, source_type: 'rss' | 'api' | 
   key_fields: provider_id === 'coingecko' ? ['api_key'] : [], scope_fields: [], example_config: {},
 } as unknown as ConnectorCatalogEntry);
 const shaped = (item: ConnectorCatalogEntry, data_shapes: string[]) => ({ ...item, data_shapes }) as ConnectorCatalogEntry;
-const catalog = [entry('rest', 'REST API', 'api'), shaped(entry('rss', 'RSS / Atom', 'rss'), ['news']), shaped(entry('binance', 'Binance', 'api'), ['measurement']), entry('coingecko', 'CoinGecko', 'api'), entry('telegram', 'Telegram', 'api')];
+const googleNews = { ...entry('google_news', 'Google News RSS', 'rss'), kind: 'preset', scope_fields: ['news_query', 'news_site', 'news_locale'],
+  example_config: { ...{ timeout_seconds: 30, timezone: 'UTC', schedule_interval_minutes: 30 }, news_query: 'Vietnam economy', news_site: 'any', news_locale: 'en-US' } } as unknown as ConnectorCatalogEntry;
+const catalog = [entry('rest', 'REST API', 'api'), shaped(entry('rss', 'RSS / Atom', 'rss'), ['news']), shaped(entry('binance', 'Binance', 'api'), ['measurement']), entry('coingecko', 'CoinGecko', 'api'), entry('telegram', 'Telegram', 'api'), googleNews];
 const baseConfig = { timeout_seconds: 30, timezone: 'UTC', schedule_interval_minutes: 30, history_mode: 'returned_snapshot' };
 const serverConfig = (provider: string | null): ConnectorConfiguration => ({
   source_id: 's1', source_type: 'api', source_generation: 1, provider, configuration: baseConfig, expected_revision: 0, auth_method: 'none',
@@ -104,6 +106,19 @@ describe('ConnectorEditor wizard gating', () => {
     await waitFor(() => expect(snapshot?.connectOk).toBe(false));
     await userEvent.type(document.getElementById('source-telegram-token')!, '123:abc');
     await waitFor(() => expect(snapshot?.connectOk).toBe(true));
+  });
+
+  it('prefills the catalog example scope and blocks Choose when a required field is cleared', async () => {
+    const h = mount();
+    await pick(h, 'Google News', 'google_news');
+    h.goto('choose');
+    const query = document.getElementById('source-scope-news_query') as HTMLInputElement;
+    expect(query.value).toBe('Vietnam economy');
+    await waitFor(() => expect(snapshot?.chooseOk).toBe(true));
+    await userEvent.clear(query);
+    await waitFor(() => expect(snapshot?.chooseOk).toBe(false));
+    await userEvent.type(query, 'oil price');
+    await waitFor(() => expect(snapshot?.chooseOk).toBe(true));
   });
 
   it('sends no header auth or secret when a native provider is validated', async () => {

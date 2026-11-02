@@ -92,13 +92,13 @@ export function WizardShell({ title, mode, steps, stepIndex, onStepChange, busy,
           <DialogDescription>{t('stepCounter', { current: stepIndex + 1, total: steps.length })}</DialogDescription>
         </DialogHeader>
         <div className="grid min-h-0 grid-cols-1 auto-rows-max content-start gap-4 overflow-y-auto min-[900px]:grid-cols-[220px_1fr] min-[900px]:items-start">
-          <ol aria-label={t('wizardStepsLabel')} className="m-0 grid list-none auto-cols-max grid-flow-col gap-2 p-0 pb-1 max-[899px]:overflow-x-auto min-[900px]:sticky min-[900px]:top-0 min-[900px]:grid-flow-row min-[900px]:auto-cols-auto">
+          <ol aria-label={t('wizardStepsLabel')} className="m-0 flex list-none flex-wrap gap-2 p-0 pb-1 min-[900px]:sticky min-[900px]:top-0 min-[900px]:grid min-[900px]:grid-flow-row min-[900px]:auto-cols-auto">
             {steps.map((step, index) => {
               // Add mode never lets the owner skip ahead of validated steps; edit mode is free navigation.
               const reachable = mode === 'edit' || index <= stepIndex;
               return <li key={step.id}>
                 <button type="button" disabled={!reachable || locked} aria-current={index === stepIndex ? 'step' : undefined} onClick={() => onStepChange(index)}
-                  className={`flex min-h-9 pointer-coarse:min-h-11 w-full items-center gap-3 rounded-lg border p-3 text-left disabled:cursor-not-allowed disabled:opacity-60 ${index === stepIndex ? 'border-primary bg-card' : 'border-border bg-transparent'}`}>
+                  className={`flex min-h-9 pointer-coarse:min-h-11 w-full items-center gap-3 rounded-lg border px-3 py-1.5 text-left disabled:cursor-not-allowed disabled:opacity-50 ${index === stepIndex ? 'border-primary bg-card' : 'border-border bg-transparent'}`}>
                   <span className={`flex size-6 shrink-0 items-center justify-center rounded-full text-xs ${index === stepIndex ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>{index + 1}</span>
                   <strong className="whitespace-nowrap text-sm">{step.title}</strong>
                 </button>

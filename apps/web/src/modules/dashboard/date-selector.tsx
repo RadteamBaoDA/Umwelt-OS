@@ -14,7 +14,7 @@ export function DateSelector() {
   const t = useTranslations('daily');
   const { date, today, setDate } = useSelectedDay();
   return (
-    <div role="group" aria-label={t('dateSelector')} className="flex flex-wrap items-center gap-1.5">
+    <div role="group" aria-label={t('dateSelector')} className="flex min-w-0 flex-nowrap items-center gap-1.5">
       <Button type="button" size="icon" variant="outline" aria-label={t('previousDay')} onClick={() => setDate(addDays(date, -1))}>
         <ChevronLeft className="h-4 w-4" aria-hidden />
       </Button>
@@ -23,7 +23,7 @@ export function DateSelector() {
         aria-label={t('selectedDate')}
         value={date}
         onChange={(event) => event.target.value && setDate(event.target.value)}
-        className="w-auto"
+        className="w-auto min-w-0"
       />
       <Button type="button" size="icon" variant="outline" aria-label={t('nextDay')} onClick={() => setDate(addDays(date, 1))}>
         <ChevronRight className="h-4 w-4" aria-hidden />

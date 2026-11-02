@@ -33,7 +33,7 @@ export function SystemPromptsWorkspace() {
   if (query.isPending) return <section className="content-panel skeleton" aria-label={t('loading')} />;
   if (query.isError || !saved) return <section className="content-panel"><h1>{t('unavailable')}</h1><p className="error">{t(apiFailureKey(query.error) ?? 'loadFailed')}</p><Button className="secondary" onClick={() => query.refetch()}>{t('retry')}</Button></section>;
   return <div className="flex flex-col gap-5">
-    <SettingsPageHeader eyebrow={t('eyebrow')} title={t('title')} description={t('description')} status={<p className="m-0 text-sm text-muted-foreground" role="status">{save.isPending ? t('saving') : dirty ? t('unsaved') : t('saved')}</p>} />
+    <SettingsPageHeader eyebrow={t('eyebrow')} title={t('title')} description={t('description')} status={<p className="m-0 text-sm text-muted-foreground" role="status">{save.isPending ? t('saving') : dirty ? t('unsaved') : save.isSuccess ? t('saved') : ''}</p>} />
     <p className="m-0 text-sm text-muted-foreground">{t('note')}</p>
     <form className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); save.mutate(saved); }}>
       {saved.prompts.map((entry) => {

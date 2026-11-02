@@ -31,7 +31,12 @@ from modules.connectors.models import (
     GithubWebhookDelivery,
     GithubWebhookOutbox,
 )
-from modules.connectors.n8n import N8nApi, n8n_service_identity, workflow_matches
+from modules.connectors.n8n import (
+    N8nApi,
+    find_workflows_by_name,
+    n8n_service_identity,
+    workflow_matches,
+)
 from modules.settings.public import n8n_http_client, resolve_n8n
 from modules.sources.models import Source
 
@@ -212,7 +217,7 @@ async def erase_account_remote_page(
             raise RuntimeError("n8n cleanup requires its API key")
         api = N8nApi(n8n.service_url, n8n.api_key, settings)
         if workflow_name and isinstance(request, dict):
-            matches = await api.find_workflows(workflow_name)
+            matches = await find_workflows_by_name(api, workflow_name)
             for match in matches:
                 identifier = match.get("id")
                 if not isinstance(identifier, str) or not identifier:

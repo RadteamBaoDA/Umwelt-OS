@@ -80,7 +80,10 @@
 }
 
 /* Floating-layer shadow (menus, select, tooltips). Kept off :root so GenUI token parity only mirrors colour tokens. */
-html { --shadow-popover: 0 8px 28px rgb(0 0 0 / 16%); }
+html { --shadow-popover: 0 8px 28px rgb(0 0 0 / 16%); --scrim: rgb(0 0 0 / 0.4); }
+/* Modal backdrop: always darkens the page (bg-foreground would lighten it in dark mode). */
+/* :root.dark (not html.dark) keeps this overlay-only token out of the GenUI colour-token parity check. */
+:root.dark { --scrim: rgb(0 0 0 / 0.6); }
 
 * { box-sizing: border-box; }
 
@@ -130,8 +133,7 @@ html.dark {
   /* Tailwind v4 bare `border` uses currentColor; default every border to the hairline token (utilities still win). */
   *, ::before, ::after { border-color: var(--line); }
   button:not([data-slot='button']), input, textarea, select { font: inherit; }
-  /* Tables align figures in columns; metrics opt in with .tabular. */
-  table { font-feature-settings: "tnum"; font-variant-numeric: tabular-nums; }
+  /* Tables do not force tnum (it widens hyphens/dashes); numeric cells opt in with tabular-nums. */
   /* Links are ink; green is reserved for data. Underline on hover/focus keeps them discoverable. */
   a:not([data-slot='button']) { color: var(--text); }
   a:not([data-slot='button']):hover, a:not([data-slot='button']):focus-visible { text-decoration: underline; }
@@ -199,8 +201,8 @@ html.dark {
   .settings-nav hr { width: 100%; margin: 8px 0; border: 0; border-top: 1px solid var(--line); }
   .settings-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 20px; padding: 32px; }
   .settings-body .content-panel { padding: 0; min-height: 0; background: none; border: 0; border-radius: 0; }
-  .settings-nav a { min-height: 40px; display: flex; align-items: center; padding: 0 12px; border-radius: 6px; text-decoration: none; font-size: 14px; font-weight: 600; color: var(--text); }
-  .settings-nav a[aria-current='page'] { background: var(--bg); }
+  .settings-nav a { min-height: 40px; display: flex; align-items: center; padding: 0 12px; border-radius: 6px; text-decoration: none; font-size: 14px; font-weight: 500; color: var(--muted); }
+  .settings-nav a[aria-current='page'] { background: var(--active); color: var(--text); font-weight: 600; }
   .settings-section-select { display: none; }
   .skip-link { position: absolute; left: 12px; top: -80px; z-index: 100; padding: 10px 14px; border-radius: 6px; background: var(--surface); color: var(--text); border: 1px solid var(--line); font-weight: 650; text-decoration: none; }
   .skip-link:focus { top: max(12px, env(safe-area-inset-top)); }
@@ -241,6 +243,7 @@ html.dark {
   .text-area { min-height: 220px; resize: vertical; }
   .text-area.compact { min-height: 100px; }
   .empty-state { padding: 24px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); }
+  .empty-state > * + * { margin-top: 12px; }
   .record-list, .version-list { list-style: none; padding: 0; margin: 20px 0; }
   .record-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--line); }
   .record-row p { margin: 5px 0 0; }
@@ -352,7 +355,7 @@ html.dark {
 
 /* phase-3 dashboard */
 @layer components {
-  .dashboard-empty { background: transparent; color: var(--muted-foreground, inherit); }
+  .dashboard-empty { background: transparent; color: var(--muted); }
   .dashboard-gadget { overflow: hidden; }
   /* Themed thin scrollbars replace the native arrowed ones inside gadget bodies and nested gadget scrollers. */
   .dashboard-gadget, .dashboard-gadget * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 55%, transparent) transparent; }

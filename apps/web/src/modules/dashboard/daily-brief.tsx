@@ -31,7 +31,7 @@ function WidgetSummary({ widget }: { widget: DailyWidgetData }) {
       {widget.status === 'not_applicable' && <p className="mt-1 text-muted-foreground">{t('futureNoNews')}</p>}
       {widget.status === 'empty' && <p className="mt-1 text-muted-foreground">{t('emptyWidget')}</p>}
       {widget.status === 'unavailable' && <p role="alert" className="mt-1 text-destructive">{t('widgetUnavailable')}</p>}
-      {titles.length > 0 && <ul className="mt-1 list-disc space-y-0.5 pl-4">{titles.map((title, index) => <li key={`${index}-${title}`} className="line-clamp-1">{title}</li>)}</ul>}
+      {titles.length > 0 && <ul className="mt-1 list-disc space-y-0.5 pl-4">{titles.map((title, index) => <li key={`${index}-${title}`}><span className="line-clamp-1">{title}</span></li>)}</ul>}
       {widget.source_status === 'manual_or_imported_only' && <p className="mt-1 text-muted-foreground">{t('manualEventsOnly')}</p>}
       {widget.updated_at && <p className="mt-1 text-muted-foreground">{t('updatedAt', { time: formatDateTime(widget.updated_at, display.locale, display.timezone) })}</p>}
     </section>
@@ -66,8 +66,8 @@ export function DailyBrief() {
     : generate.error ? 'generateUnavailable' : null;
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3.5">
-      <header className="flex flex-wrap items-center justify-between gap-2">
+    <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3.5 pb-4">
+      <header className="flex flex-nowrap items-center justify-between gap-2">
         <DateSelector />
         {canReadOwnerWorkspace && context.data && context.data.relation !== 'today' && <span className="rounded bg-secondary px-2 py-0.5 text-xs font-semibold">{t(`relation_${context.data.relation}`)}</span>}
       </header>

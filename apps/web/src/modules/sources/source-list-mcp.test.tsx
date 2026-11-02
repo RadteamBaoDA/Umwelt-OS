@@ -37,6 +37,6 @@ describe('SourceList MCP rows', () => {
     await screen.findByText('Mcp one');
     expect(screen.getAllByRole('button', { name: 'Configure' }).length).toBeGreaterThanOrEqual(1);
     const badges = screen.getAllByTestId('source-realtime-badge').map((node) => node.textContent);
-    expect(badges).toEqual(['Near-realtime', 'Realtime']);
+    expect(badges).toEqual(['Scheduled', 'Live']);
   });
 });

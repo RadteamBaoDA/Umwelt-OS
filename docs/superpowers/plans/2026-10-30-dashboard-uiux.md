@@ -167,3 +167,94 @@ Four review rounds (Opus, read-only) against six criteria: ledger consistency, n
 | 4 | Done and verified in after6 |
 | 5 | Done and verified in after6 |
 | 6 | Done (preset source proposal, e2e Add-gadget waits) and verified in after6 |
+
+## Checkpoint 2026-11-01 04:10 (paused by owner, nothing committed)
+
+- **Round 14 fixes D1–D7** (fresh tick colour `--accent`, schedule nowrap, timeline spacing, brief clamp, setup/invite footers, provider card height): verified in capture final4 (129 passed).
+- **Round 15** (8 items: chart toggle, globe context guard, phone map, quake excerpt, Members/Memory copy, chat border, palette hints): fixed; capture final5 (129 passed, console 0 bytes).
+- **Round 16:** full sweep of all 353 final5 PNGs by 4 auditors: 0 P0, ~6 P1, ~22 P2.
+  - Dashboard batch done (tsc clean):
+    - Map engines in an absolute layer, so the footer stays in the card.
+    - Phone/no-precise map shows one message and no empty box.
+    - Globe re-fits and resumes on the next frame, with a lost-context fallback.
+    - Map copy now matches the Configure link.
+    - Recharts animation off.
+    - Capture `settle` waits for "Loading…" status.
+    - Daily brief padding and nowrap date row.
+    - Dashboard header basis on phones.
+    - Video count hidden while loading.
+    - Weather values aligned.
+  - Settings batch (in progress when paused):
+    - Memory tabs overflow; `--scrim` token for dialog/sheet.
+    - Settings-nav active state; legal selected state.
+    - Wizard step bar; provider card centring.
+    - Search mode span; Global-settings copy.
+    - "Saved" on load; Realtime badge; schedule "—" while loading.
+    - Models copy; disclosure summaries.
+    - Invite input; palette chip height; onboarding stepper.
+- **Resume steps:**
+  1. Review the settings-batch diff (`git diff --stat`).
+  2. From `apps/web`: `npx tsc --noEmit -p .` and `timeout 600 npx vitest run`. Two vitest failures were open: `provider-terms.test.tsx` en/vi key parity and `design-system-parity.test.ts` token parity. Likely the new `--scrim` / badge keys; mirror them in genUI tokens and the vi messages.
+  3. Run the control-char scan.
+  4. Run full capture final6: `SCREENS_DIR=.taste-skill/final6`, target `dashboard-datasources|screens-capture|system.spec|chat-live`.
+  5. Run a 4-slice full audit (1440 / 768 / 390 / gadgets).
+  6. Repeat until there are 0 P0/P1/P2.
+- **Unverified risks:**
+  - The Overview blank-globe root cause is unconfirmed (hardening only).
+  - The `settle` wait applies to every route.
+
+## Checkpoint 2026-11-01 20:00 (stopped by owner: CPU spike from parallel agents + hooks)
+
+- Settings batch: all 16 items landed. Tracking-mode jargon replaced ("Live"/"Scheduled"). tsc clean, vitest 549/549.
+- final6 capture: 129 passed, 353 PNGs, console 0 bytes (`.taste-skill/final6`).
+- Overview blank globe root cause:
+  - Old code drew the plot box even with precise off, and the globe paint raced.
+  - The current code shows only the setup notice when precise is off.
+- Round 17 audit was interrupted. Only the gadgets slice finished: 2 P1, 2 P2.
+  - **P1, map footer still clipped (map-earth/map-flat).**
+    - Cause: the inline `minHeight: bodyFloor` on the body div (`gadget-frame.tsx:~368`) beats `min-h-0`.
+    - The map floor of 608px (`widget-registry.tsx:~80,89`) exceeds the default 9-row card (~545px body).
+    - Fix: move `minHeight` to the inner host div (~384). Lower the map floor to `30*rem+32` (512).
+  - **P2, duplicate loading block.** `map-gadget.tsx:~105` shows a skeleton above the drawn plot. Replace it with a small overlay inside the plot.
+  - **P2, oversized Configure link.** `gadget-notice.tsx:~37` hard-codes `text-sm` in `actionClass`, so the link is bigger than the `text-xs` message. Remove it.
+- Resume: 1440/768/390 slices still unaudited on final6.
+  - Run them ONE AT A TIME (4 parallel agents x ~7 hooks per tool call, plus the remember plugin's post-tool bash, spawned dozens of bash trees and hit 100% CPU).
+  - Agreed closing rule: round 17 is the last full sweep. Fix its list in one batch. Capture final7 and verify only those items. Later nits go to the backlog.
+- **Round 17, 768 slice (112/112 reviewed): 0 P0, 0 P1, 4 P2.** All round-16 fixes hold.
+  - **D1:** the map credit line shows when precise is off. Guard `map-gadget.tsx:~134` with `precise &&`. Change the `mapPreciseDisabled` copy to "Exact locations are hidden. Turn on location sharing in Data sources settings." (update vi too).
+  - **D2:** the empty status `<p>` leaves a gap in System prompts. Make `SettingsPageHeader` (`settings-layout.tsx:~16`) skip an empty status.
+  - **D3:** the daily brief "Ask AI about this day" wraps and is cut at 768. Shorten `askAboutDay` to "Ask AI" (update vi too).
+  - **D4:** legal nav links are crammed. `policy-document.tsx:~27` gap-1 → gap-x-6 gap-y-1.
+- Still unaudited on final6: 1440 and 390 slices.
+- **Round 17, 390 slice (112/112 reviewed): 0 P0, 0 P1, 5 P2.** Round-16 fixes hold except the map height.
+  - **D1:** empty or no-precise map cards keep the 608px map floor, leaving 450–550px of blank card. Fixed together with the gadgets P1: apply the map floor only when a map is drawn, else 204px.
+  - **D2:** the daily brief floor of 180px is too small (`widget-registry.tsx:~66`). Raise it to 240.
+  - **D3:** raw ISO reference date in `provider-observation-gadget.tsx:~126`. Format it as a date only, then update the test at :86.
+  - **D4:** legal nav gap. Same fix as 768 D4; add `min-h-11` to the links.
+  - **D5:** "See service health on the [System status]" is missing a trailing noun. Add " page."
+- Still unaudited on final6: the 1440 slice only (the agent was killed by the owner).
+
+## Result 2026-11-01 22:15: closing rule met (nothing committed)
+
+- Round 17 was the last full sweep: all 4 slices of final6, 353/353 PNGs. 0 P0, 1 P1, 14 P2. All were fixed in one batch:
+  - map floor 352 on the host
+  - daily brief floor 240 and "Ask AI"
+  - map loading overlay, credit guard, notice copy
+  - Configure link size
+  - legal nav gap
+  - reference date formatting
+  - "System status page." wording
+  - empty settings status hidden
+  - System status, onboarding and search copy and spacing
+- final7 (full e2e: 129 passed, console 0 bytes) verification: 12/13 PASS, no new P0/P1. The open item was the Overview/World map with precise off: the 1440 card was blank.
+- Fix: the base map is always drawn, with the setup notice overlaid (same as the no-locations state). The phone on-demand state shows the notice in flow.
+- final8 (screens-capture: 11 passed) verified by direct inspection:
+  - light/1440 Overview and dark/1440 World show the globe with the overlaid notice and the footer inside the card.
+  - 390 shows the notice only.
+- Checks: tsc clean, vitest 549/549.
+- **Backlog (P2, not blocking):**
+  - Phone notice-only cards (Map with precise off, Feed without sources, Highlights) keep their projected layout height, leaving ~200px blank. Fix needs a fit-to-content mode in the grid.
+  - Admin terms in Global/n8n/Models ("Secure cookies", "Chat (LLM)", "Time precision").
+  - Table gadget long strings scroll sideways at 390.
+  - Wikipedia view counts have no thousands separator (provider text).
+  - Earlier backlog items above still apply.

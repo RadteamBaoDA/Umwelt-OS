@@ -1243,6 +1243,8 @@ def new_workflow_operation(
 
 def _new_deactivation(row: ConnectorProvisioning, generation: int, *, scope: Scope, access_fence: AccessFence) -> dict[str, Any] | None:
     """Build cleanup work for the known workflow, or None when no workflow exists."""
+    from modules.connectors.n8n import connector_workflow_names
+
     if not row.workflow_id:
         return None
     operation_id = uuid7()
@@ -1253,7 +1255,7 @@ def _new_deactivation(row: ConnectorProvisioning, generation: int, *, scope: Sco
         revision=row.desired_revision,
         configuration={},
         workflow_id=row.workflow_id,
-        workflow_name=row.workflow_name or f"BBD-OS connector {row.source_id}",
+        workflow_name=row.workflow_name or connector_workflow_names(row.source_id)[0],
         body=None, scope=scope, access_fence=access_fence,
     )
 
@@ -2869,7 +2871,7 @@ async def drive_workflow_operation(
     only; revoked access journals the transport and raises original permission loss.
     No dispatched/unknown replay, renewed epoch, upgraded Scope or publication after journal.
     """
-    from modules.connectors.n8n import workflow_matches
+    from modules.connectors.n8n import find_workflows_by_name, workflow_matches
 
     for _ in range(4):
         operation = await claim_workflow_step(
@@ -2898,7 +2900,7 @@ async def drive_workflow_operation(
         body = step.get("request")
         try:
             if kind == "lookup":
-                matches = await api.find_workflows(str(operation["workflow_name"]))
+                matches = await find_workflows_by_name(api, str(operation["workflow_name"]))
                 if len(matches) > 1:
                     raise ValueError("n8n has multiple workflows for this connector operation")
                 if matches:

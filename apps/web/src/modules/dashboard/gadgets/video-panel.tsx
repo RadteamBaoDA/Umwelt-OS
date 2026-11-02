@@ -54,9 +54,9 @@ export function VideoPanel({ instance }: VideoPanelProps) {
 
   return (
     <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-y-auto">
-      <div className="flex items-center justify-end text-xs text-muted-foreground border-b border-border pb-2">
+      {!query.isPending && !query.isError && items.length > 0 && <div className="flex items-center justify-end text-xs text-muted-foreground border-b border-border pb-2">
         <span className="tabular-nums">{daily('streamCount', { count: items.length })}</span>
-      </div>
+      </div>}
 
       {sourceIds.length === 0 && <GadgetNotice kind="setup" className="p-0" message={dashboard('videoSourcesRequired')} />}
       {sourceIds.length > 0 && query.isPending && <GadgetSkeleton variant="list" className="p-0" label={dashboard('gadgetDataLoading')} />}

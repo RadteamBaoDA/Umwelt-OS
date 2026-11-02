@@ -9,6 +9,8 @@ import { clearInviteToken, InviteAccept, takeInviteToken } from './invite-accept
 
 const replace = vi.fn();
 vi.mock('next/navigation', () => ({ useRouter: () => ({ replace }) }));
+// The header theme control reads the root display-preferences provider, which this page test does not mount.
+vi.mock('@/modules/account/appearance-control', () => ({ AppearanceControl: () => null }));
 
 const TOKEN = 'T'.repeat(43);
 

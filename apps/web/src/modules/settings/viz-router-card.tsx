@@ -131,7 +131,7 @@ export function VizRouterCard() {
     </SettingsSection>
     {save.isError ? <p className="error" role="alert">{t(apiFailureKey(save.error) ?? 'saveFailed')}</p> : null}
     <SettingsActions>
-      <p className="m-0 mr-auto self-center text-sm text-muted-foreground" role="status">{save.isPending ? t('saving') : dirty ? t('unsaved') : t('saved')}</p>
+      <p className="m-0 mr-auto self-center text-sm text-muted-foreground" role="status">{save.isPending ? t('saving') : dirty ? t('unsaved') : save.isSuccess ? t('saved') : ''}</p>
       <Button type="button" variant="outline" disabled={save.isPending || !dirty} onClick={() => { reset(); save.reset(); }}>{t('cancelChanges')}</Button>
       <Button type="submit" disabled={save.isPending || !dirty || !valid}>{t('saveButton')}</Button>
     </SettingsActions>

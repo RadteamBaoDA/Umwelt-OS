@@ -332,13 +332,12 @@ function FeedStream({
         <div className="flex items-center gap-2">
           <Button
             type="button"
-            variant={onlyUnread ? 'default' : 'ghost'}
+            variant={onlyUnread ? 'default' : 'outline'}
             size="sm"
-            className={onlyUnread ? undefined : '-ml-3'}
             aria-pressed={onlyUnread}
             onClick={() => setOnlyUnread((prev) => !prev)}
           >
-            {t('unreadOnly')} ({feedItems.length})
+            {t('unreadOnly')} ({unreadCount})
           </Button>
           {unreadCount > 0 && (
             <span className="px-2 rounded-full text-xs font-semibold bg-primary/20 text-primary">

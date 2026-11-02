@@ -52,7 +52,7 @@ function WorkflowsSection({ enabled }: { enabled: boolean }) {
           <TableCell>{row.source_name}</TableCell>
           <TableCell>{row.source_type}{row.provider ? ` / ${row.provider}` : ''}</TableCell>
           <TableCell><Badge variant="outline">{stateLabel(row.state)}</Badge></TableCell>
-          <TableCell>{row.last_success_at ? formatDateTime(row.last_success_at, display.locale, display.timezone) : t('never')}</TableCell>
+          <TableCell className="tabular-nums">{row.last_success_at ? formatDateTime(row.last_success_at, display.locale, display.timezone) : t('never')}</TableCell>
           <TableCell>{row.last_error_code ?? '-'}</TableCell>
           <TableCell><div className="flex flex-wrap gap-2">
             <Button type="button" variant="outline" disabled={!enabled || act.isPending} onClick={() => act.mutate({ id: row.source_id, kind: 'collect' })}>{t('collectNow')}</Button>
@@ -104,7 +104,7 @@ export function N8nSettingsWorkspace() {
   // The source badge in the section title already says whether a value is set; only explain write-only behaviour when one is saved.
   const state = (configured: boolean) => (configured ? t('neverShown') : '');
   return <div className="flex flex-col gap-5">
-    <SettingsPageHeader eyebrow={t('eyebrow')} title={t('title')} description={t('description')} status={<p className="m-0 text-sm text-muted-foreground" role="status">{save.isPending ? t('saving') : dirty ? t('unsaved') : t('saved')}</p>} />
+    <SettingsPageHeader eyebrow={t('eyebrow')} title={t('title')} description={t('description')} status={<p className="m-0 text-sm text-muted-foreground" role="status">{save.isPending ? t('saving') : dirty ? t('unsaved') : save.isSuccess ? t('saved') : ''}</p>} />
     <form className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); save.mutate(saved); }}>
       <SettingsSection title={t('integration')}>
         <label className="flex items-center gap-3"><Switch checked={currentEnabled} disabled={save.isPending} onCheckedChange={setEnabled} aria-label={t('enabledLabel')} /><span className="label">{t('enabledLabel')}</span></label>

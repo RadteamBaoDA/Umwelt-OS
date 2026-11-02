@@ -3,8 +3,19 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { PasswordInput } from '@/components/ui/password-input';
 
 /**
+ * True when a status node renders no text: a bare `<p>` whose children are empty strings, null or false.
+ * Lets pages keep passing one status element while the header omits it until there is something to say.
+ */
+function isEmptyStatus(status: React.ReactNode): boolean {
+  if (!React.isValidElement<{ children?: React.ReactNode }>(status)) return false;
+  const children = React.Children.toArray(status.props.children);
+  return children.every((child) => typeof child === 'string' && child.trim() === '');
+}
+
+/**
  * Page header for a settings screen: h1 title (24/600), optional description, plus an optional right-aligned status slot.
  * `eyebrow` is accepted for call-site compatibility but intentionally not rendered (ledger design: title only).
+ * A status element with no text is omitted, so an idle save line never leaves an empty row.
  */
 export function SettingsPageHeader({ title, description, status }: { eyebrow?: React.ReactNode; title: React.ReactNode; description?: React.ReactNode; status?: React.ReactNode }) {
   return (
@@ -13,7 +24,8 @@ export function SettingsPageHeader({ title, description, status }: { eyebrow?: R
         <h1 className="mt-0 mb-0 text-2xl font-semibold">{title}</h1>
         {description ? <p className="mt-2 mb-0 text-muted-foreground">{description}</p> : null}
       </div>
-      {status ? <div className="shrink-0">{status}</div> : null}
+      {/* A status node with no text (e.g. a save line before any save) would wrap onto its own row and leave a gap. */}
+      {status && !isEmptyStatus(status) ? <div className="shrink-0">{status}</div> : null}
     </header>
   );
 }

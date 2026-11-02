@@ -164,15 +164,15 @@ export function MetricsChart({
   return (
     <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-y-auto overflow-x-hidden">
       {/* Top Header: Symbol, Value, Change & Controls */}
-      <div className="flex shrink-0 items-start justify-between border-b border-border pb-2.5">
-        <div className="space-y-1">
+      <div className="flex shrink-0 items-start justify-between gap-2 border-b border-border pb-2.5">
+        <div className="min-w-0 space-y-1">
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums">
             <span className="font-semibold text-foreground">{targetSymbol}</span>
-            <span>•</span>
+            <span aria-hidden="true">·</span>
             <span>{providerDelay || daily('freshnessUnknown')}</span>
           </div>
 
-          <div className="flex items-baseline gap-2">
+          <div className="flex flex-wrap items-baseline gap-x-2">
             <span className="text-2xl font-bold tabular-nums tracking-tight text-foreground">
               {formatChartValue(currentValue, { currency, unit: currency ? unit : undefined, locale: display.locale })}
             </span>
@@ -181,7 +181,7 @@ export function MetricsChart({
 
             {/* Change delta with visible sign, percentage, and text tag (not color only) */}
             <div
-              className={`inline-flex items-center gap-0.5 text-xs tabular-nums font-semibold ${
+              className={`inline-flex items-center gap-0.5 whitespace-nowrap text-xs tabular-nums font-semibold ${
                 isPositive ? 'text-positive' : 'text-destructive'
               }`}
             >
@@ -203,7 +203,7 @@ export function MetricsChart({
         </div>
 
         {/* Chart Kind Toggle (Area / Line / Bar) */}
-        <div className="flex items-center gap-0.5 border border-border rounded-md p-0.5 bg-muted/20">
+        <div className="flex shrink-0 items-center gap-0.5 border border-border rounded-md p-0.5 bg-muted/20">
           <button
             type="button"
             onClick={() => setChartKind('area')}

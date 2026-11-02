@@ -1124,7 +1124,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
     <section className="flex w-full flex-col gap-6" data-dashboard-ready={dashboardRouteReady}>
       {/* Page header (Dashboard artboard): eyebrow, switcher-as-title, meta and actions */}
       <div className="flex flex-wrap items-end gap-3">
-        <div className="mr-auto flex min-w-0 flex-col gap-0.5">
+        <div className="mr-auto flex min-w-0 basis-full flex-col gap-0.5 sm:basis-auto">
           <h1 className="m-0 min-w-0 text-2xl font-semibold leading-tight tracking-[-0.02em] text-foreground">
           
           <DropdownMenu>

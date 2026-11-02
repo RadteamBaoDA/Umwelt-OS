@@ -88,6 +88,31 @@ function isNativeEntry(entry: ConnectorCatalogEntry | undefined): boolean {
     && entry.source_type && !genericProviderIds.has(entry.provider_id) && entry.code_available);
 }
 
+/**
+ * Scope fields each provider cannot collect without; mirrors the `required` inputs of the Choose-data step.
+ * Either-or scopes (X account/query, Mastodon account/hashtag) are checked separately in the editor.
+ */
+const REQUIRED_SCOPE: Partial<Record<string, readonly (keyof ConnectorConfig)[]>> = {
+  google_news: ['news_query'], openalex: ['scholarly_query'], sec_edgar: ['sec_cik', 'sec_contact_email'], fred: ['fred_series_id'],
+  openweathermap: ['owm_latitude', 'owm_longitude'], openaq: ['openaq_location_id'], nasa_firms: ['firms_country'],
+  youtube: ['youtube_channel_id'], arxiv: ['arxiv_category'], huggingface: ['huggingface_author'], bluesky: ['bluesky_actor'],
+  reddit: ['reddit_subreddit'], mastodon: ['mastodon_instance_url'], telegram: ['telegram_chat_ids'],
+  github: ['github_owner', 'github_repository'], github_releases: ['github_owner', 'github_repository'],
+  alpha_vantage: ['market_symbols', 'market_currency', 'market_exchange_timezone'],
+  open_meteo: ['weather_latitude', 'weather_longitude', 'weather_timezone', 'weather_metrics'],
+  notion: ['notion_page_ids'], slack: ['slack_channel_ids'],
+  google_mail: ['google_mail_label_ids'], google_calendar: ['google_calendar_ids'], google_drive: ['google_drive_ids'],
+  health: ['fhir_base_url', 'fhir_patient_id'], home_assistant: ['ha_base_url', 'ha_entity_ids'],
+};
+
+/** True when a scope value is present: a non-blank string, a non-empty list, or a finite number. */
+function scopeFilled(value: unknown): boolean {
+  if (typeof value === 'string') return value.trim() !== '';
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'number') return Number.isFinite(value);
+  return value !== undefined && value !== null;
+}
+
 /** Reports credentials stored in the write-only provider slot; Alpha Vantage has its own established credential owner. */
 function usesProviderCredential(entry: ConnectorCatalogEntry | undefined): boolean {
   return Boolean(entry && entry.provider_id !== 'alpha_vantage' && !genericProviderIds.has(entry.provider_id)
@@ -155,27 +180,39 @@ function providerKey(providerId: string): string {
   } as Record<string, string>)[providerId] ?? 'provider';
 }
 
+/**
+ * Starting scope for native providers so each required field is filled and the wizard can move on at once;
+ * the owner can replace any value. Owner-specific scopes (Telegram/Slack/Notion ids, Google resources,
+ * local health/Home Assistant endpoints) have no meaningful public default and stay empty.
+ */
+const NATIVE_SCOPE_DEFAULTS: Partial<Record<string, Partial<ConnectorConfig>>> = {
+  youtube: { youtube_channel_id: 'UC_x5XG1OV2P6uZZ5FSM9Ttw' },
+  arxiv: { arxiv_category: 'cs.AI' },
+  huggingface: { huggingface_author: 'google' },
+  bluesky: { bluesky_actor: 'bsky.app' },
+  reddit: { reddit_subreddit: 'worldnews' },
+  mastodon: { mastodon_instance_url: 'https://mastodon.social', mastodon_hashtag: 'news' },
+  x: { x_query: 'news' },
+  github: { github_owner: 'vercel', github_repository: 'next.js' },
+  github_releases: { github_owner: 'vercel', github_repository: 'next.js' },
+  alpha_vantage: { market_symbols: ['IBM'], market_currency: 'USD', market_exchange_timezone: 'America/New_York' },
+  // Ho Chi Minh City; "Use my location" replaces it with the device position.
+  open_meteo: { weather_metrics: ['temperature_2m'], weather_timezone: 'Asia/Ho_Chi_Minh', weather_latitude: 10.8231, weather_longitude: 106.6297 },
+};
+
 /** Builds the editable default configuration for the selected provider. */
 function defaultConfiguration(provider: Provider, entry?: ConnectorCatalogEntry): ConnectorConfig {
-  // Preset providers use catalog configuration so newly registered adapters need no parallel frontend list.
-  // google_news is scoped: the owner types the query, so the example query is not preselected.
-  if (provider === 'google_news' && entry?.example_config) return { ...(entry.example_config as ConnectorConfig), news_query: '' };
-  // sec_edgar is scoped: the owner supplies their own CIK and contact email, so the example values are not preselected.
-  if (provider === 'sec_edgar' && entry?.example_config) return { ...(entry.example_config as ConnectorConfig), sec_cik: '', sec_contact_email: '' };
-  if (provider === 'openalex' && entry?.example_config) return { ...(entry.example_config as ConnectorConfig), scholarly_query: '' };
-  // Keyed scoped presets: the owner supplies the scope, so the catalog example values are cleared.
-  if (provider === 'fred' && entry?.example_config) return { ...(entry.example_config as ConnectorConfig), fred_series_id: '' };
-  if (provider === 'openweathermap' && entry?.example_config) return { ...(entry.example_config as ConnectorConfig), owm_latitude: undefined, owm_longitude: undefined };
-  if (provider === 'openaq' && entry?.example_config) return { ...(entry.example_config as ConnectorConfig), openaq_location_id: undefined };
-  if (provider === 'nasa_firms' && entry?.example_config) return { ...(entry.example_config as ConnectorConfig), firms_country: '' };
+  // Preset providers use catalog configuration (including the example scope) so every required field starts filled
+  // and newly registered adapters need no parallel frontend list.
+  // SEC fair-access rules require the owner's real contact address, so the placeholder email is never preselected.
+  if (provider === 'sec_edgar' && entry?.example_config) return { ...(entry.example_config as ConnectorConfig), sec_contact_email: '' };
   if (isPreset(entry) && entry?.example_config) return entry.example_config as ConnectorConfig;
   if (isNativeEntry(entry)) return {
     timeout_seconds: 30,
     timezone: 'Asia/Ho_Chi_Minh',
     schedule_interval_minutes: provider === 'alpha_vantage' ? 1440 : provider === 'youtube' || provider === 'arxiv' ? 15 : 30,
     history_mode: provider === 'telegram' ? 'pending_updates' : 'returned_snapshot',
-    ...(provider === 'reddit' ? { reddit_subreddit: '' } : {}),
-    ...(provider === 'open_meteo' ? { weather_metrics: ['temperature_2m'], weather_timezone: 'UTC', weather_latitude: 0, weather_longitude: 0 } : {}),
+    ...NATIVE_SCOPE_DEFAULTS[provider],
     ...(provider === 'github' ? { include_issues: true, include_pulls: true, include_commits: true, include_releases: true, github_history_days: 90 } : {}),
   };
   return {
@@ -1452,14 +1489,11 @@ export function ConnectorEditor({
     : provider === 'rest' && authMethod === 'http_header' ? Boolean(secret) || providerCredentialConfigured
       : keyedOrAlpha ? Boolean(secret) || providerCredentialConfigured : true;
   const providerOk = Boolean(name.trim() && currentEntry?.source_type && currentEntry.code_available && ['available', 'implemented', 'requires_credentials'].includes(currentEntry.availability));
-  const googleScopeOk = provider === 'reddit' ? Boolean(configuration.reddit_subreddit?.trim())
-    : provider === 'google_mail' ? Boolean(configuration.google_mail_label_ids?.length)
-    : provider === 'google_calendar' ? Boolean(configuration.google_calendar_ids?.length)
-      : provider === 'google_drive' ? Boolean(configuration.google_drive_ids?.length)
-        : provider === 'x' ? Boolean(configuration.x_account?.trim()) !== Boolean(configuration.x_query?.trim())
-          : provider === 'health' ? Boolean(configuration.fhir_base_url?.trim() && configuration.fhir_patient_id?.trim())
-          : provider === 'home_assistant' ? Boolean(configuration.ha_base_url?.trim() && configuration.ha_entity_ids?.length) : true;
-  const chooseOk = !termsBlocked && urlOk && googleScopeOk;
+  // An empty required scope would only fail later as a 422 on save, so the wizard holds Choose until it is filled.
+  const scopeOk = (REQUIRED_SCOPE[provider] ?? []).every((key) => scopeFilled(configuration[key]))
+    && (provider !== 'x' || scopeFilled(configuration.x_account) !== scopeFilled(configuration.x_query))
+    && (provider !== 'mastodon' || scopeFilled(configuration.mastodon_account) !== scopeFilled(configuration.mastodon_hashtag));
+  const chooseOk = !termsBlocked && urlOk && scopeOk;
   const snapshot = useMemo<EditorSnapshot>(() => ({ sourceId, provider, busy: locked, providerOk, connectOk, chooseOk, verify }),
     [sourceId, provider, locked, providerOk, connectOk, chooseOk, verify]);
   useEffect(() => { onSnapshot?.(snapshot); }, [snapshot, onSnapshot]);
@@ -1484,7 +1518,7 @@ export function ConnectorEditor({
           const localProvider = entry.provider_id;
           const supported = entry.kind !== 'manual_import' && Boolean(entry.source_type && entry.code_available) && ['available', 'implemented', 'requires_credentials'].includes(entry.availability) && isProvider(localProvider);
           const added = addedBuiltinIds.has(localProvider);
-          return <Button key={entry.provider_id} type="button" variant="outline" className={`source-provider h-auto min-h-24 min-w-0 flex-col items-start justify-start overflow-hidden whitespace-normal break-words text-left font-normal${provider === localProvider ? ' is-selected' : ''}`} disabled={!supported || locked || added || Boolean(sourceId)} onClick={() => { if (!supported || !isProvider(localProvider)) return; selectProvider(localProvider, entry); }}>
+          return <Button key={entry.provider_id} type="button" variant="outline" className={`source-provider h-auto min-h-14 min-w-0 flex-col items-start justify-center overflow-hidden whitespace-normal break-words text-left font-normal${provider === localProvider ? ' is-selected' : ''}`} disabled={!supported || locked || added || Boolean(sourceId)} onClick={() => { if (!supported || !isProvider(localProvider)) return; selectProvider(localProvider, entry); }}>
             <strong>{providerKey(entry.provider_id) === 'provider' ? entry.label : t(providerKey(entry.provider_id))}</strong>
             {(catalogStatus(entry) || !entry.code_available) && <span>{[catalogStatus(entry), entry.code_available ? '' : t('codeUnavailable')].filter(Boolean).join(' · ')}</span>}
             {added && <Badge variant="secondary">{t('builtinAdded')}</Badge>}

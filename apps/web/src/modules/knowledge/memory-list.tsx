@@ -285,8 +285,8 @@ export function MemoryList() {
 
       {/* Filter and search toolbar */}
       <div className="flex flex-wrap items-center gap-3">
-        <Tabs value={filterType} onValueChange={(next) => setFilterType(next as MemoryFilterType)}>
-          <TabsList aria-label={t('filterByType')} className="h-auto">
+        <Tabs value={filterType} onValueChange={(next) => setFilterType(next as MemoryFilterType)} className="min-w-0 max-w-full overflow-x-auto">
+          <TabsList aria-label={t('filterByType')} className="h-auto w-max">
             {(['all', 'fact', 'preference', 'instruction'] as const).map((typeKey) => {
               const n = countFor(typeKey);
               return (

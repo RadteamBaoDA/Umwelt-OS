@@ -252,9 +252,9 @@ function SourceEntry({
         {connector && activation.data?.error_code && <p className="text-muted-foreground">{errorLabel(activation.data.error_code)}</p>}
         {connector && activation.data && activation.data.state !== 'active' && <p className="text-muted-foreground">{t('activationState')}: {t(({ queued: 'stateQueued', provisioning: 'stateProvisioning', active: 'active', saved_not_active: 'stateSavedNotActive', reconciliation_required: 'stateReconciliationRequired', disabled: 'stateDisabled' } as Record<string, string>)[activation.data.state] ?? 'stateUnknown')}</p>}
       </td>
-      <td className={cell}>{mobileLabel('colSchedule')}{connector ? `${schedule}${timezone ? ` · ${formatTimeZoneLabel(timezone, display.locale)}` : ''}` : '—'}</td>
-      <td className={cell}>{mobileLabel('colCollected')}{dateOrDash(source.collected_at)}</td>
-      <td className={cell}>{mobileLabel('colIndexed')}{dateOrDash(source.indexed_at)}</td>
+      <td className={cell}>{mobileLabel('colSchedule')}{connector ? <>{schedule}{timezone && <span className="whitespace-nowrap">{' · '}{formatTimeZoneLabel(timezone, display.locale)}</span>}</> : '—'}</td>
+      <td className={`${cell} tabular-nums min-[1024px]:whitespace-nowrap`}>{mobileLabel('colCollected')}{dateOrDash(source.collected_at)}</td>
+      <td className={`${cell} tabular-nums min-[1024px]:whitespace-nowrap`}>{mobileLabel('colIndexed')}{dateOrDash(source.indexed_at)}</td>
       <td className={cell}>
         <TooltipProvider delayDuration={300}>
         <div className="flex flex-nowrap gap-1" role="group" aria-label={t('sourceActions', { name: source.name })}>
@@ -413,7 +413,7 @@ export function SourceList() {
     {items.length > 0 && <SourcesTable filter={filter} counts={counts} onFilterChange={setFilter}>
       {visible.map((source) => {
         const configuration = configurationBySourceId.get(source.id);
-        return <SourceEntry key={source.id} source={source} schedule={configuration?.data ? scheduleLabel(configuration.data.configuration.schedule_interval_minutes, t) : configuration?.isPending ? '—' : t('scheduleUnknown')} timezone={configuration?.data?.configuration.timezone ?? null} realtimeMode={configuration?.data?.configuration.realtime_mode ?? null} operationId={operations[source.id] ?? ''} editingId={dialog?.kind === 'edit' ? dialog.source.id : null} onPurgeStarted={(id) => setOperations((current) => ({ ...current, [source.id]: id }))} purged={Boolean(purged[source.id])} onPurgeFinished={() => { if (purged[source.id]) return; setPurged((current) => ({ ...current, [source.id]: true })); void refresh(); }} onEdit={(value) => transition({ kind: 'edit', source: value })} onChanged={() => { void refresh(); }} onRemoved={() => headingRef.current?.focus()} />;
+        return <SourceEntry key={source.id} source={source} schedule={configuration?.data ? scheduleLabel(configuration.data.configuration.schedule_interval_minutes, t) : configuration?.isPending ? t('scheduleLoading') : t('scheduleUnknown')} timezone={configuration?.data?.configuration.timezone ?? null} realtimeMode={configuration?.data?.configuration.realtime_mode ?? null} operationId={operations[source.id] ?? ''} editingId={dialog?.kind === 'edit' ? dialog.source.id : null} onPurgeStarted={(id) => setOperations((current) => ({ ...current, [source.id]: id }))} purged={Boolean(purged[source.id])} onPurgeFinished={() => { if (purged[source.id]) return; setPurged((current) => ({ ...current, [source.id]: true })); void refresh(); }} onEdit={(value) => transition({ kind: 'edit', source: value })} onChanged={() => { void refresh(); }} onRemoved={() => headingRef.current?.focus()} />;
       })}
     </SourcesTable>}
     {items.length > 0 && visible.length === 0 && <p className="empty-state">{t('emptyFiltered')}</p>}

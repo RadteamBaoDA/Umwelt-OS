@@ -3,7 +3,7 @@ export const aiSettingsMessages = {
   'en-us': {
       loading: 'Loading AI settings', unavailable: 'AI settings unavailable', loadFailed: 'Could not load AI settings.', retry: 'Retry',
       unauthorized: 'Please sign in again to continue.', forbidden: 'This action is not allowed for this account.', conflict: 'Settings changed elsewhere. Reload and try again.', serviceUnavailable: 'The local service is unavailable. Try again shortly.', requestFailed: 'The request could not be completed.',
-      title: 'Models', description: 'Choose which models answer chats. Privacy settings decide what data they can see.',
+      title: 'Models', description: 'Choose which models answer chats and what data they may use.',
       saving: 'Saving changes…', unsaved: 'Unsaved changes', saved: 'Saved', gateway: 'Model gateway connection', gatewayEndpoint: 'Gateway endpoint', discover: 'Discover model IDs', availableIds: 'Available IDs:', noneReturned: 'None returned', discoveryFailed: 'Model discovery failed.', blockedEndpoint: 'The saved gateway is blocked by deployment network policy. Set an approved endpoint before saving.', credential: 'Credential:', configured: 'configured', notConfigured: 'not configured', gatewayCredential: 'Gateway credential', gatewayCredentialHelp: 'Re-enter for discovery or draft probes; blank keeps saved credential', removeGatewayCredential: 'Remove saved gateway credential',
      
       provider: 'Provider', none: 'None',
@@ -60,7 +60,7 @@ export const aiSettingsMessages = {
   'vi-vi': {
       loading: 'Đang tải cài đặt AI', unavailable: 'Cài đặt AI không khả dụng', loadFailed: 'Không thể tải cài đặt AI.', retry: 'Thử lại',
       unauthorized: 'Hãy đăng nhập lại để tiếp tục.', forbidden: 'Tài khoản này không được phép thực hiện thao tác.', conflict: 'Cài đặt đã thay đổi ở nơi khác. Hãy tải lại rồi thử lại.', serviceUnavailable: 'Dịch vụ cục bộ hiện không khả dụng. Hãy thử lại sau.', requestFailed: 'Không thể hoàn tất yêu cầu.',
-      title: 'Mô hình', description: 'Chọn mô hình trả lời trò chuyện. Cài đặt quyền riêng tư quyết định dữ liệu chúng được xem.',
+      title: 'Mô hình', description: 'Chọn mô hình trả lời trò chuyện và dữ liệu chúng được phép dùng.',
       saving: 'Đang lưu thay đổi…', unsaved: 'Thay đổi chưa lưu', saved: 'Đã lưu', gateway: 'Kết nối cổng mô hình', gatewayEndpoint: 'Điểm cuối cổng kết nối', discover: 'Khám phá mã mô hình', availableIds: 'Mã khả dụng:', noneReturned: 'Không có kết quả', discoveryFailed: 'Không thể khám phá mô hình.', blockedEndpoint: 'Cổng kết nối đã lưu bị chính sách mạng triển khai chặn. Hãy đặt điểm cuối được phê duyệt trước khi lưu.', credential: 'Thông tin xác thực:', configured: 'đã cấu hình', notConfigured: 'chưa cấu hình', gatewayCredential: 'Thông tin xác thực cổng kết nối', gatewayCredentialHelp: 'Nhập lại để khám phá hoặc thăm dò bản nháp; để trống sẽ giữ thông tin đã lưu', removeGatewayCredential: 'Xóa thông tin xác thực cổng kết nối đã lưu',
      
       provider: 'Nhà cung cấp', none: 'Không có',

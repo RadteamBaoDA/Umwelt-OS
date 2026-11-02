@@ -129,7 +129,7 @@ function RunRow({ run, source, t, locale, timezone, retryPending, onRetry }: {
   const hasActiveStage = run.stages.some((stage) => ['pending', 'queued', 'running', 'retrying'].includes(stage.status));
   return <TableRow>
     <TableCell className="text-xs tabular-nums" title={run.run_id}>{run.run_id.slice(0, 8)}</TableCell>
-    <TableCell>{formatDate(run.created_at, locale, timezone)}</TableCell>
+    <TableCell className="tabular-nums">{formatDate(run.created_at, locale, timezone)}</TableCell>
     <TableCell>{t(statusKey(run.status))}</TableCell>
     <TableCell className="min-w-64 whitespace-normal">
       <div className="grid gap-2">{run.stages.map((stage) => <details key={stage.stage_key} className="rounded border border-border px-2 py-1">

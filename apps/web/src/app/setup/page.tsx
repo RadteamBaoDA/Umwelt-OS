@@ -14,6 +14,7 @@ import { PasswordInput } from '@/components/ui/password-input';
 import { Label } from '@/components/ui/label';
 import { UmweltLogo } from '@/components/brand/umwelt-mark';
 import { AppearanceControl } from '@/modules/account/appearance-control';
+import { LegalLinks } from '@/modules/legal/legal-links';
 
 /** Build localized validation for first-run owner creation without changing its API contract. */
 function createSetupSchema(passwordMismatch: string) {
@@ -64,6 +65,7 @@ export default function SetupPage() {
     </form>
   </section></main>
     <footer className="flex flex-wrap items-center gap-4 border-t border-border bg-background px-4 py-2.5 text-xs text-muted-foreground sm:px-6">
+      <LegalLinks />
     </footer>
   </div>;
 }

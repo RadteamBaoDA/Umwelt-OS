@@ -51,6 +51,11 @@ async function settle(page: Page, path: string) {
   await page.goto(path, { waitUntil: 'load' });
   await page.locator('main, body').first().waitFor({ state: 'visible' });
   await page.waitForTimeout(1500);
+  // Slow list queries (e.g. /news stories) outlast the fixed wait; give "Loading ..." statuses up to 30s to clear. Non-fatal.
+  await page.waitForFunction(
+    () => ![...document.querySelectorAll('[role="status"]')].some((el) => /^loading\b/i.test(el.textContent?.trim() ?? '')),
+    undefined, { timeout: 30_000 },
+  ).catch(() => undefined);
 }
 
 /** Saves one viewport screenshot; a failure to capture one screen never stops the rest of the sweep. */

@@ -132,6 +132,8 @@ export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, 
       activeRenderer.pointsData(features).width(width).height(height);
       activeRenderer.pointOfView({ altitude: fitAltitude(width, height) });
       activeRenderer.controls().enabled = visible && interactive;
+      // A context created while the browser's context budget is exhausted is lost before any listener can attach; detect it now.
+      if (activeRenderer.renderer().getContext().isContextLost()) throw new Error('WebGL context lost on creation');
       const canvas = activeRenderer.renderer().domElement;
       const handleContextLost = (event: Event) => {
         // Keep browser restoration enabled and expose the same evidence list as the fallback.
@@ -151,7 +153,20 @@ export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, 
       // Renderer creation is an external-system sync; clearing the failure flag belongs here.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setUnavailable(false);
+      // The renderer can be built while the lazy chunk/layout is still settling and then never paint (stale size, paused loop,
+      // or a context that died silently). Re-apply size and resume on the next frame, then verify the context one frame later
+      // so a dead context falls back to the flat map instead of leaving an empty plot.
+      let frameB = 0;
+      const frameA = requestAnimationFrame(() => {
+        activeRenderer.width(width).height(height);
+        if (visibleRef.current) activeRenderer.resumeAnimation();
+        frameB = requestAnimationFrame(() => {
+          if (activeRenderer.renderer().getContext().isContextLost()) setContextLost(true);
+        });
+      });
       return () => {
+        cancelAnimationFrame(frameA);
+        cancelAnimationFrame(frameB);
         canvas.removeEventListener('webglcontextlost', handleContextLost);
         canvas.removeEventListener('webglcontextrestored', handleContextRestored);
         rendererRef.current = null;

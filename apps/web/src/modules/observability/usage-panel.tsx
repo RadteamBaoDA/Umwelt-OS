@@ -33,7 +33,7 @@ export function UsagePanel() {
         const capability = row.labels.capability ?? t('unknown');
         const role = row.labels.role ?? t('unknown');
         const matching = latency.find((item) => item.labels.capability === row.labels.capability && item.labels.role === row.labels.role && item.labels.outcome === row.labels.outcome);
-        return <tr key={`${capability}:${role}:${row.labels.outcome ?? 'all'}`} className="border-t border-border"><th scope="row" className="py-2 text-left font-normal">{capability} · {role} · {row.labels.outcome ?? t('all')}</th><td className="text-right">{row.value}</td><td className="text-right">{matching?.p95_ms == null ? t('unknown') : `${matching.p95_ms} ms`}</td></tr>;
+        return <tr key={`${capability}:${role}:${row.labels.outcome ?? 'all'}`} className="border-t border-border"><th scope="row" className="py-2 text-left font-normal">{capability} · {role} · {row.labels.outcome ?? t('all')}</th><td className="text-right tabular-nums">{row.value}</td><td className="text-right tabular-nums">{matching?.p95_ms == null ? t('unknown') : `${matching.p95_ms} ms`}</td></tr>;
       })}
     </tbody></table></div> : <p className="text-muted-foreground">{t('noUsage')}</p>}
     <p className="text-muted-foreground">{t('usageEstimateCaveat')}</p>

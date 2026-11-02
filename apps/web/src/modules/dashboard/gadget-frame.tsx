@@ -365,7 +365,7 @@ export function GadgetFrame({
           </div>
         </header>
 
-        <div ref={inlineScrollRef} className="dashboard-gadget-body min-h-0 flex-1 overflow-auto overscroll-contain" style={{ minHeight: bodyFloor }}>
+        <div ref={inlineScrollRef} className="dashboard-gadget-body min-h-0 flex-1 overflow-auto overscroll-contain">
         {/* Queue controls scroll inside this fixed-floor body and never change the grid geometry. */}
         {readingQueueCount > 0 && onApplyReadingQueue && (
           <div className="px-3 py-1.5 bg-raised border-b border-rule text-foreground text-xs flex items-center justify-between">
@@ -381,7 +381,8 @@ export function GadgetFrame({
           </div>
         )}
 
-        <div ref={inlineHostRef} className="h-full min-h-full min-w-0" />
+        {/* The reading floor sits on the host, not the body: a card shorter than the floor scrolls its body instead of clipping the bottom (footers, last rows) under the card edge. */}
+        <div ref={inlineHostRef} className="h-full min-h-full min-w-0" style={{ minHeight: bodyFloor }} />
         </div>
         {/* Provenance footer: a fixed one-line row inside the flex column; hidden when freshness is unknown. */}
         {freshnessLabel && (

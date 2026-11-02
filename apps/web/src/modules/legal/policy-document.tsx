@@ -19,14 +19,14 @@ export function PolicyDocument({ name, documents, language, inventory }: {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <Link href="/login" aria-label="Umwelt-OS" className="rounded-md no-underline"><UmweltLogo /></Link>
         <nav aria-label={t.language} className="flex flex-wrap gap-1">
-          <Button asChild variant="outline"><Link href={`/${name}?lang=en-us`} lang="en-US" aria-current={locale === 'en-us' ? 'page' : undefined}>English</Link></Button>
-          <Button asChild variant="outline"><Link href={`/${name}?lang=vi-vi`} lang="vi-VN" aria-current={locale === 'vi-vi' ? 'page' : undefined}>Tiếng Việt</Link></Button>
+          <Button asChild variant={locale === 'en-us' ? 'default' : 'outline'}><Link href={`/${name}?lang=en-us`} lang="en-US" aria-current={locale === 'en-us' ? 'page' : undefined}>English</Link></Button>
+          <Button asChild variant={locale === 'vi-vi' ? 'default' : 'outline'}><Link href={`/${name}?lang=vi-vi`} lang="vi-VN" aria-current={locale === 'vi-vi' ? 'page' : undefined}>Tiếng Việt</Link></Button>
         </nav>
       </header>
       <aside className="rounded-lg border border-border bg-secondary p-4 text-sm"><strong>{t.draft}</strong><p className="mt-1">{t.notice}</p></aside>
-      <nav aria-label={t.policies} className="flex flex-wrap gap-1">
-        {(['privacy', 'terms', 'refunds'] as const).map((policy) => <Button asChild variant="link" key={policy}><Link href={`/${policy}?lang=${locale}`} aria-current={policy === name ? 'page' : undefined}>{t[policy]}</Link></Button>)}
-        <Button asChild variant="link"><Link href="/login">{t.login}</Link></Button>
+      <nav aria-label={t.policies} className="flex flex-wrap gap-x-6 gap-y-1">
+        {(['privacy', 'terms', 'refunds'] as const).map((policy) => <Button asChild variant="link" key={policy} className="px-0 aria-[current=page]:font-semibold aria-[current=page]:no-underline"><Link href={`/${policy}?lang=${locale}`} aria-current={policy === name ? 'page' : undefined}>{t[policy]}</Link></Button>)}
+        <Button asChild variant="link" className="px-0"><Link href="/login">{t.login}</Link></Button>
       </nav>
       <Card><CardContent className="overflow-x-auto pt-0 [&_h1]:mb-6 [&_h1]:text-3xl [&_h1]:font-semibold [&_h2]:mb-3 [&_h2]:mt-8 [&_h2]:text-xl [&_h2]:font-semibold [&_p]:my-4 [&_p]:leading-7 [&_ul]:list-disc [&_ul]:pl-6 [&_li]:my-2 [&_a]:text-primary [&_a]:underline" dangerouslySetInnerHTML={{ __html: documents[locale] }} /></Card>
       <details id="services" className="rounded-lg border border-border p-4"><summary className="min-h-9 pointer-coarse:min-h-11 cursor-pointer font-medium">{t.inventory}</summary><div lang="en-US" className="overflow-x-auto text-sm [&_p]:my-4 [&_h2]:my-4 [&_h2]:font-semibold [&_table]:min-w-[64rem] [&_td]:border [&_td]:border-border [&_td]:p-2 [&_th]:border [&_th]:border-border [&_th]:p-2 [&_a]:text-primary [&_a]:underline" dangerouslySetInnerHTML={{ __html: inventory }} /></details>

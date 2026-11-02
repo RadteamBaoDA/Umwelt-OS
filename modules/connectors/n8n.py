@@ -62,10 +62,46 @@ def workflow_name(source_id: UUID, operation_id: UUID) -> str:
     return f"Umwelt-OS connector {source_id} {operation_id.hex}"
 
 
-def workflow_webhook_path(source_id: UUID, source_type: str) -> str:
-    """Build the source-scoped manual webhook path for a supported connector type."""
+_CURRENT_WORKFLOW_PREFIX = "Umwelt-OS connector "
+_LEGACY_WORKFLOW_PREFIX = "BBD-OS connector "
+
+
+def connector_workflow_names(source_id: UUID) -> tuple[str, str]:
+    """Return the (current, legacy) display names of a source's connector workflow."""
+    return (f"{_CURRENT_WORKFLOW_PREFIX}{source_id}", f"{_LEGACY_WORKFLOW_PREFIX}{source_id}")
+
+
+def alternate_workflow_name(name: str) -> str | None:
+    """Swap the current and legacy brand prefix of a workflow name; None if it has neither."""
+    for prefix, other in ((_CURRENT_WORKFLOW_PREFIX, _LEGACY_WORKFLOW_PREFIX), (_LEGACY_WORKFLOW_PREFIX, _CURRENT_WORKFLOW_PREFIX)):
+        if name.startswith(prefix):
+            return other + name[len(prefix):]
+    return None
+
+
+async def find_workflows_by_name(api: "N8nApi", name: str) -> list[dict[str, Any]]:
+    """Find workflows by exact name, retrying the alternate brand prefix when none match.
+
+    Installs created before the Umwelt-OS rename keep legacy "BBD-OS connector" names in n8n,
+    while new rows may only know the current name (or vice versa); both resolve here. The
+    alternate is tried only on an empty result so a current match is never mixed with a legacy one.
+    """
+    matches = await api.find_workflows(name)
+    alternate = alternate_workflow_name(name)
+    if not matches and alternate is not None:
+        matches = await api.find_workflows(alternate)
+    return matches
+
+
+def workflow_webhook_paths(source_id: UUID, source_type: str) -> tuple[str, str]:
+    """Return the (current, legacy) manual webhook paths for a supported connector type."""
     connector_type = {"api": "rest", "web": "url", "rss": "rss", "mcp": "mcp"}[source_type]
-    return f"bbd-collect-{connector_type}-{source_id.hex}"
+    return (f"umwelt-collect-{connector_type}-{source_id.hex}", f"bbd-collect-{connector_type}-{source_id.hex}")
+
+
+def workflow_webhook_path(source_id: UUID, source_type: str) -> str:
+    """Build the source-scoped manual webhook path used by newly built workflows."""
+    return workflow_webhook_paths(source_id, source_type)[0]
 
 
 def build_workflow(

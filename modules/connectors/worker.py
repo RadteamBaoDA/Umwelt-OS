@@ -28,7 +28,7 @@ from modules.connectors.models import (
     GithubWebhookDelivery,
     GithubWebhookOutbox,
 )
-from modules.connectors.n8n import N8nApi, workflow_matches
+from modules.connectors.n8n import N8nApi, find_workflows_by_name, workflow_matches
 from modules.sources import public as sources
 
 logger = logging.getLogger(__name__)
@@ -672,7 +672,7 @@ async def _recover_unknown_create(
     workflow_id: str | None = None
     try:
         created_operation_id = UUID(str(operation_value))
-        matches = await api.find_workflows(str(name))
+        matches = await find_workflows_by_name(api, str(name))
         if (
             len(matches) == 1
             and isinstance(matches[0].get("id"), str)

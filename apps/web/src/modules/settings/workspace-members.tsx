@@ -126,7 +126,7 @@ export function WorkspaceMembers() {
       <div className="field">
         <Label htmlFor="invite-email">{t('emailLabel')}</Label>
         <div className="flex flex-wrap gap-2">
-          <Input id="invite-email" type="email" className="min-w-0 flex-1" autoComplete="off" value={email} placeholder={t('emailPlaceholder')}
+          <Input id="invite-email" type="email" className="min-w-0 flex-1 basis-56" autoComplete="off" value={email} placeholder={t('emailPlaceholder')}
             onChange={(e) => setEmail(e.target.value)} aria-invalid={emailError || undefined} />
           <Button type="submit" disabled={create.isPending}>{create.isPending ? t('creating') : t('createInvite')}</Button>
         </div>

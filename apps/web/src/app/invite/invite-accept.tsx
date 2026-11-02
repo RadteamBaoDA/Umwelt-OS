@@ -12,6 +12,8 @@ import { PasswordInput } from '@/components/ui/password-input';
 import { Label } from '@/components/ui/label';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import { assignAuthorizationUrl } from '@/core/safe-url';
+import { AppearanceControl } from '@/modules/account/appearance-control';
+import { LegalLinks } from '@/modules/legal/legal-links';
 
 const GOOGLE_RETURN_KEY = 'umwelt:invite-google';
 const MIN_PASSWORD = 12;
@@ -138,7 +140,7 @@ export function InviteAccept() {
   const errorKey: FailureKey | null = accept.error ? failureKey(accept.error, signedIn) : google.error ? 'inviteGoogleFailed' : null;
 
   return <div className="flex min-h-dvh flex-col bg-secondary text-foreground">
-    <header className="flex h-16 items-center border-b border-border bg-background px-4 sm:px-6"><UmweltLogo /></header>
+    <header className="flex h-16 items-center gap-4 border-b border-border bg-background px-4 sm:px-6"><UmweltLogo /><span className="flex-1" /><AppearanceControl /></header>
     <main id="main-content" className="flex flex-1 items-center justify-center px-4 py-10 sm:py-12">
       <section aria-labelledby="invite-title" className="auth-panel flex flex-col gap-6">
         <div className="grid gap-1">
@@ -177,5 +179,8 @@ export function InviteAccept() {
         </form>}
       </section>
     </main>
+    <footer className="flex flex-wrap items-center gap-4 border-t border-border bg-background px-4 py-2.5 text-xs text-muted-foreground sm:px-6">
+      <LegalLinks />
+    </footer>
   </div>;
 }

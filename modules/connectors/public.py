@@ -2804,6 +2804,25 @@ def n8n_callback_base() -> str:
     return CALLBACK_BASE
 
 
+async def _post_wake(client: Any, service_url: str, paths: tuple[str, ...], body: dict[str, object], token: str) -> Any:
+    """POST the wake body to the first webhook path n8n has registered and return that response.
+
+    Workflows built before the Umwelt-OS rename still listen on the legacy path. n8n answers 404 for
+    an unregistered path, so only a 404 moves on to the next path; any other status (including the
+    409/425/429 deferrals) is returned as-is. The last response is returned when every path is 404.
+    """
+    response = None
+    for webhook_path in paths:
+        response = await client.post(
+            f"{service_url.rstrip('/')}/webhook/{webhook_path}",
+            json=body,
+            headers={"X-BBD-Webhook-Token": token},
+        )
+        if response.status_code != 404:
+            break
+    return response
+
+
 async def wake_packaged_collection(
     session: AsyncSession,
     *,
@@ -2824,7 +2843,7 @@ async def wake_packaged_collection(
     """
     import httpx
 
-    from modules.connectors.n8n import workflow_webhook_path
+    from modules.connectors.n8n import workflow_webhook_paths
     from modules.connectors.provisioning import activation_status
     from modules.sources import public as sources
 
@@ -2862,13 +2881,12 @@ async def wake_packaged_collection(
         return PackagedCollectionWakeResult(workspace_id=scope.workspace_id, source_id=source_id, outcome="unavailable")
     try:
         async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=False) as client:
-            response = await client.post(
-                f"{n8n.service_url.rstrip('/')}/webhook/{workflow_webhook_path(source_id, source_type)}",
-                json={
-                    "source_id": str(source_id), "source_generation": source_generation,
-                    "connector_revision": connector_revision,
-                },
-                headers={"X-BBD-Webhook-Token": token},
+            wake_body = {
+                "source_id": str(source_id), "source_generation": source_generation,
+                "connector_revision": connector_revision,
+            }
+            response = await _post_wake(
+                client, n8n.service_url, workflow_webhook_paths(source_id, source_type), wake_body, token,
             )
             if response.status_code in {409, 425, 429}:
                 retry_at = None

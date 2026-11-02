@@ -119,7 +119,7 @@ export function TablePanel({ instance }: TablePanelProps) {
                             <p className="font-medium">{shown.title}{shown.severity && <Badge variant="outline" className="ml-2 align-middle">{t(`severity_${shown.severity}`)}</Badge>}</p>
                             <p className="mt-1 line-clamp-2 text-muted-foreground">{cleanExcerpt(record.title, record.excerpt)}</p>
                           </td>
-                          <td className="whitespace-nowrap p-2 text-muted-foreground">{formatDateTime(record.published_at ?? record.observed_at, display.locale, display.timezone)}</td>
+                          <td className="whitespace-nowrap p-2 tabular-nums text-muted-foreground">{formatDateTime(record.published_at ?? record.observed_at, display.locale, display.timezone)}</td>
                         </tr>
                       );
                       })}

@@ -10,7 +10,7 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { listGeospatialObservations } from '@/modules/observations/api';
 import type { GadgetInstance } from '../api';
 import { buildMapLayers, projectMapFeatures } from '../map-layers';
-import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
+import { GadgetNotice } from './gadget-notice';
 import { formatMetricLabel } from './metric-label';
 
 const FlatMap = lazy(() => import('./flat-map').then((module) => ({ default: module.FlatMap })));
@@ -37,7 +37,8 @@ export function MapGadget({ instance, isEditMode = false }: { instance: GadgetIn
   const days = Math.max(1, Math.min(definition.scope?.lookback_days ?? 30, 30));
   const to = useMemo(() => new Date(), [instance.id]);
   const from = useMemo(() => new Date(to.getTime() - days * 86_400_000), [to, days]);
-  const plotRef = useRef<HTMLDivElement>(null);
+  // State (callback ref) rather than a ref: the plot mounts and unmounts as the empty/on-demand state changes, so observers must re-attach.
+  const [plotNode, setPlotNode] = useState<HTMLDivElement | null>(null);
   const intersectingRef = useRef(false);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [visible, setVisible] = useState(false);
@@ -46,17 +47,17 @@ export function MapGadget({ instance, isEditMode = false }: { instance: GadgetIn
   const [mapRequested, setMapRequested] = useState(false);
 
   useEffect(() => {
-    const node = plotRef.current;
+    const node = plotNode;
     if (!node) return;
     const observer = new ResizeObserver(([entry]) => setSize({
       width: Math.floor(entry.contentRect.width), height: Math.floor(entry.contentRect.height),
     }));
     observer.observe(node);
     return () => observer.disconnect();
-  }, []);
+  }, [plotNode]);
 
   useEffect(() => {
-    const node = plotRef.current;
+    const node = plotNode;
     if (!node) return;
     const observer = new IntersectionObserver(([entry]) => {
       intersectingRef.current = entry.isIntersecting;
@@ -67,7 +68,7 @@ export function MapGadget({ instance, isEditMode = false }: { instance: GadgetIn
     observer.observe(node);
     document.addEventListener('visibilitychange', onVisibility);
     return () => { observer.disconnect(); document.removeEventListener('visibilitychange', onVisibility); };
-  }, []);
+  }, [plotNode]);
 
   const observations = useInfiniteQuery({
     queryKey: ['world-observations', 'map', instance.id, sourceIds, regions, days, precise],
@@ -91,27 +92,36 @@ export function MapGadget({ instance, isEditMode = false }: { instance: GadgetIn
   const mapOnDemand = isPhone && !mapRequested;
   const canRenderEngine = visible && size.width > 0 && size.height > 0 && !mapOnDemand;
 
-  // Without points the base map stays visible and the empty notice is overlaid on it.
-  const mapEmpty = !points.length && precise && !observations.isPending;
+  // Without points the base map stays visible and the empty notice is overlaid on it. With precise locations off the
+  // observations query never runs, so that state counts as empty at once and its setup notice takes the overlay.
+  const mapEmpty = !points.length && (!precise || !observations.isPending);
+  // The phone on-demand empty state skips the plot entirely, so its notice renders in flow and no credit is shown.
+  const showPlot = !(mapOnDemand && mapEmpty);
+  const emptyMessage = !precise || activeLayer?.reason === 'privacy_opt_in_required' ? t('mapPreciseDisabled') : activeLayer?.reason === 'no_source_selected' ? t('mapSourceRequired') : activeLayer?.enabled === false ? t('mapObservationLayerDisabled') : t('mapEmpty');
   return <section className="flex h-full min-h-0 flex-col gap-2 overflow-hidden bg-card p-3 text-card-foreground">
     <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border pb-2">
       {/* The gadget frame already shows the title; keep only the range line. */}
       <div className="min-w-0 flex-1"><p className="line-clamp-2 break-words text-xs text-muted-foreground">{t('mapRange', { days })}</p></div>
       <span aria-label={engine === 'globe' ? t('mapGlobeEngine') : t('mapFlatEngine')} title={engine === 'globe' ? t('mapGlobeEngine') : t('mapFlatEngine')} className="line-clamp-2 max-w-[40%] min-w-0 shrink text-right text-xs text-muted-foreground break-words">{engine === 'globe' ? t('mapGlobeEngine') : t('mapFlatEngine')}</span>
     </header>
-    {!precise && <GadgetNotice kind="setup" message={t('mapPreciseDisabled')} action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }} className="shrink-0 px-0 py-1 text-xs" />}
     {precise && sourceIds.length === 0 && <GadgetNotice kind="setup" message={t('mapSourceRequired')} className="shrink-0 px-0 py-1 text-xs" />}
-    {precise && sourceIds.length > 0 && observations.isPending && <GadgetSkeleton variant="chart" label={t('observationLoading')} className="shrink-0 px-0 py-1" />}
     {observations.isError && <GadgetNotice kind="error" message={t('observationLoadFailed')} className="shrink-0 px-0 py-1 text-xs" />}
-    <div ref={plotRef} role="group" className="relative min-h-48 flex-[2] overflow-hidden rounded border border-border" aria-label={t('mapPlotLabel')}>
-      {mapOnDemand && <div className="flex h-full flex-col items-start justify-center gap-2 p-3"><p className="text-xs text-muted-foreground">{t('mapOnDemand')}</p><Button type="button" variant="outline" onClick={() => setMapRequested(true)}>{t('mapOpen')}</Button></div>}
-      {canRenderEngine && engine === 'globe'
+    {/* On-demand phone state with no points: the notice renders in normal flow (an absolute notice in a collapsed plot is clipped). */}
+    {!showPlot && <GadgetNotice kind="empty" message={emptyMessage} action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }} className="shrink-0 px-0 py-1 text-xs" />}
+    {showPlot && <div ref={setPlotNode} role="group" className="relative min-h-48 flex-[2] overflow-hidden rounded border border-border" aria-label={t('mapPlotLabel')}>
+      {mapOnDemand && !mapEmpty && <div className="flex h-full flex-col items-start justify-center gap-2 p-3"><p className="text-xs text-muted-foreground">{t('mapOnDemand')}</p><Button type="button" variant="outline" onClick={() => setMapRequested(true)}>{t('mapOpen')}</Button></div>}
+      {/* Loading sits over the plot instead of a separate skeleton block, so a drawn map is never pushed down. */}
+      {precise && sourceIds.length > 0 && observations.isPending && <p role="status" className="absolute left-2 top-2 z-10 m-0 rounded bg-card/90 px-2 py-1 text-xs text-muted-foreground">{t('observationLoading')}</p>}
+      {/* Engines paint into an absolute layer so the canvas never sizes the plot: the plot takes its height from the card's flex layout, and the footer stays inside the card. */}
+      {canRenderEngine && <div className="absolute inset-0">
+      {engine === 'globe'
         ? <Suspense fallback={<p role="status" className="p-2 text-xs text-muted-foreground">{t('mapRendererLoading')}</p>}><GlobeMap features={points} selectedFeatureId={selectedFeatureId} onSelectFeature={selectFeature} width={size.width} height={size.height} visible={visible} interactive={!isEditMode} /></Suspense>
-        : canRenderEngine && <Suspense fallback={<p role="status" className="p-2 text-xs text-muted-foreground">{t('mapRendererLoading')}</p>}><FlatMap features={points} selectedFeatureId={selectedFeatureId} onSelectFeature={selectFeature} width={size.width} height={size.height} visible={visible} interactive={!isEditMode} /></Suspense>}
+        : <Suspense fallback={<p role="status" className="p-2 text-xs text-muted-foreground">{t('mapRendererLoading')}</p>}><FlatMap features={points} selectedFeatureId={selectedFeatureId} onSelectFeature={selectFeature} width={size.width} height={size.height} visible={visible} interactive={!isEditMode} /></Suspense>}
+      </div>}
       {isPhone && mapRequested && <Button type="button" variant="outline" className="absolute right-2 top-2 z-10" onClick={() => setMapRequested(false)}>{t('mapHide')}</Button>}
-      {mapEmpty && <GadgetNotice kind="empty" message={activeLayer?.reason === 'privacy_opt_in_required' ? t('mapPreciseDisabled') : activeLayer?.reason === 'no_source_selected' ? t('mapSourceRequired') : activeLayer?.enabled === false ? t('mapObservationLayerDisabled') : t('mapEmpty')} action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }} className="absolute left-2 top-2 z-10 max-w-[90%] rounded bg-card/90 px-2 py-1 text-xs" />}
+      {mapEmpty && <GadgetNotice kind="empty" message={emptyMessage} action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }} className="absolute left-2 top-2 z-10 max-w-[90%] rounded bg-card/90 px-2 py-1 text-xs" />}
       {selected && <p className="absolute bottom-2 left-2 max-w-[90%] rounded bg-card/90 px-2 py-1 text-xs">{formatMetricLabel(selected.metric, t)} · {selected.value ?? t('weatherMissingValue')} {selected.unit} · {selected.region ?? selected.provider}<span className="block">{t('mapSourceIdentity')}: {selected.source_id} · {t('mapQuality')}: {selected.quality}</span>{selected.document_version_number ? <Link className="underline" href={`/knowledge/documents/${selected.document_id}?version=${selected.document_version_number}#cited-revision`}>{t('mapOpenRevision', { version: selected.document_version_number })}</Link> : <span>{t('mapRevisionUnavailable')}</span>}</p>}
-    </div>
+    </div>}
     <div className={`flex min-h-0 flex-col ${features.length > 0 ? 'flex-1' : 'shrink-0'}`}>
       {features.length > 0 && <h3 className="line-clamp-2 break-words text-xs font-semibold">{t('mapEvidenceList', { count: features.length })}</h3>}
       <ul className="min-h-0 flex-1 divide-y divide-border overflow-y-auto" aria-label={t('mapEvidenceListLabel')}>
@@ -125,6 +135,7 @@ export function MapGadget({ instance, isEditMode = false }: { instance: GadgetIn
       {observations.hasNextPage && <button type="button" disabled={observations.isFetchingNextPage} onClick={() => void observations.fetchNextPage()} className="line-clamp-2 max-w-full self-start break-words py-1 text-xs text-primary underline disabled:opacity-50">{observations.isFetchingNextPage ? t('observationLoading') : t('mapLoadMore')}</button>}
       {(observations.data?.pages.some((page) => page.truncated) || ((observations.data?.pages.length ?? 0) >= 5 && Boolean(observations.data?.pages.at(-1)?.next_cursor))) && <p role="status" className="line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('observationTruncated')}</p>}
     </div>
-    <p className="line-clamp-2 shrink-0 break-words text-xs text-muted-foreground"><a className="underline" href="https://open-meteo.com/" target="_blank" rel="noreferrer">{t('openMeteoAttribution')}</a> · {t('mapNoRemoteTiles')}</p>
+    {/* The data and basemap credit describes a drawn map, so it shows only when the plot is rendered. */}
+    {showPlot && <p className="line-clamp-2 shrink-0 break-words text-xs text-muted-foreground"><a className="underline" href="https://open-meteo.com/" target="_blank" rel="noreferrer">{t('openMeteoAttribution')}</a> · {t('mapNoRemoteTiles')}</p>}
   </section>;
 }

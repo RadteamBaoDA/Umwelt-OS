@@ -116,6 +116,7 @@ export function ProviderScope({
   </>;
   if (provider === 'fred') return field('fred_series_id', t('fredSeriesId'), configuration.fred_series_id ?? '', (value) => onChange('fred_series_id', value.toUpperCase()), { maxLength: 25, pattern: '[A-Z0-9_]{1,25}' });
   if (provider === 'openweathermap') return <>
+    <LocationButton disabled={disabled} onLocate={(latitude, longitude) => { onChange('owm_latitude', latitude); onChange('owm_longitude', longitude); }} />
     {field('owm_latitude', t('weatherLatitude'), String(configuration.owm_latitude ?? ''), (value) => onChange('owm_latitude', value === '' ? undefined : Number(value)), { maxLength: 24, pattern: '-?[0-9]{1,2}(\\.[0-9]+)?' })}
     {field('owm_longitude', t('weatherLongitude'), String(configuration.owm_longitude ?? ''), (value) => onChange('owm_longitude', value === '' ? undefined : Number(value)), { maxLength: 24, pattern: '-?[0-9]{1,3}(\\.[0-9]+)?' })}
   </>;
@@ -174,6 +175,12 @@ export function ProviderScope({
     {field('market_exchange_timezone', t('marketExchangeTimezone'), configuration.market_exchange_timezone ?? '', (value) => onChange('market_exchange_timezone', value), { maxLength: 64 })}
   </>;
   if (provider === 'open_meteo') return <>
+    <LocationButton disabled={disabled} onLocate={(latitude, longitude) => {
+      onChange('weather_latitude', latitude);
+      onChange('weather_longitude', longitude);
+      // The browser zone matches the located device, so it replaces the default forecast timezone.
+      onChange('weather_timezone', Intl.DateTimeFormat().resolvedOptions().timeZone);
+    }} />
     {field('weather_latitude', t('weatherLatitude'), String(configuration.weather_latitude ?? ''), (value) => onChange('weather_latitude', value === '' ? undefined : Number(value)), { maxLength: 24, pattern: '-?[0-9]{1,2}(\\.[0-9]+)?' })}
     {field('weather_longitude', t('weatherLongitude'), String(configuration.weather_longitude ?? ''), (value) => onChange('weather_longitude', value === '' ? undefined : Number(value)), { maxLength: 24, pattern: '-?[0-9]{1,3}(\\.[0-9]+)?' })}
     {field('weather_timezone', t('weatherTimezone'), configuration.weather_timezone ?? '', (value) => onChange('weather_timezone', value), { maxLength: 64 })}
@@ -212,6 +219,37 @@ export function ProviderScope({
       onChange('telegram_chat_ids', values);
     }} />
     <small id="source-scope-telegram-help" className="text-muted-foreground">{t('telegramChannelHelp')}</small>
+  </div>;
+}
+
+/**
+ * Fills coordinates from the browser Geolocation API after an explicit owner click (the browser asks for permission).
+ * Coordinates are rounded to 4 decimals (~11 m), enough for weather and within the server bounds; denial or
+ * failure shows a hint and leaves the typed values unchanged.
+ */
+function LocationButton({ disabled, onLocate }: { disabled: boolean; onLocate: (latitude: number, longitude: number) => void }) {
+  const t = useTranslations('sources');
+  const [state, setState] = useState<'idle' | 'locating' | 'denied' | 'unavailable'>('idle');
+  const supported = typeof navigator !== 'undefined' && 'geolocation' in navigator;
+  /** Requests one position and reports it rounded, or records why it could not be read. */
+  const locate = () => {
+    setState('locating');
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        setState('idle');
+        onLocate(Math.round(coords.latitude * 1e4) / 1e4, Math.round(coords.longitude * 1e4) / 1e4);
+      },
+      (failure) => setState(failure.code === failure.PERMISSION_DENIED ? 'denied' : 'unavailable'),
+      { timeout: 10_000, maximumAge: 600_000 },
+    );
+  };
+  return <div className="flex flex-wrap items-center gap-2">
+    <Button type="button" variant="outline" disabled={disabled || !supported || state === 'locating'} onClick={locate}>
+      {state === 'locating' ? t('locating') : t('useMyLocation')}
+    </Button>
+    {(state === 'denied' || state === 'unavailable' || !supported) && <small role="status" className="text-muted-foreground">
+      {t(state === 'denied' ? 'locationDenied' : 'locationUnavailable')}
+    </small>}
   </div>;
 }
 

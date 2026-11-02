@@ -56,7 +56,7 @@ export function computeFreshnessTick(source: TickSource, now: number): Freshness
 }
 
 const STATUS_COLOR: Record<FreshnessStatus, string> = {
-  fresh: 'var(--data)',
+  fresh: 'var(--accent)',
   stale: 'var(--status-warning)',
   failing: 'var(--negative)',
 };
