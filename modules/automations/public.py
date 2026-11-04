@@ -8,6 +8,31 @@ calls a model, sends a webhook or creates a task: preview is pure evaluation.
 
 from __future__ import annotations
 
+from importlib import import_module as _import_module
+from typing import TYPE_CHECKING as _TYPE_CHECKING
+from typing import Any as _Any
+
+# Re-exports of private submodules that themselves import this facade are resolved lazily (PEP 562) so the two cannot
+# form an import cycle; type checkers see them through the TYPE_CHECKING block at the end of the module.
+_LAZY_DTO_MODULES = {
+    "ensure_demo_automations": "modules.automations.seed",
+    "register_automation_tools": "modules.automations.tools",
+}
+
+
+def __getattr__(name: str) -> _Any:
+    """Resolve the lazily re-exported names on first access (module-level ``__getattr__``).
+
+    Raises ``AttributeError`` for any other missing attribute, preserving normal module semantics.
+    """
+    module_name = _LAZY_DTO_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(_import_module(module_name), name)
+    globals()[name] = value
+    return value
+
+
 import hashlib
 import json
 from collections.abc import Mapping
@@ -525,3 +550,11 @@ async def purge_finished_runs(session: AsyncSession, *, now: datetime | None = N
     ).limit(limit)
     result = await session.execute(delete(_AutomationRun).where(_AutomationRun.id.in_(doomed)))
     return int(getattr(result, "rowcount", 0) or 0)
+
+if _TYPE_CHECKING:
+    from modules.automations.seed import (
+        ensure_demo_automations as ensure_demo_automations,
+    )
+    from modules.automations.tools import (
+        register_automation_tools as register_automation_tools,
+    )

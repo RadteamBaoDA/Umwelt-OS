@@ -410,7 +410,7 @@ class HarnessContext:
     ) -> bool:
         """Revalidate source/session/claim/profile after DNS and reserve the effect before the socket send."""
         from modules.agents.approvals import reserve_effect_before_send
-        from modules.tools.webhook import load_webhook_profiles
+        from modules.tools.public import load_webhook_profiles
 
         try:
             run = await self._run_snapshot()
@@ -1482,7 +1482,7 @@ async def _resolve_approval(
     an approved action first consults the effect ledger and otherwise receives the send/verify hooks.
     """
     from modules.agents.approvals import action_identity, approval_for_slot
-    from modules.tools.webhook import load_webhook_profiles
+    from modules.tools.public import load_webhook_profiles
 
     resolution = _ApprovalResolution()
     profile_alias = arguments.get("profile")

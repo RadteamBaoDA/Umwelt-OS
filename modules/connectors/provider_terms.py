@@ -28,7 +28,7 @@ from modules.connectors.provider_specs import (
     evaluate_terms,
     get_provider_spec,
 )
-from modules.sources.schemas import ConnectorSource
+from modules.sources.public import ConnectorSource
 
 
 class ProviderTermsAcknowledge(BaseModel):

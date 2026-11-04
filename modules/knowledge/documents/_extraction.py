@@ -27,9 +27,7 @@ from modules.knowledge.documents.models import (
     DocumentVersion,
 )
 from modules.sources.models import Source
-from modules.sources.schemas import (
-    SourceFence,
-)
+from modules.sources.public import SourceFence
 
 EXTRACTION_CHUNK_LIMIT = 100
 

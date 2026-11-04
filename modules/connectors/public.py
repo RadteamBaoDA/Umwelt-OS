@@ -141,7 +141,7 @@ from modules.connectors.provider_specs import (
 from modules.connectors.providers.cii import CiiProjection
 from modules.connectors.sections import MAX_SECTIONS, SECTION_CATALOG
 from modules.ingestion.schemas import IngestionRecord, TelegramRawDelivery
-from modules.sources.schemas import ConnectorSource, SourceFence
+from modules.sources.public import ConnectorSource, SourceFence
 
 if TYPE_CHECKING:
     from core.config import Settings

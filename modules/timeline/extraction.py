@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from modules.settings.prompts import DEFAULT_SYSTEM_PROMPTS
+from modules.settings.public import DEFAULT_SYSTEM_PROMPTS
 
 MAX_EVENTS = 30
 MAX_EVENT_EVIDENCE = 5

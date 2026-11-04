@@ -137,7 +137,7 @@ async def export_provider_scope(
     """
     from modules.connectors.catalog import get_catalog_entry
     from modules.sources import public as sources
-    from modules.sources.schemas import SourceExportFence
+    from modules.sources.public import SourceExportFence
 
     if not await sources.filter_export_eligible_sources(session, [SourceExportFence(
         source_id=source_id, workspace_id=scope.workspace_id, generation=expected_source_generation,

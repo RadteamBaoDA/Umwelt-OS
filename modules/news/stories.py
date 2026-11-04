@@ -37,7 +37,7 @@ from modules.news.schemas import (
 from modules.search import public as search
 from modules.sources import public as sources
 from modules.sources.models import Source
-from modules.translations.schemas import TranslationInput
+from modules.translations.public import TranslationInput
 
 ALGORITHM_VERSION = 1
 MAX_CANDIDATES = 100

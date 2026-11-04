@@ -63,7 +63,7 @@ from modules.connectors.public import (
 from modules.ingestion import public as ingestion
 from modules.settings.public import module_dependency, resolve_n8n
 from modules.sources import public as sources
-from modules.sources.schemas import ConnectorSource, SourceFence
+from modules.sources.public import ConnectorSource, SourceFence
 
 router = APIRouter(prefix="/api/v1/connectors", tags=["connectors"])
 Session = Annotated[AsyncSession, Depends(get_session)]

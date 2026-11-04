@@ -32,7 +32,7 @@ from core.workspaces.schemas import (
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
 from modules.sources import public as sources
-from modules.sources.schemas import SourceExportFence, SourceFence
+from modules.sources.public import SourceExportFence, SourceFence
 from modules.timeline.models import (
     Event,
     EventAudit,

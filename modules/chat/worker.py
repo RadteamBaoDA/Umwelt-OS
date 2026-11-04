@@ -119,7 +119,7 @@ from modules.chat.user_input import (
 )
 from modules.memory.public import lock_export_privacy, read_export_privacy
 from modules.settings import public as settings_public
-from modules.settings.prompts import resolve_prompt
+from modules.settings.public import resolve_prompt
 from modules.sources import public as sources_public
 
 logger = logging.getLogger(__name__)

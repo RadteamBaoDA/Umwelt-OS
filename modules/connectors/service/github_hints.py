@@ -38,7 +38,7 @@ from modules.connectors.models import (
     GithubWebhookDelivery,
     GithubWebhookOutbox,
 )
-from modules.sources.schemas import ConnectorSource, SourceFence
+from modules.sources.public import ConnectorSource, SourceFence
 
 if TYPE_CHECKING:
     from modules.connectors.github.webhooks import (

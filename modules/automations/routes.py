@@ -152,7 +152,7 @@ async def issue_webhook_credential(
 ) -> dict[str, object]:
     """Rotate one alias token and show its random bearer exactly once to the authenticated owner."""
     response.headers["Cache-Control"] = "private, no-store"
-    from modules.tools.mcp_credentials import issue_inbound_token
+    from modules.tools.public import issue_inbound_token
 
     flag = _flag(request)
     fence = await _admit(session, scope=scope, multi_workspace_enabled=flag, lock=True)
@@ -302,7 +302,7 @@ async def receive_inbound_webhook(
     if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
         raise HTTPException(status_code=415, detail="Webhook requires application/json")
     _check_declared_length(request.headers.get("content-length"))
-    from modules.tools.mcp_credentials import hash_inbound_token, verify_inbound_token
+    from modules.tools.public import hash_inbound_token, verify_inbound_token
 
     flag = _flag(request)
     # The URL carries no workspace: alias plus the token digest is the unique selector (Recipe W).

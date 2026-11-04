@@ -739,7 +739,7 @@ async def _purge_translations(
     """Drop every actor's derived translations of a brief whose share ended (documents have none)."""
     if resource_type != "brief":
         return
-    from modules.translations.lifecycle import purge_resource_translations
+    from modules.translations.public import purge_resource_translations
 
     for resource_id in resource_ids:
         await purge_resource_translations(session, workspace_id, "daily_brief", resource_id)

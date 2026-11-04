@@ -54,7 +54,7 @@ from modules.ingestion.schemas import (
 )
 from modules.knowledge.documents import public as documents
 from modules.sources import public as sources
-from modules.sources.schemas import ConnectorSource, SourceFence
+from modules.sources.public import ConnectorSource, SourceFence
 
 
 async def _admit_batch(

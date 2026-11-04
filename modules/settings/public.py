@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+# Cross-module contract re-exports (importers use this public module, never private submodules).
+from modules.settings.prompts import (
+    resolve_prompt as resolve_prompt,
+)
 import hashlib
 import ipaddress
 import json

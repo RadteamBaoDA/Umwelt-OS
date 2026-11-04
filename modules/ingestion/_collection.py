@@ -43,7 +43,7 @@ from modules.ingestion.schemas import (
     TelegramCursor,
 )
 from modules.sources import public as sources
-from modules.sources.schemas import ConnectorSource, SourceFence
+from modules.sources.public import ConnectorSource, SourceFence
 
 
 async def get_source_cursor(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,

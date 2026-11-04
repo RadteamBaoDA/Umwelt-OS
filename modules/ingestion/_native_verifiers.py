@@ -46,7 +46,7 @@ from modules.ingestion.schemas import (
     classify_telegram_probe,
 )
 from modules.sources import public as sources
-from modules.sources.schemas import ConnectorSource, SourceFence
+from modules.sources.public import ConnectorSource, SourceFence
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -275,7 +275,7 @@ class BaseNativeVerifier:
     @staticmethod
     def _parse_metadata(ctx: NativeAcceptance, record: IngestionRecord) -> Any:
         """Parse and cross-check the typed provider metadata (identity, version, provider, coverage)."""
-        from modules.knowledge.documents.schemas import ProviderRecordMetadata
+        from modules.knowledge.documents.public import ProviderRecordMetadata
         try:
             metadata = ProviderRecordMetadata.model_validate(record.metadata.get("provider_record"))
         except (TypeError, ValueError) as exc:

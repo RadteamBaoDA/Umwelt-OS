@@ -19,7 +19,7 @@ from core.demo_seed import (
 from core.modules import register_modules
 from core.workspaces.public import resolve_workspace_owner_context
 from core.workspaces.schemas import InternalJobScope
-from modules.automations.seed import ensure_demo_automations
+from modules.automations.public import ensure_demo_automations
 from modules.chat.public import ensure_demo_conversation
 from modules.goals.public import ensure_demo_goals
 from modules.knowledge.documents import public as documents

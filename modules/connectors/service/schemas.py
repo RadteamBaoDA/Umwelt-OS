@@ -61,7 +61,7 @@ from modules.connectors.provider_options import (
 )
 from modules.connectors.sections import MAX_SECTIONS
 from modules.ingestion.schemas import IngestionRecord, TelegramRawDelivery
-from modules.sources.schemas import SourceFence
+from modules.sources.public import SourceFence
 
 DEFAULT_TIMEZONE = "Asia/Ho_Chi_Minh"
 

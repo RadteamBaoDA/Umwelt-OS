@@ -15,7 +15,7 @@ if TYPE_CHECKING:
         DocumentCleanupEvidenceScope,
         EvidenceReferenceRead,
     )
-    from modules.sources.schemas import SourceFence
+    from modules.sources.public import SourceFence
 
 from fastapi import HTTPException
 from redis.asyncio import Redis
@@ -417,7 +417,7 @@ async def _fence_export_source(
     manual ones. Read-only.
     """
     from modules.sources import public as sources_public
-    from modules.sources.schemas import SourceExportFence
+    from modules.sources.public import SourceExportFence
 
     source_id = prov.explicit_source_id
     if prov.doc_evidence is not None:
@@ -678,7 +678,7 @@ async def _lock_live_provenance_evidence(
     from modules.chat import public as chat_public
     from modules.knowledge.documents import public as documents_public
     from modules.sources import public as sources_public
-    from modules.sources.schemas import SourceExportFence
+    from modules.sources.public import SourceExportFence
 
     raw = provenance
     if require_copy_evidence and raw.keys() - {

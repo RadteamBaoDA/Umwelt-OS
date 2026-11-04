@@ -21,7 +21,7 @@ from modules.connectors.providers.news import safe_xml_root
 from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
 from modules.ingestion.schemas import IngestionRecord
 from modules.knowledge.documents.public import ProviderRecordMetadata
-from modules.sources.schemas import ConnectorSource
+from modules.sources.public import ConnectorSource
 
 _MAX_PAGE_BYTES = 10 * 1024 * 1024
 _MAX_MAPPED_BYTES = 9 * 1024 * 1024

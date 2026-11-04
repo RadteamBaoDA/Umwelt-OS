@@ -34,7 +34,7 @@ from modules.knowledge.entities.schemas import (
     EntitySuppressionRequest,
 )
 from modules.knowledge.public import KnowledgeService
-from modules.knowledge.relationships.schemas import NeighborPage
+from modules.knowledge.relationships.public import NeighborPage
 from modules.settings.public import module_dependency
 
 router = APIRouter(tags=["knowledge"], dependencies=[Depends(module_dependency("knowledge.entities"))])

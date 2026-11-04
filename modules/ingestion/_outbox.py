@@ -39,9 +39,9 @@ from modules.ingestion.schemas import (
     EventDelivery,
 )
 from modules.knowledge.documents import public as documents
-from modules.knowledge.documents.schemas import DocumentCleanupPreparationLimitError
+from modules.knowledge.documents.public import DocumentCleanupPreparationLimitError
 from modules.sources import public as sources
-from modules.sources.schemas import SourceFence
+from modules.sources.public import SourceFence
 
 
 @dataclass(frozen=True)

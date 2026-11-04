@@ -26,7 +26,7 @@ from modules.connectors.models import (
 from modules.connectors.n8n import N8nApi, build_workflow, workflow_name
 from modules.connectors.provider_specs import min_interval_minutes
 from modules.sources import public as sources
-from modules.sources.schemas import SourceFence
+from modules.sources.public import SourceFence
 
 
 def prepare_credential_assignment(

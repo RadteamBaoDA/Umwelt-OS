@@ -17,7 +17,7 @@ from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, Worksp
 from modules.connectors.models import (
     ConnectorProvisioning,
 )
-from modules.sources.schemas import ConnectorSource, SourceFence
+from modules.sources.public import ConnectorSource, SourceFence
 
 
 def _connector_actor(scope: Scope) -> int:

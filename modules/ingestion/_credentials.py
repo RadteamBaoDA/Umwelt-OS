@@ -19,7 +19,7 @@ from modules.ingestion.models import (
     CollectorCredential,
 )
 from modules.sources import public as sources
-from modules.sources.schemas import SourceFence
+from modules.sources.public import SourceFence
 
 
 async def create_collector_credential(

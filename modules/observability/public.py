@@ -29,7 +29,7 @@ from modules.observability.schemas import (
     RunRead,
     RunsRead,
 )
-from modules.settings.schemas import MaintenanceSummaryRead
+from modules.settings.public import MaintenanceSummaryRead
 
 
 def _quantile(buckets: list[int], q: float) -> float | None:

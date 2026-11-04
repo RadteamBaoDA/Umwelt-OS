@@ -66,7 +66,7 @@ from modules.knowledge.relationships.seed import (
     ensure_demo_relationships,  # re-export: used by documents seed
 )
 from modules.sources import public as sources
-from modules.sources.schemas import SourceExportFence, SourceFence
+from modules.sources.public import SourceExportFence, SourceFence
 
 
 async def _admit(

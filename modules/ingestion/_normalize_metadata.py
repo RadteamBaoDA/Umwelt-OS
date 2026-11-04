@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 from modules.ingestion._native_records import validate_telegram_record_delivery
 from modules.ingestion.schemas import IngestionRecord, TelegramDeliveryProof, TelegramRawDelivery
-from modules.knowledge.documents.schemas import (
+from modules.knowledge.documents.public import (
     MEASUREMENT_PROVIDER_IDS,
     NEWS_PROVIDER_IDS,
     ProviderRecordMetadata,

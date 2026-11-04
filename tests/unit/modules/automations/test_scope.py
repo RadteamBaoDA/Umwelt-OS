@@ -413,7 +413,7 @@ async def test_create_tool_perform_takes_scope_and_forwards_it() -> None:
         captured["perform"] = perform
         return "result"
 
-    with patch("modules.agents.internal_writes.run_approved_write", fake_write):
+    with patch("modules.agents.public.run_approved_write", fake_write):
         await tools._create(arguments, context)
     perform = captured["perform"]
     assert list(inspect.signature(perform).parameters) == ["session", "scope"]  # type: ignore[arg-type]

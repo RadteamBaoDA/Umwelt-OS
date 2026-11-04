@@ -40,7 +40,7 @@ from modules.knowledge.temporal.schemas import (
     ReconcileStatus,
 )
 from modules.sources import public as sources
-from modules.sources.schemas import SourceFence
+from modules.sources.public import SourceFence
 
 
 def _actor(scope: Scope) -> int:

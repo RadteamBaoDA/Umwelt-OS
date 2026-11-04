@@ -17,8 +17,8 @@ from modules.knowledge.temporal import public as temporal
 from modules.timeline import public as timeline
 
 if TYPE_CHECKING:  # annotation-only; keeps the facade free of runtime schema coupling
-    from modules.chat.schemas import AnswerContext, AnswerContextRequest
-    from modules.knowledge.entities.schemas import (
+    from modules.chat.public import AnswerContext, AnswerContextRequest
+    from modules.knowledge.entities.public import (
         EntityEvidencePage,
         EntityHistoryPage,
         EntityPage,
@@ -29,10 +29,10 @@ if TYPE_CHECKING:  # annotation-only; keeps the facade free of runtime schema co
         EntityReviewAssignmentResult,
         EntityReviewPage,
     )
-    from modules.knowledge.relationships.schemas import NeighborPage
-    from modules.knowledge.temporal.schemas import ChangePage
-    from modules.memory.schemas import MemoryPage, MemoryRead
-    from modules.timeline.schemas import EventPage, TimelinePage, TimelineQuery
+    from modules.knowledge.relationships.public import NeighborPage
+    from modules.knowledge.temporal.public import ChangePage
+    from modules.memory.public import MemoryPage, MemoryRead
+    from modules.timeline.public import EventPage, TimelinePage, TimelineQuery
 
 
 class KnowledgeService:

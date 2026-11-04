@@ -220,7 +220,7 @@ def _record(
     provider_updated_at: str | None = None,
 ) -> IngestionRecord:
     """Assemble a news ingestion record with typed provider provenance and optional canonical link."""
-    from modules.knowledge.documents.schemas import ProviderRecordMetadata
+    from modules.knowledge.documents.public import ProviderRecordMetadata
 
     envelope = ProviderRecordMetadata(
         provider=provider, identity=identity, provider_version=version,

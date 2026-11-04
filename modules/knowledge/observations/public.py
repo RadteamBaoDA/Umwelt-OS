@@ -49,7 +49,7 @@ from modules.knowledge.observations.schemas import (
     WorldMeasurement,
 )
 from modules.sources import public as sources
-from modules.sources.schemas import SourceExportFence, SourceFence
+from modules.sources.public import SourceExportFence, SourceFence
 
 # Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
 __all__ = [

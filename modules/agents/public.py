@@ -1,5 +1,34 @@
 """Owner-scoped agent run creation, lookup, and cancellation contracts."""
 
+# Cross-module contract re-exports (importers use this public module, never private submodules).
+from importlib import import_module as _import_module
+from typing import TYPE_CHECKING as _TYPE_CHECKING
+from typing import Any as _Any
+
+# Re-exports of private submodules that themselves import this facade are resolved lazily (PEP 562) so the two cannot
+# form an import cycle; type checkers see them through the TYPE_CHECKING block at the end of the module.
+_LAZY_DTO_MODULES = {
+    "mark_effect_outcome": "modules.agents.approvals",
+}
+
+
+def __getattr__(name: str) -> _Any:
+    """Resolve the lazily re-exported names on first access (module-level ``__getattr__``).
+
+    Raises ``AttributeError`` for any other missing attribute, preserving normal module semantics.
+    """
+    module_name = _LAZY_DTO_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(_import_module(module_name), name)
+    globals()[name] = value
+    return value
+
+
+from modules.agents.internal_writes import (
+    run_approved_write as run_approved_write,
+    uuid_arg as uuid_arg,
+)
 import asyncio
 import base64
 import binascii
@@ -2088,3 +2117,8 @@ async def redact_expired_agent_traces(
         ).values(payload=None))
     await session.flush()
     return redacted
+
+if _TYPE_CHECKING:
+    from modules.agents.approvals import (
+        mark_effect_outcome as mark_effect_outcome,
+    )

@@ -26,7 +26,7 @@ from modules.ingestion.models import (
 from modules.knowledge.documents import public as documents
 from modules.knowledge.observations import public as observations_public
 from modules.sources import public as sources
-from modules.sources.schemas import SourceFence
+from modules.sources.public import SourceFence
 
 
 async def _validate_source_ingestion_purge_in_uow(

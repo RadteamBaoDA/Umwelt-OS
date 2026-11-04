@@ -6,7 +6,7 @@ from hashlib import sha256
 from typing import Any
 
 from modules.ingestion.schemas import IngestionRecord
-from modules.knowledge.documents.schemas import ProviderRecordMetadata
+from modules.knowledge.documents.public import ProviderRecordMetadata
 
 
 def normalize_github_record(

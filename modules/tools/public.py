@@ -1,5 +1,25 @@
 """Public registry contracts and native output-fence revalidation boundary."""
 
+# Cross-module contract re-exports (importers use this public module, never private submodules).
+from modules.tools.browser import (
+    register_browser_tool as register_browser_tool,
+)
+from modules.tools.builtins import (
+    register_builtin_tools as register_builtin_tools,
+)
+from modules.tools.mcp_credentials import (
+    hash_inbound_token as hash_inbound_token,
+    issue_inbound_token as issue_inbound_token,
+    verify_inbound_token as verify_inbound_token,
+)
+from modules.tools.mcp_transport import (
+    McpOperationNetworkBudget as McpOperationNetworkBudget,
+    McpPinnedHttpTransport as McpPinnedHttpTransport,
+)
+from modules.tools.webhook import (
+    load_webhook_profiles as load_webhook_profiles,
+    register_webhook_tool as register_webhook_tool,
+)
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
@@ -24,7 +44,7 @@ from core.tools import (
 )
 from core.tools.schemas import ToolOutputFence
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
-from modules.sources.schemas import SourceFence
+from modules.sources.public import SourceFence
 from modules.tools.mcp_admission import McpAdmission, McpInboundLease
 from modules.tools.mcp_collection import McpCollectionRead, read_collection_capability
 from modules.tools.mcp_repository import McpConflict, McpNotFound, McpUnavailable

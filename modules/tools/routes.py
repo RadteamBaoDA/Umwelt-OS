@@ -18,7 +18,7 @@ from core.realtime import commit_with_replay
 from core.tools import ToolExecutionPrincipal
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.schemas import WorkspaceContext
-from modules.agents.access import read_workspace_modules
+from modules.agents.public import read_workspace_modules
 from modules.settings.public import module_dependency
 from modules.tools.browser_public import (
     _admit,

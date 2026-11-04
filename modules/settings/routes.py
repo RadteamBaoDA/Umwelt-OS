@@ -25,7 +25,7 @@ from core.rate_limit import require_budget
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat import web_search as web
-from modules.chat.generative_ui import external_router as viz
+from modules.chat.public import external_router as viz
 from modules.settings import lifecycle, models, public
 from modules.settings.openrouter_models import parse_openrouter_page, to_query_params
 from modules.settings.schemas import (

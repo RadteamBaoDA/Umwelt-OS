@@ -7,7 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from core.ids import uuid7
-from modules.tasks.schemas import TaskRead, TaskStatus
+from modules.tasks.public import TaskRead, TaskStatus
 
 GoalStatus = Literal["active", "completed", "paused", "cancelled"]
 

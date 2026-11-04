@@ -1,5 +1,9 @@
 """Public module contracts and API boundary for the chat capability."""
 
+# Cross-module contract re-exports (importers use this public module, never private submodules).
+from modules.chat.generative_ui import (
+    external_router as external_router,
+)
 import base64 as _base64
 import binascii as _binascii
 import hashlib as _hashlib
@@ -409,7 +413,7 @@ async def resolve_gadget_context(
         # Strip server-reserved keys: "selected_only" and every "_"-prefixed private key.
         return {key: value for key, value in context.items() if key != "selected_only" and not key.startswith("_")}
     from modules.knowledge.documents import public as documents_public
-    from modules.knowledge.documents.schemas import GadgetDocumentSelectionFence
+    from modules.knowledge.documents.public import GadgetDocumentSelectionFence
 
     selections = _parse_selection_items(context.get("items"))
 
@@ -1106,7 +1110,7 @@ async def _chat_export_evidence_fences(
     source_fences = await documents_public.review_version_fences(
         session, versions, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     from modules.sources import public as sources_public
-    from modules.sources.schemas import SourceExportFence
+    from modules.sources.public import SourceExportFence
 
     source_generations: dict[UUID, int] = {}
     conflicting_sources: set[UUID] = set()
@@ -1537,7 +1541,7 @@ async def _revalidate_export_citations(
     current_sources = await documents_public.review_version_fences(
         session, version_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     from modules.sources import public as sources_public
-    from modules.sources.schemas import SourceExportFence
+    from modules.sources.public import SourceExportFence
 
     current_generations: dict[UUID, int] = {}
     conflicting_sources: set[UUID] = set()

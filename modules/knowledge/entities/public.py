@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+# Cross-module contract re-exports (importers use this public module, never private submodules).
+from modules.knowledge.entities.schemas import (
+    EvidenceRef as EvidenceRef,
+)
 import base64
 import binascii
 import json
@@ -76,7 +80,7 @@ from modules.knowledge.entities.seed import (
     ensure_demo_entities,  # re-export: used by documents seed
 )
 from modules.sources import public as sources
-from modules.sources.schemas import SourceExportFence, SourceFence
+from modules.sources.public import SourceExportFence, SourceFence
 
 
 async def _admit(

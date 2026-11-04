@@ -74,7 +74,7 @@ def _writer(action: _Action) -> ToolHandler:
     """Wrap an owner-scoped goal mutation in the approved-write lifecycle."""
     async def handler(arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
         """Execute exactly one approved goal mutation and record its effect outcome."""
-        from modules.agents.internal_writes import run_approved_write, uuid_arg
+        from modules.agents.public import run_approved_write, uuid_arg
 
         async def perform(session: AsyncSession, scope: Scope) -> str:
             """Run the public goal service call with the admitted approval scope."""

@@ -8,6 +8,7 @@ from sqlalchemy.dialects import postgresql
 
 from core.workspaces import public as workspaces
 from modules.translations import lifecycle
+from modules.translations import public as translations_public
 
 WS, RID = uuid4(), uuid4()
 
@@ -37,7 +38,7 @@ async def test_expiry_never_evicts_a_live_leased_running_row():
 
 async def test_brief_share_revoke_purges_but_document_does_not(monkeypatch):
     purge = AsyncMock(return_value=1)
-    monkeypatch.setattr(lifecycle, "purge_resource_translations", purge)
+    monkeypatch.setattr(translations_public, "purge_resource_translations", purge)
     session = MagicMock()
     await workspaces._purge_translations(session, WS, "document", (RID,))
     purge.assert_not_awaited()

@@ -43,7 +43,7 @@ from core.workspaces.schemas import InternalJobScope, Scope
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
 from modules.settings import public as settings_public
-from modules.settings.prompts import resolve_prompt
+from modules.settings.public import resolve_prompt
 from modules.sources import public as sources
 from modules.timeline import public as timeline
 from modules.timeline.extraction import (

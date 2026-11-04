@@ -9,7 +9,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from modules.settings.schemas import TranslationSettingsRead
+from modules.settings.public import TranslationSettingsRead
 
 ResourceType = Literal["news_story", "daily_brief"]
 TranslationStatus = Literal["pending", "ready", "unchanged", "blocked", "failed"]

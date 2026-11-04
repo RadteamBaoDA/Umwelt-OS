@@ -63,7 +63,7 @@ from modules.ingestion.schemas import (
     ReceiveBatch,
 )
 from modules.sources import public as sources
-from modules.sources.schemas import ConnectorSource, SourceFence
+from modules.sources.public import ConnectorSource, SourceFence
 
 RENEW_EVERY_SECONDS = 20
 PAYLOAD_RATE_LIMIT_BACKOFF = timedelta(minutes=15)  # body-level throttling carries no Retry-After; coarse until observed

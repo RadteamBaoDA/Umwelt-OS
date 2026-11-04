@@ -4,6 +4,10 @@ Authorization is deny-by-default: a resource type is admitted only after its own
 registers an authorizer (W3 News/Brief projections). Callers commit; no network I/O happens here.
 """
 
+# Cross-module contract re-exports (importers use this public module, never private submodules).
+from modules.translations.lifecycle import (
+    purge_resource_translations as purge_resource_translations,
+)
 import hashlib
 import json
 from collections.abc import Awaitable, Callable
@@ -30,7 +34,7 @@ from core.telemetry import count
 from core.workspaces.public import lock_access_fence, read_access_fence
 from core.workspaces.schemas import Scope, WorkspaceContext
 from modules.settings.models import TranslationSettingsRecord
-from modules.settings.schemas import TranslationSettingsRead, TranslationSettingsUpdate
+from modules.settings.public import TranslationSettingsRead, TranslationSettingsUpdate
 from modules.translations.models import (
     ContentTranslation,
     TranslationBatch,

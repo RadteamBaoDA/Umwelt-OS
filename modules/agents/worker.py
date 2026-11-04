@@ -51,13 +51,13 @@ from modules.agents.public import (
     WORKFLOW_VERSION,
     publish_agent_activity_safely,
 )
-from modules.automations.tools import register_automation_tools
-from modules.goals.tools import register_goal_tools
-from modules.tasks.tools import register_task_tools
-from modules.tools.browser import register_browser_tool
-from modules.tools.builtins import register_builtin_tools
+from modules.automations.public import register_automation_tools
+from modules.goals.public import register_goal_tools
+from modules.tasks.public import register_task_tools
+from modules.tools.public import register_browser_tool
+from modules.tools.public import register_builtin_tools
 from modules.tools.public import McpAdmission, McpRuntime
-from modules.tools.webhook import register_webhook_tool
+from modules.tools.public import register_webhook_tool
 
 logger = logging.getLogger(__name__)
 SEGMENT_TIMEOUT_SECONDS = 145

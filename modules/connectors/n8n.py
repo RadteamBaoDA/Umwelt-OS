@@ -23,7 +23,7 @@ from modules.connectors.public import (
     validate_public_url,
 )
 from modules.connectors.selection import SKEW
-from modules.sources.schemas import ConnectorSource
+from modules.sources.public import ConnectorSource
 
 # Fixed in-network address packaged workflows call back to (every infrastructure/n8n/workflows/*.json URL).
 # Not owner-configurable: a different value would desynchronize the shipped templates.

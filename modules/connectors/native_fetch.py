@@ -56,7 +56,7 @@ from modules.ingestion.schemas import (
     NativeCollectionReceipt,
 )
 from modules.sources import public as sources
-from modules.sources.schemas import ConnectorSource, SourceFence
+from modules.sources.public import ConnectorSource, SourceFence
 
 Coverage = Literal["returned_snapshot", "pending_updates_only", "truncated"]
 GITHUB_RECONNECT_DETAIL = "GitHub grant is expired or requires reconnection"
