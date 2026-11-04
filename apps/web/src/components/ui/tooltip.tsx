@@ -1,4 +1,5 @@
 'use client';
+import { cn } from '@/lib/utils';
 
 import * as React from 'react';
 import { Tooltip as TooltipPrimitive } from 'radix-ui';
@@ -37,7 +38,7 @@ export function TooltipContent({ className, side = 'top', sideOffset = 8, ...pro
         data-slot="tooltip-content"
         side={side}
         sideOffset={sideOffset}
-        className={`ui-tooltip ${className ?? ''}`}
+        className={cn("ui-tooltip", className)}
         {...props}
       />
     </TooltipPrimitive.Portal>

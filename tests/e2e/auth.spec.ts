@@ -44,7 +44,7 @@ test('sign out stays a sign out when a request 401s before the logout reply', as
     await page.getByRole('button', { name: 'User menu' }).click();
     await page.getByRole('menuitem', { name: 'Sign out' }).click();
     await logoutSent;
-    await page.evaluate(() => window.dispatchEvent(new Event('bbd:unauthorized')));
+    await page.evaluate(() => window.dispatchEvent(new Event('umwelt:unauthorized')));
     releaseLogout();
     await expect(page).toHaveURL(/\/login$/);
     await expect(page).not.toHaveURL(/reason=expired/);

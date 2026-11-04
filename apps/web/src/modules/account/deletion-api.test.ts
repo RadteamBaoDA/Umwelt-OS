@@ -32,11 +32,11 @@ describe('account deletion acceptance', () => {
 
   it('recovers an ambiguous 401 without broadcasting global session-expiry events', async () => {
     const unauthorized = vi.fn();
-    window.addEventListener('bbd:unauthorized', unauthorized);
+    window.addEventListener('umwelt:unauthorized', unauthorized);
     const state = { status: 'queued', phase: 'external', error_code: null };
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(Response.json({}, { status: 401 })).mockResolvedValueOnce(Response.json(state)));
     await expect(acceptAccountDeletion('password', 'csrf')).resolves.toEqual(state);
     expect(unauthorized).not.toHaveBeenCalled();
-    window.removeEventListener('bbd:unauthorized', unauthorized);
+    window.removeEventListener('umwelt:unauthorized', unauthorized);
   });
 });

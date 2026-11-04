@@ -13,7 +13,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { AppLocaleId, formatTimeZoneLabel, normalizeFormattingLocale } from '@/core/i18n';
+import { AppLocaleId, formatTimeZoneLabel } from '@/core/i18n';
+import { formatDateTime } from '@/core/format';
 import { useGuardedNavigation } from '@/core/guarded-navigation';
 import {
   connectorKeys,
@@ -68,9 +69,7 @@ export function humanizeCode(code: string): string {
 
 /** Formats an optional ISO timestamp with the supplied application locale and time zone, returning the supplied fallback when absent. */
 function formatDate(value: string | null, locale: AppLocaleId, timezone: string, fallback: string): string {
-  return value ? new Intl.DateTimeFormat(normalizeFormattingLocale(locale), {
-    dateStyle: 'medium', timeStyle: 'short', timeZone: timezone,
-  }).format(new Date(value)) : fallback;
+  return value ? formatDateTime(value, locale, timezone) : fallback;
 }
 
 /** Resolves registered provider IDs to translated names, then to the catalog label, so new providers need no message key; otherwise the raw ID. */

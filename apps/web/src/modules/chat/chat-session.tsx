@@ -453,7 +453,7 @@ export function ChatSession({
           setIsStreaming(false);
           setActiveResponseId(null);
           setError(t('sessionExpired'));
-          // Password rotation also ends the stream's old session; apiRequest dispatches bbd:unauthorized only on a real 401.
+          // Password rotation also ends the stream's old session; apiRequest dispatches umwelt:unauthorized only on a real 401.
           // A 200 probe means the session was only rotated: the durable run continues, so reattach (never resend the prompt).
           void apiRequest('/api/v1/auth/session').then(async () => {
             await streamPromise.catch(() => undefined);

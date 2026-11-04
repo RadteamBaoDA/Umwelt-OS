@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
-import { workspaceHeaders, workspaceTargetFor } from '@/core/api';
+import { apiRequestRaw } from '@/core/api';
 
 /** Render the owner portable data export downloads. */
 export function DataExportSettings() {
@@ -15,13 +15,9 @@ export function DataExportSettings() {
     setDownloading(format);
     setDownloadError(false);
     try {
-      const response = await fetch(`/api/v1/exports/${format}`, {
-        cache: 'no-store', credentials: 'same-origin', headers: workspaceHeaders(workspaceTargetFor(`/api/v1/exports/${format}`)),
-      });
-      if (!response.ok) {
-        if (response.status === 401) window.dispatchEvent(new Event('bbd:unauthorized'));
-        throw new Error('Export failed');
-      }
+      // The shared raw request already broadcasts a 401 and applies workspace headers.
+      const response = await apiRequestRaw(`/api/v1/exports/${format}`);
+      if (!response.ok) throw new Error(t('downloadFailed'));
       const objectUrl = URL.createObjectURL(await response.blob());
       const anchor = document.createElement('a');
       anchor.href = objectUrl;

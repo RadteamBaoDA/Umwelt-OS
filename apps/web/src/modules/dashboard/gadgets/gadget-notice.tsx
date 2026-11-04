@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import React from 'react';
 import { Button } from '@/components/ui/button';
-import { cn } from 'cn';
+import { cn } from '@/lib/utils';
 
 /** Optional follow-up action of a gadget notice: a link (`href`) or a handler (`onClick`). */
 export interface GadgetNoticeAction {

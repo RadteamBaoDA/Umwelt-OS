@@ -292,7 +292,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         if (!ownsAttempt(attempt) || error instanceof SupersededSnapshotAttempt) return;
         if (error instanceof ApiError && error.status === 401) {
           setStatus('expired');
-          window.dispatchEvent(new Event('bbd:unauthorized'));
+          window.dispatchEvent(new Event('umwelt:unauthorized'));
         } else {
           setStatus('unavailable');
           setBarrierGeneration(generation);
@@ -377,7 +377,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           if (!ownsAuthCheck()) return;
           if (error instanceof ApiError && error.status === 401) {
             setStatus('expired');
-            window.dispatchEvent(new Event('bbd:unauthorized'));
+            window.dispatchEvent(new Event('umwelt:unauthorized'));
           }
         }).finally(() => {
           if (authCheckController === controller) authCheckController = null;
@@ -558,7 +558,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       stream.addEventListener('resync_required', () => { if (ownControlEvent()) resync(true); });
       stream.addEventListener('auth_expired', () => {
         if (!ownControlEvent()) return;
-        // Password rotation also ends this stream's old session; the snapshot probe dispatches bbd:unauthorized only on a real 401.
+        // Password rotation also ends this stream's old session; the snapshot probe dispatches umwelt:unauthorized only on a real 401.
         // Repeated auth_expired within 5s is delayed so a misbehaving server cannot drive a tight resync loop.
         const wait = Date.now() - lastAuthExpiredAt < 5000 ? 5000 : 0;
         lastAuthExpiredAt = Date.now();

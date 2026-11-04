@@ -20,7 +20,8 @@ import { SyncHistory } from './sync-history';
 import type { SourceAiOptions } from './source-ai-toggles';
 import { collectAndWait, useSourceActions, waitForActivation } from './use-source-actions';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { AppLocaleId, normalizeFormattingLocale } from '@/core/i18n';
+import { AppLocaleId } from '@/core/i18n';
+import { formatDateTime as formatDate } from '@/core/format';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useGuardedNavigation } from '@/core/guarded-navigation';
 import { useWorkspace } from '@/core/workspace-context';
@@ -225,13 +226,6 @@ function defaultConfiguration(provider: Provider, entry?: ConnectorCatalogEntry)
     schedule_interval_minutes: provider === 'rss' ? 15 : 30,
     ...(provider === 'rest' ? { items_path: 'items', id_field: 'id', content_field: 'content' } : {}),
   };
-}
-
-/** Formats an ISO timestamp with the supplied application locale and time zone. */
-function formatDate(value: string, locale: AppLocaleId, timezone: string): string {
-  return new Intl.DateTimeFormat(normalizeFormattingLocale(locale), {
-    dateStyle: 'medium', timeStyle: 'short', timeZone: timezone,
-  }).format(new Date(value));
 }
 
 /** Converts a request or validation failure into the editor’s supported error message key. */

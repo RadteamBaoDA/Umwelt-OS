@@ -189,10 +189,10 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
     const unauthorized = () => endSession(true);
     /** Updates the cached session from the detail of a session-refresh event. */
     const refreshed = (event: Event) => client.setQueryData(['session'], (event as CustomEvent<Session>).detail);
-    window.addEventListener('bbd:unauthorized', unauthorized);
+    window.addEventListener('umwelt:unauthorized', unauthorized);
     window.addEventListener('bbd:session-refreshed', refreshed);
     return () => {
-      window.removeEventListener('bbd:unauthorized', unauthorized);
+      window.removeEventListener('umwelt:unauthorized', unauthorized);
       window.removeEventListener('bbd:session-refreshed', refreshed);
     };
   }, [client, endSession]);

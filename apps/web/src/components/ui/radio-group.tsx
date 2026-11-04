@@ -1,4 +1,5 @@
 "use client"
+import { cn } from '@/lib/utils';
 
 import * as React from "react"
 import { CircleIcon } from "lucide-react"
@@ -14,7 +15,7 @@ function RadioGroupItem({ className, ...props }: React.ComponentProps<typeof Rad
   return (
     <RadioGroupPrimitive.Item
       data-slot="radio-group-item"
-      className={`radio-group-item ${className ?? ''}`}
+      className={cn("radio-group-item", className)}
       {...props}
     >
       <RadioGroupPrimitive.Indicator data-slot="radio-group-indicator">

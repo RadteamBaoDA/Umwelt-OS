@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { cn } from "cn"
+import { cn } from '@/lib/utils'
 import { ScrollArea as ScrollAreaPrimitive } from "radix-ui"
 
 /** Renders the shadcn `ScrollArea` primitive (scroll-area) with semantic tokens; forwards className and props to the underlying element. */

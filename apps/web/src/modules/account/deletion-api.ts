@@ -1,4 +1,4 @@
-import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
+import { ApiError, apiRequestRaw, csrfHeaders } from '@/core/api';
 
 export type DeletionPreview = {
   can_delete: boolean;
@@ -15,7 +15,7 @@ export type DeletionStatus = {
 
 /** Read receipt-only progress without emitting global authentication events after logout. */
 export async function readAccountDeletionStatus(signal?: AbortSignal): Promise<DeletionStatus> {
-  const response = await fetch('/api/v1/auth/account/deletion-status', { cache: 'no-store', credentials: 'same-origin', signal });
+  const response = await apiRequestRaw('/api/v1/auth/account/deletion-status', { signal }, { emitAuthEvents: false });
   if (!response.ok) throw new ApiError(response.status, 'Deletion status unavailable');
   return response.json() as Promise<DeletionStatus>;
 }
@@ -27,17 +27,13 @@ export async function readAccountDeletionStatus(signal?: AbortSignal): Promise<D
 export async function acceptAccountDeletion(currentPassword: string, csrfToken: string): Promise<DeletionStatus> {
   let response: Response;
   try {
-    const request: RequestInit = {
-      method: 'POST', cache: 'no-store', credentials: 'same-origin',
+    // The shared raw path refreshes a rejected CSRF token once; auth events stay off because a 401 here is recovered
+    // through the preissued receipt instead of ending the session.
+    response = await apiRequestRaw('/api/v1/auth/account/deletion', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
       body: JSON.stringify({ current_password: currentPassword, confirmation: 'DELETE' }),
-    };
-    response = await fetch('/api/v1/auth/account/deletion', request);
-    if (response.status === 403 && response.headers.get('X-CSRF-Error') === 'invalid') {
-      const refreshed = await apiRequest<{ csrfToken: string }>('/api/v1/auth/session');
-      window.dispatchEvent(new CustomEvent('bbd:session-refreshed', { detail: refreshed }));
-      response = await fetch('/api/v1/auth/account/deletion', { ...request, headers: { 'Content-Type': 'application/json', ...csrfHeaders(refreshed.csrfToken) } });
-    }
+    }, { emitAuthEvents: false });
   } catch (error) {
     try { return await readAccountDeletionStatus(); } catch { throw error; }
   }

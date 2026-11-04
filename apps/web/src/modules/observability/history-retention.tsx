@@ -43,7 +43,7 @@ export function HistoryRetention({ oldestSampleAt }: { oldestSampleAt: string | 
       <SelectContent>{options.map((days) => <SelectItem key={days} value={String(days)}>{t('retentionDays', { days })}</SelectItem>)}</SelectContent>
     </Select>
     <h2 id="history-interval-title" className="m-0 text-base font-semibold">{t('intervalTitle')}</h2>
-    <Select value={interval === undefined ? '' : String(interval)} disabled={!settings.data || save.isPending} onValueChange={(value) => save.mutate({ sample_interval_minutes: Number(value) })}>
+    <Select value={interval === undefined ? '' : String(interval)} disabled={!settings.data || save.isPending} onValueChange={(value) => save.mutate({ sample_interval_minutes: Number(value) as NonNullable<HistorySettingsPatch['sample_interval_minutes']> })}>
       <SelectTrigger className="w-36" aria-label={t('intervalTitle')}><SelectValue /></SelectTrigger>
       <SelectContent>{INTERVALS.map((m) => <SelectItem key={m} value={String(m)}>{m === 0 ? t('intervalOff') : t('intervalEvery', { minutes: m })}</SelectItem>)}</SelectContent>
     </Select>

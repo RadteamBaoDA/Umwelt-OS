@@ -9,17 +9,11 @@ import { TablePagination } from '@/components/ui/pagination';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { AppLocaleId, normalizeFormattingLocale } from '@/core/i18n';
+import { AppLocaleId } from '@/core/i18n';
+import { formatDateTime as formatDate } from '@/core/format';
 import { isStale } from './freshness';
 import { useErrorCodeLabel } from '@/core/error-codes';
 import { CollectionStats, connectorKeys, getSourceIngestion, IngestionRun, IngestionRunStatus, retryRun, Source, sourceKeys } from './api';
-
-/** Formats an ISO timestamp with the supplied application locale and time zone. */
-function formatDate(value: string, locale: AppLocaleId, timezone: string): string {
-  return new Intl.DateTimeFormat(normalizeFormattingLocale(locale), {
-    dateStyle: 'medium', timeStyle: 'short', timeZone: timezone,
-  }).format(new Date(value));
-}
 
 /** Maps run and stage states to their translated message keys. */
 function statusKey(status: string): 'runQueued' | 'runRunning' | 'runSucceeded' | 'runNeedsOcr' | 'runFailed' {

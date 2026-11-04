@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { cn } from 'cn';
+import { cn } from '@/lib/utils';
 import { Tabs as TabsPrimitive } from 'radix-ui';
 
 /** Owns tab selection and value state while preserving Radix keyboard and ARIA behavior. */

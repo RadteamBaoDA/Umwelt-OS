@@ -1,4 +1,5 @@
 'use client';
+import { cn } from '@/lib/utils';
 
 import * as React from 'react';
 import { CheckIcon, ChevronDownIcon } from 'lucide-react';
@@ -37,8 +38,8 @@ export function SearchableSelect({ value, options, onValueChange, placeholder, s
   return (
     <Popover open={open} onOpenChange={(next) => { setOpen(next); if (!next) setQuery(''); }}>
       <PopoverTrigger asChild>
-        <button type="button" role="combobox" aria-expanded={open} aria-controls={open ? listId : undefined} aria-label={ariaLabel} aria-labelledby={labelledBy} aria-describedby={describedBy} disabled={disabled} className={`input flex items-center justify-between gap-2 text-start ${className ?? ''}`}>
-          <span className={`min-w-0 flex-1 truncate ${value ? '' : 'text-muted-foreground'}`}>{value || placeholder}</span>
+        <button type="button" role="combobox" aria-expanded={open} aria-controls={open ? listId : undefined} aria-label={ariaLabel} aria-labelledby={labelledBy} aria-describedby={describedBy} disabled={disabled} className={cn("input flex items-center justify-between gap-2 text-start", className)}>
+          <span className={cn("min-w-0 flex-1 truncate", !value && "text-muted-foreground")}>{value || placeholder}</span>
           <ChevronDownIcon size={16} className="shrink-0 text-muted-foreground" aria-hidden="true" />
         </button>
       </PopoverTrigger>

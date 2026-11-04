@@ -507,7 +507,7 @@ export async function streamResponseEvents(
 
   if (!response.ok) {
     if (response.status === 401 && typeof window !== 'undefined') {
-      window.dispatchEvent(new Event('bbd:unauthorized'));
+      window.dispatchEvent(new Event('umwelt:unauthorized'));
     }
     const errText = await response.text().catch(() => 'Streaming request failed');
     // Status lets callers retry transient 5xx/network failures but not 4xx rejections.

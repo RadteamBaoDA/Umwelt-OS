@@ -91,12 +91,27 @@ function logApiFailure(
 type Session = { authenticated: true; csrfToken: string };
 let sessionRefresh: Promise<Session> | null = null;
 
-/** Sends a same-origin API request, applies the provided request options, and rejects unsuccessful responses as ApiError. */
-export async function apiRequest<T>(
+/** Options for the raw request variant. */
+export type RawRequestOptions = {
+  /** Retry once after refreshing the session when the server reports an invalid CSRF token (default true). */
+  retryCsrf?: boolean;
+  /** Dispatch `umwelt:unauthorized` on a 401 (default true); disable for post-logout receipt reads. */
+  emitAuthEvents?: boolean;
+};
+
+type SentRequest = { response: Response; scoped: boolean; isStale: () => boolean };
+
+/**
+ * Sends one API request with workspace headers, the per-generation abort signal chained to any caller signal,
+ * stale-workspace detection and the shared single-flight CSRF refresh retry. Returns the unparsed Response
+ * (any status) so JSON and raw callers share identical transport semantics.
+ * @throws StaleWorkspaceError when the selected workspace changed while the request was in flight.
+ */
+async function sendApiRequest(
   path: string,
-  options: RequestInit = {},
-  retryCsrf = true,
-): Promise<T> {
+  options: RequestInit,
+  retryCsrf: boolean,
+): Promise<SentRequest> {
   const headers = new Headers(options.headers);
   const scoped = workspaceTargetFor(path) === "selected";
   const source = scoped ? workspaceSource : null;
@@ -148,8 +163,59 @@ export async function apiRequest<T>(
     const session = await sessionRefresh;
     headers.set("X-CSRF-Token", session.csrfToken);
     // Disable further CSRF retries so a failed refresh cannot recurse indefinitely.
-    return apiRequest<T>(path, { ...options, headers }, false);
+    return sendApiRequest(path, { ...options, headers }, false);
   }
+  return { response, scoped, isStale };
+}
+
+/** Tells the workspace provider to fall back when the selected workspace itself is gone or revoked. */
+function dispatchWorkspaceInvalid(): void {
+  window.dispatchEvent(new Event("bbd:workspace-invalid"));
+}
+
+/** Broadcasts a lost session so the shell can return to login. */
+function dispatchUnauthorized(): void {
+  window.dispatchEvent(new Event("umwelt:unauthorized"));
+}
+
+/**
+ * Sends a same-origin API request and returns the raw Response (blob/stream/any status) without parsing or throwing
+ * on HTTP errors. Shares CSRF retry, workspace headers, stale-workspace handling and abort chaining with `apiRequest`.
+ * A 401 dispatches `umwelt:unauthorized` unless `emitAuthEvents` is false; a scoped 404 "Workspace not found"
+ * dispatches the workspace-invalid fallback event.
+ * @throws StaleWorkspaceError when the workspace changed mid-flight; network errors propagate unchanged.
+ */
+export async function apiRequestRaw(
+  path: string,
+  options: RequestInit = {},
+  { retryCsrf = true, emitAuthEvents = true }: RawRequestOptions = {},
+): Promise<Response> {
+  const { response, scoped, isStale } = await sendApiRequest(path, options, retryCsrf);
+  if (!response.ok && typeof window !== "undefined") {
+    if (scoped && response.status === 404) {
+      // Inspect a clone so the caller can still read the original body.
+      const detail = await response
+        .clone()
+        .json()
+        .then(
+          (b: { detail?: unknown }) => b.detail,
+          () => undefined,
+        );
+      if (isStale()) throw new StaleWorkspaceError();
+      if (detail === "Workspace not found") dispatchWorkspaceInvalid();
+    }
+    if (response.status === 401 && emitAuthEvents) dispatchUnauthorized();
+  }
+  return response;
+}
+
+/** Sends a same-origin API request, applies the provided request options, and rejects unsuccessful responses as ApiError. */
+export async function apiRequest<T>(
+  path: string,
+  options: RequestInit = {},
+  retryCsrf = true,
+): Promise<T> {
+  const { response, scoped, isStale } = await sendApiRequest(path, options, retryCsrf);
   if (response.status === 204) return undefined as T;
 
   // Gateway failures (502/504) return HTML; surface them as ApiError with the status instead of a SyntaxError.
@@ -189,10 +255,10 @@ export async function apiRequest<T>(
       body.detail === "Workspace not found"
     ) {
       // The selected workspace itself is gone or revoked: let the provider fall back to the default.
-      window.dispatchEvent(new Event("bbd:workspace-invalid"));
+      dispatchWorkspaceInvalid();
     }
     if (response.status === 401 && typeof window !== "undefined") {
-      window.dispatchEvent(new Event("bbd:unauthorized"));
+      dispatchUnauthorized();
     }
     const detail =
       typeof body.detail === "object" && body.detail !== null

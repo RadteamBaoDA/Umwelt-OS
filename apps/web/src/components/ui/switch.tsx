@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { Switch as SwitchPrimitive } from 'radix-ui';
-import { cn } from 'cn';
+import { cn } from '@/lib/utils';
 
 /** Renders the shadcn `Switch` primitive (switch) with semantic tokens; forwards className and props to the Radix root. */
 export function Switch({ className, ...props }: React.ComponentProps<typeof SwitchPrimitive.Root>) {

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { cn } from 'cn';
+import { cn } from '@/lib/utils';
 
 /**
  * Renders the official New York shadcn textarea primitive with local class merging and typed native props.
