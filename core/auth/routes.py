@@ -57,6 +57,7 @@ from core.auth.service import hash_password, verify_login_password, verify_passw
 from core.config import Settings
 from core.database import get_session
 from core.telemetry import log_event
+from modules.settings.public import set_initial_owner_display_name
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 logger = logging.getLogger("bbd.auth")
@@ -247,6 +248,8 @@ async def create_owner(
 
     try:
         await provision_bootstrap_account_in_uow(session, await asyncio.to_thread(hash_password, body.password))
+        # Same transaction as the owner row: both commit or both roll back on a competing setup.
+        await set_initial_owner_display_name(session, owner_id=1, display_name=body.display_name)
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()

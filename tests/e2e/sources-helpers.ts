@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { Locator, Page } from '@playwright/test';
-import { expect } from './fixtures';
+import { expect, test } from './fixtures';
 
 type Outcome = { ok: boolean; text: string };
 
@@ -16,6 +16,23 @@ if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
  */
 export function liveKey(providerId: string): string | undefined {
   return process.env[`E2E_KEY_${providerId.toUpperCase()}`]?.trim() || undefined;
+}
+
+/** Public YouTube feed used as a canary: if the runner cannot fetch it either, a YouTube failure is a remote outage. */
+export const YOUTUBE_CANARY = 'https://www.youtube.com/feeds/videos.xml?channel_id=UCBR8-60-B28hp2BmDPdntcQ';
+
+/**
+ * Skips (as a remote outage) a YouTube test whose fetch/render failed while the canary feed is also unreachable
+ * from the runner; calls `onOutage(id)` first so a caller can record the skip (e.g. for a final check). Returns
+ * normally when the canary answers 2xx, so the caller's failure stays a hard failure.
+ */
+export async function skipIfYoutubeOutage(id: string, onOutage?: (id: string) => void): Promise<void> {
+  if (id !== 'youtube') return;
+  const status = await fetch(YOUTUBE_CANARY, { signal: AbortSignal.timeout(10_000) }).then((r) => r.status, () => 0);
+  if (status >= 200 && status < 300) return;
+  test.info().annotations.push({ type: 'remote-outage', description: `youtube canary feed returned ${status || 'a network error'}` });
+  onOutage?.(id);
+  test.skip(true, `youtube is unreachable from the runner (canary ${status || 'network error'})`);
 }
 
 /** Headers an owner write needs: Playwright's request context sends no Origin (browsers do). */

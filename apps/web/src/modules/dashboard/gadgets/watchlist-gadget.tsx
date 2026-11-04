@@ -7,16 +7,37 @@ import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { formatDateTime } from '@/core/i18n';
+import { listWorldObservationWindow, type WorldObservation } from '@/modules/observations/api';
 import { useDisplayPreferences } from '@/core/query-provider';
 import type { GadgetInstance, HighlightRule } from '../api';
 import { evaluateGadgetHighlights } from '../api';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
+import { metricBetterDirection } from './metric-direction';
+import { deltaVsPrevious, formatObservationValue, historyPerSeries, seriesKey } from './provider-observation-gadget';
+import { SeriesRow } from './series-row';
 import { formatRelativeTime } from './relative-time';
 
 /** Sort rank per status/severity (lower sorts first). */
 const STATUS_RANK: Record<WatchlistItem['status'], number> = { alert: 0, matched: 1, monitoring: 2 };
 const SEVERITY_RANK: Record<WatchlistItem['severity'], number> = { critical: 0, warning: 1, info: 2 };
+
+/** Ticker to CoinGecko series key (observations of by-id assets carry the uppercased coin id, e.g. BITCOIN). */
+const SYMBOL_ALIASES: Record<string, string> = { BTC: 'BITCOIN', ETH: 'ETHEREUM', SOL: 'SOLANA', XRP: 'RIPPLE', DOGE: 'DOGECOIN', ADA: 'CARDANO' };
+/** History window for watchlist sparklines. */
+const SPARK_LOOKBACK_DAYS = 30;
+
+/**
+ * Upper-case match keys for a watchlist symbol target: itself plus its known alias in either direction.
+ *
+ * @param target Raw symbol target text.
+ * @returns Distinct upper-case candidates the observation series symbol may carry.
+ */
+function symbolCandidates(target: string): string[] {
+  const up = target.trim().toUpperCase();
+  const reverse = Object.entries(SYMBOL_ALIASES).find(([, id]) => id === up)?.[0];
+  return [...new Set([up, SYMBOL_ALIASES[up], reverse].filter((v): v is string => Boolean(v)))];
+}
 
 /** Single monitored rule or target symbol entry on the watchlist table. */
 export interface WatchlistItem {
@@ -82,6 +103,33 @@ export function WatchlistGadget({
     matchCount: 1,
   }));
 
+  // One batched observations query for every symbol target (never per row); sorted so the key is stable.
+  const symbolTargets = [...new Set(items.filter((i) => i.targetType === 'symbol').flatMap((i) => symbolCandidates(i.target)))].sort();
+  const sourceIds = definition.source_ids ?? [];
+  const spark = useQuery({
+    queryKey: ['world-observations', 'watchlist', instance.id, sourceIds, symbolTargets],
+    enabled: symbolTargets.length > 0 && sourceIds.length > 0,
+    staleTime: 60_000,
+    queryFn: ({ signal }) => {
+      const to = new Date(Date.now() + 86_400_000);
+      const from = new Date(to.getTime() - (SPARK_LOOKBACK_DAYS + 1) * 86_400_000);
+      return listWorldObservationWindow({ sourceIds, symbols: symbolTargets, from, to, maxPages: 2, history: true }, signal);
+    },
+  });
+  // Latest observation and history per upper-cased series symbol, so rows match case-insensitively and by alias.
+  const sparkItems = spark.data?.items ?? [];
+  const history = historyPerSeries(sparkItems);
+  const latestBySymbol = new Map<string, WorldObservation>();
+  for (const o of sparkItems) {
+    const key = (o.symbol ?? '').toUpperCase();
+    const cur = latestBySymbol.get(key);
+    if (key && o.value !== null && (!cur || o.observed_at > cur.observed_at)) latestBySymbol.set(key, o);
+  }
+  /** Latest observation matching a symbol item, or undefined (row then keeps its plain display). */
+  const matchFor = (item: WatchlistItem) => item.targetType === 'symbol'
+    ? symbolCandidates(item.target).map((c) => latestBySymbol.get(c)).find(Boolean)
+    : undefined;
+
   // Filter items by search query
   const filteredItems = items.filter((item) => {
     if (!filterQuery) return true;
@@ -145,7 +193,21 @@ export function WatchlistGadget({
       {/* Rule rows: severity is a 2px left edge (plus screen-reader text), time and count sit right, tabular. */}
       {sortedItems.length > 0 && (
         <ul className="min-h-0 flex-1 divide-y divide-border/50">
-          {sortedItems.map((item) => (
+          {sortedItems.map((item) => {
+            const obs = matchFor(item);
+            const edge = item.severity === 'critical' ? 'border-destructive' : item.severity === 'warning' ? 'border-foreground/50' : 'border-transparent';
+            // Symbol with live observations: label | sparkline | value | % change, direction-aware delta colour.
+            if (obs) {
+              const points = history.get(seriesKey(obs));
+              return (
+                <li key={item.id} className={`border-l-2 pl-3 ${edge}`} data-testid="watchlist-symbol-row">
+                  <SeriesRow label={item.target} value={obs.value} currency={obs.currency ?? undefined} series={points}
+                    format={(v) => formatObservationValue(obs, v, display.locale)} deltaPercent={deltaVsPrevious(points)} better={metricBetterDirection(obs.metric)} />
+                  <span className="sr-only">{t(`watchlistSeverity_${item.severity}`)} · {t(`watchlistStatus_${item.status}`)}</span>
+                </li>
+              );
+            }
+            return (
             <li
               key={item.id}
               className={`flex items-start justify-between gap-3 border-l-2 py-2 pl-3 ${
@@ -170,7 +232,8 @@ export function WatchlistGadget({
                 <p>{t('watchlistMatchCount', { count: item.matchCount })}</p>
               </div>
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
     </div>

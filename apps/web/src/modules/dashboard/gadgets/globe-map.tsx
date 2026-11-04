@@ -9,6 +9,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import type { MapFeature } from '../map-layers';
 import { FlatMap } from './flat-map';
+import { locationKey, shouldRecentre } from './globe-view';
 
 /** Props shared by the accessible map controller and the lazy 3D renderer. */
 export type GlobeMapProps = {
@@ -107,6 +108,8 @@ export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, 
   const rendererRef = useRef<GlobeInstance | null>(null);
   const materialRef = useRef<MeshBasicMaterial | null>(null);
   const selectedFeatureRef = useRef<string | null>(selectedFeatureId);
+  // Location-set key the camera was last centred on; refreshes of the same places must not undo the user's rotation/zoom.
+  const centredKeyRef = useRef<string | null>(null);
   const visibleRef = useRef(visible);
   const interactiveRef = useRef(interactive);
   const [unavailable, setUnavailable] = useState(false);
@@ -156,6 +159,7 @@ export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, 
       materialRef.current = activeMaterial;
       activeRenderer.pointsData(features).width(width).height(height);
       activeRenderer.pointOfView({ ...centroidView(features), altitude: fitAltitude(width, height) });
+      centredKeyRef.current = locationKey(features);
       activeRenderer.controls().enabled = visible && interactive;
       // A context created while the browser's context budget is exhausted is lost before any listener can attach; detect it now.
       if (activeRenderer.renderer().getContext().isContextLost()) throw new Error('WebGL context lost on creation');
@@ -228,10 +232,18 @@ export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, 
     else renderer.pauseAnimation();
   }, [features, height, interactive, selectedFeatureId, visible, width]);
 
-  /** Re-center on the evidence centroid when the point set changes (data arrives after the globe is created). */
+  /**
+   * Re-center on the evidence centroid only when the set of point locations changes (data arrives after the globe is
+   * created, or places are added/removed). Value/timestamp refreshes keep the key equal, so the user's view is kept;
+   * a dragged or zoomed globe thus stays put until the locations themselves change.
+   */
   useEffect(() => {
+    const key = locationKey(features);
+    if (!shouldRecentre(centredKeyRef.current, key)) return;
     const view = centroidView(features);
-    if (view) rendererRef.current?.pointOfView(view);
+    if (!view || !rendererRef.current) return;
+    rendererRef.current.pointOfView(view);
+    centredKeyRef.current = key;
   }, [features]);
 
   useEffect(() => {

@@ -25,6 +25,7 @@ import { GoogleLink } from '@/modules/account/google-link';
 import { AccountDeletionSection } from '@/modules/account/account-deletion';
 import { LegalLinks } from '@/modules/legal/legal-links';
 import { UserMenu } from '@/modules/account/user-menu';
+import { syncServerAccent } from '@/core/accent';
 import { OwnerPreferences, PreferencesDialog } from '@/modules/account/preferences-dialog';
 import { ChatDrawer } from '@/modules/chat/chat-drawer';
 import { NotificationBell } from '@/modules/notifications/notification-bell';
@@ -139,6 +140,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (session.data && preferences.data && display.isCurrentGeneration(generation)) {
       display.confirmPreferences(preferences.data, generation);
+      syncServerAccent(preferences.data.accent);
     }
   }, [session.data, preferences.data, generation, display.confirmPreferences, display.isCurrentGeneration]);
 

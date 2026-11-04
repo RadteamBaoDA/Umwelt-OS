@@ -478,3 +478,18 @@ const highlightRuleErrorKeys: Record<string, string> = {
 export function highlightRuleErrorKey(error: unknown): string | null {
   return error instanceof ApiError && error.status === 422 ? highlightRuleErrorKeys[error.code ?? ''] ?? null : null;
 }
+
+/** Current local weather returned by the owner-only proxy; coordinates are never echoed back. */
+export type LocalWeather = {
+  temperature_c: number;
+  weather_code: number;
+  place: string | null;
+  observed_at: string;
+  attribution: string[];
+};
+
+/** Reads current weather and place name for browser coordinates (already rounded by the caller) via the backend proxy. */
+export function getLocalWeather(lat: number, lon: number, locale: 'en' | 'vi', signal?: AbortSignal) {
+  const query = new URLSearchParams({ lat: String(lat), lon: String(lon), locale });
+  return apiRequest<LocalWeather>(`/api/v1/weather/local?${query}`, { signal });
+}

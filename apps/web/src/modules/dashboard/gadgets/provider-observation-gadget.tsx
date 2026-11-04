@@ -42,7 +42,7 @@ export function latestPerSeries(items: WorldObservation[]): WorldObservation[] {
 }
 
 /** Series identity shared by `latestPerSeries` and `historyPerSeries`. */
-function seriesKey(item: WorldObservation): string {
+export function seriesKey(item: WorldObservation): string {
   return `${item.provider}|${item.metric}|${item.symbol ?? ''}|${item.region ?? ''}`;
 }
 
@@ -74,7 +74,7 @@ export function historyPerSeries(items: WorldObservation[]): Map<string, ChartDa
  * @param points Ascending series points.
  * @returns Signed percent, or null when there is no previous point or it is zero.
  */
-function deltaVsPrevious(points: ChartDataPoint[] | undefined): number | null {
+export function deltaVsPrevious(points: ChartDataPoint[] | undefined): number | null {
   if (!points || points.length < 2) return null;
   const prev = points[points.length - 2].value;
   return prev === 0 ? null : ((points[points.length - 1].value - prev) / Math.abs(prev)) * 100;

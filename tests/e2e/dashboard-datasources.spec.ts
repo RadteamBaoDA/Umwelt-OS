@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { test, expect } from './fixtures';
 import { RESULTS_DIR } from './run-paths';
 import {
-  BUILTINS, WIZARD_CASES, connectWizardSource, deleteSources, enableBuiltinViaSettings, escapeRe, findSources, hasLiveKeys, liveKey, writeHeaders,
+  BUILTINS, WIZARD_CASES, connectWizardSource, deleteSources, enableBuiltinViaSettings, escapeRe, findSources, hasLiveKeys, liveKey, skipIfYoutubeOutage, writeHeaders,
 } from './sources-helpers';
 
 /**
@@ -155,22 +155,8 @@ async function remoteThrottled(page: Page, id: string): Promise<boolean> {
   return SLOW_MS[id] ? codes.includes('provider_rate_limited') : codes.some((code) => LAG_CODES.includes(code ?? ''));
 }
 
-/** Public YouTube feed used as a canary: if the runner cannot fetch it either, a YouTube failure is a remote outage. */
-const YOUTUBE_CANARY = 'https://www.youtube.com/feeds/videos.xml?channel_id=UCBR8-60-B28hp2BmDPdntcQ';
-
-/**
- * Skips (as a remote outage) a YouTube test whose fetch/render failed while the canary feed is also unreachable
- * from the runner; records the id so the final dashboard check excludes it. Returns normally when the canary
- * answers 2xx, so the caller's failure stays a hard failure.
- */
-async function skipIfYoutubeOutage(id: string): Promise<void> {
-  if (id !== 'youtube') return;
-  const status = await fetch(YOUTUBE_CANARY, { signal: AbortSignal.timeout(10_000) }).then((r) => r.status, () => 0);
-  if (status >= 200 && status < 300) return;
-  test.info().annotations.push({ type: 'remote-outage', description: `youtube canary feed returned ${status || 'a network error'}` });
-  writeRemoteSkipped([...new Set([...readRemoteSkipped(), id])]);
-  test.skip(true, `youtube is unreachable from the runner (canary ${status || 'network error'})`);
-}
+/** Persists a YouTube outage skip so the final dashboard check excludes the gadget. */
+const recordYoutubeOutage = (id: string) => writeRemoteSkipped([...new Set([...readRemoteSkipped(), id])]);
 
 /** Opens the e2e dashboard by id (resolved through the API so tests stay independent of each other). */
 async function openDashboard(page: Page) {
@@ -348,7 +334,7 @@ test.describe('datasources', () => {
       const out = await connectWizardSource(page, c, `${PREFIX} ${c.id}`);
       console.log(`RESULT ${c.id} :: ${out.text}`);
       if (c.expect === 'fetch') {
-        if (!out.ok) await skipIfYoutubeOutage(c.id);
+        if (!out.ok) await skipIfYoutubeOutage(c.id, recordYoutubeOutage);
         expect(out.ok, out.text).toBe(true);
       } else {
         expect(out.ok, 'dummy credential must not succeed').toBe(false);
@@ -385,7 +371,7 @@ test.describe('dashboard', () => {
         await addGadget(page, g);
         await expectRendersData(page, g.id, g.renderer);
       } catch (error) {
-        await skipIfYoutubeOutage(g.id);
+        await skipIfYoutubeOutage(g.id, recordYoutubeOutage);
         throw error;
       }
     });

@@ -183,7 +183,7 @@ async def test_auth_hashing_runs_off_loop(monkeypatch: pytest.MonkeyPatch) -> No
 
     async def setup() -> None:
         await auth_routes.create_owner(
-            SimpleNamespace(password="p"), request, Response(), Sess(), None, "tok", "o", "c",  # type: ignore[arg-type]
+            SimpleNamespace(password="p", display_name=None), request, Response(), Sess(), None, "tok", "o", "c",  # type: ignore[arg-type]
         )
 
     assert await _lag_while(login()) < 0.1

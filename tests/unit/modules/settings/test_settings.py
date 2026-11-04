@@ -133,7 +133,8 @@ class TestReadOwnerPreferences:
             locale="vi-vi",
             timezone="Asia/Tokyo",
         )
-        session.scalar.return_value = record
+        # Preferences row query returns the record; the owner-email lookup returns an address.
+        session.scalar.side_effect = lambda stmt, *a, **k: record if "owner_preferences" in str(stmt) else "vpacs.demo@x.com"
 
         prefs = await read_owner_preferences(session, actor_user_id=1, multi_workspace_enabled=False)
         assert isinstance(prefs, OwnerPreferencesRead)
@@ -142,6 +143,8 @@ class TestReadOwnerPreferences:
         assert prefs.theme == "dark"
         assert prefs.locale == "vi-vi"
         assert prefs.timezone == "Asia/Tokyo"
+        assert prefs.display_name is None
+        assert prefs.resolved_display_name == "Vpacs Demo"
 
 
 class TestSaveOwnerPreferences:
@@ -187,7 +190,8 @@ class TestSaveOwnerPreferences:
             locale="en-us",
             timezone="UTC",
         )
-        session.scalar.return_value = record
+        # Preferences row query returns the record; the owner-email lookup returns an address.
+        session.scalar.side_effect = lambda stmt, *a, **k: record if "owner_preferences" in str(stmt) else "vpacs.demo@x.com"
 
         update = OwnerPreferencesUpdate(
             expected_revision=1,
@@ -273,3 +277,44 @@ class TestEndpointAndPrivacyValidation:
         raw = {"allow_remote_web_search": True, "web_search_destinations": ["web-search:x"]}
         privacy = _privacy(raw, ["omniroute:abc"], ["web-search:x"])
         assert privacy.web_search_destinations == ["web-search:x"]
+
+
+_BASE = {"expected_revision": 1, "theme": "dark", "locale": "en-us", "timezone": "UTC"}
+
+
+class TestDisplayNameAndAccent:
+    """display_name / accent validation, default NULL, and persistence through save."""
+
+    def test_defaults_are_none(self) -> None:
+        """Omitted fields default to NULL."""
+        update = OwnerPreferencesUpdate(**_BASE)
+        assert update.display_name is None and update.accent is None
+
+    def test_name_trimmed_and_blank_becomes_none(self) -> None:
+        """Whitespace is stripped and blank maps to None."""
+        assert OwnerPreferencesUpdate(**_BASE, display_name="  Bao  ").display_name == "Bao"
+        assert OwnerPreferencesUpdate(**_BASE, display_name="   ").display_name is None
+
+    @pytest.mark.parametrize("name", ["x" * 81, "a\nb", "a\x00b", "a\x7fb"])
+    def test_bad_names_rejected(self, name: str) -> None:
+        """Overlong names and control characters fail validation."""
+        with pytest.raises(ValidationError):
+            OwnerPreferencesUpdate(**_BASE, display_name=name)
+
+    def test_bad_accent_rejected(self) -> None:
+        """Accents outside the palette are rejected."""
+        with pytest.raises(ValidationError):
+            OwnerPreferencesUpdate(**_BASE, accent="neon")
+
+    @pytest.mark.asyncio
+    async def test_save_persists_and_reads_back(self) -> None:
+        """save_owner_preferences stores both fields and echoes them."""
+        session = AsyncMock()
+        session.execute.return_value = None
+        record = OwnerPreferencesRecord(owner_id=1, configuration_revision=1, theme="light", locale="en-us", timezone="UTC")
+        session.scalar.return_value = record
+        update = OwnerPreferencesUpdate(**_BASE, display_name="Bao", accent="moss")
+        with patch("modules.settings.public.require_preferences_account", AsyncMock()):
+            result = await save_owner_preferences(session, update, actor_user_id=1, multi_workspace_enabled=False)
+        assert (record.display_name, record.accent) == ("Bao", "moss")
+        assert (result.display_name, result.accent) == ("Bao", "moss")
