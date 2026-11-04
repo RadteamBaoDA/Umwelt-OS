@@ -160,11 +160,10 @@ async def discover_models(body: ConnectionDraft, request: Request, session: Sess
     The gateway rechecks endpoint policy before sending; upstream gateway errors
     become HTTP 502 and missing draft credentials produce HTTP 409.
     """
-    endpoint = public.validate_endpoint(str(body.base_url), request.app.state.settings)
-    if endpoint is None:
-        raise HTTPException(status_code=422, detail="Gateway endpoint is required")
     config = await public.get_ai_execution_config(session, request.app.state.settings, request.app.state.redis, scope=_owner)
-    credential, local, destination = public.resolve_draft_provider(config, endpoint, body.api_key, body.provider_id, body.kind)
+    endpoint, kind = public.resolve_draft_endpoint(
+        config, str(body.base_url) if body.base_url else None, body.kind, body.provider_id, request.app.state.settings)
+    credential, local, destination = public.resolve_draft_provider(config, endpoint, body.api_key, body.provider_id, kind)
     if not credential and not local:
         raise HTTPException(status_code=409, detail="Configure a gateway credential first")
     session_ref = authenticated_session_ref(request)

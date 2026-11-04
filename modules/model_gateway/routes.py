@@ -125,12 +125,11 @@ async def probe_draft(
     role = body.role or "chat"
     settings: Settings = request.app.state.settings
     redis: Redis = request.app.state.redis
-    endpoint = ai_settings.validate_endpoint(str(body.base_url), settings)
-    if endpoint is None:
-        raise HTTPException(status_code=422, detail="Gateway endpoint is required")
     mapping = ModelMapping(model=body.model, version=body.version, destination="remote")
     config = await ai_settings.get_ai_execution_config(session, settings, redis, scope=_owner)
-    credential, local, destination = ai_settings.resolve_draft_provider(config, endpoint, body.api_key, body.provider_id, body.kind)
+    endpoint, kind = ai_settings.resolve_draft_endpoint(
+        config, str(body.base_url) if body.base_url else None, body.kind, body.provider_id, settings)
+    credential, local, destination = ai_settings.resolve_draft_provider(config, endpoint, body.api_key, body.provider_id, kind)
     if not credential and not local:
         raise HTTPException(status_code=409, detail="Enter the draft gateway credential to probe")
     session_ref = authenticated_session_ref(request)

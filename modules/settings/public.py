@@ -37,6 +37,7 @@ from core.model_gateway.schemas import (
     ModelMapping,
     PrivacySettings,
     ProviderConfig,
+    ProviderKind,
     ProviderModel,
     ProviderRead,
     ProviderUpdate,
@@ -316,6 +317,34 @@ def _resolve_provider(record: dict[str, Any], settings: Settings) -> ProviderCon
         kind=kind, label=record.get("label") or "", base_url=endpoint, policy_denied=denied, local=local,
         api_key="" if denied else _decrypt(ciphertext, settings), credential_configured=bool(ciphertext),
         destination_id=None if denied else _identity(endpoint, "", local=local)[1], models=_models(record))
+
+
+def resolve_draft_endpoint(
+    config: AIExecutionConfig, base_url: str | None, kind: ProviderKind | None, provider_id: str | None, settings: Settings,
+) -> tuple[str, ProviderKind]:
+    """Policy-validated endpoint and effective kind for an unsaved connection draft.
+
+    ``kind`` falls back to the stored provider's kind, then ``custom``. A hosted kind ignores the client ``base_url``:
+    it uses the saved provider's URL verbatim when that provider has the same kind and an equivalent URL (so
+    ``resolve_draft_provider``'s same-endpoint key fallback still matches), else the vendor's fixed endpoint. A
+    self-hosted kind requires ``base_url``.
+
+    Raises:
+        HTTPException: 422 when a self-hosted draft has no URL or the endpoint violates deployment policy.
+    """
+    stored = config.providers.get(provider_id or DEFAULT_PROVIDER_ID)
+    resolved: ProviderKind = kind or (stored.kind if stored else "custom")
+    if resolved in HOSTED_PROVIDER_KINDS:
+        if stored is not None and stored.kind == resolved and hosted_endpoint_equivalent(resolved, stored.base_url):
+            raw = stored.base_url
+        else:
+            raw = HOSTED_PROVIDER_ENDPOINTS[resolved]
+    else:
+        raw = base_url
+    endpoint = _endpoint(raw, settings)
+    if endpoint is None:
+        raise HTTPException(status_code=422, detail="Gateway endpoint is required")
+    return endpoint, resolved
 
 
 def resolve_draft_provider(
