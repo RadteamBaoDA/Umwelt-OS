@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
+from core.errors import DomainError
 from modules.automations import execution
 from tests.unit.modules._cleanup_scope import CTX, MEMBER_CTX, Recorder, admitted
 
@@ -15,7 +15,7 @@ KW = {"operation_id": uuid4(), "document_id": uuid4(), "source_id": uuid4(), "ve
 @pytest.mark.parametrize("hook", [execution.scrub_document_triggers, execution.scrub_document_runs])
 async def test_member_denied_before_sql(hook) -> None:  # type: ignore[no-untyped-def]
     session = Recorder()
-    with admitted(), pytest.raises(HTTPException) as caught:
+    with admitted(), pytest.raises(DomainError) as caught:
         await hook(session, **KW, **MEMBER_CTX)
     assert caught.value.status_code == 403 and session.sql == []
 

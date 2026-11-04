@@ -228,6 +228,58 @@ def _verify_webhook_signature(
         raise HTTPException(status_code=401, detail="Webhook credentials are invalid or expired")
 
 
+def _check_declared_length(content_length: str | None) -> None:
+    """Reject a negative, non-numeric or over-limit ``Content-Length`` before any body is read.
+
+    Raises ``HTTPException`` 400 for malformed or negative values and 413 above ``WEBHOOK_BODY_LIMIT``.
+    A missing header is allowed; the streamed read enforces the same bound on actual bytes.
+    """
+    if content_length is None:
+        return
+    try:
+        declared_length = int(content_length)
+        if declared_length < 0:
+            raise HTTPException(status_code=400, detail="Webhook content length is invalid")
+        if declared_length > WEBHOOK_BODY_LIMIT:
+            raise HTTPException(status_code=413, detail="Webhook body exceeds 64 KiB")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Webhook content length is invalid") from exc
+
+
+async def _read_webhook_body(request: Request) -> bytes:
+    """Stream the request body within five seconds and ``WEBHOOK_BODY_LIMIT`` bytes.
+
+    Raises ``HTTPException`` 413 when the actual bytes exceed the limit and 503 on timeout.
+    """
+    body = bytearray()
+    try:
+        async with asyncio.timeout(5):
+            async for chunk in request.stream():
+                if len(body) + len(chunk) > WEBHOOK_BODY_LIMIT:
+                    raise HTTPException(status_code=413, detail="Webhook body exceeds 64 KiB")
+                body.extend(chunk)
+    except TimeoutError as exc:
+        raise HTTPException(status_code=503, detail="Webhook ingress timed out") from exc
+    return bytes(body)
+
+
+async def _require_same_idempotent_event(
+    session: AsyncSession, scope: InternalJobScope, alias: str, event_key: str, event: str,
+) -> None:
+    """Allow a duplicate delivery only when the stored inbox row carries the identical event.
+
+    Raises ``HTTPException`` 409 when the idempotency key was already used for another payload.
+    """
+    prior = await session.scalar(select(AutomationTrigger).where(
+        AutomationTrigger.workspace_id == scope.workspace_id,
+        AutomationTrigger.owner_id == _actor(scope),
+        AutomationTrigger.trigger_type == "webhook",
+        AutomationTrigger.event_key == f"{alias}:{event_key}",
+    ))
+    if prior is None or prior.payload != {"event": event, "hook": alias}:
+        raise HTTPException(status_code=409, detail="Idempotency key was already used for another event")
+
+
 @webhook_router.post("/inbound/{alias}", status_code=status.HTTP_202_ACCEPTED)
 async def receive_inbound_webhook(
     alias: Annotated[str, Path(pattern=r"^[a-z][a-z0-9_-]{0,39}$")],
@@ -249,16 +301,7 @@ async def receive_inbound_webhook(
         raise HTTPException(status_code=401, detail="Webhook credentials are required")
     if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
         raise HTTPException(status_code=415, detail="Webhook requires application/json")
-    content_length = request.headers.get("content-length")
-    if content_length is not None:
-        try:
-            declared_length = int(content_length)
-            if declared_length < 0:
-                raise HTTPException(status_code=400, detail="Webhook content length is invalid")
-            if declared_length > WEBHOOK_BODY_LIMIT:
-                raise HTTPException(status_code=413, detail="Webhook body exceeds 64 KiB")
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Webhook content length is invalid") from exc
+    _check_declared_length(request.headers.get("content-length"))
     from modules.tools.mcp_credentials import hash_inbound_token, verify_inbound_token
 
     flag = _flag(request)
@@ -279,17 +322,9 @@ async def receive_inbound_webhook(
         workspace_id=credential.workspace_id, actor_user_id=owner.user_id, membership_revision=owner.membership_revision)
     # External trigger ingress uses its own bearer. Persisted module availability is read only
     # after the fence lock below (lock order: fence first), since this router has no session dependency.
-    body = bytearray()
-    try:
-        async with asyncio.timeout(5):
-            async for chunk in request.stream():
-                if len(body) + len(chunk) > WEBHOOK_BODY_LIMIT:
-                    raise HTTPException(status_code=413, detail="Webhook body exceeds 64 KiB")
-                body.extend(chunk)
-    except TimeoutError as exc:
-        raise HTTPException(status_code=503, detail="Webhook ingress timed out") from exc
+    body = await _read_webhook_body(request)
     _verify_webhook_signature(
-        request.app.state.settings.automation_webhook_signing_secrets, alias, bytes(body), timestamp, signature)
+        request.app.state.settings.automation_webhook_signing_secrets, alias, body, timestamp, signature)
     try:
         payload = InboundEvent.model_validate(json.loads(body))
     except (json.JSONDecodeError, UnicodeDecodeError, ValidationError) as exc:
@@ -308,14 +343,7 @@ async def receive_inbound_webhook(
         {"event": payload.event}, hook=alias, scope=scope, multi_workspace_enabled=flag,
     )
     if not accepted:
-        prior = await session.scalar(select(AutomationTrigger).where(
-            AutomationTrigger.workspace_id == scope.workspace_id,
-            AutomationTrigger.owner_id == _actor(scope),
-            AutomationTrigger.trigger_type == "webhook",
-            AutomationTrigger.event_key == f"{alias}:{event_key}",
-        ))
-        if prior is None or prior.payload != {"event": payload.event, "hook": alias}:
-            raise HTTPException(status_code=409, detail="Idempotency key was already used for another event")
+        await _require_same_idempotent_event(session, scope, alias, event_key, payload.event)
     await commit_with_replay(session, [], scope=scope, multi_workspace_enabled=flag, access_fence=fence)
     return {"accepted": accepted}
 

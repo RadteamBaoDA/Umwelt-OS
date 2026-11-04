@@ -95,9 +95,9 @@ async def _run_lease(engine: AsyncEngine, run_id: UUID) -> AsyncIterator[tuple[A
             try:
                 await connection.scalar(text("SELECT pg_advisory_unlock(:key)"), {"key": key})
                 await connection.commit()
-            except Exception:  # noqa: BLE001, S110  # best-effort cleanup/optional step; failure intentionally ignored
+            except Exception:  # best-effort unlock: closing the connection releases the lock anyway
                 # Closing a lost connection releases its PostgreSQL session lock.
-                pass
+                logger.debug("Agent run lease unlock failed; closing the connection releases it", exc_info=True)
         await connection.close()
 
 
@@ -165,6 +165,132 @@ async def _claim_run(
     return claimed
 
 
+def _append_status_activity(row: AgentRun, status: str) -> None:
+    """Append one bounded status entry (keeping the newest 64) to the run's activity log."""
+    row.activities = [*row.activities[-63:], {
+        "kind": "status", "status": status, "created_at": datetime.now(UTC).isoformat(),
+    }]
+
+
+def _apply_segment_usage(
+    row: AgentRun, context: HarnessContext, state: dict[str, Any] | None, elapsed: int,
+) -> None:
+    """Fold this segment's active seconds, token usage and source fences into the locked run row.
+
+    Usage and fences from graph state are ignored once evidence is revoked; unobservable model
+    usage always marks the token total unknown.
+    """
+    row.active_seconds = min(MAX_ACTIVE_SECONDS, row.active_seconds + elapsed)
+    row.claim_started_at = None
+    row.updated_at = datetime.now(UTC)
+    if state is not None and not row.evidence_revoked:
+        if state.get("token_usage") is not None:
+            row.token_usage = state["token_usage"]
+        row.token_usage_unknown = (
+            row.token_usage_unknown or bool(state.get("token_usage_unknown", False))
+            or context.unobservable_model_usage
+        )
+        fences = state.get("source_fences")
+        if isinstance(fences, dict):
+            row.source_fences = fences
+    row.token_usage_unknown = row.token_usage_unknown or context.unobservable_model_usage
+
+
+async def _settle_uncertain_effects(session: AsyncSession, context: HarnessContext) -> list[AgentApproval]:
+    """Close effects left in flight as review-only and fail still-started tool calls.
+
+    Lock order: approvals by ID, then in-flight effects by action ID (run lock already held by the
+    caller). An in-flight effect loses its payload and its approval becomes ``requires_review``.
+    Returns the locked approvals for the status decision that follows.
+    """
+    approvals = list((await session.scalars(select(AgentApproval).where(
+        AgentApproval.run_id == context.run_id,
+        AgentApproval.workspace_id == context.scope.workspace_id,
+    ).order_by(AgentApproval.id).with_for_update())).all())
+    approvals_by_action = {approval.action_id: approval for approval in approvals}
+    uncertain = list((await session.scalars(select(AgentEffect).where(
+        AgentEffect.run_id == context.run_id, AgentEffect.state == "in_flight",
+        AgentEffect.workspace_id == context.scope.workspace_id,
+    ).order_by(AgentEffect.action_id).with_for_update())).all())
+    for effect in uncertain:
+        effect.state = "requires_review"
+        effect.payload = None
+        approval = approvals_by_action.get(effect.action_id)
+        if approval is not None:
+            approval.status = "requires_review"
+            approval.resolved_at = datetime.now(UTC)
+    await session.execute(
+        update(AgentToolCall)
+        .where(AgentToolCall.run_id == context.run_id, AgentToolCall.status == "started")
+        .values(status="failed", error_code="segment_interrupted", completed_at=datetime.now(UTC))
+    )
+    return approvals
+
+
+async def _pause_or_cancel_waiting_run(
+    session: AsyncSession, context: HarnessContext, row: AgentRun, approvals: list[AgentApproval],
+) -> None:
+    """Park a run for approval after repeating ephemeral authorization at the pause boundary.
+
+    The run and approval rows are locked. A dead owner session or Chat link cancels the run, erases
+    pending approval arguments/fences and deletes the checkpoint instead of leaving it waiting.
+    """
+    from core.auth.public import revalidate_account_session
+    from modules.chat.public import has_live_agent_run_link
+
+    if (await revalidate_account_session(
+        session, row.auth_session_hash, row.owner_id, multi_workspace_enabled=context.multi_workspace_enabled,
+    )
+            and await has_live_agent_run_link(
+                session, row.id, row.owner_id, row.auth_session_hash,
+            )):
+        row.status = "waiting_approval"
+        _append_status_activity(row, "waiting_approval")
+        return
+    row.cancel_requested = True
+    row.status, row.completed_at = "cancelled", datetime.now(UTC)
+    _append_status_activity(row, "cancelled")
+    for approval in approvals:
+        if approval.status == "pending":
+            approval.status, approval.resolved_at = "cancelled", datetime.now(UTC)
+            approval.arguments = None
+            approval.source_fences = {}
+    await _delete_checkpoints(session, row.checkpoint_thread_id)
+
+
+async def _decide_segment_status(
+    session: AsyncSession, context: HarnessContext, row: AgentRun, state: dict[str, Any] | None,
+    outcome: str, approvals: list[AgentApproval],
+) -> None:
+    """Choose the run's next lifecycle status after a segment: cancel, wait, requeue or fail.
+
+    Cancellation/evidence revocation wins; then an approval pause; then a ``continue`` outcome
+    within the active-time budget requeues with a new dispatch generation; everything else fails
+    with ``active_time_limit`` or the outcome code and erases the checkpoint.
+    """
+    if row.cancel_requested or row.evidence_revoked:
+        row.cancel_requested = True
+        row.status = "cancelled"
+        row.completed_at = datetime.now(UTC)
+        _append_status_activity(row, "cancelled")
+        await _delete_checkpoints(session, row.checkpoint_thread_id)
+    elif state is not None and state.get("waiting_approval"):
+        await _pause_or_cancel_waiting_run(session, context, row, approvals)
+    elif outcome == "continue" and row.active_seconds < MAX_ACTIVE_SECONDS:
+        row.status = "queued"
+        row.dispatch_generation += 1
+        _append_status_activity(row, "queued")
+    else:
+        row.status = "failed"
+        row.error_code = (
+            "active_time_limit" if row.active_seconds >= MAX_ACTIVE_SECONDS else outcome
+        )
+        row.completed_at = datetime.now(UTC)
+        row.token_usage_unknown = row.token_usage_unknown or outcome == "segment_timeout"
+        await _delete_checkpoints(session, row.checkpoint_thread_id)
+        _append_status_activity(row, "failed")
+
+
 async def _account_segment(
     session_factory: async_sessionmaker[AsyncSession], context: HarnessContext,
     *, state: dict[str, Any] | None, outcome: str,
@@ -177,93 +303,9 @@ async def _account_segment(
         ).with_for_update())
         if row is None or row.claim_generation != context.claim_generation or row.status != "running":
             return
-        row.active_seconds = min(MAX_ACTIVE_SECONDS, row.active_seconds + elapsed)
-        row.claim_started_at = None
-        row.updated_at = datetime.now(UTC)
-        if state is not None and not row.evidence_revoked:
-            if state.get("token_usage") is not None:
-                row.token_usage = state["token_usage"]
-            row.token_usage_unknown = (
-                row.token_usage_unknown or bool(state.get("token_usage_unknown", False))
-                or context.unobservable_model_usage
-            )
-            fences = state.get("source_fences")
-            if isinstance(fences, dict):
-                row.source_fences = fences
-        row.token_usage_unknown = row.token_usage_unknown or context.unobservable_model_usage
-        approvals = list((await session.scalars(select(AgentApproval).where(
-            AgentApproval.run_id == context.run_id,
-            AgentApproval.workspace_id == context.scope.workspace_id,
-        ).order_by(AgentApproval.id).with_for_update())).all())
-        approvals_by_action = {approval.action_id: approval for approval in approvals}
-        uncertain = list((await session.scalars(select(AgentEffect).where(
-            AgentEffect.run_id == context.run_id, AgentEffect.state == "in_flight",
-            AgentEffect.workspace_id == context.scope.workspace_id,
-        ).order_by(AgentEffect.action_id).with_for_update())).all())
-        for effect in uncertain:
-            effect.state = "requires_review"
-            effect.payload = None
-            approval = approvals_by_action.get(effect.action_id)
-            if approval is not None:
-                approval.status = "requires_review"
-                approval.resolved_at = datetime.now(UTC)
-        await session.execute(
-            update(AgentToolCall)
-            .where(AgentToolCall.run_id == context.run_id, AgentToolCall.status == "started")
-            .values(status="failed", error_code="segment_interrupted", completed_at=datetime.now(UTC))
-        )
-        if row.cancel_requested or row.evidence_revoked:
-            row.cancel_requested = True
-            row.status = "cancelled"
-            row.completed_at = datetime.now(UTC)
-            row.activities = [*row.activities[-63:], {
-                "kind": "status", "status": "cancelled", "created_at": datetime.now(UTC).isoformat(),
-            }]
-            await _delete_checkpoints(session, row.checkpoint_thread_id)
-        elif state is not None and state.get("waiting_approval"):
-            # The run and approval rows are locked; repeat ephemeral authorization at the pause boundary.
-            from core.auth.public import revalidate_account_session
-            from modules.chat.public import has_live_agent_run_link
-
-            if (await revalidate_account_session(
-                session, row.auth_session_hash, row.owner_id, multi_workspace_enabled=context.multi_workspace_enabled,
-            )
-                    and await has_live_agent_run_link(
-                        session, row.id, row.owner_id, row.auth_session_hash,
-                    )):
-                row.status = "waiting_approval"
-                row.activities = [*row.activities[-63:], {
-                    "kind": "status", "status": "waiting_approval", "created_at": datetime.now(UTC).isoformat(),
-                }]
-            else:
-                row.cancel_requested = True
-                row.status, row.completed_at = "cancelled", datetime.now(UTC)
-                row.activities = [*row.activities[-63:], {
-                    "kind": "status", "status": "cancelled", "created_at": datetime.now(UTC).isoformat(),
-                }]
-                for approval in approvals:
-                    if approval.status == "pending":
-                        approval.status, approval.resolved_at = "cancelled", datetime.now(UTC)
-                        approval.arguments = None
-                        approval.source_fences = {}
-                await _delete_checkpoints(session, row.checkpoint_thread_id)
-        elif outcome == "continue" and row.active_seconds < MAX_ACTIVE_SECONDS:
-            row.status = "queued"
-            row.dispatch_generation += 1
-            row.activities = [*row.activities[-63:], {
-                "kind": "status", "status": "queued", "created_at": datetime.now(UTC).isoformat(),
-            }]
-        else:
-            row.status = "failed"
-            row.error_code = (
-                "active_time_limit" if row.active_seconds >= MAX_ACTIVE_SECONDS else outcome
-            )
-            row.completed_at = datetime.now(UTC)
-            row.token_usage_unknown = row.token_usage_unknown or outcome == "segment_timeout"
-            await _delete_checkpoints(session, row.checkpoint_thread_id)
-            row.activities = [*row.activities[-63:], {
-                "kind": "status", "status": "failed", "created_at": datetime.now(UTC).isoformat(),
-            }]
+        _apply_segment_usage(row, context, state, elapsed)
+        approvals = await _settle_uncertain_effects(session, context)
+        await _decide_segment_status(session, context, row, state, outcome, approvals)
         await session.commit()
         published = (row.owner_id, row.auth_session_hash, row.status)
     await publish_agent_activity_safely(
@@ -409,8 +451,8 @@ async def _recover_abandoned(
         try:
             await lease[0].scalar(text("SELECT pg_advisory_unlock(:key)"), {"key": key})
             await lease[0].commit()
-        except Exception:  # noqa: BLE001, S110  # best-effort cleanup/optional step; failure intentionally ignored
-            pass
+        except Exception:  # best-effort unlock: closing the backend releases the lock anyway
+            logger.debug("Agent run lease unlock failed; the context manager retries it", exc_info=True)
         # The context manager retries this unlock; closing the backend also releases its session lock.
         return True
 
@@ -443,8 +485,166 @@ async def _refresh_stale_mcp_tools(
     for connection_hex in stale:
         try:
             await runtime.refresh_connection(scope, UUID(hex=connection_hex))
-        except Exception:  # noqa: BLE001, S112  # best-effort cleanup/optional step; failure intentionally ignored
+        except Exception:  # best-effort refresh: a stale MCP registration is retried on the next run
+            logger.debug("MCP connection refresh skipped for a stale tool", exc_info=True)
             continue
+
+
+async def _admit_queued_run(
+    session_factory: async_sessionmaker[AsyncSession], parsed_id: UUID, flag: bool,
+) -> tuple[InternalJobScope, AccessFence, Mapping[str, Any]] | None:
+    """Rebuild a queued run's scope and original fence from its durable row and admit it.
+
+    Recipe J: the job argument is only a run id; workspace, actor and the original epoch come from
+    the durable row. Legacy NULL epochs and lost access are quarantined via ``_terminate_unadmitted``;
+    a missing, non-queued run or a workspace with Agents disabled is left untouched. Returns the
+    scope, fence and the workspace-effective module map, or ``None`` when the job must not run.
+    """
+    async with session_factory() as identity_session:
+        identity = (await identity_session.execute(select(
+            AgentRun.workspace_id, AgentRun.owner_id, AgentRun.membership_revision,
+            AgentRun.configuration_revision, AgentRun.status,
+        ).where(AgentRun.id == parsed_id))).one_or_none()
+        if identity is None or identity.status != "queued":
+            return None
+        epoch = run_epoch(identity)
+        if epoch is None:
+            await _terminate_unadmitted(
+                session_factory, parsed_id, identity.workspace_id, "workspace_epoch_unavailable",
+            )
+            return None
+        scope, original_fence = epoch
+        try:
+            await admit_run(identity_session, identity, multi_workspace_enabled=flag)
+        except (HTTPException, DomainError):
+            await identity_session.rollback()
+            await _terminate_unadmitted(
+                session_factory, parsed_id, identity.workspace_id, "workspace_access_changed",
+            )
+            return None
+        from modules.settings.public import module_is_enabled, read_module_availability
+
+        # A workspace with Agents disabled leaves its durable work untouched (not acknowledged).
+        if not await module_is_enabled(identity_session, "agents", scope=scope, multi_workspace_enabled=flag):
+            return None
+        availability = await read_module_availability(
+            identity_session, scope=scope, multi_workspace_enabled=flag,
+        )
+        # Worker process state can outlive owner updates made through another API process.
+        from core.modules import effective_modules, register_modules
+
+        disabled = {item.id for item in availability.modules if item.explicitly_disabled}
+        return scope, original_fence, effective_modules(disabled, register_modules())
+
+
+def _run_version_compatible(row: AgentRun, profile_snapshot: dict[str, Any] | None) -> bool:
+    """Return whether this worker can execute the run's workflow, prompt and checkpoint versions.
+
+    Accepts the legacy assistant workflows and the pinned specialist workflow only when the stored
+    profile snapshot, agent ID and checkpoint schema agree; anything else is failed as incompatible.
+    """
+    supported_versions = {
+        (WORKFLOW_VERSION, PROMPT_VERSION),
+        (APPROVAL_WORKFLOW_VERSION, APPROVAL_PROMPT_VERSION),
+    }
+    legacy_compatible = (
+        row.agent_id == "assistant" and (row.workflow_version, row.prompt_version) in supported_versions
+        and row.checkpoint_schema_version == CHECKPOINT_SCHEMA_VERSION and row.profile_snapshot is None
+    )
+    specialist_compatible = (
+        profile_snapshot is not None and profile_snapshot.get("id") == row.agent_id
+        and (row.workflow_version, row.prompt_version) == (
+            SPECIALIST_WORKFLOW_VERSION, SPECIALIST_PROMPT_VERSION,
+        )
+        and row.checkpoint_schema_version == SPECIALIST_CHECKPOINT_SCHEMA_VERSION
+    )
+    return legacy_compatible or specialist_compatible
+
+
+def _segment_initial_state(
+    context: HarnessContext, row: AgentRun, checkpoint: Any, profile_snapshot: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build the graph input for this segment from the row (fresh) or the checkpoint (resume).
+
+    A resumed profile checkpoint must still match the durable run (``RunIncompatible`` when its
+    channel values are not a mapping). Checkpointed partial usage is kept when a crash happened
+    before row accounting, by flagging ``token_usage_unknown`` from the row.
+    """
+    if checkpoint is None:
+        initial: dict[str, Any] = {
+            "prompt": row.prompt, "messages": [], "pending_tool_calls": [],
+            "tool_slots": [], "tool_index": 0,
+            "source_fences": {"records": [], "source_generations": {}},
+            "answer": None, "segment_steps": 0, "segment_done": False,
+            "token_usage": row.token_usage, "token_usage_unknown": row.token_usage_unknown,
+        }
+        if profile_snapshot is not None:
+            initial.update({
+                "profile_id": row.agent_id,
+                "profile_revision_hash": row.profile_revision_hash or "",
+                "owner_record_state": "authorized",
+            })
+        return initial
+    initial = {"segment_steps": 0, "segment_done": False}
+    values = checkpoint.checkpoint.get("channel_values", {})
+    if profile_snapshot is not None:
+        if not isinstance(values, dict):
+            raise RunIncompatible("Profile checkpoint context is invalid")
+        context.assert_profile_checkpoint(cast(HarnessState, values))
+    # Keep checkpointed partial usage when a crash happened before row accounting.
+    if row.token_usage_unknown:
+        initial["token_usage_unknown"] = True
+    return initial
+
+
+async def _run_graph_segment(
+    context: HarnessContext, row: AgentRun, settings: Settings, profile_snapshot: dict[str, Any] | None,
+) -> Any:
+    """Run the workflow graph for at most one segment under the remaining active-time budget.
+
+    Raises ``RunLimitReached`` when no budget remains and ``TimeoutError`` when the segment timeout
+    expires. Holds no ORM transaction while the graph does model/tool I/O; the checkpointer uses its
+    own connection. Returns the final graph state (validated by the caller).
+    """
+    remaining = max(0.0, MAX_ACTIVE_SECONDS - row.active_seconds)
+    if remaining <= 0:
+        raise RunLimitReached("Active execution budget exhausted")
+    segment_timeout = min(SEGMENT_TIMEOUT_SECONDS, remaining)
+    async with asyncio.timeout(segment_timeout):
+        database_url: URL = make_url(settings.database_url)
+        checkpoint_url = database_url.set(drivername="postgresql").render_as_string(hide_password=False)
+        async with AsyncPostgresSaver.from_conn_string(
+            checkpoint_url, serde=StrictJsonSerializer(),
+        ) as saver:
+            graph = build_workflow(context, saver)
+            graph_config: RunnableConfig = {
+                "configurable": {"thread_id": row.checkpoint_thread_id},
+                "recursion_limit": 32,
+            }
+            checkpoint = await saver.aget_tuple(graph_config)
+            initial = _segment_initial_state(context, row, checkpoint, profile_snapshot)
+            return await graph.ainvoke(initial, graph_config)
+
+
+async def _finish_segment_state(
+    session_factory: async_sessionmaker[AsyncSession], context: HarnessContext, state: Any,
+) -> None:
+    """Validate the graph's final state and publish success or schedule the next segment.
+
+    Raises ``RuntimeError`` for a non-mapping state or a state with neither answer nor
+    continuation. Re-checks the profile checkpoint and the durable run before publishing.
+    """
+    if not isinstance(state, dict):
+        raise RuntimeError("Workflow state is invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+    context.assert_profile_checkpoint(cast(HarnessState, state))
+    await context._run_snapshot()
+    if state.get("answer") is not None and not state.get("segment_done"):
+        await _finish_run(session_factory, context, state=state, status="succeeded", error_code=None)
+        return
+    if state.get("segment_done"):
+        await _account_segment(session_factory, context, state=state, outcome="continue")
+        return
+    raise RuntimeError("Workflow ended without a result or continuation")
 
 
 async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_generation: int) -> None:
@@ -465,44 +665,10 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
         parsed_id = UUID(run_id)
     except ValueError:
         return
-    # Recipe J: the job argument is only a run id; workspace, actor and the original epoch come from
-    # the durable row. Legacy NULL epochs are quarantined and never rebased.
-    async with session_factory() as identity_session:
-        identity = (await identity_session.execute(select(
-            AgentRun.workspace_id, AgentRun.owner_id, AgentRun.membership_revision,
-            AgentRun.configuration_revision, AgentRun.status,
-        ).where(AgentRun.id == parsed_id))).one_or_none()
-        if identity is None or identity.status != "queued":
-            return
-        epoch = run_epoch(identity)
-        if epoch is None:
-            await _terminate_unadmitted(
-                session_factory, parsed_id, identity.workspace_id, "workspace_epoch_unavailable",
-            )
-            return
-        scope, original_fence = epoch
-        modules: Mapping[str, Any] | None = None
-        try:
-            await admit_run(identity_session, identity, multi_workspace_enabled=flag)
-        except (HTTPException, DomainError):
-            await identity_session.rollback()
-            await _terminate_unadmitted(
-                session_factory, parsed_id, identity.workspace_id, "workspace_access_changed",
-            )
-            return
-        from modules.settings.public import module_is_enabled, read_module_availability
-
-        # A workspace with Agents disabled leaves its durable work untouched (not acknowledged).
-        if not await module_is_enabled(identity_session, "agents", scope=scope, multi_workspace_enabled=flag):
-            return
-        availability = await read_module_availability(
-            identity_session, scope=scope, multi_workspace_enabled=flag,
-        )
-        # Worker process state can outlive owner updates made through another API process.
-        from core.modules import effective_modules, register_modules
-
-        disabled = {item.id for item in availability.modules if item.explicitly_disabled}
-        modules = effective_modules(disabled, register_modules())
+    admitted = await _admit_queued_run(session_factory, parsed_id, flag)
+    if admitted is None:
+        return
+    scope, original_fence, modules = admitted
     async with _run_lease(engine, parsed_id) as lease:
         if lease is None:
             return
@@ -517,33 +683,7 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
             return
         if row is None:
             return
-        supported_versions = {
-            (WORKFLOW_VERSION, PROMPT_VERSION),
-            (APPROVAL_WORKFLOW_VERSION, APPROVAL_PROMPT_VERSION),
-        }
-        legacy_compatible = (
-            row.agent_id == "assistant" and (row.workflow_version, row.prompt_version) in supported_versions
-            and row.checkpoint_schema_version == CHECKPOINT_SCHEMA_VERSION and row.profile_snapshot is None
-        )
         profile_snapshot = row.profile_snapshot if isinstance(row.profile_snapshot, dict) else None
-        specialist_compatible = (
-            profile_snapshot is not None and profile_snapshot.get("id") == row.agent_id
-            and (row.workflow_version, row.prompt_version) == (
-                SPECIALIST_WORKFLOW_VERSION, SPECIALIST_PROMPT_VERSION,
-            )
-            and row.checkpoint_schema_version == SPECIALIST_CHECKPOINT_SCHEMA_VERSION
-        )
-        if not (legacy_compatible or specialist_compatible):
-            failed_context = HarnessContext(
-                parsed_id, scope, original_fence, row.claim_generation, session_factory, engine, settings,
-                redis, registry,
-                connection, key, asyncio.get_running_loop().time(), frozenset(row.allowed_tools),
-                dict(row.tool_contracts), row.active_seconds,
-                workflow_version=row.workflow_version, prompt_version=row.prompt_version,
-                profile_snapshot=profile_snapshot, modules=modules,
-            )
-            await _finish_run(session_factory, failed_context, state=None, status="failed", error_code="incompatible_run_version")
-            return
         context = HarnessContext(
             parsed_id, scope, original_fence, row.claim_generation, session_factory, engine, settings,
             redis, registry,
@@ -552,62 +692,16 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
             workflow_version=row.workflow_version, prompt_version=row.prompt_version,
             profile_snapshot=profile_snapshot, modules=modules,
         )
+        if not _run_version_compatible(row, profile_snapshot):
+            await _finish_run(session_factory, context, state=None, status="failed", error_code="incompatible_run_version")
+            return
         await _refresh_stale_mcp_tools(ctx, registry, row, scope)
         state: dict[str, Any] | None = None
         outcome = "execution_failed"
         try:
-            remaining = max(0.0, MAX_ACTIVE_SECONDS - row.active_seconds)
-            if remaining <= 0:
-                raise RunLimitReached("Active execution budget exhausted")
-            segment_timeout = min(SEGMENT_TIMEOUT_SECONDS, remaining)
-            async with asyncio.timeout(segment_timeout):
-                database_url: URL = make_url(settings.database_url)
-                checkpoint_url = database_url.set(drivername="postgresql").render_as_string(hide_password=False)
-                async with AsyncPostgresSaver.from_conn_string(
-                    checkpoint_url, serde=StrictJsonSerializer(),
-                ) as saver:
-                    graph = build_workflow(context, saver)
-                    graph_config: RunnableConfig = {
-                        "configurable": {"thread_id": row.checkpoint_thread_id},
-                        "recursion_limit": 32,
-                    }
-                    checkpoint = await saver.aget_tuple(graph_config)
-                    if checkpoint is None:
-                        initial: dict[str, Any] = {
-                            "prompt": row.prompt, "messages": [], "pending_tool_calls": [],
-                            "tool_slots": [], "tool_index": 0,
-                            "source_fences": {"records": [], "source_generations": {}},
-                            "answer": None, "segment_steps": 0, "segment_done": False,
-                            "token_usage": row.token_usage, "token_usage_unknown": row.token_usage_unknown,
-                        }
-                    else:
-                        initial = {"segment_steps": 0, "segment_done": False}
-                        values = checkpoint.checkpoint.get("channel_values", {})
-                        if profile_snapshot is not None:
-                            if not isinstance(values, dict):
-                                raise RunIncompatible("Profile checkpoint context is invalid")
-                            context.assert_profile_checkpoint(cast(HarnessState, values))
-                        # Keep checkpointed partial usage when a crash happened before row accounting.
-                        if row.token_usage_unknown:
-                            initial["token_usage_unknown"] = True
-                    if profile_snapshot is not None and checkpoint is None:
-                        initial.update({
-                            "profile_id": row.agent_id,
-                            "profile_revision_hash": row.profile_revision_hash or "",
-                            "owner_record_state": "authorized",
-                        })
-                    state = await graph.ainvoke(initial, graph_config)
-            if not isinstance(state, dict):
-                raise RuntimeError("Workflow state is invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
-            context.assert_profile_checkpoint(cast(HarnessState, state))
-            await context._run_snapshot()
-            if state.get("answer") is not None and not state.get("segment_done"):
-                await _finish_run(session_factory, context, state=state, status="succeeded", error_code=None)
-                return
-            if state.get("segment_done"):
-                await _account_segment(session_factory, context, state=state, outcome="continue")
-                return
-            raise RuntimeError("Workflow ended without a result or continuation")
+            state = await _run_graph_segment(context, row, settings, profile_snapshot)
+            await _finish_segment_state(session_factory, context, state)
+            return
         except TimeoutError:
             outcome = "segment_timeout"
         except RunCancelled:
@@ -624,6 +718,63 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
         except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
             logger.warning("Agent run %s stopped after %s", parsed_id, type(exc).__name__)
         await _account_segment(session_factory, context, state=state, outcome=outcome)
+
+
+async def _load_dispatchable_runs(
+    session_factory: async_sessionmaker[AsyncSession], flag: bool,
+) -> list[Any]:
+    """Page the oldest queued runs whose workspace still has Agents enabled.
+
+    Module enablement is per workspace (Recipe W). Workspaces with Agents disabled are excluded
+    from the next page query so they cannot starve other workspaces; rows whose owner lineage is
+    unavailable are returned so ``process_agent_run`` terminalizes them (Recipe J). Reads only,
+    in one session, at most ``RECONCILE_MAX_PAGES`` pages of ``MAX_RECONCILE_ROWS``.
+    """
+    queued: list[Any] = []
+    async with session_factory() as session:
+        # Module enablement is per workspace (Recipe W). Workspaces with Agents disabled are excluded
+        # from the next page query so they cannot starve other workspaces; rows whose owner lineage
+        # is unavailable are enqueued so process_agent_run terminalizes them (Recipe J).
+        enabled: dict[tuple[UUID, int], bool] = {}
+        disabled_workspaces: set[UUID] = set()
+        for _page in range(RECONCILE_MAX_PAGES):
+            queue_stmt = select(
+                AgentRun.id, AgentRun.dispatch_generation, AgentRun.workspace_id, AgentRun.owner_id,
+            ).where(AgentRun.status == "queued", AgentRun.cancel_requested.is_(False))
+            if disabled_workspaces:
+                queue_stmt = queue_stmt.where(AgentRun.workspace_id.not_in(disabled_workspaces))
+            page = list((await session.execute(
+                queue_stmt.order_by(AgentRun.created_at).limit(MAX_RECONCILE_ROWS)
+            )).all())
+            new_disabled = False
+            queued = []
+            for row in page:
+                _run_id, _generation, workspace_id, owner_id = row
+                if (workspace_id, owner_id) not in enabled:
+                    owner = await workspaces.resolve_workspace_owner_context(
+                        session, workspace_id, multi_workspace_enabled=flag,
+                    )
+                    if owner is None or owner.user_id != owner_id:
+                        enabled[(workspace_id, owner_id)] = True
+                    else:
+                        from modules.settings.public import module_is_enabled
+
+                        job_scope = InternalJobScope(
+                            workspace_id=workspace_id, actor_user_id=owner.user_id,
+                            membership_revision=owner.membership_revision,
+                        )
+                        enabled[(workspace_id, owner_id)] = await module_is_enabled(
+                            session, "agents", scope=job_scope, multi_workspace_enabled=flag,
+                        )
+                        if not enabled[(workspace_id, owner_id)]:
+                            disabled_workspaces.add(workspace_id)
+                            new_disabled = True
+                if enabled[(workspace_id, owner_id)]:
+                    queued.append(row)
+            # A full page that held disabled rows may hide enabled ones behind it: re-query without them.
+            if not (new_disabled and len(page) == MAX_RECONCILE_ROWS):
+                break
+    return queued
 
 
 async def reconcile_agent_dispatch(ctx: dict[str, object]) -> int:
@@ -672,56 +823,14 @@ async def reconcile_agent_dispatch(ctx: dict[str, object]) -> int:
         )
     if rows:
         _activity_reconcile_cursor = rows[-1][0]
-    queued: list[Any] = []
-    async with session_factory() as session:
-        # Module enablement is per workspace (Recipe W). Workspaces with Agents disabled are excluded
-        # from the next page query so they cannot starve other workspaces; rows whose owner lineage
-        # is unavailable are enqueued so process_agent_run terminalizes them (Recipe J).
-        enabled: dict[tuple[UUID, int], bool] = {}
-        disabled_workspaces: set[UUID] = set()
-        for _page in range(RECONCILE_MAX_PAGES):
-            queue_stmt = select(
-                AgentRun.id, AgentRun.dispatch_generation, AgentRun.workspace_id, AgentRun.owner_id,
-            ).where(AgentRun.status == "queued", AgentRun.cancel_requested.is_(False))
-            if disabled_workspaces:
-                queue_stmt = queue_stmt.where(AgentRun.workspace_id.not_in(disabled_workspaces))
-            page = list((await session.execute(
-                queue_stmt.order_by(AgentRun.created_at).limit(MAX_RECONCILE_ROWS)
-            )).all())
-            new_disabled = False
-            queued = []
-            for row in page:
-                _run_id, _generation, workspace_id, owner_id = row
-                if (workspace_id, owner_id) not in enabled:
-                    owner = await workspaces.resolve_workspace_owner_context(
-                        session, workspace_id, multi_workspace_enabled=flag,
-                    )
-                    if owner is None or owner.user_id != owner_id:
-                        enabled[(workspace_id, owner_id)] = True
-                    else:
-                        from modules.settings.public import module_is_enabled
-
-                        job_scope = InternalJobScope(
-                            workspace_id=workspace_id, actor_user_id=owner.user_id,
-                            membership_revision=owner.membership_revision,
-                        )
-                        enabled[(workspace_id, owner_id)] = await module_is_enabled(
-                            session, "agents", scope=job_scope, multi_workspace_enabled=flag,
-                        )
-                        if not enabled[(workspace_id, owner_id)]:
-                            disabled_workspaces.add(workspace_id)
-                            new_disabled = True
-                if enabled[(workspace_id, owner_id)]:
-                    queued.append(row)
-            # A full page that held disabled rows may hide enabled ones behind it: re-query without them.
-            if not (new_disabled and len(page) == MAX_RECONCILE_ROWS):
-                break
+    queued = await _load_dispatchable_runs(session_factory, flag)
     enqueued = 0
     for run_id, generation, workspace_id, owner_id in queued:
         try:
             enqueued += int(await _enqueue_generation(redis, run_id, generation))
-        except Exception:  # noqa: BLE001, S112  # best-effort cleanup/optional step; failure intentionally ignored
+        except Exception:  # best-effort enqueue: PostgreSQL retains the queued work
             # PostgreSQL retains queued work; the next bounded reconciliation retries enqueue.
+            logger.debug("Agent run enqueue failed; the next reconciliation retries it", exc_info=True)
             continue
     return enqueued
 

@@ -8,11 +8,11 @@ from datetime import UTC, datetime
 from typing import cast as typing_cast
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy import Text, bindparam, cast, func, or_, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.errors import ForbiddenError
 from core.ids import uuid7
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
@@ -59,14 +59,20 @@ class McpUnavailable(Exception):
 
 
 def _actor(scope: Scope) -> int:
+    """Return the acting owner ID: the stamped actor of a job scope or the request user."""
     return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
 
 
 def _require_owner(scope: Scope) -> None:
+    """Require an explicit workspace scope and, for requests, the workspace owner role.
+
+    Raises ``TypeError`` for an untyped scope and ``ForbiddenError`` (403) for a member; job scopes
+    were admitted against the stamped owner already. Pure; runs before any query.
+    """
     if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
         raise TypeError("An explicit workspace scope is required")
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
+        raise ForbiddenError("Workspace owner required")
 
 
 async def admit(

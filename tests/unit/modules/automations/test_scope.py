@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
 from core import worker_cursors
+from core.errors import DomainError
 from core.workspaces.schemas import WorkspaceContext
 from modules.automations import execution, producers, public, routes, scheduler, tools, worker
 from modules.automations.models import AutomationCursor
@@ -64,7 +65,7 @@ def _session(ids: list[UUID] | None = None) -> AsyncMock:
 ])
 async def test_member_denied_before_any_query(call) -> None:
     session = AsyncMock()
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         await call(session)
     assert caught.value.status_code == 403
     for name in ("execute", "scalar", "scalars", "get", "flush", "commit"):

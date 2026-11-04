@@ -6,10 +6,16 @@ from collections.abc import Mapping
 from typing import Any, cast
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.errors import (
+    ConflictError,
+    NotFoundError,
+    PayloadTooLargeError,
+    UnavailableError,
+    ValidationFailedError,
+)
 from core.model_gateway.schemas import AIExecutionConfig
 from core.tools import ToolRegistry, ToolRisk
 from core.workspaces.schemas import Scope
@@ -188,7 +194,7 @@ async def get_profile(
     await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     modules = await read_workspace_modules(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if profile_id not in PROFILE_TITLES:
-        raise HTTPException(status_code=404, detail="Agent profile not found")
+        raise NotFoundError("Agent profile not found")
     row = await session.scalar(select(AgentProfile).where(
         AgentProfile.workspace_id == scope.workspace_id, AgentProfile.profile_id == profile_id,
     ))
@@ -210,7 +216,7 @@ async def update_profile_in_uow(
     await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
     modules = await read_workspace_modules(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if profile_id not in PROFILE_TITLES:
-        raise HTTPException(status_code=404, detail="Agent profile not found")
+        raise NotFoundError("Agent profile not found")
     owner_id = actor(scope)
     workspace_id = scope.workspace_id
     # A row lock cannot serialize concurrent creation while this profile has no row yet.
@@ -223,21 +229,21 @@ async def update_profile_in_uow(
     ).with_for_update())
     current_revision = row.revision if row is not None else 0
     if patch.expected_revision != current_revision:
-        raise HTTPException(status_code=409, detail="Agent profile changed; reload before saving")
+        raise ConflictError("Agent profile changed; reload before saving")
     if len(patch.prompt.encode("utf-8")) > 32_000:
-        raise HTTPException(status_code=413, detail="Agent prompt exceeds the size limit")
+        raise PayloadTooLargeError("Agent prompt exceeds the size limit")
     contracts = _tool_contracts(registry, scope.workspace_id, modules)
     chosen = [item.model_dump(mode="json") for item in patch.allowed_tools]
     if len({item["name"] for item in chosen}) != len(chosen) or any(contracts.get(item["name"]) != item for item in chosen):
-        raise HTTPException(status_code=422, detail="Selected tool contract is no longer available")
+        raise ValidationFailedError("Selected tool contract is no longer available")
     if "webhook.send" in {item["name"] for item in chosen} and profile_id not in {"supervisor", "research"}:
-        raise HTTPException(status_code=422, detail="This profile cannot request external actions")
+        raise ValidationFailedError("This profile cannot request external actions")
     if {item["name"] for item in chosen} & INTERNAL_PROFILE_TOOLS and profile_id not in INTERNAL_WRITE_PROFILES:
-        raise HTTPException(status_code=422, detail="This profile cannot use task or goal tools")
+        raise ValidationFailedError("This profile cannot use task or goal tools")
     if HANDOFF_TOOL in {item["name"] for item in chosen} and profile_id != "supervisor":
-        raise HTTPException(status_code=422, detail="Only the Supervisor profile may delegate")
+        raise ValidationFailedError("Only the Supervisor profile may delegate")
     if {item["name"] for item in chosen} & AUTOMATION_PROFILE_TOOLS and profile_id != AUTOMATION_PROFILE_ID:
-        raise HTTPException(status_code=422, detail="This profile cannot use automation tools")
+        raise ValidationFailedError("This profile cannot use automation tools")
     if patch.source_ids:
         from modules.sources.public import list_tool_sources
 
@@ -248,7 +254,7 @@ async def update_profile_in_uow(
             source_ids=selected_source_ids, owner_all=False,
         )
         if {item.id for item in sources.items} != selected_source_ids:
-            raise HTTPException(status_code=422, detail="Source scope contains an inactive source")
+            raise ValidationFailedError("Source scope contains an inactive source")
     revision = current_revision + 1
     if row is None:
         row = AgentProfile(workspace_id=workspace_id, profile_id=profile_id, owner_id=owner_id)
@@ -280,9 +286,9 @@ async def resolve_profile_snapshot(
         scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     if profile.revision != expected_revision:
-        raise HTTPException(status_code=409, detail="Agent profile changed; reload before starting")
+        raise ConflictError("Agent profile changed; reload before starting")
     if not profile.enabled or profile.capability == "unavailable":
-        raise HTTPException(status_code=503, detail="Agent profile capability is unavailable")
+        raise UnavailableError("Agent profile capability is unavailable")
     modules = await read_workspace_modules(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     contracts = _tool_contracts(registry, scope.workspace_id, modules)
     profile_snapshot = _profile_content(profile)
@@ -291,11 +297,11 @@ async def resolve_profile_snapshot(
     snapshot.pop("available_tools", None)
     snapshot["profile_revision_hash"] = digest
     if not snapshot["allowed_tools"] or any(contracts.get(item["name"]) != item for item in snapshot["allowed_tools"]):
-        raise HTTPException(status_code=503, detail="Agent profile tools are unavailable")
+        raise UnavailableError("Agent profile tools are unavailable")
     config = settings_public.derive_for_role(config, AGENT_MODEL_ROLE)
     mapping = config.defaults.resolve(AGENT_MODEL_ROLE)
     if mapping is None or not mapping.model:
-        raise HTTPException(status_code=503, detail="Agent chat model is unavailable")
+        raise UnavailableError("Agent chat model is unavailable")
     # Pin only identity and policy metadata; the gateway secret never enters the run snapshot.
     snapshot["gateway"] = {
         "configuration_revision": config.configuration_revision,

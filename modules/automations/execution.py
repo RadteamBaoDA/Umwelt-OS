@@ -24,7 +24,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+import logging
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -40,7 +41,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
-from core.errors import DomainError
+from core.errors import DomainError, error_status
 from core.ids import uuid7
 from core.realtime import commit_with_replay
 from core.workspaces import public as workspaces
@@ -63,6 +64,8 @@ from modules.notifications.public import NotificationEmit, emit
 from modules.settings import public as settings_public
 from modules.tasks.public import TaskConflict, TaskCreate, create_task_in_uow
 from modules.tools.public import send_webhook_once, webhook_profile_revision
+
+logger = logging.getLogger(__name__)
 
 MAX_DEPTH = 5  # chain depth of automation-caused events
 MAX_ACTIONS = 10
@@ -452,6 +455,40 @@ def _scrub_document_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     }}
 
 
+async def _legacy_run_evidence_current(
+    session: AsyncSession, run: AutomationRun, *, scope: Scope, multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+) -> bool:
+    """Prove a document-less legacy run from its exact event pair, then backfill its document identity.
+
+    Requires the canonical ``trigger_event_id``/``event:<id>`` pair, a ready-event provenance whose
+    Source equals the payload's, and current retained evidence. On success the run row is stamped
+    with the proven document and version (the caller's transaction owns the commit).
+    """
+    event_id = _legacy_run_event_id(run)
+    if event_id is None or run.trigger_key != f"event:{event_id}" or run.trigger_event_id != str(event_id):
+        return False
+    from modules.ingestion import public as ingestion
+
+    proof = await ingestion.resolve_ready_event_provenance(
+        session, event_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if proof is None:
+        return False
+    try:
+        if UUID(str(run.payload.get("source_id"))) != proof.source_id:
+            return False
+    except (ValueError, TypeError):
+        return False
+    if not await _retained_document_evidence_current(
+        session, run.payload, event_id=event_id, document_id=proof.document_id,
+        document_version_id=proof.document_version_id, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+    ):
+        return False
+    run.document_id, run.document_version_id = proof.document_id, proof.document_version_id
+    return True
+
+
 async def _run_evidence_current(
     session: AsyncSession, run: AutomationRun, *, scope: Scope, multi_workspace_enabled: bool,
     access_fence: AccessFence,
@@ -462,52 +499,11 @@ async def _run_evidence_current(
     if run.document_evidence_revoked or (run.document_id is None) != (run.document_version_id is None):
         return False
     if run.document_id is None or run.document_version_id is None:
-        event_id: UUID | None = None
-        if run.trigger_event_id is not None:
-            try:
-                candidate = UUID(run.trigger_event_id)
-                if str(candidate) == run.trigger_event_id:
-                    event_id = candidate
-            except (ValueError, TypeError):
-                pass
-        if event_id is None and run.trigger_key.startswith("event:"):
-            token = run.trigger_key.removeprefix("event:")
-            try:
-                candidate = UUID(token)
-                if str(candidate) == token and run.trigger_key == f"event:{candidate}":
-                    event_id = candidate
-            except (ValueError, TypeError):
-                pass
-        if event_id is None or run.trigger_key != f"event:{event_id}" or run.trigger_event_id != str(event_id):
-            return False
-        from modules.ingestion import public as ingestion
-
-        proof = await ingestion.resolve_ready_event_provenance(
-            session, event_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-        if proof is None:
-            return False
-        try:
-            if UUID(str(run.payload.get("source_id"))) != proof.source_id:
-                return False
-        except (ValueError, TypeError):
-            return False
-        if not await _retained_document_evidence_current(
-            session, run.payload, event_id=event_id, document_id=proof.document_id,
-            document_version_id=proof.document_version_id, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
-        ):
-            return False
-        run.document_id, run.document_version_id = proof.document_id, proof.document_version_id
-        return True
-
-    event_id = None
-    if run.trigger_event_id is not None:
-        try:
-            candidate = UUID(run.trigger_event_id)
-            if str(candidate) == run.trigger_event_id:
-                event_id = candidate
-        except (TypeError, ValueError):
-            pass
+        return await _legacy_run_evidence_current(
+            session, run, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+        )
+    event_id = _canonical_uuid(run.trigger_event_id) if run.trigger_event_id is not None else None
     if (event_id is None or run.trigger_key != f"event:{event_id}"
             or run.trigger_event_id != str(event_id)):
         return False
@@ -634,6 +630,118 @@ async def scrub_document_triggers(
     )
 
 
+@dataclass(frozen=True)
+class _CleanupMatch:
+    """Outcome of proving whether one automation run belongs to a cleaned-up document.
+
+    ``proven_version`` is the document version the proof established (``None`` when unmatched) and
+    ``event_id`` the canonical trigger event the run was recognized by, if any.
+    """
+
+    matched: bool
+    proven_version: UUID | None
+    event_id: UUID | None
+
+
+def _canonical_uuid(token: str) -> UUID | None:
+    """Parse ``token`` as a UUID only when it is already in canonical text form, else ``None``."""
+    try:
+        candidate = UUID(token)
+    except (ValueError, TypeError):
+        return None
+    return candidate if str(candidate) == token else None
+
+
+def _legacy_run_event_id(run: AutomationRun) -> UUID | None:
+    """Recover the original trigger event ID of a legacy run that never recorded a document.
+
+    Accepts a canonical ``trigger_event_id`` or, failing that, the ``event:<id>`` trigger key. The
+    caller still requires the exact canonical pair of both fields before trusting the event as proof.
+    """
+    event_id = _canonical_uuid(run.trigger_event_id) if run.trigger_event_id is not None else None
+    if event_id is None and run.trigger_key.startswith("event:"):
+        candidate = _canonical_uuid(run.trigger_key.removeprefix("event:"))
+        if candidate is not None and run.trigger_key == f"event:{candidate}":
+            event_id = candidate
+    return event_id
+
+
+async def _match_run_for_cleanup(
+    session: AsyncSession, run: AutomationRun, *, document_id: UUID, source_id: UUID,
+    version_ids: tuple[UUID, ...], scope: Scope, multi_workspace_enabled: bool,
+) -> _CleanupMatch:
+    """Decide whether ``run`` carries the cleaned document's evidence, by recorded fields or event proof.
+
+    A run already pointing at this document and source is confirmed through its trigger event;
+    a legacy run with no document at all is recovered from its event identity. Reads the inbox
+    events through the cleanup proof helper; mutates nothing.
+    """
+    matched = (
+        run.document_id == document_id and run.document_version_id is not None
+        and run.payload.get("source_id") == str(source_id)
+    )
+    proven_version = run.document_version_id if matched else None
+    event_id: UUID | None = None
+    if matched:
+        try:
+            event_id = UUID(run.trigger_event_id or "")
+            proof = await _legacy_event_matches_cleanup(
+                session, event_id, document_id=document_id, source_id=source_id, version_ids=version_ids,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            ) if str(event_id) == run.trigger_event_id and run.trigger_key == f"event:{event_id}" else None
+        except (ValueError, TypeError):
+            proof = None
+        matched = proof is not None and proof.document_version_id == run.document_version_id
+    if not matched and run.document_id is None and run.document_version_id is None:
+        event_id = _legacy_run_event_id(run)
+        # The run formatter stores the original event ID twice; require the exact pair.
+        if event_id is not None and run.trigger_key == f"event:{event_id}" and run.trigger_event_id == str(event_id):
+            proof = await _legacy_event_matches_cleanup(
+                session, event_id, document_id=document_id, source_id=source_id, version_ids=version_ids,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            matched = proof is not None
+            proven_version = proof.document_version_id if proof is not None else None
+    return _CleanupMatch(matched, proven_version, event_id)
+
+
+async def _revoke_run_document_evidence(
+    session: AsyncSession, run: AutomationRun, *, document_id: UUID, proven_version: UUID | None,
+) -> None:
+    """Scrub a proven run's payload and settle its actions, keeping action results and uncertainty.
+
+    Locks the run's action rows in ordinal order. Pending/approved actions are skipped, an in-flight
+    action becomes ``requires_review``, and the run itself is closed as ``requires_review`` when an
+    effect is uncertain or ``dropped`` when it was still active.
+    """
+    from modules.automations.models import AutomationRunAction
+
+    actions = list((await session.scalars(
+        select(AutomationRunAction).where(AutomationRunAction.run_id == run.id)
+        .order_by(AutomationRunAction.ordinal).with_for_update()
+    )).all())
+    run.document_id = document_id
+    run.document_version_id = proven_version
+    run.document_evidence_revoked = True
+    run.payload = _scrub_document_payload(run.payload)
+    uncertain = any(action.status in {"in_flight", "requires_review"} for action in actions)
+    for action in actions:
+        if action.status in {"pending", "approved", "awaiting_approval"}:
+            action.status, action.error_code, action.approved_session_hash = (
+                "skipped", "document_evidence_revoked", None,
+            )
+        elif action.status == "in_flight":
+            action.status, action.error_code = "requires_review", "document_evidence_revoked"
+    if uncertain:
+        run.status, run.reason, run.finished_at = (
+            "requires_review", "document_evidence_revoked", datetime.now(UTC),
+        )
+    elif run.status in {"queued", "running", "awaiting_approval"}:
+        run.status, run.reason, run.finished_at = (
+            "dropped", "document_evidence_revoked", datetime.now(UTC),
+        )
+
+
 async def scrub_document_runs(
     session: AsyncSession, *, operation_id: UUID, document_id: UUID, source_id: UUID,
     version_ids: tuple[UUID, ...], final_reference_page: bool = False,
@@ -657,101 +765,71 @@ async def scrub_document_runs(
     )).all())
     complete = len(rows) < limit
     changed = 0
-    from modules.automations.models import AutomationRunAction
-
     provisional: list[UUID] = []
     unavailable: list[UUID] = []
     for run in rows:
         if run.document_evidence_revoked:
             continue
-        matched = (
-            run.document_id == document_id and run.document_version_id is not None
-            and run.payload.get("source_id") == str(source_id)
+        match = await _match_run_for_cleanup(
+            session, run, document_id=document_id, source_id=source_id, version_ids=version_ids,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
-        proven_version = run.document_version_id if matched else None
-        event_id: UUID | None = None
-        if matched:
-            try:
-                event_id = UUID(run.trigger_event_id or "")
-                proof = await _legacy_event_matches_cleanup(
-                    session, event_id, document_id=document_id, source_id=source_id, version_ids=version_ids,
-                    scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-                ) if str(event_id) == run.trigger_event_id and run.trigger_key == f"event:{event_id}" else None
-            except (ValueError, TypeError):
-                proof = None
-            matched = proof is not None and proof.document_version_id == run.document_version_id
-        if not matched and run.document_id is None and run.document_version_id is None:
-            event_id = None
-            if run.trigger_event_id is not None:
-                try:
-                    candidate = UUID(run.trigger_event_id)
-                    if str(candidate) == run.trigger_event_id:
-                        event_id = candidate
-                except (ValueError, TypeError):
-                    pass
-            # The run formatter stores the original event ID twice; require the exact pair.
-            if event_id is None and run.trigger_key.startswith("event:"):
-                token = run.trigger_key.removeprefix("event:")
-                try:
-                    candidate = UUID(token)
-                    if str(candidate) == token and run.trigger_key == f"event:{candidate}":
-                        event_id = candidate
-                except (ValueError, TypeError):
-                    pass
-            if event_id is not None and run.trigger_key == f"event:{event_id}" and run.trigger_event_id == str(event_id):
-                proof = await _legacy_event_matches_cleanup(
-                    session, event_id, document_id=document_id, source_id=source_id, version_ids=version_ids,
-                    scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-                )
-                matched = proof is not None
-                proven_version = proof.document_version_id if proof is not None else None
         if run.document_id is not None and run.document_id != document_id:
             continue
-        if (not matched and run.document_id is None and run.document_version_id is None
-                and event_id is not None
-                and await _event_belongs_elsewhere(session, str(event_id), document_id=document_id,
+        if (not match.matched and run.document_id is None and run.document_version_id is None
+                and match.event_id is not None
+                and await _event_belongs_elsewhere(session, str(match.event_id), document_id=document_id,
                         scope=scope, multi_workspace_enabled=multi_workspace_enabled)):
             continue
         contradictory = (
             run.document_id == document_id and run.document_version_id is not None
             and run.document_version_id not in version_ids
         )
-        if contradictory:
+        if contradictory or not match.matched:
             (unavailable if final_reference_page else provisional).append(run.id)
             continue
-        if not matched:
-            (unavailable if final_reference_page else provisional).append(run.id)
-            continue
-        actions = list((await session.scalars(
-            select(AutomationRunAction).where(AutomationRunAction.run_id == run.id)
-            .order_by(AutomationRunAction.ordinal).with_for_update()
-        )).all())
-        run.document_id = document_id
-        run.document_version_id = proven_version
-        run.document_evidence_revoked = True
-        run.payload = _scrub_document_payload(run.payload)
-        uncertain = any(action.status in {"in_flight", "requires_review"} for action in actions)
-        for action in actions:
-            if action.status in {"pending", "approved", "awaiting_approval"}:
-                action.status, action.error_code, action.approved_session_hash = (
-                    "skipped", "document_evidence_revoked", None,
-                )
-            elif action.status == "in_flight":
-                action.status, action.error_code = "requires_review", "document_evidence_revoked"
-        if uncertain:
-            run.status, run.reason, run.finished_at = (
-                "requires_review", "document_evidence_revoked", datetime.now(UTC),
-            )
-        elif run.status in {"queued", "running", "awaiting_approval"}:
-            run.status, run.reason, run.finished_at = (
-                "dropped", "document_evidence_revoked", datetime.now(UTC),
-            )
+        await _revoke_run_document_evidence(
+            session, run, document_id=document_id, proven_version=match.proven_version,
+        )
         changed += 1
     if changed:
         await session.flush()
     return AutomationCleanupProgress(
         rows[-1].id if rows else after, complete, changed, operation_id, tuple(provisional), tuple(unavailable),
     )
+
+
+async def _document_trigger_sources(
+    session: AsyncSession, triggers: Sequence[AutomationTrigger], *, scope: Scope,
+    multi_workspace_enabled: bool, held: set[UUID] | None = None,
+) -> set[UUID] | None:
+    """Resolve the Source of each live ready-document trigger through ingestion provenance.
+
+    Triggers of other types, already revoked ones and those without a canonical event key are
+    skipped. With ``held`` given, returns ``None`` at the first Source outside it (the caller must
+    not acquire an unheld Source fence while holding inbox locks); otherwise returns all Sources.
+    Read-only; takes no locks.
+    """
+    from modules.ingestion import public as ingestion
+
+    found: set[UUID] = set()
+    for trigger in triggers:
+        if trigger.trigger_type != "new_document" or trigger.document_evidence_revoked:
+            continue
+        try:
+            event_id = UUID(trigger.event_key)
+        except (TypeError, ValueError):
+            continue
+        if str(event_id) != trigger.event_key:
+            continue
+        proof = await ingestion.resolve_ready_event_provenance(
+            session, event_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        if proof is None:
+            continue
+        if held is not None and proof.source_id not in held:
+            return None
+        found.add(proof.source_id)
+    return found
 
 
 async def fan_out_triggers(
@@ -778,21 +856,9 @@ async def fan_out_triggers(
             select(AutomationTrigger).where(*pending)
             .order_by(AutomationTrigger.created_at).limit(100)
         )).all()
-        source_ids: set[UUID] = set()
-        for candidate in detached:
-            if candidate.trigger_type != "new_document" or candidate.document_evidence_revoked:
-                continue
-            try:
-                event_id = UUID(candidate.event_key)
-            except (TypeError, ValueError):
-                continue
-            if str(event_id) != candidate.event_key:
-                continue
-            from modules.ingestion import public as ingestion
-            proof = await ingestion.resolve_ready_event_provenance(
-                session, event_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-            if proof is not None:
-                source_ids.add(proof.source_id)
+        source_ids = await _document_trigger_sources(
+            session, detached, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        ) or set()
         from modules.sources import public as sources
         for source_id in sorted(source_ids, key=str):
             await sources.lock_retained_evidence_source(
@@ -804,21 +870,11 @@ async def fan_out_triggers(
             .execution_options(populate_existing=True))).all()
         # A producer may have inserted a new page member between discovery and row locking. Do not
         # discover and acquire its Source fence while holding inbox locks; defer the whole batch.
-        for event in events:
-            if event.trigger_type != "new_document" or event.document_evidence_revoked:
-                continue
-            try:
-                event_id = UUID(event.event_key)
-            except (TypeError, ValueError):
-                continue
-            if str(event_id) != event.event_key:
-                continue
-            from modules.ingestion import public as ingestion
-            proof = await ingestion.resolve_ready_event_provenance(
-                session, event_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-            if proof is not None and proof.source_id not in source_ids:
-                await session.rollback()
-                return 0
+        if await _document_trigger_sources(
+            session, events, scope=scope, multi_workspace_enabled=multi_workspace_enabled, held=source_ids,
+        ) is None:
+            await session.rollback()
+            return 0
         for event in events:
             if event.trigger_type == "new_document" and not await _trigger_evidence_current(
                 session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
@@ -1074,6 +1130,172 @@ async def _mark(
                 session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
 
 
+@dataclass(frozen=True)
+class _ExternalDispatch:
+    """What to send after the in-flight marker is committed and the session is closed."""
+
+    kind: str
+    run: Any
+    rev: Any
+    spec: dict[str, Any]
+    session_hash: str | None
+    destination: str | None
+
+
+async def _dispatch_run_agent(
+    ctx: dict[str, Any], dispatch: _ExternalDispatch, ordinal: int, *,
+    factory: async_sessionmaker[AsyncSession], scope: Scope, multi_workspace_enabled: bool,
+) -> str:
+    """Start the Agent run for an action; the start is idempotent so a replay is simply attempted again."""
+    return await _start_agent(
+        ctx, dispatch.run, ordinal, dispatch.spec, dispatch.session_hash, dispatch.rev.name,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+
+
+async def _dispatch_call_webhook(
+    ctx: dict[str, Any], dispatch: _ExternalDispatch, ordinal: int, *,
+    factory: async_sessionmaker[AsyncSession], scope: Scope, multi_workspace_enabled: bool,
+) -> str:
+    """Send the approved webhook for an action to its pinned destination revision."""
+    return await _send_webhook(
+        ctx, dispatch.run, ordinal, dispatch.spec, factory, dispatch.destination, dispatch.session_hash,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+
+
+# Post-commit external effects by action type; a new external action registers here instead of
+# extending the dispatch code in ``_action_step``.
+_EXTERNAL_DISPATCHERS: dict[str, Callable[..., Awaitable[str]]] = {
+    "run_agent": _dispatch_run_agent,
+    "call_webhook": _dispatch_call_webhook,
+}
+
+
+async def _settle_missing_evidence(
+    session: AsyncSession, run: Any, row: Any, state: str, fence: AccessFence,
+    *, scope: Scope, multi_workspace_enabled: bool,
+) -> str:
+    """Close a run whose Document trigger evidence is no longer current.
+
+    A dispatched (in-flight/review) action retains uncertainty as ``requires_review`` because the
+    dispatch boundary may already have been crossed and must never be replayed; any other action
+    is skipped and the run dropped. Pending siblings are skipped and the change is committed.
+    """
+    if state in {"in_flight", "requires_review"}:
+        row.status, row.error_code = "requires_review", "document_evidence_unavailable"
+        _finish(run, "requires_review", "document_evidence_unavailable")
+        await _skip_pending(session, run.id, "document_evidence_unavailable")
+        await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        return "requires_review"
+    row.status, row.error_code = "skipped", "document_evidence_unavailable"
+    _finish(run, "dropped", "document_evidence_unavailable")
+    await _skip_pending(session, run.id, "document_evidence_unavailable")
+    await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    return "dropped"
+
+
+async def _request_action_approval(
+    session: AsyncSession, run: Any, row: Any, rev: Any, spec: dict[str, Any], ordinal: int,
+    settings: Settings, fence: AccessFence, *, scope: Scope, multi_workspace_enabled: bool,
+) -> str:
+    """Park an approval-gated action as ``awaiting_approval`` and notify the owner.
+
+    A webhook binds its current deployment profile revision; a missing profile fails the action.
+    Commits the awaiting row and its notification together under the access fence.
+    """
+    kind = spec["type"]
+    try:
+        destination = webhook_profile_revision(settings, spec["alias"]) if kind == "call_webhook" else None
+    except ValueError:
+        destination = None
+    if kind == "call_webhook" and destination is None:
+        row.status, row.error_code = "failed", "webhook_unavailable"
+        await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        return "failed"
+    row.destination_revision = destination
+    row.status, row.approval_hash = "awaiting_approval", _approval_hash(run, ordinal, spec, destination)
+    row.approval_expires_at = datetime.now(UTC) + timedelta(hours=settings.approval_expiry_hours)
+    await emit(session, NotificationEmit(
+        dedupe_key=f"automation-approval:{run.id}:{ordinal}", kind="automation.approval",
+        title=rev.name[:300], body="An automation action is waiting for your approval."),
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    return "awaiting_approval"
+
+
+async def _prepare_action(
+    ctx: dict[str, Any], session: AsyncSession, factory: async_sessionmaker[AsyncSession],
+    run_id: UUID, ordinal: int, *, scope: Scope, multi_workspace_enabled: bool,
+) -> str | _ExternalDispatch:
+    """Run every in-session step of one action and return a final outcome or an external dispatch.
+
+    Takes the access fence, then run and action row locks. Settled, review-only, parked, paused,
+    stale and approval-gated rows return their outcome text; database actions run in this session.
+    An external action is committed ``in_flight`` (the point of no return) and returned so the
+    caller sends it after the session closes.
+    """
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    run = await _locked_run(session, run_id, scope)
+    row = await session.scalar(select(AutomationRunAction).where(
+        AutomationRunAction.run_id == run_id, AutomationRunAction.ordinal == ordinal).with_for_update())
+    assert run is not None
+    rev = await session.scalar(select(AutomationRevision).where(
+        AutomationRevision.automation_id == run.automation_id, AutomationRevision.revision == run.revision))
+    assert rev is not None
+    spec = rev.actions[ordinal - 1]
+    assert row is not None
+    state = row.status
+    if state == "succeeded":
+        return "succeeded"
+    if state in ("failed", "denied", "skipped"):
+        return "failed"
+    if not await _run_evidence_current(session, run, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence):
+        return await _settle_missing_evidence(
+            session, run, row, state, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+    # run_agent is idempotent (client_request_id), so an interrupted one is simply attempted again.
+    if state == "requires_review" or (state == "in_flight" and spec["type"] != "run_agent"):
+        row.status, row.error_code = "requires_review", row.error_code or "ambiguous_after_restart"
+        await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        return "requires_review"
+    if state == "awaiting_approval":
+        return "awaiting_approval"
+    settings = cast(Settings, ctx["settings"])
+    kind = spec["type"]
+    stale = None
+    if not await _fence_current(session, run, scope=scope, share=True):
+        stale = "stale_revision"
+    elif not await _action_modules_enabled(session, spec["type"], scope=scope, multi_workspace_enabled=multi_workspace_enabled):
+        # Preserve the approved durable action for dispatch after its owner is re-enabled.
+        return "paused"
+    elif state == "approved" and _destination_stale(settings, spec, row.destination_revision):
+        stale = "stale_destination"
+    if stale is not None:
+        row.status, row.error_code = "skipped", stale
+        await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        return "dropped"
+    if kind in APPROVAL_ACTIONS and state == "pending":
+        return await _request_action_approval(
+            session, run, row, rev, spec, ordinal, settings, fence,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+    row.attempts += 1
+    if kind in ("create_notification", "create_task"):
+        return await _in_database_action(
+            session, run, row, rev, spec, factory, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
+    if kind == "generate_brief":
+        await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)  # release locks; brief generation commits internally
+        return await _generate_brief(ctx, run, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    session_hash, destination = row.approved_session_hash, row.destination_revision
+    if kind == "call_webhook":
+        row.approved_session_hash = None  # restore only if the final pre-send lifecycle fence pauses
+    # run_agent keeps the digest until success: its idempotent start may be re-attempted.
+    row.status = "in_flight"  # point of no return: committed before the external call
+    await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    return _ExternalDispatch(kind, run, rev, spec, session_hash, destination)
+
+
 async def _action_step(
     ctx: dict[str, Any], run_id: UUID, ordinal: int, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> str:
@@ -1082,105 +1304,20 @@ async def _action_step(
     Resumable: every row state is handled, so calling this after a crash converges. The fence is
     checked before every start, including exact Document trigger evidence. A revoked in-flight action
     remains review-only because the external effect may already have happened; it is never replayed.
+    The external effect is sent after the preparing session closes, via ``_EXTERNAL_DISPATCHERS``.
     """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     async with factory() as session:
-        fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
-        run = await _locked_run(session, run_id, scope)
-        row = await session.scalar(select(AutomationRunAction).where(
-            AutomationRunAction.run_id == run_id, AutomationRunAction.ordinal == ordinal).with_for_update())
-        assert run is not None
-        rev = await session.scalar(select(AutomationRevision).where(
-            AutomationRevision.automation_id == run.automation_id, AutomationRevision.revision == run.revision))
-        assert rev is not None
-        spec = rev.actions[ordinal - 1]
-        assert row is not None
-        state = row.status
-        if state == "succeeded":
-            return "succeeded"
-        if state in ("failed", "denied", "skipped"):
-            return "failed"
-        if not await _run_evidence_current(session, run, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence):
-            if state in {"in_flight", "requires_review"}:
-                # The dispatch boundary may already have been crossed; retain uncertainty and never replay it.
-                assert row is not None
-                row.status, row.error_code = "requires_review", "document_evidence_unavailable"
-                _finish(run, "requires_review", "document_evidence_unavailable")
-                assert run is not None
-                await _skip_pending(session, run.id, "document_evidence_unavailable")
-                await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-                return "requires_review"
-            assert row is not None
-            row.status, row.error_code = "skipped", "document_evidence_unavailable"
-            _finish(run, "dropped", "document_evidence_unavailable")
-            assert run is not None
-            await _skip_pending(session, run.id, "document_evidence_unavailable")
-            await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-            return "dropped"
-        # run_agent is idempotent (client_request_id), so an interrupted one is simply attempted again.
-        if state == "requires_review" or (state == "in_flight" and spec["type"] != "run_agent"):
-            assert row is not None
-            row.status, row.error_code = "requires_review", row.error_code or "ambiguous_after_restart"
-            await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-            return "requires_review"
-        if state == "awaiting_approval":
-            return "awaiting_approval"
-        settings = cast(Settings, ctx["settings"])
-        kind = spec["type"]
-        stale = None
-        if not await _fence_current(session, run, scope=scope, share=True):
-            stale = "stale_revision"
-        elif not await _action_modules_enabled(session, spec["type"], scope=scope, multi_workspace_enabled=multi_workspace_enabled):
-            # Preserve the approved durable action for dispatch after its owner is re-enabled.
-            return "paused"
-        elif state == "approved" and _destination_stale(settings, spec, row.destination_revision):
-            stale = "stale_destination"
-        if stale is not None:
-            assert row is not None
-            row.status, row.error_code = "skipped", stale
-            await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-            return "dropped"
-        if kind in APPROVAL_ACTIONS and state == "pending":
-            try:
-                destination = webhook_profile_revision(settings, spec["alias"]) if kind == "call_webhook" else None
-            except ValueError:
-                destination = None
-            if kind == "call_webhook" and destination is None:
-                assert row is not None
-                row.status, row.error_code = "failed", "webhook_unavailable"
-                await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-                return "failed"
-            assert row is not None
-            row.destination_revision = destination
-            row.status, row.approval_hash = "awaiting_approval", _approval_hash(run, ordinal, spec, destination)
-            row.approval_expires_at = datetime.now(UTC) + timedelta(hours=settings.approval_expiry_hours)
-            assert rev is not None
-            assert run is not None
-            await emit(session, NotificationEmit(
-                dedupe_key=f"automation-approval:{run.id}:{ordinal}", kind="automation.approval",
-                title=rev.name[:300], body="An automation action is waiting for your approval."),
-                scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-            await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-            return "awaiting_approval"
-        assert row is not None
-        row.attempts += 1
-        if kind in ("create_notification", "create_task"):
-            return await _in_database_action(
-                session, run, row, rev, spec, factory, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
-        if kind == "generate_brief":
-            await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)  # release locks; brief generation commits internally
-            return await _generate_brief(ctx, run, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-        session_hash, destination = row.approved_session_hash, row.destination_revision
-        if kind == "call_webhook":
-            assert row is not None
-            row.approved_session_hash = None  # restore only if the final pre-send lifecycle fence pauses
-        # run_agent keeps the digest until success: its idempotent start may be re-attempted.
-        row.status = "in_flight"  # point of no return: committed before the external call
-        await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    if kind == "run_agent":
-        assert rev is not None
-        return await _start_agent(ctx, run, ordinal, spec, session_hash, rev.name, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    return await _send_webhook(ctx, run, ordinal, spec, factory, destination, session_hash, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        prepared = await _prepare_action(
+            ctx, session, factory, run_id, ordinal, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+    if isinstance(prepared, str):
+        return prepared
+    # Any type without its own dispatcher keeps the historical webhook path.
+    dispatcher: Callable[..., Awaitable[str]] = _EXTERNAL_DISPATCHERS.get(prepared.kind, _dispatch_call_webhook)
+    return await dispatcher(
+        ctx, prepared, ordinal, factory=factory, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
 
 
 async def _restore_paused_action(
@@ -1398,12 +1535,12 @@ async def _start_agent(
         try:  # PostgreSQL is the queue; a lost push is replayed by the agent reconciler.
             await cast(ArqRedis, ctx["redis"]).enqueue_job(
                 "process_agent_run", str(started.id), 1, _job_id=f"agent-run:{started.id}:1")
-        except Exception:  # noqa: BLE001, S110  # best-effort cleanup/optional step; failure intentionally ignored
-            pass
+        except Exception:  # best-effort push: the agent reconciler replays a lost enqueue
+            logger.debug("Agent run push failed; the reconciler replays it", exc_info=True)
     except asyncio.CancelledError:
         raise  # stays in_flight; the idempotent start is attempted again on resume
     except (HTTPException, DomainError) as exc:
-        if exc.status_code >= 500:  # replay-storage blip etc.: retry, never a terminal rejection
+        if cast(int, error_status(exc)) >= 500:  # replay-storage blip etc.: retry, never a terminal rejection
             return await _transient(factory, run.id, ordinal, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         await _mark(factory, run.id, ordinal, "failed", "agent_rejected", scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         return "failed"

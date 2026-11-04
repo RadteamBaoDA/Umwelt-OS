@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.errors import ForbiddenError
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 
@@ -12,14 +12,20 @@ DENIED_STATUSES = frozenset({401, 403, 404, 409})  # admission denials that skip
 
 
 def _actor(scope: Scope) -> int:
+    """Return the acting owner ID: the stamped actor of a job scope or the request user."""
     return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
 
 
 def _require_owner(scope: Scope) -> None:
+    """Require an explicit workspace scope and, for requests, the workspace owner role.
+
+    Raises ``TypeError`` for an untyped scope and ``ForbiddenError`` (403) for a member; job scopes
+    were admitted against the stamped owner already. Pure; runs before any query.
+    """
     if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
         raise TypeError("An explicit workspace scope is required")
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
+        raise ForbiddenError("Workspace owner required")
 
 
 async def _admit(

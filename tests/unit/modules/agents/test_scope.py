@@ -10,6 +10,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
+from core.errors import DomainError
 from core.workspaces.schemas import AccessFence, InternalJobScope, WorkspaceContext
 from modules.agents import access, approvals, internal_writes, worker
 from modules.agents import public as agents
@@ -55,7 +56,7 @@ async def test_member_is_denied_before_any_statement() -> None:
                 session, cutoff=datetime.now(UTC), scope=MEMBER, multi_workspace_enabled=False,
             ),
         ):
-            with pytest.raises(HTTPException) as caught:
+            with pytest.raises(DomainError) as caught:
                 await call
             assert caught.value.status_code == 403
     read.assert_not_awaited()
@@ -87,7 +88,7 @@ def test_legacy_null_epoch_is_quarantined_not_rebased(row: SimpleNamespace) -> N
 async def test_admit_run_requires_live_fence_to_equal_original() -> None:
     moved = AccessFence(workspace_id=WS, user_id=7, membership_revision=2, configuration_revision=6)
     with patch.object(access.workspaces, "read_access_fence", AsyncMock(return_value=moved)), \
-            pytest.raises(HTTPException) as caught:
+            pytest.raises(DomainError) as caught:
         await access.admit_run(MagicMock(), _run(), multi_workspace_enabled=False)
     assert caught.value.status_code == 409
     with patch.object(access.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)):

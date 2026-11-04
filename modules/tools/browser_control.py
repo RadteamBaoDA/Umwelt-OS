@@ -1,9 +1,11 @@
 """Authenticated internal callbacks from the isolated browser service."""
 
 import hmac
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -137,6 +139,188 @@ async def _current_authority(
     return True, grant, job_scope, fence
 
 
+@dataclass
+class _ControlState:
+    """One locked callback: the session, locked job, event and the freshly read authority verdict."""
+
+    session: AsyncSession
+    job: BrowserReadJob
+    payload: BrowserControlEvent
+    valid: bool
+    grant: Any
+    job_scope: InternalJobScope | None
+    fence: AccessFence | None
+    flag: bool
+
+    async def commit(self) -> None:
+        """Commit under the job's original fence, or plainly when authority was already revoked."""
+        if self.fence is None or self.job_scope is None:
+            await self.session.commit()  # authority already revoked: no fence is held
+        else:
+            await commit_with_replay(
+                self.session, [], scope=self.job_scope, multi_workspace_enabled=self.flag,
+                access_fence=self.fence,
+            )
+
+    def revoke(self) -> None:
+        """Fail a queued or running job whose authority is gone (the caller commits)."""
+        if self.job.status in {"queued", "running"}:
+            self.job.status, self.job.error_code = "failed", "authority_revoked"
+
+
+async def _event_register(state: _ControlState, guard: Any) -> dict[str, object]:
+    """Handle the service's first callback: claim the job and register the durable remote guard.
+
+    Rejects replays and malformed registrations as 409, an unverified network capability as 503 and
+    revoked authority as 403 (after failing the job). On success the job becomes ``running``.
+    """
+    job, payload = state.job, state.payload
+    if (
+        job.cancel_requested or job.status != "queued" or job.service_instance_id is not None
+        or payload.request_ordinal != 0 or payload.target_url is not None
+        or payload.actual_pages != 0 or payload.actual_bytes != 0
+        or payload.result_hash is not None
+    ):
+        raise HTTPException(status_code=409, detail="Browser job was already claimed")
+    if not _browser_network_verified():
+        raise HTTPException(status_code=503, detail="Browser network capability is unverified")
+    if not state.valid:
+        state.revoke()
+        await state.commit()
+        raise HTTPException(status_code=403, detail="Browser job authority was revoked")
+    await register_remote_heavy_in_uow(
+        state.session, job.operation_id, payload.service_instance_id,
+        job.id, job.service_token_hash,
+        # Just past the 45 s hard job bound: a guard orphaned by a dead service
+        # stops blocking heavy work instead of wedging it until job expiry.
+        min(job.expires_at, datetime.now(UTC) + timedelta(seconds=REMOTE_GUARD_SECONDS)),
+    )
+    job.service_instance_id = payload.service_instance_id
+    job.status = "running"
+    await state.commit()
+    return {"allowed": True}
+
+
+async def _event_authorize(state: _ControlState, guard: Any) -> dict[str, object]:
+    """Grant one next-request permit when authority, ordinal, guard expiry and target scope all hold.
+
+    Unverified capability is 503; revoked authority fails the job (403); any out-of-scope or
+    out-of-sequence request is 403. The permit advances ``request_ordinal`` and is committed.
+    """
+    job, payload, grant = state.job, state.payload, state.grant
+    if not _browser_network_verified():
+        raise HTTPException(status_code=503, detail="Browser network capability is unverified")
+    if not state.valid:
+        state.revoke()
+        await state.commit()
+        raise HTTPException(status_code=403, detail="Browser request is outside current authority")
+    if (
+        # The API enforces the guard bound: no new permits after expiry.
+        guard.expires_at <= datetime.now(UTC)
+        or not state.valid or grant is None
+        or payload.request_ordinal != job.request_ordinal + 1
+        or payload.request_ordinal > 6
+        or payload.actual_pages != 0 or payload.actual_bytes != 0
+        or payload.result_hash is not None
+        or not _target_in_scope(payload.target_url, grant.origin, grant.path_prefix)
+    ):
+        raise HTTPException(status_code=403, detail="Browser request is outside current authority")
+    job.request_ordinal = payload.request_ordinal
+    await state.commit()
+    return {"allowed": True, "request_ordinal": payload.request_ordinal}
+
+
+async def _event_complete(state: _ControlState, guard: Any) -> dict[str, object]:
+    """Record the service's completed totals and clear the remote guard after its cleanup ack.
+
+    A cancelled or purged job is never resurrected: the guard is cleared and any non-terminal row
+    settles as ``cancelled``. A stale ordinal or out-of-bound totals are 409.
+    """
+    job, payload, session = state.job, state.payload, state.session
+    if job.cancel_requested or job.status != "running":
+        if job.status in {"queued", "running", "cancel_requested", "uncertain"}:
+            job.status = "cancelled"
+        proof = cleanup_proof_after_ack(job.operation_id, guard.service_instance_id, job.id)
+        await clear_remote_heavy_in_uow(session, job.operation_id, proof)
+        await state.commit()
+        return {"allowed": True, "cleaned": True}
+    if (
+        payload.request_ordinal != job.request_ordinal
+        or not 1 <= payload.actual_pages <= job.max_pages
+        or payload.actual_bytes > job.max_bytes
+        or payload.result_hash is None
+    ):
+        raise HTTPException(status_code=409, detail="Browser completion ordinal is stale")
+    job.actual_pages = payload.actual_pages
+    job.actual_bytes = payload.actual_bytes
+    job.result_hash = payload.result_hash
+    job.status = "running"
+    proof = cleanup_proof_after_ack(job.operation_id, guard.service_instance_id, job.id)
+    await clear_remote_heavy_in_uow(session, job.operation_id, proof)
+    await state.commit()
+    return {"allowed": True}
+
+
+async def _event_cancelled(state: _ControlState, guard: Any) -> dict[str, object]:
+    """Acknowledge a service-side cancellation: cancel a non-terminal job and clear the guard."""
+    job = state.job
+    if job.status not in {"succeeded", "failed", "expired"}:
+        job.status = "cancelled"
+    job.cancel_requested = True
+    proof = cleanup_proof_after_ack(job.operation_id, guard.service_instance_id, job.id)
+    await clear_remote_heavy_in_uow(state.session, job.operation_id, proof)
+    await state.commit()
+    return {"allowed": True}
+
+
+# Lifecycle callbacks after registration, keyed by event; a new service event adds a handler here.
+_GUARDED_EVENT_HANDLERS: dict[str, Callable[[_ControlState, Any], Awaitable[dict[str, object]]]] = {
+    "authorize": _event_authorize,
+    "complete": _event_complete,
+    "cancelled": _event_cancelled,
+}
+
+
+def _guard_accepts(guard: Any, job: BrowserReadJob, payload: BrowserControlEvent) -> bool:
+    """Return whether the remote guard exactly matches this instance/nonce for the event.
+
+    Permits require an ``active`` guard; ``complete``/``cancelled`` may also clear an ``uncertain`` one.
+    """
+    return not (
+        guard is None
+        or guard.state != ("active" if payload.event == "authorize" else guard.state)
+        or guard.state not in {"active", "uncertain"}
+        or guard.service_instance_id != payload.service_instance_id
+        or guard.remote_job_id != job.id or guard.nonce_hash != job.service_token_hash
+        or job.service_instance_id != payload.service_instance_id
+    )
+
+
+async def _dispatch_control_event(state: _ControlState) -> dict[str, object]:
+    """Route a verified callback to its handler, enforcing the remote-guard identity first.
+
+    ``register`` precedes any guard. An already-cleared guard answers complete/cancelled idempotently
+    as cleaned. Otherwise the guard must match (409) before the event handler runs.
+    """
+    job, payload = state.job, state.payload
+    if payload.event == "register":
+        return await _event_register(state, None)
+    guard = await get_remote_heavy_guard(state.session, job.operation_id)
+    if (
+        guard is not None and guard.state == "cleared"
+        and guard.service_instance_id == payload.service_instance_id
+        and guard.remote_job_id == job.id
+        and job.service_instance_id == payload.service_instance_id
+        and payload.event in {"complete", "cancelled"}
+    ):
+        return {"allowed": True, "cleaned": True}
+    # An uncertain guard may still be cleared by the exact instance/nonce on
+    # complete or cancelled; new request permits require it to be active.
+    if not _guard_accepts(guard, job, payload):
+        raise HTTPException(status_code=409, detail="Browser remote guard is not active")
+    return await _GUARDED_EVENT_HANDLERS[payload.event](state, guard)
+
+
 @router.post("/jobs/{job_id}/event")
 async def browser_control_event(
     job_id: UUID,
@@ -172,19 +356,6 @@ async def browser_control_event(
         valid, grant, job_scope, fence = await _current_authority(
             session, candidate, multi_workspace_enabled=flag,
         )
-
-        async def commit() -> None:
-            if fence is None or job_scope is None:
-                await session.commit()  # authority already revoked: no fence is held
-            else:
-                await commit_with_replay(
-                    session, [], scope=job_scope, multi_workspace_enabled=flag, access_fence=fence,
-                )
-
-        def revoke() -> None:
-            if job.status in {"queued", "running"}:
-                job.status, job.error_code = "failed", "authority_revoked"
-
         job = await session.scalar(select(BrowserReadJob).where(
             BrowserReadJob.id == job_id,
         ).with_for_update().execution_options(populate_existing=True))
@@ -199,102 +370,6 @@ async def browser_control_event(
             or (job.expires_at <= datetime.now(UTC) and payload.event in {"register", "authorize"})
         ):
             raise HTTPException(status_code=409, detail="Browser job authority is stale")
-        if payload.event == "register":
-            if (
-                job.cancel_requested or job.status != "queued" or job.service_instance_id is not None
-                or payload.request_ordinal != 0 or payload.target_url is not None
-                or payload.actual_pages != 0 or payload.actual_bytes != 0
-                or payload.result_hash is not None
-            ):
-                raise HTTPException(status_code=409, detail="Browser job was already claimed")
-            if not _browser_network_verified():
-                raise HTTPException(status_code=503, detail="Browser network capability is unverified")
-            if not valid:
-                revoke()
-                await commit()
-                raise HTTPException(status_code=403, detail="Browser job authority was revoked")
-            await register_remote_heavy_in_uow(
-                session, job.operation_id, payload.service_instance_id,
-                job.id, job.service_token_hash,
-                # Just past the 45 s hard job bound: a guard orphaned by a dead service
-                # stops blocking heavy work instead of wedging it until job expiry.
-                min(job.expires_at, datetime.now(UTC) + timedelta(seconds=REMOTE_GUARD_SECONDS)),
-            )
-            job.service_instance_id = payload.service_instance_id
-            job.status = "running"
-            await commit()
-            return {"allowed": True}
-
-        guard = await get_remote_heavy_guard(session, job.operation_id)
-        if (
-            guard is not None and guard.state == "cleared"
-            and guard.service_instance_id == payload.service_instance_id
-            and guard.remote_job_id == job.id
-            and job.service_instance_id == payload.service_instance_id
-            and payload.event in {"complete", "cancelled"}
-        ):
-            return {"allowed": True, "cleaned": True}
-        # An uncertain guard may still be cleared by the exact instance/nonce on
-        # complete or cancelled; new request permits require it to be active.
-        if (
-            guard is None
-            or guard.state != ("active" if payload.event == "authorize" else guard.state)
-            or guard.state not in {"active", "uncertain"}
-            or guard.service_instance_id != payload.service_instance_id
-            or guard.remote_job_id != job.id or guard.nonce_hash != job.service_token_hash
-            or job.service_instance_id != payload.service_instance_id
-        ):
-            raise HTTPException(status_code=409, detail="Browser remote guard is not active")
-        if payload.event == "authorize":
-            if not _browser_network_verified():
-                raise HTTPException(status_code=503, detail="Browser network capability is unverified")
-            if not valid:
-                revoke()
-                await commit()
-                raise HTTPException(status_code=403, detail="Browser request is outside current authority")
-            if (
-                # The API enforces the guard bound: no new permits after expiry.
-                guard.expires_at <= datetime.now(UTC)
-                or not valid or grant is None
-                or payload.request_ordinal != job.request_ordinal + 1
-                or payload.request_ordinal > 6
-                or payload.actual_pages != 0 or payload.actual_bytes != 0
-                or payload.result_hash is not None
-                or not _target_in_scope(payload.target_url, grant.origin, grant.path_prefix)
-            ):
-                raise HTTPException(status_code=403, detail="Browser request is outside current authority")
-            job.request_ordinal = payload.request_ordinal
-            await commit()
-            return {"allowed": True, "request_ordinal": payload.request_ordinal}
-        if payload.event == "complete":
-            if job.cancel_requested or job.status != "running":
-                # A cancelled or purged job is never resurrected: clear the guard and
-                # settle any non-terminal row as cancelled, never as running.
-                if job.status in {"queued", "running", "cancel_requested", "uncertain"}:
-                    job.status = "cancelled"
-                proof = cleanup_proof_after_ack(job.operation_id, guard.service_instance_id, job.id)
-                await clear_remote_heavy_in_uow(session, job.operation_id, proof)
-                await commit()
-                return {"allowed": True, "cleaned": True}
-            if (
-                payload.request_ordinal != job.request_ordinal
-                or not 1 <= payload.actual_pages <= job.max_pages
-                or payload.actual_bytes > job.max_bytes
-                or payload.result_hash is None
-            ):
-                raise HTTPException(status_code=409, detail="Browser completion ordinal is stale")
-            job.actual_pages = payload.actual_pages
-            job.actual_bytes = payload.actual_bytes
-            job.result_hash = payload.result_hash
-            job.status = "running"
-            proof = cleanup_proof_after_ack(job.operation_id, guard.service_instance_id, job.id)
-            await clear_remote_heavy_in_uow(session, job.operation_id, proof)
-            await commit()
-            return {"allowed": True}
-        if job.status not in {"succeeded", "failed", "expired"}:
-            job.status = "cancelled"
-        job.cancel_requested = True
-        proof = cleanup_proof_after_ack(job.operation_id, guard.service_instance_id, job.id)
-        await clear_remote_heavy_in_uow(session, job.operation_id, proof)
-        await commit()
-        return {"allowed": True}
+        return await _dispatch_control_event(
+            _ControlState(session, job, payload, valid, grant, job_scope, fence, flag),
+        )

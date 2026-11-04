@@ -117,6 +117,15 @@ class InboundResponseBuffer:
         return self._start, bytes(self._body)
 
 
+@dataclass(frozen=True)
+class _Reject:
+    """A fixed, detail-free HTTP rejection decided before any owner callback runs."""
+
+    status: int
+    code: str
+    bearer_challenge: bool = False
+
+
 class InboundMcpGuard:
     """Authenticate and bound one canonical, stateless MCP JSON HTTP request."""
 
@@ -155,27 +164,18 @@ class InboundMcpGuard:
         self._revalidate_inbound = revalidate_inbound
         self._revalidate_inbound_output = revalidate_inbound_output
 
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """Enforce canonical addressing, bounded admission/auth/body, then final buffered egress fences."""
-        if scope.get("type") != "http":
-            if scope.get("type") == "websocket":
-                await send({"type": "websocket.close", "code": 1008})
-            return
+    def _precheck_request(self, scope: Scope, headers: list[tuple[bytes, bytes]]) -> _Reject | None:
+        """Reject oversize headers, non-canonical paths and wrong Host/Origin/Authorization counts.
 
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + 60.0
-        headers = scope.get("headers", [])
+        Starlette Mount keeps the full external path in ``path``; ``root_path`` is routing context.
+        This endpoint deliberately does not accept deployment app_root_path prefixes. Pure; no I/O.
+        """
         header_size = sum(len(name) + len(value) + 2 for name, value in headers)
         if len(headers) > 64 or header_size > 16_384:
-            await self._send_fixed_error(send, 431, "invalid_headers")
-            return
-        # Starlette Mount keeps the full external path in `path`; `root_path` is routing context.
-        # This endpoint deliberately does not accept deployment app_root_path prefixes.
+            return _Reject(431, "invalid_headers")
         path = scope.get("path", "")
         if path != self._canonical_path or scope.get("query_string", b""):
-            await self._send_fixed_error(send, 404, "not_found")
-            return
-
+            return _Reject(404, "not_found")
         hosts = [value for name, value in headers if name.lower() == b"host"]
         origins = [value for name, value in headers if name.lower() == b"origin"]
         auth_headers = [value for name, value in headers if name.lower() == b"authorization"]
@@ -186,123 +186,174 @@ class InboundMcpGuard:
             or (origins and origins[0] not in self._allowed_origins)
             or len(auth_headers) != 1
         ):
-            await self._send_fixed_error(send, 403, "request_rejected")
-            return
+            return _Reject(403, "request_rejected")
+        return None
 
-        auth = auth_headers[0]
+    @staticmethod
+    def _bearer_token(headers: list[tuple[bytes, bytes]]) -> str | _Reject:
+        """Extract the single ASCII bearer token (at most 512 chars, no whitespace) or reject as 401."""
+        auth = next(value for name, value in headers if name.lower() == b"authorization")
+        unauthorized = _Reject(401, "unauthorized", bearer_challenge=True)
         if not auth.startswith(b"Bearer ") or len(auth) > 519:
-            await self._send_fixed_error(send, 401, "unauthorized", bearer_challenge=True)
-            return
+            return unauthorized
         try:
             raw_token = auth[7:].decode("ascii")
         except UnicodeDecodeError:
-            await self._send_fixed_error(send, 401, "unauthorized", bearer_challenge=True)
-            return
+            return unauthorized
         if not raw_token or len(raw_token) > 512 or any(char.isspace() for char in raw_token):
+            return unauthorized
+        return raw_token
+
+    @staticmethod
+    def _check_framing(headers: list[tuple[bytes, bytes]], method: str) -> _Reject | int | None:
+        """Validate method and body framing; return a rejection or the declared length (or ``None``).
+
+        Only POST with identity encoding, exactly one JSON content type and at most one valid,
+        non-negative ``Content-Length`` up to 128,000 bytes is accepted. Pure; no I/O.
+        """
+        if method in {"GET", "DELETE"} or method != "POST":
+            return _Reject(405, "method_not_allowed")
+        content_encodings = [value for name, value in headers if name.lower() == b"content-encoding"]
+        content_types = [value for name, value in headers if name.lower() == b"content-type"]
+        content_lengths = [value for name, value in headers if name.lower() == b"content-length"]
+        if content_encodings and content_encodings != [b"identity"]:
+            return _Reject(415, "unsupported_encoding")
+        if len(content_types) != 1 or not content_types[0].split(b";", 1)[0].strip().lower() == b"application/json":  # noqa: SIM201  # style-only rewrite skipped to avoid touching control flow
+            return _Reject(415, "unsupported_media_type")
+        if len(content_lengths) > 1:
+            return _Reject(400, "invalid_request")
+        if not content_lengths:
+            return None
+        try:
+            declared_length = int(content_lengths[0])
+        except ValueError:
+            return _Reject(400, "invalid_request")
+        if declared_length < 0 or declared_length > 128_000:
+            return _Reject(413, "request_too_large")
+        return declared_length
+
+    async def _send_rejection(self, send: Send, rejection: _Reject) -> None:
+        """Emit the fixed error for a pre-computed rejection."""
+        await self._send_fixed_error(send, rejection.status, rejection.code, bearer_challenge=rejection.bearer_challenge)
+
+    async def _authenticate(
+        self, scope: Scope, send: Send, token_box: list[str],
+    ) -> InboundPrincipal | None:
+        """Authenticate the bearer, then drop it and strip credentials from the forwarded scope.
+
+        The token is popped from ``token_box`` so no reference survives this call. A failed
+        authentication sends the uniform 401 and returns ``None``. The SDK request context needs
+        Host/Origin but never the already-consumed bearer or cookies.
+        """
+        raw_token = token_box.pop()
+        try:
+            return await self._authenticate_inbound(raw_token)
+        except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
             await self._send_fixed_error(send, 401, "unauthorized", bearer_challenge=True)
+            return None
+        finally:
+            raw_token = ""
+            scope["headers"] = [
+                (name, value)
+                for name, value in scope.get("headers", [])
+                if name.lower() not in {b"authorization", b"cookie"}
+            ]
+
+    async def _read_bounded_body(
+        self, receive: Receive, send: Send, declared_length: int | None, deadline: float,
+    ) -> bytes | None:
+        """Read the request body, answering 408/413/400 itself; ``None`` means a response was sent."""
+        try:
+            return await self._read_request_body(receive, declared_length=declared_length, deadline=deadline)
+        except TimeoutError:
+            await self._send_fixed_error(send, 408, "request_timeout")
+        except OverflowError:
+            await self._send_fixed_error(send, 413, "request_too_large")
+        except ValueError:
+            await self._send_fixed_error(send, 400, "invalid_request")
+        return None
+
+    async def _serve_admitted(
+        self, scope: Scope, receive: Receive, send: Send, lease: McpInboundLease,
+        token_box: list[str], deadline: float,
+    ) -> None:
+        """Run an admitted request: authenticate, authorize, frame, read, fence, serve and emit.
+
+        The owner scope is revalidated before the body is read and again after, so a revoked caller
+        is rejected without an SDK call. Every rejection sends its fixed error and returns.
+        """
+        loop = asyncio.get_running_loop()
+        identity = await self._authenticate(scope, send, token_box)
+        if identity is None:
+            return
+        if not await lease.bind_client(identity.client_id):
+            await self._send_fixed_error(send, 429, "client_capacity")
+            return
+        expected = await self._authorize_inbound(identity)
+        if expected is None or not await self._revalidate_inbound(identity, expected):
+            await self._send_fixed_error(send, 403, "forbidden")
+            return
+        state = InboundRequestState(identity=identity, expected=expected, lease=lease)
+        framing = self._check_framing(scope.get("headers", []), scope.get("method", "").upper())
+        if isinstance(framing, _Reject):
+            await self._send_rejection(send, framing)
+            return
+        if not await self._revalidate_inbound(identity, expected):
+            await self._send_fixed_error(send, 403, "forbidden")
+            return
+        body = await self._read_bounded_body(receive, send, framing, deadline)
+        if body is None:
+            return
+        if not await self._revalidate_inbound(identity, expected):
+            await self._send_fixed_error(send, 403, "forbidden")
+            return
+        if body.lstrip().startswith(b"["):
+            await self._send_fixed_error(send, 400, "batch_unsupported")
+            return
+        state_dict = scope.setdefault("state", {})
+        if not isinstance(state_dict, dict) or "bbd_mcp_authorization" in state_dict:
+            await self._send_fixed_error(send, 403, "request_rejected")
+            return
+        state_dict["bbd_mcp_authorization"] = state
+        start, response_body = await self._run_child(
+            scope,
+            body,
+            receive,
+            state,
+            operation_deadline=max(
+                loop.time(), deadline - _CLEANUP_RESERVE_SECONDS,
+            ),
+            cleanup_deadline=deadline,
+        )
+        try:
+            await self._emit_response(send, start, response_body, state)
+        except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
+            # A failed client send cannot be repaired with a second response start.
             return
 
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Enforce canonical addressing, bounded admission/auth/body, then final buffered egress fences."""
+        if scope.get("type") != "http":
+            if scope.get("type") == "websocket":
+                await send({"type": "websocket.close", "code": 1008})
+            return
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 60.0
+        headers = scope.get("headers", [])
+        rejection = self._precheck_request(scope, headers)
+        token = self._bearer_token(headers) if rejection is None else None
+        if rejection is None and isinstance(token, _Reject):
+            rejection = token
+        if rejection is not None:
+            await self._send_rejection(send, rejection)
+            return
+        token_box = [cast(str, token)]
+        token = None
         try:
             async with self._admission.inbound_slot(deadline) as lease:
                 async with asyncio.timeout_at(deadline):
-                    try:
-                        identity = await self._authenticate_inbound(raw_token)
-                    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
-                        await self._send_fixed_error(send, 401, "unauthorized", bearer_challenge=True)
-                        return
-                    finally:
-                        raw_token = ""
-                        auth = b""
-                        auth_headers.clear()
-                        # The SDK request context needs Host/Origin but never the already-consumed bearer or cookies.
-                        headers = [
-                            (name, value)
-                            for name, value in headers
-                            if name.lower() not in {b"authorization", b"cookie"}
-                        ]
-                        scope["headers"] = headers
-                    if not await lease.bind_client(identity.client_id):
-                        await self._send_fixed_error(send, 429, "client_capacity")
-                        return
-
-                    expected = await self._authorize_inbound(identity)
-                    if expected is None or not await self._revalidate_inbound(identity, expected):
-                        await self._send_fixed_error(send, 403, "forbidden")
-                        return
-                    state = InboundRequestState(identity=identity, expected=expected, lease=lease)
-
-                    method = scope.get("method", "").upper()
-                    if method in {"GET", "DELETE"}:
-                        await self._send_fixed_error(send, 405, "method_not_allowed")
-                        return
-                    if method != "POST":
-                        await self._send_fixed_error(send, 405, "method_not_allowed")
-                        return
-
-                    content_encodings = [value for name, value in headers if name.lower() == b"content-encoding"]
-                    content_types = [value for name, value in headers if name.lower() == b"content-type"]
-                    content_lengths = [value for name, value in headers if name.lower() == b"content-length"]
-                    if content_encodings and content_encodings != [b"identity"]:
-                        await self._send_fixed_error(send, 415, "unsupported_encoding")
-                        return
-                    if len(content_types) != 1 or not content_types[0].split(b";", 1)[0].strip().lower() == b"application/json":  # noqa: SIM201  # style-only rewrite skipped to avoid touching control flow
-                        await self._send_fixed_error(send, 415, "unsupported_media_type")
-                        return
-                    if len(content_lengths) > 1:
-                        await self._send_fixed_error(send, 400, "invalid_request")
-                        return
-                    declared_length: int | None = None
-                    if content_lengths:
-                        try:
-                            declared_length = int(content_lengths[0])
-                        except ValueError:
-                            await self._send_fixed_error(send, 400, "invalid_request")
-                            return
-                        if declared_length < 0 or declared_length > 128_000:
-                            await self._send_fixed_error(send, 413, "request_too_large")
-                            return
-                    if not await self._revalidate_inbound(identity, expected):
-                        await self._send_fixed_error(send, 403, "forbidden")
-                        return
-
-                    try:
-                        body = await self._read_request_body(receive, declared_length=declared_length, deadline=deadline)
-                    except TimeoutError:
-                        await self._send_fixed_error(send, 408, "request_timeout")
-                        return
-                    except OverflowError:
-                        await self._send_fixed_error(send, 413, "request_too_large")
-                        return
-                    except ValueError:
-                        await self._send_fixed_error(send, 400, "invalid_request")
-                        return
-                    if not await self._revalidate_inbound(identity, expected):
-                        await self._send_fixed_error(send, 403, "forbidden")
-                        return
-                    if body.lstrip().startswith(b"["):
-                        await self._send_fixed_error(send, 400, "batch_unsupported")
-                        return
-
-                    state_dict = scope.setdefault("state", {})
-                    if not isinstance(state_dict, dict) or "bbd_mcp_authorization" in state_dict:
-                        await self._send_fixed_error(send, 403, "request_rejected")
-                        return
-                    state_dict["bbd_mcp_authorization"] = state
-                    start, response_body = await self._run_child(
-                        scope,
-                        body,
-                        receive,
-                        state,
-                        operation_deadline=max(
-                            loop.time(), deadline - _CLEANUP_RESERVE_SECONDS,
-                        ),
-                        cleanup_deadline=deadline,
-                    )
-                    try:
-                        await self._emit_response(send, start, response_body, state)
-                    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
-                        # A failed client send cannot be repaired with a second response start.
-                        return
+                    await self._serve_admitted(scope, receive, send, lease, token_box, deadline)
         except TimeoutError:
             await self._send_fixed_error(send, 503, "request_timeout")
         except RuntimeError:

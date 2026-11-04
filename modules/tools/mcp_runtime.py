@@ -3,7 +3,7 @@
 import logging
 from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -77,6 +77,48 @@ def derive_mcp_public_endpoint(settings: Settings) -> tuple[str, str, str]:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _select_grant_and_capability(discovery: Any, grants: Any, fence: ExecutionFence) -> tuple[Any, Any]:
+    """Find the fence's grant and the discovered capability that grant reviewed (either may be ``None``)."""
+    grant = next((item for item in grants if item.id == fence.grant_id), None)
+    capability = next((
+        item for item in discovery.capabilities
+        if grant is not None and item.id == grant.capability_id
+    ), None)
+    return grant, capability
+
+
+def _selection_matches_fence(
+    connection: Any, discovery: Any, grant: Any, capability: Any, fence: ExecutionFence, destination_id: str,
+) -> bool:
+    """Return whether the current connection, discovery, grant and capability equal the reviewed fence.
+
+    Requires an enabled remote-capable transport, identical revisions and descriptor hash, a
+    read-only chat grant whose destinations and sources include the fence's, and an unchanged
+    remote capability key and deployment profile hash. Pure; no I/O.
+    """
+    return not (
+        not connection.enabled
+        or connection.transport not in {McpTransport.STREAMABLE_HTTP, McpTransport.STDIO}
+        or connection.revision != fence.connection_revision
+        or discovery.id != fence.discovery_id
+        or discovery.connection_revision != connection.revision
+        or grant is None
+        or capability is None
+        or capability.kind not in {"tool", "resource"}
+        or grant.connection_id != connection.id
+        or grant.reviewed_connection_revision != connection.revision
+        or grant.descriptor_hash != capability.descriptor_hash
+        or grant.descriptor_hash != fence.descriptor_hash
+        or grant.grant_revision != fence.grant_revision
+        or grant.risk != McpRisk.READ_ONLY
+        or grant.purpose != "chat"
+        or destination_id not in grant.destinations
+        or grant.source_ids != fence.source_ids
+        or capability.remote_key != fence.remote_capability_key
+        or connection.deployment_profile_hash != fence.deployment_profile_hash
+    )
 
 
 class McpRuntime:
@@ -452,6 +494,18 @@ class McpRuntime:
                 session, connection_id, grant_id, destination_id, scope=scope,
             )
 
+    def _profile_identity_current(self, connection: Any, fence: ExecutionFence) -> bool:
+        """Return whether the launch-profile identity still equals the fence.
+
+        A stdio connection needs a catalogued deployment profile whose current identity equals the
+        reviewed hash; an HTTP connection must carry no profile hash. Pure catalog lookup, no I/O.
+        """
+        if connection.transport == McpTransport.STDIO:
+            return connection.deployment_profile_id is not None and self.profile_catalog.get_identity(
+                connection.deployment_profile_id,
+            ) == fence.deployment_profile_hash
+        return fence.deployment_profile_hash is None
+
     async def revalidate_fence(self, scope: Scope, fence: ExecutionFence) -> bool:
         """Require current reviewed remote transport, enabled registry, source and admission authority.
 
@@ -485,39 +539,10 @@ class McpRuntime:
             if selection is None:
                 return False
             connection, discovery, grants = selection
-            grant = next((item for item in grants if item.id == fence.grant_id), None)
-            capability = next((
-                item for item in discovery.capabilities
-                if grant is not None and item.id == grant.capability_id
-            ), None)
-            if (
-                not connection.enabled
-                or connection.transport not in {McpTransport.STREAMABLE_HTTP, McpTransport.STDIO}
-                or connection.revision != fence.connection_revision
-                or discovery.id != fence.discovery_id
-                or discovery.connection_revision != connection.revision
-                or grant is None
-                or capability is None
-                or capability.kind not in {"tool", "resource"}
-                or grant.connection_id != connection.id
-                or grant.reviewed_connection_revision != connection.revision
-                or grant.descriptor_hash != capability.descriptor_hash
-                or grant.descriptor_hash != fence.descriptor_hash
-                or grant.grant_revision != fence.grant_revision
-                or grant.risk != McpRisk.READ_ONLY
-                or grant.purpose != "chat"
-                or destination_id not in grant.destinations
-                or grant.source_ids != fence.source_ids
-                or capability.remote_key != fence.remote_capability_key
-                or connection.deployment_profile_hash != fence.deployment_profile_hash
-            ):
+            grant, capability = _select_grant_and_capability(discovery, grants, fence)
+            if not _selection_matches_fence(connection, discovery, grant, capability, fence, destination_id):
                 return False
-            if connection.transport == McpTransport.STDIO:
-                if connection.deployment_profile_id is None or self.profile_catalog.get_identity(
-                    connection.deployment_profile_id,
-                ) != fence.deployment_profile_hash:
-                    return False
-            elif fence.deployment_profile_hash is not None:
+            if not self._profile_identity_current(connection, fence):
                 return False
             assert grant is not None and capability is not None
             expected_definition = build_mcp_tool_definition(
