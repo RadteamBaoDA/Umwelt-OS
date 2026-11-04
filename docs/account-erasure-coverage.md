@@ -53,6 +53,7 @@ Reviewed 21 October 2026. This is the registered SQL model inventory, not eviden
 | `daily_briefs` | [modules/dashboard/erasure.py](../modules/dashboard/erasure.py) | Delete scoped rows in bounded pages; verify absence before identity finalization. |
 | `dashboard_groups` | [modules/dashboard/erasure.py](../modules/dashboard/erasure.py) | Delete scoped rows in bounded pages; verify absence before identity finalization. |
 | `dashboard_live_credentials` | [modules/dashboard/erasure.py](../modules/dashboard/erasure.py) | Delete the workspace's encrypted live-map settings before identity finalization. |
+| `dashboard_live_terms` | [modules/dashboard/erasure.py](../modules/dashboard/erasure.py) | Delete owned workspace acknowledgements; reviewer references are cleared by the foreign key when an operator account is removed. |
 | `dashboard_layouts` | [modules/dashboard/erasure.py](../modules/dashboard/erasure.py) | Delete scoped rows in bounded pages; verify absence before identity finalization. |
 | `dashboards` | [modules/dashboard/erasure.py](../modules/dashboard/erasure.py) | Delete scoped rows in bounded pages; verify absence before identity finalization. |
 | `demo_seed_receipts` | [core/auth/deletion_cleanup.py](../core/auth/deletion_cleanup.py) | Delete scoped rows in bounded pages; verify absence before identity finalization. |
@@ -158,6 +159,6 @@ Reviewed 21 October 2026. This is the registered SQL model inventory, not eviden
 | `workspace_shares` | [core/workspaces/erasure.py](../core/workspaces/erasure.py) | Remove departing member references; remove owned workspace shares during finalization. |
 | `workspaces` | [core/workspaces/erasure.py](../core/workspaces/erasure.py) | Delete emptied owned workspace last; shared members/live invitations block acceptance. |
 
-Total: 152 registered tables; 136 ordinary cleanup tables, 8 shared/operational tables, 8 identity/workspace/receipt tables.
+Total: 159 registered tables; 141 ordinary cleanup tables, 10 shared/operational tables, 8 identity/workspace/receipt tables.
 
 External persistence is separate: graph content and its permanent opaque late-write fence, filesystem originals, Agent saver tables and Redis namespaces are owned by their respective stage contracts. Host environment secrets, provider backups/logs, exported copies and third-party retained data require separate operator/provider handling.

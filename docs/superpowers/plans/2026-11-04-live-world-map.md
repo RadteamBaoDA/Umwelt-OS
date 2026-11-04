@@ -71,3 +71,15 @@
 
 - After reconciliation, 56 existing Dashboard Python tests and 74 focused frontend tests passed; Alembic generated offline SQL from `0010_observations_vn_stock` through the merged head. Webpack completed after a Next.js security warning, but omitted 27 standalone trace files outside the junction tracing root.
 - Reindexed the merged working tree and ran GitNexus `detect_changes(scope=all)` twice. Both reported critical risk, 1,415 changed symbols and `truncated: true` (1,000 shown); the merge includes target history and this is not a clean or complete graph audit. The source review and targeted tests cover selected seams only.
+
+## Review follow-up in progress
+
+- Independent review identified admin-view access, stale event display after terms withdrawal, and provider cancellation gaps. Uncommitted fixes allow only owner or admitted admin reads (redacting SEC contact for admin), bind event queries to config revision and eligibility, and cancel active provider I/O when a request disconnects. The existing member denial remains aligned with Dashboard admission.
+- A second review found the cancellation change can cancel a shared fetch when its first client disconnects even while another waits. `test_shared_fetch_survives_leader_disconnect_while_another_client_waits` reproduces this and currently fails: two upstream fetches instead of one. Implement observer-aware shared-task lifetime and per-send authority before treating this work as ready.
+- Added focused weather projection and teardown checks and updated the account erasure inventory; account-erasure coverage tests pass. No final merge into the user's branch has occurred.
+
+## Shared-fetch review resolution
+
+- The previously failing two-client test now passes: a shared provider task retains independently fenced observers, switches to a connected authorized session for each send, and cancels only after its final observer leaves. Final publication revalidates each client and is cancelled on disconnect; shared results remain available until cache insertion. Bounded-cache eviction and config-revocation behavior have regression tests.
+- Follow-up independent review found no further concrete issue in those changes. Its limits: simulated requests only; real ASGI disconnects, live provider access, and PostgreSQL concurrency remain unverified.
+- Target checkout now has an additional uncommitted migration `0011_model_capability_evidence` based on `0010`. The owner approved adding an uncommitted no-schema merge revision after integration; an isolated Alembic preview produced one head. Preserve the owner's migration and other working changes.

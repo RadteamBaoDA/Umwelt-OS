@@ -28,7 +28,7 @@ from core.auth.schemas import AccountSessionRef
 from core.config import Settings
 from core.database import Base
 from core.workspaces import public as workspaces
-from core.workspaces.schemas import WorkspaceContext
+from core.workspaces.schemas import AdminWorkspaceReadContext, WorkspaceContext
 from modules.connectors.public import live_terms_catalog
 
 
@@ -163,10 +163,10 @@ def require_live_terms(credentials: LiveCredentials, provider: str) -> None:
 
 
 async def read_live_credentials(
-    session: AsyncSession, *, scope: WorkspaceContext, settings: Settings, multi_workspace_enabled: bool,
+    session: AsyncSession, *, scope: WorkspaceContext | AdminWorkspaceReadContext, settings: Settings, multi_workspace_enabled: bool,
 ) -> LiveCredentials:
-    """Read one owner-only snapshot after fresh workspace admission; never expose secrets to a client."""
-    if not isinstance(scope, WorkspaceContext) or scope.role != "owner":
+    """Read a server-only owner snapshot for an admitted owner or read-only instance administrator."""
+    if not isinstance(scope, AdminWorkspaceReadContext) and (not isinstance(scope, WorkspaceContext) or scope.role != "owner"):
         raise HTTPException(status_code=403, detail="Workspace owner required")
     await workspaces.read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     row = await session.scalar(select(LiveMapCredential).where(

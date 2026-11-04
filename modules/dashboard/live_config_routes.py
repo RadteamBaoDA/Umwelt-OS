@@ -14,13 +14,13 @@ from core.auth.models import AuthSession
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
 from core.publication import require_publication_gate
-from core.workspaces.dependencies import require_workspace_read, require_workspace_write
+from core.workspaces.dependencies import require_workspace_observer_read, require_workspace_write
 from core.workspaces.public import (
     bump_operator_review_revision,
     list_instance_workspaces,
     read_access_fence,
 )
-from core.workspaces.schemas import PublicationFence, WorkspaceContext
+from core.workspaces.schemas import AdminWorkspaceReadContext, PublicationFence, WorkspaceContext
 from modules.dashboard.live_credentials import (
     LiveCredentialUpdate,
     LiveMapTerms,
@@ -32,13 +32,13 @@ from modules.dashboard.live_credentials import (
 router = APIRouter(prefix="/api/v1/live-map", tags=["live-map"])
 operator_router = APIRouter(prefix="/api/v1/operator/live-map", tags=["live-map"])
 Session = Annotated[AsyncSession, Depends(get_session)]
-OwnerRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
+OwnerRead = Annotated[WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)]
 OwnerWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 
 @router.get("/config")
 async def read_config(request: Request, response: Response, session: Session, scope: OwnerRead) -> dict[str, Any]:
-    """Return sanitized settings for the workspace owner without exposing saved keys."""
+    """Return sanitized settings to the owner or operator viewer; never expose saved keys."""
     response.headers["Cache-Control"] = "private, no-store"
     operator = is_instance_operator(request.state.auth_session)
     gate = request.app.state.settings.multi_workspace_enabled
@@ -48,7 +48,11 @@ async def read_config(request: Request, response: Response, session: Session, sc
     await session.rollback()
     require_publication_gate(request, PublicationFence(scope=scope, access_fence=fence,
                              auth_session=authenticated_session_ref(request), grants=()))
-    return public_live_credentials(value, is_operator=operator)
+    result = public_live_credentials(value, is_operator=operator)
+    if isinstance(scope, AdminWorkspaceReadContext):
+        # Contact information belongs to the workspace owner, not the operator viewer.
+        result["sec_contact_email"] = None
+    return result
 
 
 @router.put("/config")

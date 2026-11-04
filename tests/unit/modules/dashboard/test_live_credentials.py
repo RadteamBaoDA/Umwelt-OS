@@ -192,3 +192,43 @@ async def test_operator_review_http_rejects_anonymous_and_other_accounts(monkeyp
             "acknowledged_at": "2026-11-04T00:00:00Z",
         })
         assert denied.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_admin_server_read_selects_workspace_owner_without_exposing_contact(monkeypatch: pytest.MonkeyPatch) -> None:
+    from core.workspaces.schemas import AdminWorkspaceReadContext
+    from modules.dashboard import live_config_routes, live_credentials
+
+    scope = AdminWorkspaceReadContext(actor_user_id=1, workspace_id=uuid4(), workspace_owner_user_id=2,
+                                      membership_revision=1, configuration_revision=1)
+    queries = []
+
+    class Session:
+        async def scalar(self, statement):
+            queries.append(statement.compile().params)
+
+        async def scalars(self, statement):
+            return []
+
+        async def rollback(self):
+            pass
+
+    async def fence(*args, **kwargs):
+        return object()
+
+    monkeypatch.setattr(live_credentials.workspaces, 'read_access_fence', fence)
+    snapshot = await live_credentials.read_live_credentials(Session(), scope=scope, settings=None, multi_workspace_enabled=True)
+    assert snapshot.revision == 1
+    assert 2 in queries[0].values() and 1 not in queries[0].values()
+    monkeypatch.setattr(live_config_routes, 'read_access_fence', fence)
+    async def credentials(*args, **kwargs):
+        return live_credentials.LiveCredentials(revision=1, sec_contact_email='private@example.test')
+    monkeypatch.setattr(live_config_routes, 'read_live_credentials', credentials)
+    monkeypatch.setattr(live_config_routes, 'authenticated_session_ref', lambda request: object())
+    monkeypatch.setattr(live_config_routes, 'PublicationFence', lambda **kwargs: object())
+    monkeypatch.setattr(live_config_routes, 'require_publication_gate', lambda *args: None)
+    request = SimpleNamespace(state=SimpleNamespace(auth_session=SimpleNamespace(owner_id=1)),
+                              app=SimpleNamespace(state=SimpleNamespace(settings=SimpleNamespace(multi_workspace_enabled=True))))
+    from fastapi import Response
+    result = await live_config_routes.read_config(request, Response(), Session(), scope)
+    assert result['sec_contact_email'] is None

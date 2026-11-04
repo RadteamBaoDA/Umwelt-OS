@@ -17,7 +17,7 @@ describe('live map visibility', () => {
     let observe: IntersectionObserverCallback | undefined;
     vi.stubGlobal('IntersectionObserver', class { constructor(callback: IntersectionObserverCallback) { observe = callback; } observe() {} disconnect() {} });
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
-    request.mockImplementation(async (url) => url.includes('/config') ? { revision: 1, terms_catalog: [] } : { fetched_at: '2026-11-04T00:00:00Z', truncated: false, items: [{ id: '1', title: 'Event', source: 'NASA EONET', observed_at: null, latitude: null, longitude: null, url: null, summary: null, sources: [{ id: 'agency', url: 'https://example.com/event' }] }] });
+    request.mockImplementation(async (url) => url.includes('/config') ? { revision: 1, terms_catalog: [{ id: 'eonet', accepted: true }, { id: 'usgs', accepted: true }] } : { fetched_at: '2026-11-04T00:00:00Z', truncated: false, items: [{ id: '1', title: 'Event', source: 'NASA EONET', observed_at: null, latitude: null, longitude: null, url: null, summary: null, sources: [{ id: 'agency', url: 'https://example.com/event' }] }] });
     const instance = { id: 'one', definition: { scope: { live_map_providers: ['eonet'] }, filters: {} } } as GadgetInstance;
     render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}><LiveMapGadget instance={instance} isEditMode={false} /></NextIntlClientProvider></QueryClientProvider>);
     await waitFor(() => expect(observe).toBeDefined());
@@ -25,12 +25,27 @@ describe('live map visibility', () => {
     const link = await screen.findByRole('link', { name: 'Provider source' });
     expect(link.getAttribute('href')).toBe('https://example.com/event');
   });
+  it('hides previously fetched events when provider consent is withdrawn', async () => {
+    let observe: IntersectionObserverCallback | undefined;
+    vi.stubGlobal('IntersectionObserver', class { constructor(callback: IntersectionObserverCallback) { observe = callback; } observe() {} disconnect() {} });
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    const accepted = { revision: 1, terms_catalog: [{ id: 'usgs', accepted: true }] };
+    request.mockImplementation(async (url) => url.includes('/config') ? accepted : { fetched_at: '2026-11-04T00:00:00Z', truncated: false, items: [{ id: '1', title: 'Old event', source: 'USGS', observed_at: null, latitude: null, longitude: null, url: null, summary: null }] });
+    const instance = { id: 'one', definition: { scope: { live_map_providers: ['usgs'] }, filters: {} } } as GadgetInstance;
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}><LiveMapGadget instance={instance} isEditMode={false} /></NextIntlClientProvider></QueryClientProvider>);
+    await waitFor(() => expect(observe).toBeDefined());
+    act(() => observe?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver));
+    expect(await screen.findByText('Old event')).toBeTruthy();
+    act(() => { client.setQueryData(['live-map-config', 'workspace'], { revision: 2, terms_catalog: [{ id: 'usgs', accepted: false }] }); });
+    await waitFor(() => expect(screen.queryByText('Old event')).toBeNull());
+  });
   it('cancels an in-flight provider only after its last visible gadget leaves', async () => {
     const observers: IntersectionObserverCallback[] = [];
     vi.stubGlobal('IntersectionObserver', class { constructor(callback: IntersectionObserverCallback) { observers.push(callback); } observe() {} disconnect() {} });
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
     let signal: AbortSignal | undefined;
-    request.mockImplementation((url, options) => url.includes('/config') ? Promise.resolve({ revision: 1, terms_catalog: [] }) : new Promise((_resolve, reject) => {
+    request.mockImplementation((url, options) => url.includes('/config') ? Promise.resolve({ revision: 1, terms_catalog: [{ id: 'eonet', accepted: true }, { id: 'usgs', accepted: true }] }) : new Promise((_resolve, reject) => {
       signal = options.signal;
       signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
     }));
