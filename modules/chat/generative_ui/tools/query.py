@@ -110,6 +110,71 @@ def _to_float(val: Any) -> float | None:
     return None
 
 
+def _row_matches(row: Mapping[str, Any], filters: Mapping[str, Any]) -> bool:
+    """True when the row satisfies every filter: collection membership, or case-insensitive string equality."""
+    for k, expected in filters.items():
+        actual = row.get(k)
+        if isinstance(expected, (list, tuple, set, frozenset)):
+            if actual not in expected:
+                return False
+        elif str(actual).lower() != str(expected).lower():
+            return False
+    return True
+
+
+def _aggregate_values(group_rows: list[dict[str, Any]], metric: str | None, agg: str) -> float | int:
+    """Aggregate one group's rows: count (or no metric) counts rows; otherwise ``agg`` over the parseable metric values.
+
+    Groups with no parseable value yield 0.0; an unknown ``agg`` behaves like ``sum``.
+    """
+    nums = [
+        n
+        for r in group_rows
+        if metric is not None and (n := _to_float(r.get(metric))) is not None
+    ]
+    if agg == "count" or metric is None:
+        return len(group_rows)
+    if not nums:
+        return 0.0
+    if agg == "avg":
+        return round(sum(nums) / len(nums), 4)
+    if agg == "min":
+        return min(nums)
+    if agg == "max":
+        return max(nums)
+    return round(sum(nums), 4)  # "sum" and unknown aggregations
+
+
+def _group_rows(
+    rows: list[dict[str, Any]], group_by: str, metric: str | None, agg: str,
+) -> list[dict[str, Any]]:
+    """Group rows by ``group_by`` (missing values group as "Other") and aggregate each group.
+
+    The first citation reference found in a group's rows is carried onto the aggregated row so provenance
+    survives aggregation.
+    """
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        groups.setdefault(str(row.get(group_by, "Other")), []).append(row)
+    aggregated: list[dict[str, Any]] = []
+    for group_val, group_rows in groups.items():
+        merged_row: dict[str, Any] = {
+            group_by: group_val,
+            (metric or "count"): _aggregate_values(group_rows, metric, agg),
+        }
+        for r in group_rows:
+            ref = _extract_citation_ref(r)
+            if ref is not None:
+                merged_row.setdefault("source_id", ref.source_id)
+                merged_row.setdefault("document_id", ref.document_id)
+                merged_row.setdefault("chunk_id", ref.chunk_id)
+                if ref.document_version_id:
+                    merged_row.setdefault("document_version_id", ref.document_version_id)
+                break
+        aggregated.append(merged_row)
+    return aggregated
+
+
 def query_records(
     records: Sequence[Mapping[str, Any]],
     *,
@@ -137,71 +202,13 @@ def query_records(
         List of new record dictionaries with `source_id`, `document_id`, and `chunk_id` preserved.
     """
     bounded_limit = max(1, min(int(limit), 200))
-    filtered: list[dict[str, Any]] = []
-    for raw in records:
-        row = dict(raw)
-        if filters:
-            matched = True
-            for k, expected in filters.items():
-                actual = row.get(k)
-                if isinstance(expected, (list, tuple, set, frozenset)):
-                    if actual not in expected:
-                        matched = False
-                        break
-                elif str(actual).lower() != str(expected).lower():
-                    matched = False
-                    break
-            if not matched:
-                continue
-        filtered.append(row)
-
+    filtered = [dict(raw) for raw in records if not filters or _row_matches(raw, filters)]
     if group_by:
-        groups: dict[str, list[dict[str, Any]]] = {}
-        for row in filtered:
-            key_val = str(row.get(group_by, "Other"))
-            groups.setdefault(key_val, []).append(row)
-
-        aggregated: list[dict[str, Any]] = []
-        for group_val, group_rows in groups.items():
-            nums = [
-                n
-                for r in group_rows
-                if metric is not None and (n := _to_float(r.get(metric))) is not None
-            ]
-            if agg == "count" or metric is None:
-                agg_value: float | int = len(group_rows)
-            elif not nums:
-                agg_value = 0.0
-            elif agg == "sum":
-                agg_value = round(sum(nums), 4)
-            elif agg == "avg":
-                agg_value = round(sum(nums) / len(nums), 4)
-            elif agg == "min":
-                agg_value = min(nums)
-            elif agg == "max":
-                agg_value = max(nums)
-            else:
-                agg_value = round(sum(nums), 4)
-
-            out_key = metric or "count"
-            merged_row: dict[str, Any] = {
-                group_by: group_val,
-                out_key: agg_value,
-            }
-            for r in group_rows:
-                ref = _extract_citation_ref(r)
-                if ref is not None:
-                    merged_row.setdefault("source_id", ref.source_id)
-                    merged_row.setdefault("document_id", ref.document_id)
-                    merged_row.setdefault("chunk_id", ref.chunk_id)
-                    if ref.document_version_id:
-                        merged_row.setdefault("document_version_id", ref.document_version_id)
-                    break
-            aggregated.append(merged_row)
-        filtered = aggregated
+        filtered = _group_rows(filtered, group_by, metric, agg)
 
     if sort_by:
         def _sort_key(item: dict[str, Any]) -> tuple[int, float | str]:
+            """Numbers sort after strings; strings compare as text."""
             val = item.get(sort_by)
             num = _to_float(val)
             if num is not None:
