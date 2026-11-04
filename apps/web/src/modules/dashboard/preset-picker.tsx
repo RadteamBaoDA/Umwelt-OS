@@ -489,6 +489,7 @@ export function PresetPicker({
                               value={slotSources[slot.slot_id] ?? []}
                               onChange={(ids) => handleSlotSources(slot.slot_id, ids)}
                               sourcesHref={sourcesLinkFor(descriptor)}
+                              max={descriptor.max_sources ?? undefined}
                             />
                           )}
                         </li>

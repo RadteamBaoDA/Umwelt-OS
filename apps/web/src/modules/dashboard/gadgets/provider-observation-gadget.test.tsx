@@ -166,4 +166,15 @@ describe('latestPerSeries', () => {
     // The visible text is locale-formatted (compact); the exact provider value stays in the accessible label.
     expect(screen.getByLabelText('25831.15 VND per USD')).toBeTruthy();
   });
+
+  it('merges rows of several sources and prefixes labels with the source name', async () => {
+    api.listGadgetSources.mockResolvedValue({ items: [{ id: 's1', provider: 'noaa_kp', name: 'Kp A' }, { id: 's2', provider: 'noaa_kp', name: 'Kp B' }], next_cursor: null });
+    api.listWorldObservationWindow.mockImplementation(async (query: { sourceIds: string[] }) => ({ truncated: false, items: [
+      { ...base, id: `r-${query.sourceIds[0]}`, source_id: query.sourceIds[0], provider: 'noaa_kp', metric: 'kp_index', value: 3, observed_at: '2026-10-09T00:00:00Z' },
+    ] }));
+    view({ id: 'g5', title: '', definition: { source_ids: ['s1', 's2'], scope: { metrics: [] } } } as never);
+    expect(await screen.findByText(/^Kp A · /)).toBeTruthy();
+    expect(screen.getByText(/^Kp B · /)).toBeTruthy();
+    expect(screen.getAllByTestId('observation-row')).toHaveLength(2);
+  });
 });

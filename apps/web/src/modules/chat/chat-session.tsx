@@ -154,7 +154,7 @@ export function ChatSession({
   // Human-in-the-loop: the pending `request_user_input` of the active run (null when none).
   const [themeRequest, setThemeRequest] = React.useState<'light' | 'dark' | 'system' | null>(null);
   const [inputRequest, setInputRequest] = React.useState<{ request: InputRequest; state: InputRequestState; label?: string } | null>(null);
-  const [webSearchOn, setWebSearchOn] = React.useState(false);
+  const [webSearchOn, setWebSearchOn] = React.useState(true);
   const [dbQueryOn, setDbQueryOn] = React.useState(false);
   const dbQueryEffective = dbQueryOn || chatCtrl.context?.kind === 'gadget';
   const [isStreaming, setIsStreaming] = React.useState<boolean>(false);
@@ -632,7 +632,7 @@ export function ChatSession({
         },
         session.csrfToken,
       );
-      setWebSearchOn(false);
+      setWebSearchOn(true);
       setDbQueryOn(false);
       chatCtrl.clearPendingMessageMutation(targetConversationId, envelope.clientRequestId);
       if (isCurrentView()) {
@@ -837,7 +837,7 @@ export function ChatSession({
           session.csrfToken,
         );
         accepted = true;
-        setWebSearchOn(false);
+        setWebSearchOn(true);
         setDbQueryOn(false);
         if (attachments.items.length && canUpdateCurrentView()) attachments.clear();
 
@@ -950,7 +950,7 @@ export function ChatSession({
     setActiveTool(null);
     setStreamingUi([]);
     setInputRequest(null);
-    setWebSearchOn(false);
+    setWebSearchOn(true);
     setDbQueryOn(false);
     setIsStreaming(false);
     setIsPending(false);

@@ -106,6 +106,38 @@ function namesLookbackField(details: unknown): boolean {
   return Array.isArray(details) && details.some((item) => Array.isArray((item as { loc?: unknown })?.loc) && ((item as { loc: unknown[] }).loc).includes('lookback_days'));
 }
 
+/**
+ * Merges the catalog entries of several bound providers into one pseudo-entry that drives the editor's pickers.
+ * Metrics and suggestions are unioned (a metric's unit becomes null when providers disagree), "keyed" and open-catalog
+ * flags are true when any provider has them, `seed_symbol`/`charts_as_series` only when all do, the lookback is the
+ * widest default. One entry is returned as is; an empty list or any unknown entry gives undefined so the free-text
+ * fallbacks stay in place. Pure.
+ *
+ * @param entries Catalog entry per distinct bound provider (undefined when its catalog entry is unknown).
+ * @returns The merged entry, or undefined when nothing is known for every provider.
+ */
+export function mergeCatalogEntries(entries: readonly (ProviderMetrics | undefined)[]): ProviderMetrics | undefined {
+  if (entries.length === 0 || entries.some((item) => item === undefined)) return undefined;
+  const known = entries as ProviderMetrics[];
+  if (known.length === 1) return known[0];
+  const metrics = new Map<string, string | null>();
+  for (const item of known) for (const metric of item.metrics) metrics.set(metric.id, metrics.has(metric.id) && metrics.get(metric.id) !== metric.unit ? null : metric.unit);
+  const lookbacks = known.flatMap((item) => (item.default_lookback_days === null ? [] : [item.default_lookback_days]));
+  const cadences = known.map((item) => item.cadence_days);
+  return {
+    metrics: [...metrics].map(([id, unit]) => ({ id, unit })),
+    symbol_keyed: known.some((item) => item.symbol_keyed),
+    suggested_symbols: [...new Set(known.flatMap((item) => item.suggested_symbols))],
+    metrics_open: known.some((item) => item.metrics_open),
+    charts_as_series: known.every((item) => item.charts_as_series),
+    region_keyed: known.some((item) => item.region_keyed),
+    suggested_regions: [...new Set(known.flatMap((item) => item.suggested_regions))],
+    seed_symbol: known.every((item) => item.seed_symbol),
+    cadence_days: cadences.some((item) => item === null) ? null : Math.min(...(cadences as number[])),
+    default_lookback_days: lookbacks.length > 0 ? Math.max(...lookbacks) : null,
+  };
+}
+
 /** Splits comma-separated text into trimmed, non-empty entries. */
 function splitList(value: string, upper = false): string[] {
   return value.split(',').map((item) => (upper ? item.trim().toUpperCase() : item.trim())).filter(Boolean);
@@ -119,8 +151,9 @@ function splitList(value: string, upper = false): string[] {
  * @param mode Selection cardinality from the renderer or template.
  * @param value Currently selected source ids.
  * @param onChange Receives the next selection.
+ * @param max Multi-mode selection ceiling.
  */
-export function DatasourcePicker({ acceptedShapes, mode, value, onChange, invalid, describedBy, sourcesHref = '/settings/sources' }: {
+export function DatasourcePicker({ acceptedShapes, mode, value, onChange, invalid, describedBy, sourcesHref = '/settings/sources', max = MAX_SOURCES }: {
   acceptedShapes: readonly DataShape[] | null;
   mode: 'single' | 'multi';
   value: string[];
@@ -129,6 +162,8 @@ export function DatasourcePicker({ acceptedShapes, mode, value, onChange, invali
   describedBy?: string;
   /** Settings > Sources URL for the "Open Sources" link; callers pass the renderer-filtered one. */
   sourcesHref?: string;
+  /** Selection ceiling for multi mode (the renderer's `max_sources`); defaults to the generic selector ceiling. */
+  max?: number;
 }) {
   const t = useTranslations('gadgetSettings');
   const legendId = useId();
@@ -191,7 +226,7 @@ export function DatasourcePicker({ acceptedShapes, mode, value, onChange, invali
       {options.map((option) => {
         const checked = value.includes(option.id);
         return <label key={option.id} className="flex min-h-9 items-center gap-2 text-sm">
-          <Checkbox checked={checked} disabled={!checked && value.length >= MAX_SOURCES}
+          <Checkbox checked={checked} disabled={!checked && value.length >= max}
             onCheckedChange={(next) => onChange(next === true ? [...value, option.id] : value.filter((item) => item !== option.id))} />
           <span className="flex flex-wrap items-center gap-2"><span>{option.name}<span className="block text-xs text-muted-foreground">{meta(option)}</span></span>{statusBadge(option)}</span>
         </label>;
@@ -413,11 +448,16 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
   const keywordsValid = splitList(keywords).length <= 32 && splitList(exclude).length <= 32;
   const fields = fieldsFor(renderer);
   // Catalog entry of the first selected datasource's provider; absent means the free-text fallbacks stay in place.
-  const provider = sourceRows.find((row) => row.id === sourceIds[0])?.provider ?? null;
+  const providerOfRow = (id: string | undefined) => sourceRows.find((row) => row.id === id)?.provider ?? null;
+  // Distinct providers of every selected datasource (a multi-source chart/metric/weather may mix kinds); the pickers use their merged catalog.
+  const providers = [...new Set(sourceIds.map(providerOfRow).filter((item): item is string => item !== null))];
+  const provider = providers.length === 1 ? providers[0] : null;
   const coinSource = sourceIds[0] ?? '';
   const coinConfiguration = useQuery({ queryKey: ['coingecko-gadget-source', coinSource], queryFn: ({ signal }) => getConnectorConfiguration(coinSource, signal), enabled: provider === 'coingecko' && Boolean(coinSource) });
   const coinAssets = provider === 'coingecko' && coinConfiguration.data ? coinConfiguration.data.configuration.coingecko_assets ?? [{ id: 'bitcoin', symbol: 'BTC', name: 'Bitcoin', series_symbol: 'BTC' }] : null;
-  const entry = provider ? catalogQuery.data?.[provider] : undefined;
+  const entry = mergeCatalogEntries(providers.map((item) => catalogQuery.data?.[item]));
+  // Several bound providers make the chart metric a checklist (one metric per provider, union scope).
+  const chartMulti = renderer === 'finance_chart' && providers.length > 1;
   const showSymbols = fields.has('symbols') && entry?.symbol_keyed === true;
   // Provider unknown (catalog failed, source absent from the loaded page, provider not in the catalog): symbols stay visible
   // and editable as free text so a saved definition is never opaque. Hidden while the catalog is still loading or nothing is bound.
@@ -425,7 +465,7 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
   // Region-keyed providers (World Bank countries, OpenAQ locations) plot one region per chart.
   const showRegion = renderer === 'finance_chart' && entry?.region_keyed === true;
   // Provider catalog drives the metric control; non-chart renderers with a catalog render a checkbox group.
-  const metricGroup = entry !== undefined && entry.metrics.length > 0 && renderer !== 'finance_chart';
+  const metricGroup = entry !== undefined && entry.metrics.length > 0 && (renderer !== 'finance_chart' || chartMulti);
   // Measurement renderers wait for the catalog so the default metric comes from the provider, not a guess.
   const catalogLoading = fields.has('metrics') && catalogQuery.isPending;
   const hasAdvanced = fields.has('keywords') || fields.has('limit') || fields.has('rules') || fields.has('lookback') || fields.has('map') || fields.has('cii') || fields.has('channels');
@@ -471,15 +511,24 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
   function changeSources(next: string[]) {
     /** Provider id of a loaded source row, or null when the id is absent or its page is not loaded yet. */
     const providerOf = (id: string | undefined) => sourceRows.find((row) => row.id === id)?.provider ?? null;
-    const providerChanged = providerOf(next[0]) !== providerOf(sourceIds[0]);
+    const providersOf = (ids: string[]) => [...new Set(ids.map(providerOf).filter((item): item is string => item !== null))].sort();
+    const nextProviders = providersOf(next);
+    const multiNext = nextProviders.length > 1;
+    const providerChanged = nextProviders.join() !== providersOf(sourceIds).join() || providerOf(next[0]) !== providerOf(sourceIds[0]);
     setSourceIds(next);
-    const nextEntry = catalogQuery.data?.[providerOf(next[0]) ?? ''];
+    const nextEntry = mergeCatalogEntries(nextProviders.map((item) => catalogQuery.data?.[item]));
     const current = splitList(metrics)[0];
     // A changed provider must not keep a metric it does not list, even when its catalog is open (typed ids are
     // only trusted while the provider stays the same).
     const metricFits = current !== undefined && (nextEntry?.metrics.some((item) => item.id === current)
       || (!providerChanged && nextEntry?.metrics_open === true));
-    if (renderer === 'finance_chart' && nextEntry && nextEntry.metrics.length > 0 && !metricFits) setMetrics(defaultMetric(nextEntry));
+    if (renderer === 'finance_chart' && multiNext && nextEntry) {
+      // One chosen metric per bound provider: keep metrics that some provider lists and add the default of any provider left without one.
+      const entries = nextProviders.map((item) => catalogQuery.data?.[item] as ProviderMetrics);
+      const kept = splitList(metrics).filter((id) => nextEntry.metrics_open || nextEntry.metrics.some((item) => item.id === id));
+      const added = entries.filter((item) => item.metrics.length > 0 && !kept.some((id) => item.metrics.some((metric) => metric.id === id))).map(defaultMetric);
+      setMetrics([...new Set([...kept, ...added])].join(', '));
+    } else if (renderer === 'finance_chart' && nextEntry && nextEntry.metrics.length > 0 && !metricFits) setMetrics(defaultMetric(nextEntry));
     // A Metric gadget keeps only metrics the new provider lists (the save would 422 on a stale id); typed ids of
     // an open catalog are trusted only while the provider stays the same.
     if (renderer === 'provider_observation' && providerChanged && nextEntry) {
@@ -493,7 +542,8 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
       let nextSymbols = splitList(symbols, true);
       // Changed provider: keep only symbols it suggests; a provider without suggestions cannot validate any.
       if (providerOf(next[0]) === 'coingecko' && next[0] !== sourceIds[0]) nextSymbols = [];
-      else if (providerChanged) nextSymbols = nextSymbols.filter((symbol) => nextEntry.suggested_symbols.includes(symbol));
+      // ponytail: several providers keep every typed symbol (symbols cannot be mapped to providers; the backend only requires some).
+      else if (providerChanged && !multiNext) nextSymbols = nextSymbols.filter((symbol) => nextEntry.suggested_symbols.includes(symbol));
       if (renderer === 'finance_chart' && nextSymbols.length === 0 && nextEntry.symbol_keyed && nextEntry.seed_symbol && nextEntry.suggested_symbols.length > 0) {
         nextSymbols = [nextEntry.suggested_symbols[0]];
       }
@@ -532,7 +582,7 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
           // A chart plots one metric: a legacy multi-metric row keeps its first one so a symbol edit still validates.
           // Without a known provider entry nothing is invented: stored metrics go back unchanged (even when empty).
           // Adding symbols/regions to a chart saved without any makes it plottable, so the default metric is injected then too.
-          metrics: entry && (!sourcesUnchanged || keysChanged) ? [splitList(metrics)[0] ?? defaultMetric(entry)] : metricsUnchanged && sourcesUnchanged && !keysChanged ? splitList(metrics) : splitList(metrics).slice(0, 1),
+          metrics: chartMulti ? splitList(metrics) : entry && (!sourcesUnchanged || keysChanged) ? [splitList(metrics)[0] ?? defaultMetric(entry)] : metricsUnchanged && sourcesUnchanged && !keysChanged ? splitList(metrics) : splitList(metrics).slice(0, 1),
           regions: entry && entry.region_keyed !== true ? [] : regionUnchanged && sourcesUnchanged ? (base?.scope?.regions ?? []) : region.trim() ? [region.trim()] : [],
           lookback_days: days,
         }
@@ -617,7 +667,7 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
       </div>}
       {sourceMode !== 'none' && <div>
         <DatasourcePicker acceptedShapes={acceptedShapes} mode={sourceMode === 'single' ? 'single' : 'multi'} value={sourceIds} onChange={changeSources}
-          invalid={!sourceValid} describedBy={!sourceValid ? sourceErrorId : undefined} sourcesHref={descriptor ? sourcesLinkFor(descriptor) : undefined} />
+          invalid={!sourceValid} describedBy={!sourceValid ? sourceErrorId : undefined} sourcesHref={descriptor ? sourcesLinkFor(descriptor) : undefined} max={descriptor?.max_sources ?? undefined} />
         {fieldError('source_ids') && <p role="alert" className="mt-1 text-xs text-destructive">{fieldError('source_ids')}</p>}
         {!sourceValid && <p id={sourceErrorId} className="mt-1 text-xs text-muted-foreground">{t('datasourceRequired')}</p>}
       </div>}
@@ -625,7 +675,7 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
         {/* A checkbox group has no single control to point `for` at, so it is named through aria-labelledby instead. */}
         <Label id={`${nameId}-met-label`} htmlFor={metricGroup ? undefined : `${nameId}-met`} className="text-xs font-semibold">{t('metricLabel')}</Label>
         {entry && entry.metrics.length > 0
-          ? <MetricPicker id={`${nameId}-met`} labelId={`${nameId}-met-label`} catalog={entry} single={renderer === 'finance_chart'} value={renderer === 'finance_chart' && splitList(metrics).length === 0 ? [defaultMetric(entry)] : splitList(metrics)} onChange={(next) => setMetrics(next.join(', '))} />
+          ? <MetricPicker id={`${nameId}-met`} labelId={`${nameId}-met-label`} catalog={entry} single={renderer === 'finance_chart' && !chartMulti} value={renderer === 'finance_chart' && !chartMulti && splitList(metrics).length === 0 ? [defaultMetric(entry)] : splitList(metrics)} onChange={(next) => setMetrics(next.join(', '))} />
           : <Input id={`${nameId}-met`} value={metrics} onChange={(event) => setMetrics(event.target.value)} placeholder={renderer === 'finance_chart' ? 'close, volume' : renderer === 'provider_observation' ? td('providerObsMetricsPlaceholder') : 'temperature_2m, precipitation'} className="h-8 font-mono text-xs" />}
         {fieldError('metrics') && <p role="alert" className="text-xs text-destructive">{fieldError('metrics')}</p>}
       </div>}

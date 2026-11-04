@@ -43,7 +43,7 @@ export interface ChatComposerProps {
   modelLabel?: string | null;
   /** Number of distinct sources cited by the latest assistant answer. */
   sourcesCount?: number;
-  /** Per-message web search opt-in; passed only by the full Chat page. */
+  /** Sticky (default-on) web search preference; passed only by the full Chat page. */
   webSearch?: { available: boolean; profileBlocked?: boolean; provider?: string; enabled: boolean; onChange: (enabled: boolean) => void };
   /** Per-message structured/SQL database query opt-in over collected datasources. */
   dbQuery?: { enabled: boolean; onChange: (enabled: boolean) => void };
@@ -286,7 +286,15 @@ export function ChatComposer({
                       onCheckedChange={(checked) => webSearch.onChange(checked === true)}
                     >
                       <GlobeIcon className="size-4 text-muted-foreground" aria-hidden="true" />
-                      {t('webSearchToggle')}
+                      <span className="flex flex-col">
+                        {t('webSearchToggle')}
+                        {/* Disabled items give no reason; explain why so the owner knows what to fix. */}
+                        {(!webSearch.available || webSearch.profileBlocked) && (
+                          <span className="text-xs text-muted-foreground" data-testid="chat-web-search-hint">
+                            {webSearch.profileBlocked ? t('webSearchProfileOnly') : t('webSearchNotSetUp')}
+                          </span>
+                        )}
+                      </span>
                     </DropdownMenuCheckboxItem>
                   </>
                 )}

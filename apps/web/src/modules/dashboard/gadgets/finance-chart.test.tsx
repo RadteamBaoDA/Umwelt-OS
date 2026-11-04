@@ -180,4 +180,17 @@ describe('FinanceChart', () => {
     expect(Math.round((to.getTime() - from.getTime()) / 86_400_000)).toBe(4);
     expect(Math.round((to.getTime() - Date.now()) / 86_400_000)).toBe(1);
   });
+
+  it('queries each bound source separately and applies symbols only to symbol-keyed providers', async () => {
+    api.listGadgetSources.mockResolvedValue({ items: [{ id: 's1', provider: 'vn_stock', name: 'VN' }, { id: 's2', provider: 'noaa_kp', name: 'Kp' }], next_cursor: null });
+    api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: [{ ...row, source_id: 's1', metric: 'close', symbol: 'FPT', provider: 'vn_stock' }, { ...row, source_id: 's2' }] });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const instance = { id: 'g2', title: '', definition: { source_ids: ['s1', 's2'], scope: { metrics: ['close', 'kp_index'], symbols: ['FPT'] } } } as never;
+    render(<QueryClientProvider client={client}><NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}><FinanceChart instance={instance} /></NextIntlClientProvider></QueryClientProvider>);
+    await screen.findByTestId('chart');
+    const calls = api.listWorldObservationWindow.mock.calls.map((call) => call[0]);
+    expect(calls).toHaveLength(2);
+    expect(calls.find((c) => c.sourceIds[0] === 's1').symbols).toEqual(['FPT']);
+    expect(calls.find((c) => c.sourceIds[0] === 's2').symbols).toBeUndefined();
+  });
 });

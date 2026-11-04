@@ -39,6 +39,20 @@ async function findSourceInfo(sourceIds: readonly string[], signal?: AbortSignal
 }
 
 /**
+ * Looks up provider and name of bound sources (bounded paged walk, cached 5 minutes, no retry).
+ *
+ * @param ids Source ids; an empty list disables the query.
+ * @returns Query whose data maps each found source id to its {@link SourceInfo}.
+ */
+export function useSourceInfo(ids: readonly string[]) {
+  return useQuery({
+    queryKey: [...dashboardKeys.sources, 'chart-provider', ...ids],
+    queryFn: ({ signal }) => findSourceInfo(ids, signal),
+    enabled: ids.length > 0, staleTime: 300_000, retry: false,
+  });
+}
+
+/**
  * Resolves the lookback window (days) of a gadget scope. A stored value wins; otherwise the bound provider's catalog
  * default applies (annual World Bank needs ~10 years, monthly OECD ~2), else `fallback`. The provider is only known
  * through the source list, so `ready` stays false until the lookups settle (a failed lookup falls back instead of
@@ -55,11 +69,7 @@ export function useEffectiveLookback(sourceId: string | readonly string[], store
   const unset = stored === null || stored === undefined;
   const catalog = useQuery({ queryKey: dashboardKeys.metricCatalog, queryFn: ({ signal }) => getMetricCatalog(signal), staleTime: 300_000, retry: false });
   const ids = typeof sourceId === 'string' ? (sourceId ? [sourceId] : []) : sourceId;
-  const info = useQuery({
-    queryKey: [...dashboardKeys.sources, 'chart-provider', ...ids],
-    queryFn: ({ signal }) => findSourceInfo(ids, signal),
-    enabled: ids.length > 0, staleTime: 300_000, retry: false,
-  });
+  const info = useSourceInfo(ids);
   // Several sources: the slowest provider's default wins so every series has enough history.
   const defaults = Object.values(info.data ?? {}).flatMap((item) => (item.provider ? [catalog.data?.[item.provider]?.default_lookback_days ?? null] : []));
   const known = defaults.filter((value): value is number => value !== null);

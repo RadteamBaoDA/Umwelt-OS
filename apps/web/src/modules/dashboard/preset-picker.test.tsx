@@ -159,7 +159,7 @@ describe('PresetPicker', () => {
     await userEvent.click(await screen.findByRole('button', { name: /Finance/ }));
     expect(await screen.findByText('Choose a datasource')).toBeTruthy();
     expect(api.previewDashboardPreset.mock.calls[0][1].slot_sources).toEqual({});
-    await userEvent.click((await screen.findAllByRole('radio', { name: /Kp feed/ }))[0]);
+    await userEvent.click((await screen.findAllByRole('checkbox', { name: /Kp feed/ }))[0]);
     await waitFor(() => expect(api.previewDashboardPreset).toHaveBeenCalledTimes(2));
     expect(api.previewDashboardPreset.mock.calls[1][1].slot_sources).toEqual({ finance_chart: ['s2'] });
     await waitFor(() => expect(screen.queryByText('Choose a datasource')).toBeNull());
@@ -261,7 +261,7 @@ describe('PresetPicker', () => {
     wrap();
     await userEvent.click(await screen.findByRole('button', { name: /Finance/ }));
     await screen.findByText('Chart');
-    await userEvent.click((await screen.findAllByRole('radio', { name: /Binance spot/ }))[0]);
+    await userEvent.click((await screen.findAllByRole('checkbox', { name: /Binance spot/ }))[0]);
     await waitFor(() => expect(api.previewDashboardPreset).toHaveBeenCalledTimes(2));
     release({ items: [], next_cursor: null });
     await waitFor(() => expect(api.listGadgetSources).toHaveBeenCalledTimes(2));
