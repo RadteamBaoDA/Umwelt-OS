@@ -238,7 +238,8 @@ class StreamTranslator:
             ModelGatewayError: on an ``error`` event (static message; the upstream text is not echoed).
         """
         kind = event.get("type")
-        index = event.get("index") if isinstance(event.get("index"), int) else -1
+        raw_index = event.get("index")
+        index = raw_index if isinstance(raw_index, int) else -1
         if kind == "message_start":
             message = event.get("message") or {}
             self._id, self._model = message.get("id"), message.get("model")

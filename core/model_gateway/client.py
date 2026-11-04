@@ -22,6 +22,7 @@ from redis.exceptions import RedisError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from core.config import Settings
+from core.model_gateway import anthropic
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import (
     HOSTED_PROVIDER_ENDPOINTS,
@@ -574,6 +575,8 @@ class ModelGateway:
         never blocks, real provider errors propagate with their redacted message. Only a stored ``unsupported``
         for ``tools`` short-circuits (the caller has a text-only fallback). The outcome is recorded as evidence
         under ``record_as`` (default ``capability``); ``record_failure=False`` leaves failures to the caller.
+        For the ``anthropic`` kind only ``chat/completions`` exists; any other path raises CapabilityUnsupported
+        before I/O. Anthropic errors are mapped to the same ``openai`` exception types, so retry handling is shared.
         """
         if not probe and before_send is None:
             raise ValueError("before_send_required")  # fail closed: every non-probe call needs a per-call fence
@@ -581,6 +584,9 @@ class ModelGateway:
             raise PrivacyPolicyDenied("Model request denied by privacy policy")
         if self.base_url is None or mapping is None:
             raise ModelGatewayError("Model gateway is not configured")
+        if self.kind == "anthropic" and path != "chat/completions":
+            # Anthropic has no embeddings, rerank or decisions API: report unsupported before any I/O.
+            raise CapabilityUnsupported(f"Anthropic does not offer {capability}")
         if not probe and capability == "tools" and await self._known_unsupported(role, mapping, "tools"):
             raise CapabilityUnsupported("Tool calling is recorded as unsupported for this model")
         if not probe:
@@ -590,13 +596,18 @@ class ModelGateway:
         base_url = _api_base(self.base_url)
 
         async def send() -> Any:
-            """Execute a chat, embedding, or rerank SDK call with bounded retries and normalize its response."""
+            """Execute a chat, embedding, or rerank call with bounded retries and normalize its response.
+
+            The Anthropic kind sends the native Messages request over the same pinned http client; the SDK
+            client is then only the owner that closes it.
+            """
+            http = self._http_client(base_url)
             async with AsyncOpenAI(
                 base_url=base_url,
                 api_key=self.api_key or "not-configured",
                 timeout=self._timeout(),
                 max_retries=0,
-                http_client=self._http_client(base_url),
+                http_client=http,
             ) as client:
                 for attempt in range(2):
                     try:
@@ -610,8 +621,12 @@ class ModelGateway:
                         # Gated (P2-3): with no after_send the ContextVar is never touched, so the
                         # transport sends request.stream unwrapped exactly as before.
                         hook = body_sent.set(after_send) if after_send is not None else None
+                        response: Any
                         try:
-                            if path == "chat/completions":
+                            if self.kind == "anthropic":
+                                response = await anthropic.create_message(
+                                    http, base_url, self.api_key, body, timeout=self._timeout())
+                            elif path == "chat/completions":
                                 response = await client.chat.completions.create(**body)
                             elif path == "embeddings":
                                 response = await client.embeddings.create(**body)
@@ -675,7 +690,10 @@ class ModelGateway:
         return response
 
     async def discover_models(self) -> list[str]:
-        """List model IDs from the configured gateway while holding capacity and enforcing endpoint policy."""
+        """List model IDs from the configured gateway while holding capacity and enforcing endpoint policy.
+
+        The ``anthropic`` kind uses the native ``GET /models`` with ``x-api-key``; errors carry static reasons only.
+        """
         if self.base_url is None or not (self.api_key or self.destination_id.startswith("local:")):
             raise ModelGatewayError("Model gateway is not configured")
         base_url = _api_base(self.base_url)
@@ -683,10 +701,13 @@ class ModelGateway:
         async def send() -> list[str]:
             """Call the configured model-list endpoint and return valid model IDs; map SDK and network failures to the gateway error."""
             await self.before_send()
+            http = self._http_client(base_url)
             async with AsyncOpenAI(base_url=base_url, api_key=self.api_key,
                                    timeout=self._timeout(), max_retries=0,
-                                   http_client=self._http_client(base_url)) as client:
+                                   http_client=http) as client:
                 try:
+                    if self.kind == "anthropic":
+                        return await anthropic.list_models(http, base_url, self.api_key, timeout=self._timeout())
                     page = await client.models.list()
                 except (APIConnectionError, APITimeoutError, APIStatusError) as exc:
                     _raise_if_policy_denied(exc)
@@ -843,7 +864,9 @@ class ModelGateway:
         Missing streaming/tools evidence never blocks.
         ``tool_choice`` and ``max_tokens`` are forwarded only when not None. A configured ``reasoning_effort``
         (chat role) is sent as the OpenAI-compatible ``reasoning_effort`` parameter; if the provider answers
-        400/422 naming it before any chunk, it is dropped once with a warning and the request is retried.
+        400/422 naming it (or ``thinking``/``effort``, as Anthropic does) before any chunk, it is dropped once with
+        a warning and the request is retried. The ``anthropic`` kind streams the native Messages SSE, translated
+        to OpenAI-shaped chunks by ``core.model_gateway.anthropic``.
         """
         capabilities = ("streaming", "tools") if tools else ("streaming",)
         if not self._policy_matches(policy) or not all(may_send(policy, role, mapping, self.destination_id, bool(self.api_key), c) for c in capabilities) or self.base_url is None or mapping is None:
@@ -864,14 +887,16 @@ class ModelGateway:
             await self._breaker_check()
         async with self._lease(_STREAM_LEASE_WAIT_SECONDS):
             base_url = _api_base(self.base_url)
+            http = self._http_client(base_url)
             async with AsyncOpenAI(
                 base_url=base_url,
                 api_key=self.api_key or "not-configured",
                 timeout=self._timeout(),
                 max_retries=0,
-                http_client=self._http_client(base_url),
+                http_client=http,
             ) as client:
                 emitted = False
+                stream: Any
                 splitters: dict[int, _ThinkSplitter] = {}
                 for attempt in range(2):
                     try:
@@ -887,12 +912,17 @@ class ModelGateway:
                         try:
                             # Bound header/first-byte wait.
                             async with asyncio.timeout(self.timeout_seconds):
-                                stream = await client.chat.completions.create(
-                                    model=mapping.model,
-                                    messages=cast("Any", messages),  # OpenAI param TypedDicts; built by prompt layer
-                                    stream=True,
-                                    **extra,
-                                )
+                                if self.kind == "anthropic":
+                                    stream = await anthropic.open_message_stream(
+                                        http, base_url, self.api_key,
+                                        {"model": mapping.model, "messages": messages, **extra}, timeout=self._timeout())
+                                else:
+                                    stream = await client.chat.completions.create(
+                                        model=mapping.model,
+                                        messages=cast("Any", messages),  # OpenAI param TypedDicts; built by prompt layer
+                                        stream=True,
+                                        **extra,
+                                    )
                         finally:
                             if hook is not None:
                                 body_sent.reset(hook)
@@ -900,7 +930,7 @@ class ModelGateway:
                                 await after_send()
                         async for chunk in stream:
                             emitted = True
-                            payload = chunk.model_dump(mode="json", exclude_none=True)
+                            payload = chunk if isinstance(chunk, dict) else chunk.model_dump(mode="json", exclude_none=True)
                             _split_reasoning(payload, splitters)
                             yield f"data: {json.dumps(payload)}"
                         for index, splitter in splitters.items():
@@ -923,7 +953,7 @@ class ModelGateway:
                         raise ModelGatewayError("Model gateway request failed") from exc
                     except APIStatusError as exc:
                         if (attempt == 0 and not emitted and "reasoning_effort" in extra and exc.status_code in {400, 422}
-                                and "reasoning" in str(exc.message or "").lower()):
+                                and any(w in str(exc.message or "").lower() for w in ("reasoning", "thinking", "effort"))):
                             # A wrong effort setting must never break chat: retry once without the parameter.
                             _LOG.warning("Provider rejected reasoning_effort (%s); retrying without it", _upstream_reason(exc))
                             del extra["reasoning_effort"]
