@@ -3,7 +3,7 @@
 from collections.abc import Awaitable, Callable
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, Request
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +16,7 @@ from core.auth.dependencies import (
 )
 from core.auth.schemas import AccountSessionRef
 from core.database import get_session
+from core.errors import ConflictError, NotFoundError, ValidationFailedError
 from core.modules import effective_modules, register_modules
 from core.workspaces.dependencies import (
     require_default_workspace_read,
@@ -124,11 +125,11 @@ async def save_module_lifecycle(
                                  locked=True, auth_sessions=auth_sessions)
     descriptor = MODULES.get(update.module_id)
     if descriptor is None:
-        raise HTTPException(status_code=404, detail="Unknown module")
+        raise NotFoundError(detail="Unknown module")
     if update.module_id in _INSTANCE_MODULES:
-        raise HTTPException(status_code=422, detail="Instance modules cannot be changed through workspace settings")
+        raise ValidationFailedError(detail="Instance modules cannot be changed through workspace settings")
     if not descriptor.enabled:
-        raise HTTPException(status_code=409, detail="This module is not available in this build")
+        raise ConflictError(detail="This module is not available in this build")
     await session.execute(
         insert(ModuleLifecycleRecord).values(owner_id=scope_actor(scope), workspace_id=scope.workspace_id)
         .on_conflict_do_nothing(index_elements=["owner_id"])
@@ -139,7 +140,7 @@ async def save_module_lifecycle(
     if row is None:
         raise RuntimeError("Module lifecycle singleton could not be initialized")
     if row.configuration_revision != update.expected_revision:
-        raise HTTPException(status_code=409, detail="Module settings changed; reload before saving")
+        raise ConflictError(detail="Module settings changed; reload before saving")
     disabled = {value for value in row.disabled_modules if isinstance(value, str) and value not in _INSTANCE_MODULES}
     if update.enabled:
         disabled.discard(update.module_id)
@@ -147,7 +148,7 @@ async def save_module_lifecycle(
         blocked = [dependency for dependency in descriptor.dependencies
                    if dependency not in resulting or not resulting[dependency].enabled]
         if blocked:
-            raise HTTPException(status_code=409, detail=f"Enable dependencies first: {', '.join(blocked)}")
+            raise ConflictError(detail=f"Enable dependencies first: {', '.join(blocked)}")
     else:
         disabled.add(update.module_id)
     row.disabled_modules = sorted(disabled)
@@ -189,7 +190,7 @@ async def save_retention_settings(
     if row is None:
         raise RuntimeError("Retention settings singleton could not be initialized")
     if row.configuration_revision != update.expected_revision:
-        raise HTTPException(status_code=409, detail="Retention settings changed; reload before saving")
+        raise ConflictError(detail="Retention settings changed; reload before saving")
     row.agent_trace_days = update.agent_trace_days
     row.configuration_revision += 1
     await session.flush()
@@ -253,7 +254,7 @@ def module_dependency(module_id: str) -> Callable[..., Awaitable[None]]:
             return
         descriptor = current.get(module_id)
         if descriptor is None or not descriptor.enabled:
-            raise HTTPException(status_code=404, detail="Module is disabled or unavailable")
+            raise NotFoundError(detail="Module is disabled or unavailable")
     return require_enabled_module
 
 

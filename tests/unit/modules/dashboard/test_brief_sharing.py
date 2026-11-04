@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
+from core.errors import DomainError
 from core.workspaces.schemas import GrantRef, WorkspaceContext
 from modules.dashboard import brief_sharing as bs
 
@@ -28,7 +28,7 @@ def row(monkeypatch):
 
 
 async def _code(call):
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await call
     return exc.value.status_code, exc.value.detail
 

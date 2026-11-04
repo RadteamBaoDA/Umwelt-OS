@@ -9,9 +9,9 @@ from uuid import uuid4
 import httpx
 import pytest
 from cryptography.fernet import Fernet
-from fastapi import HTTPException
 from pydantic import SecretStr
 
+from core.errors import DomainError
 from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.settings import public, routes
 from modules.settings.schemas import VizRouterUpdate
@@ -80,7 +80,7 @@ async def test_llm_save_validates_model_and_binds_consent_to_destination() -> No
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", ["missing", "emb"])
 async def test_llm_save_rejects_unknown_or_non_llm_model(model: str) -> None:
-    with pytest.raises(HTTPException) as err:
+    with pytest.raises(DomainError) as err:
         await _save(_row(), kind="llm", provider_id="default", model=model)
     assert err.value.status_code == 422
 
@@ -100,7 +100,7 @@ async def test_stale_revision_conflicts() -> None:
          patch.object(public, "_row", AsyncMock(return_value=row)):
         session = MagicMock()
         session.execute = AsyncMock()
-        with pytest.raises(HTTPException) as err:
+        with pytest.raises(DomainError) as err:
             await public.save_viz_router(session, update, _settings(), scope=SCOPE)
     assert err.value.status_code == 409
 
@@ -265,7 +265,7 @@ async def test_openrouter_save_encrypts_key_binds_consent_and_resolves_endpoint(
 async def test_keyed_kind_requires_model_and_key() -> None:
     for fields in ({"kind": "openrouter", "model": "", "api_key_action": "replaced", "api_key": "k"},
                    {"kind": "openrouter", "model": "m"}):
-        with pytest.raises(HTTPException) as err:
+        with pytest.raises(DomainError) as err:
             await _save_keyed(_row(), **fields)
         assert err.value.status_code == 422
 
@@ -273,7 +273,7 @@ async def test_keyed_kind_requires_model_and_key() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("account", [None, "", "abc", "g" * 32, ACCOUNT + "0"])
 async def test_cloudflare_rejects_bad_account_id(account: str | None) -> None:
-    with pytest.raises(HTTPException) as err:
+    with pytest.raises(DomainError) as err:
         await _save_keyed(_row(), kind="cloudflare", model="@cf/meta/llama-3.1-8b-instruct", account_id=account,
                           api_key_action="replaced", api_key="k")
     assert err.value.status_code == 422
@@ -297,14 +297,14 @@ async def test_cloudflare_account_endpoint_and_consent_dropped_when_destination_
 @pytest.mark.asyncio
 async def test_cloudflare_gateway_override_must_be_https_and_policy_allowed() -> None:
     kw = {"kind": "cloudflare", "model": "m", "api_key_action": "replaced", "api_key": "k"}
-    with pytest.raises(HTTPException):
+    with pytest.raises(DomainError):
         await _save_keyed(_row(), gateway_url="http://gateway.ai.cloudflare.com/v1/x", **kw)  # type: ignore[arg-type]
     denied = _keyed_settings()
     denied.ai_allow_public_providers = False
-    with pytest.raises(HTTPException) as err:
+    with pytest.raises(DomainError) as err:
         await _save_keyed(_row(), denied, account_id=ACCOUNT, **kw)  # type: ignore[arg-type]
     assert err.value.status_code == 422
-    with pytest.raises(HTTPException):
+    with pytest.raises(DomainError):
         await _save_keyed(_row(), denied, kind="openrouter", model="m", api_key_action="replaced", api_key="k")
 
 
@@ -315,7 +315,7 @@ async def test_keys_are_kept_per_kind_and_never_reused_across_hosts() -> None:
     stored = await _save_keyed(row, kind="cloudflare", model="m", account_id=ACCOUNT, api_key_action="replaced", api_key="cf-key")
     assert stored["openrouter_key_ciphertext"] and stored["cloudflare_key_ciphertext"]
     assert (await _resolve_keyed(row)).api_key == "cf-key"
-    with pytest.raises(HTTPException):  # cloudflare key removed: openrouter's is not borrowed
+    with pytest.raises(DomainError):  # cloudflare key removed: openrouter's is not borrowed
         await _save_keyed(row, kind="cloudflare", model="m", account_id=ACCOUNT, api_key_action="removed")
 
 

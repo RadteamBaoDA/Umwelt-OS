@@ -35,6 +35,7 @@ def protect_text(text: str) -> tuple[str, dict[str, str]]:
     protected: dict[str, str] = {}
 
     def mask(match: re.Match[str]) -> str:
+        """Replace one protected match with a unique nonce marker and remember the original value."""
         marker = f"@@P{nonce}_{len(protected)}@@"
         protected[marker] = match.group(0)
         return marker
@@ -60,6 +61,7 @@ def restore_text(text: str, protected: dict[str, str]) -> str:
 
 
 def _tokens(text: str) -> set[str]:
+    """Return the set of protected values (numbers, URLs, citations, tickers) occurring in ``text``."""
     return {m.group(0) for m in _PROTECTED_RE.finditer(text)}
 
 

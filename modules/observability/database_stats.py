@@ -6,12 +6,15 @@ timed-out probe yields ``None`` for its fields) and each database gets a ~1.5s t
 """
 
 import asyncio
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
 from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 DB_BUDGET_SECONDS = 1.5
 _PG_TABLE_LIMIT = 10

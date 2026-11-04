@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core import worker_cursors
 from core.config import Settings
+from core.errors import DomainError
 from core.realtime import commit_with_replay
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import InternalJobScope
@@ -95,7 +96,7 @@ async def run_scheduled_highlights(ctx: dict[str, object]) -> int:
                     multi_workspace_enabled=settings.multi_workspace_enabled,
                 )
                 evaluated += 1
-            except HTTPException as exc:
+            except (DomainError, HTTPException) as exc:
                 if exc.status_code in {401, 403, 404, 409}:
                     await session.rollback()
                     continue
@@ -179,7 +180,7 @@ async def run_scheduled_brief(ctx: dict[str, object]) -> bool:
                         settings=settings, redis=cast(Redis, ctx["redis"]),
                     )
                     created_any = created is not None or created_any
-            except HTTPException as exc:
+            except (DomainError, HTTPException) as exc:
                 if exc.status_code in {401, 403, 404, 409}:
                     await session.rollback()
                     continue

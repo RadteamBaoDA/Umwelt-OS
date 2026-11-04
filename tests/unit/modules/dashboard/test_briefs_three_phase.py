@@ -20,7 +20,7 @@ from modules.dashboard.models import DailyBrief
 DAY = date(2026, 10, 7)
 TZ = "Asia/Ho_Chi_Minh"
 SOURCE = str(uuid4())
-SCOPE = SimpleNamespace(workspace_id=uuid4(), actor_user_id=1)
+SCOPE = SimpleNamespace(workspace_id=uuid4(), actor_user_id=1, user_id=1)  # duck-typed scope; both ids so the canonical actor_id works
 
 
 def _fact() -> dict[str, Any]:

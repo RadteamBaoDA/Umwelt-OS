@@ -48,17 +48,20 @@ class TranslationBlocked(Exception):  # frozen contract name
     """A safe, storable reason why this input must not (or could not) be translated."""
 
     def __init__(self, code: str) -> None:
+        """Capture the stable machine code of this block reason."""
         super().__init__(code)
         self.code = code
 
 
 class _News(BaseModel):
+    """Strict schema of a translated news item (title and excerpt only; extra keys rejected)."""
     model_config = ConfigDict(extra="forbid")
     title: str
     excerpt: str
 
 
 class _Segment(BaseModel):
+    """Strict schema of one translated brief segment (extra keys rejected)."""
     model_config = ConfigDict(extra="forbid")
     content: str
 
@@ -83,6 +86,7 @@ def _language(text: str) -> Literal["vi", "en"] | None:
 
 
 def _schema(fields: tuple[str, ...]) -> dict[str, Any]:
+    """Build the strict JSON-schema response format requiring exactly the given string fields."""
     return {"name": "content_translation", "strict": True, "schema": {
         "type": "object", "properties": {f: {"type": "string"} for f in fields},
         "required": list(fields), "additionalProperties": False}}
@@ -92,6 +96,7 @@ async def _ask(
     gateway: ModelGateway, config: AIExecutionConfig, policy: RequestPolicy, language: str,
     payload: dict[str, str], schema: dict[str, Any], before_send: Callable[[], Awaitable[None]], deadline: float,
 ) -> dict[str, Any]:
+    """Send one translation request through the gateway before ``deadline``; raises TranslationBlocked when the deadline is exhausted or the reply is unusable. Performs provider I/O after ``before_send`` rechecks."""
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TranslationBlocked("deadline_exceeded")
@@ -125,6 +130,7 @@ async def _ask(
 
 
 def _restore(original: str, translated: str, protected: dict[str, str]) -> str:
+    """Restore protected values in the model output and reject newly introduced tokens; invalid output becomes TranslationBlocked(invalid_model_output)."""
     try:
         restored = restore_text(translated, protected)
         reject_new_tokens(original, restored)
@@ -170,6 +176,7 @@ async def _translate_brief(
     gateway: ModelGateway, config: AIExecutionConfig, policy: RequestPolicy, language: str, text: str,
     before_send: Callable[[], Awaitable[None]], deadline: float,
 ) -> str:
+    """Translate a markdown brief line by line in bounded chunks, preserving structure; rejects over-long lines (input_too_large) and honours the shared deadline."""
     lines = split_markdown(text)
     bodies = [body for _, body in lines if body]
     # ponytail: no intra-line splitting; add a sentence splitter if real briefs hit the 2000-char line cap

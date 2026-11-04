@@ -3,8 +3,8 @@
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
+from core.errors import DomainError
 from modules.notifications import public as notifications
 from tests.unit.modules._cleanup_scope import CTX, MEMBER_CTX, Recorder, admitted
 
@@ -13,7 +13,7 @@ KW = {"operation_id": uuid4(), "document_id": uuid4(), "version_ids": ()}
 
 async def test_member_denied_before_sql() -> None:
     session = Recorder()
-    with admitted(), pytest.raises(HTTPException) as caught:
+    with admitted(), pytest.raises(DomainError) as caught:
         await notifications.scrub_document_evidence(session, **KW, **MEMBER_CTX)  # type: ignore[arg-type]
     assert caught.value.status_code == 403 and session.sql == []
 

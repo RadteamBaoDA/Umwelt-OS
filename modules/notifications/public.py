@@ -6,13 +6,13 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.realtime import commit_with_replay
-from core.workspaces import public as workspaces
+from core.workspaces.admission import actor_id as _actor
+from core.workspaces.admission import admit_scope
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.notifications.models import Notification
 from modules.notifications.schemas import (
@@ -36,30 +36,20 @@ __all__ = [
 MAX_CLEANUP_PAGE = 100
 
 
-def _actor(scope: Scope) -> int:
-    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
-
-
-def _require_owner(scope: Scope) -> None:
-    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
-        raise TypeError("An explicit workspace scope is required")
-    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
-
-
 async def _admit(
     session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
     lock: bool = False, expected: AccessFence | None = None,
 ) -> AccessFence:
-    """Owner admission; a member is denied before any session await."""
-    _require_owner(scope)
-    if type(multi_workspace_enabled) is not bool:
-        raise TypeError("The configured multi-workspace feature flag must be a boolean")
-    if lock:
-        return await workspaces.lock_access_fence(
-            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
-        )
-    return await workspaces.read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    """Owner admission; a member is denied before any session await.
+
+    Thin wrapper over ``core.workspaces.admission.admit_scope`` (workspace or job scopes only, owner only); keeps this module's
+    private ``_admit`` name so call sites and tests are unchanged. No commit; the caller owns the
+    transaction and lock ordering.
+    """
+    return await admit_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=lock, expected=expected,
+        allowed_scopes=(WorkspaceContext, InternalJobScope),
+    )
 
 
 class NotificationMissing(Exception):
@@ -320,6 +310,74 @@ async def set_read(
     )
 
 
+async def _classify_highlight_row(
+    session: AsyncSession, row: Notification, document_id: UUID, known_versions: set[UUID],
+    *, scope: Scope, multi_workspace_enabled: bool,
+) -> tuple[str, UUID | None]:
+    """Decide whether one candidate notification belongs to the Document being scrubbed.
+
+    Returns ``("skip", None)`` for rows that are not this cleanup's concern (other kinds, already
+    revoked, foreign Document or version), ``("undecidable", None)`` for rows whose identity is
+    contradictory or unresolvable (provisional until the final reference page) and
+    ``("scrub", version_id)`` for rows whose copied fields must be cleared. A legacy row whose
+    version is not in the caller's receipt is resolved through the Documents public contracts
+    (read-only, admitted). Never mutates ``row``.
+    """
+    if row.kind != "dashboard_highlight" or row.copied_evidence_revoked:
+        return "skip", None
+    # A sidecar naming another Document is positive foreign ownership: never this cleanup's concern.
+    if row.document_id is not None and row.document_id != document_id:
+        return "skip", None
+    exact_match = row.document_id == document_id
+    version_id = row.document_version_id
+    identity = _highlight_identity(row.kind, row.dedupe_key, row.params)
+    # Even when the legacy parser rejects formatting, a canonical embedded version that conflicts
+    # with the private sidecar is positive contradictory identity and must not be scrubbed.
+    parts = row.dedupe_key.split(":")
+    dedupe_version: UUID | None = None
+    if len(parts) == 6 and parts[0] == "highlight":
+        try:
+            candidate = UUID(parts[5])
+            dedupe_version = candidate if str(candidate) == parts[5] else None
+        except (TypeError, ValueError):
+            pass
+    if exact_match and version_id is not None and dedupe_version is not None and dedupe_version != version_id:
+        return "undecidable", None
+    if exact_match and version_id is not None and (identity is None or identity[3] == version_id):
+        # The private exact Document/version sidecar is sufficient authority to scrub copied fields.
+        version_id = row.document_version_id
+    elif exact_match and (identity is not None and version_id is not None and identity[3] != version_id):
+        return "undecidable", None
+    elif identity is None:
+        if row.document_id is None or exact_match:
+            return "undecidable", None
+        return "skip", None
+    else:
+        parsed_version = identity[3]
+        if version_id is not None and version_id != parsed_version:
+            return "undecidable", None
+        version_id = version_id or parsed_version
+    assert version_id is not None  # every surviving branch above resolved a version
+    if not exact_match and version_id not in known_versions:
+        from modules.knowledge.documents import public as documents
+
+        # Report only genuinely undecidable legacy rows; a version that resolves elsewhere is foreign.
+        locator = await documents.review_version_locator(
+            session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if locator is not None and locator[0] != document_id:
+            return "skip", None
+        # A Document already deleted (its own receipt not yet scrubbed) resolves from retained evidence.
+        if locator is None:
+            retained = await documents.cleanup_evidence_version_document(
+                session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            if retained is not None and retained != document_id:
+                return "skip", None
+        return "undecidable", None
+    return "scrub", version_id
+
+
 async def scrub_document_evidence(
     session: AsyncSession, *, operation_id: UUID, document_id: UUID, version_ids: tuple[UUID, ...],
     final_reference_page: bool = False, after: UUID | None = None, limit: int = MAX_CLEANUP_PAGE,
@@ -357,64 +415,16 @@ async def scrub_document_evidence(
     provisional: list[UUID] = []
     unavailable: list[UUID] = []
     for row in rows:
-        if row.kind != "dashboard_highlight":
+        verdict, version_id = await _classify_highlight_row(
+            session, row, document_id, known_versions, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if verdict == "skip":
             continue
-        if row.copied_evidence_revoked:
-            continue
-        # A sidecar naming another Document is positive foreign ownership: never this cleanup's concern.
-        if row.document_id is not None and row.document_id != document_id:
-            continue
-        exact_match = row.document_id == document_id
-        version_id = row.document_version_id
-        identity = _highlight_identity(row.kind, row.dedupe_key, row.params)
-        # Even when the legacy parser rejects formatting, a canonical embedded version that conflicts
-        # with the private sidecar is positive contradictory identity and must not be scrubbed.
-        parts = row.dedupe_key.split(":")
-        dedupe_version: UUID | None = None
-        if len(parts) == 6 and parts[0] == "highlight":
-            try:
-                candidate = UUID(parts[5])
-                dedupe_version = candidate if str(candidate) == parts[5] else None
-            except (TypeError, ValueError):
-                pass
-        if exact_match and version_id is not None and dedupe_version is not None and dedupe_version != version_id:
+        if verdict == "undecidable":
             (unavailable if final_reference_page else provisional).append(row.id)
             continue
-        if exact_match and version_id is not None and (identity is None or identity[3] == version_id):
-            # The private exact Document/version sidecar is sufficient authority to scrub copied fields.
-            version_id = row.document_version_id
-        elif exact_match and (identity is not None and version_id is not None and identity[3] != version_id):
-            (unavailable if final_reference_page else provisional).append(row.id)
-            continue
-        elif identity is None:
-            if row.document_id is None or exact_match:
-                (unavailable if final_reference_page else provisional).append(row.id)
-            continue
-        else:
-            parsed_version = identity[3]
-            if version_id is not None and version_id != parsed_version:
-                (unavailable if final_reference_page else provisional).append(row.id)
-                continue
-            version_id = version_id or parsed_version
-        assert version_id is not None  # every surviving branch above resolved a version
-        if not exact_match and version_id not in known_versions:
-            from modules.knowledge.documents import public as documents
-
-            # Report only genuinely undecidable legacy rows; a version that resolves elsewhere is foreign.
-            locator = await documents.review_version_locator(
-                session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            )
-            if locator is not None and locator[0] != document_id:
-                continue
-            # A Document already deleted (its own receipt not yet scrubbed) resolves from retained evidence.
-            if locator is None:
-                retained = await documents.cleanup_evidence_version_document(
-                    session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-                )
-                if retained is not None and retained != document_id:
-                    continue
-            (unavailable if final_reference_page else provisional).append(row.id)
-            continue
+        assert version_id is not None  # every scrub verdict carries a resolved version
         row.document_id = document_id
         row.document_version_id = version_id
         row.title = None

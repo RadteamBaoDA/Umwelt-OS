@@ -3,7 +3,7 @@
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 from uuid import UUID
 
 from cryptography.fernet import Fernet, InvalidToken, MultiFernet
@@ -27,6 +27,14 @@ from sqlalchemy.types import Uuid
 from core.auth.schemas import AccountSessionRef
 from core.config import Settings
 from core.database import Base
+from core.errors import (
+    ConflictError,
+    DomainError,
+    ForbiddenError,
+    NotFoundError,
+    UnavailableError,
+    ValidationFailedError,
+)
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AdminWorkspaceReadContext, WorkspaceContext
 from modules.connectors.public import live_terms_catalog
@@ -106,7 +114,7 @@ def _cipher(key: str) -> MultiFernet:
     try:
         return MultiFernet([Fernet(part.strip().encode("ascii")) for part in key.split(",")])
     except (ValueError, TypeError, UnicodeEncodeError) as exc:
-        raise HTTPException(status_code=503, detail="Credential encryption unavailable") from exc
+        raise UnavailableError(detail="Credential encryption unavailable") from exc
 
 
 def _seal_secrets(key: str, workspace_id: UUID, revision: int, values: dict[str, str]) -> str:
@@ -126,7 +134,7 @@ def _open_secrets(key: str, workspace_id: UUID, revision: int, encrypted: str) -
             raise ValueError("Invalid binding")
         return values
     except (InvalidToken, UnicodeError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=503, detail="Stored map credentials unavailable") from exc
+        raise UnavailableError(detail="Stored map credentials unavailable") from exc
 
 
 def _read_row(row: LiveMapCredential | None, settings: Settings, workspace_id: UUID) -> LiveCredentials:
@@ -140,7 +148,7 @@ def _read_row(row: LiveMapCredential | None, settings: Settings, workspace_id: U
         if not isinstance(terms, dict) or any(not isinstance(record, dict) for record in terms.values()):
             raise ValueError("Invalid terms records")
     except (ValueError, TypeError) as exc:
-        raise HTTPException(status_code=503, detail="Stored map terms unavailable") from exc
+        raise UnavailableError(detail="Stored map terms unavailable") from exc
     return LiveCredentials(revision=row.revision, terms=terms, **values)
 
 
@@ -149,17 +157,17 @@ def require_live_terms(credentials: LiveCredentials, provider: str) -> None:
     item = live_terms_catalog().get(provider)
     record = credentials.terms.get(provider)
     if not item or not isinstance(record, dict) or record.get("version") != item["version"]:
-        raise HTTPException(status_code=409, detail="provider_terms_ineligible")
+        raise ConflictError(detail="provider_terms_ineligible")
     use = record.get("declared_use")
     if use not in {"personal", "noncommercial", "commercial"}:
-        raise HTTPException(status_code=409, detail="provider_terms_ineligible")
+        raise ConflictError(detail="provider_terms_ineligible")
     eligibility = item["eligibility"]
     allowed = (eligibility == "open" or (eligibility == "personal" and use == "personal")
                or (eligibility == "noncommercial" and use in {"personal", "noncommercial"})
                or (eligibility == "review" and record.get("review_state") == "approved" and record.get("reviewer_user_id") == 1
                    and isinstance(record.get("evidence_ref"), str) and bool(record["evidence_ref"].strip())))
     if not allowed:
-        raise HTTPException(status_code=409, detail="provider_terms_ineligible")
+        raise ConflictError(detail="provider_terms_ineligible")
 
 
 async def read_live_credentials(
@@ -167,7 +175,7 @@ async def read_live_credentials(
 ) -> LiveCredentials:
     """Read a server-only owner snapshot for an admitted owner or read-only instance administrator."""
     if not isinstance(scope, AdminWorkspaceReadContext) and (not isinstance(scope, WorkspaceContext) or scope.role != "owner"):
-        raise HTTPException(status_code=403, detail="Workspace owner required")
+        raise ForbiddenError(detail="Workspace owner required")
     await workspaces.read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     row = await session.scalar(select(LiveMapCredential).where(
         LiveMapCredential.workspace_id == scope.workspace_id, LiveMapCredential.owner_id == scope.user_id,
@@ -188,7 +196,7 @@ def public_live_credentials(value: LiveCredentials, *, is_operator: bool) -> dic
         try:
             require_live_terms(value, provider)
             accepted = True
-        except HTTPException:
+        except (DomainError, HTTPException):
             accepted = False
         record = value.terms.get(provider, {})
         catalog.append({"id": provider, **item, "accepted": accepted,
@@ -210,23 +218,23 @@ async def save_live_credentials(
     """
     changed_fields = value.model_fields_set & {"openweather_key", "firms_key", "sec_contact_email", "terms_accept", "terms_revoke"}
     if not changed_fields:
-        raise HTTPException(status_code=422, detail="At least one setting is required")
+        raise ValidationFailedError(detail="At least one setting is required")
     accepted = value.terms_accept or []
     revoked = value.terms_revoke or []
     catalog = live_terms_catalog()
     if (len(accepted) != len(set(accepted)) or len(revoked) != len(set(revoked))
             or set(accepted) & set(revoked) or (set(accepted) | set(revoked)) - set(catalog)):
-        raise HTTPException(status_code=422, detail="Invalid provider terms selection")
+        raise ValidationFailedError(detail="Invalid provider terms selection")
     if accepted and value.terms_use is None:
-        raise HTTPException(status_code=422, detail="Declared use is required")
+        raise ValidationFailedError(detail="Declared use is required")
     for provider in accepted:
         eligibility = catalog[provider]["eligibility"]
         if (eligibility == "personal" and value.terms_use != "personal") or (
             eligibility == "noncommercial" and value.terms_use == "commercial"
         ):
-            raise HTTPException(status_code=409, detail="provider_terms_ineligible")
+            raise ConflictError(detail="provider_terms_ineligible")
     if value.terms_review_confirmed and not (is_operator and value.terms_evidence_ref and value.terms_evidence_ref.strip()):
-        raise HTTPException(status_code=403, detail="operator_review_required")
+        raise ForbiddenError(detail="operator_review_required")
     await workspaces.bump_configuration_revision(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, auth_sessions=auth_sessions,
     )
@@ -237,9 +245,9 @@ async def save_live_credentials(
         LiveMapCredential.workspace_id == scope.workspace_id, LiveMapCredential.owner_id == scope.user_id,
     ).with_for_update().execution_options(populate_existing=True))
     if row is None:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+        raise NotFoundError(detail="Workspace not found")
     if row.revision != value.expected_revision:
-        raise HTTPException(status_code=409, detail="Live map settings changed")
+        raise ConflictError(detail="Live map settings changed")
     previous = _read_row(row, settings, scope.workspace_id)
     data = {name: getattr(previous, name) for name in ("openweather_key", "firms_key", "sec_contact_email")}
     for name in value.model_fields_set & set(data):
@@ -257,11 +265,14 @@ async def save_live_credentials(
             record = LiveMapTerms(workspace_id=scope.workspace_id, owner_id=scope.user_id, provider_id=provider)
             session.add(record)
             term_rows[provider] = record
-        record.version, record.declared_use, record.acknowledged_at = term["version"], value.terms_use, datetime.now(UTC)
+        # ``terms_use`` is non-None here: an accepted provider without it was rejected above.
+        record.version, record.declared_use, record.acknowledged_at = (
+            term["version"], cast(str, value.terms_use), datetime.now(UTC),
+        )
         record.review_state, record.reviewer_user_id, record.reviewed_at, record.evidence_ref = "pending", None, None, None
         if term["eligibility"] == "review" and is_operator and value.terms_review_confirmed:
             record.review_state, record.reviewer_user_id, record.reviewed_at = "approved", 1, datetime.now(UTC)
-            record.evidence_ref = value.terms_evidence_ref.strip()
+            record.evidence_ref = (value.terms_evidence_ref or "").strip()
     row.revision += 1
     retained = {name: item for name, item in data.items() if item is not None}
     row.encrypted_payload = _seal_secrets(settings.connector_credential_encryption_key.get_secret_value(),

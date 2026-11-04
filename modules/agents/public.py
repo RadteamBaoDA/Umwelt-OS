@@ -17,6 +17,7 @@ from fastapi import HTTPException
 from sqlalchemy import and_, exists, func, or_, select, text, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from core.errors import DomainError
 from core.ids import uuid7
 from core.pagination import decode_cursor, encode_cursor
 from core.realtime import commit_with_replay
@@ -272,7 +273,7 @@ async def revalidate_browser_run_authority(
 
     try:
         fence = await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    except HTTPException as exc:
+    except (HTTPException, DomainError) as exc:
         if exc.status_code in {401, 403, 404, 409}:
             return False
         raise

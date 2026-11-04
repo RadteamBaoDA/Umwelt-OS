@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core import worker_cursors
 from core.config import Settings
+from core.errors import DomainError
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import InternalJobScope
 from modules.agents import public as agents
@@ -58,7 +59,7 @@ async def _redact_workspace_traces(
             )
             await session.commit()
             return redacted
-        except HTTPException as exc:
+        except (DomainError, HTTPException) as exc:
             if exc.status_code in {401, 403, 404, 409}:
                 await session.rollback()
                 return 0

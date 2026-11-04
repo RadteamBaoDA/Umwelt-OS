@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
+from core.errors import DomainError
 from core.workspaces import admission, public
 from core.workspaces.schemas import AdminWorkspaceReadContext, InternalJobScope, WorkspaceContext
 
@@ -51,7 +51,7 @@ async def test_owner_read_and_lock_paths(fences: tuple[AsyncMock, AsyncMock]) ->
 @pytest.mark.asyncio
 async def test_member_denied_before_any_fence(fences: tuple[AsyncMock, AsyncMock]) -> None:
     """Members get 403 unless owner_only is disabled (news stories variant)."""
-    with pytest.raises(HTTPException) as denied:
+    with pytest.raises(DomainError) as denied:
         await admission.admit_scope(None, scope=MEMBER, multi_workspace_enabled=False)  # type: ignore[arg-type]
     assert denied.value.status_code == 403 and denied.value.detail == "Workspace owner required"
     fences[0].assert_not_awaited()
@@ -64,7 +64,7 @@ async def test_member_denied_before_any_fence(fences: tuple[AsyncMock, AsyncMock
 async def test_admin_view_is_read_only_when_requested(fences: tuple[AsyncMock, AsyncMock]) -> None:
     """Admin viewers may read but cannot lock when admin_read_only_on_lock is set."""
     await admission.admit_scope(None, scope=ADMIN, multi_workspace_enabled=False, admin_read_only_on_lock=True)  # type: ignore[arg-type]
-    with pytest.raises(HTTPException) as denied:
+    with pytest.raises(DomainError) as denied:
         await admission.admit_scope(  # type: ignore[arg-type]
             None, scope=ADMIN, multi_workspace_enabled=False, lock=True, admin_read_only_on_lock=True,
         )

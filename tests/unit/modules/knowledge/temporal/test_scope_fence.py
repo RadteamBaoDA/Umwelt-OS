@@ -10,7 +10,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
-from core.errors import ConflictError
+from core.errors import ConflictError, DomainError, error_status
 from core.workspaces.schemas import AccessFence, InternalJobScope, WorkspaceContext
 from modules.knowledge.temporal import public, routes, worker
 from modules.knowledge.temporal.schemas import ReconcileRequest
@@ -50,9 +50,9 @@ def _adm() -> worker._Admission:
 async def test_member_is_denied_before_any_query(call) -> None:
     session = _session()
     with patch("core.workspaces.public.read_access_fence", AsyncMock(return_value=FENCE)), \
-            pytest.raises(HTTPException) as denied:
+            pytest.raises((HTTPException, DomainError)) as denied:
         await call(session)
-    assert denied.value.status_code == 403
+    assert error_status(denied.value) == 403
     for name in ("execute", "scalar", "scalars", "get"):
         getattr(session, name).assert_not_awaited()
 

@@ -9,9 +9,9 @@ patch ``workspaces.read_access_fence``/``lock_access_fence`` keep working.
 
 from __future__ import annotations
 
-from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.errors import ForbiddenError
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import (
     AccessFence,
@@ -69,9 +69,9 @@ async def admit_scope(
     if allowed_scopes is not None:
         require_owner_scope(scope, allowed=allowed_scopes, label=scope_label)
     if owner_only and isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
+        raise ForbiddenError(detail="Workspace owner required")
     if admin_read_only_on_lock and lock and isinstance(scope, AdminWorkspaceReadContext):
-        raise HTTPException(status_code=403, detail="Admin workspace access is read-only")
+        raise ForbiddenError(detail="Admin workspace access is read-only")
     if check_flag and type(multi_workspace_enabled) is not bool:
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     if lock:

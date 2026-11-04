@@ -4,10 +4,10 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 
+from core.errors import DomainError
 from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.knowledge.documents.models import Document
 from modules.search import public
@@ -90,7 +90,7 @@ async def test_changed_fence_is_409_not_partial_page(grants, monkeypatch) -> Non
         async def scalars(self, statement, *_a):
             return SimpleNamespace(all=lambda: [chunk])
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await public.search(
             Session(), None, None, SearchRequest(query="alpha"), scope=MEMBER,  # type: ignore[arg-type]
             multi_workspace_enabled=True,
@@ -102,13 +102,13 @@ async def test_changed_fence_is_409_not_partial_page(grants, monkeypatch) -> Non
 async def test_member_cannot_use_remote_destination_or_index(grants) -> None:
     from core.tools.schemas import ToolDestination
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await public.search(
             FakeSession(), None, None, SearchRequest(query="a"), scope=MEMBER,  # type: ignore[arg-type]
             multi_workspace_enabled=True, destination=ToolDestination.REMOTE, source_generation_fences={uuid4(): 1},
         )
     assert exc.value.status_code == 403
-    with pytest.raises(HTTPException) as exc2:
+    with pytest.raises(DomainError) as exc2:
         await public.index_status(
             FakeSession(), scope=MEMBER, multi_workspace_enabled=True, settings=None, redis=None,  # type: ignore[arg-type]
         )

@@ -43,3 +43,19 @@ Options: `allowed_scopes`/`scope_label` (TypeError text), `owner_only`,
 * tools/browser_public.py:33, tools/mcp_repository.py:65, notifications/public.py:43,
   automations/scope.py:18: type check plus member 403; `admit_scope` performs both checks.
 * news/routes.py:49 **DIFFERS** (admits `admin_viewer` via a role-string check): keep own logic.
+
+## Adoption status: misc-modules package
+
+`admit_scope` raises `core.errors.ForbiddenError` (same 403 status and detail as before) so domain
+code stays framework-free; callers that handle both error families use `core.errors.is_http_error`.
+
+Adopted (thin `_admit` wrappers keep the module-private name; `_actor` is the imported `actor_id`):
+goals/public, tasks/public (typed scopes, labels `goal workspace` / `task workspace`), dashboard/public,
+dashboard/briefs, notifications/public (workspace or job scopes), search/public (`allow_member` variant).
+`actor_id` only: goals/seed, tasks/seed, search/indexing. Left as documented divergent copies:
+search/indexing `_admit` (non-locking compare, 409), dashboard/live_map_routes pacing helper.
+
+Export helpers: `core/export_pages.py` holds the snapshot cursor, byte-bound and digest code shared by
+goals, tasks and dashboard exports; the remaining `export_page`/`validate_export_fences` copies are
+listed in that module's docstring for later adoption.
+

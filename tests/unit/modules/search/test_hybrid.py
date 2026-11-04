@@ -11,8 +11,8 @@ Covers:
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import HTTPException
 
+from core.errors import DomainError
 from core.tools.schemas import ToolDestination
 from modules.search.public import (
     MAX_RANKED_CANDIDATES,
@@ -166,7 +166,7 @@ class TestSearchCursorsAndPagination:
 
         # Using cursor from query 1 with query 2 should raise 422
         req2 = SearchRequest(query="query 2", limit=10, cursor=cursor1)
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(DomainError) as exc_info:
             _offset(req2)
         assert exc_info.value.status_code == 422
         assert "Invalid search cursor" in exc_info.value.detail
@@ -180,7 +180,7 @@ class TestSearchCursorsAndPagination:
         cursor_local = _encode_cursor(req, offset=10, destination=ToolDestination.LOCAL, source_generation_fences=fences)
         req_with_cursor = SearchRequest(query="test", limit=10, cursor=cursor_local)
 
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(DomainError) as exc_info:
             _offset(req_with_cursor, destination=ToolDestination.REMOTE, source_generation_fences=fences)
         assert exc_info.value.status_code == 422
 
@@ -190,13 +190,13 @@ class TestSearchCursorsAndPagination:
         oversized_cursor = _encode_cursor(req, offset=MAX_RANKED_CANDIDATES + 1)
         req_with_cursor = SearchRequest(query="test", limit=10, cursor=oversized_cursor)
 
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(DomainError) as exc_info:
             _offset(req_with_cursor)
         assert exc_info.value.status_code == 422
 
     def test_malformed_cursor_rejected(self) -> None:
         """Verify non-base64 or malformed cursor string is rejected with 422."""
         req = SearchRequest(query="test", limit=10, cursor="!@#$%^&*()")
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(DomainError) as exc_info:
             _offset(req)
         assert exc_info.value.status_code == 422

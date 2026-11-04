@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
 from core.config import Settings
+from core.errors import DomainError
 from core.ids import uuid7
 from core.model_gateway.client import ModelGateway, ModelGatewayError
 from core.model_gateway.schemas import AIExecutionConfig, RequestPolicy
@@ -85,6 +86,7 @@ class Claim:
 
 
 def _factory(ctx: dict[str, object]) -> async_sessionmaker[AsyncSession]:
+    """Return the worker context's session factory (the ARQ ``session_factory`` entry)."""
     return cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
 
 
@@ -157,6 +159,7 @@ async def release_slot(session: AsyncSession, translation_id: UUID, token: int) 
 # --- row state -------------------------------------------------------------------------------
 
 def _mine(claim: Claim) -> Any:
+    """Fence predicate matching exactly this claim: same row, same lease token, still pending."""
     c = ContentTranslation
     return and_(c.id == claim.id, c.lease_token == claim.lease_token, c.status == "pending")
 
@@ -172,12 +175,14 @@ async def _finish(factory: async_sessionmaker[AsyncSession], claim: Claim, **val
 
 
 async def _block(factory: async_sessionmaker[AsyncSession], claim: Claim, code: str) -> None:
+    """Terminate a claim as ``blocked`` (policy codes) or ``failed`` with a cleared payload and count the outcome; a lost lease is ignored."""
     status = "blocked" if code in BLOCKED_CODES else "failed"
     await _finish(factory, claim, status=status, error_code=code, completed_at=datetime.now(UTC), **_CLEAR)
     count("translation_jobs_total", outcome=status)
 
 
 async def _retry_or_fail(factory: async_sessionmaker[AsyncSession], claim: Claim, code: str) -> None:
+    """Schedule a retry after ``RETRY_DELAY`` or, once ``MAX_ATTEMPTS`` is reached, fail the claim terminally; counts the outcome."""
     if claim.attempt >= MAX_ATTEMPTS:
         await _finish(factory, claim, status="failed", error_code=code, completed_at=datetime.now(UTC), **_CLEAR)
         count("translation_jobs_total", outcome="failed")
@@ -190,6 +195,7 @@ async def _retry_or_fail(factory: async_sessionmaker[AsyncSession], claim: Claim
 
 @dataclass(slots=True)
 class _Run:
+    """Per-claim execution context: session factory, settings, Redis, the leased claim, the member scope and the lazily resolved AI config."""
     factory: async_sessionmaker[AsyncSession]
     settings: Settings
     redis: Redis
@@ -230,7 +236,7 @@ async def _verify(run: _Run, session: AsyncSession) -> TranslationInput:
         if run.config is not None:
             await settings_public.check_ai_execution_config(
                 session, run.settings, run.redis, scope=run.gateway_scope, expected=run.config)
-    except HTTPException as exc:
+    except (DomainError, HTTPException) as exc:
         raise TranslationBlocked("stale_request") from exc
     return source
 
@@ -386,7 +392,7 @@ async def translate_content(ctx: dict[str, object], translation_id: str) -> None
             await _block(factory, claim, exc.code)
     except (ModelGatewayError, OSError, TimeoutError):
         await _retry_or_fail(factory, claim, "transport_error")
-    except HTTPException:
+    except (DomainError, HTTPException):
         await _block(factory, claim, "stale_request")
     finally:
         observe_ms("translation_job_ms", started)
@@ -431,7 +437,7 @@ async def sweep_translation_orphans(ctx: dict[str, object]) -> int:
                         resource_type=cast(Any, row.resource_type), resource_id=row.resource_id,
                         resource_revision=row.resource_revision),
                     multi_workspace_enabled=settings.multi_workspace_enabled)
-            except HTTPException:
+            except (DomainError, HTTPException):
                 continue  # transient/fence error: judge it next sweep
             if source is None:
                 doomed.append(row.id)

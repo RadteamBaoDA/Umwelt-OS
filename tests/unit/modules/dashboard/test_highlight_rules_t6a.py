@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.dialects import postgresql
 
+from core.errors import DomainError
 from core.workspaces.schemas import WorkspaceContext
 from modules.dashboard import public
 from modules.dashboard.highlights import evaluate_highlights
@@ -364,7 +365,6 @@ _REAL_ADMIT = public._admit  # captured before the autouse fixture replaces it
 
 @pytest.mark.asyncio
 async def test_member_is_forbidden_on_preview_and_usage(monkeypatch: pytest.MonkeyPatch) -> None:
-    from fastapi import HTTPException
 
     monkeypatch.setattr(public, "_admit", _REAL_ADMIT)
     member = WorkspaceContext(workspace_id=WS, user_id=2, role="member", membership_revision=1)
@@ -373,7 +373,7 @@ async def test_member_is_forbidden_on_preview_and_usage(monkeypatch: pytest.Monk
         public.preview_highlights(ReadOnlySession(), request, scope=member, multi_workspace_enabled=False),  # type: ignore[arg-type]
         public.definition_usage(ReadOnlySession(), uuid4(), scope=member, multi_workspace_enabled=False),  # type: ignore[arg-type]
     ):
-        with pytest.raises(HTTPException) as err:
+        with pytest.raises(DomainError) as err:
             await call
         assert err.value.status_code == 403
 

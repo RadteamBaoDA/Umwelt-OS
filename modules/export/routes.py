@@ -291,8 +291,7 @@ async def download_export(
     response.headers["Pragma"] = "no-cache"
     try:
         return await _build_export_response(output_format, session, owner, scope, request, response)
-    except (HTTPException, DomainError) as exc:
-        # Owner modules raise DomainError subclasses; both families expose a mutable ``headers``.
+    except (DomainError, HTTPException) as exc:
         headers = dict(exc.headers or {})
         headers.update({"Cache-Control": "private, no-store, max-age=0", "Pragma": "no-cache"})
         exc.headers = headers

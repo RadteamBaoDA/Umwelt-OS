@@ -6,10 +6,10 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
 from sqlalchemy.dialects import postgresql
 
+from core.errors import DomainError
 from modules.observability import history
 from modules.observability.schemas import HistoryRange, HistorySettingsUpdate
 
@@ -42,7 +42,7 @@ def test_settings_update_rejects_invalid_bodies(body: dict[str, Any]) -> None:
 async def test_save_settings_409_on_stale_revision_and_bumps_on_match() -> None:
     session = MagicMock()
     session.execute = AsyncMock(return_value=MagicMock(first=lambda: None))
-    with pytest.raises(HTTPException) as err:
+    with pytest.raises(DomainError) as err:
         await history.save_history_settings(session, expected_revision=1, retention_days=14)
     assert err.value.status_code == 409
     session.execute = AsyncMock(return_value=MagicMock(first=lambda: SimpleNamespace(retention_days=14, sample_interval_minutes=5, revision=2)))

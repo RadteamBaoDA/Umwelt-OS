@@ -7,8 +7,6 @@ Cross-module task reads/writes go through modules.tasks.public DTO contracts.
 
 from __future__ import annotations
 
-import base64
-import binascii
 import hashlib
 import json
 from collections.abc import Sequence
@@ -17,19 +15,23 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid5
 
-from fastapi import HTTPException
 from sqlalchemy import ColumnElement, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.export_pages import (
+    content_digest,
+    decode_snapshot_cursor,
+    dto_digest,
+    encode_snapshot_cursor,
+    serialize_bounded_page,
+)
 from core.pagination import decode_cursor, encode_cursor
 from core.realtime import commit_with_replay
-from core.workspaces import public as workspaces
+from core.workspaces.admission import ALL_SCOPE_TYPES, admit_scope
+from core.workspaces.admission import actor_id as _actor
 from core.workspaces.schemas import (
     AccessFence,
-    AdminWorkspaceReadContext,
-    InternalJobScope,
     Scope,
-    WorkspaceContext,
 )
 from modules.goals.models import Goal
 from modules.goals.schemas import (
@@ -52,35 +54,28 @@ from modules.goals.seed import (
 
 # Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
 __all__ = [
+    "GoalFilter",
+    "GoalPage",
+    "GoalRead",
     "ensure_demo_goals",
 ]
-
-
-def _actor(scope: Scope) -> int:
-    """Return the principal recorded by a real workspace or durable job scope."""
-    return scope.user_id if isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext)) else scope.actor_user_id
 
 
 async def _admit(
     session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
     lock: bool = False, expected: AccessFence | None = None,
 ) -> AccessFence:
-    """Require owner scope and capture or lock authorization before goal/task locks."""
-    if not isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext, InternalJobScope)):
-        raise TypeError("An explicit goal workspace scope is required")
-    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
-    if lock and isinstance(scope, AdminWorkspaceReadContext):
-        raise HTTPException(status_code=403, detail="Admin workspace access is read-only")
-    if type(multi_workspace_enabled) is not bool:
-        raise TypeError("The configured multi-workspace feature flag must be a boolean")
-    if lock:
-        return await workspaces.lock_access_fence(
-            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
-        )
-    return await workspaces.read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    """Require owner scope and capture or lock authorization before goal/task locks.
+
+    Thin wrapper over ``core.workspaces.admission.admit_scope`` (typed scopes labelled ``goal workspace``, admin viewers read-only); keeps this module's
+    private ``_admit`` name so call sites and tests are unchanged. No commit; the caller owns the
+    transaction and lock ordering.
+    """
+    return await admit_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=lock, expected=expected,
+        allowed_scopes=ALL_SCOPE_TYPES, scope_label="goal workspace", admin_read_only_on_lock=True,
     )
+
 
 MAX_REVISION = 9_007_199_254_740_991
 GOAL_EXPORT_PAGE_BYTES = 16_777_216
@@ -88,35 +83,12 @@ GOAL_EXPORT_PAGE_BYTES = 16_777_216
 
 def _encode_goal_export_cursor(snapshot_at: datetime, created_at: datetime, identifier: UUID) -> str:
     """Bind a canonical goal keyset position to one immutable export cutoff."""
-    raw = json.dumps(
-        [1, "goals", snapshot_at.isoformat(), created_at.isoformat(), str(identifier)],
-        separators=(",", ":"),
-    ).encode()
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    return encode_snapshot_cursor("goals", snapshot_at, created_at, identifier)
 
 
 def _decode_goal_export_cursor(cursor: str) -> tuple[datetime, datetime, UUID]:
     """Reject noncanonical, oversized, cross-dataset, or future goal export cursors."""
-    try:
-        if len(cursor) > 512 or "=" in cursor:
-            raise ValueError
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
-        if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
-            raise ValueError
-        values = json.loads(raw)
-        if not isinstance(values, list) or len(values) != 5 or values[:2] != [1, "goals"]:
-            raise ValueError
-        snapshot_at, created_at = datetime.fromisoformat(values[2]), datetime.fromisoformat(values[3])
-        identifier = UUID(values[4])
-        if (any(value.tzinfo is None or value.utcoffset() is None for value in (snapshot_at, created_at))
-                or snapshot_at.isoformat() != values[2] or created_at.isoformat() != values[3]
-                or created_at > snapshot_at or snapshot_at > datetime.now(UTC)
-                or str(identifier) != values[4]
-                or _encode_goal_export_cursor(snapshot_at, created_at, identifier) != cursor):
-            raise ValueError
-        return snapshot_at, created_at, identifier
-    except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
-        raise HTTPException(status_code=422, detail="Goal export cursor is invalid") from exc
+    return decode_snapshot_cursor(cursor, "goals", label="Goal")
 
 
 def _goal_export_scope(scope: Scope, snapshot_at: datetime) -> tuple[ColumnElement[bool], ...]:
@@ -160,13 +132,10 @@ async def export_page(
     has_more, rows = len(rows) > limit, rows[:limit]
     items = [await _goal_export_read(session, row, scope=scope,
                                      multi_workspace_enabled=multi_workspace_enabled) for row in rows]
-    encoded = [item.model_dump_json().encode("utf-8") for item in items]
-    payload_bytes = 2 + sum(map(len, encoded)) + max(0, len(items) - 1)
-    if payload_bytes > GOAL_EXPORT_PAGE_BYTES:
-        raise HTTPException(status_code=413, detail="Goal export page exceeds its byte bound")
+    encoded, payload_bytes = serialize_bounded_page(items, label="Goal", max_bytes=GOAL_EXPORT_PAGE_BYTES)
     fences = [GoalExportFence(
         id=row.id, created_at=row.created_at, updated_at=row.updated_at, revision=row.revision,
-        content_digest=hashlib.sha256(raw).hexdigest(),
+        content_digest=content_digest(raw),
     ) for row, raw in zip(rows, encoded, strict=True)]
     return GoalExportPage(
         owner_id=owner_id, record_kind="goals", snapshot_at=snapshot_at,
@@ -201,7 +170,7 @@ async def validate_export_fences(
         )
         if (item.created_at != fence.created_at or item.updated_at != fence.updated_at
                 or item.revision != fence.revision
-                or hashlib.sha256(item.model_dump_json().encode("utf-8")).hexdigest() != fence.content_digest):
+                or dto_digest(item) != fence.content_digest):
             return GoalExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
     return GoalExportValidation(valid=True, reason="valid", observed_snapshot_count=observed)
 
@@ -422,6 +391,35 @@ async def create_goal(
                                             multi_workspace_enabled=multi_workspace_enabled)
 
 
+async def _resolve_milestone_update(
+    session: AsyncSession, goal: Goal, payload: GoalUpdate, *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[dict[str, Any]]:
+    """Serialize the submitted milestones and sync each linked milestone's completion from its task.
+
+    Several milestone entries may validly point at one task, so each task identity is queried once.
+    Previously linked tasks may be soft-deleted (``allow_deleted_ids``); new links must be live.
+    Runs inside the caller's locked transaction through the tasks public contract; no writes.
+    """
+    from modules.tasks import public as tasks
+
+    next_milestones = [item.model_dump(mode="json") for item in (payload.milestones or [])]
+    linked_ids = list(dict.fromkeys(
+        UUID(str(item["task_id"])) for item in next_milestones if item.get("task_id")
+    ))
+    prior_links = set(_milestone_task_ids(goal.milestones or []))
+    await tasks.validate_linked_tasks(
+        session, linked_ids, goal.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        allow_deleted_ids=list(set(linked_ids) & prior_links),
+    )
+    task_states = await tasks.linked_task_completion(
+        session, linked_ids, goal.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    for item in next_milestones:
+        if item.get("task_id"):
+            item["completed"] = task_states.get(UUID(str(item["task_id"])), False)
+    return next_milestones
+
+
 async def update_goal(
     session: AsyncSession, goal_id: UUID, payload: GoalUpdate, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> GoalRead:
@@ -443,24 +441,9 @@ async def update_goal(
         raise ValueError("status cannot be cleared")
     next_milestones = None
     if "milestones" in fields:
-        next_milestones = [item.model_dump(mode="json") for item in (payload.milestones or [])]
-        # Several milestone entries may validly point at one task; query that identity once.
-        linked_ids = list(dict.fromkeys(
-            UUID(str(item["task_id"])) for item in next_milestones if item.get("task_id")
-        ))
-        prior_links = set(_milestone_task_ids(goal.milestones or []))
-        from modules.tasks import public as tasks
-
-        await tasks.validate_linked_tasks(
-            session, linked_ids, goal.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            allow_deleted_ids=list(set(linked_ids) & prior_links),
+        next_milestones = await _resolve_milestone_update(
+            session, goal, payload, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
-        task_states = await tasks.linked_task_completion(
-            session, linked_ids, goal.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        )
-        for item in next_milestones:
-            if item.get("task_id"):
-                item["completed"] = task_states.get(UUID(str(item["task_id"])), False)
     current_milestones = next_milestones if next_milestones is not None else goal.milestones or []
     current_entities = (payload.entity_ids or []) if "entity_ids" in fields else [
         UUID(str(value)) for value in goal.entity_ids or []
@@ -571,38 +554,42 @@ def _proposal_hash(proposal: PlanProposal) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
-async def accept_plan(
-    session: AsyncSession, goal_id: UUID, proposal: PlanProposal, *, scope: Scope, multi_workspace_enabled: bool,
+async def _replay_accepted_plan(
+    session: AsyncSession, goal: Goal, previous: dict[str, Any], fingerprint: str,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> PlanAcceptanceResult:
-    """Atomically accept a content-bound proposal once and replay its stored task manifest."""
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
-    goal = await _lock_goal(session, goal_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    fingerprint = _proposal_hash(proposal)
-    manifest = list(goal.accepted_proposals or [])
-    previous = next((item for item in manifest if item.get("proposal_id") == proposal.proposal_id), None)
-    if previous is not None:
-        if previous.get("content_hash") != fingerprint:
-            raise GoalConflict("idempotency_key_reused", "proposal_id was already accepted with different content", goal.revision)
-        from modules.tasks import public as tasks
+    """Replay the stored manifest of an already accepted proposal (idempotent accept).
 
-        live, deleted = await tasks.accepted_task_results(
-            session, [UUID(item) for item in previous.get("task_ids", [])], scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-        return PlanAcceptanceResult(
-            goal=await _current_entity_projection(session, _to_goal_read(goal), scope=scope,
-                                                  multi_workspace_enabled=multi_workspace_enabled),
-            created_tasks=live, deleted_task_ids=deleted,
-            accepted_goal_revision=previous["accepted_goal_revision"],
-            accepted_milestone_ids=[UUID(item) for item in previous.get("milestone_ids", [])],
-            already_accepted=True,
-        )
-    if goal.status != "active":
-        raise GoalConflict("goal_inactive", "Plan proposals can only be accepted by an active goal", goal.revision)
-    if proposal.expected_revision != goal.revision:
-        raise GoalConflict("stale_revision", f"Expected revision {proposal.expected_revision} but goal is at {goal.revision}", goal.revision)
-    if goal.revision >= MAX_REVISION:
-        raise GoalConflict("revision_exhausted", "Goal revision counter has reached the maximum safe integer limit", goal.revision)
+    Raises ``GoalConflict("idempotency_key_reused")`` when the same ``proposal_id`` carries different
+    content. Reads the live and deleted tasks through the tasks public contract; writes nothing.
+    """
+    from modules.tasks import public as tasks
+
+    if previous.get("content_hash") != fingerprint:
+        raise GoalConflict("idempotency_key_reused", "proposal_id was already accepted with different content", goal.revision)
+    live, deleted = await tasks.accepted_task_results(
+        session, [UUID(item) for item in previous.get("task_ids", [])], scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    return PlanAcceptanceResult(
+        goal=await _current_entity_projection(session, _to_goal_read(goal), scope=scope,
+                                              multi_workspace_enabled=multi_workspace_enabled),
+        created_tasks=live, deleted_task_ids=deleted,
+        accepted_goal_revision=previous["accepted_goal_revision"],
+        accepted_milestone_ids=[UUID(item) for item in previous.get("milestone_ids", [])],
+        already_accepted=True,
+    )
+
+
+def _check_plan_bounds(
+    goal: Goal, proposal: PlanProposal, manifest: list[dict[str, Any]],
+) -> tuple[list[UUID], list[UUID]]:
+    """Validate reference-count bounds and milestone identities; return ``(milestone_ids, entity_ids)``.
+
+    Pure. The goal may hold at most 1000 manifests and 100 milestone/task/entity references in total;
+    milestone ``task_index`` values must point into the proposal and the (derived or supplied)
+    milestone ids must be unique and absent from the goal (``GoalConflict("milestone_id_conflict")``).
+    """
     if len(manifest) >= 1000:
         raise ValueError("A goal may retain at most 1000 accepted proposal manifests")
     existing_milestones = goal.milestones or []
@@ -626,26 +613,26 @@ async def accept_plan(
     ]
     if len(set(proposal_milestone_ids)) != len(proposal_milestone_ids) or any(str(item) in {str(value.get("id")) for value in goal.milestones or []} for item in proposal_milestone_ids):
         raise GoalConflict("milestone_id_conflict", "Proposal milestone ID is already present on this goal", goal.revision)
+    return proposal_milestone_ids, proposal_entity_ids
 
+
+async def _create_plan_tasks_and_milestones(
+    session: AsyncSession, goal: Goal, proposal: PlanProposal, *, scope: Scope, multi_workspace_enabled: bool,
+) -> tuple[list[dict[str, Any]], list[UUID], list[Any]]:
+    """Create the proposal's tasks in order and append its milestones; return ``(milestones, task_ids, tasks)``.
+
+    The goal row is already locked; the task unit of work validates sorted entity references before
+    inserts and is idempotent per ``(goal, proposal_id, index)``. Milestones link to the created
+    task by ``task_index`` and start completed only when that task is already ``done``.
+    """
     from modules.tasks import public as tasks
+    from modules.tasks.schemas import TaskCreate
 
-    # Lock the full bounded entity union before task inserts; per-task locking could
-    # otherwise deadlock against a concurrent proposal accepted in reverse task order.
-    entity_lock_ids = sorted(set(proposal_entity_ids), key=str)
-    if len(entity_lock_ids) > 100:
-        raise ValueError("A proposal may reference at most 100 unique entities")
-    await tasks.validate_entity_references_for_write(
-        session, entity_lock_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-    )
-
-    milestone_values = deepcopy(existing_milestones)
+    milestone_values = deepcopy(goal.milestones or [])
     task_ids: list[UUID] = []
     created = []
-    # The goal row is already locked; task UoW validates sorted entity references before inserts.
     for index, task in enumerate(proposal.tasks):
         payload = TaskProposal.model_validate(task.model_dump())
-        from modules.tasks.schemas import TaskCreate
-
         created.append(await tasks.create_task_in_uow(session, TaskCreate(
             title=payload.title, description=payload.description, status=payload.status,
             due_date=payload.due_date, due_at=payload.due_at, goal_id=goal.id,
@@ -660,6 +647,46 @@ async def accept_plan(
             id=milestone_id, title=item.title, completed=bool(task_id and item.task_index is not None and proposal.tasks[item.task_index].status == "done"),
             due_date=item.due_date, order=item.order, task_id=task_id,
         ).model_dump(mode="json"))
+    return milestone_values, task_ids, created
+
+
+async def accept_plan(
+    session: AsyncSession, goal_id: UUID, proposal: PlanProposal, *, scope: Scope, multi_workspace_enabled: bool,
+) -> PlanAcceptanceResult:
+    """Atomically accept a content-bound proposal once and replay its stored task manifest."""
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    goal = await _lock_goal(session, goal_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    fingerprint = _proposal_hash(proposal)
+    manifest = list(goal.accepted_proposals or [])
+    previous = next((item for item in manifest if item.get("proposal_id") == proposal.proposal_id), None)
+    if previous is not None:
+        return await _replay_accepted_plan(
+            session, goal, previous, fingerprint, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+    if goal.status != "active":
+        raise GoalConflict("goal_inactive", "Plan proposals can only be accepted by an active goal", goal.revision)
+    if proposal.expected_revision != goal.revision:
+        raise GoalConflict("stale_revision", f"Expected revision {proposal.expected_revision} but goal is at {goal.revision}", goal.revision)
+    if goal.revision >= MAX_REVISION:
+        raise GoalConflict("revision_exhausted", "Goal revision counter has reached the maximum safe integer limit", goal.revision)
+    if len(manifest) >= 1000:
+        raise ValueError("A goal may retain at most 1000 accepted proposal manifests")
+    proposal_milestone_ids, proposal_entity_ids = _check_plan_bounds(goal, proposal, manifest)
+
+    from modules.tasks import public as tasks
+
+    # Lock the full bounded entity union before task inserts; per-task locking could
+    # otherwise deadlock against a concurrent proposal accepted in reverse task order.
+    entity_lock_ids = sorted(set(proposal_entity_ids), key=str)
+    if len(entity_lock_ids) > 100:
+        raise ValueError("A proposal may reference at most 100 unique entities")
+    await tasks.validate_entity_references_for_write(
+        session, entity_lock_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+
+    milestone_values, task_ids, created = await _create_plan_tasks_and_milestones(
+        session, goal, proposal, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     goal.milestones = milestone_values
     if not goal.manual_progress:
         goal.progress = _calculate_progress(milestone_values)

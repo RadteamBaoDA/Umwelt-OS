@@ -28,6 +28,7 @@ from core.model_gateway.schemas import (
     ModelMapping,
     PrivacySettings,
 )
+from core.workspaces import public as core_workspaces_public
 from core.workspaces.schemas import InternalJobScope, WorkspaceContext
 from modules.chat.schemas import AnswerContext, AnswerContextRequest, EvidenceItem
 
@@ -545,7 +546,7 @@ async def test_notification_emit_returns_false_when_evidence_source_purged(monke
     from core.workspaces.schemas import WorkspaceContext
 
     scope = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1)
-    monkeypatch.setattr(notifications.workspaces, "read_access_fence", AsyncMock(return_value=MagicMock()))
+    monkeypatch.setattr(core_workspaces_public, "read_access_fence", AsyncMock(return_value=MagicMock()))
 
     assert await notifications.emit(
         session, payload, evidence=evidence, scope=scope, multi_workspace_enabled=False,

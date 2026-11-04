@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.public import revalidate_account_session
+from core.errors import DomainError
 from core.ids import uuid7
 from core.realtime import commit_with_replay
 from core.tools.schemas import ToolDefinition, ToolExecutionPrincipal, compute_argument_hash
@@ -128,7 +129,7 @@ async def verify_approved_action(
                 session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             ) != original_fence:
                 return False
-        except HTTPException:
+        except (HTTPException, DomainError):
             return False
         row = await session.scalar(select(AgentApproval).where(
             AgentApproval.action_id == action_id, AgentApproval.workspace_id == scope.workspace_id,
@@ -195,7 +196,7 @@ async def reserve_effect_before_send(
                 session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
                 lock=True, expected=original_fence,
             )
-        except HTTPException:
+        except (HTTPException, DomainError):
             return False
         # Do the latest auth query before row locks; a second send fence occurs after DNS resolution.
         if not await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled):

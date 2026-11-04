@@ -9,31 +9,33 @@ document-seed coordinator.
 
 from __future__ import annotations
 
-import base64
-import binascii
-import hashlib
-import json
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, time, timedelta
+from typing import Any
 from typing import cast as typing_cast
 from uuid import UUID, uuid5
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import HTTPException
 from sqlalchemy import ColumnElement, DateTime, cast, func, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.models import Owner
+from core.errors import NotFoundError
+from core.export_pages import (
+    content_digest,
+    decode_snapshot_cursor,
+    dto_digest,
+    encode_snapshot_cursor,
+    serialize_bounded_page,
+)
 from core.ids import uuid7
 from core.pagination import decode_cursor, encode_cursor
 from core.realtime import commit_with_replay
-from core.workspaces import public as workspaces
+from core.workspaces.admission import ALL_SCOPE_TYPES, admit_scope
+from core.workspaces.admission import actor_id as _actor
 from core.workspaces.schemas import (
     AccessFence,
-    AdminWorkspaceReadContext,
-    InternalJobScope,
     Scope,
-    WorkspaceContext,
 )
 from modules.tasks.models import Task
 from modules.tasks.schemas import (
@@ -44,6 +46,7 @@ from modules.tasks.schemas import (
     TaskFilter,
     TaskPage,
     TaskRead,
+    TaskStatus,
     TaskUpdate,
 )
 from modules.tasks.seed import (
@@ -53,68 +56,41 @@ from modules.tasks.seed import (
 # Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
 __all__ = [
     "TaskCreate",
+    "TaskFilter",
+    "TaskPage",
+    "TaskRead",
+    "TaskStatus",
     "ensure_demo_tasks",
 ]
-
-
-def _actor(scope: Scope) -> int:
-    """Return the principal recorded by a real workspace or durable job scope."""
-    return scope.user_id if isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext)) else scope.actor_user_id
 
 
 async def _admit(
     session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
     lock: bool = False, expected: AccessFence | None = None,
 ) -> AccessFence:
-    """Require owner scope and capture or lock authorization before task/goal locks."""
-    if not isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext, InternalJobScope)):
-        raise TypeError("An explicit task workspace scope is required")
-    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
-    if lock and isinstance(scope, AdminWorkspaceReadContext):
-        raise HTTPException(status_code=403, detail="Admin workspace access is read-only")
-    if type(multi_workspace_enabled) is not bool:
-        raise TypeError("The configured multi-workspace feature flag must be a boolean")
-    if lock:
-        return await workspaces.lock_access_fence(
-            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
-        )
-    return await workspaces.read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    """Require owner scope and capture or lock authorization before task/goal locks.
+
+    Thin wrapper over ``core.workspaces.admission.admit_scope`` (typed scopes labelled ``task workspace``, admin viewers read-only); keeps this module's
+    private ``_admit`` name so call sites and tests are unchanged. No commit; the caller owns the
+    transaction and lock ordering.
+    """
+    return await admit_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=lock, expected=expected,
+        allowed_scopes=ALL_SCOPE_TYPES, scope_label="task workspace", admin_read_only_on_lock=True,
     )
+
 
 MAX_REVISION = 9_007_199_254_740_991
 
 
 def _encode_task_export_cursor(snapshot_at: datetime, created_at: datetime, identifier: UUID) -> str:
     """Bind a task keyset position to the immutable owner export cutoff."""
-    payload = json.dumps([1, "tasks", snapshot_at.isoformat(), created_at.isoformat(), str(identifier)],
-                         separators=(",", ":")).encode()
-    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    return encode_snapshot_cursor("tasks", snapshot_at, created_at, identifier)
 
 
 def _decode_task_export_cursor(cursor: str) -> tuple[datetime, datetime, UUID]:
     """Reject oversized, noncanonical, cross-dataset, or future task export cursors."""
-    try:
-        if len(cursor) > 512 or "=" in cursor:
-            raise ValueError
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
-        if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
-            raise ValueError
-        values = json.loads(raw)
-        if not isinstance(values, list) or len(values) != 5 or values[:2] != [1, "tasks"]:
-            raise ValueError
-        snapshot_at, created_at = datetime.fromisoformat(values[2]), datetime.fromisoformat(values[3])
-        identifier = UUID(values[4])
-        if (any(value.tzinfo is None or value.utcoffset() is None for value in (snapshot_at, created_at))
-                or snapshot_at.isoformat() != values[2] or created_at.isoformat() != values[3]
-                or created_at > snapshot_at or snapshot_at > datetime.now(UTC)
-                or str(identifier) != values[4]
-                or _encode_task_export_cursor(snapshot_at, created_at, identifier) != cursor):
-            raise ValueError
-        return snapshot_at, created_at, identifier
-    except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
-        raise HTTPException(status_code=422, detail="Task export cursor is invalid") from exc
+    return decode_snapshot_cursor(cursor, "tasks", label="Task")
 
 
 def _task_export_scope(scope: Scope, snapshot_at: datetime) -> tuple[ColumnElement[bool], ...]:
@@ -132,7 +108,7 @@ async def export_page(
     if owner_id != _actor(scope) or record_kind != "tasks" or not 1 <= limit <= 100:
         raise ValueError("Task export owner, kind or page limit is invalid")
     if await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
-        raise HTTPException(status_code=404, detail="Owner not found")
+        raise NotFoundError(detail="Owner not found")
     if cursor is None:
         snapshot_at, position = datetime.now(UTC), None
     else:
@@ -150,13 +126,10 @@ async def export_page(
     )).all())
     more, rows = len(rows) > limit, rows[:limit]
     items = [_to_task_read(row) for row in rows]
-    encoded = [item.model_dump_json().encode("utf-8") for item in items]
-    payload_bytes = 2 + sum(map(len, encoded)) + max(0, len(items) - 1)
-    if payload_bytes > 16_777_216:
-        raise HTTPException(status_code=413, detail="Task export page exceeds its byte bound")
+    encoded, payload_bytes = serialize_bounded_page(items, label="Task")
     fences = [TaskExportFence(
         id=row.id, created_at=row.created_at, updated_at=row.updated_at,
-        content_digest=hashlib.sha256(raw).hexdigest(),
+        content_digest=content_digest(raw),
     ) for row, raw in zip(rows, encoded, strict=True)]
     return TaskExportPage(
         owner_id=owner_id, record_kind="tasks", snapshot_at=snapshot_at, snapshot_count=count,
@@ -189,7 +162,7 @@ async def validate_export_fences(
         if row is None or row.created_at != fence.created_at or row.updated_at != fence.updated_at:
             return TaskExportValidation(valid=False, reason="record_changed", observed_snapshot_count=count)
         item = _to_task_read(row)
-        if hashlib.sha256(item.model_dump_json().encode("utf-8")).hexdigest() != fence.content_digest:
+        if dto_digest(item) != fence.content_digest:
             return TaskExportValidation(valid=False, reason="record_changed", observed_snapshot_count=count)
     return TaskExportValidation(valid=True, reason="valid", observed_snapshot_count=count)
 
@@ -340,6 +313,34 @@ async def create_task(
                           multi_workspace_enabled=multi_workspace_enabled)
 
 
+def _apply_task_patch(
+    task: Task, payload: TaskUpdate, *, next_status: str, next_goal_id: UUID | None,
+    next_entity_ids: list[UUID] | None, next_due_date: date | None, next_due_at: datetime | None,
+) -> None:
+    """Write the validated patch onto the locked task row (no flush, no revision bump).
+
+    Only explicitly sent title/description/entity fields are touched; status, goal and due values are
+    the already-resolved next values. A done task keeps its completion time (the explicit one wins,
+    else the existing, else now); any other status clears it.
+    """
+    fields = payload.model_fields_set
+    if "title" in fields and payload.title is not None:
+        task.title = payload.title
+    if "description" in fields:
+        task.description = payload.description
+    task.status = next_status
+    task.goal_id = next_goal_id
+    if "entity_ids" in fields:
+        task.entity_ids = [str(item) for item in (next_entity_ids or [])]
+    task.due_date = next_due_date
+    task.due_at = next_due_at
+
+    if task.status == "done":
+        task.completed_at = payload.completed_at if "completed_at" in fields and payload.completed_at is not None else (task.completed_at or datetime.now(UTC))
+    else:
+        task.completed_at = None
+
+
 async def update_task(
     session: AsyncSession, task_id: UUID, payload: TaskUpdate, *, scope: Scope, multi_workspace_enabled: bool
 ) -> TaskRead:
@@ -388,18 +389,8 @@ async def update_task(
         raise ValueError("title cannot be cleared")
     if "completed_at" in fields and payload.completed_at is not None and next_status != "done":
         raise ValueError("completed_at is only valid for a done task")
-    if "title" in fields and payload.title is not None: task.title = payload.title
-    if "description" in fields: task.description = payload.description
-    task.status = next_status
-    task.goal_id = next_goal_id
-    if "entity_ids" in fields: task.entity_ids = [str(item) for item in (next_entity_ids or [])]
-    task.due_date = next_due_date
-    task.due_at = next_due_at
-
-    if task.status == "done":
-        task.completed_at = payload.completed_at if "completed_at" in fields and payload.completed_at is not None else (task.completed_at or datetime.now(UTC))
-    else:
-        task.completed_at = None
+    _apply_task_patch(task, payload, next_status=next_status, next_goal_id=next_goal_id,
+                      next_entity_ids=next_entity_ids, next_due_date=next_due_date, next_due_at=next_due_at)
     task.revision += 1
     await session.flush()
     try:
@@ -431,6 +422,47 @@ async def get_task(session: AsyncSession, task_id: UUID, *, scope: Scope, multi_
                                             multi_workspace_enabled=multi_workspace_enabled)
 
 
+def _apply_task_view(statement: Any, view: str | None, local_day: date, start: datetime, end: datetime) -> Any:
+    """Narrow a task query to a named view using the owner's local-day boundaries. Pure.
+
+    ``today`` and ``upcoming`` exclude done/cancelled work and mix date-only and instant due values;
+    cancelled work stays discoverable under All/status=cancelled, never under ``completed``.
+    """
+    if view == "inbox":
+        return statement.where(Task.status == "inbox")
+    if view == "today":
+        return statement.where(((Task.due_date == local_day) | ((Task.due_at >= start) & (Task.due_at < end))), Task.status.notin_(("done", "cancelled")))
+    if view == "upcoming":
+        return statement.where(((Task.due_date > local_day) | (Task.due_at >= end)), Task.status.notin_(("done", "cancelled")))
+    if view == "blocked":
+        return statement.where(Task.status == "blocked")
+    if view == "completed":
+        return statement.where(Task.status == "done")
+    return statement
+
+
+def _apply_task_filters(statement: Any, filter: TaskFilter) -> Any:
+    """Apply the optional status/goal/entity/due-range/text filters of ``filter``. Pure."""
+    if filter.status is not None:
+        statement = statement.where(Task.status == filter.status)
+    if filter.goal_id is not None:
+        statement = statement.where(Task.goal_id == filter.goal_id)
+    if filter.entity_id is not None:
+        statement = statement.where(Task.entity_ids.contains([str(filter.entity_id)]))
+    if filter.due_date_from is not None:
+        statement = statement.where(Task.due_date >= filter.due_date_from)
+    if filter.due_date_to is not None:
+        statement = statement.where(Task.due_date <= filter.due_date_to)
+    if filter.due_at_from is not None:
+        statement = statement.where(Task.due_at >= filter.due_at_from)
+    if filter.due_at_to is not None:
+        statement = statement.where(Task.due_at <= filter.due_at_to)
+    if filter.q and filter.q.strip():
+        term = f"%{filter.q.strip()}%"
+        statement = statement.where(Task.title.ilike(term) | Task.description.ilike(term))
+    return statement
+
+
 async def list_tasks(session: AsyncSession, filter: TaskFilter, *, scope: Scope, multi_workspace_enabled: bool) -> TaskPage:
     """Return an owner-fenced, bounded task page using date-only and local-instant semantics."""
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
@@ -443,23 +475,8 @@ async def list_tasks(session: AsyncSession, filter: TaskFilter, *, scope: Scope,
     # Local-midnight boundaries are computed independently, so DST days can be 23 or 25 hours.
     start = datetime.combine(local_day, time.min, zone).astimezone(UTC)
     end = datetime.combine(local_day + timedelta(days=1), time.min, zone).astimezone(UTC)
-    if filter.view == "inbox": statement = statement.where(Task.status == "inbox")
-    elif filter.view == "today": statement = statement.where(((Task.due_date == local_day) | ((Task.due_at >= start) & (Task.due_at < end))), Task.status.notin_(("done", "cancelled")))
-    elif filter.view == "upcoming": statement = statement.where(((Task.due_date > local_day) | (Task.due_at >= end)), Task.status.notin_(("done", "cancelled")))
-    elif filter.view == "blocked": statement = statement.where(Task.status == "blocked")
-    elif filter.view == "completed":
-        # Cancelled work remains discoverable under All/status=cancelled, not Completed.
-        statement = statement.where(Task.status == "done")
-    if filter.status is not None: statement = statement.where(Task.status == filter.status)
-    if filter.goal_id is not None: statement = statement.where(Task.goal_id == filter.goal_id)
-    if filter.entity_id is not None: statement = statement.where(Task.entity_ids.contains([str(filter.entity_id)]))
-    if filter.due_date_from is not None: statement = statement.where(Task.due_date >= filter.due_date_from)
-    if filter.due_date_to is not None: statement = statement.where(Task.due_date <= filter.due_date_to)
-    if filter.due_at_from is not None: statement = statement.where(Task.due_at >= filter.due_at_from)
-    if filter.due_at_to is not None: statement = statement.where(Task.due_at <= filter.due_at_to)
-    if filter.q and filter.q.strip():
-        term = f"%{filter.q.strip()}%"
-        statement = statement.where(Task.title.ilike(term) | Task.description.ilike(term))
+    statement = _apply_task_view(statement, filter.view, local_day, start, end)
+    statement = _apply_task_filters(statement, filter)
     statement = statement.order_by(Task.created_at.desc(), Task.id.desc())
     if filter.cursor:
         cursor_dt, cursor_id = decode_cursor(filter.cursor)

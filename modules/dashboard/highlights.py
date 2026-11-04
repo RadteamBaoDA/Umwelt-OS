@@ -59,6 +59,7 @@ _TURKISH_I = {0x130: "i", 0x131: "i"}  # re.IGNORECASE equates İ/ı with i; cas
 
 
 def _fold(value: str) -> str:
+    """Case-fold ``value`` for matching, mapping Turkish dotted/dotless I first so it folds like ASCII i."""
     return value.translate(_TURKISH_I).casefold()
 
 
@@ -127,6 +128,7 @@ def match_compiled(
 
 
 def _minutes(value: str) -> int:
+    """Convert a validated ``HH:MM`` string to minutes since midnight (no range checking)."""
     return int(value[:2]) * 60 + int(value[3:])
 
 

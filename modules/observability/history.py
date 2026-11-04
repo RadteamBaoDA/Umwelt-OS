@@ -8,12 +8,12 @@ no personal data and is not tied to an account or workspace, so account erasure 
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from fastapi import HTTPException
 from redis.asyncio import Redis
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.errors import ConflictError
 from core.system.health import system_health
 from modules.observability.database_stats import read_database_stats
 from modules.observability.models import SystemHealthSample, SystemHistorySettings
@@ -66,7 +66,7 @@ async def save_history_settings(
     )
     row = result.first()
     if row is None:
-        raise HTTPException(status_code=409, detail="History settings changed; reload and retry")
+        raise ConflictError(detail="History settings changed; reload and retry")
     return HistorySettingsRead(
         retention_days=row.retention_days, sample_interval_minutes=row.sample_interval_minutes, revision=row.revision,
     )

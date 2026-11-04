@@ -19,6 +19,7 @@ from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.errors import DomainError
 from core.modules import register_modules
 from core.realtime import commit_with_replay
 from core.tools import ToolRegistry
@@ -483,7 +484,7 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
         modules: Mapping[str, Any] | None = None
         try:
             await admit_run(identity_session, identity, multi_workspace_enabled=flag)
-        except HTTPException:
+        except (HTTPException, DomainError):
             await identity_session.rollback()
             await _terminate_unadmitted(
                 session_factory, parsed_id, identity.workspace_id, "workspace_access_changed",
@@ -511,7 +512,7 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
                 session_factory, parsed_id, dispatch_generation,
                 scope=scope, original_fence=original_fence, multi_workspace_enabled=flag,
             )
-        except HTTPException:
+        except (HTTPException, DomainError):
             await _terminate_unadmitted(session_factory, parsed_id, scope.workspace_id, "workspace_access_changed")
             return
         if row is None:

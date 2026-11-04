@@ -124,6 +124,7 @@ def _hourly(block: object) -> list[HourlyPoint]:
         return []
 
     def column(name: str) -> list[object]:
+        """Return the named hourly column from the provider block, or an empty list when it is missing or not a list."""
         values = block.get(name)
         return values if isinstance(values, list) else []
 

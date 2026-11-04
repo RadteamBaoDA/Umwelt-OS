@@ -9,9 +9,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
+from core.errors import DomainError
 from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.notifications import public
 from modules.notifications.schemas import NotificationEmit, NotificationEvidence
@@ -30,8 +30,8 @@ def _sql(statement: object) -> tuple[str, dict[str, object]]:
 
 def _fences() -> object:
     """Stand in for workspace admission (no DB) while keeping the role check under test."""
-    read = patch("modules.notifications.public.workspaces.read_access_fence", AsyncMock(return_value=FENCE))
-    lock = patch("modules.notifications.public.workspaces.lock_access_fence", AsyncMock(return_value=FENCE))
+    read = patch("core.workspaces.public.read_access_fence", AsyncMock(return_value=FENCE))
+    lock = patch("core.workspaces.public.lock_access_fence", AsyncMock(return_value=FENCE))
     return _Both(read, lock)
 
 
@@ -59,7 +59,7 @@ def _session() -> AsyncMock:
 @pytest.mark.parametrize("call", ["emit", "list", "set_read"])
 async def test_member_denied_before_any_query(call: str) -> None:
     session = _session()
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         if call == "emit":
             await public.emit(
                 session, NotificationEmit(dedupe_key="k", kind="x"), scope=MEMBER, multi_workspace_enabled=FLAG,
@@ -134,7 +134,7 @@ async def test_emit_with_evidence_call_order_and_admitted_fence() -> None:
     session = AsyncMock()
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: uuid4()))
     with (
-        patch("modules.notifications.public.workspaces.read_access_fence", admit),
+        patch("core.workspaces.public.read_access_fence", admit),
         patch("modules.knowledge.documents.public.review_version_locator", locator),
         patch("modules.sources.public.lock_retained_evidence_source", lock),
         patch("modules.knowledge.documents.public.get_ready_version_ref", ready),

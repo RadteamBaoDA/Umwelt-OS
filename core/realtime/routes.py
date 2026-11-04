@@ -95,13 +95,13 @@ class SnapshotRead(BaseModel):
 class _RealtimeSendDenied(Exception):
     """Stop delegated response publication without exposing a protected denial body."""
 
-    def __init__(self, failure: HTTPException) -> None:
+    def __init__(self, failure: HTTPException | DomainError) -> None:
         """Keep only the generic admission/unavailability error for a not-yet-started response."""
         super().__init__(failure.detail)
         self.failure = failure
 
 
-def _denial_failure(exc: BaseException) -> HTTPException | None:
+def _denial_failure(exc: BaseException) -> HTTPException | DomainError | None:
     """Recognize only send denial or a group composed exclusively of expected denial leaves.
 
     Cleanup/invalidation failure, cancellation or any unrelated leaf rejects the entire
@@ -239,7 +239,7 @@ class _RealtimeResponse(Response):
 
     async def _finish_denied(
         self,
-        denial: HTTPException,
+        denial: HTTPException | DomainError,
         scope: ASGIScope,
         receive: Receive,
         send: Send,

@@ -52,7 +52,7 @@ class PublicationGateMiddleware:
             await self.app(scope, receive, send)
             return
         started = False
-        denied: HTTPException | None = None
+        denied: HTTPException | DomainError | None = None
 
         async def gated(message: Message) -> None:
             """Re-validate the request's PublicationFence in a bounded transaction before each protected send."""

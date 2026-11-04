@@ -1,6 +1,6 @@
 import pytest
-from fastapi import HTTPException
 
+from core.errors import DomainError
 from core.model_gateway.schemas import ProviderConfig
 from modules.settings import public
 from tests.unit.modules.settings.test_providers import _derived_config, _settings
@@ -28,6 +28,6 @@ def test_stored_key_never_follows_a_kind_switch():
 
 
 def test_self_hosted_draft_requires_url():
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         public.resolve_draft_endpoint(config, None, "ollama", None, settings)
     assert exc.value.status_code == 422

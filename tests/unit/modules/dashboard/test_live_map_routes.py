@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException, Response
 
+from core.errors import DomainError
 from core.workspaces.schemas import WorkspaceContext
 from modules.dashboard import live_map_routes as routes
 from modules.dashboard.live_credentials import LiveCredentials
@@ -58,7 +59,7 @@ async def test_event_cache_is_workspace_and_revision_scoped(monkeypatch):
 @pytest.mark.asyncio
 async def test_weather_rejects_non_owner_before_fetch():
     workspace = WorkspaceContext(user_id=2, workspace_id=uuid4(), role="member", membership_revision=1)
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises((DomainError, HTTPException)) as exc:
         await routes.weather("wind", 0, 0, 0, None, Session(), workspace)
     assert exc.value.status_code == 404
 
@@ -77,7 +78,7 @@ async def test_revoked_terms_deny_even_a_cached_result(monkeypatch):
     monkeypatch.setattr(routes, "read_access_fence", fence)
     monkeypatch.setattr(routes, "read_live_credentials", credentials)
     routes._cache[(workspace.workspace_id, 1, "usgs", None, None, None, None)] = (float("inf"), {"items": []})
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises((DomainError, HTTPException)) as exc:
         await routes.events("usgs", request, Response(), Session(), workspace, country=None, owner=None, repo=None, cik=None)
     assert exc.value.status_code == 409
 
@@ -163,7 +164,7 @@ async def test_revision_change_during_fetch_denies_and_does_not_cache(monkeypatc
     monkeypatch.setattr(routes, "read_live_credentials", credentials)
     monkeypatch.setattr(routes, "require_live_terms", lambda *args: None)
     monkeypatch.setattr(routes.live_map, "fetch_events", fetch)
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises((DomainError, HTTPException)) as exc:
         await routes.events("usgs", request, Response(), Session(), workspace, country=None, owner=None, repo=None, cik=None)
     assert exc.value.status_code == 409
     assert not routes._cache
@@ -176,7 +177,7 @@ async def test_disconnected_client_is_denied_before_quota_or_provider_send():
 
     request = SimpleNamespace(is_disconnected=disconnected)
     workspace = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1)
-    with pytest.raises(HTTPException) as error:
+    with pytest.raises((DomainError, HTTPException)) as error:
         await routes._before_send(request, workspace, object(), 1, "hackernews")
     assert error.value.status_code == 499
 
@@ -237,7 +238,7 @@ async def test_disconnect_during_provider_request_cancels_and_drains_it():
     task = asyncio.create_task(join())
     await entered.wait()
     closed.set()
-    with pytest.raises(HTTPException) as error:
+    with pytest.raises((DomainError, HTTPException)) as error:
         await asyncio.wait_for(task, timeout=2)
     assert error.value.status_code == 499
     assert cancelled.is_set()
@@ -414,7 +415,7 @@ async def test_shared_send_considers_observer_joining_during_authorization(monke
     await task
     assert accepted == [second.request]
     job.observers.remove(second)
-    with pytest.raises(HTTPException) as error:
+    with pytest.raises((DomainError, HTTPException)) as error:
         await routes._shared_before_send(job, 'hackernews')
     assert error.value.status_code == 409
 
@@ -454,7 +455,7 @@ async def test_disconnect_during_final_revalidation_cancels_without_caching(monk
     task = asyncio.create_task(routes.events('usgs', request, Response(), Session(), workspace, country=None, owner=None, repo=None, cik=None))
     await entered.wait()
     closed.set()
-    with pytest.raises(HTTPException) as error:
+    with pytest.raises((DomainError, HTTPException)) as error:
         await asyncio.wait_for(task, timeout=2)
     assert error.value.status_code == 499 and cancelled.is_set()
     assert not routes._cache

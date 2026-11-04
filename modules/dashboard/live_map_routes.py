@@ -18,6 +18,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
+from core.errors import DomainError
 from core.publication import require_publication_gate
 from core.workspaces.dependencies import require_workspace_observer_read
 from core.workspaces.public import lock_access_fence, read_access_fence
@@ -81,7 +82,7 @@ _jobs: dict[tuple[Any, ...], _SharedJob] = {}
 async def _shared_before_send(job: _SharedJob, provider: str) -> None:
     """Admit one connected observer's exact session and revision before each upstream send."""
     attempted: set[_Observer] = set()
-    last_error: HTTPException | None = None
+    last_error: DomainError | HTTPException | None = None
     while candidates := job.observers - attempted:
         observer = next(iter(candidates))
         attempted.add(observer)
@@ -92,7 +93,7 @@ async def _shared_before_send(job: _SharedJob, provider: str) -> None:
             # A cancelled waiter may leave while its database fence is being checked.
             if observer in job.observers and not await observer.request.is_disconnected():
                 return
-        except HTTPException as exc:
+        except (DomainError, HTTPException) as exc:
             if exc.status_code not in {401, 403, 404, 409, 499}:
                 raise
             if exc.status_code != 499:
@@ -323,7 +324,8 @@ async def weather(layer: str, z: int, x: int, y: int, request: Request, session:
     credentials = await read_live_credentials(session, scope=workspace, settings=settings, multi_workspace_enabled=gate)
     require_live_terms(credentials, "openweather")
     await session.rollback()
-    if not credentials.openweather_key:
+    openweather_key = credentials.openweather_key
+    if not openweather_key:
         raise HTTPException(422, "weather_key_required", headers=_HEADERS)
 
     key = (workspace.workspace_id, credentials.revision, layer, z, x, y)
@@ -357,7 +359,7 @@ async def weather(layer: str, z: int, x: int, y: int, request: Request, session:
             await _shared_before_send(job, "openweather")
 
         async with _parallel:
-            return await live_map.fetch_weather(layer, z, x, y, credentials.openweather_key, before_send=before_send)
+            return await live_map.fetch_weather(layer, z, x, y, openweather_key, before_send=before_send)
 
     try:
         async with _join_shared(("weather", *key), _Observer(request, workspace, fence, credentials.revision), collect) as body:

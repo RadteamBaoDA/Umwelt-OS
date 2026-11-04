@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
+from core.errors import DomainError
 from core.workspaces.schemas import WorkspaceContext
 from modules.dashboard import context, public
 
@@ -47,7 +47,7 @@ async def test_member_denied_before_any_context_read() -> None:
         patch.object(context, "_events_widget", reads),
     ):
         for builder in (context.build_daily_context, context.build_daily_widgets):
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises(DomainError) as exc:
                 await builder(AsyncMock(), datetime.now(UTC).date(), "UTC", scope=member, multi_workspace_enabled=True)
             assert exc.value.status_code == 403
     reads.assert_not_awaited()

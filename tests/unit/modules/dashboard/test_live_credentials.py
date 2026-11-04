@@ -8,6 +8,7 @@ from cryptography.fernet import Fernet
 from fastapi import HTTPException
 from pydantic import SecretStr, ValidationError
 
+from core.errors import DomainError
 from core.workspaces.schemas import WorkspaceContext
 from modules.dashboard.live_credentials import (
     LiveCredentials,
@@ -24,9 +25,9 @@ def test_encrypted_secret_is_bound_to_workspace_and_revision() -> None:
     encrypted = _seal_secrets(key, workspace, 3, {"firms_key": "example-secret"})
     assert "example-secret" not in encrypted
     assert _open_secrets(key, workspace, 3, encrypted) == {"firms_key": "example-secret"}
-    with pytest.raises(HTTPException):
+    with pytest.raises((DomainError, HTTPException)):
         _open_secrets(key, uuid4(), 3, encrypted)
-    with pytest.raises(HTTPException):
+    with pytest.raises((DomainError, HTTPException)):
         _open_secrets(key, workspace, 4, encrypted)
 
 
@@ -39,11 +40,11 @@ def test_config_secrets_are_redacted_and_reject_invalid_values() -> None:
 
 
 def test_missing_or_stale_terms_fail_closed() -> None:
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises((DomainError, HTTPException)) as exc:
         require_live_terms(LiveCredentials(revision=1), "usgs")
     assert exc.value.status_code == 409
     old = LiveCredentials(revision=2, terms={"usgs": {"version": "old", "declared_use": "personal"}})
-    with pytest.raises(HTTPException):
+    with pytest.raises((DomainError, HTTPException)):
         require_live_terms(old, "usgs")
 
 
@@ -87,13 +88,13 @@ async def test_terms_accept_and_revoke_are_revision_guarded(monkeypatch: pytest.
     require_live_terms(accepted, "usgs")
     assert row.encrypted_payload is None
     assert len(session.terms) == 1
-    with pytest.raises(HTTPException) as conflict:
+    with pytest.raises((DomainError, HTTPException)) as conflict:
         await save_live_credentials(session, LiveCredentialUpdate(
             expected_revision=1, terms_revoke=["usgs"]), **kwargs)
     assert conflict.value.status_code == 409
     withdrawn = await save_live_credentials(session, LiveCredentialUpdate(
         expected_revision=2, terms_revoke=["usgs"]), **kwargs)
-    with pytest.raises(HTTPException):
+    with pytest.raises((DomainError, HTTPException)):
         require_live_terms(withdrawn, "usgs")
     assert row.encrypted_payload is None
 
@@ -101,7 +102,7 @@ async def test_terms_accept_and_revoke_are_revision_guarded(monkeypatch: pytest.
 @pytest.mark.asyncio
 async def test_review_class_needs_operator_and_explicit_evidence() -> None:
     scope = WorkspaceContext(user_id=2, workspace_id=uuid4(), role="owner", membership_revision=1)
-    with pytest.raises(HTTPException) as denied:
+    with pytest.raises((DomainError, HTTPException)) as denied:
         await save_live_credentials(None, LiveCredentialUpdate(
             expected_revision=1, terms_accept=["eonet"], terms_use="personal",
             terms_review_confirmed=True, terms_evidence_ref="Reviewed terms"),
@@ -135,7 +136,7 @@ async def test_operator_review_is_bound_to_owner_acknowledgement(monkeypatch: py
     monkeypatch.setattr("modules.dashboard.live_config_routes.bump_operator_review_revision", bump)
     monkeypatch.setattr("modules.dashboard.live_config_routes.authenticated_session_ref", lambda request: object())
     common = {"state": "approved", "evidence_ref": "reviewed", "version": row.version, "declared_use": "personal"}
-    with pytest.raises(HTTPException) as stale:
+    with pytest.raises((DomainError, HTTPException)) as stale:
         await review_live_terms(workspace, "eonet", LiveTermsDecision(**common, acknowledged_at=now - timedelta(seconds=1)),
                                 object(), Session(), object())
     assert stale.value.status_code == 409
@@ -143,7 +144,7 @@ async def test_operator_review_is_bound_to_owner_acknowledgement(monkeypatch: py
                                      object(), Session(), object())
     assert result == {"state": "approved"}
     assert row.reviewer_user_id == 1 and row.evidence_ref == "reviewed"
-    with pytest.raises(HTTPException):
+    with pytest.raises((DomainError, HTTPException)):
         await review_live_terms(workspace, "eonet", LiveTermsDecision(**common, acknowledged_at=now),
                                 object(), Session(), object())
 

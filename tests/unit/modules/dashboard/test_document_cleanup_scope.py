@@ -3,8 +3,8 @@
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
+from core.errors import DomainError
 from modules.dashboard import briefs
 from tests.unit.modules._cleanup_scope import CTX, MEMBER_CTX, Recorder, admitted
 
@@ -16,7 +16,7 @@ async def test_member_denied_before_sql() -> None:
             briefs.clean_document_brief_evidence(session, uuid4(), **MEMBER_CTX),  # type: ignore[arg-type]
             briefs.legacy_brief_coverage(session, **MEMBER_CTX),  # type: ignore[arg-type]
         ):
-            with pytest.raises(HTTPException) as caught:
+            with pytest.raises(DomainError) as caught:
                 await call
             assert caught.value.status_code == 403
     assert session.sql == []
