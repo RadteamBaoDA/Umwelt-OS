@@ -27,7 +27,10 @@ const numberFields = [
 ] as const;
 const pageSize = 50;
 const debounceMs = 600;
-const listPatterns = { supported_parameters: /^[a-z_]{1,40}$/, model_authors: /^[a-z0-9][a-z0-9._-]{0,63}$/, providers: /^.{1,100}$/ } as const;
+const listPatterns = { supported_parameters: /^[a-z_]{1,40}$/, model_authors: /^[a-z0-9][a-z0-9._-]{0,63}$/, providers: /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$/ } as const;
+/** Server-accepted inclusive range per number filter (out-of-range values would 422); keys are matched by suffix. */
+const numberRanges: Record<string, [number, number]> = { context: [1, 10_000_000], price: [0, 10_000], output_price: [0, 10_000], age_days: [0, 36_500], intelligence_index: [0, 1000], coding_index: [0, 1000], agentic_index: [0, 1000], tool_success_rate: [0, 1] };
+const knownErrors = new Set(['credential_required', 'network_denied', 'auth_error', 'timeout']);
 
 /** Wire filters for the browse endpoint (snake_case because they go on the wire). */
 export type OpenRouterFilters = {
@@ -52,7 +55,7 @@ function parseList(raw: string, pattern: RegExp): string[] {
   return raw.split(',').map((item) => item.trim()).filter((item) => pattern.test(item)).slice(0, 20);
 }
 
-/** Builds the wire filter object from tab, sort and typed state, omitting every empty or invalid field. */
+/** Builds the wire filter object from tab, sort and typed state, omitting every empty, out-of-range or inverted-pair field. */
 export function buildFilters(output: OpenRouterFilters['output_modalities'], sort: OpenRouterFilters['sort'], typed: Typed): OpenRouterFilters {
   const f: OpenRouterFilters = { output_modalities: output, sort };
   const q = typed.q.trim().slice(0, 100);
@@ -63,10 +66,18 @@ export function buildFilters(output: OpenRouterFilters['output_modalities'], sor
   const authors = parseList(typed.authors, listPatterns.model_authors); if (authors.length) f.model_authors = authors;
   const providers = parseList(typed.providers, listPatterns.providers); if (providers.length) f.providers = providers;
   if (typed.endpoints.length) f.endpoints = typed.endpoints;
+  const nums: Record<string, number> = {};
   for (const [key] of numberFields) {
     const raw = typed.numbers[key]?.trim();
-    if (raw && Number.isFinite(Number(raw))) (f as Record<string, unknown>)[key] = Number(raw);
+    const [low, high] = numberRanges[key.replace(/^m(in|ax)_/, '')] ?? [0, 0];
+    if (raw && Number.isFinite(Number(raw)) && Number(raw) >= low && Number(raw) <= high) nums[key] = Number(raw);
   }
+  // An inverted min/max pair can never match and the server rejects it, so neither side is sent.
+  for (const key of Object.keys(nums)) {
+    const max = key.replace(/^min_/, 'max_');
+    if (key.startsWith('min_') && max in nums && nums[key] > nums[max]) { delete nums[key]; delete nums[max]; }
+  }
+  Object.assign(f, nums);
   if (/^[A-Za-z0-9 ._-]{1,40}$/.test(typed.arch)) f.arch = typed.arch;
   if (typed.region === 'eu' || typed.region === 'us') f.region = typed.region;
   if (typed.distillable !== 'any') f.distillable = typed.distillable === 'yes';
@@ -121,7 +132,7 @@ export function OpenRouterModelBrowser({ providerId, browse, excluded, disabled,
   const data = result.data;
   const errorText = result.error instanceof ApiError && result.error.status === 429 ? t('orbRateLimited')
     : result.error ? t('orbBrowseError_other')
-    : data && !data.ok ? t(`orbBrowseError_${data.error ?? 'other'}`) : '';
+    : data && !data.ok ? t(`orbBrowseError_${data.error && knownErrors.has(data.error) ? data.error : 'other'}`) : '';
   const toggle = (list: string[], value: string, on: boolean) => (on ? [...list, value] : list.filter((item) => item !== value));
   const numberLabelId = (name: string) => `orb-${name}`;
   const first = data && data.models.length ? offset + 1 : 0;

@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { messages } from '@/core/messages';
-import { AISettingsWorkspace, autoFillDefaults } from './ai-settings';
+import { AISettingsWorkspace, autoFillDefaults, browseApiKey } from './ai-settings';
 
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'csrf' }) }));
 vi.mock('@/modules/agents/agent-settings', () => ({ AgentSettingsWorkspace: () => null }));
@@ -65,5 +65,13 @@ describe('AI settings models', () => {
     expect(filled.embedding).toBeUndefined();
     expect(filled.background).toBeUndefined();
     expect(autoFillDefaults(next, next, {})).toEqual({});
+  });
+
+  it('sends the typed OpenRouter browse key only when draft and saved kinds are openrouter', () => {
+    expect(browseApiKey('sk-typed', 'openrouter', undefined)).toBe('sk-typed');
+    expect(browseApiKey('sk-typed', 'openrouter', 'openrouter')).toBe('sk-typed');
+    expect(browseApiKey('sk-typed', 'openrouter', 'custom')).toBe('');
+    expect(browseApiKey('sk-typed', 'custom', 'openrouter')).toBe('');
+    expect(browseApiKey(undefined, 'openrouter', 'openrouter')).toBe('');
   });
 });

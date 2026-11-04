@@ -5,7 +5,7 @@ import { NextIntlClientProvider, useTranslations } from 'next-intl';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from '@/core/api';
 import { messages } from '@/core/messages';
-import { OpenRouterModelBrowser, typeForModel, type BrowseOpenRouter, type OpenRouterModel } from './openrouter-model-browser';
+import { buildFilters, OpenRouterModelBrowser, typeForModel, type BrowseOpenRouter, type OpenRouterModel } from './openrouter-model-browser';
 
 const flux: OpenRouterModel = { id: 'black-forest-labs/flux-2', name: 'FLUX.2', created: 1, context_length: 8000, input_modalities: ['text'], output_modalities: ['image'], pricing_prompt: '0.000002', pricing_completion: '0.000004', supported_parameters: [] };
 const ok = (models: OpenRouterModel[] = [], next: number | null = null) => ({ ok: true, error: null, models, total_count: models.length, next_offset: next });
@@ -73,5 +73,22 @@ describe('openrouter model browser', () => {
     first.unmount();
     renderBrowser({ browse: vi.fn().mockRejectedValue(new ApiError(429, 'Too Many Requests')) });
     expect((await screen.findByRole('alert')).textContent).toMatch(/Too many searches/);
+  });
+
+  it('maps an unknown server error code to the generic message', async () => {
+    const odd = vi.fn().mockResolvedValue({ ok: false, error: 'provider_error', models: [], total_count: 0, next_offset: null });
+    renderBrowser({ browse: odd });
+    expect((await screen.findByRole('alert')).textContent).toMatch(/Could not load OpenRouter models/);
+  });
+});
+
+describe('buildFilters', () => {
+  const typed = { q: '', inputs: [], category: 'any', params: '', authors: '', providers: '', endpoints: [], numbers: {}, arch: '', region: 'any', distillable: 'any', zdr: false };
+  it('skips inverted min/max pairs and out-of-range numbers, keeps valid ones', () => {
+    const f = buildFilters('all', 'newest', { ...typed, numbers: { min_price: '5', max_price: '1', min_age_days: '3', max_tool_success_rate: '2', context: '0', max_coding_index: '10' } });
+    expect(f).toEqual({ output_modalities: 'all', sort: 'newest', min_age_days: 3, max_coding_index: 10 });
+  });
+  it('drops provider names the server pattern rejects', () => {
+    expect(buildFilters('all', 'newest', { ...typed, providers: 'Together, -bad, ok name' }).providers).toEqual(['Together', 'ok name']);
   });
 });

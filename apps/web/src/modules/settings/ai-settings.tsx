@@ -39,6 +39,15 @@ export function autoFillDefaults(prev: ProviderRead[], next: ProviderRead[], cur
   }
   return out;
 }
+/**
+ * Chooses the key sent with an OpenRouter browse call. A typed key may have been entered for another kind's host, so it
+ * is sent only when the draft kind is `openrouter` and the saved row (if any) is too; otherwise `''` makes the server
+ * fall back to the stored key, which it only reuses for a saved openrouter provider.
+ */
+export function browseApiKey(typedKey: string | undefined, draftKind: string, savedKind: string | undefined): string {
+  return typedKey && draftKind === 'openrouter' && (savedKind === undefined || savedKind === 'openrouter') ? typedKey : '';
+}
+
 const draftStorageKey = 'bbd:settings:ai:draft:v2';
 const defaultPrivacy: Privacy = { allow_remote_reasoning: false, allow_remote_embeddings: false, allow_remote_web_search: false, allow_widget_remote_media: false, reasoning_destinations: [], embedding_destinations: [], web_search_destinations: [] };
 
@@ -166,7 +175,7 @@ export function AISettingsWorkspace() {
     onSettled: () => setDiscoveringId(null),
   });
   /** Builds the browse call for one OpenRouter provider: a saved provider uses its stored key, a draft one the typed key. */
-  const browseOpenRouter = (provider: ProviderRead): BrowseOpenRouter => (filters, offset, limit) => apiRequest<OpenRouterBrowseResult>('/api/v1/settings/ai/openrouter/models', { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ provider_id: savedIds.includes(provider.id) ? provider.id : undefined, api_key: secrets[provider.id]?.key ?? '', filters, offset, limit }) });
+  const browseOpenRouter = (provider: ProviderRead): BrowseOpenRouter => (filters, offset, limit) => apiRequest<OpenRouterBrowseResult>('/api/v1/settings/ai/openrouter/models', { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ provider_id: savedIds.includes(provider.id) ? provider.id : undefined, api_key: browseApiKey(secrets[provider.id]?.key, provider.kind, query.data?.providers.find((item) => item.id === provider.id)?.kind), filters, offset, limit }) });
   /** Probes the saved embedding default through the role endpoint, the only path that persists embeddings evidence. */
   const embeddingProbe = useMutation({
     mutationFn: () => apiRequest<Capability>('/api/v1/settings/models/embedding/test', { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ capability: 'embeddings' }) }),
