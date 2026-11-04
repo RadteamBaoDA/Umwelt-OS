@@ -12,6 +12,7 @@ from sqlalchemy import Select, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.schemas import AccountSessionRef
+from core.errors import DomainError
 from core.ids import uuid7
 from core.workspaces.access import (
     authorize_internal_job as authorize_internal_job,  # noqa: PLC0414  # deliberate public re-export for mypy/ruff
@@ -189,7 +190,7 @@ async def resolve_workspace_owner_context(
         return None
     try:
         await read_access_fence(session, scope=context, multi_workspace_enabled=multi_workspace_enabled)
-    except HTTPException as exc:
+    except (HTTPException, DomainError) as exc:
         if exc.status_code in {401, 404}:
             return None
         raise

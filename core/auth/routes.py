@@ -56,6 +56,7 @@ from core.auth.schemas import (
 from core.auth.service import hash_password, verify_login_password, verify_password
 from core.config import Settings
 from core.database import get_session
+from core.errors import DomainError
 from core.telemetry import log_event
 from modules.settings.public import set_initial_owner_display_name
 
@@ -298,12 +299,12 @@ async def login(
     try:
         await _allow_attempt(request, redis, "login")
         await _login_precheck(request, redis, body.identifier)
-    except HTTPException as exc:
+    except (HTTPException, DomainError) as exc:
         _audit(request, "login_rate_limited" if exc.status_code == 429 else "login_unavailable")
         raise
     try:
         state, owner_id = await _login_verify(request, response, body, session, settings)
-    except HTTPException as exc:
+    except (HTTPException, DomainError) as exc:
         if exc.status_code == 401:
             await _login_record(request, redis, body.identifier, success=False)
             _audit(request, "login_failure")
@@ -351,7 +352,7 @@ async def _login_verify(
 
     try:
         owner = await _lock_owner(session, account_id, wait_seconds=OWNER_LOCK_WAIT_SECONDS)
-    except HTTPException as exc:
+    except (HTTPException, DomainError) as exc:
         if exc.status_code != 409:
             raise
         # Credentials already verified: contention is retryable, never a 401 (not a failed attempt).
@@ -524,7 +525,7 @@ async def _lock_owner_session_retrying(
             return await _lock_owner_session(
                 request, session, ids, None, check_csrf=False, share_owner=True
             )
-        except HTTPException as exc:
+        except (HTTPException, DomainError) as exc:
             if exc.status_code != 409 or attempt == attempts - 1:
                 raise
             await session.rollback()  # a failed NOWAIT aborts the transaction
@@ -788,7 +789,7 @@ async def _google_invitation_branch(
         return response
     try:
         target = await invitation_target(session, digest)
-    except HTTPException:
+    except (HTTPException, DomainError):
         await session.rollback()
         return response
     if target.email != email:

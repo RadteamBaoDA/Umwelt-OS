@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from core.errors import DomainError
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import PublicationFence
 
@@ -85,7 +86,7 @@ class PublicationGateMiddleware:
                             multi_workspace_enabled=app.state.settings.multi_workspace_enabled,
                             auth_sessions=(fence.auth_session,), read=True)
                         await workspaces.lock_resource_grants(session, scope=fence.scope, grants=fence.grants)
-                except HTTPException as exc:
+                except (HTTPException, DomainError) as exc:
                     denied = exc
                     if kind == "http.response.start":
                         return  # swallowed; the caller path below sends the 404/409

@@ -940,7 +940,7 @@ async def admit_collection(
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     try:
         _, scope, _ = await _collector(session, source_id, authorization, multi_workspace_enabled=multi_workspace_enabled)
-    except HTTPException as exc:
+    except (HTTPException, DomainError) as exc:
         if exc.status_code != 401:
             raise
         await session.rollback()  # the MCP workflow holds only the distinct mcp:collect bearer

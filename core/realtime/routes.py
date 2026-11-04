@@ -23,6 +23,7 @@ from core.auth.dependencies import require_account
 from core.auth.public import authenticated_session_ref, get_active_account
 from core.auth.schemas import AccountRead, AccountSessionRef
 from core.database import get_session
+from core.errors import DomainError
 from core.realtime.service import (
     MAX_CURSOR_LENGTH,
     MAX_REPLAY_BATCH,
@@ -208,7 +209,7 @@ class _RealtimeResponse(Response):
                     started = True
                 elif not message.get("more_body", False):
                     finished = True
-            except HTTPException as exc:
+            except (HTTPException, DomainError) as exc:
                 raise _RealtimeSendDenied(exc) from exc
             except (TimeoutError, SQLAlchemyError) as exc:
                 send_uncertain = send_attempted

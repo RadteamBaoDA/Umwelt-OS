@@ -10,6 +10,7 @@ from core.auth.dependencies import require_account, require_account_write
 from core.auth.public import authenticated_session_ref, get_active_account
 from core.auth.schemas import AccountRead
 from core.database import get_session
+from core.errors import DomainError
 from core.publication import require_publication_gate
 from core.workspaces.public import (
     read_access_fence,
@@ -175,7 +176,7 @@ async def require_workspace_observer_read(
             return viewer
     try:
         return await _selected_workspace(request, session, account.id, workspace_id)
-    except HTTPException as exc:
+    except (HTTPException, DomainError) as exc:
         if exc.status_code != 404 or account.id != 1 or workspace_id is None:
             raise
     assert selected is not None
