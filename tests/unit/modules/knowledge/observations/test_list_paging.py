@@ -9,12 +9,11 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
 import modules.ingestion.models  # resolve Observation foreign-key targets
 import modules.knowledge.documents.models
 import modules.sources.models  # noqa: F401
-from core.errors import NotFoundError
+from core.errors import NotFoundError, ValidationFailedError
 from core.pagination import decode_fingerprinted_cursor
 from modules.knowledge.observations import public
 from modules.knowledge.observations.schemas import ObservationQuery
@@ -117,6 +116,6 @@ async def test_cursor_from_other_query_is_rejected(monkeypatch: pytest.MonkeyPat
     """A cursor minted for different filters is HTTP 422 'Observation cursor is invalid'."""
     _patch(monkeypatch)
     _, cursor, _, _ = await _list(_session(_rows(3)))
-    with pytest.raises(HTTPException) as failure:
+    with pytest.raises(ValidationFailedError) as failure:
         await _list(_session(), cursor, history=True)
     assert (failure.value.status_code, failure.value.detail) == (422, "Observation cursor is invalid")

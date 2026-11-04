@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy import (
     ColumnElement,
     Integer,
@@ -28,6 +27,13 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
+from core.errors import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    PayloadTooLargeError,
+    ValidationFailedError,
+)
 from core.events import DomainEvent
 from core.ids import uuid7
 from core.pagination import decode_cursor, encode_cursor
@@ -44,12 +50,15 @@ from core.workspaces.schemas import (
 from modules.sources.models import Source, SourcePurgeOperation
 from modules.sources.schemas import (
     ConnectorSource,
+    GadgetSourceSelection,
     GadgetSourceSelectionPage,
     OperationRead,
     SourceCreate,
     SourceExportFence,
     SourceFence,
     SourceFenceSet,
+    SourceImpactRead,
+    SourceList,
     SourceMetadataExportFence,
     SourceMetadataExportPage,
     SourceMetadataExportValidation,
@@ -57,9 +66,27 @@ from modules.sources.schemas import (
     SourcePurgeJobIdentity,
     SourceRead,
 )
-from modules.sources.schemas import (
-    GadgetSourceSelection as GadgetSourceSelection,  # noqa: PLC0414  # explicit re-export (mypy strict)
-)
+
+# DTOs other modules import from ``modules.sources.schemas`` are re-exported here so importers can switch to the
+# public contract. Only the re-exported schema names are listed; every other public function remains importable.
+__all__ = [
+    "ConnectorSource",
+    "GadgetSourceSelection",
+    "GadgetSourceSelectionPage",
+    "OperationRead",
+    "SourceCreate",
+    "SourceExportFence",
+    "SourceFence",
+    "SourceFenceSet",
+    "SourceImpactRead",
+    "SourceList",
+    "SourceMetadataExportFence",
+    "SourceMetadataExportPage",
+    "SourceMetadataExportValidation",
+    "SourcePatch",
+    "SourcePurgeJobIdentity",
+    "SourceRead",
+]
 
 
 @dataclass(frozen=True)
@@ -158,7 +185,7 @@ def _require_source_owner(scope: Scope) -> None:
     if not isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext, InternalJobScope)):
         raise TypeError("An explicit Source scope is required")
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
+        raise ForbiddenError(detail="Workspace owner required")
 
 
 def _source_scope(scope: Scope) -> tuple[ColumnElement[bool], ...]:
@@ -198,7 +225,7 @@ async def _admit_source_scope(
     """
     _require_source_owner(scope)
     if lock and isinstance(scope, AdminWorkspaceReadContext):
-        raise HTTPException(status_code=403, detail="Admin workspace access is read-only")
+        raise ForbiddenError(detail="Admin workspace access is read-only")
     if type(multi_workspace_enabled) is not bool:
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     if lock:
@@ -241,7 +268,7 @@ def _decode_source_page_cursor(cursor: str, fingerprint: str) -> tuple[datetime,
             raise ValueError
         return created_at, identifier
     except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
-        raise HTTPException(status_code=422, detail="Source cursor is invalid") from exc
+        raise ValidationFailedError(detail="Source cursor is invalid") from exc
 
 
 def _encode_source_export_cursor(
@@ -279,7 +306,7 @@ def _decode_source_export_cursor(cursor: str, fingerprint: str) -> tuple[datetim
             raise ValueError
         return snapshot_at, created_at, identifier
     except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
-        raise HTTPException(status_code=422, detail="Source export cursor is invalid") from exc
+        raise ValidationFailedError(detail="Source export cursor is invalid") from exc
 
 
 def _source_export_scope(snapshot_at: datetime, *, scope: Scope) -> tuple[ColumnElement[bool], ...]:
@@ -336,7 +363,7 @@ async def export_page(
     encoded_items = [item.model_dump_json().encode("utf-8") for item in items]
     payload_bytes = 2 + sum(map(len, encoded_items)) + max(0, len(items) - 1)
     if payload_bytes > 16_777_216:
-        raise HTTPException(status_code=413, detail="Source export page exceeds its byte bound")
+        raise PayloadTooLargeError(detail="Source export page exceeds its byte bound")
     fences = [SourceMetadataExportFence(
         source_id=row.id, workspace_id=scope.workspace_id, created_at=row.created_at, updated_at=row.updated_at,
         generation=row.generation, content_digest=hashlib.sha256(raw).hexdigest(),
@@ -441,7 +468,7 @@ async def observability_quality_summary(
     O owns operator admission before calling this deliberate global, content-free projection.
     """
     if instance_operator is not True:
-        raise HTTPException(status_code=403, detail="Instance operator required")
+        raise ForbiddenError(detail="Instance operator required")
     now = now or datetime.now(UTC)
     cadence = cast(Source.configuration["schedule_interval_minutes"].astext, Integer)
     default_cadence = case((Source.type == "rss", 15), else_=30)
@@ -824,7 +851,7 @@ async def github_retirement_peer_projection_in_uow(
         access_fence=access_fence, source_fence=source_fence,
     )
     if anchor is None or anchor.status != "archived" or anchor.provider != "github":
-        raise HTTPException(status_code=409, detail="GitHub retirement anchor is unavailable")
+        raise ConflictError(detail="GitHub retirement anchor is unavailable")
     return select(Source.id).where(
         Source.workspace_id == anchor.workspace_id,
         Source.id != anchor.id,
@@ -851,7 +878,7 @@ def ingestion_instance_lifecycle_projection(*, instance_operator: bool) -> Selec
     metadata/configuration/credentials/content or implicit workspace grant is returned.
     """
     if instance_operator is not True:
-        raise HTTPException(status_code=403, detail="Instance operator required")
+        raise ForbiddenError(detail="Instance operator required")
     return select(Source.id, Source.status, Source.generation)
 
 
@@ -936,7 +963,7 @@ async def lock_source_set(
     )
     fences = await _lock_source_fence_rows(session, ordered, scope=scope, retained_evidence=retained_evidence)
     if fences is None:
-        raise HTTPException(status_code=404, detail="Source set is unavailable")
+        raise NotFoundError(detail="Source set is unavailable")
     return SourceFenceSet(fences=fences, access_fence=access_fence)
 
 
@@ -1130,7 +1157,7 @@ async def _source_in_uow(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     if current_access != access_fence:
-        raise HTTPException(status_code=409, detail="Workspace access fence changed")
+        raise ConflictError(detail="Workspace access fence changed")
     if source_fence.id != source_id or source_fence.workspace_id != scope.workspace_id:
         return None
     source = await session.scalar(select(Source).where(
@@ -1459,7 +1486,7 @@ async def prepare_source_pause_for_connector_in_uow(
         access_fence=access_fence, source_fence=source_fence,
     )
     if source is None or source.status not in {"active", "paused"}:
-        raise HTTPException(status_code=409, detail="Source pause preparation is unavailable")
+        raise ConflictError(detail="Source pause preparation is unavailable")
     from modules.connectors import public as connectors
     from modules.ingestion import public as ingestion
     from modules.tools.public import lock_source_browser_results_in_uow
@@ -1872,7 +1899,7 @@ async def get_connector_retained_effect_anchor_in_uow(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     if current_access != access_fence:
-        raise HTTPException(status_code=409, detail="Retained Connector access fence changed")
+        raise ConflictError(detail="Retained Connector access fence changed")
     if type(source_generation) is not int or source_generation <= 0:
         raise ValueError("Original Connector Source generation is required")
     if isinstance(scope, InternalJobScope) and scope.source_id is not None and (
@@ -2107,7 +2134,7 @@ async def get_source_impact(
     if await get_source(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled) is None:
         return None
     if await session.scalar(export_eligible_source_ids(scope=scope).where(Source.id == source_id)) is None:
-        raise HTTPException(status_code=409, detail="Source purge is pending")
+        raise ConflictError(detail="Source purge is pending")
     from modules.chat import public as chat
     from modules.dashboard import public as dashboard
     from modules.knowledge.documents import public as documents

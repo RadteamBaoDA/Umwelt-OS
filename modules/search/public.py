@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from core.config import Settings
+from core.errors import DomainError
 from core.model_gateway.client import ModelGatewayError, PrivacyPolicyDenied
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import AIExecutionConfig, ModelMapping, RequestPolicy
@@ -533,7 +534,7 @@ async def search(
         except DBAPIError:
             await session.rollback()
             warnings.append(FALLBACK_WARNING)
-        except HTTPException as exc:
+        except (HTTPException, DomainError) as exc:
             if exc.status_code != 503:
                 raise
             warnings.append(FALLBACK_WARNING)

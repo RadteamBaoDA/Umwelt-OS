@@ -5,12 +5,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4, uuid5
 
 import pytest
-from fastapi import HTTPException
 
+from core.errors import DomainError
 from core.events import DomainEvent
 from core.workspaces.schemas import AccessFence, InternalJobScope, WorkspaceContext
 from modules.ingestion import public as ingestion
+from modules.knowledge.documents import public as documents
 from modules.knowledge.documents.schemas import DocumentCleanupJobIdentity
+
+from .patching import patch_ingestion
 
 WS, SRC, OP = uuid4(), uuid4(), uuid4()
 SCOPE = WorkspaceContext(user_id=7, workspace_id=WS, role="owner", membership_revision=3)
@@ -34,8 +37,8 @@ def _identity(**overrides) -> DocumentCleanupJobIdentity:
 async def _publish(event, identity, scope=SCOPE):
     session = MagicMock()
     reader = AsyncMock(return_value=identity)
-    with patch.object(ingestion, "_admit_ingestion_scope", AsyncMock(return_value=AccessFence(WS, 7, 3, 2))), \
-            patch.object(ingestion.documents, "read_document_cleanup_job_identity", reader):
+    with patch_ingestion("_admit_ingestion_scope", AsyncMock(return_value=AccessFence(WS, 7, 3, 2))), \
+            patch.object(documents, "read_document_cleanup_job_identity", reader):
         await ingestion.publish_event(session, event, scope=scope, multi_workspace_enabled=True)
     return session, reader
 
@@ -64,7 +67,7 @@ async def test_non_exact_envelope_is_value_error(override) -> None:
 
 async def test_extra_payload_identity_with_wrong_principal_is_not_found() -> None:
     event = _event(payload={"operation_id": str(OP), "actor_user_id": 99})
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await _publish(event, _identity())
     assert exc.value.status_code == 404
 
@@ -73,7 +76,7 @@ async def test_extra_payload_identity_with_wrong_principal_is_not_found() -> Non
 async def test_identity_missing_or_mismatching_is_404(identity) -> None:
     value = {"workspace": _identity(workspace_id=uuid4()), "actor": _identity(actor_user_id=8),
              "membership": _identity(membership_revision=4), None: None}[identity]
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await _publish(_event(), value)
     assert (exc.value.status_code, exc.value.detail) == (404, "Document cleanup receipt not found")
 
@@ -83,6 +86,6 @@ async def test_source_bound_scope_requires_matching_source_and_generation() -> N
     session, _ = await _publish(_event(), _identity(), scope=bound)
     assert session.add.call_args.args[0].payload == {"operation_id": str(OP)}
     for other in (_identity(source_id=uuid4()), _identity(source_generation=6)):
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(DomainError) as exc:
             await _publish(_event(), other, scope=bound)
         assert exc.value.status_code == 404

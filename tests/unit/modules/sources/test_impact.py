@@ -10,6 +10,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
+from core.errors import DomainError
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat import public as chat
 from modules.connectors import native_fetch
@@ -147,7 +148,7 @@ async def test_impact_is_409_while_purge_pending(monkeypatch: pytest.MonkeyPatch
         return object()
 
     monkeypatch.setattr(sources, "get_source", found)
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         await sources.get_source_impact(
             ImpactSession(None), uuid4(), scope=SCOPE, multi_workspace_enabled=False,  # type: ignore[arg-type]
         )

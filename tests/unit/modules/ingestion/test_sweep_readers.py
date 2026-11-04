@@ -9,6 +9,8 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
+from core.errors import DomainError
+from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, WorkspaceContext
 from modules.ingestion import public
 
@@ -41,7 +43,7 @@ class _Session:
 @pytest.fixture(autouse=True)
 def admission():
     mock = AsyncMock(return_value=FENCE)
-    with patch.object(public.workspaces, "read_access_fence", mock):
+    with patch.object(workspaces, "read_access_fence", mock):
         yield mock
 
 
@@ -72,7 +74,7 @@ async def test_workspace_predicate_precedes_order_and_limit(reader, admission) -
 async def test_member_denied_before_any_query(reader) -> None:
     member = WorkspaceContext(user_id=2, workspace_id=WORKSPACE_ID, role="member", membership_revision=1)
     session = _Session()
-    with pytest.raises(HTTPException) as denied:
+    with pytest.raises(DomainError) as denied:
         await reader(session, None, scope=member, multi_workspace_enabled=True)
     assert denied.value.status_code == 403
     assert session.statements == []

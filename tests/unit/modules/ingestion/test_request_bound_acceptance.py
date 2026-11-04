@@ -4,8 +4,8 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
+from core.errors import DomainError
 from modules.connectors import public as connectors
 from modules.connectors.collection_schemas import CollectionRequestRef
 from modules.ingestion import public as ingestion
@@ -27,14 +27,14 @@ async def call(**overrides):
 
 @pytest.mark.asyncio
 async def test_neither_bearer_nor_request_is_rejected():
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await call()
     assert exc.value.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_unknown_bearer_is_rejected_without_a_request():
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await call(collector_token="not-a-credential")
     assert exc.value.status_code == 401
 
@@ -48,7 +48,7 @@ async def test_request_ref_must_prove_the_exact_attempt(monkeypatch):
         return seen.get("ok", False)
 
     monkeypatch.setattr(connectors, "lock_collection_request_in_uow", proof)
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await call(request_ref=REF)
     assert exc.value.status_code == 409
     assert seen["source_generation"] == 1 and seen["connector_revision"] == 2 and seen["ref"] == REF
@@ -66,7 +66,7 @@ async def test_request_ref_without_connector_revision_fails_closed(monkeypatch):
         return True
 
     monkeypatch.setattr(connectors, "lock_collection_request_in_uow", good)
-    with pytest.raises(HTTPException):
+    with pytest.raises(DomainError):
         await call(request_ref=REF, connector_revision=None)
 
 
@@ -81,7 +81,7 @@ async def test_settle_is_noop_without_ref_and_409_when_attempt_is_stale(monkeypa
         return False
 
     monkeypatch.setattr(connectors, "settle_collection_in_uow", stale)
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await ingestion._settle_request(RecSession(), REF, outcome="no_changes", run_id=None, **ids)
     assert exc.value.status_code == 409 and calls[0]["outcome"] == "no_changes" and calls[0]["accepted_receipt_id"]
 

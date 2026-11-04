@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from core.auth.public import revalidate_account_session
 from core.config import Settings
+from core.errors import DomainError
 from core.model_gateway.client import ModelGateway
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import AIExecutionConfig, ModelMapping, RequestPolicy
@@ -260,7 +261,7 @@ class HarnessContext:
                 session, scope=self.scope, multi_workspace_enabled=self.multi_workspace_enabled,
                 lock=lock, expected=self.original_fence if lock else None,
             )
-        except HTTPException as exc:
+        except (HTTPException, DomainError) as exc:
             raise RunCancelled("Workspace access is no longer valid") from exc
         if fence != self.original_fence:
             raise RunCancelled("Workspace access changed since the run was created")
@@ -893,7 +894,7 @@ async def run_specialist_handoff(
                 session, specialist, profile.revision, parent.registry, config,
                 scope=parent.scope, multi_workspace_enabled=parent.multi_workspace_enabled,
             )
-        except HTTPException as exc:
+        except (HTTPException, DomainError) as exc:
             # Disabled, unavailable model/tools or a stale revision: refuse rather than degrade.
             raise HandoffRefused("tool_unavailable") from exc
     tools = [item for item in snapshot["allowed_tools"] if item["name"] not in HANDOFF_EXCLUDED_TOOLS]

@@ -13,7 +13,7 @@ from modules.chat.generative_ui.tools.form import _resolve_slots, build_meeting_
 from modules.chat.generative_ui.tools.plan import _first_provenance
 from modules.chat.generative_ui.tools.query import query_records
 from modules.chat.schemas import AnswerContext, AnswerContextRequest
-from tests.unit.test_b1c_regressions import _evidence
+from tests.unit.typing_regressions.test_none_handling_regressions import _evidence
 
 
 def test_parse_sse_chunk_extracts_delta_fields() -> None:

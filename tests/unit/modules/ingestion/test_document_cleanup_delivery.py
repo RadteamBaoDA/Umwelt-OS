@@ -11,7 +11,10 @@ from sqlalchemy.dialects import postgresql
 from core.workspaces.schemas import InternalJobScope
 from modules.ingestion import dispatcher
 from modules.ingestion import public as ingestion
+from modules.knowledge.documents import public as documents
 from modules.knowledge.documents.schemas import DocumentCleanupJobIdentity
+
+from .patching import patch_ingestion
 
 WS, SRC, OP = uuid4(), uuid4(), uuid4()
 EVENT_ID = uuid5(OP, "document-cleanup-requested")
@@ -40,7 +43,7 @@ async def _resolve(row, *, exact=EVENT_ID, identity=None, event_id=EVENT_ID):
     session = MagicMock()
     session.scalar = AsyncMock(return_value=exact)
     resolver = AsyncMock(return_value=identity)
-    with patch.object(ingestion.documents, "resolve_document_cleanup_job_identity", resolver):
+    with patch.object(documents, "resolve_document_cleanup_job_identity", resolver):
         result = await ingestion._resolve_document_cleanup_event_scope(
             session, event_id, row, multi_workspace_enabled=True,
         )
@@ -114,7 +117,7 @@ async def test_settle_cas_sql_binds_claim_status_and_exact_payload() -> None:
     result.scalar_one_or_none.return_value = EVENT_ID
     session.execute = AsyncMock(return_value=result)
     claim = datetime(2026, 1, 1, tzinfo=UTC)
-    with patch.object(ingestion, "_admit_ingestion_scope", AsyncMock()):
+    with patch_ingestion("_admit_ingestion_scope", AsyncMock()):
         ok = await ingestion.settle_document_cleanup_event_in_uow(
             session, EVENT_ID, "pending", operation_id=OP, dispatched_at=claim,
             next_attempt_at=claim, scope=JOB_SCOPE, multi_workspace_enabled=True,
@@ -128,7 +131,7 @@ async def test_settle_cas_sql_binds_claim_status_and_exact_payload() -> None:
 async def test_get_and_lock_helpers_use_principal_columns_not_source_payload() -> None:
     session = MagicMock()
     session.scalar = AsyncMock(return_value=None)
-    with patch.object(ingestion, "_admit_ingestion_scope", AsyncMock()):
+    with patch_ingestion("_admit_ingestion_scope", AsyncMock()):
         assert await ingestion.get_document_cleanup_event(
             session, EVENT_ID, operation_id=OP, scope=JOB_SCOPE, multi_workspace_enabled=True) is None
         assert await ingestion.lock_document_cleanup_event_in_uow(

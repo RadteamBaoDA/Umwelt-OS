@@ -14,6 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings
+from core.errors import DomainError
 from core.realtime import commit_with_replay
 from core.tools import ToolDestination, ToolExecutionPrincipal, ToolRisk
 from core.tools.registry import ToolRegistry
@@ -281,7 +282,7 @@ class McpRuntime:
                     multi_workspace_enabled=self.settings.multi_workspace_enabled,
                 ):
                     return False
-            except (HTTPException, SQLAlchemyError, ValueError, OSError, TimeoutError):
+            except (HTTPException, DomainError, SQLAlchemyError, ValueError, OSError, TimeoutError):
                 # Admission/database failures deny; TypeError/AttributeError are bugs and propagate.
                 return False
 
@@ -614,6 +615,6 @@ class McpRuntime:
                     connections = await mcp_repository.list_runtime_connections(session, scope=scope)
                 for connection in connections:
                     await self.refresh_connection(scope, connection.id)
-            except (HTTPException, mcp_repository.McpConflict, mcp_repository.McpNotFound,
+            except (HTTPException, DomainError, mcp_repository.McpConflict, mcp_repository.McpNotFound,
                     mcp_repository.McpUnavailable, SQLAlchemyError) as exc:
                 logger.warning("MCP hydrate skipped a workspace (%s)", type(exc).__name__)

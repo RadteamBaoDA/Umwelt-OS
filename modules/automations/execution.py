@@ -40,6 +40,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.errors import DomainError
 from core.ids import uuid7
 from core.realtime import commit_with_replay
 from core.workspaces import public as workspaces
@@ -1401,7 +1402,7 @@ async def _start_agent(
             pass
     except asyncio.CancelledError:
         raise  # stays in_flight; the idempotent start is attempted again on resume
-    except HTTPException as exc:
+    except (HTTPException, DomainError) as exc:
         if exc.status_code >= 500:  # replay-storage blip etc.: retry, never a terminal rejection
             return await _transient(factory, run.id, ordinal, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         await _mark(factory, run.id, ordinal, "failed", "agent_rejected", scope=scope, multi_workspace_enabled=multi_workspace_enabled)

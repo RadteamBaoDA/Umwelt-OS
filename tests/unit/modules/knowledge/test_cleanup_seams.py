@@ -10,6 +10,7 @@ from sqlalchemy.dialects import postgresql
 
 from core.errors import ConflictError, DomainError, error_status
 from core.workspaces.schemas import AccessFence, WorkspaceContext
+from modules.ingestion import _outbox as ingestion_outbox
 from modules.ingestion import public as ingestion
 from modules.knowledge.documents.schemas import DocumentCleanupPreparationLimitError
 from modules.knowledge.entities import public as entities
@@ -104,7 +105,7 @@ def _admit():
          patch.object(timeline, "_admit", AsyncMock(return_value=FENCE)), \
          patch.object(temporal, "_admit", AsyncMock(return_value=FENCE)), \
          patch.object(observations, "_admit", AsyncMock(return_value=FENCE)), \
-         patch.object(ingestion, "_admit_ingestion_scope", AsyncMock(return_value=FENCE)):
+         patch.object(ingestion_outbox, "_admit_ingestion_scope", AsyncMock(return_value=FENCE)):
         yield
 
 

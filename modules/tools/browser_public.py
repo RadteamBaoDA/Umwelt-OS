@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.errors import DomainError
 from core.ids import uuid7
 from core.realtime import commit_with_replay
 from core.workspaces import public as workspaces
@@ -73,7 +74,7 @@ async def _job_authority(
         fence = await workspaces.lock_access_fence(
             session, scope=scope, expected=original, multi_workspace_enabled=multi_workspace_enabled,
         )
-    except HTTPException as exc:
+    except (HTTPException, DomainError) as exc:
         if exc.status_code in {401, 403, 404, 409}:
             return None
         raise
