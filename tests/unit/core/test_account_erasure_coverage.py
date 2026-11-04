@@ -114,7 +114,7 @@ def test_every_registered_table_has_one_erasure_owner_or_finalizer() -> None:
     finalizer = {
         "owner", "auth_session", "google_identity", "account_deletion_operations",
         "workspaces", "workspace_memberships", "workspace_invitations", "workspace_shares",
-        "remote_heavy_guards", "maintenance_summary",
+        "remote_heavy_guards", "maintenance_summary", "system_health_samples", "system_history_settings",
     }
     assert len(declared) == len(set(declared))
     assert ordinary | _SPECIAL_TABLES | finalizer == set(Base.metadata.tables)

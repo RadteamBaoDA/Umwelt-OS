@@ -1,4 +1,5 @@
 import type { AccentId } from '@/core/accent';
+import { apiRequest } from '@/core/api';
 import type { AppLocaleId, ThemePreference } from '@/core/i18n';
 
 export type PreferenceValues = {
@@ -17,3 +18,16 @@ export type OwnerPreferences = PreferenceValues & {
   /** Server-stored accent; null = default ink. */
   accent?: AccentId | null;
 };
+
+/** Shared TanStack Query cache key for the owner's preferences. */
+export const OWNER_PREFERENCES_KEY = ['owner-preferences'] as const;
+
+/**
+ * Loads the owner's stored preferences. Every `useQuery` on {@link OWNER_PREFERENCES_KEY} passes this as `queryFn`,
+ * so a refetch never lands on a subscriber without one (TanStack may adopt any observer's options for the query).
+ * @param signal Abort signal forwarded from TanStack Query.
+ * @throws ApiError when the request fails.
+ */
+export function fetchOwnerPreferences(signal?: AbortSignal): Promise<OwnerPreferences> {
+  return apiRequest<OwnerPreferences>('/api/v1/settings/preferences', { signal });
+}

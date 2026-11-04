@@ -37,9 +37,23 @@ describe('LocalWeather', () => {
 
   it('loads silently when granted and shows rounded place and temperature', async () => {
     const geo = stubBrowser('granted', { latitude: 15.87654, longitude: 108.33219 });
-    mocks.get.mockResolvedValue({ temperature_c: 24.4, weather_code: 1, place: 'Hoi An', observed_at: 'x', attribution: [] });
+    mocks.get.mockResolvedValue({ temperature_c: 24.4, weather_code: 3, place: 'Hoi An, Quang Nam', observed_at: '2026-11-04T06:00:00Z', attribution: [], humidity_pct: 55, wind_kmh: 6.2, precipitation_probability_pct: 5, is_day: true, hourly: [0, 1, 2, 3].map((h) => ({ at: `2026-11-04T0${h * 3}:00:00Z`, temperature_c: 20 + h, precipitation_probability_pct: 10, wind_kmh: 5 })) });
     renderIt();
-    expect(await screen.findByText(/Hoi An 24°/)).toBeTruthy();
+    // Inline summary first; the full card only after opening the info popover.
+    expect(await screen.findByText(/Hoi An, Quang Nam/)).toBeTruthy();
+    expect(screen.getByText('24°C')).toBeTruthy();
+    expect(screen.getByText(/Cloudy/)).toBeTruthy();
+    expect(screen.queryByText('Humidity: 55%')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Weather details' }));
+    expect(await screen.findByText('Humidity: 55%')).toBeTruthy();
+    expect(screen.getByText('Chance of rain: 5%')).toBeTruthy();
+    expect(screen.getByText('Wind: 6 km/h')).toBeTruthy();
+    expect(screen.getByText(/Wednesday/)).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Rain chance' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '°F' }));
+    expect(await screen.findByText('76°F')).toBeTruthy();
+    expect(localStorage.getItem('umwelt.weather.unit')).toBe('f');
+    localStorage.removeItem('umwelt.weather.unit');
     expect(geo).toHaveBeenCalledOnce();
     expect(mocks.get.mock.calls[0].slice(0, 3)).toEqual([15.88, 108.33, 'en']);
     expect(screen.queryByText('FALLBACK')).toBeNull();
@@ -53,7 +67,11 @@ describe('LocalWeather', () => {
     expect(geo).not.toHaveBeenCalled();
     expect(button.getAttribute('title')).toMatch(/Open-Meteo/);
     fireEvent.click(button);
-    expect(await screen.findByText(/30°/)).toBeTruthy();
+    expect(await screen.findByText('30°C')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Weather details' }));
+    expect(await screen.findByText('Clear')).toBeTruthy();
+    expect(screen.queryByText(/Humidity/)).toBeNull();
+    expect(screen.queryByRole('tablist')).toBeNull();
   });
 
   it('renders only the fallback when denied or when the prompt is refused', async () => {

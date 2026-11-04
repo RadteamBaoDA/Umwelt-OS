@@ -6,7 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { UserIcon } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import type { OwnerPreferences } from '@/core/preferences';
+import { fetchOwnerPreferences, OWNER_PREFERENCES_KEY } from '@/core/preferences';
 import { useWorkspace } from '@/core/workspace-context';
 import { NotificationItems, useNotificationFeed } from '@/modules/notifications/notification-bell';
 
@@ -42,8 +42,8 @@ export function UserMenu({ onOpenPreferences, onOpenAccount, onOpenChangePasswor
   const { workspaces, selection, selectWorkspace } = useWorkspace();
   // Below 640px the bell is hidden, so unread state surfaces as a dot on the avatar (shares the bell's cached query).
   const { unread } = useNotificationFeed();
-  // Read-only subscription to the preferences the shell already loaded (never fetches here).
-  const prefs = useQuery<OwnerPreferences>({ queryKey: ['owner-preferences'], enabled: false });
+  // Read-only subscription to the preferences the shell already loaded (disabled: never fetches here; queryFn only backs shared refetches).
+  const prefs = useQuery({ queryKey: OWNER_PREFERENCES_KEY, queryFn: ({ signal }) => fetchOwnerPreferences(signal), enabled: false });
   const initials = initialsOf(prefs.data?.resolved_display_name ?? prefs.data?.display_name);
   const [open, setOpen] = useState(false);
   const suppressFocusRef = useRef(false);

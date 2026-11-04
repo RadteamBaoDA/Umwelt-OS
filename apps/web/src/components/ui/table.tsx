@@ -3,12 +3,23 @@
 import * as React from "react"
 import { cn } from "cn"
 
-/** Renders the shadcn `Table` primitive (table) with semantic tokens; forwards className and props to the underlying element. */
-function Table({ className, ...props }: React.ComponentProps<"table">) {
+/**
+ * Renders the shadcn `Table` primitive inside a bounded scroll container (max height, scrolls on both axes so the
+ * sticky `TableHead` stays visible). `className` goes to the table; `containerClassName` overrides the container
+ * (e.g. `max-h-none` where an ancestor already scrolls).
+ */
+function Table({
+  className,
+  containerClassName,
+  ...props
+}: React.ComponentProps<"table"> & { containerClassName?: string }) {
   return (
     <div
       data-slot="table-container"
-      className="relative w-full overflow-x-auto"
+      className={cn(
+        "relative w-full max-h-[min(36rem,70vh)] overflow-auto",
+        containerClassName
+      )}
     >
       <table
         data-slot="table"
@@ -69,13 +80,13 @@ function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
   )
 }
 
-/** Renders the shadcn `TableHead` primitive (table) with semantic tokens; forwards className and props to the underlying element. */
+/** Renders the shadcn `TableHead` primitive (table), sticky to the top of the scroll container, with semantic tokens; forwards className and props to the underlying element. */
 function TableHead({ className, ...props }: React.ComponentProps<"th">) {
   return (
     <th
       data-slot="table-head"
       className={cn(
-        "h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+        "sticky top-0 z-10 h-10 bg-background px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
         className
       )}
       {...props}

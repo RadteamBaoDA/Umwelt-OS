@@ -3,7 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { useState } from 'react';
-import type { OwnerPreferences } from '@/core/preferences';
+import { fetchOwnerPreferences, OWNER_PREFERENCES_KEY } from '@/core/preferences';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { normalizeFormattingLocale } from '@/core/i18n';
 import { listWorldObservationWindow } from '@/modules/observations/api';
@@ -51,16 +51,16 @@ export function consumeLastVisit(now: number): number | null {
  * Today greeting (time of day, optional owner name, local date) and a "since you last looked" line with new
  * story counts for the owner's top active topics. Counts come from the first story page per topic, so they cap at
  * the page size. Read-only; hidden counts when there is no prior visit, no topics or nothing new.
- * When an Open-Meteo source exists, appends the latest temperature (with the source name as the place) after the date;
- * no source, no data or an error renders nothing extra.
+ * After the date: local weather (browser location) as text with an info button that opens the full card; without it,
+ * an Open-Meteo source's latest temperature (source name as the place); no source, no data or an error adds nothing.
  * @param name Owner display name override; defaults to the cached owner preference `display_name`.
  * @param sourceIds Source ids scoping story queries; counts are skipped when empty.
  * @param weatherSource Active Open-Meteo source (id, name used as place) for the weather line; omitted = no line.
  */
 export function TodayHeader({ name: nameProp, sourceIds, weatherSource }: { name?: string; sourceIds: string[]; weatherSource?: { id: string; name: string } }) {
   const t = useTranslations('dashboard');
-  // Read-only subscription to the preferences already loaded by the shell (never fetches here).
-  const prefs = useQuery<OwnerPreferences>({ queryKey: ['owner-preferences'], enabled: false });
+  // Read-only subscription to the preferences already loaded by the shell (disabled: never fetches here; queryFn only backs shared refetches).
+  const prefs = useQuery({ queryKey: OWNER_PREFERENCES_KEY, queryFn: ({ signal }) => fetchOwnerPreferences(signal), enabled: false });
   const name = nameProp ?? prefs.data?.display_name ?? prefs.data?.resolved_display_name ?? undefined;
   const { locale, timezone } = useDisplayPreferences();
   const [{ now, lastVisit }] = useState(() => {
@@ -109,7 +109,7 @@ export function TodayHeader({ name: nameProp, sourceIds, weatherSource }: { name
       <p className="m-0 text-base font-semibold text-foreground">
         {name ? t('greetingNamed', { greeting, name }) : greeting}
         <span className="font-normal text-muted-foreground"> · {date}</span>
-        <LocalWeather fallback={weatherText ? <span className="font-normal text-muted-foreground tabular-nums"> · {weatherText}</span> : null} />
+        <LocalWeather fallback={weatherText ? <span className="tabular-nums">{weatherText}</span> : null} />
       </p>
       {summary && <p className="m-0 text-sm text-muted-foreground">{t('sinceLastLooked', { summary })}</p>}
     </div>

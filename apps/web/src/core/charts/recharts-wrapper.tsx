@@ -676,6 +676,8 @@ export interface BaseLineChartProps {
   emptyTitle?: string;
   emptyMessage?: string;
   showGrid?: boolean;
+  /** Join points across null buckets (sparse sampling); default leaves a gap. */
+  connectNulls?: boolean;
 }
 
 /**
@@ -694,6 +696,7 @@ export function BaseLineChart({
   emptyTitle,
   emptyMessage,
   showGrid = true,
+  connectNulls = false,
 }: BaseLineChartProps) {
   const { resolvedTheme } = useTheme();
   const display = useDisplayPreferences();
@@ -757,6 +760,7 @@ export function BaseLineChart({
                 dot={false}
                 activeDot={{ r: 4, strokeWidth: 1 }}
                 isAnimationActive={false}
+                connectNulls={connectNulls}
               />
             );
           })}

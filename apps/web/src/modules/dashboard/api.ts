@@ -486,6 +486,13 @@ export type LocalWeather = {
   place: string | null;
   observed_at: string;
   attribution: string[];
+  /** Secondary readings; null/absent when the provider omitted them. */
+  humidity_pct?: number | null;
+  wind_kmh?: number | null;
+  precipitation_probability_pct?: number | null;
+  is_day?: boolean | null;
+  /** Next 24 forecast hours (UTC instants); empty when the provider sent none. */
+  hourly?: { at: string; temperature_c: number | null; precipitation_probability_pct: number | null; wind_kmh: number | null }[];
 };
 
 /** Reads current weather and place name for browser coordinates (already rounded by the caller) via the backend proxy. */

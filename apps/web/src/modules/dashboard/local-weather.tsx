@@ -2,19 +2,23 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { Info, MapPin } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { getLocalWeather } from './api';
+import { getLocalWeather, type LocalWeather as LocalWeatherReading } from './api';
+import { toUnit, useWeatherUnit, weatherCondition, WeatherCard } from './weather-card';
 
 type Coords = { lat: number; lon: number };
 type Phase = 'checking' | 'ask' | 'granted' | 'hidden';
-
 /** Rounds to 2 decimals (~1 km) so only coarse coordinates ever enter memory, query keys or requests. */
 const coarse = (value: number) => Math.round(value * 100) / 100;
 
 /**
- * Local weather fragment for the Today header, driven by the browser's geolocation.
+ * Local weather for the Today header, driven by the browser's geolocation. The loaded reading renders inline as
+ * " · place temperature condition" plus an info button; hovering (mouse) or clicking/Enter (touch, keyboard) the button
+ * opens the full `WeatherCard` in a popover. Renders inline content: place it inside the header text line.
  * Never prompts on load: it loads silently only when permission is already granted, otherwise offers a
  * "Show local weather" button whose click triggers the browser prompt. Denial or errors hide the button and
  * render `fallback`. Coordinates live only in component memory (no storage) and travel only to the backend proxy.
@@ -60,13 +64,10 @@ export function LocalWeather({ fallback = null }: { fallback?: ReactNode }) {
     queryFn: ({ signal }) => getLocalWeather(coords!.lat, coords!.lon, apiLocale, signal),
   });
 
-  if (weather.data) {
-    const degrees = new Intl.NumberFormat(normalizeFormattingLocale(locale), { maximumFractionDigits: 0 }).format(weather.data.temperature_c);
-    return <span className="font-normal text-muted-foreground tabular-nums"> · {weather.data.place ? `${weather.data.place} ` : ''}{degrees}°</span>;
-  }
+  if (weather.data) return <WeatherSummary data={weather.data} />;
   return (
-    <>
-      {fallback}
+    <span className="font-normal text-muted-foreground">
+      {fallback && <> · {fallback}</>}
       {phase === 'ask' && (
         <>
           {' · '}
@@ -77,6 +78,55 @@ export function LocalWeather({ fallback = null }: { fallback?: ReactNode }) {
           <span id="local-weather-privacy" className="sr-only">{t('localWeatherPrivacy')}</span>
         </>
       )}
-    </>
+    </span>
+  );
+}
+
+/** Delay before a hover-opened popover closes, so the pointer can travel from the button into the card. */
+const HOVER_CLOSE_MS = 150;
+
+/**
+ * Inline weather summary with an info button that opens the full card. Mouse hover opens/closes it (with a short
+ * grace period); click toggles it for touch and keyboard users; Escape and outside clicks close it (Radix).
+ * @param data Loaded local-weather reading.
+ */
+function WeatherSummary({ data }: { data: LocalWeatherReading }) {
+  const t = useTranslations('dashboard');
+  const { locale } = useDisplayPreferences();
+  const [unit] = useWeatherUnit();
+  const [open, setOpen] = useState(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const degrees = new Intl.NumberFormat(normalizeFormattingLocale(locale), { maximumFractionDigits: 0 }).format(toUnit(data.temperature_c, unit));
+  const { key } = weatherCondition(data.weather_code, data.is_day);
+
+  /** Cancels a pending hover close. */
+  const keepOpen = () => { if (closeTimer.current) clearTimeout(closeTimer.current); closeTimer.current = null; };
+  /** Opens on mouse hover only; touch pointers fall through to the click toggle. */
+  const hoverOpen = (event: ReactPointerEvent) => { if (event.pointerType === 'mouse') { keepOpen(); setOpen(true); } };
+  /** Schedules a close when the mouse leaves the button or the card. */
+  const hoverClose = (event: ReactPointerEvent) => {
+    if (event.pointerType !== 'mouse') return;
+    keepOpen();
+    closeTimer.current = setTimeout(() => setOpen(false), HOVER_CLOSE_MS);
+  };
+  useEffect(() => keepOpen, []);
+
+  return (
+    <span className="font-normal text-muted-foreground">
+      {' · '}
+      {data.place && <><MapPin className="inline size-3.5 -translate-y-px" aria-hidden="true" /> {data.place} </>}
+      <span className="tabular-nums text-foreground">{degrees}°{unit === 'f' ? 'F' : 'C'}</span> {t(key)}
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button type="button" aria-label={t('weatherDetails')} onPointerEnter={hoverOpen} onPointerLeave={hoverClose}
+            className="ml-1 inline-flex size-6 cursor-pointer items-center justify-center rounded-full border-0 bg-transparent p-0 align-middle text-muted-foreground hover:bg-raised hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
+            <Info className="size-4" aria-hidden="true" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-auto p-0" onPointerEnter={keepOpen} onPointerLeave={hoverClose}>
+          <WeatherCard data={data} />
+        </PopoverContent>
+      </Popover>
+    </span>
   );
 }

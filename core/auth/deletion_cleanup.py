@@ -46,7 +46,7 @@ _CORE_OWNER = AccountErasureOwner(_CORE_TABLES)
 _SPECIAL_TABLES = frozenset({
     "connector_admission_slots", "translation_admission_slots", "github_webhook_capacity",
     "github_webhook_deliveries", "github_webhook_outbox", "connector_quota_windows",
-    "remote_heavy_guards", "maintenance_summary",
+    "remote_heavy_guards", "maintenance_summary", "system_health_samples", "system_history_settings",
 })
 
 

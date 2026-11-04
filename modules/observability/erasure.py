@@ -11,6 +11,8 @@ from . import models as _models  # noqa: F401 - register this owner's tables
 
 ERASURE_TABLES: tuple[str, ...] = (
     "maintenance_summary",
+    "system_health_samples",
+    "system_history_settings",
 )
 
 ERASURE_OWNER = AccountErasureOwner(ERASURE_TABLES)

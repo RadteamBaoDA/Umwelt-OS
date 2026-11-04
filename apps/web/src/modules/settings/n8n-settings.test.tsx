@@ -51,9 +51,9 @@ describe('n8n settings', () => {
     expect(await screen.findByText('Feed A')).toBeTruthy();
     expect(screen.getByText('Feed B')).toBeTruthy();
     expect(screen.getByText('Never')).toBeTruthy();
-    expect(screen.getByText('timeout')).toBeTruthy();
+    expect(screen.getByText('Error: timeout')).toBeTruthy();
     expect(screen.getAllByText('Active').length).toBeGreaterThan(0);
-    expect((screen.getAllByRole('link', { name: 'Open source' })[0] as HTMLAnchorElement).getAttribute('href')).toBe('/settings/sources?source=s1');
+    expect((screen.getByRole('link', { name: 'Feed A' }) as HTMLAnchorElement).getAttribute('href')).toBe('/settings/sources?source=s1');
     await userEvent.click(screen.getAllByRole('button', { name: 'Collect now' })[0]);
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/connectors/sources/s1/collect'))).toBe(true));
     const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/connectors/sources/s1/collect'))!;

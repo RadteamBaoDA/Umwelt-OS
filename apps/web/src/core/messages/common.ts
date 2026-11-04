@@ -12,6 +12,11 @@ export const commonMessages = {
       close: 'Close',
       showPassword: 'Show password',
       hidePassword: 'Hide password',
+      rowsPerPage: 'Rows per page',
+      pageRange: '{start}–{end} of {total}',
+      pageNumber: 'Page {page}',
+      previousPage: 'Previous page',
+      nextPage: 'Next page',
   },
   'vi-vi': {
       retry: 'Thử lại',
@@ -25,5 +30,10 @@ export const commonMessages = {
       close: 'Đóng',
       showPassword: 'Hiện mật khẩu',
       hidePassword: 'Ẩn mật khẩu',
+      rowsPerPage: 'Số dòng mỗi trang',
+      pageRange: '{start}–{end} / {total}',
+      pageNumber: 'Trang {page}',
+      previousPage: 'Trang trước',
+      nextPage: 'Trang sau',
   },
 } as const;
