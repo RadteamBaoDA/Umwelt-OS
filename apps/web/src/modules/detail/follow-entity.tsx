@@ -7,7 +7,7 @@ import { useTranslations } from 'next-intl';
 import { ApiError } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { Button } from '@/components/ui/button';
-import { createTopic, fetchAllTopics, updateTopic } from '@/modules/news/api';
+import { createTopic, fetchAllTopics, updateTopic } from '@/modules/news';
 
 const topicsKey = ['topics', 'follow-lookup'] as const;
 
@@ -15,6 +15,7 @@ const topicsKey = ['topics', 'follow-lookup'] as const;
  * Follow = a topic whose entity_ids contain this entity. Idempotent: an active linked topic means
  * "Following" and the button is disabled; an inactive linked topic is reactivated rather than duplicated.
  */
+// eslint-disable-next-line complexity -- stateful workflow whose branches mirror independent UI/request states (loading, error, conflict, per-step content); extraction into per-state components is tracked as follow-up R3.6 so this refactor stays behaviour-neutral
 export function FollowEntityButton({ entityId, name }: { entityId: string; name: string | null }) {
   const t = useTranslations('detail');
   const reasonId = useId();

@@ -5,7 +5,7 @@ import { useLocale, useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useErrorCodeLabel } from '@/core/error-codes';
-import { humanizeCode } from '@/modules/shared/humanize-code';
+import { humanizeCode } from '@/modules/shared';
 import type { ObservedRun } from './api';
 import { Input } from '@/components/ui/input';
 
@@ -32,6 +32,7 @@ export function RunTable({ runs, isLoading, isError, retry }: {
       <label className="flex-1">{t('searchRuns')}<Input className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2" value={query} onChange={(event) => { setQuery(event.target.value); setVisibleCount(20); }} /></label>
       <label className="flex items-center gap-2"><Checkbox checked={failuresOnly} onCheckedChange={(next) => { setFailuresOnly(next === true); setVisibleCount(20); }} />{t('failuresOnly')}</label>
     </div>
+    {/* eslint-disable-next-line complexity -- JSX presentational markup: the score counts every conditional-render branch (&&, ?:, ??) of this row; it holds no branching business logic, so splitting would only relocate the same render conditions */}
     {visible.length ? <div className="space-y-2">{visible.map((run) => <article key={`${run.kind}:${run.id}`} className="rounded-md border border-border p-3">
       <div className="flex flex-wrap items-start justify-between gap-2"><div><strong>{run.kind}</strong><span className="text-muted-foreground"> · {t.has(`st_${run.status}`) ? t(`st_${run.status}`) : humanizeCode(run.status)}</span><p className="text-xs tabular-nums text-muted-foreground" title={run.id}>{run.id.slice(0, 8)}</p>{run.error_code && <p className="text-sm text-destructive">{errorLabel(run.error_code)}</p>}</div>
         <div className="flex gap-2"><Button type="button" variant="outline" aria-expanded={expanded === run.id} onClick={() => setExpanded(expanded === run.id ? null : run.id)}>{expanded === run.id ? t('hideDetails') : t('details')}</Button>{detailHref(run) && <a className="text-sm underline" href={detailHref(run)!} target="_blank" rel="noreferrer">{t('openRun')}</a>}</div></div>

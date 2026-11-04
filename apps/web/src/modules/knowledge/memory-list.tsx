@@ -44,6 +44,26 @@ import {
 
 type MemoryFilterType = 'all' | 'fact' | 'preference' | 'instruction';
 
+/** Labelled memory-type select shared by the creation form (fact, preference or instruction). */
+function MemoryTypeField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const t = useTranslations('memory');
+  return (
+          <div className="space-y-1.5">
+            <Label htmlFor="memory-type">{t('type')}</Label>
+            <Select value={value} onValueChange={onChange}>
+              <SelectTrigger id="memory-type">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="fact">{t('fact')}</SelectItem>
+                <SelectItem value="preference">{t('preference')}</SelectItem>
+                <SelectItem value="instruction">{t('instruction')}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+  );
+}
+
 /**
  * Dialog for creating an explicit owner memory item.
  *
@@ -100,19 +120,7 @@ export function CreateMemoryDialog({
           }}
           className="space-y-4 pt-2"
         >
-          <div className="space-y-1.5">
-            <Label htmlFor="memory-type">{t('type')}</Label>
-            <Select value={memoryType} onValueChange={setMemoryType}>
-              <SelectTrigger id="memory-type">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="fact">{t('fact')}</SelectItem>
-                <SelectItem value="preference">{t('preference')}</SelectItem>
-                <SelectItem value="instruction">{t('instruction')}</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          <MemoryTypeField value={memoryType} onChange={setMemoryType} />
 
           <div className="space-y-1.5">
             <Label htmlFor="memory-content">{t('content')}</Label>
@@ -202,6 +210,243 @@ function EditMemoryDialog({ item, onOpenChange, csrfToken }: { item: MemoryItem 
  * manual creation, edit and a confirmed forget action.
  */
 export function MemoryList() {
+  const s0 = useMemoryListState();
+  const { candidates, createDialogOpen, setCreateDialogOpen, editItem, setEditItem, csrfToken } = s0;
+  const vm: MemoryListVm = s0;
+  return (
+    <section className="rounded-lg border bg-card p-6 space-y-6" aria-labelledby="memory-title">
+<MemoryListHeader vm={vm} />
+
+      {/* Filter and search toolbar */}
+<MemoryListToolbar vm={vm} />
+
+      {/* Active memories list */}
+<ActiveMemories vm={vm} />
+
+      {/* Memory candidates review section */}
+      {candidates.length > 0 && (
+<MemoryCandidatesReview vm={vm} />
+      )}
+
+      {/* Manual Memory Creation Dialog */}
+      <CreateMemoryDialog
+        open={createDialogOpen}
+        onOpenChange={setCreateDialogOpen}
+        csrfToken={csrfToken}
+      />
+      <EditMemoryDialog item={editItem} onOpenChange={(open) => { if (!open) setEditItem(null); }} csrfToken={csrfToken} />
+<ForgetMemoryDialog vm={vm} />
+    </section>
+  );
+}
+
+type MemoryListVm = ReturnType<typeof useMemoryListState>;
+
+/** Back link, title and the memory-settings / new-memory actions. */
+function MemoryListHeader({ vm }: { vm: MemoryListVm }) {
+  const { t, setCreateDialogOpen } = vm;
+  return (
+      <div className="section-heading flex flex-wrap items-start justify-between gap-4">
+        <div className="grid gap-1">
+          <Link href="/chat" className="inline-flex min-h-9 pointer-coarse:min-h-11 w-fit items-center gap-1 text-sm font-semibold text-primary underline-offset-4 hover:underline"><ArrowLeftIcon aria-hidden="true" className="size-4" />{t('backToChat')}</Link>
+          <h1 id="memory-title" className="m-0 text-2xl font-semibold">{t('title')}</h1>
+          <p className="text-muted-foreground text-sm text-muted-foreground">{t('subtitle')} {t('memoryNote')}</p>
+        </div>
+        <div className="form-actions">
+          <Button asChild variant="outline"><Link href="/settings/memory">{t('memorySettings')}</Link></Button>
+          <Button onClick={() => setCreateDialogOpen(true)}>{t('newMemory')}</Button>
+        </div>
+      </div>
+  );
+}
+
+/** Kind filter tabs with counts and the search input. */
+function MemoryListToolbar({ vm }: { vm: MemoryListVm }) {
+  const { t, countFor, filterType, setFilterType, searchQuery, setSearchQuery } = vm;
+  return (
+      <div className="flex flex-wrap items-center gap-3">
+        <Tabs value={filterType} onValueChange={(next) => setFilterType(next as MemoryFilterType)} className="min-w-0 max-w-full overflow-x-auto">
+          <TabsList aria-label={t('filterByType')} className="h-auto w-max">
+            {(['all', 'fact', 'preference', 'instruction'] as const).map((typeKey) => {
+              const n = countFor(typeKey);
+              return (
+                <TabsTrigger key={typeKey} value={typeKey} className="min-h-10 gap-1.5 px-3 text-[13px] font-semibold">
+                  {typeKey === 'all' ? t('filterAll') : t(typeKey)}
+                  {n !== null && (
+                    <>
+                      <span className="tabular-nums" aria-hidden="true">{n}</span>
+                      <span className="sr-only">{t('kindCount', { count: n })}</span>
+                    </>
+                  )}
+                </TabsTrigger>
+              );
+            })}
+          </TabsList>
+        </Tabs>
+
+        <div className="ms-auto w-full min-[720px]:w-[280px]">
+          <Input
+            type="search"
+            className="min-h-9 pointer-coarse:min-h-11"
+            aria-label={t('searchMemories')}
+            placeholder={t('searchMemories')}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
+      </div>
+  );
+}
+
+/** Loading, error, empty and populated states of the active memory list. */
+function ActiveMemories({ vm }: { vm: MemoryListVm }) {
+  const { t, display, memoriesQuery, items, setEditItem, setForgetItem } = vm;
+  return (
+      <div className="space-y-3">
+        {memoriesQuery.isPending && (
+          <div className="skeleton h-32 rounded-lg" role="status" aria-label={t('loading')} />
+        )}
+
+        {memoriesQuery.isError && (
+          <div className="flex items-center justify-between rounded-md border border-destructive/20 bg-destructive/10 p-4 text-sm text-destructive" role="alert">
+            <span>{t('errorLoading')}</span>
+            <Button
+              variant="outline"
+              onClick={() => memoriesQuery.refetch()}
+            >
+              {t('retry')}
+            </Button>
+          </div>
+        )}
+
+        {memoriesQuery.isSuccess && items.length === 0 && (
+          <div className="empty-state rounded-lg border border-dashed border-border bg-card p-8 text-center">
+            <h3 className="mb-1 text-base font-semibold">{t('emptyTitle')}</h3>
+            <p className="mx-auto max-w-md text-sm text-muted-foreground">
+              {t('emptyDescription')}
+            </p>
+          </div>
+        )}
+
+        {items.length > 0 && (
+          <ul className="record-list m-0 divide-y divide-border overflow-hidden rounded-lg border bg-card">
+            {items.map((item: MemoryItem) => (
+              <li
+                key={item.id}
+                className="flex flex-wrap items-start justify-between gap-4 p-4 transition-colors hover:bg-secondary"
+              >
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline">{t(item.type as 'fact' | 'preference' | 'instruction')}</Badge>
+                    {item.confidence < 1.0 && (
+                      <span className="text-xs text-muted-foreground">
+                        {Math.round(item.confidence * 100)}% {t('confidence')}
+                      </span>
+                    )}
+                  </div>
+                  <p className="break-words text-sm font-medium text-foreground">{item.content}</p>
+                  {item.reason && (
+                    <p className="text-xs italic text-muted-foreground">{item.reason}</p>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    {item.is_manual ? t('addedByYou') : t('model')} · {formatDateTime(item.created_at, display.locale, display.timezone)}
+                  </p>
+                </div>
+
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button variant="ghost" onClick={() => setEditItem(item)}>{t('edit')}</Button>
+                  <Button
+                    variant="ghost"
+                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => setForgetItem(item)}
+                  >
+                    {t('forget')}
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+  );
+}
+
+/** Pending memory candidates with accept and reject actions. */
+function MemoryCandidatesReview({ vm }: { vm: MemoryListVm }) {
+  const { t, acceptCandidateMutation, rejectCandidateMutation, candidates } = vm;
+  return (
+        <div className="space-y-3 border-t border-border pt-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">{t('candidatesTitle')}</h2>
+            <span className="text-xs text-muted-foreground">
+              {candidates.length} {t('candidatesTitle').toLowerCase()}
+            </span>
+          </div>
+
+          <ul className="record-list divide-y divide-border overflow-hidden rounded-lg border bg-background">
+            {candidates.map((cand: MemoryCandidate) => (
+              <li
+                key={cand.id}
+                className="flex flex-wrap items-start justify-between gap-4 p-4 transition-colors hover:bg-secondary"
+              >
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline">{t(cand.type as 'fact' | 'preference' | 'instruction')}</Badge>
+                    <span className="text-xs text-muted-foreground">
+                      {Math.round(cand.confidence * 100)}% {t('confidence')}
+                    </span>
+                  </div>
+                  <p className="break-words text-sm font-medium text-foreground">{cand.content}</p>
+                  {cand.reason && (
+                    <p className="text-xs text-muted-foreground">{cand.reason}</p>
+                  )}
+                </div>
+
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button
+                    disabled={acceptCandidateMutation.isPending}
+                    onClick={() => acceptCandidateMutation.mutate(cand.id)}
+                  >
+                    {t('accept')}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    disabled={rejectCandidateMutation.isPending}
+                    onClick={() => rejectCandidateMutation.mutate(cand.id)}
+                  >
+                    {t('reject')}
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+  );
+}
+
+/** Confirmation dialog that forgets the selected memory. */
+function ForgetMemoryDialog({ vm }: { vm: MemoryListVm }) {
+  const { t, forgetMutation, forgetItem, setForgetItem } = vm;
+  return (
+      <Dialog open={forgetItem !== null} onOpenChange={(open) => { if (!open && !forgetMutation.isPending) { setForgetItem(null); forgetMutation.reset(); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t('forgetName')}</DialogTitle>
+            <DialogDescription>{t('forgetConfirm')}</DialogDescription>
+          </DialogHeader>
+          {forgetItem && <p className="break-words rounded-md border border-border p-3 text-sm">{forgetItem.content}</p>}
+          {forgetMutation.error && <p className="text-destructive text-sm" role="alert">{forgetMutation.error instanceof ApiError ? forgetMutation.error.message : t('forgetFailed')}</p>}
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={forgetMutation.isPending} onClick={() => setForgetItem(null)}>{t('cancel')}</Button>
+            <Button type="button" variant="destructive" disabled={forgetMutation.isPending} onClick={() => { if (forgetItem) forgetMutation.mutate(forgetItem.id); }}>{forgetMutation.isPending ? t('loading') : t('forget')}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+  );
+}
+
+/** Loads the active memories, per-kind counts and pending candidates (search debounced 300 ms) and declares the forget/accept/reject mutations. */
+function useMemoryListState() {
   const t = useTranslations('memory');
   const { csrfToken } = useWorkspaceSession();
   const queryClient = useQueryClient();
@@ -269,192 +514,6 @@ export function MemoryList() {
   const countFor = (key: MemoryFilterType) =>
     kindCounts ? (key === 'all' ? Object.values(kindCounts).reduce((a, b) => a + b, 0) : (kindCounts[key] ?? 0)) : null;
 
-  return (
-    <section className="rounded-lg border bg-card p-6 space-y-6" aria-labelledby="memory-title">
-      <div className="section-heading flex flex-wrap items-start justify-between gap-4">
-        <div className="grid gap-1">
-          <Link href="/chat" className="inline-flex min-h-9 pointer-coarse:min-h-11 w-fit items-center gap-1 text-sm font-semibold text-primary underline-offset-4 hover:underline"><ArrowLeftIcon aria-hidden="true" className="size-4" />{t('backToChat')}</Link>
-          <h1 id="memory-title" className="m-0 text-2xl font-semibold">{t('title')}</h1>
-          <p className="text-muted-foreground text-sm text-muted-foreground">{t('subtitle')} {t('memoryNote')}</p>
-        </div>
-        <div className="form-actions">
-          <Button asChild variant="outline"><Link href="/settings/memory">{t('memorySettings')}</Link></Button>
-          <Button onClick={() => setCreateDialogOpen(true)}>{t('newMemory')}</Button>
-        </div>
-      </div>
 
-      {/* Filter and search toolbar */}
-      <div className="flex flex-wrap items-center gap-3">
-        <Tabs value={filterType} onValueChange={(next) => setFilterType(next as MemoryFilterType)} className="min-w-0 max-w-full overflow-x-auto">
-          <TabsList aria-label={t('filterByType')} className="h-auto w-max">
-            {(['all', 'fact', 'preference', 'instruction'] as const).map((typeKey) => {
-              const n = countFor(typeKey);
-              return (
-                <TabsTrigger key={typeKey} value={typeKey} className="min-h-10 gap-1.5 px-3 text-[13px] font-semibold">
-                  {typeKey === 'all' ? t('filterAll') : t(typeKey)}
-                  {n !== null && (
-                    <>
-                      <span className="tabular-nums" aria-hidden="true">{n}</span>
-                      <span className="sr-only">{t('kindCount', { count: n })}</span>
-                    </>
-                  )}
-                </TabsTrigger>
-              );
-            })}
-          </TabsList>
-        </Tabs>
-
-        <div className="ms-auto w-full min-[720px]:w-[280px]">
-          <Input
-            type="search"
-            className="min-h-9 pointer-coarse:min-h-11"
-            aria-label={t('searchMemories')}
-            placeholder={t('searchMemories')}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
-        </div>
-      </div>
-
-      {/* Active memories list */}
-      <div className="space-y-3">
-        {memoriesQuery.isPending && (
-          <div className="skeleton h-32 rounded-lg" role="status" aria-label={t('loading')} />
-        )}
-
-        {memoriesQuery.isError && (
-          <div className="flex items-center justify-between rounded-md border border-destructive/20 bg-destructive/10 p-4 text-sm text-destructive" role="alert">
-            <span>{t('errorLoading')}</span>
-            <Button
-              variant="outline"
-              onClick={() => memoriesQuery.refetch()}
-            >
-              {t('retry')}
-            </Button>
-          </div>
-        )}
-
-        {memoriesQuery.isSuccess && items.length === 0 && (
-          <div className="empty-state rounded-lg border border-dashed border-border bg-card p-8 text-center">
-            <h3 className="mb-1 text-base font-semibold">{t('emptyTitle')}</h3>
-            <p className="mx-auto max-w-md text-sm text-muted-foreground">
-              {t('emptyDescription')}
-            </p>
-          </div>
-        )}
-
-        {items.length > 0 && (
-          <ul className="record-list m-0 divide-y divide-border overflow-hidden rounded-lg border bg-card">
-            {items.map((item: MemoryItem) => (
-              <li
-                key={item.id}
-                className="flex flex-wrap items-start justify-between gap-4 p-4 transition-colors hover:bg-secondary"
-              >
-                <div className="min-w-0 flex-1 space-y-1.5">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant="outline">{t(item.type as 'fact' | 'preference' | 'instruction')}</Badge>
-                    {item.confidence < 1.0 && (
-                      <span className="text-xs text-muted-foreground">
-                        {Math.round(item.confidence * 100)}% {t('confidence')}
-                      </span>
-                    )}
-                  </div>
-                  <p className="break-words text-sm font-medium text-foreground">{item.content}</p>
-                  {item.reason && (
-                    <p className="text-xs italic text-muted-foreground">{item.reason}</p>
-                  )}
-                  <p className="text-xs text-muted-foreground">
-                    {item.is_manual ? t('addedByYou') : t('model')} · {formatDateTime(item.created_at, display.locale, display.timezone)}
-                  </p>
-                </div>
-
-                <div className="flex shrink-0 items-center gap-2">
-                  <Button variant="ghost" onClick={() => setEditItem(item)}>{t('edit')}</Button>
-                  <Button
-                    variant="ghost"
-                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                    onClick={() => setForgetItem(item)}
-                  >
-                    {t('forget')}
-                  </Button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      {/* Memory candidates review section */}
-      {candidates.length > 0 && (
-        <div className="space-y-3 border-t border-border pt-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">{t('candidatesTitle')}</h2>
-            <span className="text-xs text-muted-foreground">
-              {candidates.length} {t('candidatesTitle').toLowerCase()}
-            </span>
-          </div>
-
-          <ul className="record-list divide-y divide-border overflow-hidden rounded-lg border bg-background">
-            {candidates.map((cand: MemoryCandidate) => (
-              <li
-                key={cand.id}
-                className="flex flex-wrap items-start justify-between gap-4 p-4 transition-colors hover:bg-secondary"
-              >
-                <div className="min-w-0 flex-1 space-y-1.5">
-                  <div className="flex items-center gap-2">
-                    <Badge variant="outline">{t(cand.type as 'fact' | 'preference' | 'instruction')}</Badge>
-                    <span className="text-xs text-muted-foreground">
-                      {Math.round(cand.confidence * 100)}% {t('confidence')}
-                    </span>
-                  </div>
-                  <p className="break-words text-sm font-medium text-foreground">{cand.content}</p>
-                  {cand.reason && (
-                    <p className="text-xs text-muted-foreground">{cand.reason}</p>
-                  )}
-                </div>
-
-                <div className="flex shrink-0 items-center gap-2">
-                  <Button
-                    disabled={acceptCandidateMutation.isPending}
-                    onClick={() => acceptCandidateMutation.mutate(cand.id)}
-                  >
-                    {t('accept')}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    disabled={rejectCandidateMutation.isPending}
-                    onClick={() => rejectCandidateMutation.mutate(cand.id)}
-                  >
-                    {t('reject')}
-                  </Button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Manual Memory Creation Dialog */}
-      <CreateMemoryDialog
-        open={createDialogOpen}
-        onOpenChange={setCreateDialogOpen}
-        csrfToken={csrfToken}
-      />
-      <EditMemoryDialog item={editItem} onOpenChange={(open) => { if (!open) setEditItem(null); }} csrfToken={csrfToken} />
-      <Dialog open={forgetItem !== null} onOpenChange={(open) => { if (!open && !forgetMutation.isPending) { setForgetItem(null); forgetMutation.reset(); } }}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>{t('forgetName')}</DialogTitle>
-            <DialogDescription>{t('forgetConfirm')}</DialogDescription>
-          </DialogHeader>
-          {forgetItem && <p className="break-words rounded-md border border-border p-3 text-sm">{forgetItem.content}</p>}
-          {forgetMutation.error && <p className="text-destructive text-sm" role="alert">{forgetMutation.error instanceof ApiError ? forgetMutation.error.message : t('forgetFailed')}</p>}
-          <DialogFooter>
-            <Button type="button" variant="outline" disabled={forgetMutation.isPending} onClick={() => setForgetItem(null)}>{t('cancel')}</Button>
-            <Button type="button" variant="destructive" disabled={forgetMutation.isPending} onClick={() => { if (forgetItem) forgetMutation.mutate(forgetItem.id); }}>{forgetMutation.isPending ? t('loading') : t('forget')}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </section>
-  );
+  return { t, queryClient, display, queryType, q, memoriesQuery, countsQuery, candidatesQuery, forgetMutation, acceptCandidateMutation, rejectCandidateMutation, items, candidates, kindCounts, countFor, filterType, setFilterType, searchQuery, setSearchQuery, createDialogOpen, setCreateDialogOpen, editItem, setEditItem, forgetItem, setForgetItem, debouncedQuery, setDebouncedQuery, csrfToken };
 }

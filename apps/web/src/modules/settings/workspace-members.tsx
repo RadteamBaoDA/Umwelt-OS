@@ -37,6 +37,144 @@ export function invitationStatus(row: InvitationRead, now = Date.now()): 'accept
 
 /** Owner-only invitation and member management for the selected workspace. */
 export function WorkspaceMembers() {
+  const s0 = useWorkspaceMembersData();
+  const { t, tShell, selection, isOwner } = s0;
+
+  if (!selection) return <section className="rounded-lg border bg-card p-6 skeleton" aria-label={t('loading')} />;
+  if (!isOwner) return <SettingsPageHeader eyebrow={tShell('settings')} title={t('title')} description={t('ownerOnly')} />;
+
+  const s1 = buildWorkspaceMembersActions(s0);
+
+  const vm: WorkspaceMembersVm = s1;
+  return <div className="flex flex-col gap-5">
+<WorkspaceMembersHeader vm={vm} />
+
+<InviteForm vm={vm} />
+
+<InviteLinkPanel vm={vm} />
+
+<WorkspaceMembersError vm={vm} />
+
+<InvitationsSection vm={vm} />
+
+<MembersSection vm={vm} />
+
+<MemberActionDialog vm={vm} />
+  </div>;
+
+}
+
+type WorkspaceMembersVm = ReturnType<typeof buildWorkspaceMembersActions>;
+
+/** Settings page header. */
+function WorkspaceMembersHeader({ vm }: { vm: WorkspaceMembersVm }) {
+  const { t, tShell } = vm;
+  return (
+    <SettingsPageHeader eyebrow={tShell('settings')} title={t('title')} description={t('intro')} />
+  );
+}
+
+/** Invite-by-email form with inline validation. */
+function InviteForm({ vm }: { vm: WorkspaceMembersVm }) {
+  const { t, create, email, setEmail, emailError, submit } = vm;
+  return (
+    <SettingsSection title={t('inviteHeading')}><form className="grid gap-3" onSubmit={submit} noValidate>
+      <div className="field">
+        <Label htmlFor="invite-email">{t('emailLabel')}</Label>
+        <div className="flex flex-wrap gap-2">
+          <Input id="invite-email" type="email" className="min-w-0 flex-1 basis-56" autoComplete="off" value={email} placeholder={t('emailPlaceholder')}
+            onChange={(e) => setEmail(e.target.value)} aria-invalid={emailError || undefined} />
+          <Button type="submit" disabled={create.isPending}>{create.isPending ? t('creating') : t('createInvite')}</Button>
+        </div>
+        {emailError && <span className="error" role="alert">{t('invalidEmail')}</span>}
+      </div>
+    </form></SettingsSection>
+  );
+}
+
+/** One-time invitation link with copy and dismiss actions. */
+function InviteLinkPanel({ vm }: { vm: WorkspaceMembersVm }) {
+  const { t, link, setLink, copied, copy } = vm;
+  return (
+    link && <div className="grid gap-2 rounded-lg border border-border bg-secondary p-4" role="status">
+      <h3 className="text-sm font-semibold">{t('linkHeading')}</h3>
+      <p className="text-muted-foreground text-xs">{t('linkHelp')}</p>
+      <div className="flex flex-wrap gap-2">
+        <Input readOnly value={link} aria-label={t('linkHeading')} className="min-w-0 flex-1" onFocus={(e) => e.currentTarget.select()} />
+        <Button type="button" variant="outline" onClick={() => void copy()}>{copied === 'ok' ? t('copied') : t('copy')}</Button>
+        <Button type="button" variant="ghost" onClick={() => setLink(null)}>{t('dismissLink')}</Button>
+      </div>
+      {copied === 'failed' && <span className="error" role="alert">{t('copyFailed')}</span>}
+    </div>
+  );
+}
+
+/** Mutation failure notice. */
+function WorkspaceMembersError({ vm }: { vm: WorkspaceMembersVm }) {
+  const { t, errorKey } = vm;
+  return (
+    errorKey && <p className="error" role="alert">{t(errorKey)}</p>
+  );
+}
+
+/** Invitation list with revoke actions and pagination. */
+function InvitationsSection({ vm }: { vm: WorkspaceMembersVm }) {
+  const { t, format, invitations, setPending, listError, invitationRows, statusLabel } = vm;
+  return (
+    <SettingsSection title={t('invitationsHeading')}>
+      {invitations.isError ? listError(() => void invitations.refetch()) : invitations.isPending ? <p className="text-muted-foreground">{t('loading')}</p>
+        : invitationRows.length === 0 ? <p className="text-muted-foreground">{t('noInvitations')}</p>
+          : <ul className="grid gap-2">{invitationRows.map((row) => {
+            const status = invitationStatus(row);
+            return <li key={row.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-border px-4 py-3">
+              <span className="min-w-0 flex-1 break-all text-sm font-medium">{row.email}</span>
+              <span className="text-muted-foreground text-xs">{statusLabel[status]}{status === 'pending' ? ` · ${t('expiresOn', { date: format.dateTime(new Date(row.expires_at), { dateStyle: 'medium' }) })}` : ''}</span>
+              {status === 'pending' && <Button type="button" variant="outline" size="sm" onClick={() => setPending({ kind: 'revoke', id: row.id })}>{t('revoke')}</Button>}
+            </li>;
+          })}</ul>}
+      {invitations.hasNextPage && <Button type="button" variant="outline" className="w-fit" disabled={invitations.isFetchingNextPage} onClick={() => void invitations.fetchNextPage()}>{invitations.isFetchingNextPage ? t('loading') : t('loadMore')}</Button>}
+    </SettingsSection>
+  );
+}
+
+/** Member list with remove actions and pagination. */
+function MembersSection({ vm }: { vm: WorkspaceMembersVm }) {
+  const { t, members, setPending, listError, memberRows } = vm;
+  return (
+    <SettingsSection title={t('membersHeading')}>
+      {members.isError ? listError(() => void members.refetch()) : members.isPending ? <p className="text-muted-foreground">{t('loading')}</p>
+        : memberRows.length === 0 ? <p className="text-muted-foreground">{t('noMembers')}</p>
+          : <ul className="grid gap-2">{memberRows.map((row) => <li key={row.user_id} className="flex flex-wrap items-center gap-3 rounded-lg border border-border px-4 py-3">
+            <span className="min-w-0 flex-1 break-all text-sm font-medium">{row.email ?? (row.role === 'owner' ? t('localOwner') : t('unknownEmail'))}</span>
+            <span className="text-muted-foreground text-xs">{row.role === 'owner' ? t('roleOwner') : t('roleMember')}</span>
+            {row.role === 'member' && <Button type="button" variant="outline" size="sm" onClick={() => setPending({ kind: 'remove', id: row.user_id })}>{t('remove')}</Button>}
+          </li>)}</ul>}
+      {members.hasNextPage && <Button type="button" variant="outline" className="w-fit" disabled={members.isFetchingNextPage} onClick={() => void members.fetchNextPage()}>{members.isFetchingNextPage ? t('loading') : t('loadMore')}</Button>}
+    </SettingsSection>
+  );
+}
+
+/** Confirmation dialog for revoking an invitation or removing a member. */
+function MemberActionDialog({ vm }: { vm: WorkspaceMembersVm }) {
+  const { t, pending, setPending, confirmPending } = vm;
+  return (
+    <AlertDialog open={pending !== null} onOpenChange={(open) => { if (!open) setPending(null); }}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{pending?.kind === 'remove' ? t('removeTitle') : t('revokeTitle')}</AlertDialogTitle>
+          <AlertDialogDescription>{pending?.kind === 'remove' ? t('removeBody') : t('revokeBody')}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={confirmPending}>{t('confirm')}</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+/** Loads invitations and members of the selected workspace (owner only) and declares the create, revoke and remove mutations that refresh both lists. */
+function useWorkspaceMembersData() {
   const t = useTranslations('workspaceMembers');
   const tShell = useTranslations('shell');
   const format = useFormatter();
@@ -89,9 +227,16 @@ export function WorkspaceMembers() {
     onSettled: refresh,
   });
 
-  if (!selection) return <section className="rounded-lg border bg-card p-6 skeleton" aria-label={t('loading')} />;
-  if (!isOwner) return <SettingsPageHeader eyebrow={tShell('settings')} title={t('title')} description={t('ownerOnly')} />;
+  function listError(onRetry: () => void) {
+    return <div role="alert" className="flex items-center gap-3"><span className="error">{t('loadFailed')}</span><Button type="button" variant="outline" size="sm" onClick={onRetry}>{t('retry')}</Button></div>;
+  }
 
+  return { t, tShell, format, client, workspaceId, revision, base, enabled, invitations, members, refresh, writeHeaders, create, revoke, remove, email, setEmail, emailError, setEmailError, link, setLink, copied, setCopied, pending, setPending, csrfToken, selection, isOwner, listError };
+}
+
+/** Maps failures to message keys and provides the invite submit, copy and confirm handlers plus the flattened rows. */
+function buildWorkspaceMembersActions(p: ReturnType<typeof useWorkspaceMembersData>) {
+  const { t, invitations, members, create, revoke, remove, email, setEmailError, link, setCopied, pending, setPending } = p;
   const error = create.error ?? revoke.error ?? remove.error;
   const errorKey = error ? failureText(error) : null;
   function failureText(e: unknown): 'forbidden' | 'conflict' | 'invalidEmail' | 'notEnabled' | 'requestFailed' {
@@ -119,74 +264,5 @@ export function WorkspaceMembers() {
   const memberRows = members.data?.pages.flatMap((p) => p.items) ?? [];
   const statusLabel = { pending: t('statusPending'), accepted: t('statusAccepted'), revoked: t('statusRevoked'), expired: t('statusExpired') };
 
-  return <div className="flex flex-col gap-5">
-    <SettingsPageHeader eyebrow={tShell('settings')} title={t('title')} description={t('intro')} />
-
-    <SettingsSection title={t('inviteHeading')}><form className="grid gap-3" onSubmit={submit} noValidate>
-      <div className="field">
-        <Label htmlFor="invite-email">{t('emailLabel')}</Label>
-        <div className="flex flex-wrap gap-2">
-          <Input id="invite-email" type="email" className="min-w-0 flex-1 basis-56" autoComplete="off" value={email} placeholder={t('emailPlaceholder')}
-            onChange={(e) => setEmail(e.target.value)} aria-invalid={emailError || undefined} />
-          <Button type="submit" disabled={create.isPending}>{create.isPending ? t('creating') : t('createInvite')}</Button>
-        </div>
-        {emailError && <span className="error" role="alert">{t('invalidEmail')}</span>}
-      </div>
-    </form></SettingsSection>
-
-    {link && <div className="grid gap-2 rounded-lg border border-border bg-secondary p-4" role="status">
-      <h3 className="text-sm font-semibold">{t('linkHeading')}</h3>
-      <p className="text-muted-foreground text-xs">{t('linkHelp')}</p>
-      <div className="flex flex-wrap gap-2">
-        <Input readOnly value={link} aria-label={t('linkHeading')} className="min-w-0 flex-1" onFocus={(e) => e.currentTarget.select()} />
-        <Button type="button" variant="outline" onClick={() => void copy()}>{copied === 'ok' ? t('copied') : t('copy')}</Button>
-        <Button type="button" variant="ghost" onClick={() => setLink(null)}>{t('dismissLink')}</Button>
-      </div>
-      {copied === 'failed' && <span className="error" role="alert">{t('copyFailed')}</span>}
-    </div>}
-
-    {errorKey && <p className="error" role="alert">{t(errorKey)}</p>}
-
-    <SettingsSection title={t('invitationsHeading')}>
-      {invitations.isError ? listError(() => void invitations.refetch()) : invitations.isPending ? <p className="text-muted-foreground">{t('loading')}</p>
-        : invitationRows.length === 0 ? <p className="text-muted-foreground">{t('noInvitations')}</p>
-          : <ul className="grid gap-2">{invitationRows.map((row) => {
-            const status = invitationStatus(row);
-            return <li key={row.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-border px-4 py-3">
-              <span className="min-w-0 flex-1 break-all text-sm font-medium">{row.email}</span>
-              <span className="text-muted-foreground text-xs">{statusLabel[status]}{status === 'pending' ? ` · ${t('expiresOn', { date: format.dateTime(new Date(row.expires_at), { dateStyle: 'medium' }) })}` : ''}</span>
-              {status === 'pending' && <Button type="button" variant="outline" size="sm" onClick={() => setPending({ kind: 'revoke', id: row.id })}>{t('revoke')}</Button>}
-            </li>;
-          })}</ul>}
-      {invitations.hasNextPage && <Button type="button" variant="outline" className="w-fit" disabled={invitations.isFetchingNextPage} onClick={() => void invitations.fetchNextPage()}>{invitations.isFetchingNextPage ? t('loading') : t('loadMore')}</Button>}
-    </SettingsSection>
-
-    <SettingsSection title={t('membersHeading')}>
-      {members.isError ? listError(() => void members.refetch()) : members.isPending ? <p className="text-muted-foreground">{t('loading')}</p>
-        : memberRows.length === 0 ? <p className="text-muted-foreground">{t('noMembers')}</p>
-          : <ul className="grid gap-2">{memberRows.map((row) => <li key={row.user_id} className="flex flex-wrap items-center gap-3 rounded-lg border border-border px-4 py-3">
-            <span className="min-w-0 flex-1 break-all text-sm font-medium">{row.email ?? (row.role === 'owner' ? t('localOwner') : t('unknownEmail'))}</span>
-            <span className="text-muted-foreground text-xs">{row.role === 'owner' ? t('roleOwner') : t('roleMember')}</span>
-            {row.role === 'member' && <Button type="button" variant="outline" size="sm" onClick={() => setPending({ kind: 'remove', id: row.user_id })}>{t('remove')}</Button>}
-          </li>)}</ul>}
-      {members.hasNextPage && <Button type="button" variant="outline" className="w-fit" disabled={members.isFetchingNextPage} onClick={() => void members.fetchNextPage()}>{members.isFetchingNextPage ? t('loading') : t('loadMore')}</Button>}
-    </SettingsSection>
-
-    <AlertDialog open={pending !== null} onOpenChange={(open) => { if (!open) setPending(null); }}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>{pending?.kind === 'remove' ? t('removeTitle') : t('revokeTitle')}</AlertDialogTitle>
-          <AlertDialogDescription>{pending?.kind === 'remove' ? t('removeBody') : t('revokeBody')}</AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
-          <AlertDialogAction variant="destructive" onClick={confirmPending}>{t('confirm')}</AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  </div>;
-
-  function listError(onRetry: () => void) {
-    return <div role="alert" className="flex items-center gap-3"><span className="error">{t('loadFailed')}</span><Button type="button" variant="outline" size="sm" onClick={onRetry}>{t('retry')}</Button></div>;
-  }
+  return { ...p, error, errorKey, invitationRows, memberRows, statusLabel, failureText, submit, copy, confirmPending };
 }

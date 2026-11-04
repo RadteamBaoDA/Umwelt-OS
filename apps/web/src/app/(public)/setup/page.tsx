@@ -13,8 +13,8 @@ import { Input } from '@/components/ui/input';
 import { PasswordInput } from '@/components/ui/password-input';
 import { Label } from '@/components/ui/label';
 import { UmweltLogo } from '@/components/brand/umwelt-mark';
-import { AppearanceControl } from '@/modules/account/appearance-control';
-import { LegalLinks } from '@/modules/legal/legal-links';
+import { AppearanceControl } from '@/modules/account';
+import { LegalLinks } from '@/modules/legal';
 
 /** Build localized validation for first-run owner creation without changing its API contract. */
 function createSetupSchema(passwordMismatch: string) {

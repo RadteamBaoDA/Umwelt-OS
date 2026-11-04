@@ -1,5 +1,5 @@
 import { Suspense } from 'react';
-import { TimelinePage } from '@/modules/timeline/timeline-page';
+import { TimelinePage } from '@/modules/timeline';
 
 /** Renders the Timeline feature in the shared workspace shell while URL state resolves. */
 export default function Page() {

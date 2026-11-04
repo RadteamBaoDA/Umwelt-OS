@@ -12,6 +12,40 @@ export type ApiConnectionStatus = 'connecting' | 'reconnecting' | 'unavailable' 
 /** Milliseconds a non-connected state must persist before the indicator is shown. */
 const DEGRADED_DELAY_MS = 5000;
 
+type StatusColor = 'success' | 'warning' | 'danger';
+type ShellTranslator = ReturnType<typeof useTranslations<'shell'>>;
+
+/** Help-text message key per API status; any status outside the table (including `unavailable`) falls back to the unavailable text. */
+const apiHelpKeys = {
+  connected: 'apiConnectedHelp', connecting: 'apiConnectingHelp', reconnecting: 'apiReconnectingHelp',
+  clientOffline: 'apiOfflineHelp', expired: 'apiExpiredHelp', unavailable: 'apiUnavailableHelp',
+} as const satisfies Record<ApiConnectionStatus, string>;
+
+/** Help-text message key per realtime status. */
+const realtimeHelpKeys = {
+  connected: 'realtimeConnectedHelp', connecting: 'realtimeConnectingHelp', reconnecting: 'realtimeReconnectingHelp',
+  expired: 'realtimeExpiredHelp', unavailable: 'realtimeUnavailableHelp',
+} as const satisfies Record<RealtimeStatus, string>;
+
+/** Localized label for a transport status; expiry and unreachability use their dedicated messages. */
+function statusLabel(status: ApiConnectionStatus | RealtimeStatus, t: ShellTranslator): string {
+  if (status === 'expired') return t('sessionExpired');
+  if (status === 'unavailable') return t('serverUnreachable');
+  return t(status);
+}
+
+/** Severity colour of a transport: connected is success, connecting/reconnecting warning, everything else danger. */
+function statusColor(status: ApiConnectionStatus | RealtimeStatus): StatusColor {
+  if (status === 'connected') return 'success';
+  return status === 'connecting' || status === 'reconnecting' ? 'warning' : 'danger';
+}
+
+/** The worst of the two transport colours drives the dot colour and the short label. */
+function worstColor(a: StatusColor, b: StatusColor): StatusColor {
+  if (a === 'danger' || b === 'danger') return 'danger';
+  return a === 'warning' || b === 'warning' ? 'warning' : 'success';
+}
+
 /**
  * Renders the 48px top-bar connection indicator only while degraded: nothing visible is shown when both transports are connected,
  * and a non-connected state must persist 5 s before the indicator appears (brief reconnects stay silent); screen-reader status text is always present.
@@ -21,13 +55,13 @@ const DEGRADED_DELAY_MS = 5000;
  */
 export function ConnectionFooter({ apiStatus, realtimeStatus, onRetry, retrying = false }: { apiStatus: ApiConnectionStatus; realtimeStatus: RealtimeStatus; onRetry?: () => void; retrying?: boolean }) {
   const t = useTranslations('shell');
-  const apiLabel = apiStatus === 'expired' ? t('sessionExpired') : apiStatus === 'unavailable' ? t('serverUnreachable') : t(apiStatus);
-  const realtimeLabel = realtimeStatus === 'expired' ? t('sessionExpired') : realtimeStatus === 'unavailable' ? t('serverUnreachable') : t(realtimeStatus);
-  const apiColor = apiStatus === 'connected' ? 'success' : apiStatus === 'connecting' || apiStatus === 'reconnecting' ? 'warning' : 'danger';
-  const realtimeColor = realtimeStatus === 'connected' ? 'success' : realtimeStatus === 'connecting' || realtimeStatus === 'reconnecting' ? 'warning' : 'danger';
+  const apiLabel = statusLabel(apiStatus, t);
+  const realtimeLabel = statusLabel(realtimeStatus, t);
+  const apiColor = statusColor(apiStatus);
+  const realtimeColor = statusColor(realtimeStatus);
   const canRetry = apiStatus !== 'connected' && apiStatus !== 'expired' && onRetry;
   // The worst of the two transports drives the dot colour and the short label.
-  const overall = apiColor === 'danger' || realtimeColor === 'danger' ? 'danger' : apiColor === 'warning' || realtimeColor === 'warning' ? 'warning' : 'success';
+  const overall = worstColor(apiColor, realtimeColor);
   const degraded = overall !== 'success';
   // Debounce: show only after the degraded state has lasted DEGRADED_DELAY_MS; any recovery resets the timer.
   const [visible, setVisible] = useState(false);
@@ -50,10 +84,10 @@ export function ConnectionFooter({ apiStatus, realtimeStatus, onRetry, retrying 
       <PopoverContent align="end" className="connection-tooltip">
         <strong>{t('api')}: {apiLabel}</strong>
         <span>{t('apiStatusHelp')}</span>
-        <span>{apiStatus === 'connected' ? t('apiConnectedHelp') : apiStatus === 'connecting' ? t('apiConnectingHelp') : apiStatus === 'reconnecting' ? t('apiReconnectingHelp') : apiStatus === 'clientOffline' ? t('apiOfflineHelp') : apiStatus === 'expired' ? t('apiExpiredHelp') : t('apiUnavailableHelp')}</span>
+        <span>{t(apiHelpKeys[apiStatus])}</span>
         <strong>{t('realtime')}: {realtimeLabel}</strong>
         <span>{t('realtimeStatusHelp')}</span>
-        <span>{realtimeStatus === 'connected' ? t('realtimeConnectedHelp') : realtimeStatus === 'connecting' ? t('realtimeConnectingHelp') : realtimeStatus === 'reconnecting' ? t('realtimeReconnectingHelp') : realtimeStatus === 'expired' ? t('realtimeExpiredHelp') : t('realtimeUnavailableHelp')}</span>
+        <span>{t(realtimeHelpKeys[realtimeStatus])}</span>
         {canRetry && <button type="button" className="connection-action" aria-label={retrying ? t('reconnecting') : t('retryApi')} disabled={retrying} onClick={onRetry}>
           <RotateCw size={16} aria-hidden="true" /><span>{retrying ? t('reconnecting') : t('retryApi')}</span>
         </button>}

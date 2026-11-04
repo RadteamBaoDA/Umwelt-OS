@@ -2,10 +2,10 @@
 
 import { ChevronRight } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import { OperationsPage } from '@/modules/observability/operations-page';
-import { SystemStatusDashboard } from '@/modules/observability/system-status-dashboard';
-import { LifecycleSettings } from '@/modules/settings/lifecycle-settings';
-import { DataExportSettings } from '@/modules/settings/data-export';
+import { OperationsPage } from '@/modules/observability';
+import { SystemStatusDashboard } from '@/modules/observability';
+import { LifecycleSettings } from '@/modules/settings';
+import { DataExportSettings } from '@/modules/settings';
 
 /** Composes the operations dashboard with the collapsible advanced operations/lifecycle panels and data export. */
 function SystemStatus() {

@@ -1,5 +1,5 @@
-import { loadPolicy } from '@/modules/legal/policy-loader';
-import { PolicyDocument } from '@/modules/legal/policy-document';
+import { loadPolicy } from '@/modules/legal/server';
+import { PolicyDocument } from '@/modules/legal';
 
 /** Serves public privacy in both supported languages without reading account content. */
 export default async function PrivacyPage({ searchParams }: { searchParams: Promise<{ lang?: string }> }) {

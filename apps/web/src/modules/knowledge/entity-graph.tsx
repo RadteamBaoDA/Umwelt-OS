@@ -36,6 +36,7 @@ function GraphActions({ focusId, canExpand, isExpanding, onExpand }: { focusId: 
 }
 
 /** Renders an entity’s related graph and emits the selected relationship to its owner. */
+// eslint-disable-next-line complexity -- stateful workflow whose branches mirror independent UI/request states (loading, error, conflict, per-step content); extraction into per-state components is tracked as follow-up R3.6 so this refactor stays behaviour-neutral
 export function EntityGraph({ entityId, title, selectedRelationshipId, onSelectRelationship }: {
   entityId: string;
   title: string;

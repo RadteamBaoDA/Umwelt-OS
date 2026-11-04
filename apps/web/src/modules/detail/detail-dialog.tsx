@@ -1,9 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { StoryDetail } from '@/modules/news/story-detail';
+import { StoryDetail } from '@/modules/news';
 import { DocumentDialogBody } from './document-dialog-body';
 import { EntityDialogBody } from './entity-dialog-body';
 
@@ -23,6 +23,14 @@ export type DetailDialogProps = {
   onCloseAutoFocus?: (event: Event) => void;
 };
 
+/** Shared empty navigation stack so a target without pushed entries keeps a stable identity across renders. */
+const EMPTY_STACK: DetailTarget[] = [];
+
+/** A target can be shown unless it is a story without any source IDs (those render nothing and ask the caller to close). */
+function isSupportedTarget(current: DetailTarget | null): boolean {
+  return current !== null && (current.kind !== 'story' || Boolean(current.sourceIds?.length));
+}
+
 /**
  * Shared detail host. Controlled: open while `target` is set; `story`, `entity` and `document` render.
  * Opening a related entity from inside replaces the dialog content and Back returns to the previous view
@@ -33,9 +41,9 @@ export function DetailDialog({ target, onClose, onCloseAutoFocus }: DetailDialog
   const t = useTranslations('detail');
   const [pushed, setPushed] = useState<{ owner: DetailTarget | null; stack: DetailTarget[] }>({ owner: null, stack: [] });
   // The stack belongs to the target that opened it; a new or cleared target starts from an empty stack.
-  const stack = pushed.owner === target ? pushed.stack : [];
+  const stack = useMemo(() => (pushed.owner === target ? pushed.stack : EMPTY_STACK), [pushed, target]);
   const current = stack.length ? stack[stack.length - 1] : target;
-  const supported = current !== null && (current.kind !== 'story' || Boolean(current.sourceIds?.length));
+  const supported = isSupportedTarget(current);
   const unsupported = target !== null && !supported;
   useEffect(() => { if (unsupported) onClose(); }, [unsupported, onClose]);
   const openEntity = useCallback((id: string) => setPushed({ owner: target, stack: [...stack, { kind: 'entity', id }] }), [target, stack]);

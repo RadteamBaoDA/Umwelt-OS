@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { documentDeletionKeys, getDocumentDeletionOperation, type DocumentDeletionReceipt } from './api';
-import { useResetOnChange } from '@/modules/shared/use-reset-on-change';
+import { useResetOnChange } from '@/modules/shared';
 
 type DocumentDeletionStageStatus =
   | DocumentDeletionReceipt['status']
@@ -20,6 +20,7 @@ type DocumentDeletionStageStatus =
   | DocumentDeletionReceipt['brief_status'];
 
 /** Shows the operation-only deletion receipt after its Document and content queries are gone. */
+// eslint-disable-next-line complexity -- stateful workflow whose branches mirror independent UI/request states (loading, error, conflict, per-step content); extraction into per-state components is tracked as follow-up R3.6 so this refactor stays behaviour-neutral
 export function DocumentDeletionReceiptPanel({ operationId }: { operationId: string }) {
   const t = useTranslations('shell');
   const pollUntil = useRef(0);

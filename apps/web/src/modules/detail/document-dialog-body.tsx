@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { formatDateTime } from '@/core/i18n';
 import { safeHttpUrl } from '@/core/safe-url';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { documentKeys, getDocument, getVersion } from '@/modules/knowledge/api';
+import { documentKeys, getDocument, getVersion } from '@/modules/knowledge';
 
 const PREVIEW_LIMIT = 2000;
 

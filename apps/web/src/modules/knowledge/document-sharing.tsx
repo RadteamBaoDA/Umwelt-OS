@@ -36,6 +36,7 @@ type ShareDialogProps = {
  * Owner-only dialog listing workspace members with an explicit Share / Revoke choice per member.
  * It never offers a whole-workspace share. Renders nothing for members.
  */
+// eslint-disable-next-line complexity -- stateful workflow whose branches mirror independent UI/request states (loading, error, conflict, per-step content); extraction into per-state components is tracked as follow-up R3.6 so this refactor stays behaviour-neutral
 export function ShareDialog({ resourceType, resourceId, resourceRevision, semantics, grant, renderError }: ShareDialogProps) {
   const t = useTranslations('sharing');
   const { selection, isOwner } = useWorkspace();

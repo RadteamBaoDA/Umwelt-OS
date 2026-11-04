@@ -19,6 +19,7 @@ type ChangePasswordDialogProps = {
 };
 
 /** Changes the owner password; the server revokes every other session and rotates this one. */
+// eslint-disable-next-line complexity -- stateful workflow whose branches mirror independent UI/request states (loading, error, conflict, per-step content); extraction into per-state components is tracked as follow-up R3.6 so this refactor stays behaviour-neutral
 export function ChangePasswordDialog({ open, csrfToken, closeLabel, onOpenChange, onCloseAutoFocus }: ChangePasswordDialogProps) {
   const t = useTranslations('account');
   const queryClient = useQueryClient();

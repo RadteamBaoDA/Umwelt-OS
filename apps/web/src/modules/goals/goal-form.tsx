@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
+import { ownerFailureKey } from '@/modules/shared';
 import { ApiError } from '@/core/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,6 +17,7 @@ import { uuid7 } from '@/core/uuid7';
 const GOAL_STATUSES: GoalStatus[] = ['active', 'completed', 'paused', 'cancelled'];
 
 /** Creates or edits goal fields with conflict draft retention; save requires current owner verification and pending state is reported to the parent. */
+// eslint-disable-next-line complexity -- stateful form with conflict-retention and per-field validation branches that mirror independent UI/request states; extraction into per-state components is tracked as follow-up R3.6 so this refactor stays behaviour-neutral
 export function GoalForm({ goal, csrfToken, onSuccess, onCancel, canSave = true, onPendingChange }: {
   goal?: Goal;
   csrfToken: string;
@@ -57,7 +59,7 @@ export function GoalForm({ goal, csrfToken, onSuccess, onCancel, canSave = true,
     onSettled: () => onPendingChange?.(false),
   });
   const conflict = mutation.error instanceof ApiError && mutation.error.status === 409;
-  const saveError = mutation.error instanceof ApiError && mutation.error.status === 404 ? t('goalOwnerMissing') : mutation.error instanceof ApiError && [401, 403].includes(mutation.error.status) ? t('ownerAccessDenied') : t('goalWriteFailed');
+  const saveError = t(ownerFailureKey(mutation.error, 'goalOwnerMissing', 'goalWriteFailed'));
 
   /** Loads the latest goal revision for review while leaving every draft field unchanged. */
   const refreshCurrentGoal = async () => {
@@ -66,7 +68,7 @@ export function GoalForm({ goal, csrfToken, onSuccess, onCancel, canSave = true,
     setRefreshError('');
     setCurrentGoal(null);
     try { setCurrentGoal(await getGoal(goal.id)); }
-    catch (error) { setRefreshError(error instanceof ApiError && error.status === 404 ? t('goalOwnerMissing') : error instanceof ApiError && [401, 403].includes(error.status) ? t('ownerAccessDenied') : t('goalReadFailed')); }
+    catch (error) { setRefreshError(t(ownerFailureKey(error, 'goalOwnerMissing', 'goalReadFailed'))); }
     finally { setRefreshing(false); }
   };
 

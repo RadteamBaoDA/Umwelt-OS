@@ -34,6 +34,81 @@ function isEntityDetailPath(pathname: string) {
   return /^\/knowledge\/entities\/[^/]+\/?$/.test(pathname);
 }
 
+/** Asks the guard to confirm discarding unsaved changes and accepts the leave; false means the owner stayed. */
+function confirmLeaving(guard: LeaveGuard | null, destination: URL, mode: NavigationMode): boolean {
+  if (!guard?.hasUnsavedChanges()) return true;
+  if (!guard.confirmDiscard({ href: destination.href, mode })) return false;
+  guard.acceptLeave();
+  return true;
+}
+
+/** Performs a full document navigation (replace or assign), used for external and route-owned source destinations. */
+function loadDocument(href: string, mode: NavigationMode) {
+  if (mode === 'replace') window.location.replace(href);
+  else window.location.assign(href);
+}
+
+/** The same-window link a plain primary-button click activated, or null for modified, handled or non-link clicks. */
+function navigableAnchor(event: MouseEvent): HTMLAnchorElement | null {
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return null;
+  const target = event.target;
+  if (!(target instanceof Element)) return null;
+  const anchor = target.closest<HTMLAnchorElement>('a[href]');
+  if (!anchor || anchor.download || (anchor.target && anchor.target !== '_self')) return null;
+  return anchor;
+}
+
+/**
+ * Decides whether a click on a link must go through guarded navigation (leaving or entering a source route, or
+ * leaving a page with unsaved changes). Returns the destination to navigate to, or null to let the browser proceed.
+ */
+function guardedClickDestination(event: MouseEvent, guard: LeaveGuard | null): URL | null {
+  const anchor = navigableAnchor(event);
+  if (!anchor) return null;
+  const destination = new URL(anchor.href, window.location.href);
+  const sameOrigin = destination.origin === window.location.origin;
+  const changesPath = !sameOrigin || destination.pathname !== window.location.pathname;
+  const leavesSources = isSourcesPath(window.location.pathname) && changesPath;
+  const entersSources = sameOrigin && isSourcesPath(destination.pathname) && !isSourcesPath(window.location.pathname);
+  const leavesGuardedPage = guard?.hasUnsavedChanges() && changesPath;
+  return leavesSources || entersSources || leavesGuardedPage ? destination : null;
+}
+
+/**
+ * Registers the document-level listeners that route eligible link clicks through `navigate`, prompt before unload
+ * while the active guard reports unsaved changes, and accept leaving when the page is hidden.
+ */
+function useLinkInterception(guardRef: React.RefObject<LeaveGuard | null>, navigate: (href: string) => boolean) {
+  useEffect(() => {
+    /** Intercepts eligible links, including external destinations, when guarded source routes or unsaved drafts require controlled navigation. */
+    const onClick = (event: MouseEvent) => {
+      const destination = guardedClickDestination(event, guardRef.current);
+      if (!destination) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      navigate(destination.href);
+    };
+    /** Prompts the browser before closing while the active editor reports unsaved changes. */
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      const guard = guardRef.current;
+      if (!guard?.hasUnsavedChanges()) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    /** Accepts leaving the editor when the browser hides the current page. */
+    const onPageHide = () => guardRef.current?.acceptLeave();
+    document.addEventListener('click', onClick, true);
+    window.addEventListener('beforeunload', onBeforeUnload);
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      document.removeEventListener('click', onClick, true);
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      window.removeEventListener('pagehide', onPageHide);
+    };
+  }, [navigate, guardRef]);
+}
+
 /** Provides navigation that checks registered unsaved-change guards and handles full-page source-route transitions. */
 export function GuardedNavigationProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -80,15 +155,11 @@ export function GuardedNavigationProvider({ children }: { children: ReactNode })
     const destination = new URL(href, window.location.href);
     const leavesPage = destination.origin !== window.location.origin || destination.pathname !== pathname;
     const guard = guardRef.current;
-    if (acceptGuard && leavesPage && guard?.hasUnsavedChanges()) {
-      if (!guard.confirmDiscard({ href: destination.href, mode })) return false;
-      guard.acceptLeave();
-    }
+    if (acceptGuard && leavesPage && !confirmLeaving(guard, destination, mode)) return false;
     if (!acceptGuard) guard?.acceptLeave();
     if (destination.origin !== window.location.origin) {
       guard?.acceptLeave();
-      if (mode === 'replace') window.location.replace(destination.href);
-      else window.location.assign(destination.href);
+      loadDocument(destination.href, mode);
       return true;
     }
 
@@ -101,8 +172,7 @@ export function GuardedNavigationProvider({ children }: { children: ReactNode })
     }
 
     if (isSourcesPath(destination.pathname)) {
-      if (mode === 'replace') window.location.replace(destination.href);
-      else window.location.assign(destination.href);
+      loadDocument(destination.href, mode);
       return true;
     }
 
@@ -121,45 +191,7 @@ export function GuardedNavigationProvider({ children }: { children: ReactNode })
     performNavigation(intent.href, intent.mode, false);
   }, [performNavigation]);
 
-  useEffect(() => {
-    /** Intercepts eligible links, including external destinations, when guarded source routes or unsaved drafts require controlled navigation. */
-    const onClick = (event: MouseEvent) => {
-      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      const anchor = target.closest<HTMLAnchorElement>('a[href]');
-      if (!anchor || anchor.download || (anchor.target && anchor.target !== '_self')) return;
-      const destination = new URL(anchor.href, window.location.href);
-      const sameOrigin = destination.origin === window.location.origin;
-      const leavesSources = isSourcesPath(window.location.pathname)
-        && (!sameOrigin || destination.pathname !== window.location.pathname);
-      const entersSources = sameOrigin && isSourcesPath(destination.pathname) && !isSourcesPath(window.location.pathname);
-      const guard = guardRef.current;
-      const leavesGuardedPage = guard?.hasUnsavedChanges() && (!sameOrigin || destination.pathname !== window.location.pathname);
-      if (!leavesSources && !entersSources && !leavesGuardedPage) return;
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
-      navigate(destination.href);
-    };
-    /** Prompts the browser before closing while the active editor reports unsaved changes. */
-    const onBeforeUnload = (event: BeforeUnloadEvent) => {
-      const guard = guardRef.current;
-      if (!guard?.hasUnsavedChanges()) return;
-      event.preventDefault();
-      event.returnValue = '';
-    };
-    /** Accepts leaving the editor when the browser hides the current page. */
-    const onPageHide = () => guardRef.current?.acceptLeave();
-    document.addEventListener('click', onClick, true);
-    window.addEventListener('beforeunload', onBeforeUnload);
-    window.addEventListener('pagehide', onPageHide);
-    return () => {
-      document.removeEventListener('click', onClick, true);
-      window.removeEventListener('beforeunload', onBeforeUnload);
-      window.removeEventListener('pagehide', onPageHide);
-    };
-  }, [navigate]);
+  useLinkInterception(guardRef, navigate);
 
   return <GuardedNavigationContext.Provider value={{ registerLeaveGuard, navigate, continueNavigation, ensureSourcesDocument, ensureEntityDocument }}>
     {children}

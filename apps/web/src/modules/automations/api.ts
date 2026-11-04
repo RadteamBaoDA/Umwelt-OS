@@ -1,3 +1,4 @@
+import type { ApiResponse } from '@/core/api-contract';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 
 export type TriggerType = 'schedule' | 'new_event' | 'new_document' | 'entity_changed' | 'task_due' | 'goal_deadline' | 'webhook' | 'connector_sync_result';
@@ -20,9 +21,10 @@ export interface Definition { trigger: Trigger; conditions: Condition[]; actions
 export interface Automation extends Definition { id: string; name: string; enabled: boolean; revision: number; created_at: string; updated_at: string }
 
 /** Trigger or action type with owning-module availability, as reported by the server. */
-export interface CapabilityItem { type: string; module: string | null; available: boolean; reason: string | null; requires_approval: boolean; fields: Record<string, 'string' | 'number' | 'boolean'> }
+/** One trigger or action the server can run, with availability by owning module (derived from the backend OpenAPI schema). */
+export type CapabilityItem = Capabilities['triggers'][number];
 /** Editor options derived from the server schemas; webhook aliases are names only, never URLs. */
-export interface Capabilities { triggers: CapabilityItem[]; actions: CapabilityItem[]; webhook_aliases: string[] }
+export type Capabilities = ApiResponse<'/api/v1/automations/capabilities'>;
 export interface WebhookCredential { alias: string; token: string; revision: number; expires_at: string; endpoint: string }
 
 export interface PreviewResult { matched: boolean; reasons: Array<{ index: number; field: string; operator: string; outcome: string }>; planned_actions: Array<{ type: string; module: string; requires_approval: boolean }> }

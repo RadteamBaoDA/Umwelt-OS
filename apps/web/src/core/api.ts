@@ -72,22 +72,6 @@ export function workspaceHeaders(
   return id ? { "X-Workspace-ID": id } : {};
 }
 
-/**
- * Logs a failed (4xx/5xx) API response to the browser console for diagnosis.
- * Records method, path, status, request id and the parsed error body when present; never logs request headers or bodies.
- */
-function logApiFailure(
-  method: string | undefined,
-  path: string,
-  response: Response,
-  body?: unknown,
-): void {
-  // console.error(
-  //   `[api] ${(method ?? 'GET').toUpperCase()} ${path} -> ${response.status} ${response.statusText}`,
-  //   { requestId: response.headers.get('X-Request-ID'), body },
-  // );
-}
-
 type Session = { authenticated: true; csrfToken: string };
 let sessionRefresh: Promise<Session> | null = null;
 
@@ -98,6 +82,43 @@ export type RawRequestOptions = {
   /** Dispatch `umwelt:unauthorized` on a 401 (default true); disable for post-logout receipt reads. */
   emitAuthEvents?: boolean;
 };
+
+/**
+ * True when a mutation was rejected for an invalid CSRF token and one refresh-and-retry is still allowed.
+ * GET/HEAD never retry; a request that carried no CSRF token cannot be fixed by refreshing.
+ */
+function shouldRetryCsrf(
+  response: Response,
+  headers: Headers,
+  options: RequestInit,
+  retryCsrf: boolean,
+): boolean {
+  return (
+    retryCsrf &&
+    response.status === 403 &&
+    response.headers.get("X-CSRF-Error") === "invalid" &&
+    headers.has("X-CSRF-Token") &&
+    !["GET", "HEAD"].includes((options.method ?? "GET").toUpperCase())
+  );
+}
+
+/**
+ * Refreshes the auth session once for all concurrent callers (single flight) and announces the new session via
+ * `bbd:session-refreshed`. The shared promise is cleared when it settles so a later rejection can refresh again.
+ */
+function refreshSessionOnce(): Promise<Session> {
+  sessionRefresh ??= apiRequest<Session>("/api/v1/auth/session")
+    .then((session) => {
+      window.dispatchEvent(
+        new CustomEvent("bbd:session-refreshed", { detail: session }),
+      );
+      return session;
+    })
+    .finally(() => {
+      sessionRefresh = null;
+    });
+  return sessionRefresh;
+}
 
 type SentRequest = { response: Response; scoped: boolean; isStale: () => boolean };
 
@@ -141,26 +162,10 @@ async function sendApiRequest(
     throw error;
   }
   if (isStale()) throw new StaleWorkspaceError();
-  if (
-    retryCsrf &&
-    response.status === 403 &&
-    response.headers.get("X-CSRF-Error") === "invalid" &&
-    headers.has("X-CSRF-Token") &&
-    !["GET", "HEAD"].includes((options.method ?? "GET").toUpperCase())
-  ) {
+  if (shouldRetryCsrf(response, headers, options, retryCsrf)) {
     // Share one session refresh across concurrent rejected mutations to avoid competing CSRF rotations.
     if (isStale()) throw new StaleWorkspaceError();
-    sessionRefresh ??= apiRequest<Session>("/api/v1/auth/session")
-      .then((session) => {
-        window.dispatchEvent(
-          new CustomEvent("bbd:session-refreshed", { detail: session }),
-        );
-        return session;
-      })
-      .finally(() => {
-        sessionRefresh = null;
-      });
-    const session = await sessionRefresh;
+    const session = await refreshSessionOnce();
     headers.set("X-CSRF-Token", session.csrfToken);
     // Disable further CSRF retries so a failed refresh cannot recurse indefinitely.
     return sendApiRequest(path, { ...options, headers }, false);
@@ -209,7 +214,53 @@ export async function apiRequestRaw(
   return response;
 }
 
-/** Sends a same-origin API request, applies the provided request options, and rejects unsuccessful responses as ApiError. */
+/** Error envelope shapes the API may return (`error` for domain errors, `detail` for FastAPI/validation errors). */
+type ApiErrorPayload = {
+  message?: string;
+  code?: string;
+  details?: unknown;
+  [key: string]: unknown;
+};
+type ApiResponseBody = {
+  error?: ApiErrorPayload;
+  detail?: string | ApiErrorPayload;
+};
+
+/**
+ * Dispatches the global events a failed response implies: workspace-invalid for a scoped 404 "Workspace not found"
+ * and unauthorized for a 401. Browser-only; no-op during SSR.
+ */
+function dispatchFailureEvents(
+  response: Response,
+  body: ApiResponseBody,
+  scoped: boolean,
+): void {
+  if (typeof window === "undefined") return;
+  // The selected workspace itself is gone or revoked: let the provider fall back to the default.
+  if (scoped && response.status === 404 && body.detail === "Workspace not found") {
+    dispatchWorkspaceInvalid();
+  }
+  if (response.status === 401) dispatchUnauthorized();
+}
+
+/** Builds the ApiError for a non-OK parsed response, preferring `error.message`, then `detail.message`/`detail`. */
+function apiErrorFromBody(status: number, body: ApiResponseBody): ApiError {
+  const detail =
+    typeof body.detail === "object" && body.detail !== null
+      ? body.detail
+      : undefined;
+  const message =
+    body.error?.message ??
+    detail?.message ??
+    (typeof body.detail === "string" ? body.detail : "Request failed");
+  return new ApiError(status, message, body.error ?? detail);
+}
+
+/**
+ * Sends a same-origin API request, applies the provided request options, and rejects unsuccessful responses as ApiError.
+ * 204 resolves undefined; non-JSON bodies (gateway HTML) become ApiError with the HTTP status.
+ * @throws StaleWorkspaceError when the workspace changed mid-flight.
+ */
 export async function apiRequest<T>(
   path: string,
   options: RequestInit = {},
@@ -224,52 +275,16 @@ export async function apiRequest<T>(
     parsed = await response.json();
   } catch {
     if (isStale()) throw new StaleWorkspaceError();
-    if (!response.ok) logApiFailure(options.method, path, response);
     throw new ApiError(
       response.status,
       response.ok ? "Invalid response" : "Request failed",
     );
   }
-  const body = parsed as {
-    error?: {
-      message?: string;
-      code?: string;
-      details?: unknown;
-      [key: string]: unknown;
-    };
-    detail?:
-      | string
-      | {
-          message?: string;
-          code?: string;
-          details?: unknown;
-          [key: string]: unknown;
-        };
-  } & T;
+  const body = parsed as ApiResponseBody & T;
   if (isStale()) throw new StaleWorkspaceError();
   if (!response.ok) {
-    if (
-      scoped &&
-      typeof window !== "undefined" &&
-      response.status === 404 &&
-      body.detail === "Workspace not found"
-    ) {
-      // The selected workspace itself is gone or revoked: let the provider fall back to the default.
-      dispatchWorkspaceInvalid();
-    }
-    if (response.status === 401 && typeof window !== "undefined") {
-      dispatchUnauthorized();
-    }
-    const detail =
-      typeof body.detail === "object" && body.detail !== null
-        ? body.detail
-        : undefined;
-    const message =
-      body.error?.message ??
-      detail?.message ??
-      (typeof body.detail === "string" ? body.detail : "Request failed");
-    logApiFailure(options.method, path, response, parsed);
-    throw new ApiError(response.status, message, body.error ?? detail);
+    dispatchFailureEvents(response, body, scoped);
+    throw apiErrorFromBody(response.status, body);
   }
   return body;
 }

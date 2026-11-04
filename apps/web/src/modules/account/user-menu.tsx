@@ -8,7 +8,7 @@ import { UserIcon } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { fetchOwnerPreferences, OWNER_PREFERENCES_KEY } from '@/core/preferences';
 import { useWorkspace } from '@/core/workspace-context';
-import { useNotificationFeed } from '@/modules/notifications/public-api';
+import { useNotificationFeed } from '@/modules/notifications';
 import { NotificationItems } from '@/modules/notifications';
 import { BareButton } from '@/components/bare-button';
 

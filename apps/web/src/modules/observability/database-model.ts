@@ -1,6 +1,6 @@
 import type { HistoryBucket, PgStats, PgTable } from './api';
 import type { Tone } from './system-status-model';
-import { getNumberFormat } from '@/modules/shared/intl-cache';
+import { getNumberFormat } from '@/modules/shared';
 
 /** Formats a byte count with binary units (B..TiB) in the locale; null stays null so callers render a dash. */
 export function formatBytes(bytes: number | null | undefined, locale: string): string | null {

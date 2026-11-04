@@ -48,6 +48,14 @@ export function formatDateTime(value: string | number | Date, locale: AppLocaleI
   return memo('datetime', locale, options, (l) => new Intl.DateTimeFormat(l, options)).format(toDate(value));
 }
 
+/**
+ * Formats a date/time with arbitrary `Intl.DateTimeFormat` options (memoised per locale and options). Prefer `formatDate` /
+ * `formatDateTime` when their presets fit; use this for axis labels and other custom field selections.
+ */
+export function formatDateWith(value: string | number | Date, locale: AppLocaleId, options: Intl.DateTimeFormatOptions): string {
+  return memo('datewith', locale, options, (l) => new Intl.DateTimeFormat(l, options)).format(toDate(value));
+}
+
 /** Formats a plain number with optional Intl.NumberFormat options. */
 export function formatNumber(value: number, locale: AppLocaleId, options: Intl.NumberFormatOptions = {}): string {
   return memo('number', locale, options, (l) => new Intl.NumberFormat(l, options)).format(value);

@@ -11,50 +11,55 @@ import { Table, TableBody, TableCaption, TableHead, TableHeader, TableRow } from
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { entityKeys, getEntity, getEntityNeighbors, getEntityTimeline, getRelationshipEvidence, listEntityEvidence } from '@/modules/knowledge/api';
+import { entityKeys, getEntity, getEntityNeighbors, getEntityTimeline, getRelationshipEvidence, listEntityEvidence } from '@/modules/knowledge';
 import { FollowEntityButton } from './follow-entity';
-import { EventDetail } from '@/modules/timeline/event-detail';
+import { EventDetail } from '@/modules/timeline';
 import { BareButton } from '@/components/bare-button';
 
 const badgeClass = 'inline-flex h-6 items-center rounded-full border border-border bg-background px-2 text-xs font-semibold text-muted-foreground';
+
+/** Props of the read-only entity dialog body. */
+type EntityDialogBodyProps = {
+  entityId: string;
+  canGoBack: boolean;
+  onBack: () => void;
+  onOpenEntity: (id: string) => void;
+};
 
 /**
  * Read-only entity view for the shared detail dialog. Identity corrections (rename, alias, merge, split,
  * suppress) intentionally stay on the full entity page so their revision-fenced previews and confirmations are untouched.
  */
-export function EntityDialogBody({ entityId, canGoBack, onBack, onOpenEntity }: {
-  entityId: string;
-  canGoBack: boolean;
-  onBack: () => void;
-  onOpenEntity: (id: string) => void;
-}) {
-  const t = useTranslations('entities');
-  const d = useTranslations('detail');
-  const display = useDisplayPreferences();
-  const [relationshipId, setRelationshipId] = useState<{ entityId: string; id: string } | null>(null);
-  const selectedRelationshipId = relationshipId?.entityId === entityId ? relationshipId.id : null;
-  const entity = useQuery({ queryKey: entityKeys.detail(entityId), queryFn: () => getEntity(entityId) });
-  const evidence = useInfiniteQuery({ queryKey: entityKeys.evidence(entityId), initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => listEntityEvidence(entityId, pageParam), getNextPageParam: (page) => page.next_cursor ?? undefined });
-  const timeline = useInfiniteQuery({ queryKey: entityKeys.timeline(entityId, { timezone: display.timezone }), initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => getEntityTimeline(entityId, { timezone: display.timezone }, pageParam), getNextPageParam: (page) => page.timeline.next_cursor ?? undefined });
-  const neighbors = useInfiniteQuery({ queryKey: entityKeys.neighbors(entityId), initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => getEntityNeighbors(entityId, pageParam), getNextPageParam: (page) => page.next_cursor ?? undefined });
-  const relEvidence = useQuery({ queryKey: ['relationships', selectedRelationshipId, 'evidence', 'dialog'], enabled: !!selectedRelationshipId, queryFn: () => getRelationshipEvidence(selectedRelationshipId!) });
+export function EntityDialogBody(props: EntityDialogBodyProps) {
+  const s0 = useEntityDialogQueries(props);
+  const { t, entity } = s0;
 
   const value = entity.data;
-  const documents = evidence.data?.pages.flatMap((page) => page.items) ?? [];
-  const events = timeline.data?.pages.flatMap((page) => page.timeline.items) ?? [];
-  const relations = neighbors.data?.pages.flatMap((page) => page.items) ?? [];
-  const relationsPager = usePagination(relations);
-  /** Appends "+" when more pages exist so counts never overstate what is loaded. */
-  const count = (n: number, more: boolean) => `${n}${more ? '+' : ''}`;
-  const typeLabel = (type: string) => t.has(`type_${type}`) ? t(`type_${type}` as 'type_person') : type;
-  const nameOf = (name: string | null) => name ?? t('unnamedEntity');
-
-  const back = canGoBack ? <Button type="button" variant="ghost" className="w-fit" onClick={onBack}><ArrowLeft aria-hidden="true" className="mr-2 size-4" />{d('back')}</Button> : null;
+  const s1 = useEntityDialogView(s0);
+  const { back } = s1;
   if (entity.isPending) return <section className="grid gap-3 p-4">{back}<div className="skeleton h-24 rounded-lg" role="status" aria-label={t('loadingEntity')} /></section>;
   if (entity.isError || !value) return <section className="grid gap-3 p-4">{back}<p className="error" role="alert">{t('unavailable')} <Button type="button" variant="outline" size="sm" onClick={() => { void entity.refetch(); }}>{t('retry')}</Button></p></section>;
 
+  const vm: EntityDialogBodyVm = { ...s1, value };
   return <section className="flex h-full min-h-0 flex-col gap-4 overflow-auto p-4" aria-labelledby="entity-dialog-title">
     {back}
+<EntityDialogHeader vm={vm} />
+    <Tabs defaultValue="overview">
+<EntityDialogTabList vm={vm} />
+<EntityOverviewTab vm={vm} />
+<EntityTimelineTab vm={vm} />
+<EntityDocumentsTab vm={vm} />
+    </Tabs>
+<EntityDialogFooter vm={vm} />
+  </section>;
+}
+
+type EntityDialogBodyVm = ReturnType<typeof useEntityDialogView> & { value: NonNullable<ReturnType<typeof useEntityDialogView>['entity']['data']> };
+
+/** Entity type badge, name and first-seen line. */
+function EntityDialogHeader({ vm }: { vm: EntityDialogBodyVm }) {
+  const { t, display, typeLabel, nameOf, value } = vm;
+  return (
     <header className="grid gap-1">
       <span className={`${badgeClass} w-fit`}>{typeLabel(value.type)}</span>
       <h2 id="entity-dialog-title" className="text-xl font-semibold leading-snug">{nameOf(value.name)}</h2>
@@ -62,12 +67,25 @@ export function EntityDialogBody({ entityId, canGoBack, onBack, onOpenEntity }: 
         {value.first_seen_at ? `${t('firstSeen')} ${formatDateTime(value.first_seen_at, display.locale, display.timezone)}` : t('ownerManaged')} · {t('revision')} {value.revision} · {display.timezone}
       </p>
     </header>
-    <Tabs defaultValue="overview">
+  );
+}
+
+/** Tab triggers with loaded counts. */
+function EntityDialogTabList({ vm }: { vm: EntityDialogBodyVm }) {
+  const { d, evidence, timeline, documents, events, count } = vm;
+  return (
       <TabsList>
         <TabsTrigger value="overview">{d('tabOverview')}</TabsTrigger>
         <TabsTrigger value="timeline">{d('tabTimeline')}{timeline.isSuccess ? ` ${count(events.length, !!timeline.hasNextPage)}` : ''}</TabsTrigger>
         <TabsTrigger value="documents">{d('tabDocuments')}{evidence.isSuccess ? ` ${count(documents.length, !!evidence.hasNextPage)}` : ''}</TabsTrigger>
       </TabsList>
+  );
+}
+
+/** Description, aliases, relationships table and relationship evidence. */
+function EntityOverviewTab({ vm }: { vm: EntityDialogBodyVm }) {
+  const { t, d, display, selectedRelationshipId, neighbors, relEvidence, setRelationshipId, entityId, onOpenEntity, relations, relationsPager, nameOf, value } = vm;
+  return (
       <TabsContent value="overview" className="grid gap-5 pt-3">
         {value.description ? <p className="text-sm leading-relaxed">{value.description}</p> : <p className="text-muted-foreground text-sm">{d('noDescription')}</p>}
         <div className="grid gap-2">
@@ -103,6 +121,13 @@ export function EntityDialogBody({ entityId, canGoBack, onBack, onOpenEntity }: 
           </div>}
         </div>
       </TabsContent>
+  );
+}
+
+/** Entity events timeline. */
+function EntityTimelineTab({ vm }: { vm: EntityDialogBodyVm }) {
+  const { t, d, display, timeline, events, nameOf, value } = vm;
+  return (
       <TabsContent value="timeline" className="grid gap-3 pt-3">
         {timeline.isError && <p className="error" role="alert">{t('timelineUnavailable')} <Button type="button" variant="outline" size="sm" onClick={() => { void timeline.refetch(); }}>{t('retry')}</Button></p>}
         {timeline.isPending && <p role="status" className="text-sm text-muted-foreground">{d('loading')}</p>}
@@ -110,6 +135,13 @@ export function EntityDialogBody({ entityId, canGoBack, onBack, onOpenEntity }: 
         {events.map((event) => <EventDetail key={event.id} event={event} locale={display.locale} timezone={display.timezone} entityNames={new Map([[value.id, nameOf(value.name)]])} />)}
         {timeline.hasNextPage && <Button type="button" variant="outline" className="w-fit" disabled={timeline.isFetchingNextPage} onClick={() => { void timeline.fetchNextPage(); }}>{t('loadTimeline')}</Button>}
       </TabsContent>
+  );
+}
+
+/** Supporting document evidence. */
+function EntityDocumentsTab({ vm }: { vm: EntityDialogBodyVm }) {
+  const { t, d, display, evidence, documents } = vm;
+  return (
       <TabsContent value="documents" className="grid gap-3 pt-3">
         {evidence.isError && <p className="error" role="alert">{t('evidenceUnavailable')} <Button type="button" variant="outline" size="sm" onClick={() => { void evidence.refetch(); }}>{t('retry')}</Button></p>}
         {evidence.isPending && <p role="status" className="text-sm text-muted-foreground">{d('loading')}</p>}
@@ -121,11 +153,51 @@ export function EntityDialogBody({ entityId, canGoBack, onBack, onOpenEntity }: 
         </article>)}
         {evidence.hasNextPage && <Button type="button" variant="outline" className="w-fit" disabled={evidence.isFetchingNextPage} onClick={() => { void evidence.fetchNextPage(); }}>{t('loadEvidence')}</Button>}
       </TabsContent>
-    </Tabs>
+  );
+}
+
+/** Follow button and link to the full entity page. */
+function EntityDialogFooter({ vm }: { vm: EntityDialogBodyVm }) {
+  const { d, value } = vm;
+  return (
     <footer className="mt-auto flex flex-wrap items-center gap-2 border-t border-border pt-3">
       <FollowEntityButton entityId={value.id} name={value.name} />
       <Button asChild variant="outline"><Link href={`/knowledge/entities/${value.id}`}>{d('openFullEntity')}</Link></Button>
       <span className="text-xs text-muted-foreground">{d('correctionsNote')}</span>
     </footer>
-  </section>;
+  );
+}
+
+/** Loads the entity, its evidence, timeline and neighbours, and the selected relationship evidence. */
+function useEntityDialogQueries(props: EntityDialogBodyProps) {
+  const { entityId, canGoBack, onBack, onOpenEntity } = props;
+  const t = useTranslations('entities');
+  const d = useTranslations('detail');
+  const display = useDisplayPreferences();
+  const [relationshipId, setRelationshipId] = useState<{ entityId: string; id: string } | null>(null);
+  const selectedRelationshipId = relationshipId?.entityId === entityId ? relationshipId.id : null;
+  const entity = useQuery({ queryKey: entityKeys.detail(entityId), queryFn: () => getEntity(entityId) });
+  const evidence = useInfiniteQuery({ queryKey: entityKeys.evidence(entityId), initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => listEntityEvidence(entityId, pageParam), getNextPageParam: (page) => page.next_cursor ?? undefined });
+  const timeline = useInfiniteQuery({ queryKey: entityKeys.timeline(entityId, { timezone: display.timezone }), initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => getEntityTimeline(entityId, { timezone: display.timezone }, pageParam), getNextPageParam: (page) => page.timeline.next_cursor ?? undefined });
+  const neighbors = useInfiniteQuery({ queryKey: entityKeys.neighbors(entityId), initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => getEntityNeighbors(entityId, pageParam), getNextPageParam: (page) => page.next_cursor ?? undefined });
+  const relEvidence = useQuery({ queryKey: ['relationships', selectedRelationshipId, 'evidence', 'dialog'], enabled: !!selectedRelationshipId, queryFn: () => getRelationshipEvidence(selectedRelationshipId!) });
+
+  return { t, d, display, selectedRelationshipId, entity, evidence, timeline, neighbors, relEvidence, relationshipId, setRelationshipId, entityId, canGoBack, onBack, onOpenEntity };
+}
+
+/** Flattens loaded pages, paginates relationships and builds label helpers and the optional back button. */
+function useEntityDialogView(p: ReturnType<typeof useEntityDialogQueries>) {
+  const { t, d, evidence, timeline, neighbors, canGoBack, onBack } = p;
+  const documents = evidence.data?.pages.flatMap((page) => page.items) ?? [];
+  const events = timeline.data?.pages.flatMap((page) => page.timeline.items) ?? [];
+  const relations = neighbors.data?.pages.flatMap((page) => page.items) ?? [];
+  const relationsPager = usePagination(relations);
+  /** Appends "+" when more pages exist so counts never overstate what is loaded. */
+  const count = (n: number, more: boolean) => `${n}${more ? '+' : ''}`;
+  const typeLabel = (type: string) => t.has(`type_${type}`) ? t(`type_${type}` as 'type_person') : type;
+  const nameOf = (name: string | null) => name ?? t('unnamedEntity');
+
+  const back = canGoBack ? <Button type="button" variant="ghost" className="w-fit" onClick={onBack}><ArrowLeft aria-hidden="true" className="mr-2 size-4" />{d('back')}</Button> : null;
+
+  return { ...p, documents, events, relations, relationsPager, count, typeLabel, nameOf, back };
 }

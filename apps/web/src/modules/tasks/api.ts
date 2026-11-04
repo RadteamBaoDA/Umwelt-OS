@@ -1,21 +1,16 @@
 import { apiRequest, ApiError, csrfHeaders } from '@/core/api';
 import type { Task, TaskCreate, TaskFilter, TaskLookupResult, TaskPage, TaskUpdate } from './types';
 
+/** Filter fields sent as query parameters, in wire order; empty values are omitted. */
+const TASK_FILTER_KEYS = ['view', 'status', 'goal_id', 'entity_id', 'due_date_from', 'due_date_to', 'due_at_from', 'due_at_to', 'q', 'timezone', 'limit', 'cursor'] as const satisfies readonly (keyof TaskFilter)[];
+
 /** Fetches a paginated page of tasks matching the supplied filters. */
 export function fetchTasks(filter?: TaskFilter): Promise<TaskPage> {
   const params = new URLSearchParams();
-  if (filter?.view) params.set('view', filter.view);
-  if (filter?.status) params.set('status', filter.status);
-  if (filter?.goal_id) params.set('goal_id', filter.goal_id);
-  if (filter?.entity_id) params.set('entity_id', filter.entity_id);
-  if (filter?.due_date_from) params.set('due_date_from', filter.due_date_from);
-  if (filter?.due_date_to) params.set('due_date_to', filter.due_date_to);
-  if (filter?.due_at_from) params.set('due_at_from', filter.due_at_from);
-  if (filter?.due_at_to) params.set('due_at_to', filter.due_at_to);
-  if (filter?.q) params.set('q', filter.q);
-  if (filter?.timezone) params.set('timezone', filter.timezone);
-  if (filter?.limit) params.set('limit', String(filter.limit));
-  if (filter?.cursor) params.set('cursor', filter.cursor);
+  for (const key of TASK_FILTER_KEYS) {
+    const value = filter?.[key];
+    if (value) params.set(key, String(value));
+  }
 
   const qs = params.toString();
   return apiRequest<TaskPage>(`/api/v1/tasks${qs ? `?${qs}` : ''}`);

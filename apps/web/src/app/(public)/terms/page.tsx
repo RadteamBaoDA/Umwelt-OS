@@ -1,5 +1,5 @@
-import { loadPolicy } from '@/modules/legal/policy-loader';
-import { PolicyDocument } from '@/modules/legal/policy-document';
+import { loadPolicy } from '@/modules/legal/server';
+import { PolicyDocument } from '@/modules/legal';
 
 /** Serves public terms in both supported languages without reading account content. */
 export default async function TermsPage({ searchParams }: { searchParams: Promise<{ lang?: string }> }) {

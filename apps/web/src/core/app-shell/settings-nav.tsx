@@ -5,7 +5,7 @@ import type { ReactNode } from 'react';
 import { useTranslations } from 'next-intl';
 import { useGuardedNavigation } from '@/core/guarded-navigation';
 import { sourcesSubNavigation, type NavigationDestination } from '@/core/module-registry';
-import '@/modules/settings/settings-gaps.css';
+import './settings-gaps.css';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 /** True when `pathname` is inside the settings group rooted at `href` (sources also owns /settings/sources/*). */

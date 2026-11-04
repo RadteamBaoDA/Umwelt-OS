@@ -1,3 +1,4 @@
+/* eslint-disable no-restricted-imports -- message catalogs are imported by path on purpose: the module index files pull in components that import this barrel (import cycle). */
 import mcpCatalog from '@/modules/sources/mcp-messages.json';
 import { storyMessages } from '@/modules/news/story-messages';
 import { dailyMessages, notificationMessages } from '@/modules/dashboard/daily-messages';

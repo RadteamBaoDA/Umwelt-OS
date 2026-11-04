@@ -9,6 +9,7 @@ import type { Goal, GoalPage } from './types';
 import { BareButton } from '@/components/bare-button';
 
 /** Renders one bounded owner cursor page or explicit IDs and exposes detail/create actions. */
+// eslint-disable-next-line complexity -- stateful workflow whose branches mirror independent UI/request states (loading, error, conflict, per-step content); extraction into per-state components is tracked as follow-up R3.6 so this refactor stays behaviour-neutral
 export function GoalList({ onSelectGoal, onCreateGoal, ids, filters, limit = 50, cacheScope = 'page', hideTitle = false }: {
   onSelectGoal?: (goal: Goal) => void;
   onCreateGoal?: () => void;

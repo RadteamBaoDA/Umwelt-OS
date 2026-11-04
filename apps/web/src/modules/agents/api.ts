@@ -1,26 +1,11 @@
 import { apiRequest, csrfHeaders } from '@/core/api';
+import type { ApiResponse } from '@/core/api-contract';
+
+/** Owner-visible profile configuration plus server-derived capability and limit state (derived from the backend OpenAPI schema). */
+export type AgentProfile = ApiResponse<'/api/v1/agents/profiles/{profile_id}'>;
 
 /** Exact registered tool revision an owner profile may select. */
-export interface AgentProfileTool {
-  name: string;
-  version: string;
-  fingerprint: string;
-}
-
-/** Owner-visible profile configuration plus server-derived capability and limit state. */
-export interface AgentProfile {
-  id: string;
-  title: string;
-  enabled: boolean;
-  revision: number;
-  prompt: string;
-  allowed_tools: AgentProfileTool[];
-  available_tools: AgentProfileTool[];
-  source_ids: string[];
-  capability: 'available' | 'partial' | 'unavailable';
-  unavailable_reasons: string[];
-  limits: Record<string, number>;
-}
+export type AgentProfileTool = AgentProfile['allowed_tools'][number];
 
 /** Durable agent run summary shared by Settings history and full Chat. */
 export interface AgentRun {

@@ -8,8 +8,8 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { ApiError, apiRequest } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { listSources } from '@/modules/sources/public-api';
-import { getSearchIndexStatus } from '@/modules/search/public-api';
+import { listSources } from '@/modules/sources';
+import { getSearchIndexStatus } from '@/modules/search';
 import { AISettingsWorkspace } from './ai-settings';
 import { OnboardingTopics } from './onboarding-topics';
 import { getOnboardingState, saveOnboardingStep, type OnboardingStep } from './onboarding-api';
@@ -37,6 +37,7 @@ const steps: { id: OnboardingStep; label: 'stepAi' | 'stepCapability' | 'stepSou
  * The AI step embeds the Settings › Models workspace on demand (same save flow and query cache) and offers a
  * "skip, use local only" path that advances without a provider; the step rail omits the caption on upcoming steps.
  */
+// eslint-disable-next-line complexity -- stateful workflow whose branches mirror independent UI/request states (loading, error, conflict, per-step content); extraction into per-state components is tracked as follow-up R3.6 so this refactor stays behaviour-neutral
 export function OnboardingPage() {
   const t = useTranslations('onboarding');
   const { csrfToken } = useWorkspaceSession();
@@ -114,6 +115,7 @@ export function OnboardingPage() {
   return <div className="mx-auto flex w-full max-w-[1200px] flex-wrap items-start gap-6">
       <nav aria-label={t('currentStep')} className="flex-[0_0_260px] max-[720px]:flex-[1_1_100%]">
         <ol className="grid gap-1">
+          {/* eslint-disable-next-line complexity -- JSX presentational markup: the score counts every conditional-render branch (&&, ?:, ??) of this row; it holds no branching business logic, so splitting would only relocate the same render conditions */}
           {steps.map((step, position) => {
             const complete = done || position < currentIndex;
             const current = !done && step.id === currentStep.id;

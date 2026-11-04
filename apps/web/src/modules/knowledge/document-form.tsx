@@ -12,7 +12,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ApiError } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { listSources, sourceKeys } from '@/modules/sources/public-api';
+import { listSources, sourceKeys } from '@/modules/sources';
 import { createDocument, documentKeys } from './api';
 import { Textarea } from '@/components/ui/textarea';
 

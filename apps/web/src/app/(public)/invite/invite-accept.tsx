@@ -12,8 +12,8 @@ import { PasswordInput } from '@/components/ui/password-input';
 import { Label } from '@/components/ui/label';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import { assignAuthorizationUrl } from '@/core/safe-url';
-import { AppearanceControl } from '@/modules/account/appearance-control';
-import { LegalLinks } from '@/modules/legal/legal-links';
+import { AppearanceControl } from '@/modules/account';
+import { LegalLinks } from '@/modules/legal';
 
 const GOOGLE_RETURN_KEY = 'umwelt:invite-google';
 const MIN_PASSWORD = 12;
@@ -62,6 +62,66 @@ function failureKey(error: unknown, signedIn: boolean): FailureKey {
 
 /** Collects a real password (or a Google proof) and accepts the invitation without signing the user in. */
 export function InviteAccept() {
+  const s0 = useInviteState();
+  const { t } = s0;
+
+  const s1 = useInviteRequests(s0);
+
+  const s2 = useInviteForm(s1);
+
+  const vm: InviteAcceptVm = s2;
+  return <div className="flex min-h-dvh flex-col bg-secondary text-foreground">
+    <header className="flex h-16 items-center gap-4 border-b border-border bg-background px-4 sm:px-6"><UmweltLogo /><span className="flex-1" /><AppearanceControl /></header>
+    <main id="main-content" className="flex flex-1 items-center justify-center px-4 py-10 sm:py-12">
+      <section aria-labelledby="invite-title" className="auth-panel flex flex-col gap-6">
+        <div className="grid gap-1">
+          <h1 id="invite-title" className="text-2xl font-semibold leading-tight">{t('inviteTitle')}</h1>
+          <p className="text-muted-foreground">{t('inviteIntro')}</p>
+        </div>
+<InviteMissingNotice vm={vm} />
+<InviteForm vm={vm} />
+      </section>
+    </main>
+    <footer className="flex flex-wrap items-center gap-4 border-t border-border bg-background px-4 py-2.5 text-xs text-muted-foreground sm:px-6">
+      <LegalLinks />
+    </footer>
+  </div>;
+}
+
+type InviteAcceptVm = ReturnType<typeof useInviteForm>;
+
+/** Notice shown when no invitation token was present in the URL. */
+function InviteMissingNotice({ vm }: { vm: InviteAcceptVm }) {
+  const { t, state } = vm;
+  return (
+        state.checked && !state.present && <>
+          <p role="alert" className="rounded-lg border border-destructive px-4 py-3 text-sm text-destructive">{t('inviteMissing')}</p>
+          <Link href="/login" className="text-sm font-medium underline underline-offset-4">{t('inviteGoToLogin')}</Link>
+        </>
+  );
+}
+
+/** Password (or Google) acceptance form with error, accept, Google and cancel controls. */
+function InviteForm({ vm }: { vm: InviteAcceptVm }) {
+  const { t, state, signedIn, googleStatus, accept, google, needsPassword, probing, errorKey, submit, cancel } = vm;
+  return (
+        state.present && !probing && <form className="grid gap-4" onSubmit={submit} noValidate>
+          {signedIn && <p role="status" className="text-muted-foreground text-sm">{t('inviteSignedIn')}</p>}
+          {state.google && <p role="status" className="text-muted-foreground text-sm">{t('inviteGoogleReady')}</p>}
+          {needsPassword && <InvitePasswordFields vm={vm} />}
+          {errorKey && <div role="alert" className="flex items-start gap-3 rounded-lg border border-destructive px-4 py-3 text-sm text-destructive">
+            <AlertTriangleIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0" /><span>{t(errorKey)}</span>
+          </div>}
+          {errorKey === 'inviteUnavailable' && <Link href="/login" className="text-sm font-medium underline underline-offset-4">{t('inviteGoToLogin')}</Link>}
+          <Button type="submit" className="w-full" disabled={accept.isPending}>{accept.isPending ? t('inviteAccepting') : t('inviteAccept')}</Button>
+          {!signedIn && !state.google && googleStatus.data?.configured && <Button type="button" variant="outline" className="w-full" disabled={google.isPending} onClick={() => google.mutate()}>{t('inviteGoogle')}</Button>}
+          <Button type="button" variant="ghost" className="w-full" onClick={cancel}>{t('inviteCancel')}</Button>
+        </form>
+  );
+}
+
+/** Reads the invitation token once after mount and holds the password form state. */
+function useInviteState() {
   const t = useTranslations('workspaceMembers');
   const router = useRouter();
   const [state, setState] = useState({ checked: false, present: false, google: false });
@@ -75,6 +135,12 @@ export function InviteAccept() {
     setState({ checked: true, ...read });
   }, []);
 
+  return { t, router, state, setState, password, setPassword, confirm, setConfirm, touched, setTouched };
+}
+
+/** Probes the session and Google availability and declares the accept and Google-enrollment mutations. */
+function useInviteRequests(p: ReturnType<typeof useInviteState>) {
+  const { router, state, password, setPassword, setConfirm } = p;
   const session = useQuery({
     queryKey: ['invite-session'],
     queryFn: () => apiRequest<{ csrfToken: string }>('/api/v1/auth/session'),
@@ -122,6 +188,12 @@ export function InviteAccept() {
     onSuccess: ({ authorization_url }) => assignAuthorizationUrl(authorization_url),
   });
 
+  return { ...p, session, signedIn, googleStatus, accept, google };
+}
+
+/** Derives password validity and the failure message key; provides submit and cancel handlers. */
+function useInviteForm(p: ReturnType<typeof useInviteRequests>) {
+  const { router, state, password, setPassword, confirm, setConfirm, setTouched, session, signedIn, accept, google } = p;
   const needsPassword = !signedIn && !state.google;
   const tooShort = password.length < MIN_PASSWORD;
   const mismatch = password !== confirm;
@@ -139,22 +211,14 @@ export function InviteAccept() {
 
   const errorKey: FailureKey | null = accept.error ? failureKey(accept.error, signedIn) : google.error ? 'inviteGoogleFailed' : null;
 
-  return <div className="flex min-h-dvh flex-col bg-secondary text-foreground">
-    <header className="flex h-16 items-center gap-4 border-b border-border bg-background px-4 sm:px-6"><UmweltLogo /><span className="flex-1" /><AppearanceControl /></header>
-    <main id="main-content" className="flex flex-1 items-center justify-center px-4 py-10 sm:py-12">
-      <section aria-labelledby="invite-title" className="auth-panel flex flex-col gap-6">
-        <div className="grid gap-1">
-          <h1 id="invite-title" className="text-2xl font-semibold leading-tight">{t('inviteTitle')}</h1>
-          <p className="text-muted-foreground">{t('inviteIntro')}</p>
-        </div>
-        {state.checked && !state.present && <>
-          <p role="alert" className="rounded-lg border border-destructive px-4 py-3 text-sm text-destructive">{t('inviteMissing')}</p>
-          <Link href="/login" className="text-sm font-medium underline underline-offset-4">{t('inviteGoToLogin')}</Link>
-        </>}
-        {state.present && !probing && <form className="grid gap-4" onSubmit={submit} noValidate>
-          {signedIn && <p role="status" className="text-muted-foreground text-sm">{t('inviteSignedIn')}</p>}
-          {state.google && <p role="status" className="text-muted-foreground text-sm">{t('inviteGoogleReady')}</p>}
-          {needsPassword && <>
+  return { ...p, needsPassword, tooShort, mismatch, invalid, probing, errorKey, submit, cancel };
+}
+
+/** New-password and confirmation fields with inline validation errors. */
+function InvitePasswordFields({ vm }: { vm: InviteAcceptVm }) {
+  const { t, password, setPassword, confirm, setConfirm, touched, tooShort, mismatch } = vm;
+  return (
+    <>
             <div className="field">
               <Label htmlFor="invite-password">{t('invitePassword')}</Label>
               <PasswordInput id="invite-password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)}
@@ -168,19 +232,6 @@ export function InviteAccept() {
                 aria-invalid={touched && mismatch ? true : undefined} />
               {touched && mismatch && <span className="error" role="alert">{t('invitePasswordMismatch')}</span>}
             </div>
-          </>}
-          {errorKey && <div role="alert" className="flex items-start gap-3 rounded-lg border border-destructive px-4 py-3 text-sm text-destructive">
-            <AlertTriangleIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0" /><span>{t(errorKey)}</span>
-          </div>}
-          {errorKey === 'inviteUnavailable' && <Link href="/login" className="text-sm font-medium underline underline-offset-4">{t('inviteGoToLogin')}</Link>}
-          <Button type="submit" className="w-full" disabled={accept.isPending}>{accept.isPending ? t('inviteAccepting') : t('inviteAccept')}</Button>
-          {!signedIn && !state.google && googleStatus.data?.configured && <Button type="button" variant="outline" className="w-full" disabled={google.isPending} onClick={() => google.mutate()}>{t('inviteGoogle')}</Button>}
-          <Button type="button" variant="ghost" className="w-full" onClick={cancel}>{t('inviteCancel')}</Button>
-        </form>}
-      </section>
-    </main>
-    <footer className="flex flex-wrap items-center gap-4 border-t border-border bg-background px-4 py-2.5 text-xs text-muted-foreground sm:px-6">
-      <LegalLinks />
-    </footer>
-  </div>;
+          </>
+  );
 }

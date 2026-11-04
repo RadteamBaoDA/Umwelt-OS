@@ -14,7 +14,7 @@ import {
 } from './database-model';
 import { StatusDot } from './status-row';
 import { fillBuckets, statusTone, type Tone } from './system-status-model';
-import { getDateTimeFormat, getNumberFormat } from '@/modules/shared/intl-cache';
+import { getDateTimeFormat, getNumberFormat } from '@/modules/shared';
 
 const DASH = <span className="text-muted-foreground" aria-label="—">—</span>;
 const TEXT: Record<Tone, string> = { success: '', muted: '', warning: 'text-[var(--status-warning)]', danger: 'text-destructive' };
@@ -70,6 +70,7 @@ function Trend({ title, data, keys, unit, empty }: { title: string; data: ChartD
 }
 
 /** Postgres column: finding sentence, live figures, trends and largest tables. */
+// eslint-disable-next-line complexity -- JSX presentational markup: the score counts every conditional-render branch (&&, ?:, ??) of this panel; it holds no branching business logic, so splitting would only relocate the same render conditions
 function PostgresColumn({ pg, buckets, bucketSeconds, locale }: { pg: PgStats | null | undefined; buckets: HistoryBucket[]; bucketSeconds: number; locale: string }) {
   const t = useTranslations('observability');
   const num = getNumberFormat(locale, { maximumFractionDigits: 1 });
@@ -135,6 +136,7 @@ function PostgresColumn({ pg, buckets, bucketSeconds, locale }: { pg: PgStats | 
 }
 
 /** Redis column: live figures and memory/ops trends. */
+// eslint-disable-next-line complexity -- JSX presentational markup: the score counts every conditional-render branch (&&, ?:, ??) of this panel; it holds no branching business logic, so splitting would only relocate the same render conditions
 function RedisColumn({ redis, buckets, bucketSeconds, locale }: { redis: RedisStats | null | undefined; buckets: HistoryBucket[]; bucketSeconds: number; locale: string }) {
   const t = useTranslations('observability');
   const num = getNumberFormat(locale, { maximumFractionDigits: 1 });

@@ -96,9 +96,10 @@ function DisplayPreferencesProvider({ children }: { children: ReactNode }) {
     document.documentElement.lang = normalizeFormattingLocale(effective.locale);
   }, [effective.locale]);
 
+  const hasConfirmedPreferences = Boolean(confirmedPreferences);
   useEffect(() => {
-    if (confirmedPreferences) themeSetterRef.current(effective.theme);
-  }, [effective.theme, Boolean(confirmedPreferences)]);
+    if (hasConfirmedPreferences) themeSetterRef.current(effective.theme);
+  }, [effective.theme, hasConfirmedPreferences]);
 
   /** Checks whether asynchronous preference work still belongs to the active auth generation. */
   const isCurrentGeneration = useCallback((generation: number) => generationRef.current === generation, []);

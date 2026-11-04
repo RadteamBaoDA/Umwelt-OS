@@ -1,4 +1,4 @@
-import { TranslationSettings } from '@/modules/settings/translation-settings';
+import { TranslationSettings } from '@/modules/settings';
 
 /** Renders translation settings (read only for invited members) within the workspace shell. */
 export default function TranslationSettingsPage() { return <TranslationSettings />; }

@@ -1,5 +1,5 @@
 import type { useTranslations } from 'next-intl';
-import { humanizeCode } from '@/modules/shared/humanize-code';
+import { humanizeCode } from '@/modules/shared';
 
 /** Localizes a backend health status via `globalSettings.st_*`; unknown codes fall back to sentence-case words. */
 export function statusLabel(t: ReturnType<typeof useTranslations<'globalSettings'>>, status: string): string {

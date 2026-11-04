@@ -1,4 +1,4 @@
-import { MemoryPrivacySettings } from '@/modules/settings/memory-privacy';
+import { MemoryPrivacySettings } from '@/modules/settings';
 
 /** Renders memory and conversation privacy controls within the workspace shell. */
 export default function MemoryPrivacyPage() {

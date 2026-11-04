@@ -8,9 +8,9 @@ import { apiRequest } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useWorkspace } from '@/core/workspace-context';
 import { useTranslations } from 'next-intl';
-import { SettingsPageHeader, SettingsSection } from '@/modules/settings/settings-layout';
-import { ProviderReviewTable, type PendingReview } from '@/modules/settings/provider-review';
-import { StatusRow } from '@/modules/observability/status-row';
+import { SettingsPageHeader, SettingsSection } from '@/modules/settings';
+import { ProviderReviewTable, type PendingReview } from '@/modules/settings';
+import { StatusRow } from '@/modules/observability';
 
 type SafeConfiguration = {
   multi_workspace_enabled: boolean;

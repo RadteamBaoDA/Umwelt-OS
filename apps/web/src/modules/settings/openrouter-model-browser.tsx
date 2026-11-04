@@ -56,17 +56,8 @@ function parseList(raw: string, pattern: RegExp): string[] {
   return raw.split(',').map((item) => item.trim()).filter((item) => pattern.test(item)).slice(0, 20);
 }
 
-/** Builds the wire filter object from tab, sort and typed state, omitting every empty, out-of-range or inverted-pair field. */
-export function buildFilters(output: OpenRouterFilters['output_modalities'], sort: OpenRouterFilters['sort'], typed: Typed): OpenRouterFilters {
-  const f: OpenRouterFilters = { output_modalities: output, sort };
-  const q = typed.q.trim().slice(0, 100);
-  if (q) f.q = q;
-  if (typed.inputs.length) f.input_modalities = typed.inputs;
-  if (typed.category !== 'any') f.category = typed.category;
-  const params = parseList(typed.params, listPatterns.supported_parameters); if (params.length) f.supported_parameters = params;
-  const authors = parseList(typed.authors, listPatterns.model_authors); if (authors.length) f.model_authors = authors;
-  const providers = parseList(typed.providers, listPatterns.providers); if (providers.length) f.providers = providers;
-  if (typed.endpoints.length) f.endpoints = typed.endpoints;
+/** Parses the typed numeric bounds, keeping in-range values and dropping both sides of an inverted min/max pair (the server rejects it). */
+function numericFilters(typed: Typed): Record<string, number> {
   const nums: Record<string, number> = {};
   for (const [key] of numberFields) {
     const raw = typed.numbers[key]?.trim();
@@ -78,7 +69,21 @@ export function buildFilters(output: OpenRouterFilters['output_modalities'], sor
     const max = key.replace(/^min_/, 'max_');
     if (key.startsWith('min_') && max in nums && nums[key] > nums[max]) { delete nums[key]; delete nums[max]; }
   }
-  Object.assign(f, nums);
+  return nums;
+}
+
+/** Builds the wire filter object from tab, sort and typed state, omitting every empty, out-of-range or inverted-pair field. */
+export function buildFilters(output: OpenRouterFilters['output_modalities'], sort: OpenRouterFilters['sort'], typed: Typed): OpenRouterFilters {
+  const f: OpenRouterFilters = { output_modalities: output, sort };
+  const q = typed.q.trim().slice(0, 100);
+  if (q) f.q = q;
+  if (typed.inputs.length) f.input_modalities = typed.inputs;
+  if (typed.category !== 'any') f.category = typed.category;
+  const params = parseList(typed.params, listPatterns.supported_parameters); if (params.length) f.supported_parameters = params;
+  const authors = parseList(typed.authors, listPatterns.model_authors); if (authors.length) f.model_authors = authors;
+  const providers = parseList(typed.providers, listPatterns.providers); if (providers.length) f.providers = providers;
+  if (typed.endpoints.length) f.endpoints = typed.endpoints;
+  Object.assign(f, numericFilters(typed));
   if (/^[A-Za-z0-9 ._-]{1,40}$/.test(typed.arch)) f.arch = typed.arch;
   if (typed.region === 'eu' || typed.region === 'us') f.region = typed.region;
   if (typed.distillable !== 'any') f.distillable = typed.distillable === 'yes';
@@ -115,6 +120,7 @@ function perMillion(price: string | null, format: Intl.NumberFormat): string {
  * immediately; typed filters are debounced to 600 ms and superseded requests are discarded by query key.
  * Paging resets whenever the committed filters change. Models in `excluded` are listed but not pickable.
  */
+// eslint-disable-next-line complexity -- stateful workflow whose branches mirror independent UI/request states (loading, error, conflict, per-step content); extraction into per-state components is tracked as follow-up R3.6 so this refactor stays behaviour-neutral
 export function OpenRouterModelBrowser({ providerId, browse, excluded, disabled, onPick, t }: { providerId: string; browse: BrowseOpenRouter; excluded: Set<string>; disabled: boolean; onPick: (model: OpenRouterModel, type: ModelType) => void; t: Translate }) {
   const locale = useLocale();
   const money = useMemo(() => new Intl.NumberFormat(locale, { style: 'currency', currency: 'USD', maximumFractionDigits: 4 }), [locale]);

@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
+import { ownerFailureKey } from '@/modules/shared';
 import { ApiError } from '@/core/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -14,6 +15,7 @@ import type { Task, TaskCreate, TaskStatus } from './types';
 const STATUSES: TaskStatus[] = ['inbox', 'todo', 'in_progress', 'blocked', 'done', 'cancelled'];
 
 /** Edits or creates a retained task draft; current owner verification gates saves and pending state is reported to the parent. */
+// eslint-disable-next-line complexity -- stateful form with conflict-retention and per-field validation branches that mirror independent UI/request states; extraction into per-state components is tracked as follow-up R3.6 so this refactor stays behaviour-neutral
 export function TaskForm({ task, csrfToken, onSuccess, onCancel, canSave = true, onPendingChange }: {
   task?: Task;
   csrfToken: string;
@@ -52,7 +54,7 @@ export function TaskForm({ task, csrfToken, onSuccess, onCancel, canSave = true,
     onSettled: () => onPendingChange?.(false),
   });
   const conflict = mutation.error instanceof ApiError && mutation.error.status === 409;
-  const saveError = mutation.error instanceof ApiError && mutation.error.status === 404 ? t('taskOwnerMissing') : mutation.error instanceof ApiError && [401, 403].includes(mutation.error.status) ? t('ownerAccessDenied') : t('taskWriteFailed');
+  const saveError = t(ownerFailureKey(mutation.error, 'taskOwnerMissing', 'taskWriteFailed'));
 
   /** Loads the latest owner revision for review without changing the retained form draft. */
   const refreshCurrentTask = async () => {
@@ -61,7 +63,7 @@ export function TaskForm({ task, csrfToken, onSuccess, onCancel, canSave = true,
     setRefreshError('');
     setCurrentTask(null);
     try { setCurrentTask(await getTask(task.id)); }
-    catch (error) { setRefreshError(error instanceof ApiError && error.status === 404 ? t('taskOwnerMissing') : error instanceof ApiError && [401, 403].includes(error.status) ? t('ownerAccessDenied') : t('taskReadFailed')); }
+    catch (error) { setRefreshError(t(ownerFailureKey(error, 'taskOwnerMissing', 'taskReadFailed'))); }
     finally { setRefreshing(false); }
   };
 

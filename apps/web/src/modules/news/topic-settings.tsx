@@ -27,6 +27,17 @@ function parseKeywords(value: string): string[] {
   return [...new Set(value.split(',').map((item) => item.trim().replace(/\s+/g, ' ')).filter(Boolean))];
 }
 
+/** True when the draft cannot be saved: blank name, importance outside 0..10 or non-numeric, keyword or entity bounds exceeded. */
+function isDraftInvalid(draft: TopicDraft, keywordsInBounds: boolean): boolean {
+  const weight = Number(draft.weight);
+  return !draft.name.trim() || weight < 0 || weight > 10 || !Number.isFinite(weight) || !keywordsInBounds || draft.entityIds.length > 100;
+}
+
+/** The generic save-failed message is hidden while a 409 conflict panel is showing for the edited topic. */
+function showGenericSaveError(error: unknown, conflictTopic: Topic | null): boolean {
+  return !conflictTopic || !(error instanceof ApiError && error.status === 409);
+}
+
 /**
  * Edit owner topics through bounded cursor pages and public APIs, retaining drafts during server revision review.
  * Writes require trusted CSRF and the expected server revision; pending page/mutation/reload operations are guarded.
@@ -34,7 +45,106 @@ function parseKeywords(value: string): string[] {
  * Deletion is confirmed and tombstones the profile, removing it from current tracked interests.
  * @param csrfToken Trusted authenticated-session token required for every mutation.
  */
-export function TopicSettings({ csrfToken }: { csrfToken: string }) {
+export function TopicSettings(props: { csrfToken: string }) {
+  const s0 = useTopicSettingsState(props);
+  const { editing } = s0;
+
+  const s1 = useTopicMutations(s0);
+
+  const s2 = useTopicActions(s1);
+
+  const vm: TopicSettingsVm = s2;
+  return (
+    <section className="flex flex-col gap-5" aria-labelledby="topic-settings-title">
+<TopicSettingsHeader vm={vm} />
+<TopicListPanel vm={vm} />
+
+      {editing !== undefined && (
+<TopicEditForm vm={vm} />
+      )}
+
+<DeleteTopicDialog vm={vm} />
+    </section>
+  );
+}
+
+type TopicSettingsVm = ReturnType<typeof useTopicActions>;
+
+/** Section heading and description. */
+function TopicSettingsHeader({ vm }: { vm: TopicSettingsVm }) {
+  const { t } = vm;
+  return (
+      <header>
+        <h2 id="topic-settings-title" className="text-lg font-semibold">{t('title')}</h2>
+        <p className="text-sm text-muted-foreground">{t('description')}</p>
+      </header>
+  );
+}
+
+/** Add button, loading/error/empty states, topic rows and pagination. */
+function TopicListPanel({ vm }: { vm: TopicSettingsVm }) {
+  const { t, topicsQuery, setDeleteTarget, activeMutation, topics, totalTopics, isPending, beginEdit } = vm;
+  return (
+<>
+      <div className="flex justify-end"><Button type="button" onClick={() => beginEdit(null)} disabled={isPending}>{t('add')}</Button></div>
+      {topicsQuery.isLoading ? <p role="status" className="text-sm text-muted-foreground">{t('loading')}</p> : null}
+      {topicsQuery.error && !topicsQuery.data ? <p role="alert" className="text-sm text-destructive">{t('loadFailed')}</p> : null}
+      {topics.length > 0 && <p className="text-xs text-muted-foreground">{t('totalCount', { loaded: topics.length, total: totalTopics })}</p>}
+      {!topicsQuery.isLoading && !topicsQuery.error && topics.length === 0 ? <p className="text-sm text-muted-foreground">{t('empty')}</p> : null}
+      <ul className="flex flex-col gap-2">
+        {topics.map((topic) => (
+          <li key={topic.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-3">
+            <div className="flex min-w-0 items-start gap-3">
+              <Checkbox checked={topic.is_active} disabled={activeMutation.isPending} aria-label={t('activeFor', { name: topic.name })} onCheckedChange={() => activeMutation.mutate(topic)} />
+              <div className="min-w-0"><p className="font-medium">{topic.name}</p><p className="text-xs text-muted-foreground">{t('importanceValue', { value: topic.weight })}</p>{topic.description && <p className="text-sm text-muted-foreground">{topic.description}</p>}<p className="text-xs text-muted-foreground">{topic.keywords.join(', ')}</p></div>
+            </div>
+            <div className="flex gap-2"><Button type="button" variant="outline" onClick={() => beginEdit(topic)} disabled={isPending}>{t('edit')}</Button><Button type="button" variant="ghost" onClick={() => setDeleteTarget(topic)} disabled={isPending}>{t('delete')}</Button></div>
+          </li>
+        ))}
+      </ul>
+      {topicsQuery.isFetchNextPageError && <p role="alert" className="text-sm text-destructive">{t('loadMoreFailed')}</p>}
+      {topicsQuery.hasNextPage && <div className="flex justify-center"><Button type="button" variant="outline" onClick={() => void topicsQuery.fetchNextPage()} disabled={topicsQuery.isFetchingNextPage}>{topicsQuery.isFetchingNextPage ? t('loadingMore') : topicsQuery.isFetchNextPageError ? t('retryLoadMore') : t('loadMore')}</Button></div>}
+      {activeMutation.error && <p role="alert" className="text-sm text-destructive">{activeMutation.error instanceof ApiError && activeMutation.error.status === 409 ? t('conflict') : t('saveFailed')}</p>}
+</>
+  );
+}
+
+/** Create/edit form with entity picker, conflict review and save errors. */
+function TopicEditForm({ vm }: { vm: TopicSettingsVm }) {
+  const { t, editing, setEditing, draft, setDraft, conflictTopic, conflictCurrent, conflictReviewed, saveMutation, isPending, keywordsInBounds } = vm;
+  return (
+        <form className="flex flex-col gap-4 rounded-lg border border-border p-4" onSubmit={(event) => { event.preventDefault(); if (!isPending) saveMutation.mutate(); }}>
+          <h3 className="font-medium">{editing ? t('editTitle') : t('createTitle')}</h3>
+          <div className="grid gap-2"><Label htmlFor="topic-name">{t('name')}</Label><Input id="topic-name" maxLength={200} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} required /></div>
+          <div className="grid gap-2"><Label htmlFor="topic-description">{t('descriptionField')}</Label><Input id="topic-description" maxLength={2000} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></div>
+          <div className="grid gap-2"><Label htmlFor="topic-keywords">{t('keywords')}</Label><Input id="topic-keywords" value={draft.keywords} onChange={(event) => setDraft({ ...draft, keywords: event.target.value })} aria-describedby="topic-keyword-hint" /><p id="topic-keyword-hint" className="text-xs text-muted-foreground">{t('keywordBounds')}</p>{!keywordsInBounds && <p role="alert" className="text-sm text-destructive">{t('keywordBoundsError')}</p>}</div>
+          <div className="grid gap-2"><Label htmlFor="topic-importance">{t('importance')}</Label><Input id="topic-importance" type="number" min="0" max="10" step="0.1" value={draft.weight} onChange={(event) => setDraft({ ...draft, weight: event.target.value })} required /><p className="text-xs text-muted-foreground">{t('importanceHint')}</p></div>
+          <label className="flex items-center gap-2 text-sm"><Checkbox checked={draft.isActive} onCheckedChange={(checked) => setDraft({ ...draft, isActive: checked === true })} />{t('active')}</label>
+      <TopicEntityPicker vm={vm} />
+          {saveMutation.error && conflictTopic && <ConflictPanel vm={vm} />}
+          {saveMutation.error && showGenericSaveError(saveMutation.error, conflictTopic) && <p role="alert" className="text-sm text-destructive">{t('saveFailed')}</p>}
+          <div className="flex justify-end gap-2"><Button type="button" variant="outline" disabled={isPending} onClick={() => setEditing(undefined)}>{t('cancel')}</Button><Button type="submit" disabled={isPending || isDraftInvalid(draft, keywordsInBounds) || (!!conflictTopic && (!conflictCurrent || !conflictReviewed))}>{saveMutation.isPending ? t('saving') : t('save')}</Button></div>
+        </form>
+  );
+}
+
+/** Confirmation dialog that deletes the selected topic. */
+function DeleteTopicDialog({ vm }: { vm: TopicSettingsVm }) {
+  const { t, deleteTarget, setDeleteTarget, deleteMutation } = vm;
+  return (
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open && !deleteMutation.isPending) { setDeleteTarget(null); deleteMutation.reset(); } }}>
+        <AlertDialogContent onEscapeKeyDown={(event) => { if (deleteMutation.isPending) event.preventDefault(); }}>
+          <AlertDialogHeader><AlertDialogTitle>{t('deleteTitle')}</AlertDialogTitle><AlertDialogDescription>{t('deleteDescription', { name: deleteTarget?.name ?? '' })}</AlertDialogDescription></AlertDialogHeader>
+          {deleteMutation.error && <p role="alert" className="text-sm text-destructive">{deleteMutation.error instanceof ApiError && deleteMutation.error.status === 409 ? t('conflict') : t('deleteFailed')}</p>}
+          <AlertDialogFooter><AlertDialogCancel disabled={deleteMutation.isPending}>{t('cancel')}</AlertDialogCancel><Button variant="destructive" disabled={!deleteTarget || deleteMutation.isPending} onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget)}>{deleteMutation.isPending ? t('deleting') : t('confirmDelete')}</Button></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+  );
+}
+
+/** Declares draft, conflict-review state and the paged topic and entity-option queries. */
+function useTopicSettingsState(props: { csrfToken: string }) {
+  const { csrfToken } = props;
   const t = useTranslations('topics');
   const [editing, setEditing] = useState<Topic | null | undefined>(undefined);
   const [draft, setDraft] = useState<TopicDraft>(makeDraft(null));
@@ -54,6 +164,12 @@ export function TopicSettings({ csrfToken }: { csrfToken: string }) {
   });
   const entitiesQuery = useQuery({ queryKey: ['topic-entity-options', entityQuery], queryFn: () => searchTopicEntities(entityQuery) });
 
+  return { t, queryClient, topicsQuery, entitiesQuery, editing, setEditing, draft, setDraft, deleteTarget, setDeleteTarget, entityQuery, setEntityQuery, conflictTopic, setConflictTopic, conflictCurrent, setConflictCurrent, conflictReviewed, setConflictReviewed, conflictReloadPending, setConflictReloadPending, conflictReloadFailed, setConflictReloadFailed, csrfToken };
+}
+
+/** Declares the save (with 409 conflict capture), activate and delete mutations; every write sends the CSRF token. */
+function useTopicMutations(p: ReturnType<typeof useTopicSettingsState>) {
+  const { queryClient, editing, setEditing, draft, setDeleteTarget, setConflictTopic, setConflictCurrent, setConflictReviewed, setConflictReloadFailed, csrfToken } = p;
   const saveMutation = useMutation({
     mutationFn: async () => {
       const common = {
@@ -89,6 +205,12 @@ export function TopicSettings({ csrfToken }: { csrfToken: string }) {
     onSuccess: () => { setDeleteTarget(null); void queryClient.invalidateQueries({ queryKey: ['topics'] }); },
   });
 
+  return { ...p, saveMutation, activeMutation, deleteMutation };
+}
+
+/** Edit/conflict-reload/entity-toggle handlers plus the flattened topic list, pending flag and keyword bound checks. */
+function useTopicActions(p: ReturnType<typeof useTopicMutations>) {
+  const { topicsQuery, editing, setEditing, draft, setDraft, conflictTopic, setConflictTopic, conflictCurrent, setConflictCurrent, setConflictReviewed, conflictReloadPending, setConflictReloadPending, setConflictReloadFailed, saveMutation, activeMutation, deleteMutation } = p;
   /**
    * Opens a fresh isolated draft so cancelling never writes query data.
    * @param topic Selected profile or null to create a new one.
@@ -149,59 +271,23 @@ export function TopicSettings({ csrfToken }: { csrfToken: string }) {
   const keywordValues = parseKeywords(draft.keywords);
   const keywordsInBounds = keywordValues.length <= 50 && keywordValues.every((item) => item.length <= 100);
 
-  return (
-    <section className="flex flex-col gap-5" aria-labelledby="topic-settings-title">
-      <header>
-        <h2 id="topic-settings-title" className="text-lg font-semibold">{t('title')}</h2>
-        <p className="text-sm text-muted-foreground">{t('description')}</p>
-      </header>
-      <div className="flex justify-end"><Button type="button" onClick={() => beginEdit(null)} disabled={isPending}>{t('add')}</Button></div>
-      {topicsQuery.isLoading ? <p role="status" className="text-sm text-muted-foreground">{t('loading')}</p> : null}
-      {topicsQuery.error && !topicsQuery.data ? <p role="alert" className="text-sm text-destructive">{t('loadFailed')}</p> : null}
-      {topics.length > 0 && <p className="text-xs text-muted-foreground">{t('totalCount', { loaded: topics.length, total: totalTopics })}</p>}
-      {!topicsQuery.isLoading && !topicsQuery.error && topics.length === 0 ? <p className="text-sm text-muted-foreground">{t('empty')}</p> : null}
-      <ul className="flex flex-col gap-2">
-        {topics.map((topic) => (
-          <li key={topic.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-3">
-            <div className="flex min-w-0 items-start gap-3">
-              <Checkbox checked={topic.is_active} disabled={activeMutation.isPending} aria-label={t('activeFor', { name: topic.name })} onCheckedChange={() => activeMutation.mutate(topic)} />
-              <div className="min-w-0"><p className="font-medium">{topic.name}</p><p className="text-xs text-muted-foreground">{t('importanceValue', { value: topic.weight })}</p>{topic.description && <p className="text-sm text-muted-foreground">{topic.description}</p>}<p className="text-xs text-muted-foreground">{topic.keywords.join(', ')}</p></div>
-            </div>
-            <div className="flex gap-2"><Button type="button" variant="outline" onClick={() => beginEdit(topic)} disabled={isPending}>{t('edit')}</Button><Button type="button" variant="ghost" onClick={() => setDeleteTarget(topic)} disabled={isPending}>{t('delete')}</Button></div>
-          </li>
-        ))}
-      </ul>
-      {topicsQuery.isFetchNextPageError && <p role="alert" className="text-sm text-destructive">{t('loadMoreFailed')}</p>}
-      {topicsQuery.hasNextPage && <div className="flex justify-center"><Button type="button" variant="outline" onClick={() => void topicsQuery.fetchNextPage()} disabled={topicsQuery.isFetchingNextPage}>{topicsQuery.isFetchingNextPage ? t('loadingMore') : topicsQuery.isFetchNextPageError ? t('retryLoadMore') : t('loadMore')}</Button></div>}
-      {activeMutation.error && <p role="alert" className="text-sm text-destructive">{activeMutation.error instanceof ApiError && activeMutation.error.status === 409 ? t('conflict') : t('saveFailed')}</p>}
+  return { ...p, reloadConflict, topics, totalTopics, isPending, keywordValues, keywordsInBounds, beginEdit, continueAfterConflictReview, toggleEntity };
+}
 
-      {editing !== undefined && (
-        <form className="flex flex-col gap-4 rounded-lg border border-border p-4" onSubmit={(event) => { event.preventDefault(); if (!isPending) saveMutation.mutate(); }}>
-          <h3 className="font-medium">{editing ? t('editTitle') : t('createTitle')}</h3>
-          <div className="grid gap-2"><Label htmlFor="topic-name">{t('name')}</Label><Input id="topic-name" maxLength={200} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} required /></div>
-          <div className="grid gap-2"><Label htmlFor="topic-description">{t('descriptionField')}</Label><Input id="topic-description" maxLength={2000} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></div>
-          <div className="grid gap-2"><Label htmlFor="topic-keywords">{t('keywords')}</Label><Input id="topic-keywords" value={draft.keywords} onChange={(event) => setDraft({ ...draft, keywords: event.target.value })} aria-describedby="topic-keyword-hint" /><p id="topic-keyword-hint" className="text-xs text-muted-foreground">{t('keywordBounds')}</p>{!keywordsInBounds && <p role="alert" className="text-sm text-destructive">{t('keywordBoundsError')}</p>}</div>
-          <div className="grid gap-2"><Label htmlFor="topic-importance">{t('importance')}</Label><Input id="topic-importance" type="number" min="0" max="10" step="0.1" value={draft.weight} onChange={(event) => setDraft({ ...draft, weight: event.target.value })} required /><p className="text-xs text-muted-foreground">{t('importanceHint')}</p></div>
-          <label className="flex items-center gap-2 text-sm"><Checkbox checked={draft.isActive} onCheckedChange={(checked) => setDraft({ ...draft, isActive: checked === true })} />{t('active')}</label>
-          <div className="grid gap-2"><Label htmlFor="topic-entity-search">{t('entities')}</Label><Input id="topic-entity-search" value={entityQuery} onChange={(event) => setEntityQuery(event.target.value)} placeholder={t('searchEntities')} /><p className="text-xs text-muted-foreground">{t('entityBounds', { count: draft.entityIds.length })}</p>
-            {draft.entityIds.length > 0 && <ul className="flex flex-wrap gap-2">{draft.entityIds.map((id) => <li key={id} className="flex items-center gap-1 rounded bg-secondary px-2 py-1 text-xs">{entitiesQuery.data?.items.find((item) => item.id === id)?.name ?? id}<Button type="button" variant="ghost" size="sm" aria-label={t('removeEntity', { id })} onClick={() => toggleEntity(id, false)}>×</Button></li>)}</ul>}
-            <div className="max-h-40 overflow-y-auto rounded-md border p-2">{entitiesQuery.data?.items.map((entity) => <label key={entity.id} className="flex items-center gap-2 py-1 text-sm"><Checkbox checked={draft.entityIds.includes(entity.id)} disabled={!draft.entityIds.includes(entity.id) && draft.entityIds.length >= 100} onCheckedChange={(checked) => toggleEntity(entity.id, checked === true)} /><span>{entity.name ?? entity.id} <span className="text-muted-foreground">({entity.type})</span></span></label>)}{entitiesQuery.isLoading && <p role="status">{t('loading')}</p>}{entitiesQuery.error && <p role="alert">{t('entitiesFailed')}</p>}</div>
-          </div>
-          {saveMutation.error && conflictTopic && <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-            <p>{t('conflict')}</p>
-            <p>{t('draftRetained')}</p>
-            {!conflictCurrent && <Button type="button" variant="outline" size="sm" onClick={() => void reloadConflict()} disabled={isPending}>{conflictReloadPending ? t('loadingCurrent') : t('reloadReview')}</Button>}
-            {conflictReloadFailed && <p role="alert">{t('reloadFailed')}</p>}
-            {conflictCurrent && <div className="mt-3 rounded border border-border bg-background p-3">
+/** Side-by-side current server version and retained draft, with the explicit continue-after-review control. */
+function ConflictComparison({ vm, current }: { vm: TopicSettingsVm; current: Topic }) {
+  const { t, draft, conflictReviewed, continueAfterConflictReview, isPending } = vm;
+  return (
+    <div className="mt-3 rounded border border-border bg-background p-3">
               <div className="grid gap-4 sm:grid-cols-2">
-                <div><h4 className="font-medium">{t('currentServerVersion', { revision: conflictCurrent.revision })}</h4>
+                <div><h4 className="font-medium">{t('currentServerVersion', { revision: current.revision })}</h4>
                   <dl className="mt-2 grid gap-1 text-xs">
-                    <div><dt className="font-medium">{t('name')}</dt><dd>{conflictCurrent.name}</dd></div>
-                    <div><dt className="font-medium">{t('descriptionField')}</dt><dd>{conflictCurrent.description || t('none')}</dd></div>
-                    <div><dt className="font-medium">{t('keywords')}</dt><dd>{conflictCurrent.keywords.join(', ') || t('none')}</dd></div>
-                    <div><dt className="font-medium">{t('importance')}</dt><dd>{conflictCurrent.weight}</dd></div>
-                    <div><dt className="font-medium">{t('entities')}</dt><dd>{conflictCurrent.entity_ids.join(', ') || t('none')}</dd></div>
-                    <div><dt className="font-medium">{t('active')}</dt><dd>{conflictCurrent.is_active ? t('yes') : t('no')}</dd></div>
+                    <div><dt className="font-medium">{t('name')}</dt><dd>{current.name}</dd></div>
+                    <div><dt className="font-medium">{t('descriptionField')}</dt><dd>{current.description || t('none')}</dd></div>
+                    <div><dt className="font-medium">{t('keywords')}</dt><dd>{current.keywords.join(', ') || t('none')}</dd></div>
+                    <div><dt className="font-medium">{t('importance')}</dt><dd>{current.weight}</dd></div>
+                    <div><dt className="font-medium">{t('entities')}</dt><dd>{current.entity_ids.join(', ') || t('none')}</dd></div>
+                    <div><dt className="font-medium">{t('active')}</dt><dd>{current.is_active ? t('yes') : t('no')}</dd></div>
                   </dl>
                 </div>
                 <div><h4 className="font-medium">{t('draftVersion')}</h4>
@@ -217,21 +303,32 @@ export function TopicSettings({ csrfToken }: { csrfToken: string }) {
               </div>
               {!conflictReviewed
                 ? <Button type="button" className="mt-3" onClick={continueAfterConflictReview} disabled={isPending}>{t('continueAfterReview')}</Button>
-                : <p className="mt-3" role="status">{t('reviewComplete', { revision: conflictCurrent.revision })}</p>}
-            </div>}
-          </div>}
-          {saveMutation.error && (!conflictTopic || !(saveMutation.error instanceof ApiError && saveMutation.error.status === 409)) && <p role="alert" className="text-sm text-destructive">{t('saveFailed')}</p>}
-          <div className="flex justify-end gap-2"><Button type="button" variant="outline" disabled={isPending} onClick={() => setEditing(undefined)}>{t('cancel')}</Button><Button type="submit" disabled={isPending || !draft.name.trim() || Number(draft.weight) < 0 || Number(draft.weight) > 10 || !Number.isFinite(Number(draft.weight)) || !keywordsInBounds || draft.entityIds.length > 100 || (!!conflictTopic && (!conflictCurrent || !conflictReviewed))}>{saveMutation.isPending ? t('saving') : t('save')}</Button></div>
-        </form>
-      )}
+                : <p className="mt-3" role="status">{t('reviewComplete', { revision: current.revision })}</p>}
+            </div>
+  );
+}
 
-      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open && !deleteMutation.isPending) { setDeleteTarget(null); deleteMutation.reset(); } }}>
-        <AlertDialogContent onEscapeKeyDown={(event) => { if (deleteMutation.isPending) event.preventDefault(); }}>
-          <AlertDialogHeader><AlertDialogTitle>{t('deleteTitle')}</AlertDialogTitle><AlertDialogDescription>{t('deleteDescription', { name: deleteTarget?.name ?? '' })}</AlertDialogDescription></AlertDialogHeader>
-          {deleteMutation.error && <p role="alert" className="text-sm text-destructive">{deleteMutation.error instanceof ApiError && deleteMutation.error.status === 409 ? t('conflict') : t('deleteFailed')}</p>}
-          <AlertDialogFooter><AlertDialogCancel disabled={deleteMutation.isPending}>{t('cancel')}</AlertDialogCancel><Button variant="destructive" disabled={!deleteTarget || deleteMutation.isPending} onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget)}>{deleteMutation.isPending ? t('deleting') : t('confirmDelete')}</Button></AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </section>
+/** 409 conflict notice with reload-for-review and the version comparison. */
+function ConflictPanel({ vm }: { vm: TopicSettingsVm }) {
+  const { t, conflictCurrent, isPending, conflictReloadPending, conflictReloadFailed, reloadConflict } = vm;
+  return (
+    <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+            <p>{t('conflict')}</p>
+            <p>{t('draftRetained')}</p>
+            {!conflictCurrent && <Button type="button" variant="outline" size="sm" onClick={() => void reloadConflict()} disabled={isPending}>{conflictReloadPending ? t('loadingCurrent') : t('reloadReview')}</Button>}
+            {conflictReloadFailed && <p role="alert">{t('reloadFailed')}</p>}
+            {conflictCurrent && <ConflictComparison vm={vm} current={conflictCurrent} />}
+          </div>
+  );
+}
+
+/** Entity search, selected entity chips and bounded checkbox list. */
+function TopicEntityPicker({ vm }: { vm: TopicSettingsVm }) {
+  const { t, draft, entityQuery, setEntityQuery, entitiesQuery, toggleEntity } = vm;
+  return (
+          <div className="grid gap-2"><Label htmlFor="topic-entity-search">{t('entities')}</Label><Input id="topic-entity-search" value={entityQuery} onChange={(event) => setEntityQuery(event.target.value)} placeholder={t('searchEntities')} /><p className="text-xs text-muted-foreground">{t('entityBounds', { count: draft.entityIds.length })}</p>
+            {draft.entityIds.length > 0 && <ul className="flex flex-wrap gap-2">{draft.entityIds.map((id) => <li key={id} className="flex items-center gap-1 rounded bg-secondary px-2 py-1 text-xs">{entitiesQuery.data?.items.find((item) => item.id === id)?.name ?? id}<Button type="button" variant="ghost" size="sm" aria-label={t('removeEntity', { id })} onClick={() => toggleEntity(id, false)}>×</Button></li>)}</ul>}
+            <div className="max-h-40 overflow-y-auto rounded-md border p-2">{entitiesQuery.data?.items.map((entity) => <label key={entity.id} className="flex items-center gap-2 py-1 text-sm"><Checkbox checked={draft.entityIds.includes(entity.id)} disabled={!draft.entityIds.includes(entity.id) && draft.entityIds.length >= 100} onCheckedChange={(checked) => toggleEntity(entity.id, checked === true)} /><span>{entity.name ?? entity.id} <span className="text-muted-foreground">({entity.type})</span></span></label>)}{entitiesQuery.isLoading && <p role="status">{t('loading')}</p>}{entitiesQuery.error && <p role="alert">{t('entitiesFailed')}</p>}</div>
+          </div>
   );
 }

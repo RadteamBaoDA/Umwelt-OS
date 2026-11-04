@@ -11,7 +11,7 @@ import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { AgentList } from './agent-list';
 import { cancelAgentRun, getAgentProfiles, getAgentRun, listAgentRuns, updateAgentProfile, type AgentProfile, type AgentRun } from './api';
 import { AgentRunDetail } from './run-detail';
-import { useResetOnChange } from '@/modules/shared/use-reset-on-change';
+import { useResetOnChange } from '@/modules/shared';
 
 interface SourceItem { id: string; name: string; status: string }
 interface SourcePage { items: SourceItem[]; next_cursor: string | null }
@@ -25,8 +25,138 @@ const runStatusKeys: Record<string, 'agentRunQueued' | 'agentRunRunning' | 'agen
   succeeded: 'agentRunSucceeded', failed: 'agentRunFailed', cancelled: 'agentRunCancelled',
 };
 
+/** Maps server-reported unavailability reasons to their message keys. */
+const reasonKeys: Record<string, string> = {
+  bounded_supervisor_handoff_unavailable: 'agentSupervisorHandoffUnavailable',
+  phase_8_personal_tools_unavailable: 'agentPersonalToolsUnavailable',
+  project_owner_tools_unavailable: 'agentProjectToolsUnavailable',
+  news_owner_tools_unavailable: 'agentNewsToolsUnavailable',
+  phase_8_planning_tools_unavailable: 'agentPlanningToolsUnavailable',
+  phase_10_automation_unavailable: 'agentAutomationGate',
+  bounded_browser_unavailable: 'agentBrowserUnavailable',
+  model_role_unconfigured: 'agentModelUnavailable',
+  model_tool_capability_unverified: 'agentModelToolUnverified',
+  registered_read_tools_unavailable: 'agentRegisteredToolsUnavailable',
+};
+
 /** Manage owner-authored profiles, exact current tools/source grants, and a bounded recent run window. */
 export function AgentSettingsWorkspace() {
+  const s0 = useAgentSettingsState();
+  const { t, profiles, sources, selectedId, setSelectedId, draft } = s0;
+
+  if (profiles.isLoading || sources.isLoading) return <p className="text-muted-foreground" role="status">{t('agentLoading')}</p>;
+  if (profiles.isError || sources.isError || !draft) return <p className="error" role="alert">{t('agentLoadFailed')}</p>;
+  const s1 = buildAgentSettingsView(s0, draft);
+
+  const vm: AgentSettingsWorkspaceVm = s1;
+  return (
+    <section className="space-y-5 border-t border-border pt-6">
+<AgentSettingsHeader vm={vm} />
+      <AgentList profiles={profiles.data ?? []} selectedId={selectedId} onSelect={setSelectedId} />
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(18rem,.8fr)]">
+<AgentProfileForm vm={vm} />
+<AgentRunHistory vm={vm} />
+      </div>
+    </section>
+  );
+}
+
+type AgentSettingsWorkspaceVm = ReturnType<typeof buildAgentSettingsView>;
+
+/** Section heading and description. */
+function AgentSettingsHeader({ vm }: { vm: AgentSettingsWorkspaceVm }) {
+  const { t } = vm;
+  return (
+      <header className="space-y-1">
+        <h2 className="text-lg font-semibold text-foreground">{t('agentsTitle')}</h2>
+        <p className="text-sm text-muted-foreground">{t('agentsDescription')}</p>
+      </header>
+  );
+}
+
+/** Profile editor: enabled flag, prompt, tool and source grants, status and actions. */
+function AgentProfileForm({ vm }: { vm: AgentSettingsWorkspaceVm }) {
+  const { t, sources, selected, save, draft, setDraft, availableSources, selectedTools, selectedSources } = vm;
+  return (
+        <form className="space-y-4 rounded-lg border border-border bg-surface p-4" onSubmit={(event) => { event.preventDefault(); if (draft) save.mutate(draft); }}>
+          <h3 className="font-semibold text-foreground">{t(profileTitleKeys[draft.id] ?? 'agentProfileKnowledge')}</h3>
+          {draft.unavailable_reasons.map((reason) => <p key={reason} className="text-sm text-muted-foreground">{t((reasonKeys[reason] ?? 'agentUnavailableReason') as 'agentUnavailableReason', { reason })}</p>)}
+          <label className="flex items-center gap-2 text-sm text-foreground">
+            <Checkbox checked={draft.enabled} onCheckedChange={(checked) => setDraft({ ...draft, enabled: checked === true })} />
+            {t('agentEnabled')}
+          </label>
+          <label className="block space-y-1 text-sm">
+            <span className="font-medium text-foreground">{t('agentPrompt')}</span>
+            <Textarea maxLength={8000} value={draft.prompt} onChange={(event) => setDraft({ ...draft, prompt: event.target.value })} />
+            <span className="text-xs text-muted-foreground">{draft.prompt.length} / 8000</span>
+          </label>
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium text-foreground">{t('agentTools')}</legend>
+            {draft.available_tools.map((tool) => (
+              <label key={`${tool.name}:${tool.version}:${tool.fingerprint}`} className="flex items-start gap-2 text-sm text-foreground">
+                <Checkbox checked={selectedTools.has(tool.name)} onCheckedChange={(checked) => {
+                  const next = new Map(draft.allowed_tools.map((item) => [item.name, item]));
+                  if (checked === true) next.set(tool.name, tool); else next.delete(tool.name);
+                  setDraft({ ...draft, allowed_tools: [...next.values()] });
+                }} />
+                <span>{tool.name} <span className="text-xs text-muted-foreground">v{tool.version}</span></span>
+              </label>
+            ))}
+          </fieldset>
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium text-foreground">{t('agentSources')}</legend>
+            {availableSources.length ? availableSources.map((source) => (
+              <label key={source.id} className="flex items-center gap-2 text-sm text-foreground">
+                <Checkbox checked={selectedSources.has(source.id)} disabled={(source.status !== 'active' || selectedSources.size >= 32) && !selectedSources.has(source.id)} onCheckedChange={(checked) => {
+                  const next = new Set(draft.source_ids);
+                  if (checked === true && next.size < 32) next.add(source.id); else if (checked !== true) next.delete(source.id);
+                  setDraft({ ...draft, source_ids: [...next] });
+                }} />
+                <span>{source.name}{source.status === 'unavailable' ? ` · ${t('agentSourceUnavailable')}` : ''}</span>
+              </label>
+            )) : <p className="text-sm text-muted-foreground">{t('agentNoSources')}</p>}
+            {sources.hasNextPage && <Button type="button" variant="outline" disabled={sources.isFetchingNextPage} onClick={() => { void sources.fetchNextPage(); }}>{sources.isFetchingNextPage ? t('agentSourcesLoadingMore') : t('agentSourcesLoadMore')}</Button>}
+            {sources.isFetchNextPageError && <p role="alert" className="text-sm text-destructive">{t('agentLoadFailed')}</p>}
+          </fieldset>
+          {save.error && <p role="alert" className="text-sm text-destructive">{t('agentSaveFailed')}</p>}
+          {save.isSuccess && <p role="status" className="text-sm text-muted-foreground">{t('agentSaved')}</p>}
+          <div className="flex gap-2">
+            <Button type="submit" disabled={save.isPending || JSON.stringify(draft) === JSON.stringify(selected)}>{t('agentSave')}</Button>
+            <Button type="button" variant="outline" disabled={save.isPending} onClick={() => setDraft(selected ? { ...selected, allowed_tools: [...selected.allowed_tools], source_ids: [...selected.source_ids] } : null)}>{t('agentCancel')}</Button>
+          </div>
+        </form>
+  );
+}
+
+/** Bounded recent run list with the selected run detail. */
+function AgentRunHistory({ vm }: { vm: AgentSettingsWorkspaceVm }) {
+  const { t, format, runs, runDetail, cancel, selectedRunId, setSelectedRunId } = vm;
+  return (
+        <aside className="space-y-3 rounded-lg border border-border bg-surface p-4">
+          <h3 className="font-semibold text-foreground">{t('agentHistory')}</h3>
+          <p className="text-xs text-muted-foreground">{t('agentHistoryBound')}</p>
+          {runs.data?.items.length ? <p className="text-xs text-muted-foreground">{t('agentRunSummary', {
+            total: runs.data.items.length,
+            succeeded: runs.data.items.filter((run) => run.status === 'succeeded').length,
+            failed: runs.data.items.filter((run) => run.status === 'failed').length,
+          })}</p> : null}
+          {runs.isError && <p role="alert" className="text-sm text-destructive">{t('agentLoadFailed')}</p>}
+          {!runs.isError && !runs.data?.items.length && <p className="text-sm text-muted-foreground">{t('agentNoRuns')}</p>}
+          <div className="space-y-2">
+            {runs.data?.items.map((run) => (
+              <Button key={run.id} type="button" className={`secondary h-auto w-full justify-start rounded-md p-2 text-left text-sm font-normal ${selectedRunId === run.id ? 'border-primary bg-secondary' : 'border-border hover:bg-secondary'}`} aria-pressed={selectedRunId === run.id} onClick={() => setSelectedRunId(run.id)}>
+                <span className="font-medium text-foreground">{t(runStatusKeys[run.status] ?? 'agentRunFailed')}</span>
+                <span className="ml-2 text-xs text-muted-foreground">{format.dateTime(new Date(run.created_at), { dateStyle: 'short', timeStyle: 'short' })}</span>
+              </Button>
+            ))}
+          </div>
+          {runDetail.data && <AgentRunDetail run={runDetail.data} onCancel={() => cancel.mutate(runDetail.data!)} cancelling={cancel.isPending} />}
+        </aside>
+  );
+}
+
+/** Loads profiles, sources, runs and the selected run, keeps an editable draft of the selected profile and declares the save and cancel mutations. */
+function useAgentSettingsState() {
   const t = useTranslations('aiSettings');
   const format = useFormatter();
   const { csrfToken } = useWorkspaceSession();
@@ -78,8 +208,12 @@ export function AgentSettingsWorkspace() {
     },
   });
 
-  if (profiles.isLoading || sources.isLoading) return <p className="text-muted-foreground" role="status">{t('agentLoading')}</p>;
-  if (profiles.isError || sources.isError || !draft) return <p className="error" role="alert">{t('agentLoadFailed')}</p>;
+  return { t, format, client, profiles, sources, selected, runs, runDetail, save, cancel, selectedId, setSelectedId, draft, setDraft, selectedRunId, setSelectedRunId, csrfToken };
+}
+
+/** Derives the selectable sources (including already-granted ones) and the selected tool and source sets from the draft. */
+function buildAgentSettingsView(p: ReturnType<typeof useAgentSettingsState>, draft: NonNullable<ReturnType<typeof useAgentSettingsState>['draft']>) {
+  const { sources } = p;
   const listedSources = (sources.data?.pages ?? []).flatMap((page) => page.items);
   const sourceOptions = new Map(listedSources.map((item) => [item.id, item]));
   for (const id of draft.source_ids) {
@@ -88,97 +222,8 @@ export function AgentSettingsWorkspace() {
   const availableSources = [...sourceOptions.values()].filter((item) =>
     item.status === 'active' || draft.source_ids.includes(item.id),
   );
-  const reasonKeys: Record<string, string> = {
-    bounded_supervisor_handoff_unavailable: 'agentSupervisorHandoffUnavailable',
-    phase_8_personal_tools_unavailable: 'agentPersonalToolsUnavailable',
-    project_owner_tools_unavailable: 'agentProjectToolsUnavailable',
-    news_owner_tools_unavailable: 'agentNewsToolsUnavailable',
-    phase_8_planning_tools_unavailable: 'agentPlanningToolsUnavailable',
-    phase_10_automation_unavailable: 'agentAutomationGate',
-    bounded_browser_unavailable: 'agentBrowserUnavailable',
-    model_role_unconfigured: 'agentModelUnavailable',
-    model_tool_capability_unverified: 'agentModelToolUnverified',
-    registered_read_tools_unavailable: 'agentRegisteredToolsUnavailable',
-  };
   const selectedTools = new Set(draft.allowed_tools.map((item) => item.name));
   const selectedSources = new Set(draft.source_ids);
 
-  return (
-    <section className="space-y-5 border-t border-border pt-6">
-      <header className="space-y-1">
-        <h2 className="text-lg font-semibold text-foreground">{t('agentsTitle')}</h2>
-        <p className="text-sm text-muted-foreground">{t('agentsDescription')}</p>
-      </header>
-      <AgentList profiles={profiles.data ?? []} selectedId={selectedId} onSelect={setSelectedId} />
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(18rem,.8fr)]">
-        <form className="space-y-4 rounded-lg border border-border bg-surface p-4" onSubmit={(event) => { event.preventDefault(); if (draft) save.mutate(draft); }}>
-          <h3 className="font-semibold text-foreground">{t(profileTitleKeys[draft.id] ?? 'agentProfileKnowledge')}</h3>
-          {draft.unavailable_reasons.map((reason) => <p key={reason} className="text-sm text-muted-foreground">{t((reasonKeys[reason] ?? 'agentUnavailableReason') as 'agentUnavailableReason', { reason })}</p>)}
-          <label className="flex items-center gap-2 text-sm text-foreground">
-            <Checkbox checked={draft.enabled} onCheckedChange={(checked) => setDraft({ ...draft, enabled: checked === true })} />
-            {t('agentEnabled')}
-          </label>
-          <label className="block space-y-1 text-sm">
-            <span className="font-medium text-foreground">{t('agentPrompt')}</span>
-            <Textarea maxLength={8000} value={draft.prompt} onChange={(event) => setDraft({ ...draft, prompt: event.target.value })} />
-            <span className="text-xs text-muted-foreground">{draft.prompt.length} / 8000</span>
-          </label>
-          <fieldset className="space-y-2">
-            <legend className="text-sm font-medium text-foreground">{t('agentTools')}</legend>
-            {draft.available_tools.map((tool) => (
-              <label key={`${tool.name}:${tool.version}:${tool.fingerprint}`} className="flex items-start gap-2 text-sm text-foreground">
-                <Checkbox checked={selectedTools.has(tool.name)} onCheckedChange={(checked) => {
-                  const next = new Map(draft.allowed_tools.map((item) => [item.name, item]));
-                  if (checked === true) next.set(tool.name, tool); else next.delete(tool.name);
-                  setDraft({ ...draft, allowed_tools: [...next.values()] });
-                }} />
-                <span>{tool.name} <span className="text-xs text-muted-foreground">v{tool.version}</span></span>
-              </label>
-            ))}
-          </fieldset>
-          <fieldset className="space-y-2">
-            <legend className="text-sm font-medium text-foreground">{t('agentSources')}</legend>
-            {availableSources.length ? availableSources.map((source) => (
-              <label key={source.id} className="flex items-center gap-2 text-sm text-foreground">
-                <Checkbox checked={selectedSources.has(source.id)} disabled={(source.status !== 'active' || selectedSources.size >= 32) && !selectedSources.has(source.id)} onCheckedChange={(checked) => {
-                  const next = new Set(draft.source_ids);
-                  if (checked === true && next.size < 32) next.add(source.id); else if (checked !== true) next.delete(source.id);
-                  setDraft({ ...draft, source_ids: [...next] });
-                }} />
-                <span>{source.name}{source.status === 'unavailable' ? ` · ${t('agentSourceUnavailable')}` : ''}</span>
-              </label>
-            )) : <p className="text-sm text-muted-foreground">{t('agentNoSources')}</p>}
-            {sources.hasNextPage && <Button type="button" variant="outline" disabled={sources.isFetchingNextPage} onClick={() => { void sources.fetchNextPage(); }}>{sources.isFetchingNextPage ? t('agentSourcesLoadingMore') : t('agentSourcesLoadMore')}</Button>}
-            {sources.isFetchNextPageError && <p role="alert" className="text-sm text-destructive">{t('agentLoadFailed')}</p>}
-          </fieldset>
-          {save.error && <p role="alert" className="text-sm text-destructive">{t('agentSaveFailed')}</p>}
-          {save.isSuccess && <p role="status" className="text-sm text-muted-foreground">{t('agentSaved')}</p>}
-          <div className="flex gap-2">
-            <Button type="submit" disabled={save.isPending || JSON.stringify(draft) === JSON.stringify(selected)}>{t('agentSave')}</Button>
-            <Button type="button" variant="outline" disabled={save.isPending} onClick={() => setDraft(selected ? { ...selected, allowed_tools: [...selected.allowed_tools], source_ids: [...selected.source_ids] } : null)}>{t('agentCancel')}</Button>
-          </div>
-        </form>
-        <aside className="space-y-3 rounded-lg border border-border bg-surface p-4">
-          <h3 className="font-semibold text-foreground">{t('agentHistory')}</h3>
-          <p className="text-xs text-muted-foreground">{t('agentHistoryBound')}</p>
-          {runs.data?.items.length ? <p className="text-xs text-muted-foreground">{t('agentRunSummary', {
-            total: runs.data.items.length,
-            succeeded: runs.data.items.filter((run) => run.status === 'succeeded').length,
-            failed: runs.data.items.filter((run) => run.status === 'failed').length,
-          })}</p> : null}
-          {runs.isError && <p role="alert" className="text-sm text-destructive">{t('agentLoadFailed')}</p>}
-          {!runs.isError && !runs.data?.items.length && <p className="text-sm text-muted-foreground">{t('agentNoRuns')}</p>}
-          <div className="space-y-2">
-            {runs.data?.items.map((run) => (
-              <Button key={run.id} type="button" className={`secondary h-auto w-full justify-start rounded-md p-2 text-left text-sm font-normal ${selectedRunId === run.id ? 'border-primary bg-secondary' : 'border-border hover:bg-secondary'}`} aria-pressed={selectedRunId === run.id} onClick={() => setSelectedRunId(run.id)}>
-                <span className="font-medium text-foreground">{t(runStatusKeys[run.status] ?? 'agentRunFailed')}</span>
-                <span className="ml-2 text-xs text-muted-foreground">{format.dateTime(new Date(run.created_at), { dateStyle: 'short', timeStyle: 'short' })}</span>
-              </Button>
-            ))}
-          </div>
-          {runDetail.data && <AgentRunDetail run={runDetail.data} onCancel={() => cancel.mutate(runDetail.data!)} cancelling={cancel.isPending} />}
-        </aside>
-      </div>
-    </section>
-  );
+  return { ...p, draft, listedSources, sourceOptions, availableSources, selectedTools, selectedSources };
 }

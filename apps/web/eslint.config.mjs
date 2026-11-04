@@ -21,7 +21,7 @@ const qualityRules = {
       {
         patterns: [
           {
-            regex: '^@/modules/[^/]+/.+',
+            regex: '^@/modules/[^/]+/(?!server$).+',
             message: 'Import another module through its public index (`@/modules/<name>`), not a deep path.',
           },
         ],

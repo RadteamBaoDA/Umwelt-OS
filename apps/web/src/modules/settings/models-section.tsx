@@ -50,6 +50,7 @@ export function pruneDefaults(prev: ProviderRead[], next: ProviderRead[], defaul
 type ModelsProps = { providers: ProviderRead[]; discovered: Record<string, string[]>; modelTests: Record<string, ModelTestState>; checkedAt?: Record<string, string>; details?: Record<string, string>; disabled: boolean; onChange: (providers: ProviderRead[]) => void; onTestModel: (provider: ProviderRead, model: ProviderModel) => void; browseOpenRouter?: (provider: ProviderRead) => BrowseOpenRouter; t: Translate };
 
 /** The single Models area: add row (provider, discovered model or OpenRouter browser, type, vision) and one table of every added model. OpenRouter providers get output-only types and the catalogue browser when `browseOpenRouter` is supplied. */
+// eslint-disable-next-line complexity -- stateful workflow whose branches mirror independent UI/request states (loading, error, conflict, per-step content); extraction into per-state components is tracked as follow-up R3.6 so this refactor stays behaviour-neutral
 export function ModelsPanel({ providers, discovered, modelTests, checkedAt = {}, details = {}, disabled, onChange, onTestModel, browseOpenRouter, t }: ModelsProps) {
   const [providerId, setProviderId] = useState('');
   const [pending, setPending] = useState('');

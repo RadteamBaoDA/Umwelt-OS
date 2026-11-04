@@ -10,10 +10,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ApiError } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useWorkspace } from '@/core/workspace-context';
-import { fetchTranslationSettings, saveTranslationSettings } from '@/modules/translations/public-api';
+import { fetchTranslationSettings, saveTranslationSettings } from '@/modules/translations';
 import type { TranslationLanguage } from '@/modules/translations';
 
 /** Workspace translation toggle and target language. Owners save with expected_revision; members see it read only. */
+// eslint-disable-next-line complexity -- JSX presentational markup: the score counts every conditional-render branch (&&, ?:, ??) of this panel; it holds no branching business logic, so splitting would only relocate the same render conditions
 export function TranslationSettings() {
   const t = useTranslations('translations');
   const { csrfToken } = useWorkspaceSession();

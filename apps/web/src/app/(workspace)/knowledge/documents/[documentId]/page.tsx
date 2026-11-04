@@ -1,4 +1,4 @@
-import { DocumentDetail } from '@/modules/knowledge/document-detail';
+import { DocumentDetail } from '@/modules/knowledge';
 
 /** Renders document detail or an operation-ID-only deletion receipt inside the shared shell. */
 export default async function DocumentPage({ params, searchParams }: { params: Promise<{ documentId: string }>; searchParams: Promise<{ version?: string; versionId?: string; chunkId?: string; deletionOperationId?: string }> }) {

@@ -10,9 +10,9 @@ import { Input } from '@/components/ui/input';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { AgentSettingsWorkspace } from '@/modules/agents/agent-settings';
+import { AgentSettingsWorkspace } from '@/modules/agents';
 import { CheckboxField, SettingsActions, SettingsPageHeader, SettingsSection } from './settings-layout';
-import { AutomationSettings } from '@/modules/automations/rule-list';
+import { AutomationSettings } from '@/modules/automations';
 import type { BrowseOpenRouter, OpenRouterBrowseResult } from './openrouter-model-browser';
 import { carryMaxTokens, mappingFor, ModelDefaults, ModelsPanel, pruneDefaults, type DefaultSlot, type Defaults, type Mapping, type ReasoningEffort } from './models-section';
 import { modelTestKey, parseDraftSnapshot, ProviderEditor, testRoleByType, type ModelTestState, type ProviderModel, type ProviderRead, type ProviderSecret } from './provider-editor';
@@ -53,8 +53,153 @@ const llmRoles: readonly DefaultSlot[] = ['chat', 'brief', 'background', 'vision
 const draftStorageKey = 'bbd:settings:ai:draft:v2';
 const defaultPrivacy: Privacy = { allow_remote_reasoning: false, allow_remote_embeddings: false, allow_remote_web_search: false, allow_widget_remote_media: false, reasoning_destinations: [], embedding_destinations: [], web_search_destinations: [] };
 
+/**
+ * Classifies the embedding default for the Save gate: idle when no model is chosen or its dimensions are known,
+ * checking while the dimensions probe runs, error when the probe finished without supplying them.
+ */
+function embeddingProbeStatus(mapping: Mapping | null | undefined, probePending: boolean): 'idle' | 'checking' | 'error' {
+  if (!mapping?.model || mapping.dimensions != null) return 'idle';
+  return probePending ? 'checking' : 'error';
+}
+
+/** Returns a copy of `record` without `key` (never mutates the state object React holds). */
+function withoutKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  const next = { ...record };
+  delete next[key];
+  return next;
+}
+
 /** Loads AI, provider, privacy and specialist settings while guarding unsaved gateway drafts. */
 export function AISettingsWorkspace() {
+  const s0 = useAiSettingsState();
+  const { t, query, saved, dirty, save } = s0;
+  const s1 = useAiDraftPersistence(s0);
+
+  const s2 = useAiModelActions(s1);
+
+  if (query.isPending) return <section className="rounded-lg border bg-card p-6 skeleton" aria-label={t('loading')} />;
+  if (query.isError || !saved) return <section className="rounded-lg border bg-card p-6"><h1>{t('unavailable')}</h1><p className="error">{describeError(query.error, t, 'loadFailed')}</p><Button variant="outline" onClick={() => query.refetch()}>{t('retry')}</Button></section>;
+  const s3 = buildAiSettingsView(s2, saved);
+  const { advancedClass, summaryClass } = s3;
+  const vm: AISettingsWorkspaceVm = s3;
+  return <div className="flex flex-col gap-5">
+    <SettingsPageHeader eyebrow={t('eyebrow')} title={t('title')} description={t('description')} status={<p className="m-0 text-sm text-muted-foreground" role="status">{save.isPending ? t('saving') : dirty ? t('unsaved') : save.isSuccess ? t('saved') : ''}</p>} />
+    <form className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); save.mutate(saved); }}>
+<ProvidersAndModelsSections vm={vm} />
+<EmbeddingsDetails vm={vm} />
+<BudgetsDetails vm={vm} />
+<PrivacyDetails vm={vm} />
+<AiSettingsFooter vm={vm} />
+    </form>
+    <details className={advancedClass}><summary className={summaryClass}>{t('agentsAutomations')}</summary><div className="pb-5"><AgentSettingsWorkspace /><AutomationSettings /></div></details>
+  </div>;
+}
+
+/** Capability result chip that always pairs an icon with text so state never depends on color. */
+function CapabilityChip({ status, label, t }: { status: string | null; label: string; t: (key: 'capPassed' | 'capFailed' | 'capUnsupported' | 'capNotChecked') => string }) {
+  const [Icon, key] = status === 'supported' ? [Check, 'capPassed' as const] : status === 'failed' ? [AlertCircle, 'capFailed' as const] : status === 'unsupported' ? [X, 'capUnsupported' as const] : [Minus, 'capNotChecked' as const];
+  return <span className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs"><Icon className="size-3" aria-hidden="true" />{label ? `${label}: ` : ''}{t(key)}</span>;
+}
+
+/** Localized failure text plus the HTTP status and server detail when the API supplied them. */
+function describeError(error: unknown, t: (key: never) => string, fallback: string): string {
+  /** Resolves a user-facing message for an API error, falling back to the given key. */
+  const base = (t as (key: string) => string)(apiFailureKey(error) ?? fallback);
+  if (!(error instanceof ApiError)) return base;
+  const detail = error.message && error.message !== String(error.status) ? `: ${error.message}` : '';
+  return `${base} (HTTP ${error.status}${detail})`;
+}
+
+type AISettingsWorkspaceVm = ReturnType<typeof buildAiSettingsView>;
+
+/** Providers section and, once a provider exists, the models and defaults section. */
+function ProvidersAndModelsSections({ vm }: { vm: AISettingsWorkspaceVm }) {
+  const { t, shownTests, checkedAt, saved, save, secrets, setSecrets, discoveringId, discoverError, discovered, testDetails, savedIds, discover, browseOpenRouter, testModel, set, defaults, embeddingStatus, embeddingDimsChanged, changeModels, pickDefault, pickMaxTokens, pickEffort } = vm;
+  return (
+<>
+      <SettingsSection title={t('providersSection')} description={t('providersHelp')}>
+        <ProviderEditor providers={saved.providers} savedIds={savedIds} secrets={secrets} disabled={save.isPending} discoveringId={discoveringId} discoverError={discoverError} discovered={discovered} t={t as never}
+          onChange={(providers) => set({ providers })} onSecret={(id, secret) => setSecrets({ ...secrets, [id]: secret })} onDiscover={(provider) => discover.mutate(provider)} />
+      </SettingsSection>
+      {/* Models need a provider; with none, only the Providers block (and its empty state) is shown. */}
+      {saved.providers.length > 0 && (
+        <SettingsSection title={t('modelsSection')} description={t('modelsHelp')}>
+          <ModelsPanel providers={saved.providers} discovered={discovered} modelTests={shownTests} checkedAt={checkedAt} details={testDetails} disabled={save.isPending} onChange={changeModels} onTestModel={(provider, model) => testModel.mutate({ provider, model })} browseOpenRouter={browseOpenRouter} t={t as never} />
+          <ModelDefaults providers={saved.providers} defaults={defaults} disabled={save.isPending} embeddingStatus={embeddingStatus} onPick={pickDefault} onEffort={pickEffort} onMaxTokens={pickMaxTokens} t={t as never} />
+          {embeddingDimsChanged && <p className="error m-0 text-sm" role="status">{t('dimensionsChangedWarning')}</p>}
+        </SettingsSection>
+      )}
+</>
+  );
+}
+
+/** Embeddings capability explanation and probe button. */
+function EmbeddingsDetails({ vm }: { vm: AISettingsWorkspaceVm }) {
+  const { t, dirty, save, embeddingProbe, capabilityStatus, embeddingMapping, embeddingsAvailable, capabilityLabel, advancedClass, summaryClass } = vm;
+  return (
+      <details className={advancedClass}><summary className={summaryClass}>{t('embeddingsTitle')}</summary>
+        <div className="flex flex-col gap-3 pb-5">
+          <p className="text-muted-foreground m-0">{t('embeddingsPurpose')}</p>
+          <p className="text-muted-foreground m-0 text-sm">{t('embeddingsWhyShown')}</p>
+          {embeddingMapping?.model && <p className="m-0">{t('embeddingsModel', { model: embeddingMapping.model, dimensions: embeddingMapping.dimensions ?? 0 })}</p>}
+          {embeddingsAvailable
+            ? <><div className="flex flex-wrap items-center gap-2"><CapabilityChip status={capabilityStatus('embedding', 'embeddings')} label={capabilityLabel('embeddings')} t={t} />
+              {/* The role probe reads the saved mapping, so unsaved edits must be saved first. */}
+              <Button type="button" variant="outline" disabled={save.isPending || dirty || embeddingProbe.isPending} onClick={() => embeddingProbe.mutate()}>{t('modelTest')}</Button></div>
+              <p className="text-muted-foreground m-0 text-sm">{t('embeddingsTestHelp')}</p></>
+            : <><p className="label m-0">{t('embeddingsUnavailable')}</p><p className="text-muted-foreground m-0">{t(embeddingMapping?.model ? 'embeddingsReasonConsent' : 'embeddingsReasonNoModel')}</p><p className="text-muted-foreground m-0">{t('embeddingsLexicalFallback')}</p></>}</div>
+      </details>
+  );
+}
+
+/** Request timeout budget section. */
+function BudgetsDetails({ vm }: { vm: AISettingsWorkspaceVm }) {
+  const { t, saved, save, set, advancedClass, summaryClass } = vm;
+  return (
+      <details className={advancedClass}><summary className={summaryClass}>{t('budgetsTitle')}</summary>
+        <div className="flex flex-col gap-3 pb-5">
+          <label className="field max-w-xs"><span className="label">{t('timeout')}</span><Input type="number" disabled={save.isPending} min={5} max={180} value={saved.request_timeout_seconds} onChange={(event) => set({ request_timeout_seconds: Number(event.target.value) })} /></label>
+          <p className="text-muted-foreground m-0">{t('budgetsUnavailable')}</p>
+        </div>
+      </details>
+  );
+}
+
+/** Remote-consent checkboxes and history storage link. */
+function PrivacyDetails({ vm }: { vm: AISettingsWorkspaceVm }) {
+  const { t, saved, save, setPrivacy, advancedClass, summaryClass } = vm;
+  return (
+      <details className={advancedClass}><summary className={summaryClass}>{t('privacyTitle')}</summary>
+        <div className="flex flex-col gap-3 pb-5">
+          <p className="text-muted-foreground m-0">{t('endpointGrantHelp')}</p>
+          <p className="text-muted-foreground m-0">{t('localProvidersNote')}</p>
+          <CheckboxField><Checkbox id="ai-remote-reasoning" disabled={save.isPending} checked={saved.privacy.allow_remote_reasoning} onCheckedChange={(checked) => setPrivacy({ allow_remote_reasoning: checked === true })} /><label htmlFor="ai-remote-reasoning">{t('allowRemoteReasoning')}</label></CheckboxField>
+          <CheckboxField><Checkbox id="ai-remote-embeddings" disabled={save.isPending} checked={saved.privacy.allow_remote_embeddings} onCheckedChange={(checked) => setPrivacy({ allow_remote_embeddings: checked === true })} /><label htmlFor="ai-remote-embeddings">{t('allowRemoteEmbeddings')}</label></CheckboxField>
+          <CheckboxField><Checkbox id="ai-widget-media" disabled={save.isPending} checked={saved.privacy.allow_widget_remote_media} onCheckedChange={(checked) => setPrivacy({ allow_widget_remote_media: checked === true })} /><label htmlFor="ai-widget-media">{t('allowWidgetRemoteMedia')}</label></CheckboxField>
+          <p className="text-muted-foreground m-0">{t('historyStorage')} <a href="/settings/memory">{t('memoryPrivacyLink')}</a></p>
+        </div>
+      </details>
+  );
+}
+
+/** Restored-draft notice, save status and the cancel/save actions. */
+function AiSettingsFooter({ vm }: { vm: AISettingsWorkspaceVm }) {
+  const { t, dirty, save, restoredSecret, cancelChanges, embeddingStatus } = vm;
+  return (
+<>
+      {restoredSecret && <p className="error m-0" role="status">{t('restoredDraft')}</p>}
+      {save.error && <p className="error m-0" role="alert">{describeError(save.error, t, 'saveFailed')}</p>}
+      {/* Success stays visible next to the (now disabled) button until the next edit makes the form dirty again. */}
+      {save.isSuccess && !dirty && <p className="m-0 text-sm text-accent" role="status">{t('saveSuccess')}</p>}
+      <SettingsActions>
+        <Button type="button" variant="outline" disabled={save.isPending || !dirty} onClick={cancelChanges}>{t('cancelChanges')}</Button><Button type="submit" disabled={save.isPending || !dirty || embeddingStatus !== 'idle'}>{t('saveButton')}</Button>
+      </SettingsActions>
+</>
+  );
+}
+
+/** Declares the AI settings queries, local draft/secret state, stored test results and the save mutation. */
+function useAiSettingsState() {
   const t = useTranslations('aiSettings');
   const { csrfToken } = useWorkspaceSession();
   const client = useQueryClient();
@@ -80,6 +225,13 @@ export function AISettingsWorkspace() {
   const secretList = Object.values(secrets);
   const dirty = Boolean(query.data && (JSON.stringify(draft ?? query.data) !== JSON.stringify(query.data) || secretList.some((item) => item.key || item.action !== 'unchanged')));
   const save = useMutation({ mutationFn: (value: AISettings) => apiRequest<AISettings>('/api/v1/settings/ai', { method: 'PUT', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ expected_revision: value.configuration_revision, providers: value.providers.map((item) => ({ id: item.id, kind: item.kind, label: item.label, base_url: item.base_url || null, models: item.models ?? [], credential_action: secrets[item.id]?.action ?? 'unchanged', api_key: secrets[item.id]?.key || null })), web_search_provider: value.web_search_provider, web_search_endpoint: value.web_search_endpoint || null, web_search_credential_action: 'unchanged', web_search_api_key: null, defaults: value.defaults ?? {}, privacy: value.privacy, request_timeout_seconds: value.request_timeout_seconds }) }), onSuccess: (value) => { setDraft(null); setSecrets({}); client.setQueryData(['ai-settings'], value); } });
+
+  return { t, client, query, storedTests, storedByKey, shownTests, checkedAt, allowNavigation, base, saved, secretList, dirty, save, draft, setDraft, secrets, setSecrets, discoveringId, setDiscoveringId, discoverError, setDiscoverError, discovered, setDiscovered, modelTests, setModelTests, testDetails, setTestDetails, restoredDraft, setRestoredDraft, restoredSecret, setRestoredSecret, csrfToken };
+}
+
+/** Restores a same-revision draft once during render, persists the dirty draft to sessionStorage and guards navigation while unsaved changes remain. */
+function useAiDraftPersistence(p: ReturnType<typeof useAiSettingsState>) {
+  const { t, query, allowNavigation, dirty, save, draft, setDraft, secrets, setSecrets, restoredDraft, setRestoredDraft, setRestoredSecret } = p;
   if (query.data && !restoredDraft) {
     // Restores a same-revision draft once, during render, before the persistence effect runs.
     setRestoredDraft(true);
@@ -102,7 +254,7 @@ export function AISettingsWorkspace() {
           revision: query.data.configuration_revision,
           draft,
           providerActions: Object.fromEntries(Object.entries(secrets).filter(([, item]) => item.action !== 'unchanged').map(([id, item]) => [id, item.action])),
-          hadSecret: secretList.some((item) => item.key),
+          hadSecret: Object.values(secrets).some((item) => item.key),
         }));
       } catch {
         // The in-memory draft remains available for this mount.
@@ -166,7 +318,14 @@ export function AISettingsWorkspace() {
       navigationApi?.removeEventListener('navigate', guardNavigation);
       document.removeEventListener('click', guardLinks, true);
     };
-  }, [dirty, save.isPending, t]);
+  }, [dirty, save.isPending, t, allowNavigation]);
+
+  return p;
+}
+
+/** Declares discovery, embedding/draft probes and per-model test mutations with their result bookkeeping. */
+function useAiModelActions(p: ReturnType<typeof useAiDraftPersistence>) {
+  const { t, client, query, setDraft, secrets, setDiscoveringId, setDiscoverError, setDiscovered, setModelTests, setTestDetails, csrfToken } = p;
   const savedIds = (query.data?.providers ?? []).map((item) => item.id);
   const discover = useMutation({
     mutationFn: (provider: ProviderRead) => apiRequest<{ model_ids: string[] }>('/api/v1/settings/ai/discover', { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ provider_id: savedIds.includes(provider.id) ? provider.id : undefined, base_url: provider.base_url, kind: provider.kind, api_key: secrets[provider.id]?.key ?? '' }) }),
@@ -223,7 +382,7 @@ export function AISettingsWorkspace() {
   /** Records (or clears, when empty) the server-reported reason of a model's latest test. */
   function setDetail(provider: ProviderRead, model: ProviderModel, detail: string | undefined) {
     const key = modelTestKey(provider.id, model.id);
-    setTestDetails((current) => { const { [key]: _old, ...rest } = current; return detail ? { ...rest, [key]: detail } : rest; });
+    setTestDetails((current) => { const rest = withoutKey(current, key); return detail ? { ...rest, [key]: detail } : rest; });
   }
   /** Shows a finished test at once, then stores it (with server time) and lets the stored row take over; keeps the local value if saving fails. */
   function finishTest(provider: ProviderRead, model: ProviderModel, result: ModelTestState) {
@@ -231,11 +390,16 @@ export function AISettingsWorkspace() {
     setModelTests((current) => ({ ...current, [key]: result }));
     apiRequest('/api/v1/settings/models/test-results', { method: 'PUT', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ provider_id: provider.id, model: model.id, result }) })
       .then(() => client.invalidateQueries({ queryKey: ['model-test-results'] }))
-      .then(() => setModelTests((current) => { const { [key]: _done, ...rest } = current; return rest; }))
+      .then(() => setModelTests((current) => withoutKey(current, key)))
       .catch(() => undefined);
   }
-  if (query.isPending) return <section className="rounded-lg border bg-card p-6 skeleton" aria-label={t('loading')} />;
-  if (query.isError || !saved) return <section className="rounded-lg border bg-card p-6"><h1>{t('unavailable')}</h1><p className="error">{describeError(query.error, t, 'loadFailed')}</p><Button variant="outline" onClick={() => query.refetch()}>{t('retry')}</Button></section>;
+
+  return { ...p, savedIds, discover, browseOpenRouter, embeddingProbe, draftProbe, testModel, setDetail, finishTest };
+}
+
+/** Derives the loaded-settings view model: draft patchers, defaults pickers, capability status and embedding state. */
+function buildAiSettingsView(p: ReturnType<typeof useAiModelActions>, saved: NonNullable<ReturnType<typeof useAiModelActions>['saved']>) {
+  const { t, query, save, setDraft, setSecrets, setDiscoverError, setRestoredSecret, discover, draftProbe } = p;
   /** Applies a partial update to the AI settings draft. */
   const set = (patch: Partial<AISettings>) => setDraft({ ...saved, ...patch });
   /** Merges a partial privacy update into the current AI settings draft. */
@@ -270,7 +434,7 @@ export function AISettingsWorkspace() {
   /** Localizes a capability kind name. */
   const capabilityLabel = (kind: string) => t(`capability${kind[0].toUpperCase()}${kind.slice(1)}` as 'capabilityChat');
   // The backend requires embedding dimensions, so a chosen embedding model blocks Save until its probe supplies them.
-  const embeddingStatus: 'idle' | 'checking' | 'error' = !embeddingMapping?.model || embeddingMapping.dimensions != null ? 'idle' : draftProbe.isPending ? 'checking' : 'error';
+  const embeddingStatus = embeddingProbeStatus(embeddingMapping, draftProbe.isPending);
   const savedDimensions = query.data?.defaults?.embedding?.dimensions ?? null;
   const embeddingDimsChanged = embeddingMapping?.dimensions != null && savedDimensions != null && embeddingMapping.dimensions !== savedDimensions;
   /** Applies a models-list edit: fills empty defaults for new Chat models and clears defaults whose model was removed. */
@@ -291,72 +455,6 @@ export function AISettingsWorkspace() {
   const pickEffort = (effort: ReasoningEffort) => { if (defaults.chat) set({ defaults: { ...defaults, chat: { ...defaults.chat, reasoning_effort: effort } } }); };
   const advancedClass = 'border-t border-border';
   const summaryClass = 'flex min-h-9 pointer-coarse:min-h-11 cursor-pointer items-center font-semibold';
-  return <div className="flex flex-col gap-5">
-    <SettingsPageHeader eyebrow={t('eyebrow')} title={t('title')} description={t('description')} status={<p className="m-0 text-sm text-muted-foreground" role="status">{save.isPending ? t('saving') : dirty ? t('unsaved') : save.isSuccess ? t('saved') : ''}</p>} />
-    <form className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); save.mutate(saved); }}>
-      <SettingsSection title={t('providersSection')} description={t('providersHelp')}>
-        <ProviderEditor providers={saved.providers} savedIds={savedIds} secrets={secrets} disabled={save.isPending} discoveringId={discoveringId} discoverError={discoverError} discovered={discovered} t={t as never}
-          onChange={(providers) => set({ providers })} onSecret={(id, secret) => setSecrets({ ...secrets, [id]: secret })} onDiscover={(provider) => discover.mutate(provider)} />
-      </SettingsSection>
-      {/* Models need a provider; with none, only the Providers block (and its empty state) is shown. */}
-      {saved.providers.length > 0 && (
-        <SettingsSection title={t('modelsSection')} description={t('modelsHelp')}>
-          <ModelsPanel providers={saved.providers} discovered={discovered} modelTests={shownTests} checkedAt={checkedAt} details={testDetails} disabled={save.isPending} onChange={changeModels} onTestModel={(provider, model) => testModel.mutate({ provider, model })} browseOpenRouter={browseOpenRouter} t={t as never} />
-          <ModelDefaults providers={saved.providers} defaults={defaults} disabled={save.isPending} embeddingStatus={embeddingStatus} onPick={pickDefault} onEffort={pickEffort} onMaxTokens={pickMaxTokens} t={t as never} />
-          {embeddingDimsChanged && <p className="error m-0 text-sm" role="status">{t('dimensionsChangedWarning')}</p>}
-        </SettingsSection>
-      )}
-      <details className={advancedClass}><summary className={summaryClass}>{t('embeddingsTitle')}</summary>
-        <div className="flex flex-col gap-3 pb-5">
-          <p className="text-muted-foreground m-0">{t('embeddingsPurpose')}</p>
-          <p className="text-muted-foreground m-0 text-sm">{t('embeddingsWhyShown')}</p>
-          {embeddingMapping?.model && <p className="m-0">{t('embeddingsModel', { model: embeddingMapping.model, dimensions: embeddingMapping.dimensions ?? 0 })}</p>}
-          {embeddingsAvailable
-            ? <><div className="flex flex-wrap items-center gap-2"><CapabilityChip status={capabilityStatus('embedding', 'embeddings')} label={capabilityLabel('embeddings')} t={t} />
-              {/* The role probe reads the saved mapping, so unsaved edits must be saved first. */}
-              <Button type="button" variant="outline" disabled={save.isPending || dirty || embeddingProbe.isPending} onClick={() => embeddingProbe.mutate()}>{t('modelTest')}</Button></div>
-              <p className="text-muted-foreground m-0 text-sm">{t('embeddingsTestHelp')}</p></>
-            : <><p className="label m-0">{t('embeddingsUnavailable')}</p><p className="text-muted-foreground m-0">{t(embeddingMapping?.model ? 'embeddingsReasonConsent' : 'embeddingsReasonNoModel')}</p><p className="text-muted-foreground m-0">{t('embeddingsLexicalFallback')}</p></>}</div>
-      </details>
-      <details className={advancedClass}><summary className={summaryClass}>{t('budgetsTitle')}</summary>
-        <div className="flex flex-col gap-3 pb-5">
-          <label className="field max-w-xs"><span className="label">{t('timeout')}</span><Input type="number" disabled={save.isPending} min={5} max={180} value={saved.request_timeout_seconds} onChange={(event) => set({ request_timeout_seconds: Number(event.target.value) })} /></label>
-          <p className="text-muted-foreground m-0">{t('budgetsUnavailable')}</p>
-        </div>
-      </details>
-      <details className={advancedClass}><summary className={summaryClass}>{t('privacyTitle')}</summary>
-        <div className="flex flex-col gap-3 pb-5">
-          <p className="text-muted-foreground m-0">{t('endpointGrantHelp')}</p>
-          <p className="text-muted-foreground m-0">{t('localProvidersNote')}</p>
-          <CheckboxField><Checkbox id="ai-remote-reasoning" disabled={save.isPending} checked={saved.privacy.allow_remote_reasoning} onCheckedChange={(checked) => setPrivacy({ allow_remote_reasoning: checked === true })} /><label htmlFor="ai-remote-reasoning">{t('allowRemoteReasoning')}</label></CheckboxField>
-          <CheckboxField><Checkbox id="ai-remote-embeddings" disabled={save.isPending} checked={saved.privacy.allow_remote_embeddings} onCheckedChange={(checked) => setPrivacy({ allow_remote_embeddings: checked === true })} /><label htmlFor="ai-remote-embeddings">{t('allowRemoteEmbeddings')}</label></CheckboxField>
-          <CheckboxField><Checkbox id="ai-widget-media" disabled={save.isPending} checked={saved.privacy.allow_widget_remote_media} onCheckedChange={(checked) => setPrivacy({ allow_widget_remote_media: checked === true })} /><label htmlFor="ai-widget-media">{t('allowWidgetRemoteMedia')}</label></CheckboxField>
-          <p className="text-muted-foreground m-0">{t('historyStorage')} <a href="/settings/memory">{t('memoryPrivacyLink')}</a></p>
-        </div>
-      </details>
-      {restoredSecret && <p className="error m-0" role="status">{t('restoredDraft')}</p>}
-      {save.error && <p className="error m-0" role="alert">{describeError(save.error, t, 'saveFailed')}</p>}
-      {/* Success stays visible next to the (now disabled) button until the next edit makes the form dirty again. */}
-      {save.isSuccess && !dirty && <p className="m-0 text-sm text-accent" role="status">{t('saveSuccess')}</p>}
-      <SettingsActions>
-        <Button type="button" variant="outline" disabled={save.isPending || !dirty} onClick={cancelChanges}>{t('cancelChanges')}</Button><Button type="submit" disabled={save.isPending || !dirty || embeddingStatus !== 'idle'}>{t('saveButton')}</Button>
-      </SettingsActions>
-    </form>
-    <details className={advancedClass}><summary className={summaryClass}>{t('agentsAutomations')}</summary><div className="pb-5"><AgentSettingsWorkspace /><AutomationSettings /></div></details>
-  </div>;
-}
 
-/** Capability result chip that always pairs an icon with text so state never depends on color. */
-function CapabilityChip({ status, label, t }: { status: string | null; label: string; t: (key: 'capPassed' | 'capFailed' | 'capUnsupported' | 'capNotChecked') => string }) {
-  const [Icon, key] = status === 'supported' ? [Check, 'capPassed' as const] : status === 'failed' ? [AlertCircle, 'capFailed' as const] : status === 'unsupported' ? [X, 'capUnsupported' as const] : [Minus, 'capNotChecked' as const];
-  return <span className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs"><Icon className="size-3" aria-hidden="true" />{label ? `${label}: ` : ''}{t(key)}</span>;
-}
-
-/** Localized failure text plus the HTTP status and server detail when the API supplied them. */
-function describeError(error: unknown, t: (key: never) => string, fallback: string): string {
-  /** Resolves a user-facing message for an API error, falling back to the given key. */
-  const base = (t as (key: string) => string)(apiFailureKey(error) ?? fallback);
-  if (!(error instanceof ApiError)) return base;
-  const detail = error.message && error.message !== String(error.status) ? `: ${error.message}` : '';
-  return `${base} (HTTP ${error.status}${detail})`;
+  return { ...p, saved, set, setPrivacy, defaults, capabilityStatus, embeddingMapping, embeddingsAvailable, cancelChanges, capabilityLabel, embeddingStatus, savedDimensions, embeddingDimsChanged, changeModels, pickDefault, pickMaxTokens, pickEffort, advancedClass, summaryClass };
 }

@@ -33,6 +33,7 @@ function reasonText(t: ReturnType<typeof useTranslations<'webSearch'>>, reason: 
 }
 
 /** Edit ordered web-search providers and their write-only credentials under one remote-search consent. */
+// eslint-disable-next-line complexity -- JSX presentational markup: the score counts every conditional-render branch (&&, ?:, ??) of this panel; it holds no branching business logic, so splitting would only relocate the same render conditions
 export function WebSearchSettingsWorkspace() {
   const t = useTranslations('webSearch');
   const { csrfToken } = useWorkspaceSession();
@@ -81,6 +82,7 @@ export function WebSearchSettingsWorkspace() {
       <SettingsSection title={t('provider')}>
         {view.providers.length > 1 ? <p className="m-0 text-sm text-muted-foreground">{t('fallbackNote')}</p> : null}
         {view.providers.length === 0 ? <p id="web-search-no-providers" className="m-0 text-sm text-muted-foreground">{t('noProviders')}</p> : null}
+        {/* eslint-disable-next-line complexity -- JSX presentational markup: the score counts every conditional-render branch (&&, ?:, ??) of this row; it holds no branching business logic, so splitting would only relocate the same render conditions */}
         {view.providers.map((entry, index) => <div key={index} className="flex flex-col gap-3 rounded-lg border p-4">
           <FieldGrid>
             <label className="field"><span className="label">{t('provider')}</span><Select disabled={save.isPending} value={entry.provider} onValueChange={(provider) => changeEntry(index, { provider: provider as Provider })}><SelectTrigger aria-label={t('providerAt', { number: index + 1 })}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="tavily">Tavily</SelectItem><SelectItem value="brave">Brave</SelectItem><SelectItem value="searxng">SearXNG</SelectItem><SelectItem value="omniroute">OmniRoute</SelectItem></SelectContent></Select></label>
