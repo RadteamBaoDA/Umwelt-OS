@@ -11,7 +11,7 @@ from contextlib import AbstractAsyncContextManager, aclosing, asynccontextmanage
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
-from typing import Any, cast
+from typing import Any, Literal, Protocol, cast
 from urllib.parse import urlsplit
 
 import httpx
@@ -22,9 +22,8 @@ from redis.exceptions import RedisError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from core.config import Settings
-from core.model_gateway.cache import capability_key
 from core.model_gateway.policy import may_send
-from core.model_gateway.schemas import CapabilityResult, ModelMapping, RequestPolicy
+from core.model_gateway.schemas import ModelMapping, RequestPolicy
 from core.model_gateway.transport import EndpointNetworkPolicyError, approved_http_client, body_sent
 from core.telemetry import record_model_call
 from core.workspaces.schemas import InternalJobScope, Scope, WorkspaceContext
@@ -108,39 +107,8 @@ def _retryable_status(status: int) -> bool:
     return status in {408, 425, 429} or status >= 500
 
 
-_CHAT_EVIDENCE = ("chat", "streaming", "tools")  # any proves the model answers plain chat completions
 _THINK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL | re.IGNORECASE)
-
-
-async def structured_evidence(
-    redis: Redis, role: str, mapping: ModelMapping | None, *, gateway_identity: str, configuration_revision: int,
-    workspace_id: Any, actor_user_id: int,
-) -> CapabilityResult | None:
-    """Return the fresh verified result that lets ``ModelGateway.structured`` run for this role mapping.
-
-    Native ``structured`` evidence wins; otherwise chat-completion evidence qualifies, because ``structured``
-    then sends prompted JSON and the caller validates it. None when nothing current, matching and supported exists.
-    Workers fingerprint the returned result, so new evidence re-queues work they parked as unsupported.
-    """
-    if mapping is None:
-        return None
-    for capability in ("structured", *_CHAT_EVIDENCE):
-        raw = await redis.get(capability_key(role, mapping.model, mapping.version, capability, gateway_identity,
-                                             workspace_id=workspace_id, actor_user_id=actor_user_id))
-        if isinstance(raw, bytes):
-            raw = raw.decode("utf-8", errors="replace")
-        try:
-            result = CapabilityResult.model_validate_json(raw) if isinstance(raw, str) else None
-            fresh = result is not None and datetime.fromisoformat(result.expires_at) > datetime.now(UTC)
-        except (ValueError, TypeError):
-            continue
-        if (result is not None and fresh and result.result == "supported" and result.role == role
-                and result.capability == capability and result.gateway_identity == gateway_identity
-                and result.model == mapping.model and result.version == mapping.version
-                and result.configuration_revision == configuration_revision):
-            return result
-    return None
 
 
 def _json_instruction(schema: dict[str, Any]) -> dict[str, str]:
@@ -185,7 +153,7 @@ class ModelGatewayError(RuntimeError):
 class ModelGatewayUnavailable(ModelGatewayError):
     """Raised without contacting the upstream while its circuit breaker is open (or a long 429 Retry-After applies).
 
-    The message must differ from "Model capability is not supported", which the entity worker matches verbatim.
+    It is a transient condition, never a capability verdict, and is not recorded as evidence.
     """
 
     def __init__(self, retry_after: float) -> None:
@@ -204,6 +172,29 @@ class PrivacyPolicyDenied(ModelGatewayError):
 
 class CapabilityUnsupported(ModelGatewayError):
     """Raised when the gateway rejects a requested model capability."""
+
+
+class CapabilityEvidenceStore(Protocol):
+    """Persistent per-model capability evidence supplied by the composing module (core never imports modules).
+
+    Evidence is learned from real provider outcomes and is advisory: only a recorded ``unsupported`` for an
+    optional capability with a fallback (tools, structured) changes behavior. Implementations must key by
+    the model identity so a credential/endpoint/default change invalidates old evidence.
+    """
+
+    async def lookup(self, role: str, mapping: ModelMapping, capability: str) -> str | None:
+        """Return the current ``supported``/``unsupported``/``failed`` result for this model capability, or None."""
+        ...
+
+    async def record(self, role: str, mapping: ModelMapping, capability: str,
+                     result: Literal["supported", "unsupported", "failed"]) -> None:
+        """Persist the outcome of a real call; may raise, the gateway swallows and logs only the error type."""
+        ...
+
+
+# Words a provider uses when it rejects an optional request feature; an unrelated 400 (bad prompt, context
+# length) must not mark the model unsupported.
+_TOOL_REJECTION = re.compile(r"tool|function", re.IGNORECASE)
 
 
 # Obvious credential shapes that providers sometimes echo back in error text: "Bearer x", vendor
@@ -312,7 +303,11 @@ class ModelGateway:
     scope: Scope = field(kw_only=True)
     gateway_identity: str = field(kw_only=True)
     configuration_revision: int = field(kw_only=True)
+    # Namespace of capability evidence; defaults to gateway_identity (strict) when a caller has no split identity.
+    model_identity: str = field(default="", kw_only=True)
     before_send: Callable[[], Awaitable[None]] = field(kw_only=True, repr=False)
+    # Optional persistent capability evidence (see CapabilityEvidenceStore); None disables lookup and recording.
+    evidence: CapabilityEvidenceStore | None = field(default=None, kw_only=True, repr=False)
     approved_endpoint_cidrs: tuple[str, ...] = ()
     allow_public_endpoints: bool = False
 
@@ -334,6 +329,10 @@ class ModelGateway:
             raise ValueError("Gateway identity must be a nonsecret SHA256 digest")
         if type(self.configuration_revision) is not int or self.configuration_revision < 0:
             raise ValueError("Explicit configuration revision is required")
+        if not self.model_identity:
+            object.__setattr__(self, "model_identity", self.gateway_identity)
+        elif len(self.model_identity) != 64 or any(char not in "0123456789abcdef" for char in self.model_identity):
+            raise ValueError("Model identity must be a nonsecret SHA256 digest")
         object.__setattr__(self, "base_url", self.base_url.rstrip("/") if self.base_url else None)
 
     def _policy_matches(self, policy: RequestPolicy) -> bool:
@@ -344,25 +343,42 @@ class ModelGateway:
                 and policy.gateway_identity == self.gateway_identity
                 and policy.configuration_revision == self.configuration_revision)
 
-    def _capability_key(self, role: str, mapping: ModelMapping, capability: str) -> str:
-        """Resolve only this immutable client's capability namespace, never a global role."""
-        actor = self.scope.actor_user_id if isinstance(self.scope, InternalJobScope) else self.scope.user_id
-        return capability_key(role, mapping.model, mapping.version, capability, self.gateway_identity,
-                              workspace_id=self.scope.workspace_id, actor_user_id=actor)
+    async def _known_unsupported(self, role: str, mapping: ModelMapping, capability: str) -> bool:
+        """True only when stored evidence says this optional capability is unsupported.
 
-    async def _capability_supported(self, role: str, mapping: ModelMapping, policy: RequestPolicy, capability: str) -> bool:
-        """Read exact principal/config cache evidence; malformed, expired or mismatched values deny."""
-        try:
-            result = CapabilityResult.model_validate_json(await self.redis.get(self._capability_key(role, mapping, capability)))
-            expiry = datetime.fromisoformat(result.expires_at)
-        except (ValueError, TypeError):
+        Missing, ``supported``/``failed`` or unreadable evidence never blocks: a lookup failure is logged by
+        type only and the real provider call decides.
+        """
+        if self.evidence is None:
             return False
-        return (result.result == "supported" and expiry.tzinfo is not None and expiry > datetime.now(UTC)
-                and result.workspace_id == self.scope.workspace_id and result.actor_user_id == policy.actor_user_id
-                and result.membership_revision == self.scope.membership_revision
-                and result.configuration_revision == self.configuration_revision
-                and result.gateway_identity == self.gateway_identity and result.role == role
-                and result.capability == capability and result.model == mapping.model and result.version == mapping.version)
+        try:
+            return await self.evidence.lookup(role, mapping, capability) == "unsupported"
+        except Exception as exc:  # noqa: BLE001  # evidence is advisory and must never fail the user request
+            _LOG.warning("Capability evidence lookup failed (%s)", type(exc).__name__)
+            return False
+
+    async def _record(self, role: str, mapping: ModelMapping | None, capability: str,
+                      result: Literal["supported", "unsupported", "failed"]) -> None:
+        """Record a real call outcome; failures never reach the caller (log type only)."""
+        if self.evidence is None or mapping is None:
+            return
+        try:
+            await self.evidence.record(role, mapping, capability, result)
+        except Exception as exc:  # noqa: BLE001  # recording is best-effort and must never fail the user request
+            _LOG.warning("Capability evidence record failed (%s)", type(exc).__name__)
+
+    async def _record_failure(self, role: str, mapping: ModelMapping | None, capability: str, exc: BaseException,
+                              *, rejected_tools: bool = False) -> None:
+        """Record a provider failure as ``failed``; ``unsupported`` only for a clear tool-calling rejection.
+
+        Privacy denials and breaker-open errors are not provider outcomes and record nothing. Transient errors
+        (timeouts, 5xx, auth) are ``failed``, which never blocks later calls.
+        """
+        if not isinstance(exc, ModelGatewayError) or isinstance(exc, (PrivacyPolicyDenied, ModelGatewayUnavailable)):
+            return
+        await self._record(role, mapping, capability, "failed")
+        if rejected_tools and isinstance(exc, CapabilityUnsupported) and _TOOL_REJECTION.search(str(exc)):
+            await self._record(role, mapping, "tools", "unsupported")
 
     def _http_client(self, base_url: str) -> httpx.AsyncClient:
         """Create a redirect-disabled HTTP client pinned to an endpoint approved by network policy."""
@@ -517,12 +533,15 @@ class ModelGateway:
         before_send: Callable[[], Awaitable[None]] | None = None,
         after_send: Callable[[], Awaitable[None]] | None = None,
         *,
-        evidence: str | None = None,
+        record_as: str | None = None,
+        record_failure: bool = True,
     ) -> Any:
-        """Check policy and cached capability before sending a bounded, retried gateway request; map transport and provider errors.
+        """Check policy, then send a bounded, retried gateway request; map transport and provider errors.
 
-        Privacy is always decided for ``capability``. ``evidence`` names a different verified capability that
-        proves this request can be served (the structured JSON fallback rides on chat-completion evidence).
+        Privacy is always decided for ``capability`` before any I/O. There is no "verified" gate: missing evidence
+        never blocks, real provider errors propagate with their redacted message. Only a stored ``unsupported``
+        for ``tools`` short-circuits (the caller has a text-only fallback). The outcome is recorded as evidence
+        under ``record_as`` (default ``capability``); ``record_failure=False`` leaves failures to the caller.
         """
         if not probe and before_send is None:
             raise ValueError("before_send_required")  # fail closed: every non-probe call needs a per-call fence
@@ -530,8 +549,8 @@ class ModelGateway:
             raise PrivacyPolicyDenied("Model request denied by privacy policy")
         if self.base_url is None or mapping is None:
             raise ModelGatewayError("Model gateway is not configured")
-        if not probe and not await self._capability_supported(role, mapping, policy, evidence or capability):
-            raise ModelGatewayError("Model capability is not supported")
+        if not probe and capability == "tools" and await self._known_unsupported(role, mapping, "tools"):
+            raise CapabilityUnsupported("Tool calling is recorded as unsupported for this model")
         if not probe:
             # Probes must be able to reach a tripped upstream, otherwise it could never be re-verified.
             await self._breaker_check()
@@ -606,14 +625,20 @@ class ModelGateway:
         started = time.perf_counter()
         try:
             response = await self._with_slot(send)
-        except _GatewayTimeout:
+        except _GatewayTimeout as exc:
             await self._breaker_fail()
             record_model_call(capability, role, started, False)
+            if record_failure and not probe:
+                await self._record_failure(role, mapping, record_as or capability, exc)
             raise
-        except BaseException:
+        except BaseException as exc:
             record_model_call(capability, role, started, False)
+            if record_failure and not probe:
+                await self._record_failure(role, mapping, record_as or capability, exc, rejected_tools=capability == "tools")
             raise
         await self._breaker_ok()
+        if not probe and path != "decisions":
+            await self._record(role, mapping, record_as or capability, "supported")
         record_model_call(capability, role, started, True, response, mapping.model)
         return response
 
@@ -733,7 +758,9 @@ class ModelGateway:
         request creation succeeds or fails; it performs optional operation cleanup or send-fence release.
         Telemetry is observational; errors and cancellation propagate, and missing usage stays null.
         Optional ``tools``/``tool_choice``/``max_tokens`` are forwarded only when provided; passing
-        ``tools`` additionally requires the verified ``tools`` capability (CapabilityUnsupported otherwise).
+        ``tools`` raises CapabilityUnsupported when stored evidence says the model rejects tools, or when the provider
+        rejects them (recorded as unsupported). Real outcomes are recorded as capability evidence (first chunk =
+        supported; provider error = failed); recording never fails the stream.
         Reasoning is surfaced as ``delta.reasoning_content`` (provider ``reasoning``/``reasoning_content``
         and leading inline ``<think>`` blocks); ``delta.content`` carries answer text only.
         """
@@ -749,6 +776,10 @@ class ModelGateway:
                 async for line in inner:
                     if first_ms is None:
                         first_ms = (time.perf_counter() - started) * 1000
+                        if not probe:
+                            await self._record(role, mapping, "streaming", "supported")
+                            if tools:
+                                await self._record(role, mapping, "tools", "supported")
                     if '"usage"' in line and usage is None:
                         try:
                             usage = json.loads(line[6:]).get("usage")
@@ -756,6 +787,10 @@ class ModelGateway:
                             usage = None
                     yield line
             ok = True
+        except ModelGatewayError as exc:
+            if not probe:
+                await self._record_failure(role, mapping, "streaming", exc, rejected_tools=bool(tools))
+            raise
         finally:
             record_model_call("streaming", role, started, ok, {"usage": usage} if usage else None,
                               mapping.model if mapping else None, first_ms)
@@ -772,7 +807,8 @@ class ModelGateway:
         """Open each fenced request attempt, then stream without retrying emitted chunks.
 
         ``tools`` (OpenAI function specs) require both ``streaming`` and ``tools`` capabilities to
-        pass ``may_send``; an unverified ``tools`` capability raises CapabilityUnsupported before any I/O.
+        pass ``may_send``; stored ``unsupported`` tools evidence raises CapabilityUnsupported before any I/O.
+        Missing streaming/tools evidence never blocks.
         ``tool_choice`` and ``max_tokens`` are forwarded only when not None. A configured ``reasoning_effort``
         (chat role) is sent as the OpenAI-compatible ``reasoning_effort`` parameter; if the provider answers
         400/422 naming it before any chunk, it is dropped once with a warning and the request is retried.
@@ -780,10 +816,8 @@ class ModelGateway:
         capabilities = ("streaming", "tools") if tools else ("streaming",)
         if not self._policy_matches(policy) or not all(may_send(policy, role, mapping, self.destination_id, bool(self.api_key), c) for c in capabilities) or self.base_url is None or mapping is None:
             raise PrivacyPolicyDenied("Model request denied by privacy policy")
-        if not probe and not await self._capability_supported(role, mapping, policy, "streaming"):
-            raise ModelGatewayError("Streaming capability has not been verified")
-        if tools and not probe and not await self._capability_supported(role, mapping, policy, "tools"):
-            raise CapabilityUnsupported("Tool calling capability has not been verified")
+        if tools and not probe and await self._known_unsupported(role, mapping, "tools"):
+            raise CapabilityUnsupported("Tool calling is recorded as unsupported for this model")
         extra: dict[str, Any] = {}
         if tools:
             extra["tools"] = tools
@@ -920,20 +954,35 @@ class ModelGateway:
             payload["temperature"] = temperature
         if extra_body:
             payload["extra_body"] = extra_body
-        if not probe and mapping is not None and not await self._capability_supported(role, mapping, policy, "structured"):
-            # Native json_schema is unproven for this model: ask for JSON in the prompt over a plain chat completion
-            # and extract it app-side. Callers still json.loads + schema-validate the content, so nothing loosens.
-            for evidence in _CHAT_EVIDENCE:
-                if await self._capability_supported(role, mapping, policy, evidence):
-                    fallback = {key: value for key, value in payload.items() if key != "response_format"}
-                    fallback["messages"] = [_json_instruction(schema), *messages]
-                    response = await self._request(
-                        role, mapping, policy, "structured", "chat/completions", fallback, probe, before_send,
-                        evidence=evidence)
-                    return _with_extracted_json(response)
-        return await self._request(
-            role, mapping, policy, "structured", "chat/completions", payload, probe, before_send
-        )
+        if probe or mapping is None:
+            return await self._request(role, mapping, policy, "structured", "chat/completions", payload, probe, before_send)
+        if await self._known_unsupported(role, mapping, "structured"):
+            return await self._structured_prompted(role, mapping, policy, payload, messages, schema, before_send)
+        try:
+            return await self._request(
+                role, mapping, policy, "structured", "chat/completions", payload, probe, before_send, record_failure=False)
+        except CapabilityUnsupported:
+            # Native json_schema was rejected: ask for JSON in the prompt over a plain chat completion and extract it
+            # app-side. A failure here propagates with its own real message; success proves the model is chat-capable
+            # and only native structured output is unsupported.
+            response = await self._structured_prompted(role, mapping, policy, payload, messages, schema, before_send)
+            await self._record(role, mapping, "structured", "unsupported")
+            return response
+
+    async def _structured_prompted(
+        self, role: str, mapping: ModelMapping, policy: RequestPolicy, payload: dict[str, Any],
+        messages: list[dict[str, Any]], schema: dict[str, Any], before_send: Callable[[], Awaitable[None]] | None,
+    ) -> Any:
+        """Send the prompted-JSON variant of a structured request (no ``response_format``) and extract the JSON.
+
+        Privacy is still decided for ``structured``; callers still ``json.loads`` + schema-validate the content, so
+        nothing loosens. Success is recorded as ``chat`` support, failures as ``failed`` chat evidence.
+        """
+        fallback = {key: value for key, value in payload.items() if key != "response_format"}
+        fallback["messages"] = [_json_instruction(schema), *messages]
+        response = await self._request(
+            role, mapping, policy, "structured", "chat/completions", fallback, False, before_send, record_as="chat")
+        return _with_extracted_json(response)
 
     async def tools(
         self,

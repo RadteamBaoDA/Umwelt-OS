@@ -133,6 +133,7 @@ async def _run_test(resolved: public.VizRouterResolved, transport: httpx.MockTra
          patch.object(routes, "approved_web_search_transport", return_value=transport):
         session = MagicMock()
         session.rollback = AsyncMock()
+        session.commit = AsyncMock()
         return await routes.test_viz_router(session, _request(), SCOPE)
 
 
@@ -160,7 +161,7 @@ async def test_route_typesafe_success_and_401() -> None:
 async def test_route_llm_falls_back_to_other_mode_and_records_capability() -> None:
     resolved = public.VizRouterResolved(kind="llm", provider_id="default", model="gpt-x", allow_remote=True)
     config = SimpleNamespace(
-        workspace_id=WS, actor_user_id=1, membership_revision=1, gateway_identity="a" * 64, configuration_revision=1,
+        workspace_id=WS, actor_user_id=1, membership_revision=1, gateway_identity="a" * 64, model_identity="a" * 64, configuration_revision=1,
         endpoint_destination_id="remote:abc", gateway_base_url=GW, gateway_api_key="k", endpoint_allowed_cidrs=(),
         allow_public_providers=True)
     mapping = SimpleNamespace(model="gpt-x")
@@ -184,6 +185,7 @@ async def test_route_llm_falls_back_to_other_mode_and_records_capability() -> No
          patch.object(routes.viz, "classify_llm", fake_classify):
         session = MagicMock()
         session.rollback = AsyncMock()
+        session.commit = AsyncMock()
         result = await routes.test_viz_router(session, _request(), SCOPE)
     assert calls == ["json_schema", "forced_tool"]
     assert (result.ok, result.mode, result.category) == (True, "forced_tool", "table")
@@ -194,7 +196,7 @@ async def test_route_llm_falls_back_to_other_mode_and_records_capability() -> No
 async def test_route_llm_hard_failure_does_not_try_other_mode() -> None:
     resolved = public.VizRouterResolved(kind="llm", provider_id="default", model="gpt-x", allow_remote=True)
     config = SimpleNamespace(
-        workspace_id=WS, actor_user_id=1, membership_revision=1, gateway_identity="a" * 64, configuration_revision=1,
+        workspace_id=WS, actor_user_id=1, membership_revision=1, gateway_identity="a" * 64, model_identity="a" * 64, configuration_revision=1,
         endpoint_destination_id="remote:abc", gateway_base_url=GW, gateway_api_key="k", endpoint_allowed_cidrs=(),
         allow_public_providers=True)
     seen: list[str] = []
@@ -211,6 +213,7 @@ async def test_route_llm_hard_failure_does_not_try_other_mode() -> None:
          patch.object(routes.viz, "classify_llm", fail):
         session = MagicMock()
         session.rollback = AsyncMock()
+        session.commit = AsyncMock()
         result = await routes.test_viz_router(session, _request(), SCOPE)
     assert (result.ok, result.error, seen) == (False, "auth_error", ["json_schema"])
 
@@ -344,6 +347,7 @@ async def test_route_keyed_kind_missing_credential_or_endpoint(resolved: public.
          patch.object(public, "viz_router_gateway_config", return_value=(config, SimpleNamespace(model="m"))):
         session = MagicMock()
         session.rollback = AsyncMock()
+        session.commit = AsyncMock()
         result = await routes.test_viz_router(session, _request(), SCOPE)
     assert (result.ok, result.error) == (False, error)
 
@@ -368,7 +372,7 @@ async def test_route_decisions_api_uses_decisions_adapter_and_records_structured
     resolved = public.VizRouterResolved(kind="openrouter", model="cloudflare/clef-flash", api="decisions",
                                         base_url=public.VIZ_OPENROUTER_URL, api_key="k", allow_remote=True)
     config = SimpleNamespace(
-        workspace_id=WS, actor_user_id=1, membership_revision=1, gateway_identity="a" * 64, configuration_revision=1,
+        workspace_id=WS, actor_user_id=1, membership_revision=1, gateway_identity="a" * 64, model_identity="a" * 64, configuration_revision=1,
         endpoint_destination_id="remote:abc", gateway_base_url=public.VIZ_OPENROUTER_URL, gateway_api_key="k",
         endpoint_allowed_cidrs=(), allow_public_providers=True)
     chat = AsyncMock()
@@ -385,6 +389,7 @@ async def test_route_decisions_api_uses_decisions_adapter_and_records_structured
          patch.object(routes.viz, "classify_decisions", decisions):
         session = MagicMock()
         session.rollback = AsyncMock()
+        session.commit = AsyncMock()
         result = await routes.test_viz_router(session, _request(), SCOPE)
     assert (result.ok, result.category, result.mode) == (True, "map", None)
     assert decisions.await_count == 1 and chat.await_count == 0 and new_result.call_args.args[2] == "structured"
@@ -393,7 +398,7 @@ async def test_route_decisions_api_uses_decisions_adapter_and_records_structured
 async def _discover(body: object, resolved: public.VizRouterResolved, gateway: object) -> object:
     config = SimpleNamespace(
         gateway_base_url=public.VIZ_OPENROUTER_URL, gateway_api_key="", endpoint_destination_id="remote:abc",
-        configuration_revision=1, gateway_identity="a" * 64, endpoint_allowed_cidrs=(), allow_public_providers=True)
+        configuration_revision=1, gateway_identity="a" * 64, model_identity="a" * 64, endpoint_allowed_cidrs=(), allow_public_providers=True)
     with patch.object(public, "resolve_viz_router", AsyncMock(return_value=resolved)), \
          patch.object(public, "get_ai_execution_config", AsyncMock(return_value=config)), \
          patch.object(public, "viz_decision_discovery_config", return_value=config) as discovery_config, \
@@ -401,6 +406,7 @@ async def _discover(body: object, resolved: public.VizRouterResolved, gateway: o
          patch.object(routes, "authenticated_session_ref", MagicMock()):
         session = MagicMock()
         session.rollback = AsyncMock()
+        session.commit = AsyncMock()
         result = await routes.discover_viz_decision_models(body, session, _request(), SCOPE)  # type: ignore[arg-type]
     return result, discovery_config
 

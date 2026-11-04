@@ -746,7 +746,7 @@ async def generate_brief(
     gateway = ModelGateway(
         redis=redis, base_url=config.gateway_base_url, api_key=config.gateway_api_key,
         destination_id=destination or "", timeout_seconds=config.request_timeout_seconds,
-        scope=scope, gateway_identity=config.gateway_identity,
+        scope=scope, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
         configuration_revision=config.configuration_revision, before_send=send_fence,
         approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers,
     )

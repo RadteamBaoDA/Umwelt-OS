@@ -1,4 +1,4 @@
-"""Router probes publish exact configured-model evidence that runtime gateway calls can reuse."""
+"""Router probes persist exact configured-model evidence (Postgres) bound to the router model identity."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -7,17 +7,15 @@ import pytest
 from fastapi import HTTPException
 from redis.asyncio import Redis
 
-from core.model_gateway.client import ModelGateway
 from core.model_gateway.schemas import (
     AIExecutionConfig,
     ModelDefaults,
     ModelMapping,
     PrivacySettings,
     ProviderConfig,
-    RequestPolicy,
 )
 from core.workspaces.schemas import WorkspaceContext
-from modules.settings import public, routes
+from modules.settings import models, public, routes
 
 SCOPE = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1)
 
@@ -47,18 +45,18 @@ def _router(kind: str = "llm", mode: str = "json_schema", api: str = "chat") -> 
     (kind, mode, "chat") for kind in ("llm", "openrouter", "cloudflare") for mode in ("json_schema", "forced_tool")
 ] + [("openrouter", "json_schema", "decisions")])
 async def test_successful_probe_publishes_evidence_consumed_by_runtime(kind: str, mode: str, api: str) -> None:
-    """Exercise real evidence creation/storage and the runtime cache gate for every gateway adapter."""
+    """Exercise real evidence creation and the persisted upsert for every gateway adapter."""
     base, resolved = _base(), _router(kind, mode, api)
     config, mapping = public.viz_router_gateway_config(base, resolved)
-    cached: dict[str, str] = {}
+    saved = AsyncMock()
     redis = AsyncMock(spec=Redis)
-    redis.set = AsyncMock(side_effect=lambda key, value, **kwargs: cached.update({key: value}))
-    redis.get = AsyncMock(side_effect=lambda key: cached.get(key))
     request, session = MagicMock(), MagicMock()
     request.app.state.settings.multi_workspace_enabled = False
     request.app.state.redis = redis
     session.rollback = AsyncMock()
-    with patch.object(public, "resolve_viz_router", AsyncMock(return_value=resolved)), \
+    session.commit = AsyncMock()
+    with patch.object(models, "save_model_test_result", saved), \
+         patch.object(public, "resolve_viz_router", AsyncMock(return_value=resolved)), \
          patch.object(public, "get_ai_execution_config", AsyncMock(return_value=base)), \
          patch.object(public, "check_ai_execution_config", AsyncMock()), \
          patch.object(routes, "authenticated_session_ref", MagicMock()), \
@@ -67,14 +65,12 @@ async def test_successful_probe_publishes_evidence_consumed_by_runtime(kind: str
          patch.object(routes.viz, "classify_decisions", AsyncMock(return_value="table")):
         result = await routes.test_viz_router(session, request, SCOPE)
     assert result.ok and result.category == "table"
-    gateway = ModelGateway(redis, config.gateway_base_url, config.gateway_api_key, config.endpoint_destination_id,
-                           scope=SCOPE, configuration_revision=1, gateway_identity=config.gateway_identity,
-                           before_send=AsyncMock())
-    policy = RequestPolicy(workspace_id=SCOPE.workspace_id, actor_user_id=1, membership_revision=1,
-                           configuration_revision=1, gateway_identity=config.gateway_identity)
     capability = "tools" if mode == "forced_tool" else "structured"
-    assert await gateway._capability_supported(public.VIZ_ROUTER_ROLE, mapping, policy, capability)
-    assert len(cached) == 1 and "router-key" not in str(cached) and "decision-key" not in str(cached)
+    saved.assert_awaited_once()
+    kwargs = saved.await_args.kwargs
+    assert (kwargs["capability"], kwargs["result"], kwargs["model_id"]) == (capability, "supported", mapping.model)
+    assert kwargs["model_identity"] == config.model_identity
+    assert "router-key" not in str(kwargs) and "decision-key" not in str(kwargs)
 
 
 @pytest.mark.parametrize("change", [
@@ -97,8 +93,8 @@ async def test_router_revision_drift_rejects_probe_without_publishing(stage: str
     request, session = MagicMock(), MagicMock()
     request.app.state.settings.multi_workspace_enabled = False
     request.app.state.redis = AsyncMock(spec=Redis)
-    request.app.state.redis.set = AsyncMock()
     session.rollback = AsyncMock()
+    session.commit = AsyncMock()
 
     async def classify(*args: object, **kwargs: object) -> str:
         """Simulate a gateway send fence only in the pre-egress race case."""
@@ -115,7 +111,7 @@ async def test_router_revision_drift_rejects_probe_without_publishing(stage: str
          pytest.raises(HTTPException) as exc:
         await routes.test_viz_router(session, request, SCOPE)
     assert exc.value.status_code == 409
-    request.app.state.redis.set.assert_not_awaited()
+    session.commit.assert_not_awaited()
     assert session.rollback.await_count >= 2
 
 
@@ -129,9 +125,8 @@ async def test_explicit_router_mapping_preserves_model_and_default_role_validati
     evidence = public.new_capability_result(role, mapping, "structured", "supported", config=config,
                                             scope=SCOPE, multi_workspace_enabled=False)
     evidence = evidence.model_copy(update={"model": model, "version": version})
-    redis = AsyncMock(spec=Redis)
-    redis.set = AsyncMock()
-    with pytest.raises(ValueError, match="configured model"):
-        await public.save_capability(redis, evidence, config=config, configured_mapping=mapping,
+    session = MagicMock()
+    with patch.object(models, "save_model_test_result", AsyncMock()) as saved, pytest.raises(ValueError, match="configured model"):
+        await public.save_capability(session, evidence, config=config, configured_mapping=mapping,
                                      scope=SCOPE, multi_workspace_enabled=False)
-    redis.set.assert_not_awaited()
+    saved.assert_not_awaited()

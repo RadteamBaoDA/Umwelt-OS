@@ -98,3 +98,10 @@ def test_observations_provider_ids_match_application_constant() -> None:
     assert "'vn_stock'" in final_check
     doc = module.downgrade.__doc__
     assert doc is not None and "raises" in doc
+
+
+def test_model_capability_evidence_extends_test_results_key() -> None:
+    sql = _upgrade_sql()
+    assert "ADD COLUMN capability VARCHAR(16) NOT NULL DEFAULT 'chat'" in sql
+    assert "ADD COLUMN model_identity VARCHAR(64)" in sql
+    assert "ADD PRIMARY KEY (workspace_id, provider_id, model_id, capability)" in sql

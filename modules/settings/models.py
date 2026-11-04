@@ -1,9 +1,10 @@
-from datetime import UTC, datetime, timedelta
-from typing import Any
+import logging
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
+from datetime import UTC, datetime
+from typing import Any, Literal
 from uuid import UUID
 
-from redis.asyncio import Redis
-from redis.exceptions import RedisError
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -15,7 +16,9 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    or_,
     select,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,7 +26,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
 from core.database import Base
-from core.model_gateway.cache import capability_key, validate_capability_scope
+from core.model_gateway.cache import validate_capability_scope
 from core.model_gateway.schemas import (
     MODEL_ROLES,
     AIExecutionConfig,
@@ -202,10 +205,19 @@ class TranslationSettingsRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
-class ModelTestResultRecord(Base):
-    """Last Test-button outcome of one provider model, so the Models table survives reloads.
+_LOG = logging.getLogger(__name__)
+_DEFAULT_PROVIDER = "default"
+# A repeat of the same outcome only refreshes ``checked_at`` this often, so every chat turn is not a DB write.
+_EVIDENCE_REFRESH = "1 hour"
 
-    Display-only evidence (never consulted by the gateway); capability evidence stays in Redis.
+
+class ModelTestResultRecord(Base):
+    """Single persistent source of model capability evidence: last outcome per provider model and capability.
+
+    Written by the Settings Test routes and by real gateway calls (chat/stream/tools/structured/embeddings outcomes);
+    read by the Models table and, for ``unsupported`` tools/structured evidence only, by the gateway. There is no
+    expiry: ``model_identity`` (credential/endpoint/default fingerprint) invalidates evidence when it changes.
+    Rows with a NULL identity (pre-existing UI test summaries) are display-only and never gate a request.
     """
 
     __tablename__ = "model_test_results"
@@ -217,35 +229,90 @@ class ModelTestResultRecord(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
     provider_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     model_id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    capability: Mapped[str] = mapped_column(String(16), primary_key=True, server_default="chat")
     result: Mapped[str] = mapped_column(String(16), nullable=False)
+    model_identity: Mapped[str | None] = mapped_column(String(64))
     checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
-async def save_model_test_result(session: AsyncSession, *, workspace_id: UUID, provider_id: str, model_id: str, result: str) -> ModelTestResultRecord:
-    """Upsert the latest test outcome for one model and stamp ``checked_at``; caller commits."""
-    stmt = insert(ModelTestResultRecord).values(workspace_id=workspace_id, provider_id=provider_id, model_id=model_id, result=result)
+async def save_model_test_result(
+    session: AsyncSession, *, workspace_id: UUID, provider_id: str, model_id: str, result: str,
+    capability: str = "chat", model_identity: str | None = None, throttle: bool = False,
+) -> ModelTestResultRecord | None:
+    """Upsert the latest outcome for one model capability and stamp ``checked_at``; caller commits.
+
+    ``throttle`` (real-call recording) skips the write when the stored outcome and identity are identical and
+    were checked within the last hour; the stored row is still returned. Explicit Test saves always write.
+    """
+    table = ModelTestResultRecord
+    stmt = insert(table).values(
+        workspace_id=workspace_id, provider_id=provider_id, model_id=model_id,
+        capability=capability, result=result, model_identity=model_identity)
+    guard = or_(table.result != result, table.model_identity.is_distinct_from(model_identity),
+                table.checked_at < func.now() - text(f"interval '{_EVIDENCE_REFRESH}'")) if throttle else None
     await session.execute(stmt.on_conflict_do_update(
-        index_elements=["workspace_id", "provider_id", "model_id"],
-        set_={"result": result, "checked_at": func.now()}))
-    row = await session.scalar(select(ModelTestResultRecord).where(
-        ModelTestResultRecord.workspace_id == workspace_id, ModelTestResultRecord.provider_id == provider_id,
-        ModelTestResultRecord.model_id == model_id).execution_options(populate_existing=True))
-    assert row is not None  # just upserted in this transaction
-    return row
+        index_elements=["workspace_id", "provider_id", "model_id", "capability"],
+        set_={"result": result, "model_identity": model_identity, "checked_at": func.now()}, where=guard))
+    return await session.scalar(select(table).where(
+        table.workspace_id == workspace_id, table.provider_id == provider_id,
+        table.model_id == model_id, table.capability == capability,
+    ).execution_options(populate_existing=True))
 
 
 async def list_model_test_results(session: AsyncSession, *, workspace_id: UUID) -> list[ModelTestResultRecord]:
-    """Return every stored model test outcome for the workspace (bounded by the 8-provider cap)."""
+    """Return every stored capability outcome for the workspace (bounded by providers x models x capabilities)."""
     return list((await session.scalars(select(ModelTestResultRecord).where(
-        ModelTestResultRecord.workspace_id == workspace_id).limit(1000))).all())
+        ModelTestResultRecord.workspace_id == workspace_id).limit(5000))).all())
 
 
-async def save_capability(redis: Redis, result: CapabilityResult, *, config: AIExecutionConfig, scope: Scope,
+class PostgresCapabilityEvidence:
+    """``CapabilityEvidenceStore`` backed by ``model_test_results`` for one workspace and model identity.
+
+    Each call uses its own short session, never the caller's: evidence I/O must not hold or commit the request
+    transaction around provider egress. Reads only trust rows whose stored identity equals the current one, so a
+    credential/endpoint/default change silently invalidates old evidence (no TTL).
+    """
+
+    def __init__(self, factory: Callable[[], AbstractAsyncContextManager[AsyncSession]], *, workspace_id: UUID, model_identity: str) -> None:
+        """Bind the session factory and the immutable workspace/identity namespace of this evidence."""
+        self._factory = factory
+        self._workspace_id = workspace_id
+        self._identity = model_identity
+
+    async def lookup(self, role: str, mapping: ModelMapping, capability: str) -> str | None:
+        """Return the stored result for this model capability under the current identity, else None."""
+        async with self._factory() as session:
+            return await session.scalar(select(ModelTestResultRecord.result).where(
+                ModelTestResultRecord.workspace_id == self._workspace_id,
+                ModelTestResultRecord.provider_id == (mapping.provider_id or _DEFAULT_PROVIDER),
+                ModelTestResultRecord.model_id == mapping.model,
+                ModelTestResultRecord.capability == capability,
+                ModelTestResultRecord.model_identity == self._identity))
+
+    async def record(self, role: str, mapping: ModelMapping, capability: str,
+                     result: Literal["supported", "unsupported", "failed"]) -> None:
+        """Upsert (throttled) the real-call outcome and commit it in an isolated transaction."""
+        async with self._factory() as session:
+            await save_model_test_result(
+                session, workspace_id=self._workspace_id, provider_id=mapping.provider_id or _DEFAULT_PROVIDER,
+                model_id=mapping.model, result=result, capability=capability, model_identity=self._identity, throttle=True)
+            await session.commit()
+
+
+def capability_evidence(factory: Callable[[], AbstractAsyncContextManager[AsyncSession]], config: AIExecutionConfig) -> PostgresCapabilityEvidence:
+    """Build the gateway evidence store for an execution config (workspace and model identity come from it).
+
+    ``factory`` is the caller's ``async_sessionmaker``; the store opens its own short sessions from it.
+    """
+    return PostgresCapabilityEvidence(factory, workspace_id=config.workspace_id, model_identity=config.model_identity)
+
+
+async def save_capability(session: AsyncSession, result: CapabilityResult, *, config: AIExecutionConfig, scope: Scope,
                           multi_workspace_enabled: bool, configured_mapping: ModelMapping | None = None) -> None:
-    """Cache only exact scoped configuration evidence after caller's locked publication fence.
+    """Persist exact scoped probe evidence after the caller's post-I/O configuration fence; caller commits.
 
-    Expired results are discarded; TTL max24h and exact namespace leave old workspace
-    configuration entries unreachable without deleting any other workspace's cache.
+    Evidence is bound to ``model_identity`` (model-relevant config only), not the settings row revision:
+    unrelated saves (web search, prompts, owner prefs) must not discard verification. There is no TTL.
     Non-default roles require the caller's freshly verified configured mapping (e.g. the
     visualization router). A standard role may also be proven for a non-default model, but only when
     ``configured_mapping`` names a model listed on its provider in ``config.providers`` (chat
@@ -254,64 +321,52 @@ async def save_capability(redis: Redis, result: CapabilityResult, *, config: AIE
     validate_capability_scope(config, scope, multi_workspace_enabled)
     if (result.workspace_id != config.workspace_id or result.actor_user_id != config.actor_user_id
             or result.membership_revision != config.membership_revision
-            or result.gateway_identity != config.gateway_identity
-            or result.configuration_revision != config.configuration_revision):
+            or result.model_identity != config.model_identity):
         raise ValueError("Capability evidence does not match execution identity")
     mapping = config.defaults.resolve(result.role) if result.role in MODEL_ROLES else configured_mapping
     if result.role in MODEL_ROLES and configured_mapping is not None:
         # Per-request model override: evidence is allowed only for a model the owner configured on that provider.
-        provider = config.providers.get(configured_mapping.provider_id or "default")
+        provider = config.providers.get(configured_mapping.provider_id or _DEFAULT_PROVIDER)
         if provider is not None and any(m.id == configured_mapping.model for m in provider.models):
             mapping = configured_mapping
     if mapping is None or mapping.model != result.model or mapping.version != result.version:
         raise ValueError("Capability evidence does not match configured model")
-    ttl = int((datetime.fromisoformat(result.expires_at) - datetime.now(UTC)).total_seconds())
-    if ttl <= 0:
-        return
-    key = capability_key(result.role, result.model, result.version, result.capability, result.gateway_identity,
-                         workspace_id=config.workspace_id, actor_user_id=config.actor_user_id)
-    await redis.set(key, result.model_dump_json(), ex=min(ttl, 86400))
+    await save_model_test_result(
+        session, workspace_id=config.workspace_id, provider_id=mapping.provider_id or _DEFAULT_PROVIDER,
+        model_id=mapping.model, result=result.result, capability=result.capability, model_identity=config.model_identity)
 
 
-async def list_capabilities(redis: Redis, *, config: AIExecutionConfig, scope: Scope, multi_workspace_enabled: bool) -> list[CapabilityResult]:
-    """Read at most 6 roles x 6 capabilities by exact workspace/actor/config keys, never global SCAN."""
+async def list_capabilities(session: AsyncSession, *, config: AIExecutionConfig, scope: Scope, multi_workspace_enabled: bool) -> list[CapabilityResult]:
+    """Report stored evidence for each configured role default under the current model identity (one query)."""
     validate_capability_scope(config, scope, multi_workspace_enabled)
+    rows = await list_model_test_results(session, workspace_id=config.workspace_id)
+    by_key = {(r.provider_id, r.model_id, r.capability): r for r in rows if r.model_identity == config.model_identity}
     results: list[CapabilityResult] = []
     for role in MODEL_ROLES:
         mapping = config.defaults.resolve(role)
         if mapping is None:
             continue
         for capability in ("chat", "streaming", "embeddings", "structured", "tools", "reranking"):
-            key = capability_key(role, mapping.model, mapping.version, capability, config.gateway_identity,
-                                 workspace_id=config.workspace_id, actor_user_id=config.actor_user_id)
-            try:
-                value = CapabilityResult.model_validate_json(await redis.get(key))
-                expiry = datetime.fromisoformat(value.expires_at)
-                if expiry.tzinfo is None or expiry <= datetime.now(UTC):
-                    continue
-            except (ValueError, TypeError):
+            row = by_key.get((mapping.provider_id or _DEFAULT_PROVIDER, mapping.model, capability))
+            if row is None or row.result not in {"supported", "unsupported", "failed"}:
                 continue
-            except RedisError:
-                return results  # cached evidence is optional; report none when Redis is down
-            if (value.workspace_id == config.workspace_id and value.actor_user_id == config.actor_user_id
-                    and value.membership_revision == config.membership_revision
-                    and value.gateway_identity == config.gateway_identity
-                    and value.configuration_revision == config.configuration_revision
-                    and value.role == role and value.capability == capability
-                    and value.model == mapping.model and value.version == mapping.version):
-                results.append(value)
+            results.append(CapabilityResult(
+                workspace_id=config.workspace_id, actor_user_id=config.actor_user_id,
+                membership_revision=config.membership_revision, role=role, model=mapping.model, version=mapping.version,
+                model_identity=config.model_identity, configuration_revision=config.configuration_revision,
+                capability=capability, result=row.result,
+                checked_at=row.checked_at.isoformat()))
     return results
 
 
 def new_capability_result(role: str, mapping: ModelMapping, capability: str, result: str, *, config: AIExecutionConfig, scope: Scope, multi_workspace_enabled: bool) -> CapabilityResult:
-    """Detach probe evidence for the exact workspace/actor/configuration with24h validity.
+    """Detach probe evidence for the exact workspace/actor/configuration (no expiry).
 
     Does not authorize storage: caller must reacquire matching identity/settings fence
     after provider I/O before save_capability. Draft probes cannot supply this config.
     """
     validate_capability_scope(config, scope, multi_workspace_enabled)
-    now = datetime.now(UTC)
     return CapabilityResult(workspace_id=config.workspace_id, actor_user_id=config.actor_user_id,
         membership_revision=config.membership_revision, role=role, model=mapping.model, version=mapping.version,
-        gateway_identity=config.gateway_identity, configuration_revision=config.configuration_revision,
-        capability=capability, result=result, checked_at=now.isoformat(), expires_at=(now + timedelta(hours=24)).isoformat())
+        model_identity=config.model_identity, configuration_revision=config.configuration_revision,
+        capability=capability, result=result, checked_at=datetime.now(UTC).isoformat())

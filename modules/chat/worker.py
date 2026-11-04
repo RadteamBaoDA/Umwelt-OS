@@ -646,9 +646,10 @@ async def _rewrite_web_query(
                 raise PrivacyPolicyDenied("Configuration changed before web query rewrite")
 
         gateway = ModelGateway(
+            evidence=settings_public.capability_evidence(session_factory, config),
             redis=redis, base_url=config.gateway_base_url, api_key=config.gateway_api_key,
             destination_id=config.endpoint_destination_id or "remote", timeout_seconds=REWRITE_TIMEOUT_SECONDS,
-            scope=scope, gateway_identity=config.gateway_identity,
+            scope=scope, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
             configuration_revision=config.configuration_revision, before_send=recheck_send,
             approved_endpoint_cidrs=tuple(settings.ai_allowed_endpoint_cidrs),
             allow_public_endpoints=config.allow_public_providers,
@@ -1182,13 +1183,14 @@ async def run_response_generation(
                 await release_send_attempt_session()
 
             gateway = ModelGateway(
+                evidence=settings_public.capability_evidence(session_factory, ai_config),
                 redis=redis,
                 base_url=endpoint,
                 api_key=credential,
                 destination_id=destination,
                 timeout_seconds=float(ai_config.request_timeout_seconds),
                 scope=owner_scope,
-                gateway_identity=ai_config.gateway_identity,
+                gateway_identity=ai_config.gateway_identity, model_identity=ai_config.model_identity,
                 configuration_revision=ai_config.configuration_revision,
                 before_send=before_send_attempt,
                 approved_endpoint_cidrs=tuple(settings.ai_allowed_endpoint_cidrs),
@@ -2087,7 +2089,7 @@ async def _external_route_decision(
 
     gateway = ModelGateway(
         redis=redis, base_url=config.gateway_base_url, api_key=config.gateway_api_key, destination_id=destination,
-        timeout_seconds=15.0, scope=scope, gateway_identity=config.gateway_identity,
+        timeout_seconds=15.0, scope=scope, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
         configuration_revision=config.configuration_revision, before_send=recheck_send,
         approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers,
     )

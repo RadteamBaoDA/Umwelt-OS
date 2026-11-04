@@ -93,7 +93,7 @@ async def test_stale_fencing_token_cannot_renew_or_release():
 def _config():
     privacy = SimpleNamespace(allow_remote_reasoning=True, reasoning_destinations=["dest"])
     return SimpleNamespace(
-        workspace_id=WS, actor_user_id=1, membership_revision=1, gateway_identity="a" * 64, configuration_revision=1,
+        workspace_id=WS, actor_user_id=1, membership_revision=1, gateway_identity="a" * 64, model_identity="a" * 64, configuration_revision=1,
         privacy=privacy, defaults=SimpleNamespace(resolve=lambda _role: ModelMapping(model="m")), endpoint_destination_id="dest",
         endpoint_policy_denied=False, gateway_base_url="http://x", gateway_api_key="k", request_timeout_seconds=60,
         endpoint_allowed_cidrs=(), system_prompts={}, providers={}, allow_public_providers=False)

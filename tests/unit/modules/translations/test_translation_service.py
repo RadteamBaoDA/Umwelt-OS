@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from core.model_gateway.client import ModelGatewayError, PrivacyPolicyDenied
+from core.model_gateway.client import CapabilityUnsupported, PrivacyPolicyDenied
 from modules.translations import service
 from modules.translations.schemas import TranslationInput
 
@@ -90,7 +90,7 @@ async def test_privacy_blocks_before_send(cfg, src):
 
 
 async def test_gateway_errors_map_without_retry():
-    cases = ((ModelGatewayError("Model capability is not supported"), "model_capability_missing"),
+    cases = ((CapabilityUnsupported("Gateway rejected this capability (HTTP 400: nope)"), "model_capability_missing"),
              (PrivacyPolicyDenied("x"), "privacy_blocked"))
     for err, code in cases:
         gw = SimpleNamespace(structured=AsyncMock(side_effect=err))

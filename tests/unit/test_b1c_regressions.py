@@ -551,25 +551,26 @@ async def test_notification_emit_returns_false_when_evidence_source_purged(monke
     ) is False
 
 
-async def test_timeline_dependency_snapshot_cold_capability_cache_is_unsupported() -> None:
+async def test_timeline_dependency_snapshot_without_evidence_is_still_supported() -> None:
     from modules.timeline.worker import ROLE, _dependency_snapshot
 
     config = _config(defaults=ModelDefaults(**{ROLE: ModelMapping(model="m", destination="remote")}))
     redis = MagicMock()
-    redis.get = AsyncMock(return_value=None)  # capability cache miss: the normal cold-start case
+    redis.get = AsyncMock(return_value=None)  # no capability evidence exists any more; work must never park on it
     fingerprint, supported = await _dependency_snapshot(config, redis, scope=OWNER)
-    assert supported is False and len(fingerprint) == 64
+    assert supported is True and len(fingerprint) == 64
+    redis.get.assert_not_awaited()
 
 
-async def test_entity_dependency_snapshot_builds_actor_scoped_capability_key() -> None:
+async def test_entity_dependency_snapshot_without_evidence_is_still_supported() -> None:
     from modules.knowledge.entities.worker import EXTRACTION_ROLE, _dependency_snapshot
 
     config = _config(defaults=ModelDefaults(**{EXTRACTION_ROLE: ModelMapping(model="m", destination="remote")}))
     redis = MagicMock()
     redis.get = AsyncMock(return_value=None)
     fingerprint, supported = await _dependency_snapshot(config, redis, scope=OWNER)
-    assert supported is False and len(fingerprint) == 64
-    assert f":u:{config.actor_user_id}:" in redis.get.await_args.args[0]  # key is actor-namespaced
+    assert supported is True and len(fingerprint) == 64
+    redis.get.assert_not_awaited()
 
 
 def _recovery_session(workspace_id: Any) -> MagicMock:

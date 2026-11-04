@@ -49,6 +49,7 @@ from modules.settings.display_name import derive_display_name, normalize_display
 from modules.settings.models import AISettingsRecord, OwnerPreferencesRecord
 
 # Re-exported for the model_gateway routes (strict mypy forbids implicit re-export, hence the aliases).
+from modules.settings.models import capability_evidence as capability_evidence  # noqa: PLC0414
 from modules.settings.models import list_capabilities as list_capabilities  # noqa: PLC0414
 from modules.settings.models import (
     list_model_test_results as list_model_test_results,  # noqa: PLC0414
@@ -429,10 +430,20 @@ async def get_ai_execution_config(session: AsyncSession, settings: Settings, red
         [(t.provider, t.endpoint, _fingerprint(t.api_key)) for t in web_fallbacks], tuple(sorted(settings.ai_allowed_endpoint_hosts)),
         tuple(sorted(settings.ai_allowed_endpoint_cidrs)), _fingerprint(settings.ai_credential_encryption_key.get_secret_value())),
         sort_keys=True, separators=(",", ":"), default=str))
+    # Model evidence/embedding validity identity: only what decides whether a model answers or an embedding
+    # space matches. Deliberately excludes the ai_settings row revision, web search config/consent, system
+    # prompts and owner prefs, so saving those never discards verified capabilities or search generations.
+    model_identity = _fingerprint(json.dumps((str(scope.workspace_id), scope_actor(scope), fence.membership_revision,
+        fence.configuration_revision, credential_identity, defaults.model_dump(),
+        privacy.model_dump(include={"allow_remote_reasoning", "allow_remote_embeddings",
+                                    "reasoning_destinations", "embedding_destinations"}),
+        tuple(sorted(settings.ai_allowed_endpoint_hosts)), tuple(sorted(settings.ai_allowed_endpoint_cidrs)),
+        _fingerprint(settings.ai_credential_encryption_key.get_secret_value())),
+        sort_keys=True, separators=(",", ":"), default=str))
     return AIExecutionConfig(
         workspace_id=scope.workspace_id, actor_user_id=scope_actor(scope), membership_revision=fence.membership_revision,
         access_configuration_revision=fence.configuration_revision,
-        configuration_revision=revision, gateway_identity=identity, endpoint_destination_id=default.destination_id,
+        configuration_revision=revision, gateway_identity=identity, model_identity=model_identity, endpoint_destination_id=default.destination_id,
         endpoint_policy_denied=default.policy_denied, gateway_credential_configured=default.credential_configured,
         endpoint_allowed_cidrs=tuple(settings.ai_allowed_endpoint_cidrs), allow_public_providers=settings.ai_allow_public_providers,
         gateway_base_url=default.base_url, gateway_api_key=default.api_key, defaults=defaults, privacy=privacy,
@@ -1045,7 +1056,11 @@ def viz_router_gateway_config(config: AIExecutionConfig, resolved: VizRouterReso
     identity = _fingerprint(json.dumps((
         config.gateway_identity, resolved.model_dump(exclude={"typesafe_key", "api_key"}), _fingerprint(resolved.api_key),
     ), sort_keys=True, separators=(",", ":")))
-    config = config.model_copy(update={"gateway_identity": identity})
+    # Router evidence follows the same split: its model identity derives from the base model identity.
+    model_identity = _fingerprint(json.dumps((
+        config.model_identity, resolved.model_dump(exclude={"typesafe_key", "api_key"}), _fingerprint(resolved.api_key),
+    ), sort_keys=True, separators=(",", ":")))
+    config = config.model_copy(update={"gateway_identity": identity, "model_identity": model_identity})
     if resolved.kind in VIZ_KEYED_KINDS:
         # Self-contained kind: its own validated endpoint and key replace the provider's; never the owner's providers.
         own = ModelMapping(model=resolved.model, destination="remote")

@@ -34,7 +34,7 @@ class _Session:
 
 def _setup(monkeypatch: pytest.MonkeyPatch, log: list[str], *, revision_changes: bool = False) -> None:
     config = SimpleNamespace(
-        endpoint_policy_denied=False, gateway_identity="g", configuration_revision=1,
+        endpoint_policy_denied=False, gateway_identity="g", model_identity="g", configuration_revision=1,
         endpoint_destination_id=None, gateway_api_key="k",
     )
     mapping = SimpleNamespace(model="m", version="1")

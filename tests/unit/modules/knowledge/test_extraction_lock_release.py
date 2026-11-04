@@ -62,7 +62,7 @@ def _harness(monkeypatch: pytest.MonkeyPatch, name: str) -> SimpleNamespace:
     factory = _Factory()
     mapping = SimpleNamespace(model="m")
     config = SimpleNamespace(
-        configuration_revision=1, gateway_identity="g", endpoint_destination_id="d", defaults=SimpleNamespace(resolve=lambda _role: mapping),
+        configuration_revision=1, gateway_identity="g", model_identity="g", endpoint_destination_id="d", defaults=SimpleNamespace(resolve=lambda _role: mapping),
         gateway_base_url="u", gateway_api_key="k", request_timeout_seconds=10, endpoint_allowed_cidrs=(),
         allow_public_providers=False, system_prompts={}, workspace_id=WS, actor_user_id=1, membership_revision=1,
         endpoint_policy_denied=False, gateway_credential_configured=True,

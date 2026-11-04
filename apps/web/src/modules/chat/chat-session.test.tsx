@@ -112,6 +112,18 @@ describe('ChatSession', () => {
     expect(h.sendMessage.mock.calls[1][1]).toMatchObject({ content: 'hello' });
   });
 
+  it('shows the provider failure reason carried by the terminal failed event', async () => {
+    h.sendMessage.mockResolvedValue({ response_id: 'r1', status: 'queued' });
+    h.streamResponseEvents.mockImplementation(async (_id: string, o: StreamEventsOptions) => {
+      o.onStatus?.('failed', { status: 'failed', error: 'Model gateway error (HTTP 401: invalid api key)' });
+    });
+    renderSession();
+    await sendText('hello');
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('HTTP 401: invalid api key');
+  });
+
   it('shows a neutral status (no alert, no Retry) after the user stops generation', async () => {
     h.sendMessage.mockResolvedValue({ response_id: 'r1', status: 'queued' });
     h.streamResponseEvents.mockImplementation((_id: string, o: StreamEventsOptions) => new Promise<void>((resolve) => {

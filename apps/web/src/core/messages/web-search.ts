@@ -19,6 +19,8 @@ export const webSearchMessages = {
     test: 'Test connection', testing: 'Testing…', testOk: 'Connection works ({count} results).', testOkNoCount: 'Connection works.',
     testError_credential_required: 'Enter an API key to test this provider.', testError_network_denied: 'The endpoint is blocked by network policy or is not allow-listed.',
     testError_provider_error: 'The provider rejected the request.', testError_timeout: 'The provider did not respond in time.', testError_unknown: 'The test failed.',
+    testReason_http: 'HTTP {status}', testReason_content_type: 'Unexpected content type: {type}', testReason_too_large: 'Response too large',
+    testReason_invalid_json: 'Response is not valid JSON', testReason_unexpected_shape: 'Unexpected response format',
   },
   'vi-vi': {
     eyebrow: 'AI', title: 'Tìm kiếm web', description: 'Chọn nhà cung cấp tìm kiếm mà trợ lý được phép gọi để lấy kết quả web trực tiếp.',
@@ -39,5 +41,7 @@ export const webSearchMessages = {
     test: 'Kiểm tra kết nối', testing: 'Đang kiểm tra…', testOk: 'Kết nối hoạt động ({count} kết quả).', testOkNoCount: 'Kết nối hoạt động.',
     testError_credential_required: 'Hãy nhập khóa API để kiểm tra nhà cung cấp này.', testError_network_denied: 'Điểm cuối bị chính sách mạng chặn hoặc chưa nằm trong danh sách cho phép.',
     testError_provider_error: 'Nhà cung cấp đã từ chối yêu cầu.', testError_timeout: 'Nhà cung cấp không phản hồi kịp thời.', testError_unknown: 'Kiểm tra thất bại.',
+    testReason_http: 'HTTP {status}', testReason_content_type: 'Kiểu nội dung không đúng: {type}', testReason_too_large: 'Phản hồi quá lớn',
+    testReason_invalid_json: 'Phản hồi không phải JSON hợp lệ', testReason_unexpected_shape: 'Định dạng phản hồi không đúng',
   },
 } as const;

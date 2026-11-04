@@ -4,7 +4,6 @@ from typing import Annotated
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import require_account, require_account_write
@@ -133,7 +132,7 @@ async def _read(session: AsyncSession, request: Request, *, scope: WorkspaceCont
     """Build the AI settings response and attach gateway-matched capabilities."""
     config = await public.get_ai_execution_config(session, request.app.state.settings, request.app.state.redis, scope=scope)
     value = public._read(config)
-    value.capabilities = await models.list_capabilities(request.app.state.redis, config=config, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    value.capabilities = await models.list_capabilities(session, config=config, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     return value
 
 
@@ -148,7 +147,7 @@ async def save_ai(value: AISettingsUpdate, session: Session, request: Request, _
     """Save AI settings, commit, then report capabilities for the saved gateway."""
     saved = await public.save_ai_settings(session, value, request.app.state.settings, scope=_owner, auth_sessions=(authenticated_session_ref(request),))
     await session.commit()
-    saved.capabilities = await models.list_capabilities(request.app.state.redis, config=
+    saved.capabilities = await models.list_capabilities(session, config=
         await public.get_ai_execution_config(session, request.app.state.settings, request.app.state.redis, scope=_owner),
         scope=_owner, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     return saved
@@ -285,7 +284,7 @@ async def test_web_search(body: WebSearchTest, session: Session, request: Reques
                                                   settings.web_search_allowed_cidrs, allow_http=body.provider == "searxng")
         results = await web.search(body.provider, endpoint, key, "test", transport=transport)
     except web.WebSearchError as exc:
-        return ConnectionTestResult(ok=False, error=exc.code)
+        return ConnectionTestResult(ok=False, error=exc.code, reason=exc.reason)
     except EndpointNetworkPolicyError:
         return ConnectionTestResult(ok=False, error="network_denied")
     return ConnectionTestResult(ok=True, detail=len(results))
@@ -405,7 +404,7 @@ async def test_viz_router(session: Session, request: Request, _owner: OwnerWrite
     await session.rollback()
     gateway = ModelGateway(redis, config.gateway_base_url, config.gateway_api_key, destination, timeout_seconds=15,
                            scope=_owner, configuration_revision=config.configuration_revision,
-                           gateway_identity=config.gateway_identity, before_send=recheck_send,
+                           gateway_identity=config.gateway_identity, model_identity=config.model_identity, before_send=recheck_send,
                            approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
                            allow_public_endpoints=config.allow_public_providers)
     # Decisions API: one adapter, no constraint modes (None); otherwise the configured mode then the other one.
@@ -430,10 +429,13 @@ async def test_viz_router(session: Session, request: Request, _owner: OwnerWrite
             multi_workspace_enabled=settings.multi_workspace_enabled)
         try:
             await recheck_config()
-            await public.save_capability(redis, result, config=config, configured_mapping=mapping, scope=_owner,
+            await public.save_capability(session, result, config=config, configured_mapping=mapping, scope=_owner,
                                          multi_workspace_enabled=settings.multi_workspace_enabled)
-        except RedisError as exc:
-            raise HTTPException(status_code=503, detail="Model capability storage is unavailable") from exc
+            await session.commit()
+        except ValueError:
+            # Evidence did not match the configured mapping (settings changed mid-test): report, never 500.
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="Visualization router settings changed; test again") from None
         finally:
             await session.rollback()
         return VizRouterTestResult(ok=True, category=category, mode=mode)
@@ -477,7 +479,7 @@ async def discover_viz_decision_models(
     await session.rollback()
     gateway = ModelGateway(redis, config.gateway_base_url, config.gateway_api_key, config.endpoint_destination_id or "remote",
                            timeout_seconds=15, scope=_owner, configuration_revision=config.configuration_revision,
-                           gateway_identity=config.gateway_identity, before_send=recheck_send,
+                           gateway_identity=config.gateway_identity, model_identity=config.model_identity, before_send=recheck_send,
                            approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
                            allow_public_endpoints=config.allow_public_providers)
     try:

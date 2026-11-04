@@ -1,4 +1,4 @@
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
@@ -199,12 +199,26 @@ class AIExecutionConfig(BaseModel):
     use the fresh locked Settings check and caller's resource fence before each send/publish.
     """
     model_config = ConfigDict(frozen=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_model_identity(cls, data: Any) -> Any:
+        """Fall back to ``gateway_identity`` when no separate ``model_identity`` is supplied.
+
+        Production (``resolve_ai_config``) always sets both. The fallback only serves hand-built configs and
+        errs strict: evidence then invalidates on every config change, i.e. the pre-split behaviour.
+        """
+        if isinstance(data, dict) and "model_identity" not in data and "gateway_identity" in data:
+            return {**data, "model_identity": data["gateway_identity"]}
+        return data
+
     workspace_id: UUID
     actor_user_id: int = Field(gt=0)
     membership_revision: int = Field(gt=0)
     access_configuration_revision: int = Field(gt=0)
     configuration_revision: int = Field(ge=1)
     gateway_identity: str = Field(pattern=r"^[0-9a-f]{64}$")
+    model_identity: str = Field(pattern=r"^[0-9a-f]{64}$")
     endpoint_destination_id: str | None
     endpoint_policy_denied: bool = False
     endpoint_allowed_cidrs: tuple[str, ...] = ()
@@ -225,19 +239,20 @@ class AIExecutionConfig(BaseModel):
 
 
 class CapabilityResult(BaseModel):
-    """Capability evidence for exact workspace/actor/membership/config/model and expiry; no secrets."""
+    """Capability evidence for exact workspace/actor/membership/model identity/model and expiry; no secrets."""
     workspace_id: UUID
     actor_user_id: int = Field(gt=0)
     membership_revision: int = Field(gt=0)
     role: str
     model: str
     version: str | None = None
-    gateway_identity: str = Field(pattern=r"^[0-9a-f]{64}$")
+    model_identity: str = Field(pattern=r"^[0-9a-f]{64}$")
+    # Informational only: capability validity never compares it (web search/prompt/prefs saves bump it).
     configuration_revision: int = Field(ge=1)
     capability: Capability
     result: Literal["supported", "unsupported", "failed"]
     checked_at: str
-    expires_at: str
+    expires_at: str | None = None  # legacy; evidence no longer expires
 
 
 class AISettingsRead(BaseModel):

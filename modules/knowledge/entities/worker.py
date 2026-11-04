@@ -24,13 +24,11 @@ from core.job_denial import (
     denial_code,
     terminalize,
 )
-from core.model_gateway.cache import capability_key
 from core.model_gateway.client import (
     CapabilityUnsupported,
     ModelGateway,
     ModelGatewayError,
     PrivacyPolicyDenied,
-    structured_evidence,
 )
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import (
@@ -87,28 +85,18 @@ async def _workspace_job_scope(
 
 
 async def _dependency_snapshot(config: AIExecutionConfig, redis: Redis, *, scope: Scope) -> tuple[str, bool]:
-    """Fingerprint non-secret extraction policy and report current capability.
+    """Fingerprint non-secret extraction policy; the capability flag is always True.
 
-    Cached capability data is accepted only when model, gateway, revision, and
-    expiry match; the snapshot excludes endpoint and credential values.
+    Capability evidence no longer gates extraction: the gateway tries native structured output and falls back to
+    prompted JSON, so work is never parked merely because no probe ran. A provider rejection still parks the item
+    (``structured_unsupported``) with this fingerprint, and it is requeued only when the fingerprint changes
+    (model/gateway/policy edits), so permanent failures cannot hot-loop. Excludes endpoint and credential values.
     """
     # AIExecutionConfig is returned by the settings owner. Hash only non-secret
     # policy/model/capability metadata; never persist endpoint or credential data.
     role = EXTRACTION_ROLE
     mapping = config.defaults.resolve(role)
     gateway_identity = config.gateway_identity
-    key = capability_key(
-        role, mapping.model, mapping.version, "structured", gateway_identity,
-        workspace_id=scope.workspace_id, actor_user_id=config.actor_user_id,
-    ) if mapping is not None else None
-    # Native structured evidence, or chat evidence for the gateway's prompted-JSON fallback.
-    evidence = await structured_evidence(
-        redis, role, mapping, gateway_identity=gateway_identity,
-        configuration_revision=config.configuration_revision,
-        workspace_id=scope.workspace_id, actor_user_id=config.actor_user_id,
-    )
-    capability_value = evidence.model_dump(mode="json") if evidence is not None else None
-    supported = evidence is not None
     privacy = config.privacy
     snapshot = {
         "revision": config.configuration_revision,
@@ -117,13 +105,11 @@ async def _dependency_snapshot(config: AIExecutionConfig, redis: Redis, *, scope
         "endpoint_denied": config.endpoint_policy_denied,
         "credential_configured": config.gateway_credential_configured,
         "mapping": (mapping.model, mapping.version) if mapping is not None else None,
-        "capability_key": key,
         "remote_reasoning": privacy.allow_remote_reasoning,
         "reasoning_destinations": sorted(privacy.reasoning_destinations),
-        "capability": capability_value,
     }
     digest = hashlib.sha256(json.dumps(snapshot, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
-    return digest, supported
+    return digest, True
 
 
 def _policy_allows_extraction(config: AIExecutionConfig, mapping: ModelMapping | None, destination: str | None, local_only: bool) -> bool:
@@ -662,9 +648,10 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                         raise PrivacyPolicyDenied("Extraction source revision changed before send")
 
             gateway = ModelGateway(
+                evidence=settings_public.capability_evidence(factory, config),
                 redis=redis, base_url=config.gateway_base_url, api_key=config.gateway_api_key,
                 destination_id=cast(str, destination), timeout_seconds=settings.background_llm_timeout_seconds,
-                scope=scope, gateway_identity=config.gateway_identity,
+                scope=scope, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
                 configuration_revision=config.configuration_revision, before_send=before_send,
                 approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
                 allow_public_endpoints=config.allow_public_providers,
@@ -1015,9 +1002,9 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                 scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
             await session.commit()
-    except ModelGatewayError as exc:
-        blocked = str(exc) == "Model capability is not supported"
-        error_code = "structured_unsupported" if blocked else "model_transport_unavailable"
+    except ModelGatewayError:
+        blocked = False  # no evidence gate any more: only transport/provider errors reach here, all retryable
+        error_code = "model_transport_unavailable"
         async with factory() as session:
             await entities.set_extraction_work_error(
                 session, work_id, lease_owner, error_code, blocked=blocked,

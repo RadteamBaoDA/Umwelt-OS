@@ -120,14 +120,14 @@ def test_worker_policies_carry_identity():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("module", ["modules.timeline.worker", "modules.knowledge.entities.worker"])
-async def test_dependency_snapshot_capability_key_has_actor(module):
+async def test_dependency_snapshot_reports_supported_without_evidence(module):
     worker = importlib.import_module(module)
     redis = MagicMock()
     redis.get = AsyncMock(return_value=None)
     scope = InternalJobScope(workspace_id=OWNER.workspace_id, actor_user_id=1, membership_revision=2)
     fingerprint, supported = await worker._dependency_snapshot(_config(), redis, scope=scope)
     assert fingerprint
-    assert supported is False
+    assert supported is True
 
 
 @pytest.mark.parametrize(

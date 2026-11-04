@@ -186,13 +186,14 @@ async def _apply_configured_reranking(
                 send_session = None
 
         gateway = ModelGateway(
+            evidence=settings_public.capability_evidence(session_factory, config),
             redis=redis,
             base_url=config.gateway_base_url or "http://localhost:8000",
             api_key=config.gateway_api_key,
             destination_id=destination_id,
             timeout_seconds=config.request_timeout_seconds,
             scope=scope_kw["scope"],
-            gateway_identity=config.gateway_identity,
+            gateway_identity=config.gateway_identity, model_identity=config.model_identity,
             configuration_revision=config.configuration_revision,
             before_send=before_rerank_send,
             approved_endpoint_cidrs=config.endpoint_allowed_cidrs,

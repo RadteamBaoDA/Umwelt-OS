@@ -312,9 +312,10 @@ async def _translate(run: _Run, source: TranslationInput) -> dict[str, str]:
         await _checked(run)
 
     gateway = ModelGateway(
+        evidence=settings_public.capability_evidence(run.factory, config),
         redis=run.redis, base_url=config.gateway_base_url, api_key=config.gateway_api_key,
         destination_id=destination, timeout_seconds=min(config.request_timeout_seconds, ATTEMPT_TIMEOUT_SECONDS),
-        scope=run.gateway_scope, gateway_identity=config.gateway_identity,
+        scope=run.gateway_scope, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
         configuration_revision=config.configuration_revision, before_send=before_send,
         approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers)
     return await translate_input(

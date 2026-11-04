@@ -401,7 +401,7 @@ export function ChatSession({
         void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(responseConversationId) });
         void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
       },
-      onStatus: (statusVal) => {
+      onStatus: (statusVal, payload) => {
         if (statusVal === 'cancelled' || statusVal === 'failed' || statusVal === 'auth_expired') terminal = true;
         if (statusVal === 'unavailable') {
           // The server cannot serve this stream: stop reading and let the post-stream recovery reset the UI.
@@ -439,7 +439,9 @@ export function ChatSession({
             setStreamingUi([]);
             setInputRequest((prev) => (prev && prev.state === 'pending' ? { ...prev, state: 'cancelled' } : prev));
             setActiveResponseId(null);
-            setError(t('responseFailed'));
+            // The server sends the vetted, secret-redacted provider/policy reason; show it so the owner can act.
+            const detail = typeof (payload as { error?: unknown } | undefined)?.error === 'string' ? (payload as { error: string }).error.trim() : '';
+            setError(detail ? t('responseFailedDetail', { detail }) : t('responseFailed'));
           }
           void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(responseConversationId) });
           void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });

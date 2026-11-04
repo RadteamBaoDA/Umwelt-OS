@@ -12,6 +12,7 @@ import { useChatController } from '@/core/app-shell/chat-controller';
 import { ChatSideRail, ChatSourcesSheet } from '@/modules/chat/chat-side-rail';
 import { chatKeys, getConversation, type Citation } from '@/modules/chat/api';
 import { useQuery } from '@tanstack/react-query';
+import { usePathname } from 'next/navigation';
 
 /**
  * Inner Chat page content consuming ChatController and filling the WorkspaceShell's scrollable main region.
@@ -23,6 +24,34 @@ function ChatPageContent() {
   const chatCtrl = useChatController();
   const [mobileView, setMobileView] = React.useState<'history' | 'chat'>('chat');
   const [historyCollapsed, setHistoryCollapsed] = React.useState(false); // 280px history region is open by default on desktop
+  // Read from the pathname (not useParams): native history.replaceState updates usePathname but not route params.
+  const pathname = usePathname();
+  const urlConversationId = React.useMemo(() => {
+    if (!pathname.startsWith('/chat/')) return null;
+    try { return decodeURIComponent(pathname.slice('/chat/'.length).split('/')[0]) || null; }
+    catch { return null; } // malformed escape in a pasted URL: treat as no conversation instead of crashing
+  }, [pathname]);
+  const activeConversationId = chatCtrl.activeConversationId;
+  const { selectConversation } = chatCtrl;
+  const lastUrlConversationId = React.useRef<string | null | undefined>(undefined);
+
+  // Two-way sync between `/chat/<id>` and the shared controller. A URL change (first load, pasted link)
+  // wins once and selects that conversation; otherwise the URL mirrors the controller. Native replaceState
+  // (not router.replace) avoids a segment remount, which would detach the first send's live stream when
+  // Enter creates a conversation; it also adds no history entries.
+  // A bare `/chat` with an already-active conversation (e.g. command palette) keeps that conversation.
+  React.useEffect(() => {
+    if (urlConversationId !== lastUrlConversationId.current) {
+      lastUrlConversationId.current = urlConversationId;
+      if (urlConversationId && urlConversationId !== activeConversationId) {
+        selectConversation(urlConversationId);
+        return;
+      }
+    }
+    if (activeConversationId !== urlConversationId) {
+      window.history.replaceState(null, '', activeConversationId ? `/chat/${encodeURIComponent(activeConversationId)}` : '/chat');
+    }
+  }, [urlConversationId, activeConversationId, selectConversation]);
 
   const handleSelectConversation = React.useCallback(
     (id: string) => {
@@ -125,7 +154,7 @@ function ChatPageContent() {
 }
 
 /**
- * Full Chat page route (/chat) providing comprehensive conversation history,
+ * Full Chat page route (/chat and /chat/<conversationId>, one optional catch-all so switching never remounts) providing comprehensive conversation history,
  * search, grounded evidence inspection, and shared ChatSession execution.
  *
  * @returns Full Chat page element wrapped within WorkspaceShell.

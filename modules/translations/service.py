@@ -114,7 +114,7 @@ async def _ask(
     except CapabilityUnsupported as exc:
         raise TranslationBlocked("model_capability_missing") from exc
     except ModelGatewayError as exc:
-        if "capability is not supported" in str(exc) or "not configured" in str(exc):
+        if "not configured" in str(exc):
             raise TranslationBlocked("model_capability_missing") from exc
         raise
     except (KeyError, IndexError, TypeError, ValueError) as exc:

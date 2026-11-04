@@ -25,7 +25,6 @@ from core.model_gateway.client import (
     ModelGateway,
     ModelGatewayError,
     PrivacyPolicyDenied,
-    structured_evidence,
 )
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import (
@@ -77,15 +76,12 @@ async def _workspace_job_scope(
 
 
 async def _dependency_snapshot(config: AIExecutionConfig, redis: Redis, *, scope: Scope) -> tuple[str, bool]:
-    """Fingerprint nonsecret extraction policy and verify a current structured capability result."""
+    """Fingerprint nonsecret extraction policy; capability is always reported supported.
+
+    There is no evidence gate: the gateway tries native structured output and falls back to prompted JSON. A
+    provider rejection parks the item with this fingerprint and it is requeued only when the fingerprint changes.
+    """
     mapping = config.defaults.resolve(ROLE)
-    # Native structured evidence, or chat evidence for the gateway's prompted-JSON fallback.
-    capability = await structured_evidence(
-        redis, ROLE, mapping, gateway_identity=config.gateway_identity,
-        configuration_revision=config.configuration_revision,
-        workspace_id=scope.workspace_id, actor_user_id=config.actor_user_id,
-    )
-    supported = capability is not None
     privacy = config.privacy
     values = {
         "revision": config.configuration_revision,
@@ -96,10 +92,9 @@ async def _dependency_snapshot(config: AIExecutionConfig, redis: Redis, *, scope
         "mapping": (mapping.model, mapping.version) if mapping else None,
         "remote": privacy.allow_remote_reasoning,
         "destinations": sorted(privacy.reasoning_destinations),
-        "capability": capability.model_dump(mode="json") if capability else None,
     }
     fingerprint = hashlib.sha256(json.dumps(values, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
-    return fingerprint, supported
+    return fingerprint, True
 
 
 def _policy(config: AIExecutionConfig, mapping: ModelMapping | None, destination: str | None, local_only: bool) -> RequestPolicy:
@@ -256,16 +251,8 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                 await settings_public.get_ai_execution_config(session, settings, redis, scope=scope), ROLE)
             mapping = config.defaults.resolve(ROLE)
             destination = config.endpoint_destination_id
-            fingerprint, capability_supported = await _dependency_snapshot(config, redis, scope=scope)
+            fingerprint, _supported = await _dependency_snapshot(config, redis, scope=scope)
             dependency_fingerprint = fingerprint
-            if not capability_supported:
-                await timeline.set_extraction_work_error(
-                    session, work_id, lease_owner, "structured_unsupported", blocked=True,
-                    dependency_fingerprint=fingerprint, scope=scope,
-                    multi_workspace_enabled=multi_workspace_enabled,
-                )
-                await session.commit()
-                return
             if not _allowed(config, mapping, destination, source.local_only):
                 await timeline.set_extraction_work_error(
                     session, work_id, lease_owner, "ai_policy_denied", blocked=True,
@@ -309,9 +296,10 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                         raise PrivacyPolicyDenied("Timeline extraction source revision changed before send")
 
             gateway = ModelGateway(
+                evidence=settings_public.capability_evidence(factory, config),
                 redis=redis, base_url=config.gateway_base_url, api_key=config.gateway_api_key,
                 destination_id=cast(str, destination), timeout_seconds=settings.background_llm_timeout_seconds,
-                scope=scope, gateway_identity=config.gateway_identity,
+                scope=scope, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
                 configuration_revision=config.configuration_revision, before_send=before_send,
                 approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
                 allow_public_endpoints=config.allow_public_providers,

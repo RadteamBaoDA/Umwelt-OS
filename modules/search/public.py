@@ -477,7 +477,7 @@ async def search(
             if (
                 generation is None or generation.dimensions is None or mapping is None
                 or mapping.model != generation.model_id or mapping.version != generation.model_version
-                or generation.gateway_identity != config.gateway_identity or not policy.embeddings_allowed
+                or generation.gateway_identity != config.model_identity or not policy.embeddings_allowed
             ):
                 raise ValueError("No permitted active embedding generation")
             cache_key = _query_vector_cache_key(

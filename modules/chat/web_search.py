@@ -1,7 +1,7 @@
 """Egress client for chat web search (Tavily/Brave/SearXNG). Sends only the literal user query.
 
 Security contract (p15 design W1 + review P2-4/P3-5/P3-6): key only in a header, never logged;
-no redirects/retries/proxy; 8 s hard timeout; 256 KiB decoded-body cap; JSON content-type only;
+no redirects/retries/proxy; 8 s hard timeout; 2 MiB decoded-body cap; JSON content-type only;
 every result string is sanitized before it can reach a prompt or storage.
 """
 
@@ -31,7 +31,9 @@ logger = logging.getLogger("bbd.chat.web_search")
 
 WEB_QUERY_MAX_CHARS = 400
 WEB_SEARCH_TIMEOUT_SECONDS = 8
-MAX_RESPONSE_BYTES = 256 * 1024
+# Some providers (e.g. OmniRoute ollama-search) return whole-page text in each snippet (~300 KB for 5 results).
+# Snippets are still cut to SNIPPET_MAX by sanitize_text, so prompts do not grow with this cap.
+MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_RESULTS = 5
 TITLE_MAX = 200
 SNIPPET_MAX = 500
@@ -49,11 +51,16 @@ _BRACKETS = {
 
 
 class WebSearchError(Exception):
-    """Truthful failure type; the message is only the code, never a URL, query or key."""
+    """Truthful failure type; the message is only the code, never a URL, query or key.
 
-    def __init__(self, code: FailureCode) -> None:
+    ``reason`` is an optional short diagnostic token (``http_502``, ``too_large``, ...) built only from
+    status codes, fixed words and a sanitized MIME type, so it is safe to log and show to the owner.
+    """
+
+    def __init__(self, code: FailureCode, reason: str | None = None) -> None:
         super().__init__(code)
         self.code = code
+        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -128,7 +135,7 @@ def parse_results(provider: str, payload: Any) -> list[WebSearchResult]:
         web = payload.get("web") if isinstance(payload, dict) else None
         items, snippet_key = (web.get("results") if isinstance(web, dict) else None), "description"
     if not isinstance(items, list):
-        raise WebSearchError("provider_error")
+        raise WebSearchError("provider_error", "unexpected_shape")
     parsed = (_result(i.get("title"), i.get("url"), i.get(snippet_key)) for i in items if isinstance(i, dict))
     return [r for r in parsed if r is not None][:MAX_RESULTS]
 
@@ -195,18 +202,22 @@ async def _fetch(
         response = await client.send(request, stream=True)
         try:
             content_type = response.headers.get("content-type", "").lower()
-            if not response.is_success or content_type.split(";")[0].strip() != "application/json":
-                raise WebSearchError("provider_error")
+            if not response.is_success:
+                raise WebSearchError("provider_error", f"http_{response.status_code}")
+            mime = content_type.split(";")[0].strip()
+            if mime != "application/json":
+                # Only [a-z0-9.+/-] survives so a hostile header cannot inject text into logs or the UI.
+                raise WebSearchError("provider_error", "content_type:" + re.sub(r"[^a-z0-9.+/-]", "", mime)[:40])
             async for chunk in response.aiter_bytes():  # decoded bytes: defeats gzip bombs
                 body += chunk
                 if len(body) > MAX_RESPONSE_BYTES:
-                    raise WebSearchError("provider_error")
+                    raise WebSearchError("provider_error", "too_large")
         finally:
             await response.aclose()
     try:
         return json.loads(bytes(body))
     except ValueError:
-        raise WebSearchError("provider_error") from None
+        raise WebSearchError("provider_error", "invalid_json") from None
 
 
 async def search(
@@ -223,12 +234,12 @@ async def search(
     if provider not in ("tavily", "brave", "searxng", "omniroute") or not (api_key.isascii() and api_key.isprintable()):
         raise WebSearchError("provider_error")
     loop = asyncio.get_running_loop()
-    started, code = loop.time(), "ok"
+    started, code, reason = loop.time(), "ok", "-"
     try:
         async with asyncio.timeout(WEB_SEARCH_TIMEOUT_SECONDS):
             return parse_results(provider, await _fetch(provider, endpoint, api_key, query, transport))
     except WebSearchError as exc:
-        code = exc.code
+        code, reason = exc.code, exc.reason or "-"
         raise
     except (TimeoutError, httpx.TimeoutException):
         code = "timeout"
@@ -240,7 +251,7 @@ async def search(
         code = f"provider_error:{type(exc).__name__}"
         raise WebSearchError("provider_error") from None
     finally:
-        logger.info("web_search provider=%s outcome=%s ms=%d", provider, code, int((loop.time() - started) * 1000))
+        logger.info("web_search provider=%s outcome=%s reason=%s ms=%d", provider, code, reason, int((loop.time() - started) * 1000))
 
 
 def target_permitted(target: WebSearchTarget, privacy: PrivacySettings) -> bool:

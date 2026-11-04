@@ -992,10 +992,11 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
             context.model_send_attempts += 1
 
         gateway = ModelGateway(
+            evidence=settings_public.capability_evidence(context.session_factory, config),
             redis=context.redis, base_url=config.gateway_base_url,
             api_key=config.gateway_api_key, destination_id=config.endpoint_destination_id or "",
             timeout_seconds=max(1.0, min(float(config.request_timeout_seconds), remaining, 25.0)),
-            scope=context.scope, gateway_identity=config.gateway_identity,
+            scope=context.scope, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
             configuration_revision=config.configuration_revision, before_send=before_send,
             approved_endpoint_cidrs=tuple(context.settings.ai_allowed_endpoint_cidrs),
             allow_public_endpoints=config.allow_public_providers,

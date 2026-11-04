@@ -2,7 +2,7 @@ import hashlib
 import json
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
-from typing import Annotated, Literal, cast
+from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
 from pydantic import BaseModel, Field
@@ -72,11 +72,32 @@ class ModelTestResultBody(BaseModel):
     result: Literal["supported", "failed", "unsupported"]
 
 
+# Capabilities that describe whether the model itself answers; tools/structured are optional features with
+# fallbacks and must not mark the whole model "unsupported" in the Models table.
+_PRIMARY_CAPABILITIES = frozenset({"chat", "streaming", "embeddings", "reranking"})
+
+
 @router.get("/test-results")
 async def list_test_results(session: Session, _owner: OwnerRead) -> list[dict[str, object]]:
-    """Return the stored last test outcome (with ``checked_at``) of every tested provider model."""
+    """Return one row per tested provider model: its newest primary outcome plus every per-capability result.
+
+    Backed by the same evidence the gateway records from real chat/embedding calls, so the table shows the latest
+    real outcome (supported / unsupported / failed) with ``checked_at``. ``capabilities`` maps each recorded
+    capability to its result.
+    """
     rows = await ai_settings.list_model_test_results(session, workspace_id=_owner.workspace_id)
-    return [{"provider_id": r.provider_id, "model": r.model_id, "result": r.result, "checked_at": r.checked_at.isoformat()} for r in rows]
+    grouped: dict[tuple[str, str], list[Any]] = {}
+    for r in rows:
+        grouped.setdefault((r.provider_id, r.model_id), []).append(r)
+    out: list[dict[str, object]] = []
+    for (provider_id, model_id), items in grouped.items():
+        primary = [r for r in items if r.capability in _PRIMARY_CAPABILITIES]
+        if not primary:
+            continue
+        latest = max(primary, key=lambda r: r.checked_at)
+        out.append({"provider_id": provider_id, "model": model_id, "result": latest.result,
+                    "checked_at": latest.checked_at.isoformat(), "capabilities": {r.capability: r.result for r in items}})
+    return out
 
 
 @router.put("/test-results")
@@ -84,6 +105,8 @@ async def save_test_result(body: ModelTestResultBody, session: Session, _owner: 
     """Persist the latest test outcome of one model so the next visit shows it with its check time."""
     row = await ai_settings.save_model_test_result(
         session, workspace_id=_owner.workspace_id, provider_id=body.provider_id, model_id=body.model, result=body.result)
+    if row is None:
+        raise HTTPException(status_code=500, detail="Test result could not be stored")
     out: dict[str, object] = {"provider_id": row.provider_id, "model": row.model_id, "result": row.result, "checked_at": row.checked_at.isoformat()}
     await session.commit()
     return out
@@ -266,7 +289,7 @@ async def probe_model(
     # Probe with the owner's configured request timeout: a fixed 15 s marked slow reasoning models as failed.
     client = ModelGateway(redis, config.gateway_base_url, config.gateway_api_key,
         destination or "remote", timeout_seconds=float(config.request_timeout_seconds), scope=_owner,
-        configuration_revision=config.configuration_revision, gateway_identity=config.gateway_identity,
+        configuration_revision=config.configuration_revision, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
         before_send=recheck_send, approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
         allow_public_endpoints=config.allow_public_providers)
     message = [{"role": "user", "content": "Reply with the word ready."}]
@@ -315,15 +338,17 @@ async def probe_model(
     except (ModelGatewayError, ValueError) as exc:  # unparseable gateway reply: failed, not a 500
         detail = str(exc)
         result = ai_settings.new_capability_result(role, mapping, body.capability, "failed", config=config, scope=_owner, multi_workspace_enabled=settings.multi_workspace_enabled)
-    except RedisError as exc:
-        raise HTTPException(status_code=503, detail="Model capability storage is unavailable") from exc
+    except RedisError as exc:  # breaker/lease/quota state; capability evidence itself is in Postgres
+        raise HTTPException(status_code=503, detail="Model gateway state is unavailable") from exc
     try:
         await ai_settings.check_ai_execution_config(session, settings, redis, scope=_owner,
                                                     expected=config, auth_sessions=(session_ref,))
-        await ai_settings.save_capability(redis, result, config=config, scope=_owner,
+        await ai_settings.save_capability(session, result, config=config, scope=_owner,
                                           multi_workspace_enabled=settings.multi_workspace_enabled, configured_mapping=configured_mapping)
-    except RedisError as exc:
-        raise HTTPException(status_code=503, detail="Model capability storage is unavailable") from exc
+        await session.commit()
+    except ValueError as exc:
+        # Evidence no longer matches the configured model (changed during the test): a clear 409, never a 500.
+        raise HTTPException(status_code=409, detail="Model configuration changed during the test; test again") from exc
     finally:
         await session.rollback()
     return {**result.model_dump(mode="json"), "detail": detail}

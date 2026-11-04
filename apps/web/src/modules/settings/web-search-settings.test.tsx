@@ -84,4 +84,14 @@ describe('web search settings', () => {
     const put = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT')!;
     expect(JSON.parse(put[1].body).expected_revision).toBe(3);
   });
+
+  it('shows a localized detail line for a failed test reason', async () => {
+    const configured = { ...read, providers: [{ provider: 'searxng', endpoint: 'https://s.example/', credential_configured: false, destination_id: 's' }] };
+    fetchMock.mockImplementation((url: string) => url.endsWith('/test') ? json({ ok: false, error: 'provider_error', detail: null, reason: 'too_large' }) : json(configured));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><QueryClientProvider client={client}><WebSearchSettingsWorkspace /></QueryClientProvider></NextIntlClientProvider>);
+    await userEvent.click(await screen.findByRole('button', { name: 'Test connection' }));
+    expect(await screen.findByText('The provider rejected the request.')).toBeTruthy();
+    expect(await screen.findByText('Response too large')).toBeTruthy();
+  });
 });

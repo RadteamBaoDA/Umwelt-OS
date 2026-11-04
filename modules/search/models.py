@@ -50,6 +50,8 @@ class IndexGeneration(Base):
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     model_id: Mapped[str] = mapped_column(String(200), nullable=False)
     model_version: Mapped[str | None] = mapped_column(String(200))
+    # Stores AIExecutionConfig.model_identity (embedding model/provider space), not gateway_identity; the column
+    # name predates the split and is kept to avoid a migration. Unrelated settings saves must not change it.
     gateway_identity: Mapped[str | None] = mapped_column(String(64))
     response_model_id: Mapped[str | None] = mapped_column(String(200))
     dimensions: Mapped[int | None] = mapped_column(Integer)

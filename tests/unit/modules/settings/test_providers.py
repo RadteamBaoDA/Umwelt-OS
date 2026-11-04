@@ -12,7 +12,6 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
 from pydantic import SecretStr
-from redis.exceptions import RedisError
 
 from core.config import Settings
 from core.model_gateway.schemas import (
@@ -351,11 +350,24 @@ def test_draft_reuses_stored_key_only_for_the_same_endpoint() -> None:
 # ---- Redis degradation ------------------------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_list_capabilities_returns_empty_when_redis_is_down() -> None:
+async def test_list_capabilities_reads_postgres_rows_matching_current_identity() -> None:
+    """Evidence has no TTL; only rows stamped with the current model identity for the role's mapping are reported."""
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
     config = _derived_config()
-    redis = MagicMock()
-    redis.get = AsyncMock(side_effect=RedisError("down"))
-    assert await models.list_capabilities(redis, config=config, scope=SCOPE, multi_workspace_enabled=False) == []
+    mapping = config.defaults.resolve("chat")
+    assert mapping is not None
+    now = datetime.now(UTC)
+
+    def row(identity: str | None, capability: str, model: str = mapping.model) -> SimpleNamespace:
+        return SimpleNamespace(provider_id=mapping.provider_id or "default", model_id=model, capability=capability,
+                               result="supported", model_identity=identity, checked_at=now)
+
+    rows = [row(config.model_identity, "streaming"), row("f" * 64, "chat"), row(None, "tools"), row(config.model_identity, "tools", "other")]
+    with patch.object(models, "list_model_test_results", AsyncMock(return_value=rows)):
+        found = await models.list_capabilities(MagicMock(), config=config, scope=SCOPE, multi_workspace_enabled=False)
+    assert [(item.role, item.capability) for item in found] == [("chat", "streaming")]
+    assert found[0].expires_at is None
 
 
 # ---- every ModelGateway(...) construction is fed from a derived config ----------------------------------------------

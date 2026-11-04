@@ -942,7 +942,7 @@ async def _context(factory: async_sessionmaker[AsyncSession], adm: _Admission, s
     )
     gateway = ModelGateway(redis, config.gateway_base_url, config.gateway_api_key,
                            config.endpoint_destination_id or "", timeout_seconds=min(config.request_timeout_seconds, 30),
-                           scope=adm.scope, gateway_identity=config.gateway_identity,
+                           scope=adm.scope, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
                            configuration_revision=config.configuration_revision, before_send=fence_check,
                            approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers)
     return context, gateway, rows
@@ -1089,7 +1089,7 @@ async def _fresh_fact_action(factory: async_sessionmaker[AsyncSession], adm: _Ad
 
     gateway = ModelGateway(redis, config.gateway_base_url, config.gateway_api_key,
         config.endpoint_destination_id or "", timeout_seconds=min(config.request_timeout_seconds, 30),
-        scope=adm.scope, gateway_identity=config.gateway_identity,
+        scope=adm.scope, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
         configuration_revision=config.configuration_revision, before_send=before_send,
         approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers)
 

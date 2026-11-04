@@ -406,3 +406,34 @@ def test_empty_primary_result_does_not_try_fallback() -> None:
 
     results, provider = asyncio.run(ws.search_with_fallback(targets, "hello", transport))
     assert results == [] and provider == "tavily" and calls == ["tavily"]
+
+
+def _reason(handler: Any) -> str | None:
+    with pytest.raises(ws.WebSearchError) as info:
+        _run("omniroute", handler)
+    assert info.value.code == "provider_error"
+    return info.value.reason
+
+
+def test_large_omniroute_snippets_parse_and_truncate() -> None:
+    page = "word " * 12_000  # ~60 KB per snippet, ~300 KB body (> old 256 KiB cap)
+    results = [{"title": f"T{i}", "url": f"https://site{i}.example/", "snippet": page} for i in range(5)]
+    found = _run("omniroute", lambda r: httpx.Response(200, json={"results": results}, headers=JSON))
+    assert len(found) == 5 and all(len(r.snippet) <= ws.SNIPPET_MAX for r in found)
+
+
+def test_failure_reasons_are_specific_and_secret_free(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="bbd.chat.web_search")
+    assert _reason(lambda r: httpx.Response(200, content=b"x" * (ws.MAX_RESPONSE_BYTES + 1), headers=JSON)) == "too_large"
+    assert _reason(lambda r: httpx.Response(502, headers=JSON)) == "http_502"
+    html_type = {"content-type": "text/html; charset=utf-8"}
+    assert _reason(lambda r: httpx.Response(200, text="<p/>", headers=html_type)) == "content_type:text/html"
+    assert _reason(lambda r: httpx.Response(200, content=b"{nope", headers=JSON)) == "invalid_json"
+    assert _reason(lambda r: httpx.Response(200, json={"error": "x"}, headers=JSON)) == "unexpected_shape"
+    assert "reason=unexpected_shape" in caplog.text
+    for secret in (KEY, "api.example.com", "weather in hanoi"):
+        assert secret not in caplog.text
+
+
+def test_error_without_reason_still_constructs() -> None:
+    assert ws.WebSearchError("timeout").reason is None

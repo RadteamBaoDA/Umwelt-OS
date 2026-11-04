@@ -183,6 +183,7 @@ def gateway(
     return ModelGateway(redis, config.gateway_base_url, config.gateway_api_key,
         config.endpoint_destination_id or "remote", config.request_timeout_seconds,
         scope=scope, gateway_identity=config.gateway_identity,
+        model_identity=config.model_identity,
         configuration_revision=config.configuration_revision, before_send=before_send,
         approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers)
 
@@ -277,7 +278,7 @@ def eligible_chunks(*, workspace_id: UUID) -> Select[UUID, str, UUID]:
 
 
 async def _dedupe_or_create(
-    session: AsyncSession, mapping: ModelMapping, gateway_identity: str, *,
+    session: AsyncSession, mapping: ModelMapping, model_identity: str, *,
     scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
     honor_retry_delay: bool = False,
 ) -> IndexGeneration | None:
@@ -285,6 +286,8 @@ async def _dedupe_or_create(
 
     Returns None only when ``honor_retry_delay`` finds a recent matching failed run, so
     the retry decision is made under serialization rather than from a stale pre-lock read.
+    ``model_identity`` (stored in the legacy ``gateway_identity`` column) identifies the embedding model/provider
+    space only, so web search, prompt or preference saves never force a rebuild.
     """
     if honor_retry_delay:
         latest = await session.scalar(select(IndexGeneration).where(
@@ -292,7 +295,7 @@ async def _dedupe_or_create(
         ).order_by(IndexGeneration.created_at.desc(), IndexGeneration.id).limit(1))
         if (latest is not None and latest.status == "failed"
                 and latest.model_id == mapping.model and latest.model_version == mapping.version
-                and latest.gateway_identity == gateway_identity
+                and latest.gateway_identity == model_identity
                 and datetime.now(UTC) - latest.updated_at < AUTO_INDEX_RETRY_DELAY):
             await session.rollback()
             return None
@@ -301,7 +304,7 @@ async def _dedupe_or_create(
         IndexGeneration.status.in_(("queued", "running", "active")),
     ).order_by(IndexGeneration.created_at.desc(), IndexGeneration.id).limit(1).with_for_update())
     if existing is not None and existing.status in {"queued", "running"}:
-        if (existing.gateway_identity != gateway_identity or existing.model_id != mapping.model
+        if (existing.gateway_identity != model_identity or existing.model_id != mapping.model
                 or existing.model_version != mapping.version):
             raise ValueError("An index generation for another gateway is still running")
         await commit_with_replay(
@@ -310,7 +313,7 @@ async def _dedupe_or_create(
         )
         return existing
     if (existing is not None and existing.status == "active"
-            and existing.gateway_identity == gateway_identity and existing.model_id == mapping.model
+            and existing.gateway_identity == model_identity and existing.model_id == mapping.model
             and existing.model_version == mapping.version):
         await commit_with_replay(
             session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
@@ -319,7 +322,7 @@ async def _dedupe_or_create(
         return existing
     generation = IndexGeneration(
         workspace_id=scope.workspace_id, model_id=mapping.model,
-        model_version=mapping.version, gateway_identity=gateway_identity,
+        model_version=mapping.version, gateway_identity=model_identity,
     )
     session.add(generation)
     await session.flush()
@@ -339,7 +342,7 @@ async def _take_generation_mutex(session: AsyncSession, scope: Scope) -> None:
 
 
 async def create_generation(
-    session: AsyncSession, mapping: ModelMapping, gateway_identity: str, *,
+    session: AsyncSession, mapping: ModelMapping, model_identity: str, *,
     scope: Scope, multi_workspace_enabled: bool,
 ) -> IndexGeneration:
     """Create or reuse one admitted workspace generation under its durable advisory lock.
@@ -352,7 +355,7 @@ async def create_generation(
     )
     await _take_generation_mutex(session, scope)
     generation = await _dedupe_or_create(
-        session, mapping, gateway_identity, scope=scope,
+        session, mapping, model_identity, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
     )
     if generation is None:  # unreachable: retry delay is only honored by the authority seam
@@ -384,7 +387,7 @@ async def create_generation_for_authority(
     if mapping is None or not authority.unchanged(config, mapping, policy) or not authority.permitted():
         raise HTTPException(status_code=409, detail="Search configuration changed")
     return await _dedupe_or_create(
-        session, mapping, config.gateway_identity, scope=scope,
+        session, mapping, config.model_identity, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
         honor_retry_delay=honor_retry_delay,
     )
@@ -644,7 +647,7 @@ async def _index_generation(
         mapping, config = original.mapping, original.config
         if (mapping is None or mapping.model != generation.model_id
                 or mapping.version != generation.model_version
-                or config.gateway_identity != generation.gateway_identity):
+                or config.model_identity != generation.gateway_identity):  # column stores model_identity
             if generation.status != "active":
                 before = await _index_projection(session, generation_id, scope=scope)
                 generation.status, generation.error_code = "failed", "model_unavailable"

@@ -18,7 +18,19 @@ type Entry = { provider: Provider; endpoint: string | null; credential_configure
 type WebSearch = { configuration_revision: number; providers: Entry[]; allow_remote_web_search: boolean };
 type DraftEntry = Entry & { key: string; removed: boolean };
 type Draft = { configuration_revision: number; providers: DraftEntry[]; allow_remote_web_search: boolean };
-type TestResult = { ok: boolean; error: 'credential_required' | 'network_denied' | 'provider_error' | 'timeout' | null; detail: number | null };
+type TestResult = { ok: boolean; error: 'credential_required' | 'network_denied' | 'provider_error' | 'timeout' | null; detail: number | null; reason?: string | null };
+
+/**
+ * Map a backend failure `reason` token (never secret) to localized detail text, or null when none/unknown.
+ * `http_<status>` and `content_type:<mime>` carry a parameter; fixed tokens use `testReason_<token>` keys.
+ */
+function reasonText(t: ReturnType<typeof useTranslations<'webSearch'>>, reason: string | null | undefined): string | null {
+  if (!reason) return null;
+  if (reason.startsWith('http_')) return t('testReason_http', { status: reason.slice(5) });
+  if (reason.startsWith('content_type:')) return t('testReason_content_type', { type: reason.slice(13) });
+  if (reason === 'too_large' || reason === 'invalid_json' || reason === 'unexpected_shape') return t(`testReason_${reason}` as 'testReason_too_large');
+  return null;
+}
 
 /** Edit ordered web-search providers and their write-only credentials under one remote-search consent. */
 export function WebSearchSettingsWorkspace() {
@@ -81,6 +93,7 @@ export function WebSearchSettingsWorkspace() {
             <Button type="button" variant="outline" disabled={save.isPending || index === view.providers.length - 1} onClick={() => move(index, 1)} aria-label={t('moveDownAt', { number: index + 1 })}>{t('moveDown')}</Button>
             <Button type="button" variant="outline" disabled={save.isPending} onClick={() => change({ ...view, providers: view.providers.filter((_, i) => i !== index) })} aria-label={t('removeAt', { number: index + 1 })}>{t('removeProvider')}</Button>
             {testedIndex === index && test.data ? <p className={test.data.ok ? 'm-0 text-sm text-muted-foreground' : 'error m-0'} role="status">{test.data.ok ? (test.data.detail == null ? t('testOkNoCount') : t('testOk', { count: test.data.detail })) : t(`testError_${test.data.error ?? 'unknown'}` as 'testError_unknown')}</p> : null}
+            {testedIndex === index && test.data && !test.data.ok && reasonText(t, test.data.reason) ? <p className="m-0 text-sm text-muted-foreground">{reasonText(t, test.data.reason)}</p> : null}
             {testedIndex === index && test.isError ? <p className="error m-0" role="alert">{t(apiFailureKey(test.error) ?? 'requestFailed')}</p> : null}
           </div>
         </div>)}

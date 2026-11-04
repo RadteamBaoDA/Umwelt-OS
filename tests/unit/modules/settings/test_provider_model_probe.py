@@ -1,4 +1,4 @@
-"""Provider-model capability probe: evidence saved by probe_model must satisfy the gateway's streaming check."""
+"""Provider-model capability probe: probe_model persists evidence in Postgres under the exact provider model."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
-from core.model_gateway.client import ModelGateway
 from core.model_gateway.schemas import (
     AIExecutionConfig,
     ModelDefaults,
@@ -19,7 +18,6 @@ from core.model_gateway.schemas import (
     ProbeRequest,
     ProviderConfig,
     ProviderModel,
-    RequestPolicy,
 )
 from core.workspaces.schemas import WorkspaceContext
 from modules.model_gateway import routes
@@ -45,7 +43,7 @@ def _config() -> AIExecutionConfig:
 
 
 class _Redis:
-    """Minimal async key/value store standing in for Redis."""
+    """Minimal async key/value store standing in for Redis (breaker/lease state only; no capability evidence)."""
 
     def __init__(self) -> None:
         self.data: dict[str, str] = {}
@@ -57,8 +55,8 @@ class _Redis:
         self.data[key] = value
 
 
-async def _run(redis: _Redis, body: ProbeRequest, role: str = "chat") -> dict[str, object]:
-    """Invoke probe_model with a stub gateway whose stream yields one content chunk."""
+async def _run(redis: _Redis, body: ProbeRequest, role: str = "chat", *, save: AsyncMock | None = None) -> dict[str, object]:
+    """Invoke probe_model with a stub gateway whose stream yields one content chunk; ``save`` stands in for the DB upsert."""
     async def stream(*_a: object, **_k: object):  # type: ignore[no-untyped-def]
         yield "data: " + json.dumps({"choices": [{"delta": {"content": "ready"}}]})
         yield "data: [DONE]"
@@ -69,10 +67,8 @@ async def _run(redis: _Redis, body: ProbeRequest, role: str = "chat") -> dict[st
         settings=SimpleNamespace(multi_workspace_enabled=False), redis=redis)))
     session = MagicMock()
     session.rollback = AsyncMock()
-    with patch.object(public, "get_ai_execution_config", AsyncMock(return_value=_config())), \
-         patch.object(public, "check_ai_execution_config", AsyncMock()), \
-         patch.object(routes, "ModelGateway", MagicMock(return_value=gateway)), \
-         patch.object(routes, "authenticated_session_ref", MagicMock()):
+    session.commit = AsyncMock()
+    with patch.object(public, "get_ai_execution_config", AsyncMock(return_value=_config())),          patch.object(public, "check_ai_execution_config", AsyncMock()),          patch.object(public, "save_capability", save or AsyncMock()),          patch.object(routes, "ModelGateway", MagicMock(return_value=gateway)),          patch.object(routes, "authenticated_session_ref", MagicMock()):
         return await routes.probe_model(request, session, SCOPE, role, body)  # type: ignore[arg-type]
 
 
@@ -86,19 +82,21 @@ def test_probe_request_requires_provider_and_model_together() -> None:
 
 @pytest.mark.asyncio
 async def test_provider_model_probe_saves_evidence_chat_streaming_accepts() -> None:
-    redis = _Redis()
-    result = await _run(redis, ProbeRequest(capability="streaming", provider_id="local", model="general-free"))
-    assert result["result"] == "supported" and len(redis.data) == 1
+    save = AsyncMock()
+    result = await _run(_Redis(), ProbeRequest(capability="streaming", provider_id="local", model="general-free"), save=save)
+    assert result["result"] == "supported"
+    save.assert_awaited_once()
+    saved = save.await_args.args[1]
+    assert (saved.model, saved.capability, saved.result) == ("general-free", "streaming", "supported")
+    assert save.await_args.kwargs["configured_mapping"] == public.mapping_for_override(_config(), "local", "general-free")
 
-    # The chat worker builds the same mapping; the gateway's fail-closed check must now pass.
-    config = _config()
-    mapping = public.mapping_for_override(config, "local", "general-free")
-    gateway = ModelGateway(redis, "http://ollama:11434", "", "local:abc", scope=SCOPE,  # type: ignore[arg-type]
-                           gateway_identity=IDENTITY, configuration_revision=2, before_send=AsyncMock())
-    policy = RequestPolicy(workspace_id=WS, actor_user_id=1, membership_revision=1, gateway_identity=IDENTITY, configuration_revision=2)
-    assert await gateway._capability_supported("chat", mapping, policy, "streaming") is True
-    other = ModelMapping(model="not-probed", provider_id="local")
-    assert await gateway._capability_supported("chat", other, policy, "streaming") is False
+
+@pytest.mark.asyncio
+async def test_probe_evidence_mismatch_is_a_409_not_a_500() -> None:
+    save = AsyncMock(side_effect=ValueError("Capability evidence does not match configured model"))
+    with pytest.raises(HTTPException) as exc:
+        await _run(_Redis(), ProbeRequest(capability="streaming", provider_id="local", model="general-free"), save=save)
+    assert exc.value.status_code == 409
 
 
 @pytest.mark.asyncio
@@ -111,7 +109,6 @@ async def test_provider_model_probe_rejects_unknown_wrong_type_and_non_chat() ->
     with pytest.raises(HTTPException) as exc:
         await _run(redis, ProbeRequest(capability="streaming", provider_id="local", model="general-free"), role="brief")
     assert exc.value.status_code == 422
-    assert redis.data == {}
 
 
 @pytest.mark.asyncio
@@ -120,4 +117,4 @@ async def test_save_capability_rejects_model_not_configured_on_provider() -> Non
     bogus = ModelMapping(model="ghost", provider_id="local")
     result = public.new_capability_result("chat", bogus, "streaming", "supported", config=config, scope=SCOPE, multi_workspace_enabled=False)
     with pytest.raises(ValueError):
-        await public.save_capability(_Redis(), result, config=config, scope=SCOPE, multi_workspace_enabled=False, configured_mapping=bogus)  # type: ignore[arg-type]
+        await public.save_capability(MagicMock(), result, config=config, scope=SCOPE, multi_workspace_enabled=False, configured_mapping=bogus)

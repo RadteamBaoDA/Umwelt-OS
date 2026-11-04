@@ -22,11 +22,6 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import RedisError
 
-from core.model_gateway.cache import (
-    capability_key,
-    capability_model_pattern,
-    capability_role_pattern,
-)
 from core.model_gateway.client import (
     CapabilityUnsupported,
     ModelGateway,
@@ -65,23 +60,15 @@ def _cap_json(role: str = "chat", capability: str = "chat") -> str:
     now = datetime.now(UTC)
     return json.dumps({
         "workspace_id": str(WORKSPACE_ID), "actor_user_id": 7, "membership_revision": 3,
-        "role": role, "model": "m", "version": "1", "gateway_identity": GATEWAY_IDENTITY,
+        "role": role, "model": "m", "version": "1", "model_identity": GATEWAY_IDENTITY,
         "configuration_revision": 1, "capability": capability, "result": "supported",
         "checked_at": now.isoformat(), "expires_at": (now + timedelta(hours=1)).isoformat(),
     })
 
 
 def _cap_get() -> AsyncMock:
-    """Redis ``get`` serving supported evidence for every role/capability the gateway can ask about."""
-    from core.model_gateway.cache import capability_key
-
-    table = {
-        capability_key(role, "m", "1", capability, GATEWAY_IDENTITY, workspace_id=WORKSPACE_ID, actor_user_id=7):
-            _cap_json(role, capability)
-        for role in ("chat", "reranker") for capability in
-        ("chat", "streaming", "embeddings", "structured", "tools", "rerank", "reranking")
-    }
-    return AsyncMock(side_effect=lambda key: table.get(key))
+    """Redis ``get`` stub: capability evidence no longer lives in Redis, so every key (breaker flags too) is unset."""
+    return AsyncMock(return_value=None)
 
 
 def _gateway(redis, **overrides) -> ModelGateway:
@@ -132,36 +119,6 @@ class TestPolicyMaySend:
         mapping = ModelMapping(model="gpt-4o", destination="remote")
         assert may_send(policy, "chat", mapping, "dest1", True, "chat") is True
         assert may_send(policy, "chat", mapping, "dest1", True, "embeddings") is False
-
-
-class TestCapabilityCacheKeys:
-    """Unit tests for cache key generators in core.model_gateway.cache."""
-
-    def test_capability_key_format(self) -> None:
-        """Verify capability_key builds expected Redis key."""
-        key = capability_key(
-            role="chat",
-            model="gpt-4o-mini",
-            version="2024-07-18",
-            capability="chat",
-            gateway_identity=GATEWAY_IDENTITY,
-            workspace_id=WORKSPACE_ID,
-            actor_user_id=7,
-        )
-        assert key.startswith("bbd:model-gateway:capability:")
-        assert GATEWAY_IDENTITY in key
-        assert str(WORKSPACE_ID) in key
-
-    def test_capability_patterns(self) -> None:
-        """Verify pattern builders for role and model cache invalidation."""
-        role_pat = capability_role_pattern(
-            "chat", workspace_id=WORKSPACE_ID, actor_user_id=7, gateway_identity=GATEWAY_IDENTITY,
-        )
-        assert role_pat.endswith(":*")
-        model_pat = capability_model_pattern(
-            "chat", "gpt-4o", "v1", workspace_id=WORKSPACE_ID, actor_user_id=7, gateway_identity=GATEWAY_IDENTITY,
-        )
-        assert model_pat.endswith(":*")
 
 
 class TestTransportNetworkPolicy:
@@ -240,7 +197,7 @@ class TestModelGatewayRequestExecution:
         now = datetime.now(UTC)
         return json.dumps({
             "workspace_id": str(WORKSPACE_ID), "actor_user_id": 7, "membership_revision": 3,
-            "role": "chat", "model": "gpt-4o", "version": "1", "gateway_identity": GATEWAY_IDENTITY,
+            "role": "chat", "model": "gpt-4o", "version": "1", "model_identity": GATEWAY_IDENTITY,
             "configuration_revision": 1, "capability": "chat", "result": "supported",
             "checked_at": now.isoformat(), "expires_at": (now + timedelta(hours=1)).isoformat(),
         })
@@ -267,14 +224,24 @@ class TestModelGatewayRequestExecution:
             await mock_gateway.chat("chat", mapping, policy, [{"role": "user", "content": "hi"}], before_send=AsyncMock())
 
     @pytest.mark.asyncio
-    async def test_request_unverified_capability_raises(self, mock_gateway) -> None:
-        """Verify _request raises ModelGatewayError when capability is not in cache."""
-        mock_gateway.redis.get.return_value = None  # Not verified
+    async def test_missing_evidence_does_not_block_and_records_supported(self, mock_gateway) -> None:
+        """No stored evidence never blocks a request; the real success is recorded as supported."""
+        records: list[tuple[str, str]] = []
+
+        class Store:
+            async def lookup(self, role, mapping, capability):
+                return None
+
+            async def record(self, role, mapping, capability, result):
+                records.append((capability, result))
+
+        gw = _gateway(mock_gateway.redis, evidence=Store())
         policy = _policy(reasoning_allowed=True, permitted_destinations=frozenset({"dest1"}))
         mapping = ModelMapping(model="gpt-4o", version="1", destination="remote")
-
-        with pytest.raises(ModelGatewayError, match="capability is not supported"):
-            await mock_gateway.chat("chat", mapping, policy, [{"role": "user", "content": "hi"}], before_send=AsyncMock())
+        with patch.object(ModelGateway, "_with_slot", AsyncMock(return_value={"choices": []})),              patch.object(ModelGateway, "_breaker_check", AsyncMock()), patch.object(ModelGateway, "_breaker_ok", AsyncMock()):
+            out = await gw.chat("chat", mapping, policy, [{"role": "user", "content": "hi"}], before_send=AsyncMock())
+        assert out == {"choices": []}
+        assert records == [("chat", "supported")]
 
     @pytest.mark.asyncio
     async def test_request_maps_unsupported_status_error(self, mock_gateway) -> None:
@@ -621,32 +588,25 @@ class TestModelGatewayCapacityAndTimeouts:
         assert redis.keys == {}
 
 
-class TestStreamingEvidenceGate:
-    """Chat streaming stays fail-closed: it needs saved evidence for the exact role/model/version."""
+class TestStreamingNoEvidenceGate:
+    """Chat streaming is never blocked by missing capability evidence; privacy checks still run first."""
 
     @staticmethod
-    async def _drain(redis_get: Any, mapping: ModelMapping) -> None:
+    async def _drain(mapping: ModelMapping) -> None:
         redis = _LeaseRedis()
-        redis.get = redis_get
+        redis.get = AsyncMock(return_value=None)
         gw = _lease_gateway(redis)
         policy = _policy(reasoning_allowed=True, permitted_destinations=frozenset({"d"}))
         [x async for x in gw.stream("chat", mapping, policy, [])]
 
     @pytest.mark.asyncio
-    async def test_unverified_streaming_raises(self) -> None:
-        with pytest.raises(ModelGatewayError, match="Streaming capability has not been verified"):
-            await self._drain(AsyncMock(return_value=None), ModelMapping(model="general-free", provider_id="local", destination="remote"))
-
-    @pytest.mark.asyncio
-    async def test_verified_streaming_with_non_default_mapping_passes_the_gate(self) -> None:
+    async def test_missing_evidence_reaches_the_provider(self) -> None:
         mapping = ModelMapping(model="general-free", provider_id="local", destination="remote")
-        key = capability_key("chat", "general-free", None, "streaming", GATEWAY_IDENTITY, workspace_id=WORKSPACE_ID, actor_user_id=7)
-        evidence = json.loads(_cap_json("chat", "streaming")) | {"model": "general-free", "version": None}
-        get = AsyncMock(side_effect=lambda k: json.dumps(evidence) if k == key else None)
-        # Past the gate the stub client fails; the verification error must not be what surfaces.
+        # The stub client fails past the (removed) gate; the old "not verified" error must not surface.
         with patch("core.model_gateway.client.AsyncOpenAI", side_effect=RuntimeError("past gate")),              patch.object(ModelGateway, "_http_client", return_value=MagicMock()),              pytest.raises(Exception) as exc:
-            await self._drain(get, mapping)
+            await self._drain(mapping)
         assert "has not been verified" not in str(exc.value)
+        assert "past gate" in str(exc.value) or "network policy" in str(exc.value) or exc.type is RuntimeError
 
 
 class _SlowModelServer:

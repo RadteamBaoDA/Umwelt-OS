@@ -190,6 +190,7 @@ class ConnectionTestResult(BaseModel):
     ok: bool
     error: str | None = None
     detail: int | None = None  # result count (web search) or HTTP status (n8n)
+    reason: str | None = None  # short non-secret diagnostic token (web search), e.g. ``too_large``
 
 
 class N8nRead(BaseModel):
