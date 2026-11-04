@@ -6,13 +6,13 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.ids import uuid7
 from core.realtime import ReplayDraft, commit_with_replay, make_graph_change
-from core.workspaces import public as workspaces
+from core.workspaces.admission import actor_id as _actor
+from core.workspaces.admission import admit_scope
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
@@ -44,29 +44,18 @@ MAX_CORRECTION_MEMBERSHIPS = 200
 MAX_CORRECTION_EVIDENCE_REFS = 100
 
 
-def _actor(scope: Scope) -> int:
-    """Return the authenticated workspace owner or durable job actor."""
-    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
-
-
 async def _admit(
     session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
     lock: bool = False, expected: AccessFence | None = None,
 ) -> AccessFence:
-    """Admit the owner workspace before correction discovery and lock acquisition."""
-    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
-        raise TypeError("An explicit correction workspace scope is required")
-    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
-    if type(multi_workspace_enabled) is not bool:
-        raise TypeError("The configured multi-workspace feature flag must be a boolean")
-    if lock:
-        return await workspaces.lock_access_fence(
-            session, scope=scope, expected=expected,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-    return await workspaces.read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    """Admit the owner workspace before correction discovery and lock acquisition.
+
+    Delegates to the canonical ``admit_scope`` for workspace/job scopes only (owner-only members get 403, the
+    flag must be a ``bool``); ``lock=True`` locks the access fence against ``expected``. No commit.
+    """
+    return await admit_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=lock, expected=expected,
+        allowed_scopes=(WorkspaceContext, InternalJobScope), scope_label="correction workspace",
     )
 
 
@@ -180,18 +169,15 @@ def _conflict(code: str, message: str, *, entity_ids: list[UUID] = [],  # noqa: 
                                    membership_ids=membership_ids, relationship_ids=relationship_ids)
 
 
-async def _discover(
-    session: AsyncSession, entity_ids: list[UUID], *, scope: Scope,
-    include_target_memberships: bool = False,
-) -> _Closure:
-    """Read and bound the merge/split support graph before acquiring its locks."""
-    ids = sorted(set(entity_ids), key=str)
-    entity_rows = list((await session.scalars(
-        select(Entity).where(Entity.workspace_id == scope.workspace_id, Entity.id.in_(ids))
-        .order_by(Entity.id).execution_options(populate_existing=True)
-    )).all()) if ids else []
-    if len(entity_rows) != len(ids):
-        raise _conflict("entity_missing", "A correction entity no longer exists", entity_ids=ids)
+async def _discover_owned_rows(
+    session: AsyncSession, ids: list[UUID], *, scope: Scope, include_target_memberships: bool,
+) -> tuple[list[EntityEvidenceMembership], list[EntityAlias], list[EntityAliasEvidence], list[EntityFieldEvidence]]:
+    """Read the bounded memberships, aliases and derived supports owned by the correction entities.
+
+    Queries run in a fixed order (source memberships, optional target memberships, aliases, alias supports,
+    field supports), each limited to ``MAX_CORRECTION_MEMBERSHIPS + 1``; exceeding the bound raises
+    ``CorrectionConflictError("correction_too_large")``. Read-only.
+    """
     source_memberships = list((await session.scalars(
         select(EntityEvidenceMembership).where(
             EntityEvidenceMembership.workspace_id == scope.workspace_id,
@@ -233,12 +219,17 @@ async def _discover(
     )).all()) if ids else []
     if len(alias_supports) > MAX_CORRECTION_MEMBERSHIPS or len(field_supports) > MAX_CORRECTION_MEMBERSHIPS:
         raise _conflict("correction_too_large", "Correction derived support closure exceeds 200", entity_ids=ids)
-    owner_membership_ids = {item.id for item in source_memberships}
-    support_membership_ids = {
-        item.membership_id for item in alias_supports
-    } | {item.membership_id for item in field_supports}
-    if not support_membership_ids <= owner_membership_ids:
-        raise _conflict("correction_closure_changed", "Derived support references evidence outside the correction membership closure", entity_ids=ids)
+    return source_memberships, aliases, alias_supports, field_supports
+
+
+async def _discover_redirects(
+    session: AsyncSession, ids: list[UUID], *, scope: Scope,
+) -> tuple[list[EntityRedirect], set[UUID]]:
+    """Walk redirects that point into the correction entities and reject cycles, size excess or retained evidence.
+
+    Returns the redirect rows sorted by old entity id and the set of redirected (old) entity ids. A redirected
+    entity that still owns memberships, aliases or field evidence raises ``redirect_dependency_conflict``.
+    """
     redirect_rows_by_old_id: dict[UUID, EntityRedirect] = {}
     redirect_frontier = set(ids)
     while redirect_frontier:
@@ -280,6 +271,31 @@ async def _discover(
         ).order_by(EntityFieldEvidence.id).limit(1))).all())
         if retained_memberships or retained_aliases or retained_fields:
             raise _conflict("redirect_dependency_conflict", "Redirect closure contains retained entity-owned evidence that needs reconciliation", entity_ids=sorted(redirect_entity_ids, key=str), membership_ids=retained_memberships)
+    return redirect_rows, redirect_entity_ids
+
+
+async def _discover(
+    session: AsyncSession, entity_ids: list[UUID], *, scope: Scope,
+    include_target_memberships: bool = False,
+) -> _Closure:
+    """Read and bound the merge/split support graph before acquiring its locks."""
+    ids = sorted(set(entity_ids), key=str)
+    entity_rows = list((await session.scalars(
+        select(Entity).where(Entity.workspace_id == scope.workspace_id, Entity.id.in_(ids))
+        .order_by(Entity.id).execution_options(populate_existing=True)
+    )).all()) if ids else []
+    if len(entity_rows) != len(ids):
+        raise _conflict("entity_missing", "A correction entity no longer exists", entity_ids=ids)
+    source_memberships, aliases, alias_supports, field_supports = await _discover_owned_rows(
+        session, ids, scope=scope, include_target_memberships=include_target_memberships,
+    )
+    owner_membership_ids = {item.id for item in source_memberships}
+    support_membership_ids = {
+        item.membership_id for item in alias_supports
+    } | {item.membership_id for item in field_supports}
+    if not support_membership_ids <= owner_membership_ids:
+        raise _conflict("correction_closure_changed", "Derived support references evidence outside the correction membership closure", entity_ids=ids)
+    redirect_rows, redirect_entity_ids = await _discover_redirects(session, ids, scope=scope)
     entity_closure_ids = sorted(set(ids) | redirect_entity_ids, key=str)
     if len(entity_closure_ids) > MAX_CORRECTION_ENTITIES:
         raise _conflict("correction_too_large", "Correction redirect closure exceeds 100 entities", entity_ids=entity_closure_ids)
@@ -406,13 +422,15 @@ async def _validate_split_request(
     return source, selected
 
 
-async def _discover_delete_closure(session: AsyncSession, entity_id: UUID, *, scope: Scope) -> _DeleteClosure:
-    """Discover bounded redirect, evidence, alias, decision, and incident-edge rows."""
-    root = await session.scalar(select(Entity).where(
-        Entity.id == entity_id, Entity.workspace_id == scope.workspace_id,
-    ).execution_options(populate_existing=True))
-    if root is None:
-        raise _conflict("entity_missing", "Entity no longer exists", entity_ids=[entity_id])
+async def _delete_redirect_closure(
+    session: AsyncSession, entity_id: UUID, *, scope: Scope,
+) -> tuple[set[UUID], dict[UUID, EntityRedirect]]:
+    """Walk redirects (breadth-first, <= 100 entities) that point into the deletion root.
+
+    Returns the closure entity ids (root included) and the redirect rows keyed by old id. Raises
+    ``entity_missing`` when the root was already deleted (cleared stub) and ``entity_redirected`` when it is
+    itself redirected; oversized closures raise ``deletion_too_large``.
+    """
     entity_ids = {entity_id}
     frontier = {entity_id}
     redirect_rows: dict[UUID, EntityRedirect] = {}
@@ -445,6 +463,20 @@ async def _discover_delete_closure(session: AsyncSession, entity_id: UUID, *, sc
         if redirect_rows[entity_id].target_entity_id is None:
             raise _conflict("entity_missing", "Entity was deleted", entity_ids=[entity_id])
         raise _conflict("entity_redirected", "Only canonical entities can be deleted", entity_ids=[entity_id])
+    return entity_ids, redirect_rows
+
+
+async def _delete_owned_rows(
+    session: AsyncSession, entity_ids: set[UUID], *, scope: Scope,
+) -> tuple[
+    list[Entity], list[EntityEvidenceMembership], list[EntityAlias], list[EntityCorrectionDecision],
+    list[EntityAliasEvidence], list[EntityFieldEvidence],
+]:
+    """Read the entity rows and bounded owned memberships, aliases, decisions and derived supports for deletion.
+
+    Raises ``deletion_closure_changed`` if a redirect entity vanished and ``deletion_too_large`` when any
+    owned or support set exceeds 200 rows. Read-only; query order is fixed.
+    """
     entity_rows = list((await session.scalars(select(Entity).where(
         Entity.workspace_id == scope.workspace_id, Entity.id.in_(entity_ids),
     ).order_by(Entity.id).execution_options(populate_existing=True))).all())
@@ -482,6 +514,20 @@ async def _discover_delete_closure(session: AsyncSession, entity_id: UUID, *, sc
     ).order_by(EntityFieldEvidence.id).limit(MAX_CORRECTION_MEMBERSHIPS + 1).execution_options(populate_existing=True))).all())
     if len(alias_supports) > MAX_CORRECTION_MEMBERSHIPS or len(field_supports) > MAX_CORRECTION_MEMBERSHIPS:
         raise _conflict("deletion_too_large", "Entity deletion support closure exceeds 200", entity_ids=sorted(entity_ids, key=str))
+    return entity_rows, memberships, aliases, decisions, alias_supports, field_supports
+
+
+async def _discover_delete_closure(session: AsyncSession, entity_id: UUID, *, scope: Scope) -> _DeleteClosure:
+    """Discover bounded redirect, evidence, alias, decision, and incident-edge rows."""
+    root = await session.scalar(select(Entity).where(
+        Entity.id == entity_id, Entity.workspace_id == scope.workspace_id,
+    ).execution_options(populate_existing=True))
+    if root is None:
+        raise _conflict("entity_missing", "Entity no longer exists", entity_ids=[entity_id])
+    entity_ids, redirect_rows = await _delete_redirect_closure(session, entity_id, scope=scope)
+    entity_rows, memberships, aliases, decisions, alias_supports, field_supports = await _delete_owned_rows(
+        session, entity_ids, scope=scope,
+    )
     try:
         relationship_refs = await relationships.list_correction_relationship_refs(
             session, sorted(entity_ids, key=str), scope=scope,
@@ -523,20 +569,16 @@ async def _discover_delete_closure(session: AsyncSession, entity_id: UUID, *, sc
                           pairs, source_ids, document_ids, lock_entity_ids, timeline_event_ids)
 
 
-async def delete_canonical_entity(
-    session: AsyncSession, entity_id: UUID, *, scope: Scope, multi_workspace_enabled: bool, reason: str,
-) -> bool:
-    """Delete a canonical root and its bounded support closure with an audit record.
+async def _lock_delete_closure(
+    session: AsyncSession, before: _DeleteClosure, fence: AccessFence, *, scope: Scope,
+    multi_workspace_enabled: bool,
+) -> tuple[list[UUID], list[UUID]]:
+    """Take the deletion locks in the fixed order and return the locked relationship and support ids.
 
-    The admitted workspace scope supplies actor provenance for the audit.
-    The function locks and revalidates the closure, removes owned support, and
-    retains cleared redirect stubs with ``target_entity_id=None`` so deleted IDs
-    stay terminal. It commits audit/realtime changes; oversized, changing, or
-    noncanonical closures raise ``CorrectionConflictError``.
+    Order: Sources (against ``fence``) -> retained Documents -> entities (sorted) -> redirect stubs ->
+    relationship closure -> timeline events. A relationship closure too large to lock raises
+    ``deletion_too_large``. Runs inside the caller's transaction; nothing is committed.
     """
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
-    before = await _discover_delete_closure(session, entity_id, scope=scope)
-    before_signature = before.signature()
     for source_id in before.source_ids:
         await sources.lock_source(
             session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
@@ -570,6 +612,61 @@ async def delete_canonical_entity(
     await timeline.lock_event_ids(
         session, before.timeline_event_ids, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
+    )
+    return relationship_ids, support_ids
+
+
+async def _delete_closure_rows(
+    session: AsyncSession, after: _DeleteClosure, entity_id: UUID, member_ids: list[UUID],
+) -> dict[str, int | None]:
+    """Delete the owned support rows, clear redirect stubs, blank non-root stubs and delete the root.
+
+    Statement order matters for foreign keys: alias evidence -> field evidence -> decisions -> memberships ->
+    aliases, then redirect targets are cleared (terminal stubs), stub entities are blanked with a revision
+    bump, and the root row is deleted. Returns the pre-change revision of every closure entity for the audit.
+    """
+    await session.execute(delete(EntityAliasEvidence).where(EntityAliasEvidence.alias_id.in_([item.id for item in after.aliases])))
+    await session.execute(delete(EntityFieldEvidence).where(EntityFieldEvidence.entity_id.in_(after.entity_ids)))
+    await session.execute(delete(EntityCorrectionDecision).where(or_(
+        EntityCorrectionDecision.entity_id.in_(after.entity_ids),
+        EntityCorrectionDecision.membership_id.in_(member_ids),
+    )))
+    await session.execute(delete(EntityEvidenceMembership).where(EntityEvidenceMembership.entity_id.in_(after.entity_ids)))
+    await session.execute(delete(EntityAlias).where(EntityAlias.entity_id.in_(after.entity_ids)))
+    for redirect in after.redirect_rows:
+        redirect.target_entity_id = None
+    for stub in after.entity_rows:
+        if stub.id == entity_id:
+            continue
+        stub.name = None
+        stub.canonical_name = None
+        stub.description = None
+        stub.name_origin = None
+        stub.description_origin = None
+        stub.metadata_json = {}
+        stub.revision += 1
+    root = next(item for item in after.entity_rows if item.id == entity_id)
+    previous_revisions: dict[str, int | None] = {str(item.id): item.revision for item in after.entity_rows}
+    await session.delete(root)
+    return previous_revisions
+
+
+async def delete_canonical_entity(
+    session: AsyncSession, entity_id: UUID, *, scope: Scope, multi_workspace_enabled: bool, reason: str,
+) -> bool:
+    """Delete a canonical root and its bounded support closure with an audit record.
+
+    The admitted workspace scope supplies actor provenance for the audit.
+    The function locks and revalidates the closure, removes owned support, and
+    retains cleared redirect stubs with ``target_entity_id=None`` so deleted IDs
+    stay terminal. It commits audit/realtime changes; oversized, changing, or
+    noncanonical closures raise ``CorrectionConflictError``.
+    """
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    before = await _discover_delete_closure(session, entity_id, scope=scope)
+    before_signature = before.signature()
+    relationship_ids, support_ids = await _lock_delete_closure(
+        session, before, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     after = await _discover_delete_closure(session, entity_id, scope=scope)
     if before_signature != after.signature() or relationship_ids != after.relationship_ids:
@@ -607,29 +704,7 @@ async def delete_canonical_entity(
     changed_timeline_ids = await timeline.remove_entity_participants(
         session, after.entity_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
-    await session.execute(delete(EntityAliasEvidence).where(EntityAliasEvidence.alias_id.in_([item.id for item in after.aliases])))
-    await session.execute(delete(EntityFieldEvidence).where(EntityFieldEvidence.entity_id.in_(after.entity_ids)))
-    await session.execute(delete(EntityCorrectionDecision).where(or_(
-        EntityCorrectionDecision.entity_id.in_(after.entity_ids),
-        EntityCorrectionDecision.membership_id.in_(member_ids),
-    )))
-    await session.execute(delete(EntityEvidenceMembership).where(EntityEvidenceMembership.entity_id.in_(after.entity_ids)))
-    await session.execute(delete(EntityAlias).where(EntityAlias.entity_id.in_(after.entity_ids)))
-    for redirect in after.redirect_rows:
-        redirect.target_entity_id = None
-    for stub in after.entity_rows:
-        if stub.id == entity_id:
-            continue
-        stub.name = None
-        stub.canonical_name = None
-        stub.description = None
-        stub.name_origin = None
-        stub.description_origin = None
-        stub.metadata_json = {}
-        stub.revision += 1
-    root = next(item for item in after.entity_rows if item.id == entity_id)
-    previous_revisions: dict[str, int | None] = {str(item.id): item.revision for item in after.entity_rows}
-    await session.delete(root)
+    previous_revisions = await _delete_closure_rows(session, after, entity_id, member_ids)
     affected_ids = sorted({
         *after.entity_ids, *relationship_ids, *support_ids,
         *(item.id for item in after.memberships), *(item.id for item in after.aliases),
@@ -851,6 +926,111 @@ async def _record_assignments(
             ))
 
 
+async def _merge_identity_fields(session: AsyncSession, source: Entity, target: Entity, *, scope: Scope) -> None:
+    """Fold the source's name/description into the target by origin precedence (mutates both ORM rows).
+
+    An owner-authored source value replaces a non-owner target value (dropping that field's derived support
+    evidence); a derived source value only fills an empty target. Conflicting owner values were rejected by
+    ``_validate_merge_request`` beforehand.
+    """
+    for field_name in ("name", "description"):
+        source_origin = getattr(source, f"{field_name}_origin")
+        target_origin = getattr(target, f"{field_name}_origin")
+        source_value = getattr(source, field_name)
+        if source_origin == "owner" and target_origin != "owner":
+            setattr(target, field_name, source_value)
+            setattr(target, f"{field_name}_origin", "owner")
+            if field_name == "name":
+                target.canonical_name = canonicalize_name(source_value) if source_value else None
+            await session.execute(delete(EntityFieldEvidence).where(
+                EntityFieldEvidence.entity_id == target.id, EntityFieldEvidence.field_name == field_name,
+                EntityFieldEvidence.membership_id.in_(select(EntityEvidenceMembership.id).where(
+                    EntityEvidenceMembership.workspace_id == scope.workspace_id,
+                )),
+            ))
+        elif source_value and getattr(target, field_name) is None and source_origin == "derived":
+            setattr(target, field_name, source_value)
+            setattr(target, f"{field_name}_origin", "derived")
+            if field_name == "name":
+                target.canonical_name = canonicalize_name(source_value)
+
+
+async def _merge_derived_name_alias(
+    session: AsyncSession, source: Entity, target: Entity, target_aliases: dict[str, EntityAlias],
+    memberships: list[EntityEvidenceMembership], closure: _Closure,
+) -> None:
+    """Keep a different derived source name as a derived target alias backed by the name's field evidence.
+
+    Creates (and flushes) the alias when the target lacks it, records it in ``target_aliases`` and adds alias
+    evidence for each source name-field support whose hash matches the source name.
+    """
+    source_derived_name = source.name if source.name_origin == "derived" else None
+    if source_derived_name and target.name and canonicalize_name(source_derived_name) != target.canonical_name:
+        normalized = canonicalize_name(source_derived_name)
+        alias = target_aliases.get(normalized)
+        if alias is None:
+            alias = EntityAlias(
+                entity_id=target.id, alias=source_derived_name, normalized_alias=normalized,
+                confirmed=False, origin="derived", confidence=None,
+            )
+            session.add(alias)
+            await session.flush()
+            target_aliases[normalized] = alias
+        membership_by_id = {item.id: item for item in memberships}
+        name_hash = sha256(source_derived_name.encode("utf-8")).hexdigest()
+        for support in closure.field_supports:
+            membership = membership_by_id.get(support.membership_id)
+            if support.entity_id == source.id and support.field_name == "name" and support.value_hash == name_hash and membership is not None:
+                session.add(EntityAliasEvidence(alias_id=alias.id, membership_id=membership.id, confidence=membership.confidence))
+
+
+async def _merge_aliases(
+    session: AsyncSession, closure: _Closure, source_aliases: list[EntityAlias],
+    target_aliases: dict[str, EntityAlias], target: Entity, memberships: list[EntityEvidenceMembership],
+) -> None:
+    """Move source aliases to the target, or fold duplicates into the target's alias.
+
+    A duplicate alias hands its supports to the target alias: a support on a new membership is re-pointed, a
+    support on an already supported membership merges confidence (max) and is deleted. The duplicate alias is
+    then deleted.
+    """
+    membership_by_id = {item.id: item for item in memberships}
+    for alias in source_aliases:
+        existing = target_aliases.get(alias.normalized_alias)
+        if existing is None:
+            for alias_support in closure.alias_supports:
+                if alias_support.alias_id == alias.id and alias_support.membership_id in membership_by_id:
+                    alias_support.alias_id = alias.id
+            alias.entity_id = target.id
+            continue
+        supports = [item for item in closure.alias_supports if item.alias_id == alias.id]
+        target_supports = {item.membership_id: item for item in closure.alias_supports if item.alias_id == existing.id}
+        for alias_support in supports:
+            target_support = target_supports.get(alias_support.membership_id)
+            if target_support is None:
+                alias_support.alias_id = existing.id
+            else:
+                target_support.confidence = max(target_support.confidence, alias_support.confidence)
+                await session.delete(alias_support)
+        await session.delete(alias)
+
+
+async def _merge_field_supports(session: AsyncSession, closure: _Closure, source: Entity, target: Entity) -> None:
+    """Re-point the source's derived field supports to the target when the target's derived value matches.
+
+    A support whose hash no longer matches the target's current derived name/description is deleted.
+    """
+    for support in closure.field_supports:
+        if support.entity_id != source.id:
+            continue
+        value = target.name if support.field_name == "name" else target.description
+        value_origin = target.name_origin if support.field_name == "name" else target.description_origin
+        if value_origin == "derived" and value is not None and support.value_hash == sha256(value.encode("utf-8")).hexdigest():
+            support.entity_id = target.id
+        else:
+            await session.delete(support)
+
+
 async def merge_entity(
     session: AsyncSession, source_id: UUID, payload: EntityMergeRequest, *,
     scope: Scope, multi_workspace_enabled: bool,
@@ -878,78 +1058,16 @@ async def merge_entity(
         session, closure.relationship_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     source, target, memberships, target_aliases, source_aliases = await _validate_merge_request(source_id, payload, closure)
     previous_revisions: dict[str, int | None] = {str(source.id): source.revision, str(target.id): target.revision}
-    for field_name in ("name", "description"):
-        source_origin = getattr(source, f"{field_name}_origin")
-        target_origin = getattr(target, f"{field_name}_origin")
-        source_value = getattr(source, field_name)
-        if source_origin == "owner" and target_origin != "owner":
-            setattr(target, field_name, source_value)
-            setattr(target, f"{field_name}_origin", "owner")
-            if field_name == "name":
-                target.canonical_name = canonicalize_name(source_value) if source_value else None
-            await session.execute(delete(EntityFieldEvidence).where(
-                EntityFieldEvidence.entity_id == target.id, EntityFieldEvidence.field_name == field_name,
-                EntityFieldEvidence.membership_id.in_(select(EntityEvidenceMembership.id).where(
-                    EntityEvidenceMembership.workspace_id == scope.workspace_id,
-                )),
-            ))
-        elif source_value and getattr(target, field_name) is None and source_origin == "derived":
-            setattr(target, field_name, source_value)
-            setattr(target, f"{field_name}_origin", "derived")
-            if field_name == "name":
-                target.canonical_name = canonicalize_name(source_value)
-    source_derived_name = source.name if source.name_origin == "derived" else None
-    if source_derived_name and target.name and canonicalize_name(source_derived_name) != target.canonical_name:
-        normalized = canonicalize_name(source_derived_name)
-        alias = target_aliases.get(normalized)
-        if alias is None:
-            alias = EntityAlias(
-                entity_id=target.id, alias=source_derived_name, normalized_alias=normalized,
-                confirmed=False, origin="derived", confidence=None,
-            )
-            session.add(alias)
-            await session.flush()
-            target_aliases[normalized] = alias
-        membership_by_id = {item.id: item for item in memberships}
-        name_hash = sha256(source_derived_name.encode("utf-8")).hexdigest()
-        for support in closure.field_supports:
-            membership = membership_by_id.get(support.membership_id)
-            if support.entity_id == source.id and support.field_name == "name" and support.value_hash == name_hash and membership is not None:
-                session.add(EntityAliasEvidence(alias_id=alias.id, membership_id=membership.id, confidence=membership.confidence))
-    membership_by_id = {item.id: item for item in memberships}
-    for alias in source_aliases:
-        existing = target_aliases.get(alias.normalized_alias)
-        if existing is None:
-            for alias_support in closure.alias_supports:
-                if alias_support.alias_id == alias.id and alias_support.membership_id in membership_by_id:
-                    alias_support.alias_id = alias.id
-            alias.entity_id = target.id
-            continue
-        supports = [item for item in closure.alias_supports if item.alias_id == alias.id]
-        target_supports = {item.membership_id: item for item in closure.alias_supports if item.alias_id == existing.id}
-        for alias_support in supports:
-            target_support = target_supports.get(alias_support.membership_id)
-            if target_support is None:
-                alias_support.alias_id = existing.id
-            else:
-                target_support.confidence = max(target_support.confidence, alias_support.confidence)
-                await session.delete(support)
-        await session.delete(alias)
+    await _merge_identity_fields(session, source, target, scope=scope)
+    await _merge_derived_name_alias(session, source, target, target_aliases, memberships, closure)
+    await _merge_aliases(session, closure, source_aliases, target_aliases, target, memberships)
     await _record_assignments(
         session, memberships, target.id, scope=scope, actor_id=actor_id, reason=payload.reason,
         future_document_id=payload.future_document_id,
     )
     for membership in memberships:
         membership.entity_id = target.id
-    for support in closure.field_supports:
-        if support.entity_id != source.id:
-            continue
-        value = target.name if support.field_name == "name" else target.description
-        value_origin = target.name_origin if support.field_name == "name" else target.description_origin
-        if value_origin == "derived" and value is not None and support.value_hash == sha256(value.encode("utf-8")).hexdigest():
-            support.entity_id = target.id
-        else:
-            await session.delete(support)
+    await _merge_field_supports(session, closure, source, target)
     try:
         replacements = await relationships.apply_entity_merge(
             session, source.id, target.id, set(closure.relationship_ids),
@@ -999,6 +1117,74 @@ async def merge_entity(
     return result
 
 
+async def _split_alias_supports(
+    session: AsyncSession, closure: _Closure, selected_ids: set[UUID], new_aliases: list[EntityAlias], new_id: UUID,
+) -> list[EntityAliasEvidence]:
+    """Move alias evidence on the selected memberships to aliases of the new entity.
+
+    Owner-authored aliases lose the selected support (they stay with the source); derived aliases are cloned
+    onto the new entity (reusing an existing new alias with the same normalized text) and the support is
+    re-pointed. Appends to ``new_aliases``, flushes after each created alias, and returns the selected supports.
+    """
+    selected_supports = [item for item in closure.alias_supports if item.membership_id in selected_ids]
+    for support in selected_supports:
+        alias = next(item for item in closure.aliases if item.id == support.alias_id)
+        if alias.origin == "owner":
+            await session.delete(support)
+            continue
+        existing = next((item for item in new_aliases if item.normalized_alias == alias.normalized_alias), None)
+        if existing is None:
+            existing = EntityAlias(
+                entity_id=new_id, alias=alias.alias, normalized_alias=alias.normalized_alias,
+                source_id=alias.source_id, confirmed=alias.confirmed, origin="derived", confidence=alias.confidence,
+            )
+            session.add(existing)
+            new_aliases.append(existing)
+            await session.flush()
+        support.alias_id = existing.id
+    return selected_supports
+
+
+async def _split_move_evidence(
+    session: AsyncSession, closure: _Closure, selected: list[EntityEvidenceMembership], selected_ids: set[UUID],
+    selected_supports: list[EntityAliasEvidence], entity_id: UUID, new_id: UUID,
+) -> None:
+    """Re-own the selected memberships and prune support the source can no longer justify.
+
+    Selected derived field supports are deleted (the new identity fields are owner-authored); a derived source
+    alias is deleted when all its remaining evidence was moved away by the selection.
+    """
+    for item in selected:
+        item.entity_id = new_id
+    # New identity fields are owner-authored; selected derived support cannot override them.
+    for field_support in closure.field_supports:
+        if field_support.membership_id in selected_ids:
+            await session.delete(field_support)
+    for alias in closure.aliases:
+        if alias.entity_id != entity_id or alias.origin != "derived":
+            continue
+        remaining = (await session.scalars(select(EntityAliasEvidence.id).where(EntityAliasEvidence.alias_id == alias.id))).all()
+        if not remaining and any(item.alias_id == alias.id for item in selected_supports):
+            await session.delete(alias)
+
+
+async def _split_clear_source_fields(
+    session: AsyncSession, closure: _Closure, source: Entity, entity_id: UUID, selected_ids: set[UUID],
+) -> None:
+    """Clear a derived name/description of the source that lost its last field evidence to the selection."""
+    for field_name in ("name", "description"):
+        if getattr(source, f"{field_name}_origin") != "derived":
+            continue
+        remaining = await session.scalar(select(EntityFieldEvidence.id).where(
+            EntityFieldEvidence.entity_id == entity_id, EntityFieldEvidence.field_name == field_name,
+        ).limit(1))
+        if remaining is None and any(item.entity_id == entity_id and item.field_name == field_name and item.membership_id in selected_ids for item in closure.field_supports):
+            setattr(source, field_name, None)
+            setattr(source, f"{field_name}_origin", None)
+            if field_name == "name":
+                source.canonical_name = None
+
+
 async def split_entity(
     session: AsyncSession, entity_id: UUID, payload: EntitySplitRequest, *,
     scope: Scope, multi_workspace_enabled: bool,
@@ -1043,34 +1229,8 @@ async def split_entity(
         session, selected, new_id, scope=scope, actor_id=actor_id,
         reason=payload.reason, future_document_id=payload.future_document_id,
     )
-    selected_supports = [item for item in closure.alias_supports if item.membership_id in selected_ids]
-    for support in selected_supports:
-        alias = next(item for item in closure.aliases if item.id == support.alias_id)
-        if alias.origin == "owner":
-            await session.delete(support)
-            continue
-        existing = next((item for item in new_aliases if item.normalized_alias == alias.normalized_alias), None)
-        if existing is None:
-            existing = EntityAlias(
-                entity_id=new_id, alias=alias.alias, normalized_alias=alias.normalized_alias,
-                source_id=alias.source_id, confirmed=alias.confirmed, origin="derived", confidence=alias.confidence,
-            )
-            session.add(existing)
-            new_aliases.append(existing)
-            await session.flush()
-        support.alias_id = existing.id
-    for item in selected:
-        item.entity_id = new_id
-    # New identity fields are owner-authored; selected derived support cannot override them.
-    for field_support in closure.field_supports:
-        if field_support.membership_id in selected_ids:
-            await session.delete(field_support)
-    for alias in closure.aliases:
-        if alias.entity_id != entity_id or alias.origin != "derived":
-            continue
-        remaining = (await session.scalars(select(EntityAliasEvidence.id).where(EntityAliasEvidence.alias_id == alias.id))).all()
-        if not remaining and any(item.alias_id == alias.id for item in selected_supports):
-            await session.delete(alias)
+    selected_supports = await _split_alias_supports(session, closure, selected_ids, new_aliases, new_id)
+    await _split_move_evidence(session, closure, selected, selected_ids, selected_supports, entity_id, new_id)
     try:
         source_relationship_ids = {
             ref.id for ref in closure.relationship_refs
@@ -1088,17 +1248,7 @@ async def split_entity(
         selected_pairs={(item.document_version_id, item.chunk_id) for item in selected},
         scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
-    for field_name in ("name", "description"):
-        if getattr(source, f"{field_name}_origin") != "derived":
-            continue
-        remaining = await session.scalar(select(EntityFieldEvidence.id).where(
-            EntityFieldEvidence.entity_id == entity_id, EntityFieldEvidence.field_name == field_name,
-        ).limit(1))
-        if remaining is None and any(item.entity_id == entity_id and item.field_name == field_name and item.membership_id in selected_ids for item in closure.field_supports):
-            setattr(source, field_name, None)
-            setattr(source, f"{field_name}_origin", None)
-            if field_name == "name":
-                source.canonical_name = None
+    await _split_clear_source_fields(session, closure, source, entity_id, selected_ids)
     source.revision += 1
     await entities.record_owner_action(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,

@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
+from core.errors import ForbiddenError
 from core.workspaces.schemas import InternalJobScope, WorkspaceContext
 from modules.knowledge.entities.models import Entity
 from modules.knowledge.entities.seed import ensure_demo_entities
@@ -141,7 +142,7 @@ def test_export_cursor_is_bound_to_workspace() -> None:
 async def test_correction_relationship_refs_deny_member_before_query() -> None:
     """The public correction read applies the role-only owner guard without any I/O."""
     session = AsyncMock()
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(ForbiddenError) as caught:
         await public.list_correction_relationship_refs(session, [uuid4()], scope=MEMBER)
     assert caught.value.status_code == 403
     session.scalars.assert_not_called()

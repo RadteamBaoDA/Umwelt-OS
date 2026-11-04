@@ -25,9 +25,11 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from core.errors import ForbiddenError
 from core.pagination import decode_cursor, encode_cursor
 from core.realtime import commit_with_replay, make_graph_change
 from core.workspaces import public as workspaces
+from core.workspaces.admission import actor_id as _actor
 from core.workspaces.schemas import (
     AccessFence,
     AdminWorkspaceReadContext,
@@ -67,11 +69,6 @@ from modules.sources import public as sources
 from modules.sources.schemas import SourceExportFence, SourceFence
 
 
-def _actor(scope: Scope) -> int:
-    """Return the principal recorded by a real workspace or durable job scope."""
-    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
-
-
 async def _admit(
     session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
     lock: bool = False, expected: AccessFence | None = None,
@@ -95,6 +92,7 @@ async def _admit(
 
 # Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
 __all__ = [
+    "NeighborPage",
     "RelationshipSnapshot",
     "ensure_demo_relationships",
 ]
@@ -133,6 +131,7 @@ async def record_relationship_history(
 
 
 def _support_pairs(refs: list[tuple[UUID, UUID]]) -> set[tuple[str, str]]:
+    """Normalize ``(document_version_id, chunk_id)`` pairs to string tuples for set comparison."""
     return {(str(version), str(chunk)) for version, chunk in refs}
 
 
@@ -154,6 +153,12 @@ def _require_cleanup_fences(
     actual: AccessFence, *, closure: RelationshipSupportClosure, scope: Scope,
     access_fence: AccessFence, source_fence: SourceFence,
 ) -> None:
+    """Require the live access fence and Source to still match those held by a cleanup transaction.
+
+    Raises HTTP 409 "Cleanup authority changed" (kept as ``HTTPException``: purge callers in sources/documents/
+    ingestion branch on ``HTTPException`` status codes) when the fence differs or the Source id/workspace does not
+    match the closure. Pure comparison; no I/O.
+    """
     if (
         actual != access_fence or source_fence.id != closure.source_id
         or source_fence.workspace_id != scope.workspace_id
@@ -360,23 +365,10 @@ async def get_relationship_snapshot(
     )
 
 
-async def _list_relationships_as_of(
-    session: AsyncSession, *, limit: int, cursor: str | None, entity_id: UUID | None,
-    valid_at: datetime | None, include_unknown_validity: bool,
-    knowledge_as_of: datetime, fingerprint: str, scope: Scope, multi_workspace_enabled: bool,
-) -> RelationshipPage:
-    """Page actual latest recorded canonical snapshots by transaction cutoff.
-
-    Current deletion/permission and retained exact support are checked again.
-    Never return current fields as historical substitutes; unavailable intervals
-    are explicit. Pagination covers snapshot identities, not loaded current rows.
-    """
-    ranked = select(
-        RelationshipSnapshotHistory.id.label("history_id"),
-        func.row_number().over(partition_by=RelationshipSnapshotHistory.relationship_id,
-            order_by=(RelationshipSnapshotHistory.recorded_at.desc(), RelationshipSnapshotHistory.id.desc())).label("position"),
-    ).where(RelationshipSnapshotHistory.workspace_id == scope.workspace_id,
-            RelationshipSnapshotHistory.recorded_at <= knowledge_as_of).subquery()
+async def _missing_history_ids(
+    session: AsyncSession, *, entity_id: UUID | None, knowledge_as_of: datetime, scope: Scope,
+) -> list[UUID]:
+    """Return up to 101 relationships created by the cutoff that have no recorded snapshot at or before it."""
     missing_statement = select(Relationship.id).where(
         Relationship.workspace_id == scope.workspace_id, Relationship.created_at <= knowledge_as_of,
         ~select(RelationshipSnapshotHistory.id).where(
@@ -388,7 +380,17 @@ async def _list_relationships_as_of(
         missing_statement = missing_statement.where(or_(
             Relationship.source_entity_id == entity_id, Relationship.target_entity_id == entity_id,
         ))
-    missing = list((await session.scalars(missing_statement.order_by(Relationship.id).limit(101))).all())
+    return list((await session.scalars(missing_statement.order_by(Relationship.id).limit(101))).all())
+
+
+def _latest_snapshot_statement(*, entity_id: UUID | None, knowledge_as_of: datetime, scope: Scope) -> Any:
+    """Select the latest recorded snapshot per relationship at the cutoff, optionally touching ``entity_id``."""
+    ranked = select(
+        RelationshipSnapshotHistory.id.label("history_id"),
+        func.row_number().over(partition_by=RelationshipSnapshotHistory.relationship_id,
+            order_by=(RelationshipSnapshotHistory.recorded_at.desc(), RelationshipSnapshotHistory.id.desc())).label("position"),
+    ).where(RelationshipSnapshotHistory.workspace_id == scope.workspace_id,
+            RelationshipSnapshotHistory.recorded_at <= knowledge_as_of).subquery()
     statement = select(RelationshipSnapshotHistory).join(
         ranked, ranked.c.history_id == RelationshipSnapshotHistory.id,
     ).where(ranked.c.position == 1, RelationshipSnapshotHistory.workspace_id == scope.workspace_id)
@@ -397,16 +399,115 @@ async def _list_relationships_as_of(
             RelationshipSnapshotHistory.state["source_entity_id"].astext == str(entity_id),
             RelationshipSnapshotHistory.state["target_entity_id"].astext == str(entity_id),
         ))
+    return statement
+
+
+def _decode_bound_cursor(cursor: str, fingerprint: str, message: str) -> tuple[datetime, UUID]:
+    """Decode a ``[fingerprint, position]`` keyset cursor (<= 1,024 chars, strict base64) bound to ``fingerprint``.
+
+    Any malformation, fingerprint mismatch (filters changed) or bad position raises ``ValueError(message)``.
+    """
+    try:
+        if len(cursor) > 1024:
+            raise ValueError
+        bound, position = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
+        if bound != fingerprint:
+            raise ValueError
+        return decode_cursor(position)
+    except (ValueError, TypeError, binascii.Error) as exc:
+        raise ValueError(message) from exc
+
+
+async def _hydrate_history_item(
+    session: AsyncSession, history: RelationshipSnapshotHistory, item: RelationshipRead, *,
+    knowledge_as_of: datetime, scope: Scope, multi_workspace_enabled: bool,
+) -> RelationshipRead | None:
+    """Re-check retained support for one historical snapshot and attach its evidence.
+
+    Re-reads endpoints, evidence refs, active sources and memberships under current permissions. Returns
+    ``None`` when a derived relationship lost any support (the caller reports it unavailable); raises
+    ``LookupError``/``ValueError`` when endpoint support changed or exceeds its bound (also unavailable).
+    """
+    from modules.sources import public as sources
+    endpoint_refs = await entities.get_entity_refs(
+        session, [item.source_entity_id, item.target_entity_id], scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled)
+    canonical_endpoints = {ref.requested_id: ref.canonical_id for ref in endpoint_refs}
+    pairs = list(dict.fromkeys((UUID(str(s["document_version_id"])), UUID(str(s["chunk_id"]))) for s in history.support))
+    if len(pairs) > MAX_CLEANUP_SUPPORTS:
+        raise ValueError("Historical snapshot support exceeds its bound")
+    refs = []
+    for offset in range(0, len(pairs), 100):
+        refs.extend(await documents.read_evidence_refs(
+            session, pairs[offset:offset + 100], scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled))
+    permitted_sources = set()
+    for source_id in sorted({ref.source_id for ref in refs}):
+        source = await sources.get_connector_source(
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        if source is not None and source.status == "active":
+            permitted_sources.add(source_id)
+    by_pair = {(ref.document_version_id, ref.chunk_id): ref for ref in refs
+               if ref.source_id in permitted_sources and ref.observed_at <= knowledge_as_of}
+    # Any missing support can have contributed to the retained derived fields.
+    if item.origin == "derived" and (not pairs or len(by_pair) != len(pairs)):
+        return None
+    membership_ids = sorted({UUID(str(s[key])) for s in history.support
+        for key in ("source_membership_id", "target_membership_id") if s.get(key)})
+    memberships = []
+    for offset in range(0, len(membership_ids), 200):
+        memberships.extend(await entities.get_membership_refs(
+            session, membership_ids[offset:offset + 200], scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled))
+    by_membership = {member.id: member for member in memberships}
+    evidence = []
+    for support in history.support:
+        pair = UUID(str(support["document_version_id"])), UUID(str(support["chunk_id"]))
+        ref = by_pair.get(pair)
+        if ref is None:
+            continue
+        for key, endpoint in (("source_membership_id", item.source_entity_id),
+                              ("target_membership_id", item.target_entity_id)):
+            if not support.get(key):
+                if item.origin == "derived":
+                    raise LookupError("Historical endpoint support unavailable")
+                continue
+            member = by_membership[UUID(str(support[key]))]
+            if (member.entity_id != canonical_endpoints[endpoint]
+                    or (member.document_version_id, member.chunk_id) != pair):
+                raise LookupError("Historical endpoint support changed")
+        evidence.append(EvidenceRead(
+            id=UUID(str(support["id"])), relationship_id=item.id,
+            document_id=ref.document_id, document_version_id=ref.document_version_id,
+            version_number=ref.version_number, chunk_id=ref.chunk_id,
+            observed_at=ref.observed_at, extracted_at=datetime.fromisoformat(str(support["extracted_at"])),
+            confidence=float(support["confidence"]),
+            source_entity_membership_id=UUID(str(support["source_membership_id"])) if support.get("source_membership_id") else None,
+            target_entity_membership_id=UUID(str(support["target_membership_id"])) if support.get("target_membership_id") else None,
+            title=ref.title, canonical_url=ref.canonical_url, source_id=ref.source_id,
+            excerpt=ref.excerpt, metadata_is_version_snapshot=ref.metadata_is_version_snapshot,
+        ))
+    item.evidence = evidence
+    return item
+
+
+async def _list_relationships_as_of(
+    session: AsyncSession, *, limit: int, cursor: str | None, entity_id: UUID | None,
+    valid_at: datetime | None, include_unknown_validity: bool,
+    knowledge_as_of: datetime, fingerprint: str, scope: Scope, multi_workspace_enabled: bool,
+) -> RelationshipPage:
+    """Page actual latest recorded canonical snapshots by transaction cutoff.
+
+    Current deletion/permission and retained exact support are checked again.
+    Never return current fields as historical substitutes; unavailable intervals
+    are explicit. Pagination covers snapshot identities, not loaded current rows.
+    Query order: missing-snapshot probe, then (after cursor validation) the snapshot page; per-item support
+    re-reads follow. Read-only; no commit.
+    """
+    missing = await _missing_history_ids(session, entity_id=entity_id, knowledge_as_of=knowledge_as_of, scope=scope)
+    statement = _latest_snapshot_statement(entity_id=entity_id, knowledge_as_of=knowledge_as_of, scope=scope)
     if cursor:
-        try:
-            if len(cursor) > 1024:
-                raise ValueError
-            bound, position = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
-            if bound != fingerprint:
-                raise ValueError
-            recorded_at, identifier = decode_cursor(position)
-        except (ValueError, TypeError, binascii.Error) as exc:
-            raise ValueError("Invalid relationship history cursor") from exc
+        recorded_at, identifier = _decode_bound_cursor(cursor, fingerprint, "Invalid relationship history cursor")
         statement = statement.where(tuple_(RelationshipSnapshotHistory.recorded_at,
             RelationshipSnapshotHistory.relationship_id) < (recorded_at, identifier))
     rows = list((await session.scalars(statement.order_by(
@@ -419,7 +520,6 @@ async def _list_relationships_as_of(
             fingerprint, encode_cursor(rows[-1].recorded_at, rows[-1].relationship_id),
         ]).encode()).decode().rstrip("=")
     items, unavailable = [], []
-    from modules.sources import public as sources
     for history in rows:
         if history.deleted:
             continue
@@ -436,69 +536,16 @@ async def _list_relationships_as_of(
                                     or (item.valid_to is not None and item.valid_to <= valid_at)):
             continue
         try:
-            endpoint_refs = await entities.get_entity_refs(
-                session, [item.source_entity_id, item.target_entity_id], scope=scope,
+            hydrated = await _hydrate_history_item(
+                session, history, item, knowledge_as_of=knowledge_as_of, scope=scope,
                 multi_workspace_enabled=multi_workspace_enabled)
-            canonical_endpoints = {ref.requested_id: ref.canonical_id for ref in endpoint_refs}
-            pairs = list(dict.fromkeys((UUID(str(s["document_version_id"])), UUID(str(s["chunk_id"]))) for s in history.support))
-            if len(pairs) > MAX_CLEANUP_SUPPORTS:
-                raise ValueError("Historical snapshot support exceeds its bound")
-            refs = []
-            for offset in range(0, len(pairs), 100):
-                refs.extend(await documents.read_evidence_refs(
-                    session, pairs[offset:offset + 100], scope=scope,
-                    multi_workspace_enabled=multi_workspace_enabled))
-            permitted_sources = set()
-            for source_id in sorted({ref.source_id for ref in refs}):
-                source = await sources.get_connector_source(
-                    session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-                if source is not None and source.status == "active":
-                    permitted_sources.add(source_id)
-            by_pair = {(ref.document_version_id, ref.chunk_id): ref for ref in refs
-                       if ref.source_id in permitted_sources and ref.observed_at <= knowledge_as_of}
-            # Any missing support can have contributed to the retained derived fields.
-            if item.origin == "derived" and (not pairs or len(by_pair) != len(pairs)):
-                unavailable.append(history.relationship_id)
-                continue
-            membership_ids = sorted({UUID(str(s[key])) for s in history.support
-                for key in ("source_membership_id", "target_membership_id") if s.get(key)})
-            memberships = []
-            for offset in range(0, len(membership_ids), 200):
-                memberships.extend(await entities.get_membership_refs(
-                    session, membership_ids[offset:offset + 200], scope=scope,
-                    multi_workspace_enabled=multi_workspace_enabled))
-            by_membership = {member.id: member for member in memberships}
-            evidence = []
-            for support in history.support:
-                pair = UUID(str(support["document_version_id"])), UUID(str(support["chunk_id"]))
-                ref = by_pair.get(pair)
-                if ref is None:
-                    continue
-                for key, endpoint in (("source_membership_id", item.source_entity_id),
-                                      ("target_membership_id", item.target_entity_id)):
-                    if not support.get(key):
-                        if item.origin == "derived":
-                            raise LookupError("Historical endpoint support unavailable")
-                        continue
-                    member = by_membership[UUID(str(support[key]))]
-                    if (member.entity_id != canonical_endpoints[endpoint]
-                            or (member.document_version_id, member.chunk_id) != pair):
-                        raise LookupError("Historical endpoint support changed")
-                evidence.append(EvidenceRead(
-                    id=UUID(str(support["id"])), relationship_id=item.id,
-                    document_id=ref.document_id, document_version_id=ref.document_version_id,
-                    version_number=ref.version_number, chunk_id=ref.chunk_id,
-                    observed_at=ref.observed_at, extracted_at=datetime.fromisoformat(str(support["extracted_at"])),
-                    confidence=float(support["confidence"]),
-                    source_entity_membership_id=UUID(str(support["source_membership_id"])) if support.get("source_membership_id") else None,
-                    target_entity_membership_id=UUID(str(support["target_membership_id"])) if support.get("target_membership_id") else None,
-                    title=ref.title, canonical_url=ref.canonical_url, source_id=ref.source_id,
-                    excerpt=ref.excerpt, metadata_is_version_snapshot=ref.metadata_is_version_snapshot,
-                ))
-            item.evidence = evidence
-            items.append(item)
         except (LookupError, ValueError):
             unavailable.append(history.relationship_id)
+            continue
+        if hydrated is None:
+            unavailable.append(history.relationship_id)
+            continue
+        items.append(hydrated)
     return RelationshipPage(items=items, next_cursor=next_cursor, knowledge_as_of=knowledge_as_of,
         canonical_history_available=not missing and not unavailable,
         observation_history_only=False, unavailable_relationship_ids=list(dict.fromkeys(unavailable + missing[:100])))
@@ -691,15 +738,7 @@ async def list_relationships(
             or_(Relationship.source_entity_id == entity_id, Relationship.target_entity_id == entity_id)
         )
     if cursor:
-        try:
-            if len(cursor) > 1024:
-                raise ValueError
-            bound, position = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
-            if bound != fingerprint:
-                raise ValueError
-            created_at, identifier = decode_cursor(position)
-        except (ValueError, TypeError, binascii.Error) as exc:
-            raise ValueError("Invalid relationship filter cursor") from exc
+        created_at, identifier = _decode_bound_cursor(cursor, fingerprint, "Invalid relationship filter cursor")
         statement = statement.where(tuple_(Relationship.created_at, Relationship.id) < (created_at, identifier))
     rows = list((await session.scalars(
         statement.order_by(desc(Relationship.created_at), desc(Relationship.id)).limit(limit + 1)
@@ -756,15 +795,7 @@ async def list_relationship_evidence(
     if knowledge_as_of is not None:
         statement = statement.where(RelationshipEvidence.observed_at <= knowledge_as_of)
     if cursor:
-        try:
-            if len(cursor) > 1024:
-                raise ValueError
-            bound, position = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
-            if bound != fingerprint:
-                raise ValueError
-            extracted_at, identifier = decode_cursor(position)
-        except (ValueError, TypeError, binascii.Error) as exc:
-            raise ValueError("Invalid relationship observation cursor") from exc
+        extracted_at, identifier = _decode_bound_cursor(cursor, fingerprint, "Invalid relationship observation cursor")
         statement = statement.where(tuple_(RelationshipEvidence.extracted_at, RelationshipEvidence.id) > (extracted_at, identifier))
     rows = list((await session.scalars(
         statement.order_by(RelationshipEvidence.extracted_at, RelationshipEvidence.id).limit(limit + 1)
@@ -856,6 +887,45 @@ async def get_neighbors(
     return NeighborPage(items=items, truncated=truncated, next_cursor=next_cursor)
 
 
+def _build_evidence_rows(
+    payload: RelationshipCreate, by_pair: dict[tuple[UUID, UUID], Any], memberships_by_id: dict[UUID, Any],
+) -> list[RelationshipEvidence]:
+    """Validate each evidence ref and endpoint membership and build the (unattached) evidence rows (pure).
+
+    Raises ``ValueError`` when evidence does not exist, a derived relationship omits an endpoint membership,
+    or a membership does not belong to the expected endpoint entity and the same version/chunk pair.
+    """
+    evidence_rows: list[RelationshipEvidence] = []
+    for item in payload.evidence:
+        pair = (item.document_version_id, item.chunk_id)
+        ref = by_pair.get(pair)
+        if ref is None:
+            raise ValueError("Relationship evidence does not exist")
+        for membership_id, expected_entity_id in (
+            (item.source_membership_id, payload.source_entity_id),
+            (item.target_membership_id, payload.target_entity_id),
+        ):
+            membership = memberships_by_id.get(membership_id) if membership_id else None
+            if payload.origin == "derived" and membership is None:
+                raise ValueError("Derived evidence must identify both endpoint memberships")
+            if membership is not None and (
+                membership.entity_id != expected_entity_id
+                or (membership.document_version_id, membership.chunk_id) != pair
+            ):
+                raise ValueError("Evidence membership does not match the relationship endpoint and evidence")
+        evidence_rows.append(RelationshipEvidence(
+            document_version_id=item.document_version_id,
+            chunk_id=item.chunk_id,
+            document_id=ref.document_id,
+            source_id=ref.source_id,
+            observed_at=ref.observed_at,
+            confidence=item.confidence,
+            source_membership_id=item.source_membership_id,
+            target_membership_id=item.target_membership_id,
+        ))
+    return evidence_rows
+
+
 async def create_relationship(
     session: AsyncSession, payload: RelationshipCreate, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> RelationshipRead:
@@ -902,34 +972,7 @@ async def create_relationship(
     except LookupError as exc:
         raise ValueError("Relationship endpoint evidence membership is missing") from exc
     memberships_by_id = {item.id: item for item in memberships}
-    evidence_rows: list[RelationshipEvidence] = []
-    for item in payload.evidence:
-        pair = (item.document_version_id, item.chunk_id)
-        ref = by_pair.get(pair)
-        if ref is None:
-            raise ValueError("Relationship evidence does not exist")
-        for membership_id, expected_entity_id in (
-            (item.source_membership_id, payload.source_entity_id),
-            (item.target_membership_id, payload.target_entity_id),
-        ):
-            membership = memberships_by_id.get(membership_id) if membership_id else None
-            if payload.origin == "derived" and membership is None:
-                raise ValueError("Derived evidence must identify both endpoint memberships")
-            if membership is not None and (
-                membership.entity_id != expected_entity_id
-                or (membership.document_version_id, membership.chunk_id) != pair
-            ):
-                raise ValueError("Evidence membership does not match the relationship endpoint and evidence")
-        evidence_rows.append(RelationshipEvidence(
-            document_version_id=item.document_version_id,
-            chunk_id=item.chunk_id,
-            document_id=ref.document_id,
-            source_id=ref.source_id,
-            observed_at=ref.observed_at,
-            confidence=item.confidence,
-            source_membership_id=item.source_membership_id,
-            target_membership_id=item.target_membership_id,
-        ))
+    evidence_rows = _build_evidence_rows(payload, by_pair, memberships_by_id)
     relationship = Relationship(
         workspace_id=scope.workspace_id,
         source_entity_id=payload.source_entity_id,
@@ -1168,7 +1211,7 @@ async def list_correction_relationship_refs(
     authorization of its own beyond the role-only owner guard, and restricts rows to the scoped workspace.
     """
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
+        raise ForbiddenError("Workspace owner required")
     ids = sorted(set(entity_ids), key=str)
     if len(ids) > 100:
         raise ValueError("Correction entity closure exceeds its atomic limit")
@@ -1347,6 +1390,56 @@ async def apply_entity_merge(
     return replacements
 
 
+async def _split_row_supports(
+    session: AsyncSession, row: Relationship, source_rows: list[RelationshipEvidence], membership_ids: set[UUID],
+    new_entity_id: UUID, *, scope: Scope,
+) -> list[tuple[UUID, UUID]]:
+    """Re-home the supports of ``row`` that rest on moved memberships onto (possibly new) destination edges.
+
+    Groups moving supports by their new endpoint pair, reuses an equal existing edge (same type, origin and
+    validity; differing metadata raises ``ValueError``) or creates one, and deletes ``row`` when every support
+    moved. Returns ``(old_id, destination_id)`` per destination; empty when nothing moves. Flushes new edges.
+    """
+    moving = [item for item in source_rows if item.source_membership_id in membership_ids or item.target_membership_id in membership_ids]
+    if not moving:
+        return []
+    endpoints: dict[tuple[UUID, UUID], list[RelationshipEvidence]] = {}
+    for support in moving:
+        next_source = new_entity_id if support.source_membership_id in membership_ids else row.source_entity_id
+        next_target = new_entity_id if support.target_membership_id in membership_ids else row.target_entity_id
+        if next_source == next_target:
+            raise ValueError("Split would create a self relationship")
+        endpoints.setdefault((next_source, next_target), []).append(support)
+    replaced: list[tuple[UUID, UUID]] = []
+    for (next_source, next_target), moved_supports in endpoints.items():
+        existing = await session.scalar(select(Relationship).where(
+            Relationship.workspace_id == scope.workspace_id,
+            Relationship.id != row.id,
+            Relationship.source_entity_id == next_source,
+            Relationship.target_entity_id == next_target,
+            Relationship.type == row.type,
+            Relationship.origin == row.origin,
+            Relationship.valid_from.is_not_distinct_from(row.valid_from),
+            Relationship.valid_to.is_not_distinct_from(row.valid_to),
+        ).order_by(Relationship.id).limit(1))
+        if existing is not None and existing.metadata_json != row.metadata_json:
+            raise ValueError("Split has conflicting relationship metadata")
+        destination = existing or Relationship(
+            workspace_id=scope.workspace_id, source_entity_id=next_source, target_entity_id=next_target, type=row.type,
+            origin=row.origin, confidence=None, valid_from=row.valid_from,
+            valid_to=row.valid_to, metadata_json=row.metadata_json,
+        )
+        if existing is None:
+            session.add(destination)
+            await session.flush()
+        for support in moved_supports:
+            support.relationship_id = destination.id
+        replaced.append((row.id, destination.id))
+    if len(source_rows) == len(moving):
+        await session.delete(row)
+    return replaced
+
+
 async def apply_entity_split(
     session: AsyncSession, entity_id: UUID, new_entity_id: UUID,
     membership_ids: set[UUID], expected_relationship_ids: set[UUID],
@@ -1380,44 +1473,11 @@ async def apply_entity_split(
             continue
         if row.origin == "owner":
             raise ValueError("Split cannot move evidence from an owner-authored relationship")
-        moving = [item for item in source_rows if item.source_membership_id in membership_ids or item.target_membership_id in membership_ids]
-        if not moving:
-            continue
-        endpoints: dict[tuple[UUID, UUID], list[RelationshipEvidence]] = {}
-        for support in moving:
-            next_source = new_entity_id if support.source_membership_id in membership_ids else row.source_entity_id
-            next_target = new_entity_id if support.target_membership_id in membership_ids else row.target_entity_id
-            if next_source == next_target:
-                raise ValueError("Split would create a self relationship")
-            endpoints.setdefault((next_source, next_target), []).append(support)
-        for (next_source, next_target), moved_supports in endpoints.items():
-            existing = await session.scalar(select(Relationship).where(
-                Relationship.workspace_id == scope.workspace_id,
-                Relationship.id != row.id,
-                Relationship.source_entity_id == next_source,
-                Relationship.target_entity_id == next_target,
-                Relationship.type == row.type,
-                Relationship.origin == row.origin,
-                Relationship.valid_from.is_not_distinct_from(row.valid_from),
-                Relationship.valid_to.is_not_distinct_from(row.valid_to),
-            ).order_by(Relationship.id).limit(1))
-            if existing is not None and existing.metadata_json != row.metadata_json:
-                raise ValueError("Split has conflicting relationship metadata")
-            destination = existing or Relationship(
-                workspace_id=scope.workspace_id, source_entity_id=next_source, target_entity_id=next_target, type=row.type,
-                origin=row.origin, confidence=None, valid_from=row.valid_from,
-                valid_to=row.valid_to, metadata_json=row.metadata_json,
-            )
-            if existing is None:
-                session.add(destination)
-                await session.flush()
-            for support in moved_supports:
-                support.relationship_id = destination.id
-            affected_relationship_ids.add(destination.id)
-            affected_relationship_ids.add(row.id)
-            replacements.append((row.id, destination.id))
-        if len(source_rows) == len(moving):
-            await session.delete(row)
+        for old_id, destination_id in await _split_row_supports(
+            session, row, source_rows, membership_ids, new_entity_id, scope=scope,
+        ):
+            affected_relationship_ids.update((old_id, destination_id))
+            replacements.append((old_id, destination_id))
     await _refresh_derived_confidence(session, affected_relationship_ids, scope=scope)
     await session.flush()
     for identifier in sorted(affected_relationship_ids):

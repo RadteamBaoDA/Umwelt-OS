@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
+from core.errors import ConflictError, error_status
 from core.model_gateway.client import PrivacyPolicyDenied
 from modules.knowledge.entities import worker as entities_worker
 from modules.timeline import worker as timeline_worker
@@ -198,9 +199,11 @@ async def test_before_send_access_fence_change_is_409(monkeypatch: pytest.Monkey
     await m.run()
     m.fence[0] = "f2"
     assert _Gateway.instance is not None
-    with pytest.raises(HTTPException) as exc:
+    # The entity worker raises the ConflictError domain error; the timeline worker still raises HTTPException.
+    with pytest.raises((HTTPException, ConflictError)) as exc:
         await _Gateway.instance.before_send()
-    assert exc.value.status_code == 409
+    assert error_status(exc.value) == 409
+    assert isinstance(exc.value, ConflictError) == (name == "entities")
 
 
 @pytest.mark.parametrize("name", NAMES)
