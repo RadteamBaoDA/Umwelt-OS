@@ -1506,6 +1506,8 @@ async def run_response_generation(
                 return await run_todo_tool(name, raw_args or "{}", todo_session, conversation_id, response_id)
         while True:
             acc = ToolCallAccumulator()
+            # Provider thinking blocks (Anthropic) of this round: must ride back with the tool results or the next round 400s.
+            round_reasoning_details: list[dict[str, Any]] = []
             round_started = False  # any chunk received; a capability fallback is only safe before this
             ui_state: dict[str, dict[str, Any]] = {}  # per part id: streamed length, milestones, parse clock, last snapshot
             round_text_start = len(accumulated_text) + len(pending)
@@ -1551,6 +1553,9 @@ async def run_response_generation(
                                         )
                                         if due and await _flush_pending() is None:
                                             return
+                                    details = delta.get("reasoning_details")
+                                    if isinstance(details, list) and details:
+                                        round_reasoning_details = [d for d in details[:64] if isinstance(d, dict)]
                                     fragments = delta.get("tool_calls")
                                     if fragments:
                                         acc.feed(fragments)
@@ -1661,6 +1666,8 @@ async def run_response_generation(
             ]
             messages_payload.append({
                 "role": "assistant", "content": accumulated_text[round_text_start:] or None, "tool_calls": tool_calls,
+                # Absent for providers that send none, so other kinds keep today's message shape.
+                **({"reasoning_details": round_reasoning_details} if round_reasoning_details else {}),
             })
             for tc, c in zip(tool_calls, handled, strict=True):
                 name = c["name"]

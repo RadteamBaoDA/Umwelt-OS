@@ -1087,6 +1087,10 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
                         "name": call["name"], "arguments": call["arguments"],
                     }} for call in normalized
                 ]}
+                # Provider thinking blocks (Anthropic) must be echoed back unmodified with the tool results.
+                details = message.get("reasoning_details")
+                if isinstance(details, list) and details:
+                    assistant["reasoning_details"] = [d for d in details[:64] if isinstance(d, dict)]
             else:
                 content = message.get("content")
                 if not isinstance(content, str) or len(content) > 32_000:
