@@ -43,3 +43,13 @@ The following are required deferred checks, not passed checks. Use disposable da
 
 Record exact source revision, configured capabilities and receipt identities without secrets. Keep failure, pending and uncertain states explicit. Use [release-checklist.md](release-checklist.md), [performance-report.md](performance-report.md) and the execution ledger for final gates. Container builds and source review do not prove service recovery, erasure, target capacity or successful restore.
 
+
+## Chat SQL tool (`query_collected_data`, mode `sql`)
+
+Model-written SQL is untrusted input. Three independent layers apply, and a failure of one must not expose data:
+
+1. **Parser allowlist** (`modules/chat/sql_guard.py`, `pglast` = PostgreSQL's own grammar). Exactly one `SELECT`; only `scoped_observations` / `scoped_documents` or CTEs defined earlier in the same top-level `WITH`; no schema-qualified names, `WITH RECURSIVE`, `INTO`, locking clauses, set-returning functions, `COLLATE`, `TABLESAMPLE`, parameters or DML. Functions, operators and cast targets come from explicit allowlists (aggregates, window, string/date/math helpers, `->`/`->>`; `now()` is allowed, `current_user`/`set_config`/`query_to_xml`/`lo_*`/`setval`/`pg_*` are not; no `regclass` casts). The length, comment and semicolon checks stay in front of the parser. The former keyword regex was removed rather than kept as a second layer: the parser already rejects everything it guarded and the regex refused legitimate literals such as `ILIKE '%set%'`.
+2. **Least-privilege role** (Alembic `0013_chat_sql_reader_role`). `umwelt_chat_sql_reader` is `NOLOGIN NOSUPERUSER NOINHERIT` with no table privileges and is granted to the application database user. Per query the executor, inside a raw `SAVEPOINT`, creates two `TEMP` `security_barrier` views named `scoped_observations` / `scoped_documents` (workspace and allowed-source ids inlined as validated `UUID`s; the view owner's rights read the base tables), `GRANT SELECT` on them to the role, then runs `SET LOCAL transaction_read_only = on` and `SET LOCAL ROLE umwelt_chat_sql_reader` before the model query. A validator bypass can therefore read nothing except those two fenced views (PUBLIC-granted catalog reads remain, which is why layer 1 still blocks catalog access).
+3. **Rollback to the savepoint** after the rows are fetched reverts the role, read-only flag and temp views (a released ORM savepoint would keep `SET LOCAL` for the rest of the turn and break later writes). `statement_timeout` stays 2000ms and the row cap 50.
+
+The migration must run as a role allowed to create roles; if the role is missing the tool fails closed (`query_execution_failed`).

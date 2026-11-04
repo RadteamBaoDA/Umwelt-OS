@@ -9,6 +9,8 @@ BASE = "0001_init"
 SECOND = "0002_observations_provider_ids"
 PROVIDERS_LATEST = "0010_observations_vn_stock"  # newest revision that rewrites ck_observations_provider
 HEAD = ScriptDirectory.from_config(Config("alembic.ini")).get_current_head()  # derived: later revisions advance it
+MERGE_REVISION = "0012_merge_live_and_capability"  # the only historical merge point (two parents)
+CHAT_SQL_READER = "0013_chat_sql_reader_role"
 
 
 def _alembic(*args: str) -> subprocess.CompletedProcess[str]:
@@ -34,7 +36,13 @@ def test_single_head_follows_the_init_baseline() -> None:
     assert chain[0] == HEAD and chain[-1] == BASE and SECOND in chain
     assert len(chain) == len(set(chain)) == len(list(script.walk_revisions("base", "heads")))
     for revision in script.walk_revisions():
-        assert isinstance(revision.down_revision, (str, type(None)))  # no merge points: strictly linear
+        if revision.revision == MERGE_REVISION:
+            assert isinstance(revision.down_revision, tuple) and len(revision.down_revision) == 2
+        elif revision.down_revision is not None and revision.revision not in {"0011_merge_live_map", "0011_model_capability_evidence"}:
+            assert isinstance(revision.down_revision, str)  # every other post-baseline revision has one parent
+    # Everything after the merge is strictly linear and the chat SQL reader role migration follows it.
+    assert script.get_revision(CHAT_SQL_READER).down_revision == MERGE_REVISION  # type: ignore[union-attr]
+    assert chain.index(CHAT_SQL_READER) < chain.index(MERGE_REVISION)
     result = _alembic("heads")
     assert result.returncode == 0, result.stderr
     assert result.stdout.split() == [HEAD, "(head)"]
@@ -105,3 +113,14 @@ def test_model_capability_evidence_extends_test_results_key() -> None:
     assert "ADD COLUMN capability VARCHAR(16) NOT NULL DEFAULT 'chat'" in sql
     assert "ADD COLUMN model_identity VARCHAR(64)" in sql
     assert "ADD PRIMARY KEY (workspace_id, provider_id, model_id, capability)" in sql
+
+
+def test_chat_sql_reader_role_migration_is_least_privilege_and_guarded() -> None:
+    sql = _upgrade_sql()
+    assert "IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'umwelt_chat_sql_reader')" in sql
+    assert "CREATE ROLE umwelt_chat_sql_reader NOLOGIN NOSUPERUSER NOINHERIT" in sql
+    assert "GRANT umwelt_chat_sql_reader TO CURRENT_USER" in sql
+    assert "GRANT SELECT" not in sql.split("umwelt_chat_sql_reader", 1)[1]  # the role gets no table privileges
+    down = _alembic("downgrade", f"{CHAT_SQL_READER}:{MERGE_REVISION}", "--sql")
+    assert down.returncode == 0, down.stderr
+    assert "DROP ROLE IF EXISTS umwelt_chat_sql_reader" in down.stdout

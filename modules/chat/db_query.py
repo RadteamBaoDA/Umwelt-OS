@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, Scope
 from modules.chat.schemas import DB_QUERY_KEY, GADGET_SCOPE_KEY, EvidenceItem
+from modules.chat.sql_guard import check_select_policy
 from modules.knowledge.documents.models import Document, DocumentChunk, DocumentVersion
 from modules.knowledge.observations.models import Observation
 from modules.sources.models import Source
@@ -29,23 +30,6 @@ from modules.sources.models import Source
 TOOL_QUERY_COLLECTED_DATA = "query_collected_data"
 MAX_DB_QUERY_ROWS = 50
 MAX_SQL_LENGTH = 2000
-
-_FORBIDDEN_SQL_TOKENS = re.compile(
-    r"\b("
-    r"insert|update|delete|drop|alter|truncate|create|replace|grant|revoke|copy|"
-    r"execute|call|do|set|reset|show|lock|vacuum|analyze|explain|listen|notify|"
-    r"prepare|deallocate|begin|commit|rollback|savepoint|into|pg_sleep|pg_read_file|"
-    r"pg_ls_dir|pg_stat|information_schema|pg_catalog|dblink|lo_import|lo_export|"
-    r"owner|auth_sessions|users|workspaces|workspace_memberships|conversations|"
-    r"messages|response_runs|stream_events|connector_rest_credentials|"
-    r"connector_oauth_grants|collector_credentials|"
-    r"observations|documents|document_versions|document_chunks|sources"
-    r")\b",
-    re.IGNORECASE,
-)
-_FORBIDDEN_PREFIX_RE = re.compile(r"\b(pg_|connector_)", re.IGNORECASE)
-_ALLOWED_CTE_RE = re.compile(r"\b(scoped_observations|scoped_documents)\b", re.IGNORECASE)
-_FOR_LOCKING_RE = re.compile(r"\bfor\s+(update|share|no\s+key\s+update|key\s+share)\b", re.IGNORECASE)
 
 _AUTO_DB_KEYWORDS_RE = re.compile(
     r"\b("
@@ -197,7 +181,14 @@ def should_auto_enable_db_query(
 
 
 def validate_readonly_sql(sql: str) -> str:
-    """Validate a model-generated SQL string to guarantee read-only SELECT execution on scoped CTEs.
+    """Validate a model-generated SQL string so only a read-only SELECT over the scoped views can run.
+
+    Layers applied here: length bound, comment/semicolon ban (keeps the ``SELECT * FROM (<sql>)``
+    wrapper intact), then the ``pglast`` default-deny allowlist in :mod:`modules.chat.sql_guard`. The
+    former keyword regex was removed on purpose: the parser rejects every relation/function it guarded
+    (and the ones it missed, e.g. ``chat_messages``, ``query_to_xml``) while the regex also refused
+    legitimate literals such as ``WHERE symbol = 'users'``. Execution adds two more layers (see
+    ``_execute_sql_mode``): a least-privilege role and a read-only transaction.
 
     Args:
         sql: Raw SQL string supplied by the model in ``mode='sql'``.
@@ -206,8 +197,7 @@ def validate_readonly_sql(sql: str) -> str:
         Cleaned single-statement SELECT query string without trailing semicolon.
 
     Raises:
-        ValueError: If the SQL is empty, not a SELECT/WITH query, contains comments/semicolons/DDL/DML,
-            or fails to reference ``scoped_observations`` or ``scoped_documents``.
+        ValueError: If the SQL is empty/too long, has comments or semicolons, or violates the allowlist.
     """
     cleaned = (sql or "").strip()
     if cleaned.endswith(";"):
@@ -216,14 +206,7 @@ def validate_readonly_sql(sql: str) -> str:
         raise ValueError("SQL query must be between 1 and 2000 characters")
     if ";" in cleaned or "--" in cleaned or "/*" in cleaned or "*/" in cleaned:
         raise ValueError("SQL query must be a single statement without comments or semicolons")
-    if not re.match(r"^\s*(select|with)\b", cleaned, re.IGNORECASE) or not re.search(r"\bselect\b", cleaned, re.IGNORECASE):
-        raise ValueError("SQL query must begin with SELECT or WITH ... SELECT")
-    if _FORBIDDEN_SQL_TOKENS.search(cleaned) or _FORBIDDEN_PREFIX_RE.search(cleaned):
-        raise ValueError("SQL query contains a forbidden keyword or system identifier")
-    if _FOR_LOCKING_RE.search(cleaned):
-        raise ValueError("SQL locking clauses are not allowed")
-    if not _ALLOWED_CTE_RE.search(cleaned):
-        raise ValueError("SQL query must reference scoped_observations or scoped_documents")
+    check_select_policy(cleaned)
     return cleaned
 
 
@@ -431,6 +414,84 @@ async def execute_db_query_tool(
         return json.dumps({"error": f"query_execution_failed: {type(exc).__name__}", "rows": []})
 
 
+CHAT_SQL_READER_ROLE = "umwelt_chat_sql_reader"
+_SQL_SAVEPOINT = "chat_sql_reader"
+
+_SCOPED_OBSERVATIONS_VIEW = """
+CREATE TEMP VIEW scoped_observations WITH (security_barrier = true) AS
+SELECT o.id, o.source_id, o.provider, o.metric, o.symbol, o.region, o.value, o.unit, o.currency,
+       o.observed_at, o.published_at, o.quality, o.is_current, o.document_id, o.document_version_id
+FROM observations o
+WHERE o.workspace_id = CAST('{workspace_id}' AS uuid)
+  AND o.source_id = ANY(CAST(ARRAY[{source_ids}] AS uuid[]))
+"""
+_SCOPED_DOCUMENTS_VIEW = """
+CREATE TEMP VIEW scoped_documents WITH (security_barrier = true) AS
+SELECT d.id, d.source_id, s.provider, d.title, d.canonical_url, d.published_at, d.observed_at,
+       d.language, LEFT(dv.content, 600) AS content_excerpt, dv.id AS document_version_id
+FROM documents d
+JOIN sources s ON s.id = d.source_id AND s.workspace_id = d.workspace_id
+JOIN document_versions dv ON dv.document_id = d.id AND dv.version_number = d.current_version
+WHERE d.workspace_id = CAST('{workspace_id}' AS uuid)
+  AND d.source_id = ANY(CAST(ARRAY[{source_ids}] AS uuid[]))
+"""
+
+
+def build_scoped_view_statements(workspace_id: UUID, allowed_source_ids: list[UUID]) -> list[str]:
+    """Return the DDL that exposes the workspace-fenced views to the reader role.
+
+    The views are TEMP, ``security_barrier`` views owned by the session user, so the reader role can
+    SELECT them (after an explicit GRANT) without holding any privilege on ``observations`` /
+    ``documents`` / ``sources``; Postgres evaluates view bodies with the owner's rights, and the
+    barrier stops model predicates from being pushed below the workspace filter. Utility statements
+    cannot take bind parameters, so the ids are inlined; they are ``UUID`` instances rendered by
+    ``str()`` (hex and dashes only), never model text.
+    """
+    ids = ", ".join(f"'{sid}'" for sid in allowed_source_ids)
+    fmt = {"workspace_id": str(workspace_id), "source_ids": ids}
+    return [
+        _SCOPED_OBSERVATIONS_VIEW.format(**fmt),
+        _SCOPED_DOCUMENTS_VIEW.format(**fmt),
+        f"GRANT SELECT ON scoped_observations, scoped_documents TO {CHAT_SQL_READER_ROLE}",
+    ]
+
+
+async def _run_sql_as_reader(
+    session: AsyncSession,
+    clean_sql: str,
+    *,
+    workspace_id: UUID,
+    allowed_source_ids: list[UUID],
+    max_rows: int,
+) -> list[Any]:
+    """Execute validated model SQL with least privilege and return fully-fetched row mappings.
+
+    Ordering (all inside one raw SAVEPOINT so nothing leaks into the caller's transaction):
+    1. create the TEMP scoped views and GRANT them to ``umwelt_chat_sql_reader`` as the session user;
+    2. ``SET LOCAL transaction_read_only = on`` then ``SET LOCAL ROLE`` the NOLOGIN reader, which owns
+       and may read nothing else, so even a parser-allowlist bypass cannot touch other tables;
+    3. run ``SELECT * FROM (<sql>) LIMIT :max_rows`` (the caller's 2000ms statement_timeout applies);
+    4. ``ROLLBACK TO SAVEPOINT`` which reverts the role, read-only flag and temp views (SET LOCAL
+       inside a released ORM savepoint would otherwise persist and make the turn's later writes fail).
+    Rows are fetched before the rollback. A raw savepoint is used because an ORM rollback would
+    expire the caller's loaded objects. On error the exception propagates and the caller's own
+    savepoint rollback discards everything.
+    """
+    await session.execute(text(f"SAVEPOINT {_SQL_SAVEPOINT}"))
+    for statement in build_scoped_view_statements(workspace_id, allowed_source_ids):
+        await session.execute(text(statement))
+    await session.execute(text("SET LOCAL transaction_read_only = on"))
+    await session.execute(text(f"SET LOCAL ROLE {CHAT_SQL_READER_ROLE}"))
+    res = await session.execute(
+        text("SELECT * FROM (" + clean_sql + ") AS _bounded_query LIMIT :max_rows"),
+        {"max_rows": max_rows},
+    )
+    mappings = list(res.mappings().all())
+    await session.execute(text(f"ROLLBACK TO SAVEPOINT {_SQL_SAVEPOINT}"))
+    await session.execute(text(f"RELEASE SAVEPOINT {_SQL_SAVEPOINT}"))
+    return mappings
+
+
 async def _execute_sql_mode(
     session: AsyncSession,
     sql_query: str,
@@ -440,66 +501,19 @@ async def _execute_sql_mode(
     limit: int,
     evidence_list: list[EvidenceItem],
 ) -> str:
-    """Run a validated read-only SELECT query inside pre-fenced CTE views."""
+    """Validate, run (least-privilege, read-only) and serialise a model-written SELECT.
+
+    Raises:
+        ValueError: when the SQL fails the parser allowlist (reported to the model, nothing executed).
+    """
     clean_sql = validate_readonly_sql(sql_query)
-    wrapped = text(
-        """
-        WITH scoped_observations AS (
-            SELECT
-                o.id,
-                o.source_id,
-                o.provider,
-                o.metric,
-                o.symbol,
-                o.region,
-                o.value,
-                o.unit,
-                o.currency,
-                o.observed_at,
-                o.published_at,
-                o.quality,
-                o.is_current,
-                o.document_id,
-                o.document_version_id
-            FROM observations o
-            WHERE o.workspace_id = :workspace_id
-              AND o.source_id = ANY(:source_ids)
-        ),
-        scoped_documents AS (
-            SELECT
-                d.id,
-                d.source_id,
-                s.provider,
-                d.title,
-                d.canonical_url,
-                d.published_at,
-                d.observed_at,
-                d.language,
-                LEFT(dv.content, 600) AS content_excerpt,
-                dv.id AS document_version_id
-            FROM documents d
-            JOIN sources s ON s.id = d.source_id AND s.workspace_id = d.workspace_id
-            JOIN document_versions dv ON dv.document_id = d.id AND dv.version_number = d.current_version
-            WHERE d.workspace_id = :workspace_id
-              AND d.source_id = ANY(:source_ids)
-        )
-        SELECT * FROM (
-        """
-        + clean_sql
-        + """
-        ) AS _bounded_query
-        LIMIT :max_rows
-        """
+    mappings = await _run_sql_as_reader(
+        session,
+        clean_sql,
+        workspace_id=workspace_id,
+        allowed_source_ids=allowed_source_ids,
+        max_rows=min(limit, MAX_DB_QUERY_ROWS),
     )
-    res = await session.execute(
-        wrapped,
-        {
-            "workspace_id": workspace_id,
-            "source_ids": allowed_source_ids,
-            "max_rows": min(limit, MAX_DB_QUERY_ROWS),
-        },
-    )
-    mappings = res.mappings().all()
     version_pairs: list[tuple[UUID, UUID]] = []
     for row in mappings:
         doc_id = row.get("document_id") or row.get("id")
