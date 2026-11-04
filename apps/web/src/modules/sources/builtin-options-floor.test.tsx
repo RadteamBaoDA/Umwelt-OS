@@ -46,3 +46,34 @@ describe('BuiltinOptions interval floor and tickers', () => {
     expect(onChange).toHaveBeenLastCalledWith('vn_symbols', undefined);
   });
 });
+
+describe('BuiltinOptions job filters', () => {
+  const jobs: BuiltinSource = {
+    ...base, id: 'vietnamworks_jobs', label: 'VietnamWorks jobs', data_shapes: ['news'], min_interval_minutes: 360,
+    applicable_options: ['name', 'schedule_interval_minutes', 'job_keywords', 'job_cities', 'job_levels', 'job_min_salary_usd'],
+  };
+
+  it('reports case-insensitively unique keywords capped at five', () => {
+    const onChange = view(jobs);
+    fireEvent.change(screen.getByLabelText('Search keywords'), { target: { value: 'Python, python, Data Engineer, a, b, c, d' } });
+    expect(onChange).toHaveBeenLastCalledWith('job_keywords', ['python', 'Data Engineer', 'a', 'b', 'c']);
+  });
+
+  it('renders translated city and level checkboxes and reports the picked values', async () => {
+    const onChange = view(jobs, { job_cities: ['ha_noi'] });
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Ho Chi Minh City' }));
+    expect(onChange).toHaveBeenLastCalledWith('job_cities', ['ha_noi', 'ho_chi_minh']);
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Fresher' }));
+    expect(onChange).toHaveBeenLastCalledWith('job_levels', ['fresher']);
+    expect(screen.getByRole('checkbox', { name: 'Director+' })).toBeTruthy();
+  });
+
+  it('reports the minimum salary as a number and undefined when cleared', () => {
+    const onChange = view(jobs, { job_min_salary_usd: 900 });
+    const input = screen.getByLabelText('Minimum salary (USD / month, hidden salaries kept)');
+    fireEvent.change(input, { target: { value: '1500' } });
+    expect(onChange).toHaveBeenLastCalledWith('job_min_salary_usd', 1500);
+    fireEvent.change(input, { target: { value: '' } });
+    expect(onChange).toHaveBeenLastCalledWith('job_min_salary_usd', undefined);
+  });
+});

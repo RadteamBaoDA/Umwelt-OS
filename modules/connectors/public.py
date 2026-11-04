@@ -73,6 +73,7 @@ from modules.connectors.models import (
 from modules.connectors.provider_options import (
     ISO_COUNTRY_PATTERN,
     MAX_COINS,
+    MAX_JOB_KEYWORDS,
     MAX_VN_SYMBOLS,
     CoinId,
     CryptoPair,
@@ -86,6 +87,9 @@ from modules.connectors.provider_options import (
     GdeltTimespan,
     HnList,
     IsoCountry,
+    JobCity,
+    JobKeyword,
+    JobLevel,
     NvdSeverity,
     NwsArea,
     NwsSeverity,
@@ -437,6 +441,10 @@ class ConnectorConfig(BaseModel):
     oecd_countries: tuple[OecdArea, ...] | None = Field(default=None, min_length=1, max_length=10)
     crypto_symbols: tuple[CryptoPair, ...] | None = Field(default=None, min_length=1, max_length=10)
     vn_symbols: tuple[VnSymbol, ...] | None = Field(default=None, min_length=1, max_length=MAX_VN_SYMBOLS)
+    job_keywords: tuple[JobKeyword, ...] | None = Field(default=None, min_length=1, max_length=MAX_JOB_KEYWORDS)
+    job_cities: tuple[JobCity, ...] | None = Field(default=None, min_length=1, max_length=3)
+    job_levels: tuple[JobLevel, ...] | None = Field(default=None, min_length=1, max_length=5)
+    job_min_salary_usd: StrictInt | None = Field(default=None, ge=0, le=20000)
     coin_ids: tuple[CoinId, ...] | None = Field(default=None, min_length=1, max_length=MAX_COINS)
     kp_min: float | None = Field(default=None, ge=0, le=9)
     advisory_min_level: StrictInt | None = Field(default=None, ge=1, le=4)

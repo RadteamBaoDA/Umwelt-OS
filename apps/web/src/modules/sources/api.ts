@@ -148,6 +148,11 @@ export type BuiltinTypeOptions = {
   crypto_symbols?: string[];
   /** Vietnam stock/index tickers (`vn_stock`), 1-20 upper-case codes. */
   vn_symbols?: string[];
+  /** Job-board filters (`vietnamworks_jobs`): 1-5 search keywords, city / level subsets and a USD salary floor. */
+  job_keywords?: string[];
+  job_cities?: ('ho_chi_minh' | 'ha_noi' | 'da_nang')[];
+  job_levels?: ('intern' | 'fresher' | 'experienced' | 'manager' | 'director')[];
+  job_min_salary_usd?: number;
   coin_ids?: string[];
   kp_min?: number;
   advisory_min_level?: 1 | 2 | 3 | 4;
@@ -653,11 +658,18 @@ export function collectionTooSoonRetryAt(cause: unknown, now: Date = new Date())
   return null;
 }
 
-/** Reads the `minimum` (minutes) from a 422 `schedule_interval_below_minimum` error, or undefined for any other error. */
+/**
+ * Reads the `minimum` (minutes) from a 422 `schedule_interval_below_minimum` error, or undefined for any other error.
+ * The server sends `detail` as a string ("...: schedule_interval_below_minimum: minimum 360 minutes"), so the code is
+ * matched with `includes` on the code or message and the minimum is parsed from the text; an object payload still wins.
+ */
 export function intervalBelowMinimum(cause: unknown): { minimum: number | null } | undefined {
-  if (!(cause instanceof ApiError) || cause.status !== 422 || (cause.code ?? cause.message) !== 'schedule_interval_below_minimum') return undefined;
+  if (!(cause instanceof ApiError) || cause.status !== 422) return undefined;
+  if (!`${cause.code ?? ''} ${cause.message}`.includes('schedule_interval_below_minimum')) return undefined;
   const raw = cause.payload.minimum ?? (cause.details as { minimum?: unknown } | undefined)?.minimum;
-  return { minimum: typeof raw === 'number' ? raw : null };
+  if (typeof raw === 'number') return { minimum: raw };
+  const parsed = /minimum (\d+)/.exec(cause.message);
+  return { minimum: parsed ? Number(parsed[1]) : null };
 }
 
 /** One scoped (non built-in) starter item: provider scope written through the normal connector configuration route. */

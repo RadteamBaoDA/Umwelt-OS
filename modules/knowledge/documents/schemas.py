@@ -17,7 +17,7 @@ MAX_CONTENT_BYTES = 1_048_576
 MAX_METADATA_BYTES = 65_536
 # Built-in feed-class presets (RSS/Atom and JSON event/list feeds): news-shaped records, no typed measurement.
 BUILTIN_FEED_PROVIDER_IDS = (
-    "aljazeera_world", "npr_news", "fed_press", "gdacs_rss", "lobsters", "github_trending", "wwr_jobs", "us_travel_advisories",
+    "aljazeera_world", "npr_news", "fed_press", "gdacs_rss", "lobsters", "github_trending", "wwr_jobs", "vietnamworks_jobs", "us_travel_advisories",
     "noaa_tsunami", "jma_eqvol",
     "gdacs_events", "nws_alerts", "emsc_quakes", "launch_library", "wikipedia_mostread", "wikipedia_top_views", "bmkg_quakes", "satnogs_observations",
 )

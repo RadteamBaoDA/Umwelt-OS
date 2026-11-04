@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
@@ -36,7 +36,7 @@ beforeEach(() => {
   Object.values(api).forEach((mock) => mock.mockReset());
   api.listSources.mockResolvedValue({ items: [], next_cursor: null });
   api.getConnectorCatalog.mockResolvedValue([]);
-  api.listBuiltinSources.mockResolvedValue([row('hn_top'), row('lobsters', { source_id: 'x', enabled: true }), row('vn_stock', { min_interval_minutes: 360 }), row('wwr_jobs'), row('bbc_world')]);
+  api.listBuiltinSources.mockResolvedValue([row('hn_top'), row('lobsters', { source_id: 'x', enabled: true }), row('vn_stock', { min_interval_minutes: 360 }), row('wwr_jobs'), row('vietnamworks_jobs', { min_interval_minutes: 360 }), row('bbc_world')]);
   api.enableBuiltinSource.mockResolvedValue(row('hn_top'));
   api.createScopedSource.mockResolvedValue({ id: 'new' });
 });
@@ -91,6 +91,20 @@ describe('StarterPackWizard', () => {
     expect(call[1]).toBe('personal');
     expect(call[4]).toMatchObject({ vn_symbols: ['FPT', 'VCB'], name: 'My stocks' });
   });
+
+  it('sends editable job keywords with the default Ho Chi Minh city and blocks more than five', async () => {
+    wrap();
+    await keepOnly(['vietnamworks_jobs']);
+    const keywordsField = await screen.findByLabelText('Search keywords (comma-separated, up to 5)');
+    expect((keywordsField as HTMLInputElement).value).toBe('developer');
+    fireEvent.change(keywordsField, { target: { value: 'a, b, c, d, e, f' } });
+    expect(screen.getByRole('button', { name: 'Next' }).hasAttribute('disabled')).toBe(true);
+    fireEvent.change(keywordsField, { target: { value: 'Data Engineer, python, data engineer' } });
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(api.enableBuiltinSource).toHaveBeenCalled());
+    const call = api.enableBuiltinSource.mock.calls.find((args) => args[0] === 'vietnamworks_jobs')!;
+    expect(call[4]).toMatchObject({ job_keywords: ['Data Engineer', 'python'], job_cities: ['ho_chi_minh'] });
+  }, 20000);
 
   it('blocks Next on an invalid ticker', async () => {
     wrap();

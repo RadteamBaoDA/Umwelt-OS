@@ -107,13 +107,14 @@ def _pinned_request(url: str, address: str, headers: dict[str, str]) -> tuple[st
 async def fetch_bounded(
     url: str, *, headers: dict[str, str] | None = None, before_send: BeforeSend,
     resolve: Resolver = resolve_public, transport: httpx.AsyncBaseTransport | None = None,
-    max_bytes: int = MAX_PAGE_BYTES, timeout: float = REQUEST_TIMEOUT_SECONDS,
+    max_bytes: int = MAX_PAGE_BYTES, timeout: float = REQUEST_TIMEOUT_SECONDS, json_body: bytes | None = None,
 ) -> Fetched:
-    """GET one URL through the pinned public destination with byte, status and time bounds.
+    """GET (or, with ``json_body``, POST that JSON to) one URL through the pinned public destination with byte, status and time bounds.
 
     ``before_send`` runs exactly once, after resolution and immediately before the request is
     handed to the transport; it is where the caller revalidates fences and debits quota, and
-    raising from it aborts the send. 429 raises ``ProviderRateLimited`` with the full
+    raising from it aborts the send. ``json_body`` is a fixed, already-serialised search query for read-only
+    POST search APIs (VietnamWorks); it never carries credentials or owner content. 429 raises ``ProviderRateLimited`` with the full
     Retry-After; redirects and other 3xx raise ``UnsafeDestination``; 304 returns no body.
     """
     parts = urlsplit(url)
@@ -128,6 +129,8 @@ async def fetch_bounded(
     merged = {"Accept-Encoding": "gzip, deflate", **(headers or {})}
     if not any(name.lower() == "user-agent" for name in merged):
         merged["User-Agent"] = DEFAULT_USER_AGENT
+    if json_body is not None:
+        merged.setdefault("Content-Type", "application/json")
     pinned, request_headers, extensions = _pinned_request(url, addresses[0], merged)
     async with httpx.AsyncClient(
         transport=transport, timeout=httpx.Timeout(timeout), trust_env=False,
@@ -135,7 +138,8 @@ async def fetch_bounded(
     ) as client:
         await before_send()
         async with asyncio.timeout(timeout), client.stream(
-            "GET", pinned, headers=request_headers, extensions=extensions,
+            "GET" if json_body is None else "POST", pinned, headers=request_headers, extensions=extensions,
+            content=json_body,
         ) as response:
             status = response.status_code
             if status == 429:

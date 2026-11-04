@@ -117,7 +117,7 @@ export function StarterPackWizard({ onClose, onChanged, onAddConnector }: { onCl
 
   const failed = runItems.filter((item) => statuses[item.id]?.state === 'failed');
   const doneCount = runItems.filter((item) => statuses[item.id]?.state === 'done' || statuses[item.id]?.state === 'exists').length;
-  const fieldLabel = { vn_symbols: 'starterFieldVnSymbols', crypto_symbols: 'starterFieldCrypto', github_repo: 'starterFieldRepo', arxiv_category: 'starterFieldArxiv', weather: 'starterFieldWeather' } as const;
+  const fieldLabel = { vn_symbols: 'starterFieldVnSymbols', job_keywords: 'starterFieldJobKeywords', crypto_symbols: 'starterFieldCrypto', github_repo: 'starterFieldRepo', arxiv_category: 'starterFieldArxiv', weather: 'starterFieldWeather' } as const;
   const steps = [
     { id: 'choose', title: t('stepStarterChoose'), valid: ready },
     { id: 'create', title: t('stepStarterCreate'), valid: true },

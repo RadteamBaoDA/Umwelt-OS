@@ -28,6 +28,7 @@ from modules.connectors.provider_options import (
     ALL_OPTION_NAMES,
     ISO_COUNTRY_PATTERN,
     MAX_COINS,
+    MAX_JOB_KEYWORDS,
     MAX_VN_SYMBOLS,
     CoinId,
     CryptoPair,
@@ -41,6 +42,9 @@ from modules.connectors.provider_options import (
     GdeltTimespan,
     HnList,
     IsoCountry,
+    JobCity,
+    JobKeyword,
+    JobLevel,
     NvdSeverity,
     NwsArea,
     NwsSeverity,
@@ -166,6 +170,10 @@ class BuiltinEnableRequest(BaseModel):
     oecd_countries: tuple[OecdArea, ...] | None = Field(default=None, min_length=1, max_length=10)
     crypto_symbols: tuple[CryptoPair, ...] | None = Field(default=None, min_length=1, max_length=10)
     vn_symbols: tuple[VnSymbol, ...] | None = Field(default=None, min_length=1, max_length=MAX_VN_SYMBOLS)
+    job_keywords: tuple[JobKeyword, ...] | None = Field(default=None, min_length=1, max_length=MAX_JOB_KEYWORDS)
+    job_cities: tuple[JobCity, ...] | None = Field(default=None, min_length=1, max_length=3)
+    job_levels: tuple[JobLevel, ...] | None = Field(default=None, min_length=1, max_length=5)
+    job_min_salary_usd: StrictInt | None = Field(default=None, ge=0, le=20000)
     coin_ids: tuple[CoinId, ...] | None = Field(default=None, min_length=1, max_length=MAX_COINS)
     kp_min: float | None = Field(default=None, ge=0, le=9)
     advisory_min_level: StrictInt | None = Field(default=None, ge=1, le=4)
@@ -300,7 +308,7 @@ async def enable_builtin(
     Wave D per-type options (``hn_list``, ``gdelt_*``, ``usgs_*``, ``eonet_*``, ``gdacs_*``, ``nws_*``, ``nvd_*``,
     ``min_magnitude``, ``kev_ransomware_only``, ``ioda_country``, ``region``) and wave F options (``wiki_language``,
     ``satnogs_status``, ``disease_country``, ``wb_*``, ``fx_*``, ``oecd_countries``, ``crypto_symbols``, ``coin_ids``,
-    ``vn_symbols``, ``kp_min``, ``advisory_min_level``) follow the same precedence and are accepted only by their own provider
+    ``vn_symbols``, ``job_*``, ``kp_min``, ``advisory_min_level``) follow the same precedence and are accepted only by their own provider
     (422 otherwise; an enum value outside a field's curated list is rejected at request parsing, also 422).
 
     Settings precedence per field (interval, ``realtime_mode``, ``max_items``, keywords, ``max_age_days``,

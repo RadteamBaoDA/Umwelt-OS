@@ -49,6 +49,7 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 | `lobsters` | lobste.rs | news | 60 | review | none | supported | registered | [terms](https://lobste.rs/about) | tech |
 | `github_trending` | mshibanami.github.io | news | 360 | review | none | supported | registered | [terms](https://github.com/mshibanami/GitHubTrendingRSS) | tech |
 | `wwr_jobs` | weworkremotely.com | news | 360 | review | none | supported | registered | [terms](https://weworkremotely.com/remote-job-rss-feed) | tech |
+| `vietnamworks_jobs` | ms.vietnamworks.com | news | 360 | review | none | supported | registered | [terms](https://www.vietnamworks.com/terms-of-use) | tech |
 | `us_travel_advisories` | travel.state.gov | event | 360 | open | none | supported | registered | [terms](https://www.state.gov/copyright-information/) | hazards |
 | `noaa_tsunami` | www.tsunami.gov | event | 30 | open | none | supported | registered | [terms](https://www.tsunami.gov/) | hazards |
 | `jma_eqvol` | www.data.jma.go.jp | event | 30 | open | none | supported | registered | [terms](https://www.jma.go.jp/jma/en/copyright.html) | hazards |
@@ -106,6 +107,7 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 - `lobsters`: Credit Lobsters and link the story; the feed carries submitter links and titles only.
 - `github_trending`: Credit GitHub and the GitHubTrendingRSS mirror; link the repository. Unofficial scrape of github.com/trending.
 - `wwr_jobs`: Credit We Work Remotely and link the job posting; feed-only title, summary and link.
+- `vietnamworks_jobs`: Credit VietnamWorks and link the job posting; unofficial search endpoint, may break without notice.
 - `us_travel_advisories`: Credit the U.S. Department of State; advisories are a point-in-time statement, check the original.
 - `noaa_tsunami`: Credit the NOAA/NWS Tsunami Warning Centers; this is not an official warning channel.
 - `jma_eqvol`: Source: Japan Meteorological Agency; state any processing (feed title and link only).
@@ -199,6 +201,8 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 | `github_trending` | `official_unknown_calls_utc_day` | provider | day | http_calls | counted, no cap | 1 | official_unknown |
 | `wwr_jobs` | `pilot_calls_utc_day` | provider | day | http_calls | 576 | 1 | pilot_local |
 | `wwr_jobs` | `official_unknown_calls_utc_day` | provider | day | http_calls | counted, no cap | 1 | official_unknown |
+| `vietnamworks_jobs` | `pilot_calls_utc_day` | provider | day | http_calls | 40 | 1 | pilot_local |
+| `vietnamworks_jobs` | `official_unknown_calls_utc_day` | provider | day | http_calls | counted, no cap | 1 | official_unknown |
 | `us_travel_advisories` | `pilot_calls_utc_day` | provider | day | http_calls | 12 | 1 | pilot_local |
 | `us_travel_advisories` | `official_unknown_calls_utc_day` | provider | day | http_calls | counted, no cap | 1 | official_unknown |
 | `noaa_tsunami` | `pilot_calls_utc_day` | provider | day | http_calls | 96 | 1 | pilot_local |
@@ -275,6 +279,8 @@ Each entry gives what the source collects, prerequisites, cadence, quota and att
 - **`ecb`**: ECB euro reference rates, `eurofxref-daily.xml`. No key. Cadence 1440 min. Attribution: credit the ECB and keep the rate date. Each EUR cross rate in the feed becomes one record; no USD/VND or other cross rate is synthesised.
 - **`binance`**: BTCUSDT last price from `data-api.binance.vision`. No key and no trading endpoints. Cadence 15 min. The quote is USDT, not USD. Attribution: credit Binance. Needs operator terms review.
 - **`vn_stock`**: Latest-session close per ticker/index from `api-finfo.vndirect.com.vn` (`/v4/stock_prices` for stocks, `/v4/vnmarket_prices` for indices; two calls per run at most). Owner option `vn_symbols` (1-20 codes, default `VNINDEX, VN30, FPT, VCB, HPG, VNM, MWG`). No key. Hard minimum cadence 360 min. Stock prices are kept in thousand VND exactly as the provider sends them; indices are in points. Unofficial endpoint that may break without notice. Needs operator terms review (the provider's terms page could not be fetched automatically).
+- **`vietnamworks_jobs`**: Job postings from the unofficial `POST ms.vietnamworks.com/job-search/v1.0/search` endpoint (owner-approved 2026-11-04; no contract, may break without notice; the terms page is client-rendered and was not machine-verified). One POST per keyword, at most five per run, one second apart, hard minimum cadence 360 min. Owner options: `job_keywords` (1-5, default `developer`), `job_cities` (`ho_chi_minh`=29, `ha_noi`=24, `da_nang`=17), `job_levels` (`intern`=8, `fresher`=1, `experienced`=5, `manager`=7, `director`=3; provider ids pinned from live hits 2026-11-04), `job_min_salary_usd` (VND salaries compared at a fixed 25,000 VND/USD; hidden salaries are kept), plus the generic include/exclude/max-age filters. Filters run after the fetch because the server-side parameters are undocumented. Recruiter contact name, e-mail and age/gender/marital/nationality flags are never stored. Results are deduplicated by job id and the provider is dedup-only (relevance-ranked, no cursor floor).
+- **`itviec_jobs`**: Not implemented. The 360-minute floor is pre-registered, but ITviec's terms of use (section 2.2) allow retrieval of site content only for "reasonable personal use" without written consent, so a scheduled crawler needs an explicit owner decision first. `robots.txt` allows crawling.
 - **`alternative_me`**: Fear and Greed index, last 2 points. No key. Cadence 1440 min. Attribution: show Alternative.me with a link next to the index, including translated output.
 - **`usgs`**: USGS M4.5+ earthquakes, past day, GeoJSON summary. No key. Cadence 60 min. Detail URLs are never fetched. Attribution: credit the U.S. Geological Survey and cite the event.
 - **`nasa_eonet`**: NASA EONET v3 open natural events (`/api/v3/events?status=open&limit=50`), at most 50 events, one record per event id. No key. Cadence 60 min. Classed `review` because EONET publishes only a disclaimer (visualization and general information only; extents are approximate), with no license, rate-limit or attribution terms. An operator must record terms approval first. Attribution: credit NASA EONET and the event's listed sources.

@@ -55,7 +55,7 @@ function TypedOption({ spec, value, onValue, disabled }: { spec: OptionSpec; val
         return <label key={item} className="flex items-center gap-2 text-sm">
           <Checkbox checked={on} disabled={disabled || (!on && selected.length >= max)}
             onCheckedChange={(next) => { const list = next === true ? [...selected, item] : selected.filter((entry) => entry !== item); if (list.length <= max) onValue(list); }} />
-          <span>{item}</span></label>;
+          <span>{spec.labelled ? t(`optv_${item}` as never) : item}</span></label>;
       })}</div>
       <small className="text-muted-foreground">{t('optMultiMax', { max })}</small></fieldset>;
   }
@@ -89,7 +89,8 @@ function TagsOption({ id, label, spec, value, disabled, onValue }: { id: string;
     <Input id={id} disabled={disabled} value={raw} aria-describedby={`${id}-help`} onChange={(event) => {
       const text = spec.upper ? event.target.value.toUpperCase() : event.target.value;
       setRaw(text);
-      const terms = [...new Set(parseTerms(text))].slice(0, max);
+      // Case-insensitive de-duplication: the server rejects keywords that differ only by case.
+      const terms = [...new Map(parseTerms(text).map((term) => [term.toLowerCase(), term])).values()].slice(0, max);
       onValue(terms.length ? terms : undefined);
     }} />
     <small id={`${id}-help`} className="text-muted-foreground">{t('optTagsHelp', { max })}</small></div>;

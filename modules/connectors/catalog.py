@@ -391,6 +391,8 @@ SAMPLE_OUTPUTS: dict[str, dict[str, Any]] = {
     "world_bank": {"indicator": "NY.GDP.MKTP.CD", "country": "VN", "period": "2024", "value": 1.0e11},
     "frankfurter": {"base": "EUR", "quote": "USD", "rate": 1.0, "reference_date": "2026-01-01"},
     "ecb": {"base": "EUR", "quote": "USD", "rate": 1.0, "reference_date": "2026-01-01"},
+    "vietnamworks_jobs": {"title": "Example job", "url": "https://www.vietnamworks.com/example-1-jv",
+                          "publisher": "VietnamWorks", "published_at": "2026-01-01T08:00:00Z"},
     "vn_stock": {"symbol": "FPT", "close": "52.7", "unit": "thousand VND", "observed_at": "2026-01-01T08:00:00Z"},
     "binance": {"symbol": "BTCUSDT", "price": "100000.00", "observed_at": "2026-01-01T08:00:00Z"},
     "alternative_me": {"index": "fear_and_greed", "value": 50, "classification": "Neutral", "reference_date": "2026-01-01"},

@@ -308,6 +308,22 @@ async def test_native_activation_persists_applied_state_and_schedule_without_wor
 
 
 @pytest.mark.asyncio
+async def test_native_activation_clamps_a_saved_interval_to_the_provider_floor():
+    """A source saved at 15 min before the floor existed is scheduled at its provider's 360-minute floor."""
+    r = row(execution_backend="n8n", workflow_id=None, desired_enabled=False, state="saved_not_active", applied_revision=0,
+            applied_backend_revision=0, backend_revision=2, transition_phase="activating_new", target_backend="native",
+            applied_template_revision=0)
+    with _NativeEnv(r, config={"schedule_interval_minutes": 15}) as env:
+        env.source.provider = "vn_stock"
+        assert await activate(env) == ""
+        assert env.m[3].await_args.kwargs["interval_minutes"] == 360
+    with _NativeEnv(r, config={"schedule_interval_minutes": 15}) as env:
+        env.source.provider = "binance"  # floor 15: unchanged
+        assert await activate(env) == ""
+        assert env.m[3].await_args.kwargs["interval_minutes"] == 15
+
+
+@pytest.mark.asyncio
 async def test_native_activation_refusals_change_nothing():
     cases = [
         ({"local_only": True}, "local_only_source"),

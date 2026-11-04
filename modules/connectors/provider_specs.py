@@ -89,7 +89,7 @@ class FreeProviderSpec:
 # Code presence only; runtime_verified stays False.
 DISPATCHABLE = frozenset({
     "bbc_world", "vnexpress_business", "dantri_news", "thanhnien_news", "tuoitre_news", "hn_top", "gdelt_economy",
-    "world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika", "vn_stock",
+    "world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika", "vn_stock", "vietnamworks_jobs",
     "coingecko", "google_news", "nasa_eonet", "cisa_kev", "sec_edgar", "openalex", "bluesky",
     # Built-in RSS/Atom world-data feeds (providers/news.py FEED_URLS).
     "aljazeera_world", "npr_news", "fed_press", "gdacs_rss", "lobsters", "github_trending", "wwr_jobs", "us_travel_advisories",
@@ -259,6 +259,13 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
           "Credit VNDirect; unofficial public endpoint, prices in thousand VND (indices in points), may break without notice.",
           ("/v4/stock_prices?q=code:FPT,VCB,HPG,VNM,MWG&sort=date:desc&size=60",
            "/v4/vnmarket_prices?q=code:VNINDEX,VN30&sort=date:desc&size=24"), (_day(48), _unknown())),
+    # Unofficial VietnamWorks job-search endpoint (no contract; may change or vanish). Owner-approved 2026-11-04.
+    # The terms page is a client-rendered app, so terms were not machine-verified. At most 5 POSTs per run (one per
+    # keyword), 6 h floor. Recruiter contact and demographic fields are never stored.
+    _spec("vietnamworks_jobs", "VietnamWorks jobs (unofficial)", "tech", ("ms.vietnamworks.com",), "news", 360,
+          "https://www.vietnamworks.com/terms-of-use", "review",
+          "Credit VietnamWorks and link the job posting; unofficial search endpoint, may break without notice.",
+          ("/job-search/v1.0/search",), (_day(40), _unknown())),
     _spec("alternative_me", "Alternative.me Fear and Greed", "economy", ("api.alternative.me",), "measurement", 1440,
           "https://alternative.me/crypto/fear-and-greed-index/", "open",
           "Display Alternative.me with a link adjacent to the index, including translated output.",
@@ -469,6 +476,7 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
 EXPANSION_CHECKED_ON = "2026-10-21"
 _EXPANSION_IDS = frozenset({
     "vn_stock",
+    "vietnamworks_jobs",
     "github_trending",
     "wwr_jobs",
     "npr_news",

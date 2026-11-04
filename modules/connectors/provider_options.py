@@ -79,6 +79,12 @@ VnSymbol = Annotated[str, StringConstraints(pattern=r"^[A-Z0-9]{2,10}$")]
 VN_INDEX_CODES = ("VNINDEX", "VN30", "VN100", "HNX", "HNX30", "UPCOM")
 DEFAULT_VN_SYMBOLS = ("VNINDEX", "VN30", "FPT", "VCB", "HPG", "VNM", "MWG")
 MAX_VN_SYMBOLS = 20
+# Job-board filters shared by ``vietnamworks_jobs`` (and ``itviec_jobs`` if it ships): bounded enums and strings.
+JobCity = Literal["ho_chi_minh", "ha_noi", "da_nang"]
+JobLevel = Literal["intern", "fresher", "experienced", "manager", "director"]
+JobKeyword = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=60)]
+MAX_JOB_KEYWORDS = 5
+DEFAULT_JOB_KEYWORDS = ("developer",)
 CoinId = Literal[
     "btc-bitcoin", "eth-ethereum", "bnb-binance-coin", "sol-solana", "xrp-xrp", "ada-cardano", "doge-dogecoin",
     "ltc-litecoin", "dot-polkadot", "trx-tron",
@@ -135,6 +141,7 @@ OPTION_FIELDS: dict[str, tuple[str, ...]] = {
     "oecd_cli": ("oecd_countries",),
     "binance": ("crypto_symbols",),
     "vn_stock": ("vn_symbols",),
+    "vietnamworks_jobs": ("job_keywords", "job_cities", "job_levels", "job_min_salary_usd"),
     "coinpaprika": ("coin_ids",),
     "noaa_kp": ("kp_min",),
     "us_travel_advisories": ("advisory_min_level",),
@@ -213,10 +220,14 @@ def validate_options(provider: str, cfg: Mapping[str, Any]) -> None:
     for name in (
         "eonet_categories", "gdacs_event_types", "gdacs_alert_levels", "nws_severity", "nvd_severity", "fx_quotes",
         "oecd_countries", "crypto_symbols", "coin_ids", "vn_symbols",
+        "job_cities", "job_levels",
     ):
         values = cfg.get(name)
         if values is not None and len(set(values)) != len(values):
             raise ValueError("Selections must be unique")
+    keywords = [k.casefold() for k in cfg.get("job_keywords") or ()]
+    if len(set(keywords)) != len(keywords):
+        raise ValueError("Selections must be unique")
     if len(cfg.get("coin_ids") or ()) > MAX_COINS:
         raise ValueError(f"At most {MAX_COINS} coins per source")
     listed = {"ecb": ECB_CURRENCIES, "frankfurter": FRANKFURTER_CURRENCIES, "open_er_api": OER_CURRENCIES}.get(provider)
@@ -370,6 +381,14 @@ def selected_vn_symbols(cfg: Mapping[str, Any]) -> tuple[str, ...]:
     Literal to sort by. Equal selections therefore still send equal requests.
     """
     return tuple(dict.fromkeys(cfg.get("vn_symbols") or DEFAULT_VN_SYMBOLS))
+
+
+def selected_job_keywords(cfg: Mapping[str, Any]) -> tuple[str, ...]:
+    """Owner job keywords de-duplicated case-insensitively in first-seen order (default ``developer``)."""
+    seen: dict[str, str] = {}
+    for keyword in cfg.get("job_keywords") or DEFAULT_JOB_KEYWORDS:
+        seen.setdefault(keyword.casefold(), keyword)
+    return tuple(seen.values())[:MAX_JOB_KEYWORDS]
 
 
 def selected_coins(cfg: Mapping[str, Any]) -> list[str]:

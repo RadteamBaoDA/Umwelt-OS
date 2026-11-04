@@ -17,6 +17,8 @@ export type OptionSpec = {
   native?: boolean;
   /** Text is forced to upper case (ISO codes). */
   upper?: boolean;
+  /** Checkbox values have translated labels under `optv_<value>` (otherwise the raw code is shown). */
+  labelled?: boolean;
 };
 
 const GDELT_COUNTRY = ['US', 'VN', 'CN', 'JP', 'GB', 'DE', 'FR', 'IN', 'KR', 'SG', 'AU', 'RU', 'BR', 'CA'] as const;
@@ -69,6 +71,11 @@ export const OPTION_SPECS: readonly OptionSpec[] = [
   { key: 'crypto_symbols', kind: 'multi', max: 10, values: ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT', 'ADAUSDT', 'DOGEUSDT', 'TRXUSDT', 'LINKUSDT', 'DOTUSDT', 'LTCUSDT', 'AVAXUSDT'] },
   // Free-form tickers (e.g. FPT, VNINDEX): comma-separated, forced upper case; the server validates the 2-10 char code pattern.
   { key: 'vn_symbols', kind: 'tags', max: 20, maxLen: 10, upper: true },
+  // Job search filters: free-form keywords (server caps 5 x 60 chars), city/level checkbox groups and a USD salary floor.
+  { key: 'job_keywords', kind: 'tags', max: 5, maxLen: 60 },
+  { key: 'job_cities', kind: 'multi', labelled: true, max: 3, values: ['ho_chi_minh', 'ha_noi', 'da_nang'] },
+  { key: 'job_levels', kind: 'multi', labelled: true, max: 5, values: ['intern', 'fresher', 'experienced', 'manager', 'director'] },
+  { key: 'job_min_salary_usd', kind: 'int', min: 0, hi: 20000 },
   { key: 'coin_ids', kind: 'multi', max: 5, values: ['btc-bitcoin', 'eth-ethereum', 'bnb-binance-coin', 'sol-solana', 'xrp-xrp', 'ada-cardano', 'doge-dogecoin', 'ltc-litecoin', 'dot-polkadot', 'trx-tron'] },
   { key: 'kp_min', kind: 'float', min: 0, hi: 9, step: 0.1 },
   { key: 'advisory_min_level', kind: 'int', min: 1, hi: 4 },

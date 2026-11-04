@@ -51,5 +51,10 @@ describe('rename and interval helpers', () => {
     expect(collectionTooSoonRetryAt(new ApiError(500, 'x'), now)).toBeUndefined();
     expect(intervalBelowMinimum(new ApiError(422, 'schedule_interval_below_minimum', { minimum: 360 }))).toEqual({ minimum: 360 });
     expect(intervalBelowMinimum(new ApiError(422, 'other'))).toBeUndefined();
+    // The server sends `detail` as a string, so ApiError has no code and the minimum is parsed from the message.
+    const sent = 'Draft connector configuration is invalid: schedule_interval_below_minimum: minimum 360 minutes';
+    expect(intervalBelowMinimum(new ApiError(422, sent))).toEqual({ minimum: 360 });
+    expect(intervalBelowMinimum(new ApiError(422, 'schedule_interval_below_minimum'))).toEqual({ minimum: null });
+    expect(intervalBelowMinimum(new ApiError(400, sent))).toBeUndefined();
   });
 });

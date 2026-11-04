@@ -40,10 +40,14 @@ class ProviderPayloadError(ValueError):
 
 @dataclass(frozen=True)
 class ProviderRequest:
-    """Fixed GET request for an injected transport; headers may hold a secret and are never repr'd."""
+    """Fixed request for an injected transport; headers may hold a secret and are never repr'd.
+
+    ``body`` is an optional pre-serialised JSON search query (POST), used only by read-only search APIs.
+    """
     method: str
     url: str
     headers: dict[str, str] = field(default_factory=dict, repr=False)
+    body: bytes | None = None
 
 
 def finite_decimal(raw: object) -> Decimal:
