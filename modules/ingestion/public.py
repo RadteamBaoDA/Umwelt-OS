@@ -1967,6 +1967,30 @@ async def seen_record_keys(
     return found
 
 
+async def seen_provider_ids(
+    session: AsyncSession, *, source_id: UUID, source_generation: int, provider_ids: Iterable[str],
+) -> set[str]:
+    """Return which ``provider_ids`` this source already observed in its current generation.
+
+    Lets a crawler skip fetching detail pages for postings it has already stored, before any record (and so
+    any content hash) exists. Read-only, scoped to the source and generation (a reset re-ingests everything),
+    and bounded by the caller's candidate list (chunked under the bind-parameter limit).
+    """
+    wanted = list(set(provider_ids))
+    found: set[str] = set()
+    for start in range(0, len(wanted), 500):
+        rows = await session.execute(
+            select(SourceObservation.provider_id)
+            .join(IngestionBatch, IngestionBatch.id == SourceObservation.batch_id)
+            .where(
+                SourceObservation.source_id == source_id,
+                IngestionBatch.source_generation == source_generation,
+                SourceObservation.provider_id.in_(wanted[start:start + 500]),
+            ))
+        found.update(row.provider_id for row in rows)
+    return found
+
+
 def record_key(record: IngestionRecord) -> tuple[str, str]:
     """Return the ``(provider_id, record_hash)`` identity stored for a generic-path record."""
     return record.provider_id, _digest({"version": record.version, "content": record.content, "metadata": record.metadata})

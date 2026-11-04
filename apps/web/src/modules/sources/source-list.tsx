@@ -77,7 +77,7 @@ function providerLabel(provider: string | null, t: ReturnType<typeof useTranslat
   if (!provider) return null;
   const keys: Record<string, string> = {
     youtube: 'providerYoutube', arxiv: 'providerArxiv', huggingface: 'providerHuggingface', github_releases: 'providerGithubReleases',
-    telegram: 'providerTelegram', vn_stock: 'providerVnStock', github_trending: 'providerGithubTrending', wwr_jobs: 'providerWwrJobs', vietnamworks_jobs: 'providerVietnamworksJobs', rss: 'providerRss', web: 'providerWeb', rest: 'providerRest',
+    telegram: 'providerTelegram', vn_stock: 'providerVnStock', github_trending: 'providerGithubTrending', wwr_jobs: 'providerWwrJobs', vietnamworks_jobs: 'providerVietnamworksJobs', itviec_jobs: 'providerItviecJobs', rss: 'providerRss', web: 'providerWeb', rest: 'providerRest',
   };
   const key = keys[provider];
   return key ? t(key as 'providerYoutube') : catalogLabel ?? provider;

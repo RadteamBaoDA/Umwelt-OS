@@ -89,7 +89,7 @@ class FreeProviderSpec:
 # Code presence only; runtime_verified stays False.
 DISPATCHABLE = frozenset({
     "bbc_world", "vnexpress_business", "dantri_news", "thanhnien_news", "tuoitre_news", "hn_top", "gdelt_economy",
-    "world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika", "vn_stock", "vietnamworks_jobs",
+    "world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika", "vn_stock", "vietnamworks_jobs", "itviec_jobs",
     "coingecko", "google_news", "nasa_eonet", "cisa_kev", "sec_edgar", "openalex", "bluesky",
     # Built-in RSS/Atom world-data feeds (providers/news.py FEED_URLS).
     "aljazeera_world", "npr_news", "fed_press", "gdacs_rss", "lobsters", "github_trending", "wwr_jobs", "us_travel_advisories",
@@ -266,6 +266,13 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
           "https://www.vietnamworks.com/terms-of-use", "review",
           "Credit VietnamWorks and link the job posting; unofficial search endpoint, may break without notice.",
           ("/job-search/v1.0/search",), (_day(40), _unknown())),
+    # ITviec job pages (schema.org JSON-LD only). Owner decision 2026-11-04: built despite terms section 2.2
+    # (retrieval limited to "reasonable personal use"); the owner accepts that terms risk. At most 3 search pages
+    # and 10 detail pages per run, 2 s apart, 6 h floor.
+    _spec("itviec_jobs", "ITviec jobs (crawled)", "tech", ("itviec.com",), "news", 360,
+          "https://itviec.com/blog/terms-and-conditions/", "review",
+          "Credit ITviec and link the job posting; static JSON-LD only, owner accepted the terms risk 2026-11-04.",
+          ("/it-jobs/{keyword}/{city}", "/it-jobs/{slug}"), (_day(60), _unknown())),
     _spec("alternative_me", "Alternative.me Fear and Greed", "economy", ("api.alternative.me",), "measurement", 1440,
           "https://alternative.me/crypto/fear-and-greed-index/", "open",
           "Display Alternative.me with a link adjacent to the index, including translated output.",
@@ -477,6 +484,7 @@ EXPANSION_CHECKED_ON = "2026-10-21"
 _EXPANSION_IDS = frozenset({
     "vn_stock",
     "vietnamworks_jobs",
+    "itviec_jobs",
     "github_trending",
     "wwr_jobs",
     "npr_news",

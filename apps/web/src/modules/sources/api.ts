@@ -148,7 +148,7 @@ export type BuiltinTypeOptions = {
   crypto_symbols?: string[];
   /** Vietnam stock/index tickers (`vn_stock`), 1-20 upper-case codes. */
   vn_symbols?: string[];
-  /** Job-board filters (`vietnamworks_jobs`): 1-5 search keywords, city / level subsets and a USD salary floor. */
+  /** Job-board filters (`vietnamworks_jobs`, `itviec_jobs`): 1-5 search keywords, city / level subsets and a USD salary floor. */
   job_keywords?: string[];
   job_cities?: ('ho_chi_minh' | 'ha_noi' | 'da_nang')[];
   job_levels?: ('intern' | 'fresher' | 'experienced' | 'manager' | 'director')[];

@@ -34,9 +34,9 @@ export const STARTER_PACKS: StarterPack[] = [
     { id: 'nvd', kind: 'builtin', provider: 'nvd' },
     { id: 'cisa_kev', kind: 'builtin', provider: 'cisa_kev' },
   ] },
-  // `itviec_jobs` is intentionally absent: its terms need an owner decision (see docs/connectors/free-sources.md).
   { id: 'jobs', labelKey: 'starterPackJobs', guide: 'linkedin', items: [
     { id: 'vietnamworks_jobs', kind: 'builtin', provider: 'vietnamworks_jobs', options: { job_keywords: ['developer'], job_cities: ['ho_chi_minh'] }, edit: 'job_keywords' },
+    { id: 'itviec_jobs', kind: 'builtin', provider: 'itviec_jobs', options: { job_keywords: ['developer'], job_cities: ['ho_chi_minh'] } },
     { id: 'wwr_jobs', kind: 'builtin', provider: 'wwr_jobs', options: { feed_sections: ['programming'] } },
   ] },
   { id: 'crypto', labelKey: 'starterPackCrypto', items: [

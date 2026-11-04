@@ -28,8 +28,8 @@ FIFTEEN_MINUTE_PROVIDERS = frozenset({
     "github", "reddit", "google_mail", "google_calendar", "google_drive", "notion", "slack", "telegram",
     "home_assistant", "health", "mastodon", "x",
 })
-# Pre-registered floor with no adapter yet: ITviec's terms need an owner decision before a crawler ships.
-UNREGISTERED_FLOORS = frozenset({"itviec_jobs"})
+# Floors pre-registered for a provider with no adapter yet (none: ITviec shipped on the owner's 2026-11-04 decision).
+UNREGISTERED_FLOORS: frozenset[str] = frozenset()
 
 
 def test_every_provider_has_a_conscious_floor() -> None:
