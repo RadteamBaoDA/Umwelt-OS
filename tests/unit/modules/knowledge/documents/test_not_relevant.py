@@ -11,6 +11,7 @@ from sqlalchemy.dialects import postgresql
 from modules.knowledge.documents import public
 from modules.knowledge.documents.models import DocumentInteraction
 from modules.knowledge.documents.schemas import GadgetDocumentInteractionPatch
+from tests.unit.modules._documents_patch import patch_documents
 from tests.unit.modules.knowledge.documents._scope import FENCE, SCOPE, SCOPE_KW
 
 
@@ -24,9 +25,9 @@ def _interaction_session(row: DocumentInteraction | None) -> AsyncMock:
 
 async def _patch(session: AsyncMock, version_id, **fields):  # type: ignore[no-untyped-def]
     projection = SimpleNamespace(version_number=1, document_version_id=version_id)
-    with patch.object(public, "get_news_document_projection", AsyncMock(return_value=projection)), \
-            patch.object(public, "_admit_document_scope", AsyncMock(return_value=FENCE)), \
-            patch.object(public, "commit_with_replay", AsyncMock()), \
+    with patch_documents("get_news_document_projection", AsyncMock(return_value=projection)), \
+            patch_documents("_admit_document_scope", AsyncMock(return_value=FENCE)), \
+            patch_documents("commit_with_replay", AsyncMock()), \
             patch.object(public.sources, "lock_source_for_document", AsyncMock()):
         return await public.set_gadget_document_interaction(
             session, document_id=uuid4(), version_number=1,
@@ -80,10 +81,10 @@ def _projection(version_id):  # type: ignore[no-untyped-def]
 async def _feed(rows: list[DocumentInteraction], versions: list, **kwargs):  # type: ignore[no-untyped-def]
     session = AsyncMock()
     session.scalars = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=rows)))
-    with patch.object(public, "list_news_document_projections", AsyncMock(return_value=([_projection(v) for v in versions], None))), \
-         patch.object(public, "_as_gadget_document_projection", lambda item, interaction=None: item.document_version_id), \
-         patch.object(public, "_admit_document_scope", AsyncMock(return_value=FENCE)), \
-         patch.object(public, "GadgetDocumentProjectionList", lambda **kw: SimpleNamespace(**kw)):
+    with patch_documents("list_news_document_projections", AsyncMock(return_value=([_projection(v) for v in versions], None))), \
+         patch_documents("_as_gadget_document_projection", lambda item, interaction=None: item.document_version_id), \
+         patch_documents("_admit_document_scope", AsyncMock(return_value=FENCE)), \
+         patch_documents("GadgetDocumentProjectionList", lambda **kw: SimpleNamespace(**kw)):
         page = await public.list_gadget_document_projections(session, source_ids=(uuid4(),), **SCOPE_KW, **kwargs)
     return page.items
 
@@ -124,8 +125,8 @@ async def test_version_export_maps_interaction_fields_and_scopes_join() -> None:
         return _Result()
 
     session.stream = stream
-    with patch.object(public, "_require_document_export_owner", AsyncMock(return_value=FENCE)), \
-         patch.object(public, "_document_export_count", AsyncMock(return_value=1)):
+    with patch_documents("_require_document_export_owner", AsyncMock(return_value=FENCE)), \
+         patch_documents("_document_export_count", AsyncMock(return_value=1)):
         page = await public.export_page(session, owner_id=SCOPE.user_id, record_kind="versions", **SCOPE_KW)
     item = page.items[0]
     assert (item.read_at, item.bookmarked_at, item.dismissed_at) == (read_at, saved_at, hidden_at)

@@ -13,6 +13,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.errors import DomainError
 from core.tools import (
     ToolDefinition,
     ToolDestination,
@@ -184,7 +185,7 @@ async def revalidate_native_output_fences(
                 )
             if not valid:
                 return False
-    except (HTTPException, SQLAlchemyError, ValueError, OSError, TimeoutError):
+    except (HTTPException, DomainError, SQLAlchemyError, ValueError, OSError, TimeoutError):
         # Admission/database/validation failures suppress output; TypeError/AttributeError are bugs and propagate.
         return False
     return True
@@ -286,7 +287,7 @@ async def revalidate_native_output_fences_many(
             else:
                 for index, _ in live:
                     verdicts[index] = await per_row(index)
-        except (HTTPException, SQLAlchemyError, ValueError, OSError, TimeoutError):
+        except (HTTPException, DomainError, SQLAlchemyError, ValueError, OSError, TimeoutError):
             # Suppress nothing on a combined failure: let each row decide on its own.
             for index, _ in members:
                 verdicts[index] = await per_row(index)

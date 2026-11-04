@@ -4,9 +4,9 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
+from core.errors import ForbiddenError
 from core.workspaces.schemas import WorkspaceContext
 from modules.knowledge.documents import public as documents
 from tests.unit.modules.knowledge.documents._scope import SCOPE, SCOPE_KW, WORKSPACE_ID
@@ -28,7 +28,7 @@ class _Session:
 async def test_member_denied_before_sql() -> None:
     member = WorkspaceContext(user_id=2, workspace_id=WORKSPACE_ID, role="member", membership_revision=1)
     session = _Session(None)
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(ForbiddenError) as caught:
         await documents.list_document_cleanup_evidence_scope(
             session, uuid4(), scope=member, multi_workspace_enabled=False,  # type: ignore[arg-type]
         )

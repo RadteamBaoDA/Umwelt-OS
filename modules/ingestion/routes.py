@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
+from core.errors import DomainError
 from core.heavy_work import to_thread_joined
 from core.ids import uuid7
 from core.rate_limit import require_budget
@@ -261,7 +262,7 @@ async def _intake_upload(
             scope=scope, multi_workspace_enabled=enabled,
             expected_access_fence=access_fence, expected_source_fence=source_fence,
         )
-    except (HTTPException, ValueError, LookupError):
+    except (HTTPException, DomainError, ValueError, LookupError):
         await session.rollback()
         await storage.delete(raw_uri)
         raise

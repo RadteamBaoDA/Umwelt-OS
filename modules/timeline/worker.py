@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.errors import DomainError
 from core.job_denial import (
     PERMISSION_LOST,
     STALE_SCOPE,
@@ -167,7 +168,7 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
 
         try:
             admitted = await admit_retry_stale(admit)
-        except HTTPException as exc:
+        except (HTTPException, DomainError) as exc:
             await session.rollback()
             await terminalize(factory, TimelineExtractionWork, work_id, workspace_id, denial_code(exc) or STALE_SCOPE)
             return
@@ -396,7 +397,7 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                 multi_workspace_enabled=multi_workspace_enabled,
             )
             await session.commit()
-    except HTTPException as exc:
+    except (HTTPException, DomainError) as exc:
         if exc.status_code == 409:
             raise  # lease expires; recovery re-resolves (attempt-budgeted)
         await terminalize(factory, TimelineExtractionWork, work_id, scope.workspace_id, PERMISSION_LOST)

@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 
+from core.errors import ForbiddenError, ValidationFailedError
 from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.knowledge.documents import public, routes
 from modules.knowledge.documents.models import Document
@@ -41,7 +42,7 @@ class _Session:
 
 def _grant_patches(fence=MFENCE):
     return (patch.object(public.workspaces, "granted_resource_ids", MagicMock(return_value=GRANTS)),
-            patch.object(public, "read_access_fence", AsyncMock(return_value=fence)))
+            patch("core.workspaces.public.read_access_fence", AsyncMock(return_value=fence)))
 
 
 @pytest.mark.asyncio
@@ -58,7 +59,7 @@ async def test_member_list_has_grant_subquery_before_limit() -> None:
 @pytest.mark.asyncio
 async def test_exclude_measurements_filters_measurement_provider_sources_before_limit() -> None:
     session = _Session()
-    with patch.object(public, "read_access_fence", AsyncMock(return_value=FENCE)):
+    with patch("core.workspaces.public.read_access_fence", AsyncMock(return_value=FENCE)):
         await public.list_documents(session, 10, None, None, scope=SCOPE, multi_workspace_enabled=True,
                                     exclude_measurements=True)
         await public.list_documents(session, 10, None, None, scope=SCOPE, multi_workspace_enabled=True)
@@ -74,7 +75,7 @@ async def test_owner_list_has_no_grant_subquery() -> None:
     session = _Session()
     granted = MagicMock(return_value=GRANTS)
     with patch.object(public.workspaces, "granted_resource_ids", granted), \
-            patch.object(public, "read_access_fence", AsyncMock(return_value=FENCE)):
+            patch("core.workspaces.public.read_access_fence", AsyncMock(return_value=FENCE)):
         await public.list_documents(session, 10, None, None, scope=SCOPE, multi_workspace_enabled=True)
     granted.assert_not_called()
 
@@ -89,7 +90,7 @@ async def test_owner_list_has_no_grant_subquery() -> None:
 ])
 async def test_member_mutations_stay_forbidden(call) -> None:
     session = _Session()
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ForbiddenError) as exc:
         await call(session)
     assert exc.value.status_code == 403
     assert session.statements == []
@@ -105,7 +106,7 @@ async def test_guessed_id_is_404_via_route() -> None:
 
 def test_cursor_from_another_actor_is_rejected() -> None:
     cursor = public._encode_document_owner_cursor("pos", kind="documents", fence=FENCE, resource_id=None)
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ValidationFailedError) as exc:
         public._decode_document_owner_cursor(cursor, kind="documents", fence=MFENCE, resource_id=None)
     assert exc.value.status_code == 422
 

@@ -12,6 +12,7 @@ from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.errors import DomainError
 from core.workspaces.public import read_access_fence
 from core.workspaces.schemas import InternalJobScope, Scope
 from modules.ingestion import public
@@ -273,7 +274,7 @@ async def dispatch_pending_work(ctx: dict[str, object]) -> int:
                 _job_id=f"ingestion:{identifier}:{claimed_at.isoformat()}", _defer_until=claimed_at)
             if job is not None:
                 enqueued += 1
-        except HTTPException:
+        except (HTTPException, DomainError):
             # Lost original authorization cannot expose payload or repair a successor claim.
             continue
         except Exception:
@@ -299,7 +300,7 @@ async def dispatch_pending_work(ctx: dict[str, object]) -> int:
                         EventOutbox.status == "queued", EventOutbox.dispatched_at == claimed_at,
                     ).values(status="pending", next_attempt_at=datetime.now(UTC) + DISPATCH_STALE_AFTER))
                     await session.commit()
-            except HTTPException:
+            except (HTTPException, DomainError):
                 continue
     return enqueued
 

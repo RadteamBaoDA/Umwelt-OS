@@ -1,3 +1,5 @@
+"""HTTP routes for documents, uploads, raw files, projections and cleanup operations."""
+
 from datetime import datetime
 from typing import Annotated
 from uuid import UUID

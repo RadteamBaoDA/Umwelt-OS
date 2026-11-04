@@ -1,3 +1,5 @@
+"""Module descriptor for the Documents capability."""
+
 from dataclasses import dataclass
 
 from core.module_descriptor import ModuleDescriptor, RouterSpec

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core import worker_cursors
 from core.config import Settings
+from core.errors import DomainError
 from core.realtime import commit_with_replay
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import InternalJobScope
@@ -74,7 +75,7 @@ async def process_news_document_ready(ctx: dict[str, object], event_id: str) -> 
             scope = await ingestion.resolve_ingestion_event_scope(
                 session, identifier, multi_workspace_enabled=flag,
             )
-        except HTTPException:
+        except (HTTPException, DomainError):
             # Denied retained principal: no mutation and no retry; the dispatcher quarantines the event.
             await session.rollback()
             return
@@ -219,7 +220,7 @@ async def process_news_document_ready(ctx: dict[str, object], event_id: str) -> 
                 session, [], scope=scope, multi_workspace_enabled=flag,
                 access_fence=access_fence,
             )
-        except HTTPException as exc:
+        except (HTTPException, DomainError) as exc:
             if exc.status_code in {401, 403, 404, 409}:
                 await session.rollback()
                 return
@@ -280,7 +281,7 @@ async def recover_news_work(ctx: dict[str, object]) -> int:
                         session, [], scope=scope, multi_workspace_enabled=flag,
                         access_fence=access_fence,
                     )
-                except HTTPException as exc:
+                except (HTTPException, DomainError) as exc:
                     if exc.status_code in {401, 403, 404, 409}:
                         await session.rollback()
                         continue
@@ -400,7 +401,7 @@ async def recover_news_work(ctx: dict[str, object]) -> int:
                 await commit_with_replay(session, [], scope=scope,
                     multi_workspace_enabled=flag, access_fence=access_fence)
                 total_processed += workspace_processed
-            except HTTPException as exc:
+            except (HTTPException, DomainError) as exc:
                 if exc.status_code in {401, 403, 404, 409}:
                     await session.rollback()
                     continue

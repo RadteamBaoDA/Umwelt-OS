@@ -11,9 +11,11 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
+from core.errors import ForbiddenError
 from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.knowledge.documents import public
 from modules.knowledge.observations import public as observations
+from tests.unit.modules._documents_patch import patch_documents
 from tests.unit.modules.knowledge.documents._scope import FENCE, SCOPE, SCOPE_KW, WORKSPACE_ID
 
 
@@ -64,7 +66,7 @@ async def test_review_version_fences_reader_carries_workspace_predicate() -> Non
 async def test_member_without_share_reads_nothing() -> None:
     member = WorkspaceContext(user_id=2, workspace_id=WORKSPACE_ID, role="member", membership_revision=1)
     session = _Session()
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ForbiddenError) as exc:
         await public.review_version_fences(session, [uuid4()], scope=member, multi_workspace_enabled=True)
     assert exc.value.status_code == 403
     assert session.statements == []
@@ -134,7 +136,7 @@ _IDS = [row[0] for row in _FROZEN_READERS]
 async def test_each_frozen_reader_admits_then_carries_workspace_predicate(name, args, kwargs, admission) -> None:
     session = _Session()
     with patch.object(public.sources, "lock_source_for_document", AsyncMock()), \
-            patch.object(public, "commit_with_replay", AsyncMock()), \
+            patch_documents("commit_with_replay", AsyncMock()), \
             contextlib.suppress(Exception):  # empty stub results may abort after the first statement
         await getattr(public, name)(session, *args, **kwargs, **SCOPE_KW)
     admission.assert_awaited_with(session, scope=SCOPE, multi_workspace_enabled=False)
@@ -164,8 +166,8 @@ async def test_interaction_uses_admitted_actor_and_fenced_commit() -> None:
     session.get = AsyncMock(return_value=None)
     projection = SimpleNamespace(version_number=1, document_version_id=version_id)
     commit, lock = AsyncMock(), AsyncMock()
-    with patch.object(public, "get_news_document_projection", AsyncMock(return_value=projection)), \
-            patch.object(public, "commit_with_replay", commit), \
+    with patch_documents("get_news_document_projection", AsyncMock(return_value=projection)), \
+            patch_documents("commit_with_replay", commit), \
             patch.object(public.sources, "lock_source_for_document", lock):
         await public.set_gadget_document_interaction(
             session, document_id=uuid4(), version_number=1,
@@ -184,7 +186,7 @@ async def test_read_evidence_refs_write_passes_expected_fence_to_source_set() ->
     session.scalars = AsyncMock(side_effect=[_Rows([uuid4()]), _Rows([uuid4()]), _Rows([])])
     lock_set = AsyncMock(return_value=SimpleNamespace(fences=[object()]))
     with patch("modules.sources.public.lock_source_set", lock_set), \
-            patch.object(public, "_read_evidence_ref_rows", AsyncMock(return_value=[])):
+            patch_documents("_read_evidence_ref_rows", AsyncMock(return_value=[])):
         await public.read_evidence_refs(session, [(uuid4(), uuid4())], for_write=True, **SCOPE_KW)
     assert lock_set.await_args.kwargs["expected_access_fence"] == FENCE
 
@@ -199,7 +201,7 @@ async def test_chat_lock_mixed_workspaces_locks_only_scoped_ids_with_fence() -> 
     session.scalars = AsyncMock(return_value=_Rows([]))
     lock_set = AsyncMock()
     with patch.object(public.sources, "lock_source_set", lock_set), \
-            patch.object(public, "read_chat_evidence_chunks", AsyncMock(return_value=[])):
+            patch_documents("read_chat_evidence_chunks", AsyncMock(return_value=[])):
         await public.lock_chat_evidence_chunks(session, [(version, chunk), foreign], **SCOPE_KW)
     assert lock_set.await_args.args[1] == [source]
     assert lock_set.await_args.kwargs["expected_access_fence"] == FENCE
@@ -242,7 +244,7 @@ async def test_get_first_chunk_id_is_workspace_scoped_and_denies_members_first()
 
     member = WorkspaceContext(user_id=2, workspace_id=WORKSPACE_ID, role="member", membership_revision=1)
     denied = _Session()
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ForbiddenError) as exc:
         await public.get_first_chunk_id(denied, uuid4(), scope=member, multi_workspace_enabled=True)
     assert exc.value.status_code == 403
     assert denied.statements == []

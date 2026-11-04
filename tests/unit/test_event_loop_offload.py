@@ -30,6 +30,7 @@ from modules.connectors.public import ConnectorRecord
 from modules.ingestion import parsers
 from modules.ingestion import worker as ingestion_worker
 from modules.knowledge.documents import public as documents
+from tests.unit.modules._documents_patch import monkeypatch_documents
 
 _CPU_DEFAULT = min(32, (os.cpu_count() or 1) + 4)  # asyncio's own implicit default, made explicit
 BIG_PAGE_REPEAT = 40_000  # about 2 MB of HTML: inline HTMLParser.feed takes several hundred ms
@@ -292,13 +293,13 @@ async def test_content_hash_async_equals_content_hash(size):
 
 async def test_content_hash_async_offloads_only_large_inputs(monkeypatch):
     calls: list[int] = []
-    real = documents.to_thread_joined
+    real = to_thread_joined
 
     async def spy(fn, *args):
         calls.append(len(args[0]))
         return await real(fn, *args)
 
-    monkeypatch.setattr(documents, "to_thread_joined", spy)
+    monkeypatch_documents(monkeypatch, "to_thread_joined", spy)
     await documents.content_hash_async("a" * 100)
     await documents.content_hash_async("a" * 70_000)
     assert calls == [70_000]

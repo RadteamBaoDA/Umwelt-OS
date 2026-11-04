@@ -1,3 +1,5 @@
+"""Private SQLAlchemy persistence models owned by the Documents module."""
+
 from datetime import datetime
 from typing import Any
 from uuid import UUID

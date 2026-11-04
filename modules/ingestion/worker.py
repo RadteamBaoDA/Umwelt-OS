@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.chunking import chunk_text
 from core.config import Settings
+from core.errors import DomainError
 from core.events import DomainEvent
 from core.heavy_work import bounded_heavy_work, to_thread_joined
 from core.ids import uuid7
@@ -1436,7 +1437,7 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                 await _commit_ingestion_change(session, run, stage, scope=work.scope,
                     multi_workspace_enabled=enabled, access_fence=work.access_fence)
             return
-        except HTTPException:
+        except (HTTPException, DomainError):
             # Original admission loss grants no counter or scheduling authority.
             return
         except (OperationalError, IntegrityError, RuntimeError):

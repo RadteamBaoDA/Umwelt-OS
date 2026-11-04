@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
-from core.errors import ConflictError, error_status
+from core.errors import ConflictError, DomainError, error_status
 from core.ids import uuid7
 from core.job_denial import (
     PERMISSION_LOST,
@@ -304,7 +304,7 @@ async def process_document_ready(ctx: dict[str, object], event_id: str) -> None:
             scope = await ingestion.resolve_ingestion_event_scope(
                 session, event_uuid, multi_workspace_enabled=multi_workspace_enabled,
             )
-        except HTTPException:
+        except (HTTPException, DomainError):
             # Denied retained principal: no mutation and no retry; the dispatcher quarantines the event.
             await session.rollback()
             return
@@ -695,7 +695,7 @@ async def _claim(
         admitted = await admit_retry_stale(
             lambda: _admit_claim(session, workspace_id, work_id, lease_owner, settings)
         )
-    except HTTPException as exc:
+    except (HTTPException, DomainError) as exc:
         await session.rollback()
         await terminalize(factory, EntityExtractionWork, work_id, workspace_id, denial_code(exc) or STALE_SCOPE)
         return None

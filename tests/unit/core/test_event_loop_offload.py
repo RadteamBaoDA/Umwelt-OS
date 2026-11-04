@@ -28,6 +28,7 @@ from modules.export import routes as export_routes
 from modules.ingestion import worker
 from modules.ingestion.parsers import ParsedDocument
 from modules.knowledge.documents import public as documents_public
+from tests.unit.modules._documents_patch import monkeypatch_documents
 
 GOLDEN_TEXTS = [
     "",
@@ -85,13 +86,13 @@ async def test_add_content_chunks_matches_direct_chunking(text: str) -> None:
 
 async def test_add_content_chunks_runs_off_loop_thread(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[int] = []
-    real = documents_public.chunk_text
+    real = chunk_text
 
     def spy(text: str) -> Any:
         seen.append(threading.get_ident())
         return real(text)
 
-    monkeypatch.setattr(documents_public, "chunk_text", spy)
+    monkeypatch_documents(monkeypatch, "chunk_text", spy)
     await documents_public.add_content_chunks(_Session(), SimpleNamespace(id=uuid4(), content="a b c"))  # type: ignore[arg-type]
     assert seen and seen[0] != threading.get_ident()
 
@@ -106,7 +107,7 @@ async def test_large_chunking_runs_off_the_event_loop_thread(monkeypatch: pytest
         seen.append(threading.get_ident())
         return chunk_text(content)
 
-    monkeypatch.setattr(documents_public, "chunk_text", recording_chunk_text)
+    monkeypatch_documents(monkeypatch, "chunk_text", recording_chunk_text)
     text = "lorem ipsum dolor sit amet " * 20_000
     await documents_public.add_content_chunks(_Session(), SimpleNamespace(id=uuid4(), content=text))  # type: ignore[arg-type]
     assert seen and all(ident != loop_thread for ident in seen)

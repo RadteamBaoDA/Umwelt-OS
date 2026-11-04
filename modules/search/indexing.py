@@ -15,6 +15,7 @@ from sqlalchemy import Select, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.errors import DomainError, error_status
 from core.heavy_work import bounded_heavy_work
 from core.job_denial import admit_retry_stale, denial_code, terminalize
 from core.model_gateway.client import ModelGateway, ModelGatewayError, PrivacyPolicyDenied
@@ -448,7 +449,7 @@ async def _reconcile_automatic_generations(
                 )
         except Exception as exc:  # one unavailable tenant must not starve later workspace IDs
             if isinstance(exc, ValueError) or (
-                isinstance(exc, HTTPException) and exc.status_code in {401, 403, 404, 409}
+                error_status(exc) in {401, 403, 404, 409}
             ):
                 continue
             raise
@@ -543,7 +544,7 @@ async def _recheck_prepared(
             session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
             lock=lock, expected=original.fence,
         )
-    except HTTPException as exc:
+    except (HTTPException, DomainError) as exc:
         if exc.status_code in {401, 403, 404, 409}:
             raise _AuthorityChanged from exc
         raise
@@ -624,7 +625,7 @@ async def _index_generation(
 
         try:
             captured = await admit_retry_stale(capture)
-        except HTTPException as exc:
+        except (HTTPException, DomainError) as exc:
             await session.rollback()
             code = denial_code(exc)
             if code is None:
@@ -677,7 +678,7 @@ async def _index_generation(
                     session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
                     lock=True, expected=original.fence,
                 )
-            except HTTPException as exc:
+            except (HTTPException, DomainError) as exc:
                 await session.rollback()
                 if exc.status_code in {401, 403, 404, 409}:
                     break
@@ -866,7 +867,7 @@ async def _index_generation(
                     unemitted += 1
         except _AuthorityChanged:
             break  # stale output discarded; the item stays pending for a fresh invocation
-        except HTTPException as exc:
+        except (HTTPException, DomainError) as exc:
             if exc.status_code in {401, 403, 404, 409}:
                 break
             raise
@@ -902,7 +903,7 @@ async def _drop_pending_item(
                 session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
                 lock=True, expected=original.fence,
             )
-        except HTTPException:
+        except (HTTPException, DomainError):
             await session.rollback()
             return
         item = await session.scalar(select(SearchIndexItem).join(
@@ -932,7 +933,7 @@ async def _fail_item(
                 session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
                 lock=True, expected=original.fence,
             )
-        except HTTPException:
+        except (HTTPException, DomainError):
             await session.rollback()
             return
         item = await session.scalar(select(SearchIndexItem).join(

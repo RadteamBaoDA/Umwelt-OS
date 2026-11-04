@@ -20,6 +20,7 @@ from modules.knowledge.documents import public as documents
 from modules.sources import public as source_public
 from modules.sources import public as sources
 from modules.sources import routes as source_routes
+from tests.unit.modules._documents_patch import monkeypatch_documents
 
 WORKSPACE_ID = uuid4()
 
@@ -106,7 +107,7 @@ async def test_find_document_identity_sql_carries_workspace_predicate(monkeypatc
     async def admitted(*_a: Any, **_kw: Any) -> None:
         return None
 
-    monkeypatch.setattr(documents, "_admit_document_scope", admitted)
+    monkeypatch_documents(monkeypatch, "_admit_document_scope", admitted)
     session = FakeSession(uuid4())
     assert await documents.find_document_identity(
         session, uuid4(), "file:abc", scope=SCOPE, multi_workspace_enabled=False,  # type: ignore[arg-type]

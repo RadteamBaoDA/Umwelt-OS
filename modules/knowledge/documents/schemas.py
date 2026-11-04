@@ -1,3 +1,5 @@
+"""Pydantic request/response contracts and provider-metadata validation for Documents."""
+
 import json
 from datetime import UTC, date, datetime
 from typing import Any, Literal
@@ -183,6 +185,159 @@ class ProviderTelegramMetadata(BaseModel):
         return value.astimezone(UTC)
 
 
+# Per-provider allowlist of retained source keys: the trust boundary for provider-controlled
+# metadata. Adding a provider requires an explicit bounded field contract here.
+_PROVIDER_SOURCE_FIELD_ALLOWLIST: dict[str, set[str]] = {
+    "youtube": {"author", "summary", "title", "tags", "published_at", "provider_updated_at"},
+    "arxiv": {"author", "authors", "categories", "tags", "summary", "title", "published_at", "provider_updated_at"},
+    "huggingface": {"author", "tags", "pipeline_tag", "created_at", "last_modified"},
+    "bluesky": {"author", "canonical_url", "created_at"},
+    "reddit": {"title", "subreddit", "author", "canonical_url", "created_at"},
+    "mastodon": {"author", "canonical_url", "created_at"},
+    "x": {"author_id", "canonical_url", "created_at", "language"},
+    "google_mail": {"thread_id", "history_id", "subject", "from", "to", "date_header"},
+    "google_calendar": {"calendar_id", "event_id", "status", "start", "end", "start_timezone", "end_timezone", "recurrence", "html_link"},
+    "google_drive": {"name", "mime_type", "modified_time", "web_view_link", "md5_checksum"},
+    "notion": {"title", "canonical_url"},
+    "slack": {"channel_id", "message_ts", "thread_ts", "user_id"},
+    "health": {"patient_id", "observation_id", "value", "unit", "observed_at_source"},
+    "home_assistant": {"entity_id", "state", "observed_at_source", "unit_of_measurement", "friendly_name", "latitude", "longitude"},
+    "github_releases": {"node_id", "name", "body", "html_url", "tag_name", "draft", "prerelease", "author", "created_at", "published_at"},
+    "github": {"record_type", "node_id", "html_url"},
+    "telegram": set(),
+    **{provider: set() for provider in MEASUREMENT_PROVIDER_IDS},
+    **dict.fromkeys((*BUILTIN_FEED_PROVIDER_IDS, *KEYED_FEED_PROVIDER_IDS), _FEED_FIELDS),
+    "bbc_world": _FEED_FIELDS, "vnexpress_business": _FEED_FIELDS, "tuoitre_news": _FEED_FIELDS, "thanhnien_news": _FEED_FIELDS, "dantri_news": _FEED_FIELDS, "google_news": _FEED_FIELDS,
+    "sec_edgar": _FEED_FIELDS | {"form", "cik"},
+    "openalex": {"title", "summary", "canonical_url", "published_at", "authors", "doi", "source", "cited_by_count"},
+    "hn_top": {"title", "text", "url", "by", "time", "id", "type", "deleted", "dead"},
+    "gdelt_economy": {"title", "url", "seendate", "domain", "language", "sourcecountry"},
+}
+
+# Maximum length of each string-typed source field (shared across providers).
+_SOURCE_FIELD_STRING_LIMITS: dict[str, int] = {
+    "author": 1000, "summary": 4000, "title": 500, "pipeline_tag": 128,
+    "node_id": 256, "name": 500, "body": 4000, "html_url": 2048,
+    "tag_name": 255, "record_type": 16, "last_modified": 64, "created_at": 64,
+    "published_at": 64, "provider_updated_at": 64,
+    "canonical_url": 2048, "guid": 512, "publisher": 200, "text": 4000, "url": 2048, "by": 128,
+    "subreddit": 21, "author_id": 255,
+    "type": 32, "form": 32, "cik": 10, "doi": 255, "source": 255, "seendate": 32, "domain": 255, "language": 64, "sourcecountry": 64,
+    "channel_id": 82, "message_ts": 24, "thread_ts": 24, "user_id": 255,
+    "thread_id": 255, "history_id": 255, "subject": 500, "from": 1000, "to": 2000,
+    "date_header": 255, "calendar_id": 255, "event_id": 255, "status": 32,
+    "start": 64, "end": 64, "start_timezone": 128, "end_timezone": 128,
+    "recurrence": 100, "mime_type": 128, "modified_time": 64, "html_link": 2048,
+    "web_view_link": 2048, "md5_checksum": 64,
+    "patient_id": 128, "observation_id": 255, "value": 64, "unit": 64,
+    "observed_at_source": 64, "entity_id": 255, "state": 512,
+    "unit_of_measurement": 64, "friendly_name": 512, "latitude": 64, "longitude": 64,
+}
+
+_TIMESTAMP_FIELDS = frozenset(
+    {"created_at", "published_at", "last_modified", "provider_updated_at", "modified_time", "observed_at_source"}
+)
+
+
+def _validate_string_list(key: str, value: Any) -> None:
+    """Require a list of at most 100 strings, each within the per-key item bound."""
+    if not isinstance(value, list) or len(value) > 100 or any(
+        not isinstance(item, str) or len(item) > (1000 if key == "recurrence" else 255)
+        for item in value
+    ):
+        raise ValueError(f"Provider {key} must be a bounded string list")
+
+
+def _validate_bool_field(key: str, value: Any) -> None:
+    """Require a real boolean (ints do not qualify)."""
+    if not isinstance(value, bool):
+        raise ValueError(f"Provider {key} must be boolean")  # noqa: TRY004 - pydantic validators must raise ValueError
+
+
+def _validate_nonnegative_int(key: str, value: Any) -> None:
+    """Require an exact non-negative ``int`` (booleans and numeric strings are rejected)."""
+    if type(value) is not int or value < 0:
+        raise ValueError(f"Provider {key} must be a non-negative integer")
+
+
+def _validate_https_link(key: str, value: Any) -> None:
+    """Require a bounded HTTPS URL with a host and without embedded credentials."""
+    from urllib.parse import urlsplit
+
+    parsed_link = urlsplit(value) if isinstance(value, str) and len(value) <= 2048 else None
+    if parsed_link is None or parsed_link.scheme != "https" or not parsed_link.hostname or parsed_link.username or parsed_link.password:
+        raise ValueError(f"Provider {key} must be an HTTPS link without credentials")
+
+
+def _validate_release_url(key: str, value: Any) -> None:
+    """Require a bounded HTTPS release URL that targets ``github.com`` without credentials."""
+    from urllib.parse import urlsplit
+
+    if not isinstance(value, str) or len(value) > 2048:
+        raise ValueError("Provider release URL must use HTTPS")
+    parsed_url = urlsplit(value)
+    if parsed_url.scheme != "https" or parsed_url.netloc != "github.com" or parsed_url.username or parsed_url.password:
+        raise ValueError("Provider release URL must target github.com")
+
+
+def _validate_iso_timestamp(key: str, value: str) -> None:
+    """Require an ISO-8601 timestamp that carries a timezone (``Z`` is accepted)."""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
+    except ValueError as exc:
+        raise ValueError(f"Provider {key} must be an ISO timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"Provider {key} must include a timezone")
+
+
+def _validate_calendar_boundary(key: str, value: str) -> None:
+    """Require a calendar ``start``/``end`` as an ISO date (all-day) or an offset-bearing timestamp."""
+    try:
+        # Calendar all-day events use YYYY-MM-DD; timed events must carry an offset.
+        parsed_date = date.fromisoformat(value) if "T" not in value else None
+        parsed_time = (
+            datetime.fromisoformat(value.replace("Z", "+00:00"))  # noqa: FURB162
+            if parsed_date is None else None
+        )
+    except ValueError as exc:
+        raise ValueError(f"Provider {key} must be an ISO date or timestamp") from exc
+    if parsed_date is None and (parsed_time is None or parsed_time.tzinfo is None or parsed_time.utcoffset() is None):
+        raise ValueError(f"Provider {key} timestamp must include a timezone")
+
+
+def _validate_bounded_string(key: str, value: Any) -> None:
+    """Require a string within the key's bound, plus timestamp/calendar format rules where they apply."""
+    if not isinstance(value, str) or len(value) > _SOURCE_FIELD_STRING_LIMITS[key]:
+        raise ValueError(f"Provider {key} must be a bounded string")
+    if key in _TIMESTAMP_FIELDS:
+        _validate_iso_timestamp(key, value)
+    elif key in {"start", "end"}:
+        _validate_calendar_boundary(key, value)
+
+
+def _validate_source_field(key: str, value: Any) -> None:
+    """Validate one allowlisted source field by its class; unknown keys are rejected.
+
+    Dispatch order is significant and mirrors the original ``elif`` chain: lists, booleans,
+    integers, links, release URL, then bounded strings. Raises ``ValueError`` (surfaced by
+    pydantic as a validation error) with the exact field-class message.
+    """
+    if key in {"tags", "categories", "authors", "recurrence"}:
+        _validate_string_list(key, value)
+    elif key in {"draft", "prerelease", "deleted", "dead"}:
+        _validate_bool_field(key, value)
+    elif key in {"time", "id", "cited_by_count"}:
+        _validate_nonnegative_int(key, value)
+    elif key in {"canonical_url", "url", "web_view_link", "html_link"}:
+        _validate_https_link(key, value)
+    elif key == "html_url":
+        _validate_release_url(key, value)
+    elif key in _SOURCE_FIELD_STRING_LIMITS:
+        _validate_bounded_string(key, value)
+    else:
+        raise ValueError("Provider snapshot field is unsupported")
+
+
 class ProviderRecordMetadata(BaseModel):
     """Retain typed, bounded provider fields separately from generic metadata."""
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -230,105 +385,13 @@ class ProviderRecordMetadata(BaseModel):
                 raise ValueError("World-data measurement must match provider")
         elif self.world_data is not None:
             raise ValueError("World-data metadata is reserved for structured providers")
-        allowed = {
-            "youtube": {"author", "summary", "title", "tags", "published_at", "provider_updated_at"},
-            "arxiv": {"author", "authors", "categories", "tags", "summary", "title", "published_at", "provider_updated_at"},
-            "huggingface": {"author", "tags", "pipeline_tag", "created_at", "last_modified"},
-            "bluesky": {"author", "canonical_url", "created_at"},
-            "reddit": {"title", "subreddit", "author", "canonical_url", "created_at"},
-            "mastodon": {"author", "canonical_url", "created_at"},
-            "x": {"author_id", "canonical_url", "created_at", "language"},
-            "google_mail": {"thread_id", "history_id", "subject", "from", "to", "date_header"},
-            "google_calendar": {"calendar_id", "event_id", "status", "start", "end", "start_timezone", "end_timezone", "recurrence", "html_link"},
-            "google_drive": {"name", "mime_type", "modified_time", "web_view_link", "md5_checksum"},
-            "notion": {"title", "canonical_url"},
-            "slack": {"channel_id", "message_ts", "thread_ts", "user_id"},
-            "health": {"patient_id", "observation_id", "value", "unit", "observed_at_source"},
-            "home_assistant": {"entity_id", "state", "observed_at_source", "unit_of_measurement", "friendly_name", "latitude", "longitude"},
-            "github_releases": {"node_id", "name", "body", "html_url", "tag_name", "draft", "prerelease", "author", "created_at", "published_at"},
-            "github": {"record_type", "node_id", "html_url"},
-            "telegram": set(),
-            **{provider: set() for provider in MEASUREMENT_PROVIDER_IDS},
-            **dict.fromkeys((*BUILTIN_FEED_PROVIDER_IDS, *KEYED_FEED_PROVIDER_IDS), _FEED_FIELDS),
-            "bbc_world": _FEED_FIELDS, "vnexpress_business": _FEED_FIELDS, "tuoitre_news": _FEED_FIELDS, "thanhnien_news": _FEED_FIELDS, "dantri_news": _FEED_FIELDS, "google_news": _FEED_FIELDS,
-            "sec_edgar": _FEED_FIELDS | {"form", "cik"},
-            "openalex": {"title", "summary", "canonical_url", "published_at", "authors", "doi", "source", "cited_by_count"},
-            "hn_top": {"title", "text", "url", "by", "time", "id", "type", "deleted", "dead"},
-            "gdelt_economy": {"title", "url", "seendate", "domain", "language", "sourcecountry"},
-        }[self.provider]
+        allowed = _PROVIDER_SOURCE_FIELD_ALLOWLIST[self.provider]
         if self.source_fields.keys() - allowed:
             raise ValueError("Provider snapshot contains unsupported source fields")
-        string_limits = {
-            "author": 1000, "summary": 4000, "title": 500, "pipeline_tag": 128,
-            "node_id": 256, "name": 500, "body": 4000, "html_url": 2048,
-            "tag_name": 255, "record_type": 16, "last_modified": 64, "created_at": 64,
-            "published_at": 64, "provider_updated_at": 64,
-            "canonical_url": 2048, "guid": 512, "publisher": 200, "text": 4000, "url": 2048, "by": 128,
-            "subreddit": 21, "author_id": 255,
-            "type": 32, "form": 32, "cik": 10, "doi": 255, "source": 255, "seendate": 32, "domain": 255, "language": 64, "sourcecountry": 64,
-            "channel_id": 82, "message_ts": 24, "thread_ts": 24, "user_id": 255,
-            "thread_id": 255, "history_id": 255, "subject": 500, "from": 1000, "to": 2000,
-            "date_header": 255, "calendar_id": 255, "event_id": 255, "status": 32,
-            "start": 64, "end": 64, "start_timezone": 128, "end_timezone": 128,
-            "recurrence": 100, "mime_type": 128, "modified_time": 64, "html_link": 2048,
-            "web_view_link": 2048, "md5_checksum": 64,
-            "patient_id": 128, "observation_id": 255, "value": 64, "unit": 64,
-            "observed_at_source": 64, "entity_id": 255, "state": 512,
-            "unit_of_measurement": 64, "friendly_name": 512, "latitude": 64, "longitude": 64,
-        }
         for key, value in self.source_fields.items():
             if self.provider == "slack" and key in {"thread_ts", "user_id"} and value is None:
                 continue
-            if key in {"tags", "categories", "authors", "recurrence"}:
-                if not isinstance(value, list) or len(value) > 100 or any(
-                    not isinstance(item, str) or len(item) > (1000 if key == "recurrence" else 255)
-                    for item in value
-                ):
-                    raise ValueError(f"Provider {key} must be a bounded string list")
-            elif key in {"draft", "prerelease", "deleted", "dead"}:
-                if not isinstance(value, bool):
-                    raise ValueError(f"Provider {key} must be boolean")
-            elif key in {"time", "id", "cited_by_count"}:
-                if type(value) is not int or value < 0:
-                    raise ValueError(f"Provider {key} must be a non-negative integer")
-            elif key in {"canonical_url", "url", "web_view_link", "html_link"}:
-                from urllib.parse import urlsplit
-
-                parsed_link = urlsplit(value) if isinstance(value, str) and len(value) <= 2048 else None
-                if parsed_link is None or parsed_link.scheme != "https" or not parsed_link.hostname or parsed_link.username or parsed_link.password:
-                    raise ValueError(f"Provider {key} must be an HTTPS link without credentials")
-            elif key == "html_url":
-                if not isinstance(value, str) or len(value) > 2048:
-                    raise ValueError("Provider release URL must use HTTPS")
-                from urllib.parse import urlsplit
-
-                parsed_url = urlsplit(value)
-                if parsed_url.scheme != "https" or parsed_url.netloc != "github.com" or parsed_url.username or parsed_url.password:
-                    raise ValueError("Provider release URL must target github.com")
-            elif key in string_limits:
-                if not isinstance(value, str) or len(value) > string_limits[key]:
-                    raise ValueError(f"Provider {key} must be a bounded string")
-                if key in {"created_at", "published_at", "last_modified", "provider_updated_at", "modified_time", "observed_at_source"}:
-                    try:
-                        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
-                    except ValueError as exc:
-                        raise ValueError(f"Provider {key} must be an ISO timestamp") from exc
-                    if parsed.tzinfo is None or parsed.utcoffset() is None:
-                        raise ValueError(f"Provider {key} must include a timezone")
-                elif key in {"start", "end"}:
-                    try:
-                        # Calendar all-day events use YYYY-MM-DD; timed events must carry an offset.
-                        parsed_date = date.fromisoformat(value) if "T" not in value else None
-                        parsed_time = (
-                            datetime.fromisoformat(value.replace("Z", "+00:00"))  # noqa: FURB162
-                            if parsed_date is None else None
-                        )
-                    except ValueError as exc:
-                        raise ValueError(f"Provider {key} must be an ISO date or timestamp") from exc
-                    if parsed_date is None and (parsed_time is None or parsed_time.tzinfo is None or parsed_time.utcoffset() is None):
-                        raise ValueError(f"Provider {key} timestamp must include a timezone")
-            else:
-                raise ValueError("Provider snapshot field is unsupported")
+            _validate_source_field(key, value)
         return self
 
 
@@ -981,6 +1044,7 @@ class DocumentCleanupPreparationLimitError(Exception):
     })
 
     def __init__(self, owner_code: str) -> None:
+        """Record which cleanup owner exceeded its dependency bound; reject unknown owner codes."""
         if owner_code not in self.OWNER_CODES:
             raise ValueError("Unknown cleanup owner code")
         super().__init__(owner_code)

@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 
+from core.errors import ConflictError, ForbiddenError
 from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.ingestion import public as ingestion
 from modules.knowledge.documents import public, routes
@@ -24,6 +25,7 @@ from modules.knowledge.documents.schemas import (
 )
 from modules.knowledge.observations import public as observations
 from modules.sources.schemas import SourceFence, SourcePurgeJobIdentity
+from tests.unit.modules._documents_patch import patch_documents
 from tests.unit.modules.knowledge.documents._scope import FENCE, SCOPE, SCOPE_KW, WORKSPACE_ID
 
 SRC, DOC, OP = uuid4(), uuid4(), uuid4()
@@ -80,7 +82,7 @@ def test_limit_error_owner_allowlist() -> None:
 @pytest.mark.parametrize("column", ["membership_revision", "configuration_revision", "source_generation"])
 async def test_resolver_null_epoch_never_authorizes(column) -> None:
     authorize = AsyncMock()
-    with patch.object(public, "authorize_internal_job", authorize):
+    with patch("core.workspaces.public.authorize_internal_job", authorize):
         assert await public.resolve_document_cleanup_job_identity(
             _session(_row(**{column: None})), OP, multi_workspace_enabled=False) is None
     authorize.assert_not_awaited()
@@ -93,7 +95,7 @@ async def test_resolver_missing_receipt_is_none() -> None:
 
 async def test_resolver_stale_configuration_is_none() -> None:
     authorize = AsyncMock(return_value=AccessFence(WORKSPACE_ID, 1, 1, 2))
-    with patch.object(public, "authorize_internal_job", authorize):
+    with patch("core.workspaces.public.authorize_internal_job", authorize):
         assert await public.resolve_document_cleanup_job_identity(
             _session(_row()), OP, multi_workspace_enabled=False) is None
     authorize.assert_awaited_once()
@@ -101,7 +103,7 @@ async def test_resolver_stale_configuration_is_none() -> None:
 
 async def test_resolver_returns_exact_identity_after_workspace_scoped_reread() -> None:
     session = _session(_row(), _row())
-    with patch.object(public, "authorize_internal_job", AsyncMock(return_value=FENCE)):
+    with patch("core.workspaces.public.authorize_internal_job", AsyncMock(return_value=FENCE)):
         identity = await public.resolve_document_cleanup_job_identity(session, OP, multi_workspace_enabled=False)
     assert identity == _identity()
     assert "workspace_id" in _sql(session.execute.await_args_list[1].args[0])
@@ -109,7 +111,7 @@ async def test_resolver_returns_exact_identity_after_workspace_scoped_reread() -
 
 
 async def test_resolver_permission_loss_propagates() -> None:
-    with patch.object(public, "authorize_internal_job", AsyncMock(side_effect=HTTPException(403))), \
+    with patch("core.workspaces.public.authorize_internal_job", AsyncMock(side_effect=HTTPException(403))), \
             pytest.raises(HTTPException):
         await public.resolve_document_cleanup_job_identity(_session(_row()), OP, multi_workspace_enabled=False)
 
@@ -134,7 +136,7 @@ async def test_reader_source_bound_scope_requires_matching_source_and_generation
 
 async def test_reader_member_is_denied_before_sql() -> None:
     session = _session()
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ForbiddenError) as exc:
         await public.read_document_cleanup_job_identity(
             session, OP, scope=dataclasses.replace(SCOPE, role="member"), multi_workspace_enabled=False)
     assert exc.value.status_code == 403
@@ -165,7 +167,7 @@ def _owner_patches(overflow: str | None = None):
     def owner(name):
         return AsyncMock(return_value=_empty_owner(overflow=overflow == name))
     return (
-        patch.object(public, "_list_evidence_ref_keys", AsyncMock(return_value=([], False))),
+        patch_documents("_list_evidence_ref_keys", AsyncMock(return_value=([], False))),
         patch.object(observations, "observation_cleanup_ids", owner("observations")),
         patch.object(entities, "support_cleanup_ids", owner("entities")),
         patch.object(relationships, "support_cleanup_ids", owner("relationships")),
@@ -213,7 +215,7 @@ async def test_closure_rejects_changed_fences() -> None:
     for item in patches:
         item.start()
     try:
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ConflictError) as exc:
             await public._prepare_cleanup_closure(
                 _closure_session(), source_id=SRC, document_id=None, scope=SCOPE, flag=False,
                 access_fence=dataclasses.replace(FENCE, configuration_revision=9), source_fence=SOURCE_FENCE)
@@ -281,7 +283,7 @@ async def test_prepare_closure_passes_membership_ids_and_builds_entity_union() -
     m1, e1, e2, e3 = uuid4(), uuid4(), uuid4(), uuid4()
     refs = [(uuid4(), uuid4())]
     rel = AsyncMock(return_value=_empty_owner(endpoint_entity_ids=(e2,)))
-    with patch.object(public, "_list_evidence_ref_keys", AsyncMock(return_value=(refs, False))),             patch.object(observations, "observation_cleanup_ids", AsyncMock(return_value=_empty_owner())),             patch.object(entities, "support_cleanup_ids", AsyncMock(
+    with patch_documents("_list_evidence_ref_keys", AsyncMock(return_value=(refs, False))),             patch.object(observations, "observation_cleanup_ids", AsyncMock(return_value=_empty_owner())),             patch.object(entities, "support_cleanup_ids", AsyncMock(
                 return_value=_empty_owner(membership_ids=(m1,), entity_ids=(e1,)))),             patch.object(relationships, "support_cleanup_ids", rel),             patch.object(timeline, "support_cleanup_ids", AsyncMock(
                 return_value=_empty_owner(participant_entity_ids=(e3,)))),             patch.object(temporal, "tombstone_cleanup_ids", AsyncMock(return_value=_empty_owner())):
         closure = await public._prepare_cleanup_closure(
@@ -350,16 +352,16 @@ def _delete_harness(closure):
     published = AsyncMock(side_effect=lambda *a, **k: calls.append("publish"))
     commit = AsyncMock(side_effect=lambda *a, **k: calls.append("commit"))
     patches = [
-        patch.object(public, "_read_document_source_id", AsyncMock(return_value=SRC)),
+        patch_documents("_read_document_source_id", AsyncMock(return_value=SRC)),
         patch.object(public.sources, "lock_source_set", AsyncMock(
             side_effect=lambda *a, **k: calls.append("lock_source_set") or SimpleNamespace(
                 fences=(SOURCE_FENCE,), access_fence=FENCE))),
-        patch.object(public, "_prepare_cleanup_closure", AsyncMock(return_value=closure)),
-        patch.object(public, "_lock_cleanup_closure", rec("lock_closure")),
-        patch.object(public, "capture_document_cleanup_evidence", rec("evidence")),
-        patch.object(public, "_apply_graph_cleanup", rec("graph", [])),
-        patch.object(public, "commit_with_replay", commit),
-        patch.object(public, "make_knowledge_change", MagicMock(return_value="change")),
+        patch_documents("_prepare_cleanup_closure", AsyncMock(return_value=closure)),
+        patch_documents("_lock_cleanup_closure", rec("lock_closure")),
+        patch_documents("capture_document_cleanup_evidence", rec("evidence")),
+        patch_documents("_apply_graph_cleanup", rec("graph", [])),
+        patch_documents("commit_with_replay", commit),
+        patch_documents("make_knowledge_change", MagicMock(return_value="change")),
         patch.object(ingestion, "prepare_document_materializations_in_uow", rec("I_prepare")),
         patch.object(ingestion, "publish_event", published),
         patch.object(ingestion, "tombstone_document_materializations", rec("I_tombstone")),
@@ -412,11 +414,11 @@ async def test_delete_document_owner_overflow_raises_before_any_effect() -> None
 
 
 async def test_delete_document_foreign_document_is_none_and_member_denied() -> None:
-    with patch.object(public, "_read_document_source_id", AsyncMock(return_value=None)):
+    with patch_documents("_read_document_source_id", AsyncMock(return_value=None)):
         assert await public.delete_document(MagicMock(), DOC, **SCOPE_KW) is None
     session = MagicMock()
     session.scalar = AsyncMock()
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ForbiddenError) as exc:
         await public.delete_document(
             session, DOC, scope=dataclasses.replace(SCOPE, role="member"), multi_workspace_enabled=False)
     assert exc.value.status_code == 403
@@ -495,7 +497,7 @@ async def test_get_document_cleanup_operation_is_workspace_and_actor_scoped() ->
 
 async def test_lock_source_documents_overflow_returns_none_without_locking() -> None:
     session = _closure_session(10_001)
-    with patch.object(public, "_lock_cleanup_closure", AsyncMock()) as lock:
+    with patch_documents("_lock_cleanup_closure", AsyncMock()) as lock:
         result = await public.lock_source_documents_for_purge_in_uow(
             session, SRC, access_fence=FENCE, source_fence=SOURCE_FENCE, **SCOPE_KW)
     assert result is None
@@ -504,9 +506,9 @@ async def test_lock_source_documents_overflow_returns_none_without_locking() -> 
 
 
 async def test_lock_source_documents_owner_overflow_returns_none() -> None:
-    with patch.object(public, "_prepare_cleanup_closure",
+    with patch_documents("_prepare_cleanup_closure",
                       AsyncMock(return_value=DocumentCleanupPreparationLimitError("entities"))), \
-            patch.object(public, "_lock_cleanup_closure", AsyncMock()) as lock:
+            patch_documents("_lock_cleanup_closure", AsyncMock()) as lock:
         assert await public.lock_source_documents_for_purge_in_uow(
             MagicMock(), SRC, access_fence=FENCE, source_fence=SOURCE_FENCE, **SCOPE_KW) is None
     lock.assert_not_awaited()
@@ -527,7 +529,7 @@ def _late_session(doc_count: int = 3):
 
 async def _late(session, capture, closure):
     with patch.object(public.sources, "read_source_purge_job_capture", AsyncMock(return_value=capture)), \
-            patch.object(public, "_prepare_cleanup_closure", AsyncMock(return_value=closure)):
+            patch_documents("_prepare_cleanup_closure", AsyncMock(return_value=closure)):
         return await public.delete_source_documents_in_uow(
             session, SRC, source_purge_operation_id=OP, access_fence=FENCE, source_fence=SOURCE_FENCE,
             **SCOPE_KW)
@@ -575,7 +577,7 @@ async def test_late_delete_inserts_identity_columns_takes_no_locks_and_publishes
     with patch.object(ingestion, "publish_event", publish), \
             patch.object(observations, "purge_source_in_uow", AsyncMock()), \
             patch.object(public.workspaces, "revoke_resource_shares_in_uow", AsyncMock(return_value=0)), \
-            patch.object(public, "_apply_graph_cleanup", AsyncMock(return_value=["draft"])):
+            patch_documents("_apply_graph_cleanup", AsyncMock(return_value=["draft"])):
         drafts = await _late(session, _capture(), closure)
     assert drafts == ["draft"]
     insert = next(s for s in statements if "INSERT INTO document_cleanup_operations" in s)

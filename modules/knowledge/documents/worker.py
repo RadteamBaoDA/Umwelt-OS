@@ -5,7 +5,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid5
 
 from fastapi import HTTPException
@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.errors import DomainError
 from core.events import DomainEvent
 from core.realtime import commit_with_replay
 from core.storage import get_storage_backend
@@ -387,6 +388,7 @@ class _Attempt:
 
 
 def _worker_flag(ctx: dict[str, object]) -> bool:
+    """Return the actual workspace rollout flag from worker settings; ``TypeError`` if not a real bool."""
     enabled = cast(Settings, ctx["settings"]).multi_workspace_enabled
     if type(enabled) is not bool:
         raise TypeError("Actual workspace rollout flag required")
@@ -425,7 +427,7 @@ async def _admit_cleanup(
         )
         if await read_access_fence(session, scope=scope, multi_workspace_enabled=flag) != original:
             return None
-    except HTTPException:
+    except (HTTPException, DomainError):
         return None
     return _Admitted(identity, scope, original, event_id, event.dispatched_at)
 
@@ -457,6 +459,7 @@ async def _settle(
 
 
 async def _commit(session: AsyncSession, admitted: _Admitted, flag: bool) -> None:
+    """Commit the cleanup transaction through the replay path under the ORIGINAL admitted access fence."""
     await commit_with_replay(
         session, (), scope=admitted.scope, multi_workspace_enabled=flag, access_fence=admitted.original,
     )
@@ -563,7 +566,7 @@ async def _advance_raw_document_cleanup(
                     operation.raw_status = "succeeded"
             if operation.raw_status != "failed":
                 operation.error_code = None
-        except (OSError, ValueError, HTTPException):
+        except (OSError, ValueError, HTTPException, DomainError):
             # Proof or filesystem failure: never unlink on doubt; the stage retries.
             operation.raw_status = "failed"
             operation.error_code = "file_cleanup_failed"
@@ -664,7 +667,7 @@ async def _reopen_cleanup_event(
                 session, (), scope=scope, multi_workspace_enabled=flag, access_fence=fence,
             )
             return True
-        except HTTPException as exc:
+        except (HTTPException, DomainError) as exc:
             await session.rollback()
             if exc.status_code not in {401, 403, 404, 409}:
                 raise
@@ -677,6 +680,7 @@ async def _reopen_cleanup_event(
 async def _reopen_page(
     factory: async_sessionmaker[AsyncSession], flag: bool, operation_ids: tuple[UUID, ...],
 ) -> int:
+    """Reopen each listed cleanup event sequentially; return how many were reopened."""
     now = datetime.now(UTC)
     return sum([await _reopen_cleanup_event(factory, flag, operation_id, now) for operation_id in operation_ids])
 
@@ -761,6 +765,7 @@ async def _requeue(
 
 
 def _cursor_state_agent(cursor: object) -> dict[str, object]:
+    """Validate a stored Agent cleanup cursor (or return the initial one); ``ValueError`` if malformed."""
     state = cursor or {"v": 1, "reference_after": None, "candidate_after": None, "phase": "discover"}
     if not isinstance(state, dict) or set(state) != {
         "v", "reference_after", "candidate_after", "phase",
@@ -769,10 +774,409 @@ def _cursor_state_agent(cursor: object) -> dict[str, object]:
     return state
 
 
+@dataclass
+class _PageSchedule:
+    """Retry schedule shared by the stage helpers of one locked copied-cleanup page.
+
+    ``next_attempt_at`` is the earliest deferral any stage asked for (``None`` means the event is
+    complete for Documents and is settled ``delivered``). ``terminal_scope_failure`` marks the
+    truthful, unretryable "evidence identities unavailable" outcome.
+    """
+
+    next_attempt_at: datetime | None = None
+    terminal_scope_failure: bool = False
+
+    def defer(self, delay: timedelta) -> None:
+        """Keep the first requested deferral; later stages only fill a missing one."""
+        self.next_attempt_at = self.next_attempt_at or datetime.now(UTC) + delay
+
+
+@dataclass(frozen=True)
+class _ReceiptSnapshot:
+    """Scalar fields of the unlocked receipt read, compared again under the receipt lock."""
+
+    operation_id: UUID
+    source_id: UUID
+    document_id: UUID
+    evidence_scope_status: str
+    agent_status: str
+    agent_cursor: object
+
+    @classmethod
+    def of(cls, operation: DocumentCleanupOperation) -> "_ReceiptSnapshot":
+        """Capture plain scalars (and a copy of the cursor) so later attribute reads are safe."""
+        return cls(
+            operation_id=operation.id,
+            source_id=operation.source_id,
+            document_id=operation.document_id,
+            evidence_scope_status=operation.evidence_scope_status,
+            agent_status=operation.agent_status,
+            agent_cursor=(
+                dict(operation.agent_cursor) if isinstance(operation.agent_cursor, dict) else operation.agent_cursor
+            ),
+        )
+
+    def differs_from(self, operation: DocumentCleanupOperation) -> bool:
+        """Return whether the locked receipt moved since the unlocked preflight read."""
+        return (
+            operation.id != self.operation_id
+            or operation.source_id != self.source_id
+            or operation.document_id != self.document_id
+            or operation.evidence_scope_status != self.evidence_scope_status
+            or operation.agent_status != self.agent_status
+            or operation.agent_cursor != self.agent_cursor
+        )
+
+
+@dataclass(frozen=True)
+class _AgentPreflight:
+    """Detached Agent evidence page and lease preflight taken before any privacy/receipt lock."""
+
+    evidence: documents.DocumentCleanupEvidenceScope
+    result: Any
+    reference_after: UUID | None
+
+
+async def _agent_preflight(
+    session: AsyncSession, operation_hint: DocumentCleanupOperation, attempt: _Attempt, *,
+    operation_id: UUID, job_scope: InternalJobScope, flag: bool,
+) -> _AgentPreflight | None:
+    """Prepare the Agent lease preflight for a queued/running Agent stage; ``None`` if not due.
+
+    Runs before the shared privacy or receipt lock (a successful transaction advisory lease is
+    retained by the same session through commit). Preflight failures (bad cursor, lease DB errors)
+    need Agent-stage recovery, so ``attempt.stage``/``attempt.progress`` are set first; the unlocked
+    snapshot lets recovery compare under the receipt lock before writing. Raises ``ValueError`` for
+    a malformed stored cursor or unavailable evidence scope.
+    """
+    if not (operation_hint.agent_status in {"queued", "running"}
+            and operation_hint.evidence_scope_status == "captured"):
+        return None
+    attempt.stage = "agent"
+    attempt.progress = _attempt_progress_snapshot(operation_hint)
+    cursor_state = _cursor_state_agent(operation_hint.agent_cursor)
+    reference_value = cursor_state.get("reference_after")
+    candidate_cursor = cursor_state.get("candidate_after")
+    if reference_value is not None and not isinstance(reference_value, str):
+        raise ValueError("Stored Agent reference cursor is malformed")
+    if candidate_cursor is not None and not isinstance(candidate_cursor, str):
+        raise ValueError("Stored Agent candidate cursor is malformed")
+    reference_after = UUID(reference_value) if reference_value else None
+    evidence = await documents.list_document_cleanup_evidence_scope(
+        session, operation_id, after=reference_after, limit=100,
+        scope=job_scope, multi_workspace_enabled=flag,
+    )
+    if evidence is None:
+        raise ValueError("Document cleanup evidence scope is unavailable")
+    from modules.agents import public as agents
+
+    result = await agents.preflight_document_copied_evidence_lease(
+        session, evidence, cursor=candidate_cursor, limit=100,
+        scope=job_scope, multi_workspace_enabled=flag,
+    )
+    return _AgentPreflight(evidence=evidence, result=result, reference_after=reference_after)
+
+
+def _memory_terminal(operation: DocumentCleanupOperation) -> bool:
+    """Return whether the Memory stage is final: succeeded, or failed with an unretryable lineage code."""
+    return operation.memory_status == "succeeded" or (
+        operation.memory_status == "failed" and operation.memory_error_code in {
+            "legacy_provenance_unresolved", "evidence_identity_unavailable",
+        }
+    )
+
+
+def _receipt_fully_settled(operation: DocumentCleanupOperation) -> bool:
+    """Return whether every stage is terminal and the receipt is already final (duplicate delivery)."""
+    return (
+        operation.raw_status in {"not_present", "retained_shared", "succeeded"}
+        and operation.chat_status == "succeeded" and _memory_terminal(operation)
+        and operation.agent_status in {"succeeded", "failed"}
+        and _copied_stage_terminal(operation.materialization_status, operation.materialization_error_code)
+        and _copied_stage_terminal(operation.brief_status, operation.brief_error_code)
+        and not operation.memory_cache_pending
+        and operation.status in {"succeeded", "failed"}
+    )
+
+
+async def _advance_agent_stage(
+    session: AsyncSession, operation: DocumentCleanupOperation, pre: _AgentPreflight | None, *,
+    attempt: _Attempt, schedule: _PageSchedule, job_scope: InternalJobScope, flag: bool,
+) -> bool:
+    """Purge one Agent page under the receipt lock; ``False`` means the lease preflight went stale.
+
+    The caller rolls back (dropping receipt/privacy locks and the stale advisory lease) and
+    requeues on ``False``. Otherwise the Agent cursor/status/counters are advanced in place and
+    the page may request a continuation. No-op unless the Agent stage is queued/running on a
+    captured evidence scope. Raises ``ValueError`` for a malformed cursor or an incomplete page
+    without a continuation cursor.
+    """
+    if not (operation.evidence_scope_status == "captured" and operation.agent_status in {"queued", "running"}):
+        return True
+    if pre is None:
+        raise ValueError("Agent cleanup lease preflight is unavailable")
+    cursor_state = _cursor_state_agent(operation.agent_cursor)
+    reference_value = cursor_state.get("reference_after")
+    candidate_cursor = cursor_state.get("candidate_after")
+    if not isinstance(reference_value, (str, type(None))) or not isinstance(candidate_cursor, (str, type(None))):
+        raise ValueError("Stored Agent cleanup cursor is malformed")  # noqa: TRY004 - ValueError is the cursor-corruption contract
+    reference_after = UUID(reference_value) if reference_value else None
+    from modules.agents import public as agents
+
+    attempt.stage = "agent"
+    agent_progress = await agents.purge_document_copied_evidence_page(
+        session, pre.evidence, cursor=candidate_cursor, limit=100,
+        preflight=pre.result, scope=job_scope, multi_workspace_enabled=flag,
+    )
+    if agent_progress.preflight_stale:
+        return False
+    operation.agent_unresolved_count = agent_progress.unavailable_count
+    operation.agent_waiting_for_lease = agent_progress.lease_pending
+    operation.agent_error_code = None
+    if agent_progress.complete:
+        if pre.evidence.next_cursor is not None:
+            operation.agent_status = "running"
+            operation.agent_cursor = {
+                "v": 1, "reference_after": str(pre.evidence.next_cursor),
+                "candidate_after": None, "phase": "discover",
+            }
+            schedule.next_attempt_at = datetime.now(UTC) + _CONTINUATION_DELAY
+        else:
+            operation.agent_cursor = None
+            operation.agent_waiting_for_lease = False
+            if agent_progress.unavailable_count:
+                operation.agent_status = "failed"
+                operation.agent_error_code = "evidence_identity_unavailable"
+            else:
+                operation.agent_status = "succeeded"
+            _hint(attempt.hints, operation, "agent")
+    else:
+        if agent_progress.next_cursor is None:
+            raise ValueError("Agent cleanup page is incomplete without a continuation cursor")
+        operation.agent_status = "running"
+        operation.agent_cursor = {
+            "v": 1,
+            "reference_after": str(reference_after) if reference_after else None,
+            "candidate_after": agent_progress.next_cursor,
+            "phase": "finalize" if agent_progress.lease_pending else "discover",
+        }
+        schedule.next_attempt_at = datetime.now(UTC) + _CONTINUATION_DELAY
+    return True
+
+
+def _fail_uncaptured_scope(operation: DocumentCleanupOperation) -> None:
+    """Mark Chat, copied and Agent stages terminally failed when evidence identities are unavailable."""
+    operation.chat_status = "failed"
+    operation.chat_error_code = "evidence_identity_unavailable"
+    operation.copied_status = "failed"
+    operation.copied_error_code = "evidence_identity_unavailable"
+    operation.error_code = "evidence_identity_unavailable"
+    operation.agent_status = "failed"
+    operation.agent_error_code = "evidence_identity_unavailable"
+    operation.agent_cursor = None
+    operation.agent_waiting_for_lease = False
+
+
+async def _advance_chat_stage(
+    session: AsyncSession, operation: DocumentCleanupOperation, *, attempt: _Attempt,
+    schedule: _PageSchedule, job_scope: InternalJobScope, flag: bool,
+) -> None:
+    """Purge one Chat page of copied evidence and advance the shared ``copied_cursor``.
+
+    Marks the stage running, reads the next bounded evidence-identity page, and either completes
+    Chat, moves the reference cursor, or stores the inner Chat cursor (each continuation schedules
+    the continuation delay). Raises ``ValueError`` for a malformed stored cursor, an unavailable
+    evidence scope, or an incomplete page without a continuation cursor.
+    """
+    attempt.stage = "chat"
+    operation.chat_status = "running"
+    operation.chat_error_code = None
+    cursor_state = operation.copied_cursor or {}
+    if not isinstance(cursor_state, dict):
+        cursor_state = {}
+    reference_after = UUID(str(cursor_state["reference_after"])) if cursor_state.get("reference_after") else None
+    chat_cursor = cursor_state.get("chat_cursor")
+    if chat_cursor is not None and not isinstance(chat_cursor, str):
+        raise ValueError("Stored Chat cleanup cursor is malformed")
+    evidence = await documents.list_document_cleanup_evidence_scope(
+        session, operation.id, after=reference_after, limit=100,
+        scope=job_scope, multi_workspace_enabled=flag,
+    )
+    if evidence is None:
+        raise ValueError("Document cleanup evidence scope is unavailable")
+    from modules.chat import public as chat
+
+    progress = await chat.purge_document_copied_evidence_page(
+        session, evidence, cursor=chat_cursor, limit=100,
+        scope=job_scope, multi_workspace_enabled=flag,
+    )
+    if progress.complete:
+        if evidence.next_cursor is None:
+            operation.chat_status = "succeeded"
+            operation.chat_error_code = None
+            operation.copied_cursor = None
+        else:
+            operation.copied_cursor = {
+                "reference_after": str(evidence.next_cursor),
+                "chat_cursor": None,
+            }
+            schedule.next_attempt_at = datetime.now(UTC) + _CONTINUATION_DELAY
+    else:
+        if progress.next_cursor is None:
+            raise ValueError("Chat cleanup page is incomplete without a continuation cursor")
+        operation.copied_cursor = {
+            "reference_after": str(reference_after) if reference_after else None,
+            "chat_cursor": progress.next_cursor,
+        }
+        schedule.next_attempt_at = datetime.now(UTC) + _CONTINUATION_DELAY
+
+
+async def _advance_memory_stage(
+    session: AsyncSession, operation: DocumentCleanupOperation, *, attempt: _Attempt,
+    schedule: _PageSchedule, job_scope: InternalJobScope, flag: bool,
+) -> None:
+    """Run one Memory page once Chat succeeded and Memory is not yet final.
+
+    A pending cache eviction owns the retry (no Memory page this delivery). Otherwise a page runs;
+    changed rows request postcommit cache eviction and a non-terminal page defers a continuation.
+    """
+    if not (operation.chat_status == "succeeded" and not _memory_terminal(operation)):
+        return
+    if operation.memory_cache_pending:
+        schedule.defer(_RETRY_DELAY)
+        return
+    attempt.stage = "memory"
+    operation.memory_status = "running"
+    operation.memory_error_code = None
+    changed, terminal = await _advance_memory_cleanup(
+        session, operation, job_scope=job_scope, flag=flag,
+    )
+    if changed:
+        attempt.evict = True
+    if not terminal:
+        schedule.defer(_CONTINUATION_DELAY)
+
+
+def _collect_stage_failures(operation: DocumentCleanupOperation, schedule: _PageSchedule) -> None:
+    """Fold per-stage failures into receipt error codes and schedule retries for retryable ones."""
+    if operation.raw_status == "failed":
+        operation.error_code = operation.error_code or "file_cleanup_failed"
+        if operation.error_code != _RAW_URI_UNAVAILABLE:
+            schedule.defer(_RETRY_DELAY)
+    if operation.chat_status == "failed" and not schedule.terminal_scope_failure:
+        operation.copied_status = "failed"
+        operation.copied_error_code = operation.chat_error_code or "chat_cleanup_failed"
+        operation.error_code = operation.copied_error_code
+        schedule.defer(_RETRY_DELAY)
+
+    if operation.agent_status == "running":
+        schedule.defer(_CONTINUATION_DELAY)
+    elif operation.agent_status == "failed":
+        operation.copied_error_code = operation.agent_error_code or "agent_cleanup_failed"
+        operation.error_code = operation.copied_error_code
+
+    for stage in ("materialization", "brief"):
+        if getattr(operation, f"{stage}_status") == "failed":
+            operation.copied_error_code = getattr(operation, f"{stage}_error_code") or f"{stage}_cleanup_failed"
+            operation.error_code = operation.copied_error_code
+
+
+def _finalize_aggregate_status(operation: DocumentCleanupOperation) -> None:
+    """Set the receipt/copied aggregate: failed if any owner failed, succeeded only if all did."""
+    local_failed = (
+        operation.raw_status == "failed" or operation.chat_status == "failed"
+        or operation.memory_status == "failed" or operation.agent_status == "failed"
+        or operation.materialization_status == "failed" or operation.brief_status == "failed"
+    )
+    if local_failed:
+        operation.status = "failed"
+        operation.copied_status = "failed"
+    elif (operation.raw_status in {"not_present", "retained_shared", "succeeded"}
+            and operation.chat_status == "succeeded" and operation.memory_status == "succeeded"
+            and not operation.memory_cache_pending and operation.agent_status == "succeeded"
+            and operation.materialization_status == "succeeded"
+            and operation.brief_status == "succeeded"):
+        # Aggregate success only when every required owner stage genuinely completed.
+        operation.status = "succeeded"
+        operation.copied_status = "succeeded"
+        operation.copied_error_code = None
+        operation.error_code = None
+    else:
+        operation.status = "running"
+        operation.copied_status = "running"
+
+
+async def _advance_copied_stages(
+    session: AsyncSession, operation: DocumentCleanupOperation, pre: _AgentPreflight | None, *,
+    attempt: _Attempt, job_scope: InternalJobScope, flag: bool,
+) -> _PageSchedule | None:
+    """Run one page of every copied-owner stage in lock order; ``None`` means the preflight went stale.
+
+    Order: Agent, Chat (or terminal scope failure), Memory, Materialization, saved briefs, then
+    failure folding and the aggregate status. Each stage records itself in ``attempt.stage`` so a
+    failure is recovered against the right stage, and contributes to the shared retry schedule.
+    """
+    operation.status = "running"
+    operation.error_code = None
+    operation.copied_status = "running"
+    schedule = _PageSchedule()
+
+    if not await _advance_agent_stage(
+        session, operation, pre, attempt=attempt, schedule=schedule, job_scope=job_scope, flag=flag,
+    ):
+        return None
+
+    if operation.evidence_scope_status != "captured":
+        _fail_uncaptured_scope(operation)
+        schedule.terminal_scope_failure = True
+    elif operation.chat_status != "succeeded":
+        await _advance_chat_stage(
+            session, operation, attempt=attempt, schedule=schedule, job_scope=job_scope, flag=flag)
+
+    await _advance_memory_stage(
+        session, operation, attempt=attempt, schedule=schedule, job_scope=job_scope, flag=flag)
+
+    # Materialization (Notifications/Automations) and saved-brief stages keep their own
+    # cursors and run under the same privacy -> receipt locks; one page each per delivery.
+    if not _copied_stage_terminal(operation.materialization_status, operation.materialization_error_code):
+        attempt.stage = "materialization"
+        operation.materialization_error_code = None
+        if not await _advance_materialization_cleanup(session, operation, job_scope=job_scope, flag=flag):
+            schedule.defer(_CONTINUATION_DELAY)
+    if not _copied_stage_terminal(operation.brief_status, operation.brief_error_code):
+        attempt.stage = "brief"
+        operation.brief_error_code = None
+        if not await _advance_brief_cleanup(session, operation, job_scope=job_scope, flag=flag):
+            schedule.defer(_CONTINUATION_DELAY)
+
+    _collect_stage_failures(operation, schedule)
+    _finalize_aggregate_status(operation)
+
+    if (operation.chat_status in {"succeeded", "failed"}
+            or operation.memory_status in {"succeeded", "failed"}
+            or operation.agent_status in {"succeeded", "failed"}
+            or operation.materialization_status in {"succeeded", "failed"}
+            or operation.brief_status in {"succeeded", "failed"}):
+        # Snapshotted after the aggregate is final so Source observes the settled state.
+        _hint(attempt.hints, operation, "aggregate")
+
+    if operation.memory_cache_pending:
+        attempt.evict = True
+        schedule.defer(_RETRY_DELAY)
+    attempt.post_progress = _attempt_progress_snapshot(operation)
+    return schedule
+
+
 async def _advance_copied_cleanup(
     factory: async_sessionmaker[AsyncSession], flag: bool, identifier: UUID, attempt: _Attempt,
 ) -> bool:
-    """Run one privacy -> receipt -> event locked page of every copied-owner stage; True if committed."""
+    """Run one privacy -> receipt -> event locked page of every copied-owner stage; True if committed.
+
+    Lock/commit order: admission, unlocked receipt hint, Agent lease preflight (before any shared
+    lock), Memory consent (privacy) lock, receipt row lock, event claim lock, then the stage
+    pages, one event settle (CAS on the claim stamp) and one replay commit. A moved receipt or a
+    stale preflight rolls back and requeues; a lost claim/CAS rolls back and returns False.
+    """
     async with factory() as session:
         admitted = await _admit_cleanup(session, identifier, flag)
         if admitted is None:
@@ -780,58 +1184,23 @@ async def _advance_copied_cleanup(
             return False
         attempt.admitted = admitted
         job_scope = admitted.scope
-        operation_id = admitted.identity.operation_id
         operation_hint = await session.scalar(_receipt_query(admitted))
         if operation_hint is None:
             await session.rollback()
             return False
         # Agent lease preparation must happen before the shared privacy or receipt lock.
-        # The same session retains a successful transaction advisory lease through commit.
-        agent_evidence = None
-        agent_preflight = None
-        agent_reference_after = None
-        operation_id_snapshot = operation_hint.id
-        source_id_snapshot = operation_hint.source_id
-        document_id_snapshot = operation_hint.document_id
-        evidence_scope_snapshot = operation_hint.evidence_scope_status
-        agent_status_snapshot = operation_hint.agent_status
-        agent_cursor_snapshot = (
-            dict(operation_hint.agent_cursor)
-            if isinstance(operation_hint.agent_cursor, dict) else operation_hint.agent_cursor
-        )
-        if operation_hint.agent_status in {"queued", "running"} and operation_hint.evidence_scope_status == "captured":
-            # Preflight failures (bad cursor, lease DB errors) need Agent-stage recovery. The
-            # unlocked snapshot lets recovery compare under the receipt lock before writing.
-            attempt.stage = "agent"
-            attempt.progress = _attempt_progress_snapshot(operation_hint)
-            cursor_state = _cursor_state_agent(operation_hint.agent_cursor)
-            reference_value = cursor_state.get("reference_after")
-            candidate_cursor = cursor_state.get("candidate_after")
-            if reference_value is not None and not isinstance(reference_value, str):
-                raise ValueError("Stored Agent reference cursor is malformed")
-            if candidate_cursor is not None and not isinstance(candidate_cursor, str):
-                raise ValueError("Stored Agent candidate cursor is malformed")
-            agent_reference_after = UUID(reference_value) if reference_value else None
-            agent_evidence = await documents.list_document_cleanup_evidence_scope(
-                session, operation_id, after=agent_reference_after, limit=100,
-                scope=job_scope, multi_workspace_enabled=flag,
-            )
-            if agent_evidence is None:
-                raise ValueError("Document cleanup evidence scope is unavailable")
-            from modules.agents import public as agents
-
-            agent_preflight = await agents.preflight_document_copied_evidence_lease(
-                session, agent_evidence, cursor=candidate_cursor, limit=100,
-                scope=job_scope, multi_workspace_enabled=flag,
-            )
-            if agent_preflight.blocked:
-                # No privacy or receipt row was locked; schedule retry from the durable cursor.
-                if await _settle(session, admitted, "pending", flag,
-                                 next_attempt_at=datetime.now(UTC) + _RETRY_DELAY):
-                    await _commit(session, admitted, flag)
-                else:
-                    await session.rollback()
-                return False
+        snapshot = _ReceiptSnapshot.of(operation_hint)
+        pre = await _agent_preflight(
+            session, operation_hint, attempt,
+            operation_id=admitted.identity.operation_id, job_scope=job_scope, flag=flag)
+        if pre is not None and pre.result.blocked:
+            # No privacy or receipt row was locked; schedule retry from the durable cursor.
+            if await _settle(session, admitted, "pending", flag,
+                             next_attempt_at=datetime.now(UTC) + _RETRY_DELAY):
+                await _commit(session, admitted, flag)
+            else:
+                await session.rollback()
+            return False
 
         # Shared Memory consent lock precedes URI, receipt, Chat and Memory owner locks.
         await lock_export_privacy_in_uow(
@@ -846,20 +1215,13 @@ async def _advance_copied_cleanup(
         if attempt.stage == "agent":
             attempt.stage = "unknown"  # Preflight and lease checks passed; later stages set their own.
 
-        scope_stale = (
-            operation.id != operation_id_snapshot
-            or operation.source_id != source_id_snapshot
-            or operation.document_id != document_id_snapshot
-            or operation.evidence_scope_status != evidence_scope_snapshot
-            or operation.agent_status != agent_status_snapshot
-            or operation.agent_cursor != agent_cursor_snapshot
-        )
-        if agent_evidence is not None:
+        scope_stale = snapshot.differs_from(operation)
+        if pre is not None:
             locked_agent_evidence = await documents.list_document_cleanup_evidence_scope(
-                session, operation.id, after=agent_reference_after, limit=100,
+                session, operation.id, after=pre.reference_after, limit=100,
                 scope=job_scope, multi_workspace_enabled=flag,
             )
-            scope_stale = scope_stale or locked_agent_evidence != agent_evidence
+            scope_stale = scope_stale or locked_agent_evidence != pre.evidence
         if scope_stale:
             # The preflight is detached, so discard its advisory lease and repeat from the
             # receipt's current cursor before touching owner rows.
@@ -867,18 +1229,7 @@ async def _advance_copied_cleanup(
             await _requeue(factory, flag, admitted, _CONTINUATION_DELAY)
             return False
 
-        memory_terminal = operation.memory_status == "succeeded" or (
-            operation.memory_status == "failed" and operation.memory_error_code in {
-                "legacy_provenance_unresolved", "evidence_identity_unavailable",
-            }
-        )
-        agent_terminal = operation.agent_status in {"succeeded", "failed"}
-        if (operation.raw_status in {"not_present", "retained_shared", "succeeded"}
-                and operation.chat_status == "succeeded" and memory_terminal and agent_terminal
-                and _copied_stage_terminal(operation.materialization_status, operation.materialization_error_code)
-                and _copied_stage_terminal(operation.brief_status, operation.brief_error_code)
-                and not operation.memory_cache_pending
-                and operation.status in {"succeeded", "failed"}):
+        if _receipt_fully_settled(operation):
             # Duplicate deliveries must not reopen a settled receipt; an unsettled one re-settles below.
             if await _settle(session, admitted, "delivered", flag):
                 await _commit(session, admitted, flag)
@@ -887,213 +1238,16 @@ async def _advance_copied_cleanup(
             await session.rollback()
             return False
 
-        operation.status = "running"
-        operation.error_code = None
-        operation.copied_status = "running"
-        next_attempt_at: datetime | None = None
-        terminal_scope_failure = False
+        schedule = await _advance_copied_stages(
+            session, operation, pre, attempt=attempt, job_scope=job_scope, flag=flag)
+        if schedule is None:
+            # Drop receipt/privacy locks and any successful stale lease before retrying.
+            await session.rollback()
+            await _requeue(factory, flag, admitted, _CONTINUATION_DELAY)
+            return False
 
-        if (operation.evidence_scope_status == "captured"
-                and operation.agent_status in {"queued", "running"}):
-            if agent_evidence is None or agent_preflight is None:
-                raise ValueError("Agent cleanup lease preflight is unavailable")
-            cursor_state = _cursor_state_agent(operation.agent_cursor)
-            reference_value = cursor_state.get("reference_after")
-            candidate_cursor = cursor_state.get("candidate_after")
-            if not isinstance(reference_value, (str, type(None))) or not isinstance(candidate_cursor, (str, type(None))):
-                raise ValueError("Stored Agent cleanup cursor is malformed")
-            reference_after = UUID(reference_value) if reference_value else None
-            from modules.agents import public as agents
-
-            attempt.stage = "agent"
-            agent_progress = await agents.purge_document_copied_evidence_page(
-                session, agent_evidence, cursor=candidate_cursor, limit=100,
-                preflight=agent_preflight, scope=job_scope, multi_workspace_enabled=flag,
-            )
-            if agent_progress.preflight_stale:
-                # Drop receipt/privacy locks and any successful stale lease before retrying.
-                await session.rollback()
-                await _requeue(factory, flag, admitted, _CONTINUATION_DELAY)
-                return False
-            operation.agent_unresolved_count = agent_progress.unavailable_count
-            operation.agent_waiting_for_lease = agent_progress.lease_pending
-            operation.agent_error_code = None
-            if agent_progress.complete:
-                if agent_evidence.next_cursor is not None:
-                    operation.agent_status = "running"
-                    operation.agent_cursor = {
-                        "v": 1, "reference_after": str(agent_evidence.next_cursor),
-                        "candidate_after": None, "phase": "discover",
-                    }
-                    next_attempt_at = datetime.now(UTC) + _CONTINUATION_DELAY
-                else:
-                    operation.agent_cursor = None
-                    operation.agent_waiting_for_lease = False
-                    if agent_progress.unavailable_count:
-                        operation.agent_status = "failed"
-                        operation.agent_error_code = "evidence_identity_unavailable"
-                    else:
-                        operation.agent_status = "succeeded"
-                    _hint(attempt.hints, operation, "agent")
-            else:
-                if agent_progress.next_cursor is None:
-                    raise ValueError("Agent cleanup page is incomplete without a continuation cursor")
-                operation.agent_status = "running"
-                operation.agent_cursor = {
-                    "v": 1,
-                    "reference_after": str(reference_after) if reference_after else None,
-                    "candidate_after": agent_progress.next_cursor,
-                    "phase": "finalize" if agent_progress.lease_pending else "discover",
-                }
-                next_attempt_at = datetime.now(UTC) + _CONTINUATION_DELAY
-
-        if operation.evidence_scope_status != "captured":
-            operation.chat_status = "failed"
-            operation.chat_error_code = "evidence_identity_unavailable"
-            operation.copied_status = "failed"
-            operation.copied_error_code = "evidence_identity_unavailable"
-            operation.error_code = "evidence_identity_unavailable"
-            operation.agent_status = "failed"
-            operation.agent_error_code = "evidence_identity_unavailable"
-            operation.agent_cursor = None
-            operation.agent_waiting_for_lease = False
-            terminal_scope_failure = True
-        elif operation.chat_status != "succeeded":
-            attempt.stage = "chat"
-            operation.chat_status = "running"
-            operation.chat_error_code = None
-            cursor_state = operation.copied_cursor or {}
-            if not isinstance(cursor_state, dict):
-                cursor_state = {}
-            reference_after = UUID(str(cursor_state["reference_after"])) if cursor_state.get("reference_after") else None
-            chat_cursor = cursor_state.get("chat_cursor")
-            if chat_cursor is not None and not isinstance(chat_cursor, str):
-                raise ValueError("Stored Chat cleanup cursor is malformed")
-            evidence = await documents.list_document_cleanup_evidence_scope(
-                session, operation.id, after=reference_after, limit=100,
-                scope=job_scope, multi_workspace_enabled=flag,
-            )
-            if evidence is None:
-                raise ValueError("Document cleanup evidence scope is unavailable")
-            from modules.chat import public as chat
-
-            progress = await chat.purge_document_copied_evidence_page(
-                session, evidence, cursor=chat_cursor, limit=100,
-                scope=job_scope, multi_workspace_enabled=flag,
-            )
-            if progress.complete:
-                if evidence.next_cursor is None:
-                    operation.chat_status = "succeeded"
-                    operation.chat_error_code = None
-                    operation.copied_cursor = None
-                else:
-                    operation.copied_cursor = {
-                        "reference_after": str(evidence.next_cursor),
-                        "chat_cursor": None,
-                    }
-                    next_attempt_at = datetime.now(UTC) + _CONTINUATION_DELAY
-            else:
-                if progress.next_cursor is None:
-                    raise ValueError("Chat cleanup page is incomplete without a continuation cursor")
-                operation.copied_cursor = {
-                    "reference_after": str(reference_after) if reference_after else None,
-                    "chat_cursor": progress.next_cursor,
-                }
-                next_attempt_at = datetime.now(UTC) + _CONTINUATION_DELAY
-
-        if operation.chat_status == "succeeded" and operation.memory_status not in {
-            "succeeded",
-        } and not (
-            operation.memory_status == "failed"
-            and operation.memory_error_code in {
-                "legacy_provenance_unresolved", "evidence_identity_unavailable",
-            }
-        ):
-            if operation.memory_cache_pending:
-                next_attempt_at = next_attempt_at or datetime.now(UTC) + _RETRY_DELAY
-            else:
-                attempt.stage = "memory"
-                operation.memory_status = "running"
-                operation.memory_error_code = None
-                changed, terminal = await _advance_memory_cleanup(
-                    session, operation, job_scope=job_scope, flag=flag,
-                )
-                if changed:
-                    attempt.evict = True
-                if not terminal:
-                    next_attempt_at = next_attempt_at or datetime.now(UTC) + _CONTINUATION_DELAY
-
-        # Materialization (Notifications/Automations) and saved-brief stages keep their own
-        # cursors and run under the same privacy -> receipt locks; one page each per delivery.
-        if not _copied_stage_terminal(operation.materialization_status, operation.materialization_error_code):
-            attempt.stage = "materialization"
-            operation.materialization_error_code = None
-            if not await _advance_materialization_cleanup(session, operation, job_scope=job_scope, flag=flag):
-                next_attempt_at = next_attempt_at or datetime.now(UTC) + _CONTINUATION_DELAY
-        if not _copied_stage_terminal(operation.brief_status, operation.brief_error_code):
-            attempt.stage = "brief"
-            operation.brief_error_code = None
-            if not await _advance_brief_cleanup(session, operation, job_scope=job_scope, flag=flag):
-                next_attempt_at = next_attempt_at or datetime.now(UTC) + _CONTINUATION_DELAY
-
-        if operation.raw_status == "failed":
-            operation.error_code = operation.error_code or "file_cleanup_failed"
-            if operation.error_code != _RAW_URI_UNAVAILABLE:
-                next_attempt_at = next_attempt_at or datetime.now(UTC) + _RETRY_DELAY
-        if operation.chat_status == "failed" and not terminal_scope_failure:
-            operation.copied_status = "failed"
-            operation.copied_error_code = operation.chat_error_code or "chat_cleanup_failed"
-            operation.error_code = operation.copied_error_code
-            next_attempt_at = next_attempt_at or datetime.now(UTC) + _RETRY_DELAY
-
-        if operation.agent_status == "running":
-            next_attempt_at = next_attempt_at or datetime.now(UTC) + _CONTINUATION_DELAY
-        elif operation.agent_status == "failed":
-            operation.copied_error_code = operation.agent_error_code or "agent_cleanup_failed"
-            operation.error_code = operation.copied_error_code
-
-        for stage in ("materialization", "brief"):
-            if getattr(operation, f"{stage}_status") == "failed":
-                operation.copied_error_code = getattr(operation, f"{stage}_error_code") or f"{stage}_cleanup_failed"
-                operation.error_code = operation.copied_error_code
-
-        local_failed = (
-            operation.raw_status == "failed" or operation.chat_status == "failed"
-            or operation.memory_status == "failed" or operation.agent_status == "failed"
-            or operation.materialization_status == "failed" or operation.brief_status == "failed"
-        )
-        if local_failed:
-            operation.status = "failed"
-            operation.copied_status = "failed"
-        elif (operation.raw_status in {"not_present", "retained_shared", "succeeded"}
-                and operation.chat_status == "succeeded" and operation.memory_status == "succeeded"
-                and not operation.memory_cache_pending and operation.agent_status == "succeeded"
-                and operation.materialization_status == "succeeded"
-                and operation.brief_status == "succeeded"):
-            # Aggregate success only when every required owner stage genuinely completed.
-            operation.status = "succeeded"
-            operation.copied_status = "succeeded"
-            operation.copied_error_code = None
-            operation.error_code = None
-        else:
-            operation.status = "running"
-            operation.copied_status = "running"
-
-        if (operation.chat_status in {"succeeded", "failed"}
-                or operation.memory_status in {"succeeded", "failed"}
-                or operation.agent_status in {"succeeded", "failed"}
-                or operation.materialization_status in {"succeeded", "failed"}
-                or operation.brief_status in {"succeeded", "failed"}):
-            # Snapshotted after the aggregate is final so Source observes the settled state.
-            _hint(attempt.hints, operation, "aggregate")
-
-        if operation.memory_cache_pending:
-            attempt.evict = True
-            next_attempt_at = next_attempt_at or datetime.now(UTC) + _RETRY_DELAY
-        attempt.post_progress = _attempt_progress_snapshot(operation)
-
-        if next_attempt_at is not None:
-            settled = await _settle(session, admitted, "pending", flag, next_attempt_at=next_attempt_at)
+        if schedule.next_attempt_at is not None:
+            settled = await _settle(session, admitted, "pending", flag, next_attempt_at=schedule.next_attempt_at)
         else:
             # The event is complete for Documents and Chat even while other copy owners remain pending.
             settled = await _settle(session, admitted, "delivered", flag)
