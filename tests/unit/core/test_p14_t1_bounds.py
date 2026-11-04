@@ -15,12 +15,12 @@ from pydantic import BaseModel
 from starlette.requests import ClientDisconnect
 
 from apps.api.main import create_app
-from core import realtime_routes
 from core.body_limit import BodyLimitMiddleware
 from core.config import Settings
 from core.database import make_session_factory
 from core.errors import install_error_handling
 from core.realtime import ReplayCursor
+from core.realtime import routes as realtime_routes
 
 
 def _capture(monkeypatch: pytest.MonkeyPatch, **kwargs: int) -> dict:

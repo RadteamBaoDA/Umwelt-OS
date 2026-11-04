@@ -90,7 +90,7 @@ async def heavy_job_slot(
             # The remote guard is durable across loss of this local connection;
             # a guard stops blocking once its expires_at passes (set just past the
             # remote job's hard bound), which is the recovery path for a dead service.
-            from core.remote_heavy import has_blocking_remote_heavy_work
+            from core.heavy_work.remote import has_blocking_remote_heavy_work
 
             if await has_blocking_remote_heavy_work(session):
                 raise RemoteHeavyWorkBlocked(

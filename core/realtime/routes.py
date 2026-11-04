@@ -23,7 +23,7 @@ from core.auth.dependencies import require_account
 from core.auth.public import authenticated_session_ref, get_active_account
 from core.auth.schemas import AccountRead, AccountSessionRef
 from core.database import get_session
-from core.realtime import (
+from core.realtime.service import (
     MAX_CURSOR_LENGTH,
     MAX_REPLAY_BATCH,
     ReplayCursor,
@@ -378,11 +378,13 @@ class _PermitResponse(_PollingStreamingResponse):
     """Streaming response that frees the stream permit if the generator never started (failed send, early error)."""
 
     def __init__(self, content: AsyncIterator[str], started: asyncio.Event, semaphore: asyncio.Semaphore, **kwargs: Any) -> None:
+        """Remember the start flag and permit semaphore for the early-failure release in ``__call__``."""
         super().__init__(content, **kwargs)
         self._started = started
         self._semaphore = semaphore
 
     async def __call__(self, scope: ASGIScope, receive: Receive, send: Send) -> None:
+        """Stream via the parent, then close the generator and free the permit if it never started."""
         try:
             await super().__call__(scope, receive, send)
         finally:

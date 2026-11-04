@@ -1,5 +1,6 @@
 import ipaddress
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
@@ -52,6 +53,8 @@ class Settings(BaseSettings):
     # Most model rounds of one turn that may add widgets (a round after widgets lets the model write text or add more).
     generative_ui_max_rounds: int = Field(default=3, ge=1, le=5, validation_alias="GENERATIVE_UI_MAX_ROUNDS")
     data_dir: Path = Path("/data")
+    # Original-file backend (core.storage.factory registry); only the local filesystem ships today.
+    storage_backend: Literal["local"] = Field(default="local", validation_alias="STORAGE_BACKEND")
     upload_max_bytes: int = Field(default=25 * 1024 * 1024, gt=0, le=1024 * 1024 * 1024)
     parser_timeout_seconds: int = Field(default=120, gt=0, le=3600)
     # How long a chat run parks on `request_user_input`; modules/chat/user_input.py clamps it to the worker job budget.

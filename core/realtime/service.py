@@ -454,16 +454,33 @@ async def _retained_window(session: AsyncSession, head: ReplayHead) -> int:
     return int(count)
 
 
-async def _retain_and_append(
-    session: AsyncSession, encoded: list[tuple[str, dict[str, Any]]], *, fence: AccessFence,
-) -> None:
-    """Expire replay-only prefixes fairly and append atomically under the final advisory gate.
+@dataclass(frozen=True)
+class _RetentionPlan:
+    """Pure arithmetic outcome of the retention planning step for one writer's append."""
 
-    Approved core retention authority may inspect other streams' scalar metadata, delete
-    their oldest replay copies and advance floors; it never reads payloads/domain/auth,
-    changes victim epochs/sequences or acquires earlier locks. Plan at most100 extra row
-    deletions and lock writer plus at most100 victims in canonical principal order. New
-    batch rows are protected. Caller flushed domain writes and disables autoflush here.
+    writer_key: tuple[UUID, int]
+    epoch: UUID
+    planned_head: ReplayHead | None
+    total: int
+    reset: bool
+    persisted_sequence: int
+    persisted_floor: int
+    old_sequence: int
+    final_sequence: int
+    floor: int
+    local_deleted: int
+    remaining: int
+    excess: int
+
+
+async def _plan_retention(
+    session: AsyncSession, batch_size: int, *, fence: AccessFence,
+) -> _RetentionPlan:
+    """Take the replay advisory gate, read the writer head/total and compute floors and excess.
+
+    Runs the timeout ``set_config`` and ``pg_advisory_xact_lock`` statements first (same order as
+    before the split), then two scalar reads; raises ``_ReplayStorageError`` for sequence overflow
+    or an impossible eviction plan. Mutates nothing; caller owns the transaction.
     """
     await session.execute(select(func.set_config("statement_timeout", "3000", True),
                                  func.set_config("lock_timeout", "3000", True)))
@@ -479,80 +496,117 @@ async def _retain_and_append(
     persisted_sequence = 0 if planned_head is None else planned_head.sequence
     persisted_floor = 1 if planned_head is None else planned_head.floor_sequence
     old_sequence = 0 if reset else persisted_sequence
-    final_sequence = old_sequence + len(encoded)
+    final_sequence = old_sequence + batch_size
     # BIGINT floor must also fit after a fully evicted stream. Never rewind this epoch.
     if final_sequence >= MAX_REPLAY_SEQUENCE:
         raise _ReplayStorageError()
     floor = max(1 if reset else persisted_floor, final_sequence - MAX_REPLAY_EVENTS + 1)
     local_deleted = old_count if reset else floor - persisted_floor
     remaining = old_count - local_deleted
-    excess = max(0, total - local_deleted + len(encoded) - MAX_INSTANCE_REPLAY_EVENTS)
+    excess = max(0, total - local_deleted + batch_size - MAX_INSTANCE_REPLAY_EVENTS)
     if excess > MAX_REPLAY_BATCH or remaining < 0:
         raise _ReplayStorageError()
+    return _RetentionPlan(
+        writer_key, epoch, planned_head, total, reset, persisted_sequence, persisted_floor,
+        old_sequence, final_sequence, floor, local_deleted, remaining, excess,
+    )
 
-    # The bounded top100 are sufficient for <=100 virtual removals. Writer's new
-    # batch contributes to projected size but can never be selected for removal.
+
+async def _allocate_victims(
+    session: AsyncSession, plan: _RetentionPlan, batch_size: int,
+) -> dict[tuple[UUID, int], int]:
+    """Choose which other streams give up their oldest replay rows to cover ``plan.excess``.
+
+    One read of the top-100 largest foreign streams; the writer's new batch contributes to the
+    projected size but can never be selected. Raises ``_ReplayStorageError`` when nothing is
+    eligible. Returns ``{}`` without any SQL when there is no excess.
+    """
+    writer_key = plan.writer_key
     allocations: dict[tuple[UUID, int], int] = {}
-    if excess:
-        size = func.count().label("retained")
-        candidates = list((await session.execute(select(
-            ReplayRecord.workspace_id, ReplayRecord.user_id, size,
-        ).where(~and_(ReplayRecord.workspace_id == writer_key[0], ReplayRecord.user_id == writer_key[1]))
-            .group_by(ReplayRecord.workspace_id, ReplayRecord.user_id)
-            .order_by(size.desc(), ReplayRecord.workspace_id, ReplayRecord.user_id)
-            .limit(MAX_REPLAY_BATCH))).all())
-        projected = {(workspace_id, user_id): int(count) for workspace_id, user_id, count in candidates}
-        eligible = dict(projected)
-        projected[writer_key] = remaining + len(encoded)
-        eligible[writer_key] = remaining
-        for _ in range(excess):
-            available = [key for key in projected if eligible[key] > allocations.get(key, 0)]
-            if not available:
-                raise _ReplayStorageError()
-            chosen = min(available, key=lambda key: (-projected[key], key[0].int, key[1]))
-            allocations[chosen] = allocations.get(chosen, 0) + 1
-            projected[chosen] -= 1
+    if not plan.excess:
+        return allocations
+    # The bounded top100 are sufficient for <=100 virtual removals.
+    size = func.count().label("retained")
+    candidates = list((await session.execute(select(
+        ReplayRecord.workspace_id, ReplayRecord.user_id, size,
+    ).where(~and_(ReplayRecord.workspace_id == writer_key[0], ReplayRecord.user_id == writer_key[1]))
+        .group_by(ReplayRecord.workspace_id, ReplayRecord.user_id)
+        .order_by(size.desc(), ReplayRecord.workspace_id, ReplayRecord.user_id)
+        .limit(MAX_REPLAY_BATCH))).all())
+    projected = {(workspace_id, user_id): int(count) for workspace_id, user_id, count in candidates}
+    eligible = dict(projected)
+    projected[writer_key] = plan.remaining + batch_size
+    eligible[writer_key] = plan.remaining
+    for _ in range(plan.excess):
+        available = [key for key in projected if eligible[key] > allocations.get(key, 0)]
+        if not available:
+            raise _ReplayStorageError()
+        chosen = min(available, key=lambda key: (-projected[key], key[0].int, key[1]))
+        allocations[chosen] = allocations.get(chosen, 0) + 1
+        projected[chosen] -= 1
+    return allocations
 
+
+async def _lock_retention_heads(
+    session: AsyncSession, plan: _RetentionPlan, allocations: dict[tuple[UUID, int], int], now: datetime,
+) -> dict[tuple[UUID, int], ReplayHead]:
+    """Lock the writer and victim heads (``FOR UPDATE``) in canonical principal order.
+
+    Creates the writer head at its canonical position when it did not exist and verifies that
+    the locked rows still match the plan; any drift raises ``_ReplayStorageError``.
+    """
+    writer_key = plan.writer_key
     keys = sorted({writer_key, *allocations}, key=lambda key: (key[0].int, key[1]))
     heads: dict[tuple[UUID, int], ReplayHead] = {}
-    now = datetime.now(UTC)
     for key in keys:
         head = await session.scalar(select(ReplayHead).where(
             ReplayHead.workspace_id == key[0], ReplayHead.user_id == key[1],
         ).with_for_update().execution_options(populate_existing=True))
         if head is None:
-            if key != writer_key or planned_head is not None:
+            if key != writer_key or plan.planned_head is not None:
                 raise _ReplayStorageError()
-            head = ReplayHead(workspace_id=key[0], user_id=key[1], epoch=epoch,
+            head = ReplayHead(workspace_id=key[0], user_id=key[1], epoch=plan.epoch,
                               sequence=0, floor_sequence=1, updated_at=now)
             session.add(head)
             # New writer creation occurs at its canonical position. Only admitted
             # writer parent keys are referenced; victim updates are non-key fields.
             await session.flush([head])
         elif key == writer_key:
-            if planned_head is None or (
+            if plan.planned_head is None or (
                 head.epoch, head.sequence, head.floor_sequence,
-            ) != (planned_head.epoch, persisted_sequence, persisted_floor):
+            ) != (plan.planned_head.epoch, plan.persisted_sequence, plan.persisted_floor):
                 raise _ReplayStorageError()
         else:
             victim_count = await _retained_window(session, head)
             if victim_count < allocations[key]:
                 raise _ReplayStorageError()
         heads[key] = head
+    return heads
 
+
+async def _delete_expired_replay(
+    session: AsyncSession, plan: _RetentionPlan, allocations: dict[tuple[UUID, int], int],
+    heads: dict[tuple[UUID, int], ReplayHead], now: datetime,
+) -> None:
+    """Delete the writer's own expired rows, then each victim's oldest rows, advancing floors.
+
+    Writer deletion first, victims in canonical order after; every delete must hit exactly the
+    planned row count or ``_ReplayStorageError`` aborts the unit.
+    """
+    writer_key = plan.writer_key
     writer = heads[writer_key]
-    if local_deleted:
+    if plan.local_deleted:
         local_predicate = [ReplayRecord.workspace_id == writer_key[0], ReplayRecord.user_id == writer_key[1],
                            ReplayRecord.epoch == writer.epoch]
-        if not reset:
-            local_predicate.append(ReplayRecord.sequence < floor)
+        if not plan.reset:
+            local_predicate.append(ReplayRecord.sequence < plan.floor)
         deleted = cast(CursorResult[Any], await session.execute(
             delete(ReplayRecord).where(*local_predicate).execution_options(synchronize_session=False)))
-        if deleted.rowcount != local_deleted:
+        if deleted.rowcount != plan.local_deleted:
             raise _ReplayStorageError()
-    if reset:
-        writer.epoch, writer.sequence, writer.floor_sequence = epoch, 0, 1
-    writer.floor_sequence = floor
+    if plan.reset:
+        writer.epoch, writer.sequence, writer.floor_sequence = plan.epoch, 0, 1
+    writer.floor_sequence = plan.floor
 
     for key in sorted(allocations, key=lambda item: (item[0].int, item[1])):
         head = heads[key]
@@ -567,14 +621,34 @@ async def _retain_and_append(
         head.floor_sequence = head.floor_sequence + amount
         head.updated_at = now
 
+
+async def _retain_and_append(
+    session: AsyncSession, encoded: list[tuple[str, dict[str, Any]]], *, fence: AccessFence,
+) -> None:
+    """Expire replay-only prefixes fairly and append atomically under the final advisory gate.
+
+    Approved core retention authority may inspect other streams' scalar metadata, delete
+    their oldest replay copies and advance floors; it never reads payloads/domain/auth,
+    changes victim epochs/sequences or acquires earlier locks. Plan at most100 extra row
+    deletions and lock writer plus at most100 victims in canonical principal order. New
+    batch rows are protected. Caller flushed domain writes and disables autoflush here.
+    Order: plan -> allocate victims -> lock heads -> delete expired -> add rows -> flush -> recheck.
+    """
+    plan = await _plan_retention(session, len(encoded), fence=fence)
+    allocations = await _allocate_victims(session, plan, len(encoded))
+    now = datetime.now(UTC)
+    heads = await _lock_retention_heads(session, plan, allocations, now)
+    await _delete_expired_replay(session, plan, allocations, heads, now)
+    writer_key = plan.writer_key
+    writer = heads[writer_key]
     for index, (event_type, payload) in enumerate(encoded, start=1):
         session.add(ReplayRecord(workspace_id=writer_key[0], user_id=writer_key[1],
-                                 sequence=old_sequence + index, epoch=epoch,
+                                 sequence=plan.old_sequence + index, epoch=plan.epoch,
                                  event_type=event_type, payload=payload))
-    writer.sequence, writer.updated_at = final_sequence, now
+    writer.sequence, writer.updated_at = plan.final_sequence, now
     await session.flush()
     # Recheck scalar cap in-memory after planned mutations under the advisory gate; no second table/head scan needed.
-    final_total = total - local_deleted - sum(allocations.values()) + len(encoded)
+    final_total = plan.total - plan.local_deleted - sum(allocations.values()) + len(encoded)
     if (
         final_total < 0
         or final_total > MAX_INSTANCE_REPLAY_EVENTS

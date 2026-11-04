@@ -59,7 +59,7 @@ CORE_ROUTERS: tuple[RouterSpec, ...] = (
     RouterSpec("core.auth.deletion_routes", 20),
     RouterSpec("core.workspaces.routes", 30),
     RouterSpec("core.system.routes", 50),
-    RouterSpec("core.realtime_routes", 320),
+    RouterSpec("core.realtime.routes", 320),
 )
 
 

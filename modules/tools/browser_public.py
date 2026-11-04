@@ -318,7 +318,7 @@ async def execute_browser_read(
 
     from core.auth.public import revalidate_account_session
     from core.config import Settings
-    from core.remote_heavy import mark_remote_heavy_uncertain_in_uow
+    from core.heavy_work.remote import mark_remote_heavy_uncertain_in_uow
     from modules.agents.public import revalidate_browser_run_authority
     from modules.connectors import public as connectors
     from modules.sources import public as sources
@@ -502,7 +502,7 @@ async def execute_browser_read(
             except (httpx.HTTPError, ValueError, TypeError):
                 cleaned = False
         async with session_factory() as session:
-            from core.remote_heavy import get_remote_heavy_guard
+            from core.heavy_work.remote import get_remote_heavy_guard
 
             guard = await get_remote_heavy_guard(session, operation_id)
             if guard is None or guard.state == "cleared":
@@ -663,7 +663,7 @@ async def execute_browser_read(
                 session, [], scope=job_scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
             )
             raise PermissionError("Browser result was cancelled before publication")
-        from core.remote_heavy import get_remote_heavy_guard
+        from core.heavy_work.remote import get_remote_heavy_guard
 
         guard = await get_remote_heavy_guard(session, row.operation_id)
         if (

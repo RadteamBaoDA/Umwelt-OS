@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from starlette.datastructures import Headers
 
 from core.body_limit import BodyLimitMiddleware
+from core.storage import StoredObject
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat import public as chat_public
 from modules.ingestion import routes
@@ -122,7 +123,7 @@ async def test_upload_disabled_during_validation_cannot_publish_late_bytes(monke
     session = _intake_session(monkeypatch)
     routes.lock_access_fence.side_effect = [SimpleNamespace(name="first"), HTTPException(status_code=401)]
     save = AsyncMock()
-    monkeypatch.setattr(routes, "save_upload", save)
+    monkeypatch.setattr(routes, "get_storage_backend", lambda _settings: SimpleNamespace(put_stream=save, delete=AsyncMock()))
     with pytest.raises(HTTPException) as caught:
         await routes._intake_upload(_request(), session, SCOPE, uuid4(), _upload("a.txt", b"hi", "text/plain"))
     assert caught.value.status_code == 401
@@ -154,9 +155,9 @@ async def test_intake_into_paused_attachments_source_stays_a_concealing_404(monk
 
 async def test_intake_dedupe_returns_existing_document_id_and_unlinks_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _intake_session(monkeypatch)
-    monkeypatch.setattr(routes, "save_upload", AsyncMock(return_value=("raw/x", 2, "abc")))
-    unlink = MagicMock()
-    monkeypatch.setattr(routes, "storage_path", MagicMock(return_value=SimpleNamespace(unlink=unlink)))
+    unlink = AsyncMock()
+    backend = SimpleNamespace(put_stream=AsyncMock(return_value=StoredObject("raw/x", 2, "abc")), delete=unlink)
+    monkeypatch.setattr(routes, "get_storage_backend", lambda _settings: backend)
     run = SimpleNamespace(id=uuid4())
     monkeypatch.setattr(routes.public, "receive_file", AsyncMock(return_value=(run, False)))
     existing = uuid4()
@@ -170,7 +171,7 @@ async def test_intake_dedupe_returns_existing_document_id_and_unlinks_bytes(monk
 
     assert got_run is run and document_id == existing
     assert find.await_args.args[1:] == (source_id, "file:abc") and find.await_args.kwargs == KW
-    unlink.assert_called_once()
+    unlink.assert_awaited_once_with("raw/x")
     find.return_value = None
     with pytest.raises(HTTPException) as caught:
         await routes._intake_upload(_request(), session, SCOPE, source_id, _upload("a.txt", b"hi", "text/plain"))

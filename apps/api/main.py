@@ -18,7 +18,7 @@ from core.database import make_session_factory
 from core.errors import install_error_handling
 from core.modules import ModuleRegistry, ordered_router_specs, register_modules
 from core.publication import PublicationGateMiddleware
-from core.realtime_routes import MAX_STREAMS_PER_API_PROCESS
+from core.realtime.routes import MAX_STREAMS_PER_API_PROCESS
 from core.telemetry import install_log_redaction
 from core.tools import ToolRegistry
 from modules.agents.handoff import register_handoff_tool

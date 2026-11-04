@@ -32,7 +32,7 @@ from core.realtime import (
     make_knowledge_change,
     make_source_change,
 )
-from core.storage import cleanup_orphaned_files, storage_path
+from core.storage import get_storage_backend
 from core.telemetry import count, set_trace, timed
 from core.workspaces.public import read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope
@@ -1494,8 +1494,9 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
             multi_workspace_enabled=enabled, access_fence=work.access_fence)
     try:
         # The row/URI proof and original dispatch were captured before closing the session.
-        parsed = await parse_file_bounded(storage_path(settings.data_dir, raw_uri), mime_type,
-            settings.parser_timeout_seconds, settings.docx_expanded_max_bytes, settings.pdf_page_max)
+        async with get_storage_backend(settings).download_to_temp(raw_uri) as source_path:
+            parsed = await parse_file_bounded(source_path, mime_type,
+                settings.parser_timeout_seconds, settings.docx_expanded_max_bytes, settings.pdf_page_max)
         parsed = _cap_parsed_text(parsed, settings.parsed_text_max_chars)
         drafts = await to_thread_joined(chunk_text, parsed.text)
         extraction_status = "needs_ocr" if parsed.warnings and not parsed.text else "succeeded"
@@ -1598,9 +1599,7 @@ async def cleanup_storage_orphans(ctx: dict[str, object]) -> int:
         referenced = await documents.raw_uris(
             session, instance_operator=True, multi_workspace_enabled=enabled,
         )
-    return await asyncio.to_thread(
-        cleanup_orphaned_files, settings.data_dir, referenced, settings.storage_orphan_grace_seconds,
-    )
+    return await get_storage_backend(settings).cleanup_orphans(referenced, settings.storage_orphan_grace_seconds)
 
 
 async def purge_collection_receipts(ctx: dict[str, object]) -> int:

@@ -10,7 +10,7 @@ import pytest
 from starlette.requests import Request
 from starlette.responses import Response
 
-from core import realtime_routes as rr
+from core.realtime import routes as rr
 
 
 def _request(factory: Any) -> Request:

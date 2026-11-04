@@ -16,8 +16,8 @@ from core.auth.deletion_models import AccountDeletionOperation
 from core.auth.models import AuthSession, GoogleIdentity, Owner
 from core.database import Base
 from core.demo_seed import DemoSeedReceipt
+from core.heavy_work.models import RemoteHeavyGuard
 from core.realtime import ReplayHead, ReplayRecord
-from core.remote_heavy_models import RemoteHeavyGuard
 from core.workspaces.models import (
     Workspace,
     WorkspaceInvitation,

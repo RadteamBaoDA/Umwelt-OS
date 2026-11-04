@@ -396,7 +396,7 @@ async def _publish_realtime_snapshot(
         records: Accepted ingestion records committed in this collection batch.
         collected_at: Timestamp of the accepted collection batch.
     """
-    from core.realtime_routes import notify_realtime_wakeup
+    from core.realtime.routes import notify_realtime_wakeup
 
     a = run.attempt
     notify_realtime_wakeup(a.scope.workspace_id)

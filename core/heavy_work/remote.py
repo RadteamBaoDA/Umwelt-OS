@@ -8,7 +8,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.remote_heavy_models import RemoteHeavyGuard
+from core.heavy_work.models import RemoteHeavyGuard
 
 _PROOF_ISSUER = object()
 

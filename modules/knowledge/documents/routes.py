@@ -2,15 +2,14 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
 from core.publication import require_publication_gate
-from core.storage import storage_path
+from core.storage import get_storage_backend
 from core.workspaces.dependencies import (
     require_workspace_observer_read,
     require_workspace_read,
@@ -263,7 +262,7 @@ async def create_document(
 @router.get("/{document_id}/raw")
 async def get_raw_document(
     document_id: UUID, request: Request, session: Session, scope: WorkspaceRead,
-) -> FileResponse:
+) -> Response:
     """Keep bootstrap-only file admission while using the scoped owner root locator.
 
     Retain private/no-store/nosniff headers and exact storage path behavior. The root query
@@ -274,14 +273,17 @@ async def get_raw_document(
     if document is None or document.raw_uri is None:
         raise HTTPException(status_code=404, detail="Raw document not found")
     await _gate_member_read(request, session, scope, (document.id,))
+    storage = get_storage_backend(request.app.state.settings)
     try:
-        path = storage_path(request.app.state.settings.data_dir, document.raw_uri)
+        present = await storage.exists(document.raw_uri)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Raw document not found") from exc
-    if not path.is_file():
+    if not present:
         raise HTTPException(status_code=404, detail="Raw document not found")
     filename = str(document.metadata_json.get("filename", "download"))
-    response = FileResponse(path, media_type=document.mime_type or "application/octet-stream", filename=filename)
+    response = storage.file_response(
+        document.raw_uri, media_type=document.mime_type or "application/octet-stream", filename=filename,
+    )
     response.headers["Cache-Control"] = "private, no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     return response

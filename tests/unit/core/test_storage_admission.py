@@ -8,7 +8,7 @@ import pytest
 @pytest.mark.parametrize('exclusive', [False, True])
 @pytest.mark.asyncio
 async def test_storage_writer_and_cleanup_use_conflicting_session_leases(exclusive: bool):
-    from core.storage_admission import workspace_storage_lease
+    from core.storage.admission import workspace_storage_lease
 
     connection = AsyncMock()
     connection.scalar.return_value = True
@@ -26,7 +26,7 @@ async def test_storage_writer_and_cleanup_use_conflicting_session_leases(exclusi
 
 @pytest.mark.asyncio
 async def test_storage_cleanup_never_proceeds_while_a_writer_holds_its_lease():
-    from core.storage_admission import WorkspaceStorageBusy, workspace_storage_lease
+    from core.storage.admission import WorkspaceStorageBusy, workspace_storage_lease
 
     connection = AsyncMock()
     connection.scalar.return_value = False

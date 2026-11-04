@@ -21,8 +21,8 @@ from core.database import get_session
 from core.heavy_work import to_thread_joined
 from core.ids import uuid7
 from core.rate_limit import require_budget
-from core.storage import save_upload, storage_path
-from core.storage_admission import WorkspaceStorageBusy, workspace_storage_lease
+from core.storage import build_document_key, get_storage_backend, iter_upload
+from core.storage.admission import WorkspaceStorageBusy, workspace_storage_lease
 from core.workspaces.dependencies import (
     require_default_workspace_read,
     require_default_workspace_write,
@@ -207,6 +207,7 @@ async def _intake_upload(
     Returns the run and the owning Document ID (the existing one for duplicate bytes).
     """
     settings = request.app.state.settings
+    storage = get_storage_backend(settings)
     enabled = settings.multi_workspace_enabled
     session_ref = authenticated_session_ref(request)
     await lock_access_fence(session, scope=scope, multi_workspace_enabled=enabled, auth_sessions=(session_ref,))
@@ -234,10 +235,11 @@ async def _intake_upload(
                 await lock_access_fence(writer_session, scope=scope, expected=access_fence,
                                         multi_workspace_enabled=enabled, auth_sessions=(session_ref,))
                 await writer_session.rollback()
-            raw_uri, size, digest = await save_upload(
-                settings.data_dir, upload, document_id, suffix, settings.upload_max_bytes,
-                workspace_id=scope.workspace_id,
+            stored = await storage.put_stream(
+                build_document_key(scope.workspace_id, document_id, suffix),
+                iter_upload(upload), settings.upload_max_bytes, workspace_id=scope.workspace_id,
             )
+            raw_uri, size, digest = stored.key, stored.size, stored.sha256
     except WorkspaceStorageBusy as exc:
         raise HTTPException(status_code=503, detail='Workspace storage is temporarily unavailable') from exc
     except ValueError as exc:
@@ -261,10 +263,10 @@ async def _intake_upload(
         )
     except (HTTPException, ValueError, LookupError):
         await session.rollback()
-        storage_path(settings.data_dir, raw_uri).unlink(missing_ok=True)
+        await storage.delete(raw_uri)
         raise
     if not created:
-        storage_path(settings.data_dir, raw_uri).unlink(missing_ok=True)
+        await storage.delete(raw_uri)
         existing = await documents.find_document_identity(
             session, source_id, f"file:{digest}", scope=scope, multi_workspace_enabled=enabled,
         )

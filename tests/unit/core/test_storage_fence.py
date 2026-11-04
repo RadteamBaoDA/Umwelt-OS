@@ -11,8 +11,8 @@ from uuid import UUID, uuid4
 import pytest
 from starlette.datastructures import UploadFile
 
-from core import storage
-from core.storage_admission import WorkspaceStorageBusy, workspace_filesystem_lease
+from core.storage import local as storage
+from core.storage.admission import WorkspaceStorageBusy, workspace_filesystem_lease
 
 WORKSPACE = UUID(int=40)
 
@@ -31,7 +31,7 @@ def test_physical_lease_conflicts_across_processes(tmp_path):
 import sys
 from pathlib import Path
 from uuid import UUID
-from core.storage_admission import workspace_filesystem_lease, WorkspaceStorageBusy
+from core.storage.admission import workspace_filesystem_lease, WorkspaceStorageBusy
 try:
     with workspace_filesystem_lease(Path(sys.argv[1]), UUID(sys.argv[2]), erase=True):
         raise SystemExit(2)

@@ -10,8 +10,9 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
-from core import realtime, realtime_routes
 from core.realtime import ReplayCursor
+from core.realtime import routes as realtime_routes
+from core.realtime import service as realtime
 from core.workspaces.schemas import AccessFence, WorkspaceContext
 
 

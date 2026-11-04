@@ -12,13 +12,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings
-from core.realtime import commit_with_replay
-from core.remote_heavy import (
+from core.heavy_work.remote import (
     cleanup_proof_after_ack,
     clear_remote_heavy_in_uow,
     get_remote_heavy_guard,
     register_remote_heavy_in_uow,
 )
+from core.realtime import commit_with_replay
 from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.agents.public import BrowserRunAuthorization, revalidate_browser_run_authority
 from modules.connectors import public as connectors

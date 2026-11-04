@@ -20,7 +20,7 @@ from core.auth.dependencies import SESSION_COOKIE, require_account, require_acco
 from core.auth.models import AuthSession
 from core.database import get_session
 from core.rate_limit import require_budget
-from core.realtime_routes import _PermitResponse
+from core.realtime.routes import _PermitResponse
 from core.workspaces.dependencies import (
     require_default_workspace_read,
     require_default_workspace_write,

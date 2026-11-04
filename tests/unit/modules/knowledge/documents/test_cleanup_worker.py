@@ -122,13 +122,12 @@ def _raw_patches(receipt, *, claim=True, referenced=False, calls=None):
 async def _run_raw(receipt, session=None, **kwargs):
     session = session or _session(receipt, receipt)
     calls, patches = _raw_patches(receipt, **kwargs)
-    unlink = MagicMock()
-    path = MagicMock()
-    path.unlink = unlink
+    unlink = AsyncMock()
+    backend = SimpleNamespace(delete=unlink)
     for item in patches:
         item.start()
     try:
-        with patch.object(worker, "storage_path", MagicMock(return_value=path)):
+        with patch.object(worker, "get_storage_backend", MagicMock(return_value=backend)):
             proceed = await worker._advance_raw_document_cleanup(
                 _factory(session), SimpleNamespace(data_dir="d"), False, EVENT,
             )
@@ -173,7 +172,7 @@ async def test_raw_traversal_uri_fails_closed() -> None:
     for item in patches:
         item.start()
     try:
-        with patch.object(worker, "storage_path", MagicMock(side_effect=ValueError("outside"))):
+        with patch.object(worker, "get_storage_backend", MagicMock(return_value=SimpleNamespace(delete=AsyncMock(side_effect=ValueError("outside"))))):
             await worker._advance_raw_document_cleanup(_factory(session), SimpleNamespace(data_dir="d"), False, EVENT)
     finally:
         for item in reversed(patches):

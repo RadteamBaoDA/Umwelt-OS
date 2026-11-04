@@ -18,11 +18,11 @@ from fastapi import HTTPException, Response
 from pydantic import SecretStr
 from starlette.datastructures import UploadFile
 
-from core import storage
 from core.auth import routes as auth_routes
 from core.chunking import chunk_text
 from core.config import Settings
 from core.heavy_work import to_thread_joined
+from core.storage import local as storage
 from modules.connectors.providers import feed_catalog
 from modules.export import routes as export_routes
 from modules.ingestion import worker
@@ -221,7 +221,7 @@ async def test_feed_records_run_off_loop(monkeypatch: pytest.MonkeyPatch) -> Non
 
 async def test_cleanup_orphans_run_off_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     idents: list[int] = []
-    monkeypatch.setattr(worker, "cleanup_orphaned_files", _slow(idents, 0))
+    monkeypatch.setattr(storage, "cleanup_orphaned_files", _slow(idents, 0))
 
     class Factory:
         def __call__(self) -> Any:

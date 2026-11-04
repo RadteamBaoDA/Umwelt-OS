@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from core.config import Settings
 from core.events import DomainEvent
 from core.realtime import commit_with_replay
-from core.storage import storage_path
+from core.storage import get_storage_backend
 from core.workspaces.public import read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.ingestion import public as ingestion
@@ -554,14 +554,12 @@ async def _advance_raw_document_cleanup(
                 operation.raw_status = "retained_shared"
             else:
                 try:
-                    path = storage_path(settings.data_dir, operation.raw_uri)
+                    # Key validation (ValueError) happens before any unlink inside the backend.
+                    await get_storage_backend(settings).delete(operation.raw_uri)
                 except ValueError:
-                    path = None
-                if path is None:
                     operation.raw_status = "failed"
                     operation.error_code = _RAW_URI_UNAVAILABLE
                 else:
-                    path.unlink(missing_ok=True)
                     operation.raw_status = "succeeded"
             if operation.raw_status != "failed":
                 operation.error_code = None
