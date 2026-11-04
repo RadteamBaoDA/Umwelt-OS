@@ -2,9 +2,11 @@
 
 from dataclasses import dataclass
 
+from core.module_descriptor import ModuleDescriptor, RouterSpec
+
 
 @dataclass(frozen=True)
-class TemporalDescriptor:
+class TemporalDescriptor(ModuleDescriptor):
     """Expose derived graph status and scoped reconciliation without owning canonical records."""
 
     id: str = "knowledge.temporal"
@@ -22,6 +24,11 @@ class TemporalDescriptor:
     tools: tuple[str, ...] = ()
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
+    routers: tuple[RouterSpec, ...] = (
+        RouterSpec("modules.knowledge.temporal.routes", 120),
+    )
+    erasure_module: str | None = "modules.knowledge.temporal.erasure"
+    erasure_order: int = 120
 
 
 descriptor = TemporalDescriptor()

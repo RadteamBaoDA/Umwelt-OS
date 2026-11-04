@@ -1,8 +1,10 @@
 from dataclasses import dataclass
 
+from core.module_descriptor import ModuleDescriptor, RouterSpec
+
 
 @dataclass(frozen=True)
-class DashboardDescriptor:
+class DashboardDescriptor(ModuleDescriptor):
     """Declare Dashboard routes, lifecycle-gated schedules, source dependencies, and events."""
 
     id: str = "dashboard"
@@ -46,6 +48,14 @@ class DashboardDescriptor:
     tools: tuple[str, ...] = ()
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
+    routers: tuple[RouterSpec, ...] = (
+        RouterSpec("modules.dashboard.routes", 280),
+        RouterSpec("modules.dashboard.live_map_routes", 290),
+        RouterSpec("modules.dashboard.live_config_routes", 300),
+        RouterSpec("modules.dashboard.live_config_routes:operator_router", 310),
+    )
+    erasure_module: str | None = "modules.dashboard.erasure"
+    erasure_order: int = 50
 
 
 descriptor = DashboardDescriptor()

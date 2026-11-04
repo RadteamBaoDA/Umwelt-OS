@@ -2,9 +2,11 @@
 
 from dataclasses import dataclass
 
+from core.module_descriptor import ModuleDescriptor, RouterSpec
+
 
 @dataclass(frozen=True)
-class ObservationDescriptor:
+class ObservationDescriptor(ModuleDescriptor):
     """Expose typed derived observations produced only from normalized ingestion evidence."""
     id: str = "knowledge.observations"
     name: str = "Observations"
@@ -20,6 +22,11 @@ class ObservationDescriptor:
     tools: tuple[str, ...] = ()
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
+    routers: tuple[RouterSpec, ...] = (
+        RouterSpec("modules.knowledge.observations.routes", 80),
+    )
+    erasure_module: str | None = "modules.knowledge.observations.erasure"
+    erasure_order: int = 100
 
 
 descriptor = ObservationDescriptor()

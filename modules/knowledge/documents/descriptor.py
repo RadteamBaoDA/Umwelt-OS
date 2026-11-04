@@ -1,8 +1,10 @@
 from dataclasses import dataclass
 
+from core.module_descriptor import ModuleDescriptor, RouterSpec
+
 
 @dataclass(frozen=True)
-class DocumentDescriptor:
+class DocumentDescriptor(ModuleDescriptor):
     """Declare document storage's source dependency and public interfaces."""
 
     id: str = "knowledge.documents"
@@ -29,6 +31,11 @@ class DocumentDescriptor:
         {"label": "Documents", "href": "/knowledge/documents"},
     )
     settings_schema: dict[str, object] | None = None
+    routers: tuple[RouterSpec, ...] = (
+        RouterSpec("modules.knowledge.documents.routes", 70),
+    )
+    erasure_module: str | None = "modules.knowledge.documents.erasure"
+    erasure_order: int = 80
 
 
 descriptor = DocumentDescriptor()

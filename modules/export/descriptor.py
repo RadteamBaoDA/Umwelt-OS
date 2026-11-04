@@ -2,9 +2,11 @@
 
 from dataclasses import dataclass
 
+from core.module_descriptor import ModuleDescriptor, RouterSpec
+
 
 @dataclass(frozen=True)
-class ExportDescriptor:
+class ExportDescriptor(ModuleDescriptor):
     """Expose credential-free portable data export independently of source module toggles."""
 
     id: str = "export"
@@ -22,6 +24,9 @@ class ExportDescriptor:
     tools: tuple[str, ...] = ()
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
+    routers: tuple[RouterSpec, ...] = (
+        RouterSpec("modules.export.routes", 40),
+    )
 
 
 descriptor = ExportDescriptor()

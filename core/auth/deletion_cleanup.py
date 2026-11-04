@@ -11,36 +11,21 @@ from core import realtime as _realtime  # noqa: F401 - register core-owned erasu
 from core.auth.deletion_service import authorize_account_erasure
 from core.auth.erasure_contracts import AccountErasureScope, ErasureProgress
 from core.erasure_sql import AccountErasureOwner, account_erasure_order
+from core.modules import erasure_descriptors
 from core.workspaces.erasure import erase_account_workspace_references
-from modules.agents import erasure as agents
-from modules.automations import erasure as automations
-from modules.chat import erasure as chat
-from modules.connectors import erasure as connectors
-from modules.dashboard import erasure as dashboard
-from modules.goals import erasure as goals
-from modules.ingestion import erasure as ingestion
-from modules.knowledge.documents import erasure as documents
-from modules.knowledge.entities import erasure as entities
-from modules.knowledge.observations import erasure as observations
-from modules.knowledge.relationships import erasure as relationships
-from modules.knowledge.temporal import erasure as temporal
-from modules.memory import erasure as memory
-from modules.news import erasure as news
-from modules.notifications import erasure as notifications
-from modules.observability import erasure as observability
-from modules.search import erasure as search
-from modules.settings import erasure as settings
-from modules.sources import erasure as sources
-from modules.tasks import erasure as tasks
-from modules.timeline import erasure as timeline
-from modules.tools import erasure as tools
-from modules.translations import erasure as translations
 
-_OWNERS = (
-    agents, automations, chat, connectors, dashboard, goals, ingestion, documents,
-    entities, observations, relationships, temporal, memory, news, notifications,
-    observability, search, settings, sources, tasks, timeline, tools, translations,
-)
+# Erasure packages are resolved from module descriptors (ascending ``erasure_order``), so core
+# names no module. Resolving at import keeps the historical side effect that loading this
+# coordinator registers every module's persistence models with the shared metadata (recovery
+# relies on it). The module-level aliases below are the stage hooks used by ``erase_account_data``.
+_ERASURE_MODULES = {item.id: item.load_erasure() for item in erasure_descriptors()}
+_OWNERS = tuple(_ERASURE_MODULES.values())
+connectors = _ERASURE_MODULES["connectors"]
+documents = _ERASURE_MODULES["knowledge.documents"]
+settings = _ERASURE_MODULES["settings"]
+temporal = _ERASURE_MODULES["knowledge.temporal"]
+tools = _ERASURE_MODULES["tools"]
+translations = _ERASURE_MODULES["translations"]
 _CORE_TABLES = ("demo_seed_receipts", "realtime_replay_head", "realtime_replay_events")
 _CORE_OWNER = AccountErasureOwner(_CORE_TABLES)
 _SPECIAL_TABLES = frozenset({

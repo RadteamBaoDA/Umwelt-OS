@@ -1,8 +1,10 @@
 from dataclasses import dataclass
 
+from core.module_descriptor import ModuleDescriptor, RouterSpec
+
 
 @dataclass(frozen=True)
-class EntityDescriptor:
+class EntityDescriptor(ModuleDescriptor):
     """Declare entity storage's document dependency and public capabilities."""
 
     id: str = "knowledge.entities"
@@ -20,6 +22,11 @@ class EntityDescriptor:
     tools: tuple[str, ...] = ()
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
+    routers: tuple[RouterSpec, ...] = (
+        RouterSpec("modules.knowledge.entities.routes", 90),
+    )
+    erasure_module: str | None = "modules.knowledge.entities.erasure"
+    erasure_order: int = 90
 
 
 descriptor = EntityDescriptor()

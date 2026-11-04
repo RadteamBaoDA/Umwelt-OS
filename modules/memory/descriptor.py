@@ -2,9 +2,11 @@
 
 from dataclasses import dataclass
 
+from core.module_descriptor import ModuleDescriptor, RouterSpec
+
 
 @dataclass(frozen=True)
-class MemoryDescriptor:
+class MemoryDescriptor(ModuleDescriptor):
     """Declare selective memory lifecycle, candidates evaluation, and privacy management capabilities."""
 
     id: str = "memory"
@@ -21,6 +23,11 @@ class MemoryDescriptor:
     tools: tuple[str, ...] = ()
     navigation: tuple[dict[str, str], ...] = ({"label": "Memory", "href": "/knowledge/memory"},)
     settings_schema: dict[str, object] | None = None
+    routers: tuple[RouterSpec, ...] = (
+        RouterSpec("modules.memory.routes", 450),
+    )
+    erasure_module: str | None = "modules.memory.erasure"
+    erasure_order: int = 130
 
 
 descriptor = MemoryDescriptor()

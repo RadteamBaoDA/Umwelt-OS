@@ -2,9 +2,11 @@
 
 from dataclasses import dataclass
 
+from core.module_descriptor import ModuleDescriptor, RouterSpec
+
 
 @dataclass(frozen=True)
-class AutomationsDescriptor:
+class AutomationsDescriptor(ModuleDescriptor):
     """Declare automations metadata, routes and events; tools back the Automation Agent."""
 
     id: str = "automations"
@@ -30,6 +32,12 @@ class AutomationsDescriptor:
     tools: tuple[str, ...] = ("automations.list", "automations.create")
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
+    routers: tuple[RouterSpec, ...] = (
+        RouterSpec("modules.automations.routes", 390),
+        RouterSpec("modules.automations.routes:webhook_router", 400),
+    )
+    erasure_module: str | None = "modules.automations.erasure"
+    erasure_order: int = 20
 
 
 descriptor = AutomationsDescriptor()
