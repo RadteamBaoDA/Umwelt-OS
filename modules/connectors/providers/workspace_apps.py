@@ -325,6 +325,133 @@ def _slack_oldest(value: datetime) -> str:
     return f"{seconds}.{delta.microseconds:06d}"
 
 
+def _require_slack_channel(info: dict[str, Any], channel_id: str) -> None:
+    """Accept only an active public/private channel the bot is a member of (no IM/MPIM, no archived).
+
+    Raises:
+        ValueError: ``slack_channel_invalid`` or ``slack_channel_unavailable``.
+    """
+    channel = info.get("channel")
+    if info.get("ok") is not True or not isinstance(channel, dict) or channel.get("id") != channel_id:
+        raise ValueError("slack_channel_invalid")
+    is_im, is_mpim = channel.get("is_im"), channel.get("is_mpim")
+    is_private = channel.get("is_private")
+    is_channel, is_group = channel.get("is_channel"), channel.get("is_group")
+    is_supported_channel = (
+        (is_private is False and is_channel is True)
+        or (is_private is True and (is_channel is True or is_group is True))
+    )
+    if (is_im is not False or is_mpim is not False or not isinstance(is_private, bool)
+            or not is_supported_channel
+            or channel.get("is_member") is not True or channel.get("is_archived") is not False):
+        raise ValueError("slack_channel_unavailable")
+
+
+def _slack_message_record(
+    message: object, channel_id: str, collected: datetime, record_count: int, seen_messages: set[str],
+) -> IngestionRecord | None:
+    """Validate one history message and map it to a record, or ``None`` for replies and duplicates.
+
+    Thread replies (``thread_ts`` differing from ``ts``) are excluded; already-seen messages are
+    skipped after validation. ``record_count`` enforces the per-collection record cap.
+
+    Raises:
+        ValueError: malformed message fields. rest.CollectionIncomplete: record or text cap exceeded.
+    """
+    if not isinstance(message, dict):
+        raise ValueError("slack_message_invalid")
+    timestamp_value = message.get("ts")
+    observed_at, timestamp = _slack_timestamp(timestamp_value)
+    thread_ts = message.get("thread_ts")
+    if thread_ts is not None and not isinstance(thread_ts, str):
+        raise ValueError("slack_message_invalid")
+    if isinstance(thread_ts, str):
+        _slack_timestamp(thread_ts)
+    if isinstance(thread_ts, str) and thread_ts != timestamp:
+        return None
+    if message.get("channel", channel_id) != channel_id:
+        raise ValueError("slack_message_invalid")
+    if record_count >= MAX_RECORDS:
+        raise rest.CollectionIncomplete
+    text = message.get("text", "")
+    if not isinstance(text, str) or "\x00" in text:
+        raise ValueError("slack_message_invalid")
+    if len(text) > MAX_TEXT_CHARS:
+        raise rest.CollectionIncomplete
+    edited = message.get("edited")
+    if edited is not None and not isinstance(edited, dict):
+        raise ValueError("slack_message_invalid")
+    edited_ts = edited.get("ts") if isinstance(edited, dict) else None
+    if isinstance(edited, dict) and edited_ts is None:
+        raise ValueError("slack_message_invalid")
+    if edited_ts is not None:
+        edited_at, edited_ts = _slack_timestamp(edited_ts)
+    else:
+        edited_at = None
+    version = edited_ts if isinstance(edited_ts, str) else timestamp
+    if len(version) > 255:
+        raise ValueError("slack_version_invalid")
+    user = message.get("user") if isinstance(message.get("user"), str) else None
+    if user is not None and (len(user) > 255 or "\x00" in user):
+        raise ValueError("slack_message_invalid")
+    provider_id = f"{channel_id}/{timestamp}"
+    if provider_id in seen_messages:
+        return None
+    provider_record = {
+        "provider": "slack",
+        "identity": provider_id,
+        "provider_version": version,
+        "timestamp_basis": "provider_modified" if edited_at is not None else "provider_published",
+        "coverage": "returned_snapshot",
+        "content_truncated": False,
+        "provider_modified_at": edited_at.isoformat() if edited_at is not None else None,
+        "source_fields": {
+            "channel_id": channel_id,
+            "message_ts": timestamp,
+            "thread_ts": thread_ts,
+            "user_id": user,
+        },
+    }
+    return IngestionRecord(
+        provider_id=provider_id,
+        content=text,
+        observed_at=observed_at,
+        version=version,
+        metadata={
+            "provider_record": provider_record,
+            "channel_id": channel_id,
+            "message_ts": timestamp,
+            "thread_ts": thread_ts if isinstance(thread_ts, str) else None,
+            "user_id": user,
+        },
+        collected_at=collected,
+    )
+
+
+def _slack_next_cursor(payload: dict[str, Any], more: bool, seen_cursors: set[str]) -> str | None:
+    """Return the next history cursor, or ``None`` when the final page carries no cursor.
+
+    Records the cursor in ``seen_cursors`` to reject loops.
+
+    Raises:
+        ValueError: ``slack_cursor_invalid`` for a missing/oversized/repeated cursor or a cursor on the last page.
+    """
+    if not more:
+        response_metadata = payload.get("response_metadata", {})
+        if not isinstance(response_metadata, dict):
+            raise ValueError("slack_cursor_invalid")
+        if response_metadata.get("next_cursor") not in (None, ""):
+            raise ValueError("slack_cursor_invalid")
+        return None
+    response_metadata = payload.get("response_metadata")
+    next_cursor = response_metadata.get("next_cursor") if isinstance(response_metadata, dict) else None
+    if (not isinstance(next_cursor, str) or not next_cursor or len(next_cursor) > 4096
+            or next_cursor in seen_cursors):
+        raise ValueError("slack_cursor_invalid")
+    seen_cursors.add(next_cursor)
+    return next_cursor
+
+
 async def collect_slack_channel_messages(
     token: str,
     scope: SlackScope,
@@ -357,20 +484,7 @@ async def collect_slack_channel_messages(
         info = await budget.get(
             f"{SLACK_ORIGIN}/conversations.info?{urlencode({'channel': channel_id})}"
         )
-        channel = info.get("channel")
-        if info.get("ok") is not True or not isinstance(channel, dict) or channel.get("id") != channel_id:
-            raise ValueError("slack_channel_invalid")
-        is_im, is_mpim = channel.get("is_im"), channel.get("is_mpim")
-        is_private = channel.get("is_private")
-        is_channel, is_group = channel.get("is_channel"), channel.get("is_group")
-        is_supported_channel = (
-            (is_private is False and is_channel is True)
-            or (is_private is True and (is_channel is True or is_group is True))
-        )
-        if (is_im is not False or is_mpim is not False or not isinstance(is_private, bool)
-                or not is_supported_channel
-                or channel.get("is_member") is not True or channel.get("is_archived") is not False):
-            raise ValueError("slack_channel_unavailable")
+        _require_slack_channel(info, channel_id)
         cursor: str | None = None
         seen_cursors: set[str] = set()
         for _page in range(MAX_PAGES):
@@ -385,93 +499,18 @@ async def collect_slack_channel_messages(
             if not isinstance(messages, list) or not isinstance(more, bool):
                 raise ValueError("slack_history_invalid")
             for message in messages:
-                if not isinstance(message, dict):
-                    raise ValueError("slack_message_invalid")
-                timestamp_value = message.get("ts")
-                observed_at, timestamp = _slack_timestamp(timestamp_value)
-                thread_ts = message.get("thread_ts")
-                if thread_ts is not None and not isinstance(thread_ts, str):
-                    raise ValueError("slack_message_invalid")
-                if isinstance(thread_ts, str):
-                    _slack_timestamp(thread_ts)
-                if isinstance(thread_ts, str) and thread_ts != timestamp:
+                record = _slack_message_record(message, channel_id, collected, len(records), seen_messages)
+                if record is None:
                     continue
-                if message.get("channel", channel_id) != channel_id:
-                    raise ValueError("slack_message_invalid")
-                if len(records) >= MAX_RECORDS:
-                    raise rest.CollectionIncomplete
-                text = message.get("text", "")
-                if not isinstance(text, str) or "\x00" in text:
-                    raise ValueError("slack_message_invalid")
-                if len(text) > MAX_TEXT_CHARS:
-                    raise rest.CollectionIncomplete
-                edited = message.get("edited")
-                if edited is not None and not isinstance(edited, dict):
-                    raise ValueError("slack_message_invalid")
-                edited_ts = edited.get("ts") if isinstance(edited, dict) else None
-                if isinstance(edited, dict) and edited_ts is None:
-                    raise ValueError("slack_message_invalid")
-                if edited_ts is not None:
-                    edited_at, edited_ts = _slack_timestamp(edited_ts)
-                else:
-                    edited_at = None
-                version = edited_ts if isinstance(edited_ts, str) else timestamp
-                if len(version) > 255:
-                    raise ValueError("slack_version_invalid")
-                user = message.get("user") if isinstance(message.get("user"), str) else None
-                if user is not None and (len(user) > 255 or "\x00" in user):
-                    raise ValueError("slack_message_invalid")
-                provider_id = f"{channel_id}/{timestamp}"
-                if provider_id in seen_messages:
-                    continue
-                provider_record = {
-                    "provider": "slack",
-                    "identity": provider_id,
-                    "provider_version": version,
-                    "timestamp_basis": "provider_modified" if edited_at is not None else "provider_published",
-                    "coverage": "returned_snapshot",
-                    "content_truncated": False,
-                    "provider_modified_at": edited_at.isoformat() if edited_at is not None else None,
-                    "source_fields": {
-                        "channel_id": channel_id,
-                        "message_ts": timestamp,
-                        "thread_ts": thread_ts,
-                        "user_id": user,
-                    },
-                }
-                record = IngestionRecord(
-                    provider_id=provider_id,
-                    content=text,
-                    observed_at=observed_at,
-                    version=version,
-                    metadata={
-                        "provider_record": provider_record,
-                        "channel_id": channel_id,
-                        "message_ts": timestamp,
-                        "thread_ts": thread_ts if isinstance(thread_ts, str) else None,
-                        "user_id": user,
-                    },
-                    collected_at=collected,
-                )
                 record_bytes = len(record.model_dump_json().encode("utf-8"))
                 if batch_bytes + record_bytes > MAX_BATCH_BYTES:
                     raise rest.CollectionIncomplete
                 records.append(record)
-                seen_messages.add(provider_id)
+                seen_messages.add(record.provider_id)
                 batch_bytes += record_bytes
-            if not more:
-                response_metadata = payload.get("response_metadata", {})
-                if not isinstance(response_metadata, dict):
-                    raise ValueError("slack_cursor_invalid")
-                if response_metadata.get("next_cursor") not in (None, ""):
-                    raise ValueError("slack_cursor_invalid")
+            next_cursor = _slack_next_cursor(payload, more, seen_cursors)
+            if next_cursor is None:
                 break
-            response_metadata = payload.get("response_metadata")
-            next_cursor = response_metadata.get("next_cursor") if isinstance(response_metadata, dict) else None
-            if (not isinstance(next_cursor, str) or not next_cursor or len(next_cursor) > 4096
-                    or next_cursor in seen_cursors):
-                raise ValueError("slack_cursor_invalid")
-            seen_cursors.add(next_cursor)
             cursor = next_cursor
         else:
             raise rest.CollectionIncomplete

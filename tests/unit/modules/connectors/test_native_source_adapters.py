@@ -1,6 +1,7 @@
 """Mock-only contract tests for the native datasource adapters added in this rollout."""
 
 import base64
+import hashlib
 import json
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -411,3 +412,49 @@ async def test_notion_pins_api_version_and_slack_excludes_thread_replies():
         collected_at=datetime(2026, 10, 24, tzinfo=UTC))
     assert [record.content for record in slack.records] == ["root"]
 
+
+
+@pytest.mark.asyncio
+async def test_calendar_partial_v2_cursor_defaults_index_and_page_token(monkeypatch: pytest.MonkeyPatch):
+    """A v2 cursor lacking calendar_index/page_token resumes at index 0 with no page token."""
+    scope_hash = hashlib.sha256(b"calendar-1").hexdigest()
+    cursor = json.dumps({"v": 2, "provider": "calendar", "scope_hash": scope_hash,
+                         "time_min": "2026-09-01T00:00:00+00:00", "time_max": "2027-01-01T00:00:00+00:00",
+                         "tokens": [None]})
+    urls: list[str] = []
+
+    async def send(url: str, **_kwargs: object) -> rest.Fetched:
+        urls.append(url)
+        return _fetched({"items": [], "nextSyncToken": "tok"})
+
+    async def before_request() -> None:
+        return None
+
+    monkeypatch.setattr(rest, "fetch_bounded", send)
+    result = await google_api.collect_calendar(
+        "token", ("calendar-1",), before_request=before_request, cursor=cursor,
+        collected_at=datetime(2026, 10, 24, tzinfo=UTC))
+    assert "pageToken" not in urls[0]
+    after = json.loads(result.cursor_after)
+    assert after["calendar_index"] == 0 and after["page_token"] is None and after["tokens"] == ["tok"]
+
+
+@pytest.mark.asyncio
+async def test_calendar_v1_cursor_migrates_per_id_tokens(monkeypatch: pytest.MonkeyPatch):
+    """A v1 cursor keyed by calendar ID continues with its sync token."""
+    urls: list[str] = []
+
+    async def send(url: str, **_kwargs: object) -> rest.Fetched:
+        urls.append(url)
+        return _fetched({"items": [], "nextSyncToken": "new"})
+
+    async def before_request() -> None:
+        return None
+
+    monkeypatch.setattr(rest, "fetch_bounded", send)
+    result = await google_api.collect_calendar(
+        "token", ("calendar-1",), before_request=before_request,
+        cursor=json.dumps({"v": 1, "provider": "calendar", "calendars": {"calendar-1": "old"}}),
+        collected_at=datetime(2026, 10, 24, tzinfo=UTC))
+    assert "syncToken=old" in urls[0]
+    assert json.loads(result.cursor_after)["tokens"] == ["new"]

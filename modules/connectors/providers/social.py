@@ -121,6 +121,180 @@ async def _get_page(
         raise ValueError("github_provider_unavailable") from None
 
 
+def _release_source_fields(
+    *, draft: bool, prerelease: bool, node_id: str | None, name_value: str | None, name: str,
+    body_value: str | None, body_text: str, html_url: str | None, tag_value: str | None, tag: str,
+    author: object, created_at: str | None, published_at: str | None,
+) -> tuple[dict[str, object], bool]:
+    """Build the bounded provenance ``source_fields`` of a release and whether any field was truncated.
+
+    Only fields the provider actually supplied are included; text fields are clipped to their caps.
+    """
+    source_fields: dict[str, object] = {
+        "draft": draft,
+        "prerelease": prerelease,
+    }
+    source_fields_truncated = (
+        len(name) > 500 or len(body_text) > 4000 or len(tag) > 255
+        or (node_id is not None and len(node_id) > 256)
+    )
+    if isinstance(node_id, str):
+        source_fields["node_id"] = node_id[:256]
+        source_fields_truncated = source_fields_truncated or len(node_id) > 256
+    if name_value is not None:
+        source_fields["name"] = name[:500]
+    if body_value is not None:
+        source_fields["body"] = body_text[:4000]
+    if isinstance(html_url, str) and html_url.startswith("https://") and len(html_url) <= 2048:
+        source_fields["html_url"] = html_url
+    if tag_value is not None:
+        source_fields["tag_name"] = tag[:255]
+    if isinstance(author, str):
+        source_fields["author"] = author[:1000]
+        source_fields_truncated = source_fields_truncated or len(author) > 1000
+    if created_at is not None:
+        source_fields["created_at"] = created_at
+    if published_at is not None:
+        source_fields["published_at"] = published_at
+    return source_fields, source_fields_truncated
+
+
+def _release_record(
+    release: object, owner: str, repository: str, collected_at: datetime,
+) -> IngestionRecord | None:
+    """Validate one REST release object and map it to a bounded ingestion record.
+
+    Returns ``None`` for draft releases (never ingested).
+
+    Raises:
+        ValueError: ``github_response_invalid`` for a malformed release, ID, timestamp or URL.
+    """
+    if not isinstance(release, dict):
+        raise ValueError("github_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+    release_id = release.get("id")
+    if isinstance(release_id, bool) or not isinstance(release_id, int) or release_id <= 0:
+        raise ValueError("github_response_invalid")
+    if release.get("draft") is True:
+        return None
+    release_owner = release.get("author")
+    author = release_owner.get("login") if isinstance(release_owner, dict) else None
+    name_value = release.get("name") if isinstance(release.get("name"), str) else None
+    name = name_value or ""
+    body_value = release.get("body") if isinstance(release.get("body"), str) else None
+    body = body_value or ""
+    body_text = _plain_text(body)
+    tag_value = release.get("tag_name") if isinstance(release.get("tag_name"), str) else None
+    tag = tag_value or ""
+    node_id = release.get("node_id") if isinstance(release.get("node_id"), str) else None
+    html_url = release.get("html_url") if isinstance(release.get("html_url"), str) else None
+    tag_candidate = release.get("tag_name") if isinstance(release.get("tag_name"), str) else None
+    canonical_url = _release_canonical(html_url, owner, repository, tag_candidate)
+    created_at = release.get("created_at") if isinstance(release.get("created_at"), str) else None
+    published_at = release.get("published_at") if isinstance(release.get("published_at"), str) else None
+    if (
+        (created_at is not None and len(created_at) > 64)
+        or (published_at is not None and len(published_at) > 64)
+        or (html_url is not None and canonical_url is None)
+    ):
+        raise ValueError("github_response_invalid")
+    selected = {
+        "id": release_id,
+        "node_id": node_id,
+        "name": name,
+        "body": body,
+        "html_url": html_url,
+        "tag_name": tag,
+        "draft": bool(release.get("draft", False)),
+        "prerelease": bool(release.get("prerelease", False)),
+        "created_at": created_at,
+        "published_at": published_at,
+        "author": author,
+    }
+    version = _selected_hash(selected)
+    identity = f"github_releases:{owner.casefold()}/{repository.casefold()}:{release_id}"
+    content = "\n".join(part for part in (name, f"Tag: {tag}" if tag else "", body_text) if part)
+    draft = release.get("draft", False)
+    prerelease = release.get("prerelease", False)
+    if not isinstance(draft, bool) or not isinstance(prerelease, bool):
+        raise ValueError("github_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+    title = name or tag or f"Release {release_id}"
+    source_fields, source_fields_truncated = _release_source_fields(
+        draft=draft, prerelease=prerelease, node_id=node_id, name_value=name_value, name=name,
+        body_value=body_value, body_text=body_text, html_url=html_url, tag_value=tag_value, tag=tag,
+        author=author, created_at=created_at, published_at=published_at,
+    )
+    content_truncated = len(content) > 4000 or source_fields_truncated
+    provider_record = ProviderRecordMetadata(
+        provider="github_releases",
+        identity=identity,
+        provider_version=version,
+        timestamp_basis="collection",
+        coverage="returned_snapshot",
+        content_truncated=content_truncated,
+        source_fields=source_fields,
+    )
+    metadata: dict[str, object] = {
+        "provider_record": provider_record.model_dump(mode="json", exclude_none=True),
+        "node_id": node_id[:256] if isinstance(node_id, str) else None,
+        "name": name[:500],
+        "title": title[:500],
+        "body": body_text[:4000],
+        "html_url": html_url if canonical_url is not None else None,
+        "tag_name": tag[:255],
+        "draft": draft,
+        "prerelease": prerelease,
+        "author": author[:1000] if isinstance(author, str) else None,
+    }
+    if canonical_url is not None:
+        metadata["canonical_url"] = canonical_url
+    if created_at is not None:
+        metadata["created_at"] = created_at
+    if published_at is not None:
+        metadata["published_at"] = published_at
+    return IngestionRecord(
+        provider_id=identity,
+        content=content[:4000],
+        observed_at=collected_at,
+        version=version,
+        metadata=metadata,
+        collected_at=collected_at,
+    )
+
+
+def _mark_records_truncated(records: list[IngestionRecord]) -> None:
+    """Rewrite each record's provider coverage to ``truncated`` in place (the sweep hit a page/record cap)."""
+    for index, record in enumerate(records):
+        record_metadata = dict(record.metadata)
+        provider_metadata = ProviderRecordMetadata.model_validate(
+            record_metadata["provider_record"]
+        ).model_copy(update={"coverage": "truncated"})
+        record_metadata["provider_record"] = provider_metadata.model_dump(
+            mode="json", exclude_none=True
+        )
+        records[index] = record.model_copy(update={"metadata": record_metadata})
+
+
+def _next_release_page(
+    link: str | None, page: int, record_count: int, owner: str, repository: str, seen_pages: set[int],
+) -> tuple[str | None, bool]:
+    """Decide the next page URL from the ``Link`` header and whether a cap truncated the sweep.
+
+    Returns ``(next_url, truncated)``; no link ends the sweep cleanly, hitting the page or record
+    cap ends it as truncated.
+
+    Raises:
+        ValueError: ``github_pagination_invalid`` for a repeated or off-scope next link.
+    """
+    if link is None:
+        return None, False
+    if page >= _MAX_PAGES or record_count >= 500:
+        return None, True
+    next_url, next_page = _validated_next(link, owner, repository)
+    if next_page in seen_pages:
+        raise ValueError("github_pagination_invalid")
+    return next_url, False
+
+
 async def collect_github_releases(
     source: ConnectorSource, *, collected_at: datetime, before_request: Callable[[], Awaitable[None]],
 ) -> ProviderCollectionPage:
@@ -162,140 +336,16 @@ async def collect_github_releases(
         if not isinstance(values, list) or len(values) > 100:
             raise ValueError("github_response_invalid")
         for release in values:
-            if not isinstance(release, dict):
-                raise ValueError("github_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
-            release_id = release.get("id")
-            if isinstance(release_id, bool) or not isinstance(release_id, int) or release_id <= 0:
-                raise ValueError("github_response_invalid")
-            if release.get("draft") is True:
+            record = _release_record(release, owner, repository, collected_at)
+            if record is None:
                 continue
-            release_owner = release.get("author")
-            author = release_owner.get("login") if isinstance(release_owner, dict) else None
-            name_value = release.get("name") if isinstance(release.get("name"), str) else None
-            name = name_value or ""
-            body_value = release.get("body") if isinstance(release.get("body"), str) else None
-            body = body_value or ""
-            body_text = _plain_text(body)
-            tag_value = release.get("tag_name") if isinstance(release.get("tag_name"), str) else None
-            tag = tag_value or ""
-            node_id = release.get("node_id") if isinstance(release.get("node_id"), str) else None
-            html_url = release.get("html_url") if isinstance(release.get("html_url"), str) else None
-            tag_candidate = release.get("tag_name") if isinstance(release.get("tag_name"), str) else None
-            canonical_url = _release_canonical(html_url, owner, repository, tag_candidate)
-            created_at = release.get("created_at") if isinstance(release.get("created_at"), str) else None
-            published_at = release.get("published_at") if isinstance(release.get("published_at"), str) else None
-            if (
-                (created_at is not None and len(created_at) > 64)
-                or (published_at is not None and len(published_at) > 64)
-                or (html_url is not None and canonical_url is None)
-            ):
-                raise ValueError("github_response_invalid")
-            selected = {
-                "id": release_id,
-                "node_id": node_id,
-                "name": name,
-                "body": body,
-                "html_url": html_url,
-                "tag_name": tag,
-                "draft": bool(release.get("draft", False)),
-                "prerelease": bool(release.get("prerelease", False)),
-                "created_at": created_at,
-                "published_at": published_at,
-                "author": author,
-            }
-            version = _selected_hash(selected)
-            identity = f"github_releases:{owner.casefold()}/{repository.casefold()}:{release_id}"
-            content = "\n".join(part for part in (name, f"Tag: {tag}" if tag else "", body_text) if part)
-            draft = release.get("draft", False)
-            prerelease = release.get("prerelease", False)
-            if not isinstance(draft, bool) or not isinstance(prerelease, bool):
-                raise ValueError("github_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
-            title = name or tag or f"Release {release_id}"
-            source_fields: dict[str, object] = {
-                "draft": draft,
-                "prerelease": prerelease,
-            }
-            source_fields_truncated = (
-                len(name) > 500 or len(body_text) > 4000 or len(tag) > 255
-                or (node_id is not None and len(node_id) > 256)
-            )
-            if isinstance(node_id, str):
-                source_fields["node_id"] = node_id[:256]
-                source_fields_truncated = source_fields_truncated or len(node_id) > 256
-            if name_value is not None:
-                source_fields["name"] = name[:500]
-            if body_value is not None:
-                source_fields["body"] = body_text[:4000]
-            if isinstance(html_url, str) and html_url.startswith("https://") and len(html_url) <= 2048:
-                source_fields["html_url"] = html_url
-            if tag_value is not None:
-                source_fields["tag_name"] = tag[:255]
-            if isinstance(author, str):
-                source_fields["author"] = author[:1000]
-                source_fields_truncated = source_fields_truncated or len(author) > 1000
-            if created_at is not None:
-                source_fields["created_at"] = created_at
-            if published_at is not None:
-                source_fields["published_at"] = published_at
-            content_truncated = len(content) > 4000 or source_fields_truncated
-            provider_record = ProviderRecordMetadata(
-                provider="github_releases",
-                identity=identity,
-                provider_version=version,
-                timestamp_basis="collection",
-                coverage="returned_snapshot",
-                content_truncated=content_truncated,
-                source_fields=source_fields,
-            )
-            metadata: dict[str, object] = {
-                "provider_record": provider_record.model_dump(mode="json", exclude_none=True),
-                "node_id": node_id[:256] if isinstance(node_id, str) else None,
-                "name": name[:500],
-                "title": title[:500],
-                "body": body_text[:4000],
-                "html_url": html_url if canonical_url is not None else None,
-                "tag_name": tag[:255],
-                "draft": draft,
-                "prerelease": prerelease,
-                "author": author[:1000] if isinstance(author, str) else None,
-            }
-            if canonical_url is not None:
-                metadata["canonical_url"] = canonical_url
-            if created_at is not None:
-                metadata["created_at"] = created_at
-            if published_at is not None:
-                metadata["published_at"] = published_at
-            records.append(
-                IngestionRecord(
-                    provider_id=identity,
-                    content=content[:4000],
-                    observed_at=collected_at,
-                    version=version,
-                    metadata=metadata,
-                    collected_at=collected_at,
-                )
-            )
+            records.append(record)
             if len(records) >= 500:
                 break
-        if link is None:
-            next_url = None
-        elif page >= _MAX_PAGES or len(records) >= 500:
-            truncated = True
-            next_url = None
-        else:
-            next_url, next_page = _validated_next(link, owner, repository)
-            if next_page in seen_pages:
-                raise ValueError("github_pagination_invalid")
+        next_url, capped = _next_release_page(link, page, len(records), owner, repository, seen_pages)
+        truncated = truncated or capped
     if truncated:
-        for index, record in enumerate(records):
-            record_metadata = dict(record.metadata)
-            provider_metadata = ProviderRecordMetadata.model_validate(
-                record_metadata["provider_record"]
-            ).model_copy(update={"coverage": "truncated"})
-            record_metadata["provider_record"] = provider_metadata.model_dump(
-                mode="json", exclude_none=True
-            )
-            records[index] = record.model_copy(update={"metadata": record_metadata})
+        _mark_records_truncated(records)
     return ProviderCollectionPage(
         records=tuple(records),
         coverage="truncated" if truncated else "returned_snapshot",

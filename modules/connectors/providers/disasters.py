@@ -3,6 +3,7 @@
 import re
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from modules.connectors.providers.macro import (
     ProviderPayloadError,
@@ -23,14 +24,34 @@ _TOKEN_RE = re.compile(r"^[A-Za-z0-9_ .-]{1,32}$")
 
 
 def usgs_request() -> ProviderRequest:
+    """Build the fixed USGS GeoJSON feed request."""
     return ProviderRequest("GET", USGS_URL)
 
 
 def _clean(value: object, limit: int) -> str | None:
+    """Return ``value`` stripped of non-printable characters and clipped to ``limit``, or ``None`` if empty/not text."""
     if not isinstance(value, str):
         return None
     cleaned = "".join(ch for ch in value if ch.isprintable()).strip()
     return cleaned[:limit] or None
+
+
+def _usgs_coordinates(props: dict[str, Any], geometry: object) -> tuple[Decimal, Decimal, Decimal]:
+    """Validate ``properties`` and the 3-element GeoJSON coordinates; return finite (lon, lat, depth_km).
+
+    Raises:
+        ProviderPayloadError: ``usgs_feature_invalid`` or ``usgs_coordinates_invalid``.
+    """
+    coords = geometry.get("coordinates") if isinstance(geometry, dict) else None
+    if not isinstance(props, dict) or not isinstance(coords, list) or len(coords) != 3:
+        raise ProviderPayloadError("usgs_feature_invalid")
+    try:
+        lon, lat, depth = (finite_decimal(c) for c in coords)
+    except ValueError as exc:
+        raise ProviderPayloadError("usgs_coordinates_invalid") from exc
+    if not (-180 <= lon <= 180 and -90 <= lat <= 90 and -50 <= depth <= 1000):
+        raise ProviderPayloadError("usgs_coordinates_invalid")
+    return lon, lat, depth
 
 
 def map_usgs(payload: object, collected_at: datetime) -> list[IngestionRecord]:
@@ -57,15 +78,9 @@ def map_usgs(payload: object, collected_at: datetime) -> list[IngestionRecord]:
         if not isinstance(event_id, str) or not _ID_RE.fullmatch(event_id) or event_id in seen:
             raise ProviderPayloadError("usgs_feature_id_invalid")
         seen.add(event_id)
-        coords = geometry.get("coordinates") if isinstance(geometry, dict) else None
-        if not isinstance(props, dict) or not isinstance(coords, list) or len(coords) != 3:
+        if not isinstance(props, dict):
             raise ProviderPayloadError("usgs_feature_invalid")
-        try:
-            lon, lat, depth = (finite_decimal(c) for c in coords)
-        except ValueError as exc:
-            raise ProviderPayloadError("usgs_coordinates_invalid") from exc
-        if not (-180 <= lon <= 180 and -90 <= lat <= 90 and -50 <= depth <= 1000):
-            raise ProviderPayloadError("usgs_coordinates_invalid")
+        lon, lat, depth = _usgs_coordinates(props, geometry)
         occurred = provider_instant(props.get("time"), collected_at, unit="ms")
         updated = provider_instant(props.get("updated"), collected_at, unit="ms")
         if updated < occurred:

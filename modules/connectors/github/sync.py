@@ -188,115 +188,141 @@ def github_segment_path(fence: GitHubBindingFence, resource: GitHubResource, sta
     return f"{path}?{urlencode(parameters)}"
 
 
-def validate_github_segment(
-    fence: GitHubBindingFence,
-    config: GitHubSourceConfig,
-    cursor_before: str | None,
-    proof: GitHubSegmentProof,
-    *,
-    collected_at: datetime,
-) -> GitHubValidatedSegment:
-    """Rebuild polling or targeted-resource transitions from raw proof under the current binding.
+def _require_fresh_hint_claim(
+    claim: GitHubHintClaimProof, fence: GitHubBindingFence, proof: GitHubSegmentProof, collected_at: datetime,
+) -> None:
+    """Reject a hint claim that no longer matches the binding fence, resource, expiry or reconcile page.
 
-    Targeted and overflow reconciliation retain the leased polling cursor. Reconcile pages are
-    normalized only for their selected resource and carry truncated coverage until the last page.
+    Raises:
+        ValueError: ``github_hint_claim_stale``.
     """
-    proof = GitHubSegmentProof.model_validate(proof.model_dump(mode="python"))
-    if proof.fence != fence or proof.collected_at != collected_at.astimezone(UTC):
-        raise ValueError("github_segment_fence_stale")
-    if proof.hint_claim is not None:
-        claim = proof.hint_claim
-        if (
-            claim.source_id != fence.source_id
-            or claim.source_generation != fence.source_generation
-            or claim.connector_revision != fence.connector_revision
-            or claim.repository_id != fence.repository_id
-            or claim.installation_id != fence.installation_id
-            or claim.binding_revision != fence.binding_revision
-            or claim.resource != proof.resource
-            or claim.expires_at <= collected_at
-            or claim.intent == "reconcile" and proof.page != claim.reconcile_page
-        ):
-            raise ValueError("github_hint_claim_stale")
-        records: tuple[IngestionRecord, ...] = ()
-        if claim.intent == "reconcile" and claim.locator_kind == "repository":
-            if proof.target_outcome in {"forbidden", "not_found"}:
-                if proof.has_next or proof.raw_items:
-                    raise ValueError("github_reconcile_page_invalid")
-                return GitHubValidatedSegment(
-                    records=(), cursor_after=cursor_before, coverage="truncated",
-                    resource=claim.resource, sweep_revision=claim.dirty_revision,
-                    outcome="complete", examined_count=0, hint_claim=claim,
-                )
-            if proof.target_outcome != "found" or proof.has_next != (proof.next_page is not None):
-                raise ValueError("github_reconcile_page_invalid")
-            if proof.has_next and proof.next_page != claim.reconcile_page + 1:
-                raise ValueError("github_reconcile_page_invalid")
-            for raw in proof.raw_items:
-                _validate_returned_repository_identity(raw, fence.repository_id)
-            records = tuple(
-                normalize_github_record(
-                    claim.resource, raw, coverage="truncated", collected_at=proof.collected_at,
-                )
-                for raw in proof.raw_items
-                if not (claim.resource == "issue" and "pull_request" in raw)
-            )
-            return GitHubValidatedSegment(
-                records=records, cursor_after=cursor_before, coverage="truncated",
-                resource=claim.resource, sweep_revision=claim.dirty_revision,
-                outcome="continued" if proof.has_next else "complete",
-                examined_count=len(proof.raw_items), hint_claim=claim,
-            )
-        if proof.target_outcome == "found" and claim.locator_kind == "repository" and claim.intent == "visibility_check":  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
-            if len(proof.raw_items) != 1 or str(proof.raw_items[0].get("id")) != claim.locator:
-                raise ValueError("github_targeted_identity_mismatch")
-        if proof.target_outcome == "found" and proof.raw_items and claim.intent not in {"visibility_check", "visibility_lost"}:
-            if len(proof.raw_items) != 1:
-                raise ValueError("github_targeted_result_invalid")
-            raw = proof.raw_items[0]
-            _validate_returned_repository_identity(raw, fence.repository_id)
-            if claim.locator_kind == "number":
-                if str(raw.get("number")) != claim.locator:
-                    raise ValueError("github_targeted_identity_mismatch")
-                if claim.resource == "issue" and "pull_request" in raw:
-                    raise ValueError("github_targeted_identity_mismatch")
-            elif claim.locator_kind == "release_id":
-                if str(raw.get("id")) != claim.locator:
-                    raise ValueError("github_targeted_identity_mismatch")
-            elif claim.locator_kind == "sha":
-                if str(raw.get("sha", "")).casefold() != claim.locator.casefold():
-                    raise ValueError("github_targeted_identity_mismatch")
-            records = (normalize_github_record(
-                claim.resource, raw, coverage="returned_snapshot", collected_at=proof.collected_at,
-            ),)
-        elif proof.target_outcome == "found" and claim.locator_kind == "ref" and proof.raw_items:
-            raw = proof.raw_items[0]
-            records = (normalize_github_record(
-                "commit", raw, coverage="truncated", collected_at=proof.collected_at,
-            ),)
-        if proof.target_outcome not in {"found", "not_found", "forbidden", "partial"}:
-            raise ValueError("github_targeted_outcome_missing")
-        return GitHubValidatedSegment(
-            records=records, cursor_after=cursor_before,
-            coverage="truncated" if claim.intent in {"reconcile", "delete_candidate"} else "returned_snapshot",
-            resource=claim.resource, sweep_revision=claim.dirty_revision,
-            outcome="complete", examined_count=len(proof.raw_items),
-            hint_claim=claim,
-        )
-    cursor = decode_github_cursor(cursor_before, fence, collected_at)
-    selection = _next_segment(cursor, collected_at)
-    if selection is None:
-        raise ValueError("github_scope_exhausted")
-    _, index, state, expected_page = selection
     if (
-        proof.resource != state.resource
-        or proof.page != expected_page
-        or proof.sweep_revision != state.sweep_revision
-        or proof.scan_floor != state.floor
-        or proof.scan_upper != state.upper
+        claim.source_id != fence.source_id
+        or claim.source_generation != fence.source_generation
+        or claim.connector_revision != fence.connector_revision
+        or claim.repository_id != fence.repository_id
+        or claim.installation_id != fence.installation_id
+        or claim.binding_revision != fence.binding_revision
+        or claim.resource != proof.resource
+        or claim.expires_at <= collected_at
+        or claim.intent == "reconcile" and proof.page != claim.reconcile_page
     ):
-        raise ValueError("github_segment_transition_stale")
+        raise ValueError("github_hint_claim_stale")
 
+
+def _validate_repository_reconcile(
+    claim: GitHubHintClaimProof, fence: GitHubBindingFence, cursor_before: str | None, proof: GitHubSegmentProof,
+) -> GitHubValidatedSegment:
+    """Validate one repository-wide reconcile page and normalize its items with truncated coverage.
+
+    Raises:
+        ValueError: ``github_reconcile_page_invalid`` or an embedded repository identity mismatch.
+    """
+    if proof.target_outcome in {"forbidden", "not_found"}:
+        if proof.has_next or proof.raw_items:
+            raise ValueError("github_reconcile_page_invalid")
+        return GitHubValidatedSegment(
+            records=(), cursor_after=cursor_before, coverage="truncated",
+            resource=claim.resource, sweep_revision=claim.dirty_revision,
+            outcome="complete", examined_count=0, hint_claim=claim,
+        )
+    if proof.target_outcome != "found" or proof.has_next != (proof.next_page is not None):
+        raise ValueError("github_reconcile_page_invalid")
+    if proof.has_next and proof.next_page != claim.reconcile_page + 1:
+        raise ValueError("github_reconcile_page_invalid")
+    for raw in proof.raw_items:
+        _validate_returned_repository_identity(raw, fence.repository_id)
+    records = tuple(
+        normalize_github_record(
+            claim.resource, raw, coverage="truncated", collected_at=proof.collected_at,
+        )
+        for raw in proof.raw_items
+        if not (claim.resource == "issue" and "pull_request" in raw)
+    )
+    return GitHubValidatedSegment(
+        records=records, cursor_after=cursor_before, coverage="truncated",
+        resource=claim.resource, sweep_revision=claim.dirty_revision,
+        outcome="continued" if proof.has_next else "complete",
+        examined_count=len(proof.raw_items), hint_claim=claim,
+    )
+
+
+def _check_targeted_identity(claim: GitHubHintClaimProof, raw: dict[str, object]) -> None:
+    """Require the single targeted item to carry the claimed number, release ID or SHA.
+
+    Raises:
+        ValueError: ``github_targeted_identity_mismatch``.
+    """
+    if claim.locator_kind == "number":
+        if str(raw.get("number")) != claim.locator:
+            raise ValueError("github_targeted_identity_mismatch")
+        if claim.resource == "issue" and "pull_request" in raw:
+            raise ValueError("github_targeted_identity_mismatch")
+    elif claim.locator_kind == "release_id":
+        if str(raw.get("id")) != claim.locator:
+            raise ValueError("github_targeted_identity_mismatch")
+    elif claim.locator_kind == "sha":
+        if str(raw.get("sha", "")).casefold() != claim.locator.casefold():
+            raise ValueError("github_targeted_identity_mismatch")
+
+
+def _targeted_records(
+    claim: GitHubHintClaimProof, fence: GitHubBindingFence, proof: GitHubSegmentProof,
+) -> tuple[IngestionRecord, ...]:
+    """Validate targeted-hint proof items and return the records to ingest (possibly empty).
+
+    Raises:
+        ValueError: identity mismatch, result-count violation or missing/unknown outcome.
+    """
+    records: tuple[IngestionRecord, ...] = ()
+    if proof.target_outcome == "found" and claim.locator_kind == "repository" and claim.intent == "visibility_check":  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
+        if len(proof.raw_items) != 1 or str(proof.raw_items[0].get("id")) != claim.locator:
+            raise ValueError("github_targeted_identity_mismatch")
+    if proof.target_outcome == "found" and proof.raw_items and claim.intent not in {"visibility_check", "visibility_lost"}:
+        if len(proof.raw_items) != 1:
+            raise ValueError("github_targeted_result_invalid")
+        raw = proof.raw_items[0]
+        _validate_returned_repository_identity(raw, fence.repository_id)
+        _check_targeted_identity(claim, raw)
+        records = (normalize_github_record(
+            claim.resource, raw, coverage="returned_snapshot", collected_at=proof.collected_at,
+        ),)
+    elif proof.target_outcome == "found" and claim.locator_kind == "ref" and proof.raw_items:
+        raw = proof.raw_items[0]
+        records = (normalize_github_record(
+            "commit", raw, coverage="truncated", collected_at=proof.collected_at,
+        ),)
+    if proof.target_outcome not in {"found", "not_found", "forbidden", "partial"}:
+        raise ValueError("github_targeted_outcome_missing")
+    return records
+
+
+def _validate_hint_segment(
+    fence: GitHubBindingFence, cursor_before: str | None, proof: GitHubSegmentProof,
+    claim: GitHubHintClaimProof, collected_at: datetime,
+) -> GitHubValidatedSegment:
+    """Validate a targeted/overflow hint proof; the leased polling cursor is retained unchanged."""
+    _require_fresh_hint_claim(claim, fence, proof, collected_at)
+    if claim.intent == "reconcile" and claim.locator_kind == "repository":
+        return _validate_repository_reconcile(claim, fence, cursor_before, proof)
+    records = _targeted_records(claim, fence, proof)
+    return GitHubValidatedSegment(
+        records=records, cursor_after=cursor_before,
+        coverage="truncated" if claim.intent in {"reconcile", "delete_candidate"} else "returned_snapshot",
+        resource=claim.resource, sweep_revision=claim.dirty_revision,
+        outcome="complete", examined_count=len(proof.raw_items),
+        hint_claim=claim,
+    )
+
+
+def _in_scope_items(
+    state: GitHubResourceCursor, proof: GitHubSegmentProof,
+) -> tuple[list[dict[str, object]], list[datetime]]:
+    """Filter proof items to the sweep window and collect pull update times for order checking.
+
+    Raises:
+        ValueError: a pull item lacks a valid update time, or pull pages are not newest-first.
+    """
     in_scope: list[dict[str, object]] = []
     pull_order: list[datetime] = []
     for item in proof.raw_items:
@@ -312,7 +338,33 @@ def validate_github_segment(
             in_scope.append(item)
     if state.resource == "pull" and any(left < right for left, right in zip(pull_order, pull_order[1:])):  # noqa: RUF007  # style-only rewrite skipped to avoid touching control flow
         raise ValueError("github_pull_page_order_invalid")
+    return in_scope, pull_order
 
+
+def _validate_polling_segment(
+    fence: GitHubBindingFence, cursor_before: str | None, proof: GitHubSegmentProof,
+    collected_at: datetime,
+) -> GitHubValidatedSegment:
+    """Rebuild the next polling transition from raw proof and advance the round-robin cursor.
+
+    Raises:
+        ValueError: exhausted scope, stale transition, ordering or examined-bound violations.
+    """
+    cursor = decode_github_cursor(cursor_before, fence, collected_at)
+    selection = _next_segment(cursor, collected_at)
+    if selection is None:
+        raise ValueError("github_scope_exhausted")
+    _, index, state, expected_page = selection
+    if (
+        proof.resource != state.resource
+        or proof.page != expected_page
+        or proof.sweep_revision != state.sweep_revision
+        or proof.scan_floor != state.floor
+        or proof.scan_upper != state.upper
+    ):
+        raise ValueError("github_segment_transition_stale")
+
+    in_scope, pull_order = _in_scope_items(state, proof)
     stop_at_floor = bool(
         state.resource == "pull" and pull_order and pull_order[-1] < state.floor
     )
@@ -354,6 +406,27 @@ def validate_github_segment(
         outcome=outcome,
         examined_count=len(proof.raw_items),
     )
+
+
+def validate_github_segment(
+    fence: GitHubBindingFence,
+    config: GitHubSourceConfig,
+    cursor_before: str | None,
+    proof: GitHubSegmentProof,
+    *,
+    collected_at: datetime,
+) -> GitHubValidatedSegment:
+    """Rebuild polling or targeted-resource transitions from raw proof under the current binding.
+
+    Targeted and overflow reconciliation retain the leased polling cursor. Reconcile pages are
+    normalized only for their selected resource and carry truncated coverage until the last page.
+    """
+    proof = GitHubSegmentProof.model_validate(proof.model_dump(mode="python"))
+    if proof.fence != fence or proof.collected_at != collected_at.astimezone(UTC):
+        raise ValueError("github_segment_fence_stale")
+    if proof.hint_claim is not None:
+        return _validate_hint_segment(fence, cursor_before, proof, proof.hint_claim, collected_at)
+    return _validate_polling_segment(fence, cursor_before, proof, collected_at)
 
 
 def _validate_returned_repository_identity(item: dict[str, object], expected_id: str) -> None:

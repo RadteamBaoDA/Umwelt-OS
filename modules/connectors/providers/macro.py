@@ -33,6 +33,7 @@ class ProviderPayloadError(ValueError):
         self, code: str,
         kind: Literal["invalid", "rate_limited", "credential", "entitlement", "incomplete"] = "invalid",
     ) -> None:
+        """Store the stable error code and its failure class (invalid, rate_limited, credential, entitlement, incomplete)."""
         super().__init__(code)
         self.code = code
         self.kind = kind
@@ -85,6 +86,7 @@ def decode_json(body: bytes) -> object:
         raise ProviderPayloadError("provider_response_too_large")
 
     def _reject(_: str) -> object:
+        """``json.loads`` hook that rejects NaN/Infinity constants."""
         raise ValueError("non-finite")
 
     try:
@@ -248,19 +250,12 @@ def world_bank_request(
     return ProviderRequest("GET", url)
 
 
-def map_world_bank(
-    payload: object,
-    collected_at: datetime,
-    *,
-    indicators: tuple[tuple[str, str, str], ...] = WORLD_BANK_INDICATORS,
-) -> list[IngestionRecord]:
-    """Map annual World Bank indicator rows; null stays missing and never replaces earlier valid years."""
-    if not indicators:
-        raise ProviderPayloadError("world_bank_scope_mismatch")
-    allowed_indicators: dict[tuple[str, str], str] = {
-        (country_code, indicator_id): metric_name
-        for country_code, indicator_id, metric_name in indicators
-    }
+def _wb_rows(payload: object) -> tuple[list[Any], Literal["returned_snapshot", "truncated"]]:
+    """Validate the World Bank envelope and paging; return the rows and snapshot/truncated coverage.
+
+    Raises:
+        ProviderPayloadError: error payload, malformed envelope/paging, incomplete page or no rows.
+    """
     if isinstance(payload, list) and len(payload) == 1 and isinstance(payload[0], dict) and "message" in payload[0]:
         raise ProviderPayloadError("world_bank_error_payload")
     if not isinstance(payload, list) or len(payload) != 2 or not isinstance(payload[0], dict) or not isinstance(payload[1], list):
@@ -275,32 +270,61 @@ def map_world_bank(
     if not rows:
         raise ProviderPayloadError("world_bank_no_rows", "incomplete")
     coverage: Literal["returned_snapshot", "truncated"] = "truncated" if pages > 1 else "returned_snapshot"
+    return rows, coverage
+
+
+def _wb_row_scope(
+    row: dict[str, Any], allowed_indicators: dict[tuple[str, str], str],
+) -> tuple[str, str, str, str]:
+    """Check a row's country/indicator against the configured scope; return ids, metric and region name.
+
+    Raises:
+        ProviderPayloadError: ``world_bank_scope_mismatch`` for any identity outside the scope.
+    """
+    indicator, country = row.get("indicator"), row.get("country")
+    if not isinstance(indicator, dict) or not isinstance(country, dict):
+        raise ProviderPayloadError("world_bank_scope_mismatch")
+    country_id = country.get("id")
+    indicator_id = indicator.get("id")
+    if not isinstance(country_id, str) or not isinstance(indicator_id, str):
+        raise ProviderPayloadError("world_bank_scope_mismatch")
+    metric_name = allowed_indicators.get((country_id, indicator_id))
+    if metric_name is None:
+        raise ProviderPayloadError("world_bank_scope_mismatch")
+    iso3_meta = _WB_ISO2_META.get(country_id)
+    iso3_code = row.get("countryiso3code")
+    if iso3_meta is not None:
+        if iso3_code != iso3_meta[0]:
+            raise ProviderPayloadError("world_bank_scope_mismatch")
+        region_name = iso3_meta[1]
+    else:
+        if not isinstance(iso3_code, str) or not re.fullmatch(r"[A-Z]{3}", iso3_code):
+            raise ProviderPayloadError("world_bank_scope_mismatch")
+        country_value = country.get("value")
+        region_name = country_value if isinstance(country_value, str) and country_value.strip() else country_id
+    return country_id, indicator_id, metric_name, region_name
+
+
+def map_world_bank(
+    payload: object,
+    collected_at: datetime,
+    *,
+    indicators: tuple[tuple[str, str, str], ...] = WORLD_BANK_INDICATORS,
+) -> list[IngestionRecord]:
+    """Map annual World Bank indicator rows; null stays missing and never replaces earlier valid years."""
+    if not indicators:
+        raise ProviderPayloadError("world_bank_scope_mismatch")
+    allowed_indicators: dict[tuple[str, str], str] = {
+        (country_code, indicator_id): metric_name
+        for country_code, indicator_id, metric_name in indicators
+    }
+    rows, coverage = _wb_rows(payload)
     seen: set[tuple[str, str, str]] = set()
     records = []
     for row in rows:
         if not isinstance(row, dict):
             raise ProviderPayloadError("world_bank_row_invalid")
-        indicator, country = row.get("indicator"), row.get("country")
-        if not isinstance(indicator, dict) or not isinstance(country, dict):
-            raise ProviderPayloadError("world_bank_scope_mismatch")
-        country_id = country.get("id")
-        indicator_id = indicator.get("id")
-        if not isinstance(country_id, str) or not isinstance(indicator_id, str):
-            raise ProviderPayloadError("world_bank_scope_mismatch")
-        metric_name = allowed_indicators.get((country_id, indicator_id))
-        if metric_name is None:
-            raise ProviderPayloadError("world_bank_scope_mismatch")
-        iso3_meta = _WB_ISO2_META.get(country_id)
-        iso3_code = row.get("countryiso3code")
-        if iso3_meta is not None:
-            if iso3_code != iso3_meta[0]:
-                raise ProviderPayloadError("world_bank_scope_mismatch")
-            region_name = iso3_meta[1]
-        else:
-            if not isinstance(iso3_code, str) or not re.fullmatch(r"[A-Z]{3}", iso3_code):
-                raise ProviderPayloadError("world_bank_scope_mismatch")
-            country_value = country.get("value")
-            region_name = country_value if isinstance(country_value, str) and country_value.strip() else country_id
+        country_id, indicator_id, metric_name, region_name = _wb_row_scope(row, allowed_indicators)
         period = row.get("date")
         if not isinstance(period, str) or not re.fullmatch(r"[0-9]{4}", period) or (country_id, indicator_id, period) in seen:
             raise ProviderPayloadError("world_bank_period_invalid")

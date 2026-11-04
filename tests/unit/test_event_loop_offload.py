@@ -425,8 +425,9 @@ async def test_collect_rest_routes_json_and_mapping_through_to_thread_joined(mon
 @pytest.mark.parametrize("module", [rest, research, social, google_api, local_services])
 def test_provider_async_paths_never_decode_json_inline(module):
     names = {"json.loads", "_json", "_decode_json", "map_page"}
-    # The saved Home Assistant cursor is a few bytes of our own state, not a provider page.
-    allowed = {"collect_home_assistant_snapshot:json.loads"} if module is local_services else set()
+    # The saved Home Assistant cursor (a few bytes of our own state) is parsed in the sync helper
+    # ``_ha_resume_index``, so no async provider function decodes JSON inline any more.
+    allowed: set[str] = set()
     assert set(_calls_in_async_functions(module, names)) == allowed
 
 

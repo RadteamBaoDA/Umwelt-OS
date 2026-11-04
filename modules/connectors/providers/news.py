@@ -133,21 +133,25 @@ _HN_MAX_BODY = 64 * 1024
 
 class _TextExtractor(HTMLParser):
     def __init__(self) -> None:
+        """Initialise the text accumulator and skipped-element depth."""
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
         self.skip = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        """Skip script/style/noscript content and turn block tags into spaces."""
         if tag in {"script", "style", "noscript"}:
             self.skip += 1
         elif tag in {"p", "br", "div", "li"}:
             self.parts.append(" ")
 
     def handle_endtag(self, tag: str) -> None:
+        """Leave a skipped element when its closing tag arrives."""
         if tag in {"script", "style", "noscript"} and self.skip:
             self.skip -= 1
 
     def handle_data(self, data: str) -> None:
+        """Append text that is outside skipped elements."""
         if not self.skip:
             self.parts.append(data)
 
@@ -196,10 +200,12 @@ def parse_when(raw: str | None, collected_at: datetime) -> datetime | None:
 
 
 def _stable_id(raw: str) -> str:
+    """Keep identifiers up to 480 characters verbatim, else replace with a SHA-256 digest."""
     return raw if len(raw) <= 480 else "sha256:" + hashlib.sha256(raw.encode()).hexdigest()
 
 
 def _license_label(provider: str) -> str | None:
+    """Return the catalogue attribution for a provider (Google News uses its fixed notice), clipped to 255 characters."""
     if provider == "google_news":
         return GOOGLE_NEWS_LICENSE
     spec = get_provider_spec(provider)
@@ -213,6 +219,7 @@ def _record(
     source_fields: dict[str, Any], canonical_url: str | None, published_at: str | None = None,
     provider_updated_at: str | None = None,
 ) -> IngestionRecord:
+    """Assemble a news ingestion record with typed provider provenance and optional canonical link."""
     from modules.knowledge.documents.schemas import ProviderRecordMetadata
 
     envelope = ProviderRecordMetadata(
@@ -261,10 +268,12 @@ def safe_xml_root(body: object, max_bytes: int = MAX_FEED_BYTES) -> ET.Element:
 
 
 def _local(tag: object) -> str:
+    """Strip an XML namespace from a tag name; non-string tags give an empty name."""
     return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
 
 
 def _child_text(el: ET.Element, *names: str) -> str | None:
+    """Return the first non-blank direct child text among ``names`` (namespace-insensitive), else ``None``."""
     for child in el:
         if _local(child.tag) in names and child.text and child.text.strip():
             return child.text.strip()
@@ -272,6 +281,7 @@ def _child_text(el: ET.Element, *names: str) -> str | None:
 
 
 def _atom_link(el: ET.Element) -> str | None:
+    """Return the first alternate ``link`` href of an Atom entry, or ``None``."""
     best = None
     for child in el:
         if _local(child.tag) == "link" and child.attrib.get("rel", "alternate") == "alternate":
@@ -280,6 +290,7 @@ def _atom_link(el: ET.Element) -> str | None:
 
 
 def _scan_items(root: ET.Element) -> list[ET.Element]:
+    """Return the item/entry elements of an RSS or Atom document; raises ``news_feed_invalid`` for other roots."""
     kind = _local(root.tag)
     if kind == "rss":
         channel = next((c for c in root if _local(c.tag) == "channel"), None)
@@ -367,6 +378,7 @@ class FeedValidators:
 
 
 def _header_value(raw: str | None) -> str | None:
+    """Return a stripped header value, or ``None`` when blank, oversized or containing control characters."""
     if raw is None or not raw.strip() or len(raw) > 256 or re.search(r"[\x00-\x1f\x7f]", raw):
         return None
     return raw.strip()
@@ -420,6 +432,7 @@ def hn_top_request(url: str = HN_TOP_URL) -> ProviderRequest:
 
 
 def hn_item_request(item_id: int) -> ProviderRequest:
+    """Build the Hacker News item request for a positive integer ID; raises ``hn_item_id_invalid`` otherwise."""
     if type(item_id) is not int or item_id <= 0:
         raise ProviderPayloadError("hn_item_id_invalid")
     return ProviderRequest("GET", HN_ITEM_URL.format(id=item_id))
@@ -451,6 +464,7 @@ class HnResult:
 
 
 def _hn_skip_reason(item: object) -> str | None:
+    """Name why a Hacker News item is skipped (missing, deleted, dead, not_story) or ``None`` to keep it."""
     if not isinstance(item, dict):
         return "missing"
     if item.get("deleted") is True:
@@ -511,6 +525,7 @@ def map_hn_stories(
 # --------------------------------------------------------------------------- registry
 
 def _feed_mapper(provider: str) -> Callable[[Any, datetime], list[IngestionRecord]]:
+    """Bind a provider name into a ``(body, collected_at)`` feed mapper."""
     return lambda body, collected_at: map_feed(provider, body, collected_at)
 
 

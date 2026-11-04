@@ -5,6 +5,7 @@ import json
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from hashlib import sha256
@@ -160,26 +161,93 @@ async def _read_feed(url: str, before_request: Callable[[], Awaitable[None]]) ->
                 return bytes(result)
 
 
+def _structured_api_reset(structured_limit: str) -> int | None:
+    """Parse the structured ``RateLimit`` header and return the ``api`` bucket's reset seconds, if any.
+
+    Raises:
+        ValueError: ``provider_rate_deadline_invalid`` for a malformed or duplicated bucket.
+    """
+    api_reset: int | None = None
+    seen_buckets: set[str] = set()
+    for item in structured_limit.split(","):
+        match = _HF_RATE_LIMIT_ITEM.fullmatch(item)
+        if match is None:
+            raise ValueError("provider_rate_deadline_invalid")
+        bucket, _remaining, reset_seconds = match.groups()
+        if bucket in seen_buckets:
+            raise ValueError("provider_rate_deadline_invalid")
+        seen_buckets.add(bucket)
+        if bucket == "api":
+            try:
+                api_reset = int(reset_seconds)
+            except (ValueError, OverflowError):
+                # Python can reject extremely long decimal fields before timedelta sees them.
+                raise ValueError("provider_rate_deadline_invalid") from None
+    return api_reset
+
+
+def _retry_after_deadline(retry_after: str, now: datetime) -> datetime:
+    """Convert a ``Retry-After`` value (delta seconds or HTTP date) to a deadline at least one second out.
+
+    Raises:
+        ValueError: ``provider_rate_deadline_invalid`` for non-positive, malformed or overflowing values.
+    """
+    try:
+        seconds = int(retry_after)
+    except ValueError:
+        try:
+            parsed = _parse_time(retry_after)
+        except (OverflowError, OSError, ValueError):
+            # UTC normalization can overflow even when the supplied local date parsed successfully.
+            raise ValueError("provider_rate_deadline_invalid") from None
+        if parsed is None:
+            raise ValueError("provider_rate_deadline_invalid") from None
+        try:
+            return max(parsed, now + timedelta(seconds=1))
+        except (OverflowError, OSError):
+            raise ValueError("provider_rate_deadline_invalid") from None
+    if seconds <= 0:
+        raise ValueError("provider_rate_deadline_invalid")
+    try:
+        return now + timedelta(seconds=seconds)
+    except (OverflowError, OSError):
+        raise ValueError("provider_rate_deadline_invalid") from None
+
+
+def _epoch_reset_deadline(reset: str, now: datetime) -> datetime:
+    """Convert an ``X-RateLimit-Reset`` epoch to a deadline that must lie in the future.
+
+    Raises:
+        ValueError: ``provider_rate_deadline_invalid`` for a past, malformed or overflowing value.
+    """
+    try:
+        parsed = datetime.fromtimestamp(float(reset), UTC)
+        if parsed > now:
+            return parsed
+        raise ValueError("provider_rate_deadline_invalid")
+    except (ValueError, OverflowError, OSError):
+        raise ValueError("provider_rate_deadline_invalid") from None
+
+
+def _standard_reset_deadline(standard_reset: str, now: datetime) -> datetime:
+    """Convert a ``RateLimit-Reset`` delta (positive seconds, fractional allowed) to a deadline.
+
+    Raises:
+        ValueError: ``provider_rate_deadline_invalid`` for a non-positive, malformed or overflowing value.
+    """
+    try:
+        standard_seconds = float(standard_reset)
+        if standard_seconds <= 0:
+            raise ValueError
+        return now + timedelta(seconds=standard_seconds)
+    except (ValueError, OverflowError):
+        raise ValueError("provider_rate_deadline_invalid") from None
+
+
 def _retry_deadline(headers: httpx.Headers, now: datetime) -> datetime:
     """Return the latest representable supplied deadline; map malformed or overflowing evidence to a fixed error."""
     structured_limit = headers.get("ratelimit")
-    api_reset: int | None = None
-    if structured_limit is not None:
-        seen_buckets: set[str] = set()
-        for item in structured_limit.split(","):
-            match = _HF_RATE_LIMIT_ITEM.fullmatch(item)
-            if match is None:
-                raise ValueError("provider_rate_deadline_invalid")
-            bucket, _remaining, reset_seconds = match.groups()
-            if bucket in seen_buckets:
-                raise ValueError("provider_rate_deadline_invalid")
-            seen_buckets.add(bucket)
-            if bucket == "api":
-                try:
-                    api_reset = int(reset_seconds)
-                except (ValueError, OverflowError):
-                    # Python can reject extremely long decimal fields before timedelta sees them.
-                    raise ValueError("provider_rate_deadline_invalid") from None
+    api_reset = _structured_api_reset(structured_limit) if structured_limit is not None else None
     deadlines: list[datetime] = []
     if api_reset is not None:
         try:
@@ -189,47 +257,13 @@ def _retry_deadline(headers: httpx.Headers, now: datetime) -> datetime:
             raise ValueError("provider_rate_deadline_invalid") from None
     retry_after = headers.get("retry-after")
     if retry_after is not None:
-        try:
-            seconds = int(retry_after)
-        except ValueError:
-            try:
-                parsed = _parse_time(retry_after)
-            except (OverflowError, OSError, ValueError):
-                # UTC normalization can overflow even when the supplied local date parsed successfully.
-                raise ValueError("provider_rate_deadline_invalid") from None
-            if parsed is not None:
-                try:
-                    deadlines.append(max(parsed, now + timedelta(seconds=1)))
-                except (OverflowError, OSError):
-                    raise ValueError("provider_rate_deadline_invalid") from None
-            else:
-                raise ValueError("provider_rate_deadline_invalid") from None
-        else:
-            if seconds <= 0:
-                raise ValueError("provider_rate_deadline_invalid")
-            try:
-                deadlines.append(now + timedelta(seconds=seconds))
-            except (OverflowError, OSError):
-                raise ValueError("provider_rate_deadline_invalid") from None
+        deadlines.append(_retry_after_deadline(retry_after, now))
     reset = headers.get("x-ratelimit-reset")
     if reset is not None:
-        try:
-            parsed = datetime.fromtimestamp(float(reset), UTC)
-            if parsed > now:
-                deadlines.append(parsed)
-            else:
-                raise ValueError("provider_rate_deadline_invalid")
-        except (ValueError, OverflowError, OSError):
-            raise ValueError("provider_rate_deadline_invalid") from None
+        deadlines.append(_epoch_reset_deadline(reset, now))
     standard_reset = headers.get("ratelimit-reset")
     if standard_reset is not None:
-        try:
-            standard_seconds = float(standard_reset)
-            if standard_seconds <= 0:
-                raise ValueError
-            deadlines.append(now + timedelta(seconds=standard_seconds))
-        except (ValueError, OverflowError):
-            raise ValueError("provider_rate_deadline_invalid") from None
+        deadlines.append(_standard_reset_deadline(standard_reset, now))
     if deadlines:
         # Multiple independent headers can impose different waits; never resume at the shorter one.
         return max(deadlines)
@@ -281,10 +315,204 @@ def _same_youtube_channel(feed_id: str | None, configured: str | None) -> bool:
     return feed_id is not None and bare(feed_id) == bare(configured)
 
 
+@dataclass(frozen=True)
+class _FeedEntry:
+    """Provider-neutral mapped Atom entry before hashing and record assembly."""
+
+    provider_id: str
+    title: str
+    author: str
+    tags: list[str]
+    text_value: str
+    selected: dict[str, object]
+    source_fields: dict[str, object]
+    source_fields_truncated: bool
+    basis: str
+    observed: datetime
+    modified: datetime | None
+    published_raw: str | None
+    modified_raw: str | None
+    canonical_url: str | None
+
+
+# An entry mapper returns ``None`` when the entry is outside the configured scope (the page is then truncated).
+_EntryMapper = Callable[[ElementTree.Element, str | None, str, str, datetime], "_FeedEntry | None"]
+
+
+def _timestamp_basis(modified: datetime | None, published: datetime | None) -> str:
+    """Prefer provider-modified, then provider-published, else the collection clock."""
+    return "provider_modified" if modified else "provider_published" if published else "collection"
+
+
+def _youtube_entry(
+    entry: ElementTree.Element, scope: str | None, title: str, summary: str, collected_at: datetime,
+) -> _FeedEntry | None:
+    """Map one YouTube Atom entry, or ``None`` when its channel/video identity is out of scope."""
+    channel_id = entry.findtext(f"{{{_YT}}}channelId")
+    video_id = entry.findtext(f"{{{_YT}}}videoId")
+    if not _same_youtube_channel(channel_id, scope) or not video_id or len(video_id) > 128:
+        return None
+    published_raw = entry.findtext(f"{{{_ATOM}}}published")
+    modified_raw = entry.findtext(f"{{{_ATOM}}}updated")
+    published = _parse_time(published_raw)
+    modified = _parse_time(modified_raw)
+    identity = f"youtube:{scope}:{video_id}"
+    author = _plain_text(entry.findtext(f"{{{_ATOM}}}author/{{{_ATOM}}}name") or "")
+    category_nodes = entry.findall(f"{{{_ATOM}}}category")
+    tags = [node.attrib["term"] for node in category_nodes if node.attrib.get("term")]
+    selected: dict[str, object] = {
+        "title": title, "summary": summary, "author": author,
+        "published": published_raw, "updated": modified_raw, "tags": tags,
+    }
+    source_fields: dict[str, object] = {
+        "title": title[:500],
+        "summary": summary[:4000],
+        "tags": [value[:255] for value in tags[:100]],
+    }
+    if author:
+        source_fields["author"] = author[:1000]
+    if published_raw is not None:
+        source_fields["published_at"] = published_raw[:64]
+    if modified_raw is not None:
+        source_fields["provider_updated_at"] = modified_raw[:64]
+    source_fields_truncated = (
+        len(title) > 500 or len(summary) > 4000 or len(author) > 1000
+        or len(tags) > 100 or any(len(value) > 255 for value in tags)
+        or (published_raw is not None and len(published_raw) > 64)
+        or (modified_raw is not None and len(modified_raw) > 64)
+    )
+    return _FeedEntry(
+        provider_id=identity, title=title, author=author, tags=tags,
+        text_value=title + (f"\n\n{summary}" if summary else ""), selected=selected,
+        source_fields=source_fields, source_fields_truncated=source_fields_truncated,
+        basis=_timestamp_basis(modified, published), observed=modified or published or collected_at,
+        modified=modified, published_raw=published_raw, modified_raw=modified_raw,
+        canonical_url=_feed_canonical(entry, "youtube", identity),
+    )
+
+
+def _arxiv_entry(
+    entry: ElementTree.Element, scope: str | None, title: str, summary: str, collected_at: datetime,
+) -> _FeedEntry | None:
+    """Map one arXiv Atom entry, or ``None`` when it has no usable identifier."""
+    arxiv_id = entry.findtext(f"{{{_ATOM}}}id")
+    if not arxiv_id or len(arxiv_id) > 512:
+        return None
+    published_raw = entry.findtext(f"{{{_ATOM}}}published")
+    modified_raw = entry.findtext(f"{{{_ATOM}}}updated")
+    published = _parse_time(published_raw)
+    modified = _parse_time(modified_raw)
+    author_nodes = entry.findall(f"{{{_ATOM}}}author")
+    author_names = [
+        _plain_text(node.findtext(f"{{{_ATOM}}}name") or "")
+        for node in author_nodes
+    ]
+    category_nodes = entry.findall("{http://www.w3.org/2005/Atom}category")
+    categories = [
+        node.attrib.get("term", "")
+        for node in category_nodes
+        if node.attrib.get("term")
+    ]
+    author = ", ".join(author_names)
+    source_fields: dict[str, object] = {
+        "title": title[:500],
+        "summary": summary[:4000],
+        "authors": [value[:255] for value in author_names[:100]],
+        "categories": [value[:255] for value in categories[:100]],
+        "tags": [value[:255] for value in categories[:100]],
+    }
+    if author:
+        source_fields["author"] = author[:1000]
+    if published_raw is not None:
+        source_fields["published_at"] = published_raw[:64]
+    if modified_raw is not None:
+        source_fields["provider_updated_at"] = modified_raw[:64]
+    source_fields_truncated = (
+        len(title) > 500 or len(summary) > 4000 or len(author) > 1000
+        or len(author_nodes) > 100 or len(category_nodes) > 100
+        or any(len(value) > 255 for value in [*author_names, *categories])
+        or (published_raw is not None and len(published_raw) > 64)
+        or (modified_raw is not None and len(modified_raw) > 64)
+    )
+    selected: dict[str, object] = {
+        "title": title, "summary": summary, "authors": author_names, "categories": categories,
+        "published": published_raw, "updated": modified_raw,
+    }
+    return _FeedEntry(
+        provider_id=arxiv_id, title=title, author=author, tags=categories,
+        text_value=title + (f"\n\n{summary}" if summary else ""), selected=selected,
+        source_fields=source_fields, source_fields_truncated=source_fields_truncated,
+        basis=_timestamp_basis(modified, published), observed=modified or published or collected_at,
+        modified=modified, published_raw=published_raw, modified_raw=modified_raw,
+        canonical_url=_feed_canonical(entry, "arxiv", arxiv_id),
+    )
+
+
+# Provider -> entry mapper registry: a new Atom-feed provider registers here without touching the loop.
+_ENTRY_MAPPERS: dict[str, _EntryMapper] = {"youtube": _youtube_entry, "arxiv": _arxiv_entry}
+
+
+def _feed_record(provider: str, mapped: _FeedEntry, truncated: bool, collected_at: datetime) -> IngestionRecord:
+    """Assemble the ingestion record (version hash, provenance, bounded metadata) for a mapped entry.
+
+    ``truncated`` is the page truncation state at this point of the sweep (it feeds coverage).
+    """
+    digest = _selected_hash(mapped.selected)
+    raw_version = f"{mapped.modified.isoformat()}:{digest}" if mapped.modified is not None else digest
+    version = raw_version[:255]
+    content_truncated = len(mapped.text_value) > 4000 or mapped.source_fields_truncated
+    record_metadata: dict[str, object] = {
+        "provider_record": _provider_record(
+            provider=provider,
+            identity=mapped.provider_id,
+            version=version,
+            timestamp_basis=mapped.basis,
+            modified_at=mapped.modified,
+            content_truncated=content_truncated,
+            coverage="truncated" if truncated else "returned_snapshot",
+            source_fields=mapped.source_fields,
+        ),
+        "author": mapped.author[:1000],
+        "tags": mapped.tags[:100],
+        "title": mapped.title[:500],
+    }
+    if mapped.canonical_url is not None:
+        record_metadata["canonical_url"] = mapped.canonical_url
+    if mapped.published_raw is not None:
+        record_metadata["published_at"] = mapped.published_raw[:64]
+    if mapped.modified_raw is not None:
+        record_metadata["provider_updated_at"] = mapped.modified_raw[:64]
+    return IngestionRecord(
+        provider_id=mapped.provider_id,
+        content=mapped.text_value[:4000],
+        observed_at=mapped.observed,
+        version=version,
+        metadata=record_metadata,
+        collected_at=collected_at,
+    )
+
+
+def _mark_truncated(records: list[IngestionRecord]) -> None:
+    """Rewrite each record's provenance coverage to ``truncated`` in place."""
+    for index, record in enumerate(records):
+        metadata = dict(record.metadata)
+        provider_record = ProviderRecordMetadata.model_validate(
+            metadata["provider_record"]
+        ).model_copy(update={"coverage": "truncated"})
+        metadata["provider_record"] = provider_record.model_dump(
+            mode="json", exclude_none=True
+        )
+        records[index] = record.model_copy(update={"metadata": metadata})
+
+
 def _records_from_feed(
     source: ConnectorSource, body: bytes, collected_at: datetime
 ) -> ProviderCollectionPage:
-    """Map actual scoped YouTube/arXiv Atom entries, limiting output and preserving source clocks."""
+    """Map actual scoped YouTube/arXiv Atom entries, limiting output and preserving source clocks.
+
+    Out-of-scope entries and the 500-entry / mapped-byte caps mark the page truncated; the
+    coverage already stamped on earlier records is rewritten at the end.
+    """
     config = ConnectorConfig.model_validate(source.configuration)
     # DOCTYPE/ENTITY refused (billion-laughs / XXE class); size bound matches the page fetch cap
     # (live arXiv category Atom feeds exceed the 1 MiB default feed limit).
@@ -297,129 +525,15 @@ def _records_from_feed(
     for entry in entries[:500]:
         title = _plain_text(entry.findtext(f"{{{_ATOM}}}title") or "")
         summary = _plain_text(entry.findtext(f"{{{_ATOM}}}summary") or entry.findtext(f"{{{_ATOM}}}content") or "")
-        if source.provider == "youtube":
-            channel_id = entry.findtext(f"{{{_YT}}}channelId")
-            video_id = entry.findtext(f"{{{_YT}}}videoId")
-            if not _same_youtube_channel(channel_id, scope) or not video_id or len(video_id) > 128:
-                truncated = True
-                continue
-            published_raw = entry.findtext(f"{{{_ATOM}}}published")
-            modified_raw = entry.findtext(f"{{{_ATOM}}}updated")
-            published = _parse_time(published_raw)
-            modified = _parse_time(modified_raw)
-            identity = f"youtube:{scope}:{video_id}"
-            author = _plain_text(entry.findtext(f"{{{_ATOM}}}author/{{{_ATOM}}}name") or "")
-            category_nodes = entry.findall(f"{{{_ATOM}}}category")
-            tags = [node.attrib["term"] for node in category_nodes if node.attrib.get("term")]
-            selected = {
-                "title": title, "summary": summary, "author": author,
-                "published": published_raw, "updated": modified_raw, "tags": tags,
-            }
-            source_fields: dict[str, object] = {
-                "title": title[:500],
-                "summary": summary[:4000],
-                "tags": [value[:255] for value in tags[:100]],
-            }
-            if author:
-                source_fields["author"] = author[:1000]
-            if published_raw is not None:
-                source_fields["published_at"] = published_raw[:64]
-            if modified_raw is not None:
-                source_fields["provider_updated_at"] = modified_raw[:64]
-            source_fields_truncated = (
-                len(title) > 500 or len(summary) > 4000 or len(author) > 1000
-                or len(tags) > 100 or any(len(value) > 255 for value in tags)
-                or (published_raw is not None and len(published_raw) > 64)
-                or (modified_raw is not None and len(modified_raw) > 64)
-            )
-            basis = "provider_modified" if modified else "provider_published" if published else "collection"
-            observed = modified or published or collected_at
-            text_value = title + (f"\n\n{summary}" if summary else "")
-            provider_id = identity
-            canonical_url = _feed_canonical(entry, "youtube", identity)
-        elif source.provider == "arxiv":
-            arxiv_id = entry.findtext(f"{{{_ATOM}}}id")
-            if not arxiv_id or len(arxiv_id) > 512:
-                truncated = True
-                continue
-            published_raw = entry.findtext(f"{{{_ATOM}}}published")
-            modified_raw = entry.findtext(f"{{{_ATOM}}}updated")
-            published = _parse_time(published_raw)
-            modified = _parse_time(modified_raw)
-            author_nodes = entry.findall(f"{{{_ATOM}}}author")
-            author_names = [
-                _plain_text(node.findtext(f"{{{_ATOM}}}name") or "")
-                for node in author_nodes
-            ]
-            category_nodes = entry.findall("{http://www.w3.org/2005/Atom}category")
-            categories = [
-                node.attrib.get("term", "")
-                for node in category_nodes
-                if node.attrib.get("term")
-            ]
-            author = ", ".join(author_names)
-            source_fields = {
-                "title": title[:500],
-                "summary": summary[:4000],
-                "authors": [value[:255] for value in author_names[:100]],
-                "categories": [value[:255] for value in categories[:100]],
-                "tags": [value[:255] for value in categories[:100]],
-            }
-            if author:
-                source_fields["author"] = author[:1000]
-            if published_raw is not None:
-                source_fields["published_at"] = published_raw[:64]
-            if modified_raw is not None:
-                source_fields["provider_updated_at"] = modified_raw[:64]
-            source_fields_truncated = (
-                len(title) > 500 or len(summary) > 4000 or len(author) > 1000
-                or len(author_nodes) > 100 or len(category_nodes) > 100
-                or any(len(value) > 255 for value in [*author_names, *categories])
-                or (published_raw is not None and len(published_raw) > 64)
-                or (modified_raw is not None and len(modified_raw) > 64)
-            )
-            selected = {"title": title, "summary": summary, "authors": author_names, "categories": categories, "published": published_raw, "updated": modified_raw}
-            basis = "provider_modified" if modified else "provider_published" if published else "collection"
-            observed = modified or published or collected_at
-            text_value = title + (f"\n\n{summary}" if summary else "")
-            provider_id = arxiv_id
-            tags = categories
-            canonical_url = _feed_canonical(entry, "arxiv", arxiv_id)
-        else:
+        provider = source.provider
+        mapper = _ENTRY_MAPPERS.get(provider) if provider is not None else None
+        if provider is None or mapper is None:
             raise ValueError("provider_scope_invalid")
-        digest = _selected_hash(selected)
-        raw_version = f"{modified.isoformat()}:{digest}" if modified is not None else digest
-        version = raw_version[:255]
-        content_truncated = len(text_value) > 4000 or source_fields_truncated
-        record_metadata: dict[str, object] = {
-            "provider_record": _provider_record(
-                provider=source.provider,
-                identity=provider_id,
-                version=version,
-                timestamp_basis=basis,
-                modified_at=modified,
-                content_truncated=content_truncated,
-                coverage="truncated" if truncated else "returned_snapshot",
-                source_fields=source_fields,
-            ),
-            "author": author[:1000],
-            "tags": tags[:100],
-            "title": title[:500],
-        }
-        if canonical_url is not None:
-            record_metadata["canonical_url"] = canonical_url
-        if published_raw is not None:
-            record_metadata["published_at"] = published_raw[:64]
-        if modified_raw is not None:
-            record_metadata["provider_updated_at"] = modified_raw[:64]
-        record = IngestionRecord(
-            provider_id=provider_id,
-            content=text_value[:4000],
-            observed_at=observed,
-            version=version,
-            metadata=record_metadata,
-            collected_at=collected_at,
-        )
+        mapped = mapper(entry, scope, title, summary, collected_at)
+        if mapped is None:
+            truncated = True
+            continue
+        record = _feed_record(provider, mapped, truncated, collected_at)
         record_bytes = len(record.model_dump_json().encode("utf-8"))
         if mapped_bytes + record_bytes > _MAX_MAPPED_BYTES:
             truncated = True
@@ -427,15 +541,7 @@ def _records_from_feed(
         mapped_bytes += record_bytes
         records.append(record)
     if truncated:
-        for index, record in enumerate(records):
-            metadata = dict(record.metadata)
-            provider_record = ProviderRecordMetadata.model_validate(
-                metadata["provider_record"]
-            ).model_copy(update={"coverage": "truncated"})
-            metadata["provider_record"] = provider_record.model_dump(
-                mode="json", exclude_none=True
-            )
-            records[index] = record.model_copy(update={"metadata": metadata})
+        _mark_truncated(records)
     return ProviderCollectionPage(
         records=tuple(records),
         coverage="truncated" if truncated else "returned_snapshot",

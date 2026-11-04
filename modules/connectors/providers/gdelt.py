@@ -41,6 +41,7 @@ def gdelt_request(max_records: int = GDELT_DEFAULT_MAX_RECORDS) -> ProviderReque
 
 
 def _seen(raw: object) -> datetime | None:
+    """Parse a GDELT ``seendate`` (YYYYMMDDTHHMMSSZ) into UTC, or ``None`` when absent or invalid."""
     match = _SEEN_RE.match(raw) if isinstance(raw, str) else None
     if not match:
         return None
@@ -98,6 +99,7 @@ def map_gdelt(payload: object, collected_at: datetime, max_records: int = GDELT_
 
 
 def _truncated(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of record metadata with provider coverage downgraded to ``truncated``."""
     out = dict(metadata)
     out["provider_record"] = {**out["provider_record"], "coverage": "truncated"}
     return out
