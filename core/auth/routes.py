@@ -242,9 +242,10 @@ async def create_owner(
         raise HTTPException(status_code=403, detail="Origin is not allowed")
     if not x_setup_token or not hmac.compare_digest(configured_token, x_setup_token):
         raise HTTPException(status_code=403, detail="Setup token is invalid")
-    await _allow_attempt(request, redis, "setup")
+    # CSRF is validated before the attempt is counted so forged cross-site requests cannot burn the shared bucket.
     if not _valid_csrf(request.cookies.get(CSRF_COOKIE), csrf_token, settings):
         raise HTTPException(status_code=403, detail="CSRF token is invalid")
+    await _allow_attempt(request, redis, "setup")
 
     try:
         await provision_bootstrap_account_in_uow(session, await asyncio.to_thread(hash_password, body.password))
@@ -280,21 +281,23 @@ async def login(
 ) -> AuthState:
     """Resolve exact normalized email (omission bootstrap1), lock account and issue active identity session.
 
-    Origin/anonymous CSRF and bounded rate admission precede credentials. Never scan passwords;
+    Origin and anonymous CSRF precede bounded rate admission, which precedes credentials. Never scan passwords;
     invalid identifier, absent account, wrong password and rollout denial share generic401.
     Recheck complete default/active identity after lock before committing hashed session state.
     """
     settings: Settings = request.app.state.settings
     if not _origin_allowed(origin, settings):
         raise HTTPException(status_code=403, detail="Origin is not allowed")
+    # Origin and CSRF are validated BEFORE any rate-limit/lockout counter moves, so a request that never passed them
+    # (cross-site forgery, scripted noise) cannot consume the per-IP budget or trigger a lockout for the real owner.
+    if not _valid_csrf(request.cookies.get(CSRF_COOKIE), csrf_token, settings):
+        raise HTTPException(status_code=403, detail="CSRF token is invalid")
     try:
         await _allow_attempt(request, redis, "login")
         await _login_precheck(request, redis, body.identifier)
     except HTTPException as exc:
         _audit(request, "login_rate_limited" if exc.status_code == 429 else "login_unavailable")
         raise
-    if not _valid_csrf(request.cookies.get(CSRF_COOKIE), csrf_token, settings):
-        raise HTTPException(status_code=403, detail="CSRF token is invalid")
     try:
         state, owner_id = await _login_verify(request, response, body, session, settings)
     except HTTPException as exc:

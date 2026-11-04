@@ -128,3 +128,58 @@ async def test_idle_session_rejected_and_active_touched(monkeypatch: pytest.Monk
     session = _Session(row(now - timedelta(minutes=10)))
     await _account_session(request, session, "tok")
     assert session.commits == 1 and session.row.last_seen_at > now - timedelta(minutes=1)
+
+
+def test_client_ip_forwarded_for_uses_rightmost_entry_only_when_trusted() -> None:
+    request = _req(**{"x-forwarded-for": "6.6.6.6, 203.0.113.9"})
+    assert routes._client_ip(request) == "172.18.0.5"  # untrusted: spoofable header ignored
+    request.app.state.settings.auth_trust_forwarded_for = True
+    assert routes._client_ip(request) == "203.0.113.9"
+    # A configured header wins and also takes its last comma entry.
+    assert routes._client_ip(_req("x-real-ip", **{"x-real-ip": "9.9.9.9, 8.8.8.8"})) == "8.8.8.8"
+
+
+def _login_request(csrf_ok: bool) -> tuple[MagicMock, MagicMock]:
+    request = _req()
+    request.cookies = {}
+    request.app.state.settings.public_origin = "https://example.com"
+    redis = MagicMock()
+    redis.pipeline.side_effect = AssertionError("rate limiter must not run before CSRF validation")
+    redis.ttl = AsyncMock(side_effect=AssertionError("lockout must not run before CSRF validation"))
+    return request, redis
+
+
+@pytest.mark.asyncio
+async def test_login_does_not_count_attempt_before_csrf_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F2.5: a request failing CSRF must not consume the per-IP budget or touch lockout state."""
+    from core.auth.routes import LoginRequest
+
+    monkeypatch.setattr(routes, "_origin_allowed", lambda *_: True)
+    monkeypatch.setattr(routes, "_valid_csrf", lambda *_: False)
+    request, redis = _login_request(csrf_ok=False)
+    with pytest.raises(HTTPException) as caught:
+        await routes.login(
+            request, MagicMock(), LoginRequest(identifier="a@example.com", password="x" * 12), MagicMock(), redis,
+            origin="https://example.com", csrf_token="bad",
+        )
+    assert caught.value.status_code == 403
+    redis.pipeline.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_setup_does_not_count_attempt_before_csrf_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F2.5: owner setup with a bad CSRF token returns 403 without touching the rate limiter."""
+    from core.auth.schemas import SetupRequest
+
+    monkeypatch.setattr(routes, "_origin_allowed", lambda *_: True)
+    monkeypatch.setattr(routes, "_valid_csrf", lambda *_: False)
+    request, redis = _login_request(csrf_ok=False)
+    request.app.state.settings.setup_token.get_secret_value.return_value = "tok"
+    with pytest.raises(HTTPException) as caught:
+        await routes.create_owner(
+            SetupRequest.model_construct(email="a@example.com", password="x" * 12, display_name="A"),
+            request, MagicMock(), MagicMock(), redis,
+            x_setup_token="tok", origin="https://example.com", csrf_token="bad",
+        )
+    assert caught.value.status_code == 403
+    redis.pipeline.assert_not_called()

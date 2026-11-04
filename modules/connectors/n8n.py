@@ -384,7 +384,7 @@ async def read_rss(
     current_url: str | None = url
     async with contextlib.AsyncExitStack() as stack:
         client = None if fetch is not None else await stack.enter_async_context(
-            httpx.AsyncClient(timeout=15, follow_redirects=False))
+            httpx.AsyncClient(timeout=15, follow_redirects=False, trust_env=False))
         for _ in range(10):
             if current_url is None or current_url in visited:
                 break
@@ -398,7 +398,18 @@ async def read_rss(
                     raise ValueError("RSS pagination exceeded the 25 MiB limit")
             else:
               assert client is not None
-              async with client.stream("GET", current_url, headers={"Accept": "application/atom+xml, application/rss+xml, application/xml, text/xml"}) as response:
+              # Pin the connection to the address validated here (closes the resolve-then-fetch DNS-rebinding
+              # window); a non-public or unresolvable host raises UnsafeDestination, never an unpinned request.
+              from modules.connectors.providers.rest import _pinned_request, resolve_public
+
+              rss_parts = urlsplit(current_url)
+              rss_port = rss_parts.port or (443 if rss_parts.scheme == "https" else 80)
+              rss_addresses = await resolve_public(rss_parts.hostname or "", rss_port)
+              send_url, send_headers, send_extensions = _pinned_request(
+                  current_url, rss_addresses[0],
+                  {"Accept": "application/atom+xml, application/rss+xml, application/xml, text/xml"},
+              )
+              async with client.stream("GET", send_url, headers=send_headers, extensions=send_extensions) as response:
                 if response.is_redirect:
                     location = response.headers.get("location")
                     if not location:

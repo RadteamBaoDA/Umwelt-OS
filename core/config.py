@@ -320,6 +320,31 @@ class Settings(BaseSettings):
         return "production"
 
     @property
+    def has_trusted_client_ip_source(self) -> bool:
+        """Return True when a front proxy is declared as the source of the real client address.
+
+        Either AUTH_CLIENT_IP_HEADER names a non-blank header or AUTH_TRUST_FORWARDED_FOR is on.
+        """
+        return bool(self.auth_client_ip_header.strip()) or self.auth_trust_forwarded_for
+
+    def require_trusted_client_ip_source(self) -> None:
+        """Refuse API startup in production with a public origin and no trusted client-IP source.
+
+        uvicorn runs with --no-proxy-headers, so without AUTH_CLIENT_IP_HEADER / AUTH_TRUST_FORWARDED_FOR every
+        request appears to come from the web container and the per-IP login limit plus account lockout become
+        instance-global (one attacker could lock the owner out). Only the API keys on client IP, so this is called
+        from create_app and deliberately is NOT part of the Settings validator: workers, chat/model workers and
+        migrations build Settings too and never see client addresses.
+        Raises RuntimeError naming the missing variables. Secrets-relaxed (dev/test) and local origins are exempt.
+        """
+        if self.secrets_relaxed or self.is_dev or self.origin_is_local or self.has_trusted_client_ip_source:
+            return
+        raise RuntimeError(
+            "AUTH_CLIENT_IP_HEADER or AUTH_TRUST_FORWARDED_FOR=true must be configured for a public "
+            "production origin (see docs/deployment.md, Client IP)"
+        )
+
+    @property
     def is_dev(self) -> bool:
         """Return True in development or test mode (relaxed secrets/cookie rules, API docs enabled)."""
         return self.mode != "production"

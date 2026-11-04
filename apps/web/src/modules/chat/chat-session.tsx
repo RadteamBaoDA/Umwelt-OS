@@ -966,6 +966,21 @@ export function ChatSession({
   }, [chatCtrl]);
 
   /**
+   * Places a sandbox-widget prompt in the composer without sending it. Refuses (throws, reported to the widget as a
+   * retryable error) when the owner already typed text, so a widget can never overwrite an in-progress message.
+   *
+   * @param prompt - Validated widget prompt text.
+   * @throws Error when the composer already holds non-blank text.
+   */
+  const handleWidgetDraftPrompt = React.useCallback(
+    (prompt: string) => {
+      if (chatCtrl.draft.trim()) throw new Error('Composer already has text');
+      chatCtrl.setDraft(prompt);
+    },
+    [chatCtrl],
+  );
+
+  /**
    * Submits a follow-up prompt raised by a generative UI widget or sandbox iframe.
    * Rejects with a localized error while a response is pending/streaming (instead of silently
    * dropping) so the prompt bridge can report a retryable failure back to the widget.
@@ -1013,7 +1028,16 @@ export function ChatSession({
   );
 
   return (
-    <PromptBridgeProvider onSendPrompt={handleWidgetSendPrompt}>
+    <PromptBridgeProvider
+      onSendPrompt={handleWidgetSendPrompt}
+      onDraftPrompt={handleWidgetDraftPrompt}
+      linkConfirmLabels={{
+        title: t('genUiLinkConfirmTitle'),
+        description: t('genUiLinkConfirmBody'),
+        open: t('genUiLinkConfirmOpen'),
+        cancel: t('genUiLinkConfirmCancel'),
+      }}
+    >
       <div className="flex flex-col h-full bg-background relative overflow-hidden">
         {/* Session header if inside drawer or full mode */}
         <div className={`flex flex-wrap items-center justify-between gap-2 border-b border-border bg-surface shrink-0 ${mode === 'drawer' ? 'px-4 py-3 pr-14' : 'px-5 py-3'}`}>

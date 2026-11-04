@@ -10,6 +10,12 @@
 
 import * as React from 'react';
 import { apiRequest } from '@/core/api';
+import {
+  DEFAULT_LINK_CONFIRM_LABELS,
+  WidgetLinkConfirmDialog,
+  useWidgetLinkConfirm,
+  type LinkConfirmLabels,
+} from './link-confirm';
 import { blobToDataUrl, fetchImageBlob, resolveMediaUrl } from './image-loader';
 import {
   DEFAULT_PROMPT_COOLDOWN_MS,
@@ -90,9 +96,18 @@ const defaultBridgeContext: PromptBridgeContextValue = {
 export const PromptBridgeContext =
   React.createContext<PromptBridgeContextValue>(defaultBridgeContext);
 
+export type { LinkConfirmLabels };
+
 export interface PromptBridgeProviderProps {
-  /** Callback invoked when a validated prompt is accepted from a widget or sandboxed iframe. */
+  /** Callback invoked for prompts submitted through the in-host `sendPrompt` context function (trusted host code only). */
   onSendPrompt: (prompt: string) => void | Promise<void>;
+  /**
+   * Receives a prompt requested by a SANDBOXED widget. It must only place the text in the chat composer; the user
+   * presses send. When omitted, sandbox prompts are rejected (fail closed) because the host cannot verify a user gesture.
+   */
+  onDraftPrompt?: (prompt: string) => void;
+  /** Localized strings for the open-link confirmation dialog (English fallback). */
+  linkConfirmLabels?: LinkConfirmLabels;
   /** Optional callback invoked when a sandboxed iframe reports a validated resize height. */
   onResize?: (height: number, source: unknown) => void;
   /** Rate-limit cooldown in milliseconds between consecutive prompt submissions. Defaults to 500ms. */
@@ -113,13 +128,19 @@ export interface PromptBridgeProviderProps {
  */
 export function PromptBridgeProvider({
   onSendPrompt,
+  onDraftPrompt,
+  linkConfirmLabels = DEFAULT_LINK_CONFIRM_LABELS,
   onResize,
   cooldownMs = DEFAULT_PROMPT_COOLDOWN_MS,
   disabled = false,
   children,
 }: PromptBridgeProviderProps) {
   const onSendPromptRef = React.useRef(onSendPrompt);
+  const onDraftPromptRef = React.useRef(onDraftPrompt);
   const onResizeRef = React.useRef(onResize);
+  // Widget-requested link awaiting the owner's explicit confirmation (one at a time; extra requests are dropped).
+  const linkConfirm = useWidgetLinkConfirm();
+  const requestLink = linkConfirm.requestLink;
   const disabledRef = React.useRef(disabled);
   const lastAcceptedAtRef = React.useRef<number | null>(null);
   const registeredFramesRef = React.useRef<Map<unknown, string>>(new Map());
@@ -130,6 +151,10 @@ export function PromptBridgeProvider({
   React.useEffect(() => {
     onSendPromptRef.current = onSendPrompt;
   }, [onSendPrompt]);
+
+  React.useEffect(() => {
+    onDraftPromptRef.current = onDraftPrompt;
+  }, [onDraftPrompt]);
 
   React.useEffect(() => {
     onResizeRef.current = onResize;
@@ -207,6 +232,42 @@ export function PromptBridgeProvider({
   );
 
   /**
+   * Handles a prompt posted by a sandboxed widget: validates and rate-limits it like any prompt, then ONLY fills the
+   * chat composer through `onDraftPrompt`. It is never submitted: a widget can run script without any user gesture, so
+   * the owner must read the text and press send themselves. Replies to the frame with ack + result (or a retryable error).
+   */
+  const draftSandboxPrompt = React.useCallback(
+    (rawPrompt: string, replyTo: unknown, requestId?: string): void => {
+      const fail = (message: string) =>
+        replyToFrame(replyTo, { type: SEND_PROMPT_ERROR_TYPE, id: requestId, retryable: true, message });
+      const draft = onDraftPromptRef.current;
+      if (disabledRef.current || !draft) {
+        fail('Prompt bridge is disabled');
+        return;
+      }
+      const parsed = sendPromptParameters.safeParse({ text: rawPrompt });
+      if (!parsed.success) {
+        fail('Invalid prompt');
+        return;
+      }
+      const now = Date.now();
+      if (cooldownMs > 0 && lastAcceptedAtRef.current !== null && now - lastAcceptedAtRef.current < cooldownMs) {
+        fail('Prompt rate limited');
+        return;
+      }
+      lastAcceptedAtRef.current = now;
+      replyToFrame(replyTo, { type: SEND_PROMPT_ACK_TYPE, id: requestId });
+      try {
+        draft(parsed.data.text);
+        replyToFrame(replyTo, { type: SEND_PROMPT_RESULT_TYPE, id: requestId, ok: true, drafted: true });
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [cooldownMs, replyToFrame],
+  );
+
+  /**
    * Serves a widget `loadImage` request: URL-allowlisted, rate limited, gated by the owner's
    * `allow_widget_remote_media` privacy flag, fetched with credentials and size/type capped, then answered
    * with a `data:` URL (opaque-origin frames cannot reliably load host-origin `blob:` URLs; no blob lifetime to manage). All failures reply with an error message and never throw.
@@ -273,15 +334,14 @@ export function PromptBridgeProvider({
       }
 
       if (validated.type === 'send-prompt') {
-        dispatchValidatedPrompt(validated.prompt, event.source, validated.id);
+        draftSandboxPrompt(validated.prompt, event.source, validated.id);
       } else if (validated.type === 'resize') {
         onResizeRef.current?.(validated.height, event.source);
       } else if (validated.type === 'load-image') {
         void handleLoadImage(event.source, validated.id, validated.url);
       } else if (validated.type === 'open-link') {
-        if (typeof window !== 'undefined') {
-          window.open(validated.url, '_blank', 'noopener,noreferrer');
-        }
+        // Never open directly: a widget can fire this without any user gesture. Ask the owner first.
+        requestLink(validated.url, event.source);
       }
     };
 
@@ -289,7 +349,7 @@ export function PromptBridgeProvider({
     return () => {
       window.removeEventListener('message', handleWindowMessage);
     };
-  }, [dispatchValidatedPrompt, handleLoadImage]);
+  }, [draftSandboxPrompt, handleLoadImage, requestLink]);
 
   const contextValue = React.useMemo<PromptBridgeContextValue>(
     () => ({
@@ -303,6 +363,7 @@ export function PromptBridgeProvider({
   return (
     <PromptBridgeContext.Provider value={contextValue}>
       {children}
+      <WidgetLinkConfirmDialog url={linkConfirm.pendingLink} labels={linkConfirmLabels} onResolve={linkConfirm.resolve} />
     </PromptBridgeContext.Provider>
   );
 }

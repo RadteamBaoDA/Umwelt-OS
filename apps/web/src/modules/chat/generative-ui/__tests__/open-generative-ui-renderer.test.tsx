@@ -181,10 +181,11 @@ describe('OpenGenerativeUIRenderer', () => {
     expect(container.style.height).toBe('280px');
   });
 
-  it('dispatches a sandbox send-prompt to the provider exactly once', () => {
+  it('drafts a sandbox send-prompt into the composer exactly once and never submits it', () => {
     const onSendPrompt = vi.fn();
+    const onDraftPrompt = vi.fn();
     render(
-      <PromptBridgeProvider onSendPrompt={onSendPrompt} cooldownMs={0}>
+      <PromptBridgeProvider onSendPrompt={onSendPrompt} onDraftPrompt={onDraftPrompt} cooldownMs={0}>
         <OpenGenerativeUIRenderer status="completed" args={{ html: '<p>x</p>' }} />
       </PromptBridgeProvider>,
     );
@@ -198,8 +199,9 @@ describe('OpenGenerativeUIRenderer', () => {
         }),
       );
     });
-    expect(onSendPrompt).toHaveBeenCalledTimes(1);
-    expect(onSendPrompt).toHaveBeenCalledWith('once');
+    expect(onDraftPrompt).toHaveBeenCalledTimes(1);
+    expect(onDraftPrompt).toHaveBeenCalledWith('once');
+    expect(onSendPrompt).not.toHaveBeenCalled();
   });
 
   /** Collects postMessage payloads sent to the iframe's contentWindow. */

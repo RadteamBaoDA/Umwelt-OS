@@ -53,6 +53,7 @@ def _prod(**kw: object) -> Settings:
         "database_url": "postgresql+asyncpg://bbd:real-pw@db:5432/bbd", "redis_url": "redis://:real-pw@redis:6379/0",
         "public_origin": "https://example.com",
         "secure_cookies": True,
+        "auth_trust_forwarded_for": True,
     }
     return Settings(_env_file=None, **{**base, **kw})  # type: ignore[arg-type]
 
@@ -106,7 +107,7 @@ def test_auto_mode_never_accepts_placeholder_secrets() -> None:
 
 
 def test_auto_mode_is_production_for_public_domain() -> None:
-    assert Settings(_env_file=None, ENVIRONMENT="auto", public_origin="https://example.com", secure_cookies=True,  # type: ignore[arg-type]
+    assert Settings(_env_file=None, ENVIRONMENT="auto", public_origin="https://example.com", secure_cookies=True, auth_trust_forwarded_for=True,  # type: ignore[arg-type]
                     database_url="postgresql+asyncpg://bbd:real-pw@db:5432/bbd", redis_url="redis://:real-pw@redis:6379/0").mode == "production"
     with pytest.raises(ValidationError):  # http on a public domain
         Settings(_env_file=None, ENVIRONMENT="auto", public_origin="http://example.com", database_url="postgresql+asyncpg://bbd:real-pw@db:5432/bbd", redis_url="redis://:real-pw@redis:6379/0")  # type: ignore[arg-type]
@@ -124,3 +125,29 @@ def test_explicit_production_on_lan_keeps_secret_checks_but_allows_http() -> Non
 def test_explicit_development_wins_over_public_domain() -> None:
     assert Settings(_env_file=None, ENVIRONMENT="development", public_origin="https://example.com").mode == "development"  # type: ignore[arg-type]
     assert Settings(_env_file=None, ENVIRONMENT="bogus", public_origin="http://localhost:3000", database_url="postgresql+asyncpg://bbd:real-pw@db:5432/bbd", redis_url="redis://:real-pw@redis:6379/0").mode == "production"  # type: ignore[arg-type]
+
+
+def test_production_public_origin_requires_trusted_client_ip_source() -> None:
+    """F2.5: the API (create_app) refuses a public production origin without a trusted client-IP source."""
+    with pytest.raises(RuntimeError, match="AUTH_CLIENT_IP_HEADER"):
+        _prod(auth_trust_forwarded_for=False).require_trusted_client_ip_source()
+    from apps.api.main import create_app
+
+    with pytest.raises(RuntimeError, match="AUTH_CLIENT_IP_HEADER"):
+        create_app(_prod(auth_trust_forwarded_for=False, auth_client_ip_header="   "))
+    _prod(auth_trust_forwarded_for=False, auth_client_ip_header="CF-Connecting-IP").require_trusted_client_ip_source()
+    _prod().require_trusted_client_ip_source()
+
+
+def test_worker_style_settings_validate_without_client_ip_source() -> None:
+    """Workers (Settings() at import) must not crash when only the api service sets AUTH_TRUST_FORWARDED_FOR."""
+    worker = _prod(auth_trust_forwarded_for=False)
+    assert not worker.has_trusted_client_ip_source and worker.mode == "production"
+
+
+def test_client_ip_source_not_required_for_local_origin_or_dev() -> None:
+    ok = {"database_url": "postgresql+asyncpg://bbd:real-pw@db:5432/bbd", "redis_url": "redis://:real-pw@redis:6379/0"}
+    lan = Settings(_env_file=None, ENVIRONMENT="production", public_origin="http://192.168.1.20:3000", **ok)  # type: ignore[arg-type]
+    assert not lan.has_trusted_client_ip_source
+    dev = Settings(_env_file=None, ENVIRONMENT="development", public_origin="https://example.com", **ok)  # type: ignore[arg-type]
+    assert dev.is_dev

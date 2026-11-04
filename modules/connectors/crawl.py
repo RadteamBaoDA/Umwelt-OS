@@ -130,22 +130,23 @@ async def crawl(payload: CrawlRequest) -> list[dict[str, Any]]:
                             req_headers = {"Accept": "text/html,application/xhtml+xml"}
                             req_extensions: dict[str, object] = {}
                             if _dns_safe is _DEFAULT_DNS_SAFE:
-                                try:
-                                    from modules.connectors.providers.rest import (
-                                        _pinned_request,
-                                        resolve_public,
-                                    )
+                                # Fail closed: any resolution/pinning error aborts the crawl instead of falling back to an
+                                # unpinned request to the hostname (DNS-rebinding window).
+                                from modules.connectors.providers.rest import (
+                                    _pinned_request,
+                                    resolve_public,
+                                )
 
-                                    parts = urlsplit(current_url)
-                                    if parts.hostname:
-                                        port = parts.port or (443 if parts.scheme == "https" else 80)
-                                        addrs = await resolve_public(parts.hostname, port)
-                                        if addrs:
-                                            send_url, req_headers, req_extensions = _pinned_request(
-                                                current_url, addrs[0], req_headers,
-                                            )
-                                except Exception:  # noqa: BLE001 - fall back to validated URL if mock resolver used
-                                    send_url = current_url
+                                parts = urlsplit(current_url)
+                                if not parts.hostname:
+                                    raise ValueError("Web URL has no host")
+                                port = parts.port or (443 if parts.scheme == "https" else 80)
+                                addrs = await resolve_public(parts.hostname, port)
+                                if not addrs:
+                                    raise ValueError("Web host did not resolve to a public address")
+                                send_url, req_headers, req_extensions = _pinned_request(
+                                    current_url, addrs[0], req_headers,
+                                )
                             req = client.build_request("GET", send_url, headers=req_headers, extensions=req_extensions)
                             response = await client.send(req, stream=True)
                             if response.status_code not in {301, 302, 303, 307, 308}:

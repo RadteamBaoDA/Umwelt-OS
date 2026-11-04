@@ -100,6 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         exit; Redis and SQLAlchemy disposal run even when startup hydration fails.
     """
     app_settings = settings or Settings()
+    app_settings.require_trusted_client_ip_source()  # API-only: workers never key on client IP
     csrf_secret = app_settings.csrf_signing_secret.get_secret_value()
     worker_counts = []
     for name in ("WEB_CONCURRENCY", "UVICORN_WORKERS"):  # uvicorn honours both (click auto_envvar_prefix)
