@@ -495,7 +495,7 @@ async def discover_viz_decision_models(
 
 
 @router.post("/ai/openrouter/models", response_model=OpenRouterBrowseResult,
-             dependencies=[Depends(require_budget("model_probe", 10, 60))])
+             dependencies=[Depends(require_budget("openrouter_browse", 30, 60))])
 async def browse_openrouter_models(
     body: OpenRouterBrowseRequest, session: Session, request: Request, _owner: OwnerWrite,
 ) -> OpenRouterBrowseResult:

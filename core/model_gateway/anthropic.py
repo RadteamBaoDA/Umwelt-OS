@@ -21,6 +21,8 @@ from core.model_gateway.transport import EndpointNetworkPolicyError
 # 2026-10-21 rejects temperature/top_p/top_k on every model (400), so the translation drops them.
 ANTHROPIC_VERSION = "2026-10-21"
 DEFAULT_MAX_TOKENS = 4096
+# Streaming has no response-size limit to protect, and long answers would be cut off at 4096.
+DEFAULT_STREAM_MAX_TOKENS = 32000
 _THINKING_TYPES = frozenset({"thinking", "redacted_thinking"})
 _STOP_REASONS = {
     "end_turn": "stop", "stop_sequence": "stop", "pause_turn": "stop",
@@ -144,7 +146,8 @@ def to_messages_request(body: dict[str, Any], *, stream: bool) -> dict[str, Any]
                 "content": content if isinstance(content, str) else json.dumps(content)}]})
     out: dict[str, Any] = {
         "model": body.get("model"), "messages": messages,
-        "max_tokens": body.get("max_tokens") or body.get("max_completion_tokens") or DEFAULT_MAX_TOKENS,
+        "max_tokens": body.get("max_tokens") or body.get("max_completion_tokens")
+        or (DEFAULT_STREAM_MAX_TOKENS if stream else DEFAULT_MAX_TOKENS),
     }
     if system:
         out["system"] = "\n\n".join(system)
@@ -298,6 +301,18 @@ class StreamTranslator:
         return []
 
 
+def _json_body(response: httpx.Response) -> Any:
+    """Decode a 2xx body as JSON; a non-JSON body (captive portal, proxy page) becomes a static gateway error."""
+    try:
+        return response.json()
+    except ValueError as exc:
+        from core.model_gateway.client import (
+            ModelGatewayError,  # client imports this module
+        )
+
+        raise ModelGatewayError("Model gateway returned an invalid response") from exc
+
+
 def headers(api_key: str) -> dict[str, str]:
     """Request headers: ``x-api-key`` auth (never ``Authorization``) plus the pinned API version."""
     return {"x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json"}
@@ -346,7 +361,7 @@ async def create_message(
     request = http.build_request("POST", f"{base_url}/messages", headers=headers(api_key),
                                  json=to_messages_request(body, stream=False), timeout=timeout)
     response = await _send(http, request, stream=False)
-    data = response.json()
+    data = _json_body(response)
     return from_messages_response(data if isinstance(data, dict) else {})
 
 
@@ -392,6 +407,6 @@ async def list_models(
     request = http.build_request("GET", f"{base_url}/models", params={"limit": 1000}, headers=headers(api_key),
                                  timeout=timeout)
     response = await _send(http, request, stream=False)
-    payload = response.json()
+    payload = _json_body(response)
     data = payload.get("data") if isinstance(payload, dict) else None
     return [item["id"] for item in data or [] if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]]

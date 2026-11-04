@@ -180,3 +180,29 @@ async def test_existing_openai_kind_still_uses_openai_sdk_path() -> None:
         out = await gw.chat("chat", _MAPPING, _POLICY, USER, before_send=AsyncMock())
     assert str(seen[0].url) == "https://api.openai.com/v1/chat/completions"
     assert seen[0].headers["authorization"] == "Bearer sk-test" and out["choices"][0]["message"]["content"] == "hi"
+
+
+@pytest.mark.asyncio
+async def test_non_json_2xx_maps_to_gateway_error_for_chat_and_discover() -> None:
+    seen: list[httpx.Request] = []
+    gw, record = _gw(lambda _r: httpx.Response(200, text="<html>proxy</html>", headers={"content-type": "text/plain"}), seen)
+    with _patched(gw, record):
+        with pytest.raises(ModelGatewayError, match="invalid response"):
+            await gw.chat("chat", _MAPPING, _POLICY, USER, before_send=AsyncMock())
+        with pytest.raises(ModelGatewayError, match="invalid response"):
+            await gw.discover_models()
+
+
+def test_default_max_tokens_is_larger_when_streaming() -> None:
+    from core.model_gateway.anthropic import to_messages_request
+    body = {"model": "m", "messages": [{"role": "user", "content": "hi"}]}
+    assert to_messages_request(body, stream=False)["max_tokens"] == 4096
+    assert to_messages_request(body, stream=True)["max_tokens"] == 32000
+    assert to_messages_request({**body, "max_tokens": 10}, stream=True)["max_tokens"] == 10
+
+
+@pytest.mark.parametrize("choice", ["required", {"type": "function", "function": {"name": "f"}}])
+def test_forced_tool_choice_is_downgraded_to_auto(choice: object) -> None:
+    from core.model_gateway.anthropic import to_messages_request
+    out = to_messages_request({"model": "m", "messages": [], "tool_choice": choice}, stream=False)
+    assert "tool_choice" not in out

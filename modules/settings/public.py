@@ -630,18 +630,15 @@ def _provider_endpoint(item: ProviderUpdate, previous: dict[str, Any] | None) ->
     """Choose the ``(kind_to_store, raw_url)`` for one provider being saved, before ``_endpoint`` policy validation.
 
     Self-hosted kinds keep the client URL. Hosted kinds ignore it: a previous URL equivalent to the vendor endpoint is
-    kept verbatim (rewriting it would rotate ``destination_id``, dropping the key and privacy consent); a previous
-    non-equivalent URL under the same hosted kind is a legacy row and is saved as ``custom`` with its URL; anything
-    else gets the fixed endpoint. A converted row's kind change rotates ``gateway_identity``/``model_identity`` once,
-    so capability evidence is re-verified once; URL, key, models and consent are untouched.
+    kept verbatim (rewriting it would rotate ``destination_id``, dropping the key and privacy consent); anything
+    else gets the fixed endpoint. Legacy rows are shown to the UI as ``custom`` (read-time migration), so a client
+    sending a hosted kind is a deliberate switch and must never bind a new key to the legacy proxy host.
     """
     if item.kind not in HOSTED_PROVIDER_KINDS:
         return item.kind, str(item.base_url) if item.base_url else None
     prev_url = previous.get("base_url") if previous else None
     if prev_url and hosted_endpoint_equivalent(item.kind, prev_url):
         return item.kind, prev_url
-    if prev_url and previous is not None and previous.get("kind") == item.kind:
-        return "custom", prev_url
     return item.kind, HOSTED_PROVIDER_ENDPOINTS[item.kind]
 
 

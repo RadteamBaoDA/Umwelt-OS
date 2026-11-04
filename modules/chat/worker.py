@@ -1554,7 +1554,10 @@ async def run_response_generation(
                                         if due and await _flush_pending() is None:
                                             return
                                     details = delta.get("reasoning_details")
-                                    if isinstance(details, list) and details:
+                                    # Only the Anthropic translator emits the complete list once; other providers
+                                    # (OpenRouter) stream fragments, and echoing one would fail signature checks.
+                                    if (ai_config.gateway_kind == "anthropic" and isinstance(details, list)
+                                            and details):
                                         round_reasoning_details = [d for d in details[:64] if isinstance(d, dict)]
                                     fragments = delta.get("tool_calls")
                                     if fragments:

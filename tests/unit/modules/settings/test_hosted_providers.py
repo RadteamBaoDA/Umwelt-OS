@@ -2,7 +2,16 @@ import pytest
 from fastapi import HTTPException
 
 from modules.settings import public
-from tests.unit.modules.settings.test_providers import GW, _config, _enc, _provider, _row, _save, _settings, _update
+from tests.unit.modules.settings.test_providers import (
+    GW,
+    _config,
+    _enc,
+    _provider,
+    _row,
+    _save,
+    _settings,
+    _update,
+)
 
 
 async def test_hosted_save_ignores_client_url_and_stores_fixed_endpoint():
@@ -29,9 +38,18 @@ async def test_legacy_hosted_row_with_custom_url_reads_as_custom_and_keeps_key()
     assert p.destination_id == public._identity(GW, "")[1]   # destination unchanged
 
 
-async def test_save_of_legacy_row_with_same_hosted_kind_keeps_url_as_custom():
+async def test_legacy_row_resaved_with_hosted_kind_and_new_key_uses_fixed_endpoint():
+    # The UI shows legacy rows as `custom`, so a client sending the hosted kind is a deliberate switch.
     stored = {"default": {"kind": "openai", "base_url": GW, "key_ciphertext": _enc("sk"), "models": []}}
-    row = await _save(_row(providers=stored), _update(providers=[_provider("default", kind="openai", url=None)]))
+    row = await _save(_row(providers=stored), _update(providers=[_provider(
+        "default", kind="openai", url=None, credential_action="replaced", api_key="new")]), _settings(public_ok=True))
+    assert row.providers["default"]["kind"] == "openai"
+    assert row.providers["default"]["base_url"] == "https://api.openai.com/v1"
+
+
+async def test_legacy_row_resaved_as_custom_keeps_proxy_url_and_key():
+    stored = {"default": {"kind": "openai", "base_url": GW, "key_ciphertext": _enc("sk"), "models": []}}
+    row = await _save(_row(providers=stored), _update(providers=[_provider("default", kind="custom", url=GW)]))
     assert row.providers["default"]["kind"] == "custom" and row.providers["default"]["base_url"] == GW
     assert row.providers["default"]["key_ciphertext"] == stored["default"]["key_ciphertext"]
 
