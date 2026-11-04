@@ -96,14 +96,20 @@ async def test_add_content_chunks_runs_off_loop_thread(monkeypatch: pytest.Monke
     assert seen and seen[0] != threading.get_ident()
 
 
-async def test_large_chunking_keeps_loop_responsive() -> None:
-    # ~9.5 MB: chunking it on the loop stalls ~0.7 s, so 0.25 s separates a regression from GIL
-    # scheduling noise in the worker thread (~0.13 s seen under a loaded host).
-    text = "lorem ipsum dolor sit amet " * 350_000
-    lag = await _lag_while(
-        documents_public.add_content_chunks(_Session(), SimpleNamespace(id=uuid4(), content=text))  # type: ignore[arg-type]
-    )
-    assert lag < 0.25
+async def test_large_chunking_runs_off_the_event_loop_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Deterministic guard: a wall-clock lag threshold flaked under full-suite GIL contention, so
+    # assert the thread identity instead. Reverting the offload runs chunk_text on the loop thread.
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+
+    def recording_chunk_text(content: str) -> Any:
+        seen.append(threading.get_ident())
+        return chunk_text(content)
+
+    monkeypatch.setattr(documents_public, "chunk_text", recording_chunk_text)
+    text = "lorem ipsum dolor sit amet " * 20_000
+    await documents_public.add_content_chunks(_Session(), SimpleNamespace(id=uuid4(), content=text))  # type: ignore[arg-type]
+    assert seen and all(ident != loop_thread for ident in seen)
 
 
 async def test_save_upload_oversize_removes_temp_file(tmp_path: Path) -> None:

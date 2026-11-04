@@ -193,6 +193,7 @@ dependencies = [
     { name = "numpy" },
     { name = "ofxtools" },
     { name = "openai" },
+    { name = "pglast" },
     { name = "posthog" },
     { name = "psycopg", extra = ["binary"] },
     { name = "psycopg-pool" },
@@ -244,6 +245,7 @@ requires-dist = [
     { name = "numpy", specifier = "==2.5.3" },
     { name = "ofxtools", specifier = ">=0.9,<1" },
     { name = "openai", specifier = ">=2.20,<3" },
+    { name = "pglast", specifier = ">=7,<9" },
     { name = "posthog", specifier = "==7.61.1" },
     { name = "psycopg", extras = ["binary"], specifier = "==3.3.3" },
     { name = "psycopg-pool", specifier = "==3.3.0" },
@@ -1454,6 +1456,32 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/5a/82/42f767fc1c1143d6fd36efb827202a2d997a375e160a71eb2888a925aac1/pathspec-1.1.1.tar.gz", hash = "sha256:17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a", size = 135180, upload-time = "2026-04-27T01:46:08.907Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f1/d9/7fb5aa316bc299258e68c73ba3bddbc499654a07f151cba08f6153988714/pathspec-1.1.1-py3-none-any.whl", hash = "sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189", size = 57328, upload-time = "2026-04-27T01:46:07.06Z" },
+]
+
+[[package]]
+name = "pglast"
+version = "8.7"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/7c/89/6e1ea9afed453506d458d4f37812644af5f5fe08347af59ca44991541068/pglast-8.7.tar.gz", hash = "sha256:7729abdc12a9949c8cc96e5cae0ba353943d3f12b0c17b09a049572bfa206e15", size = 3853324, upload-time = "2026-10-18T12:45:53.744Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/61/2a/b3ce1cd39fff3b8fe63c216517ec7f7d7b514997fe85082a3f8e93fbdfbe/pglast-8.7-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:a7a16590eff897c57045fcb3adf5c0427d753b3bed9c37f3bd8b6a5474e82680", size = 1785040, upload-time = "2026-10-18T13:18:25.512Z" },
+    { url = "https://files.pythonhosted.org/packages/ef/a4/66ca593d3b890080eb85562d61dc959924b7f01ba624137698624b0026e7/pglast-8.7-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:1cf26c0e096a0c92d47ee57b05b50009acdba2ec0b2efc20271723ceb8f2dbea", size = 1705594, upload-time = "2026-10-18T13:18:26.685Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/f5/5c3da244b4f5b94f22760e7736e0fe99e56c52f17f74d3e7e692b7f91826/pglast-8.7-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:02f7b819df3244870dabfe1e65f3797932bd33b738738c9ae7870157306fecee", size = 7703738, upload-time = "2026-10-18T13:18:27.905Z" },
+    { url = "https://files.pythonhosted.org/packages/90/27/9e13baec1f26b7f6bc7fb8100cb4465dc93934323b1544e6fe55b92e695f/pglast-8.7-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e1c2e041507b723ac4eb521846c2a0be76f0b52b4bfd22a7e8e3dce05e3c78cb", size = 7962607, upload-time = "2026-10-18T13:18:29.399Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/10/ca5583efdec44a30f01f33fed0371e95c6788b8c149ef0287a9e36272e94/pglast-8.7-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:33633f5544be260a2aa6ce8228e92c015806269fdd325aa1a89ccd82d763b58d", size = 7440080, upload-time = "2026-10-18T13:18:31.214Z" },
+    { url = "https://files.pythonhosted.org/packages/38/9f/387305ade86a1f0823a806b6b44beb37cdedd8973e226955499a66635c7b/pglast-8.7-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:a78d0f2cb2f442180ddec0e54ea182449235b9ae868d2b801a87ede61c5bb90f", size = 7718954, upload-time = "2026-10-18T13:18:32.745Z" },
+    { url = "https://files.pythonhosted.org/packages/06/6a/39c052a1d44f54eb82379225cdadc2a3ce23e4bc16804f59bf5d8fb514d2/pglast-8.7-cp312-cp312-win32.whl", hash = "sha256:ea68b3d592d1a0b6760247d203a3293a49ee4cb687b1977e3c676f76e228ca2a", size = 1480864, upload-time = "2026-10-18T13:18:34.209Z" },
+    { url = "https://files.pythonhosted.org/packages/49/ec/69dbd30109f716a6324e6e6dc0c3fc4ff91b17133e72d95ea1cbb7943f01/pglast-8.7-cp312-cp312-win_amd64.whl", hash = "sha256:aa78353ad06abf25bdfbe58609ed9feab52815eddfd485ce41592d99f760cc20", size = 1604459, upload-time = "2026-10-18T13:18:35.986Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/ae/efe6d591975462cf551c196d886fcacc719777a779cdfcc61194590d3cd7/pglast-8.7-cp312-cp312-win_arm64.whl", hash = "sha256:ebf036c4dc77309a86fcdb2a97d33a03e25c98db956f37e2edeeb018a2211e5f", size = 1482595, upload-time = "2026-10-18T13:18:37.648Z" },
+    { url = "https://files.pythonhosted.org/packages/60/ff/9eee0fde809e70ee738a2bfdb1c5b51957e0581c3ab3514ab1e69c380016/pglast-8.7-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:1b8b9da9d485afa5ccdcb59cbe550a6179ff4605e6c1328a2bbfd31b36846755", size = 1784093, upload-time = "2026-10-18T13:18:38.743Z" },
+    { url = "https://files.pythonhosted.org/packages/59/a5/b4171ccdf0e20129b5d9173d122d2103e695870732ce541d7b200cc1e467/pglast-8.7-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:66760be907785873249071c4ebbeca23427c8639a829c414d114bfa89490535b", size = 1704893, upload-time = "2026-10-18T13:18:39.963Z" },
+    { url = "https://files.pythonhosted.org/packages/5e/4e/8a7d7f2f2c94a63c9e316435fc6fb5909d5d0fc3616f75485fb143ba0149/pglast-8.7-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:b6fd0d10a177a6510fc2ee0342e6d81c1c6faf7e020cc661007d977bd219313c", size = 7775064, upload-time = "2026-10-18T13:18:41.215Z" },
+    { url = "https://files.pythonhosted.org/packages/5d/b7/063345c54cebe164eacb8f2791806db8af140091492c7c4e2db40631696d/pglast-8.7-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:683c5547984f1c283bae7779598c8f26405153bc1d077bd6740c2f55e077c806", size = 8039246, upload-time = "2026-10-18T13:18:42.554Z" },
+    { url = "https://files.pythonhosted.org/packages/58/da/ceeee8d38c14c224e22cddd5c04d25e66dcce9d8fab235e3266bd6ee7c58/pglast-8.7-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:af0b062a567a24d40af92de0dec64439f067a470d51ea24a6e45d19713b77593", size = 7518964, upload-time = "2026-10-18T13:18:44.167Z" },
+    { url = "https://files.pythonhosted.org/packages/24/29/f8ca7ffdd1b87989600a44329495d13bb04638a18158802a97e818524e52/pglast-8.7-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:e9e76acb7caacaa222e6c21e42740915b0ca48bb15a81db34f934ee0c780b366", size = 7804792, upload-time = "2026-10-18T13:18:45.412Z" },
+    { url = "https://files.pythonhosted.org/packages/09/76/6b74c2a4bdae029582ad717f0ba7c5bb34aebc38b04e456516b566b728d2/pglast-8.7-cp313-cp313-win32.whl", hash = "sha256:d965b2dfcb392194d5f4b51fdbb0dab062156c89d3b706e8e6beb1a70b49d14c", size = 1479866, upload-time = "2026-10-18T13:18:46.978Z" },
+    { url = "https://files.pythonhosted.org/packages/98/29/9bbe86bc100d7da6bcaa0abc8babe41f016bc167c67e979908ab29544bdd/pglast-8.7-cp313-cp313-win_amd64.whl", hash = "sha256:9615ea4aca7aa3a8cd6d53a452d4c51e28de7e4e760f2b247b59a68b6cfd0484", size = 1603633, upload-time = "2026-10-18T13:18:48.569Z" },
+    { url = "https://files.pythonhosted.org/packages/85/4a/2c84c69e59f1b8031b255444c46e96441e365f57a6a7b8f626a235817a88/pglast-8.7-cp313-cp313-win_arm64.whl", hash = "sha256:06d4e3a1bf1250d4e64152abada13d96e6f356a2b4a12f16e00265e867b10466", size = 1481756, upload-time = "2026-10-18T13:18:49.946Z" },
 ]
 
 [[package]]
