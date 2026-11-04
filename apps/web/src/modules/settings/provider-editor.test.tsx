@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider, useTranslations } from 'next-intl';
 import { describe, expect, it, vi } from 'vitest';
 import { messages } from '@/core/messages';
-import { mappingProviderId, guessModelType, maxProviders, newProvider, parseDraftSnapshot, ProviderEditor, type ProviderRead } from './provider-editor';
+import { mappingProviderId, guessModelType, maxProviders, modelTypeForModality, newProvider, parseDraftSnapshot, ProviderEditor, type ProviderRead } from './provider-editor';
 
 const cloud: ProviderRead = { id: 'default', kind: 'openai', label: 'OpenAI', base_url: 'https://api.openai.com/v1', destination_id: 'remote:x', credential_configured: true, local: false, policy_denied: false, models: [{ id: 'gpt-4o', type: 'llm' }] };
 const local: ProviderRead = { ...cloud, id: 'ollama-1', kind: 'ollama', label: 'Ollama', base_url: 'http://localhost:11434/v1', local: true, policy_denied: true, credential_configured: false };
@@ -44,6 +44,41 @@ describe('provider editor', () => {
     const many = Array.from({ length: maxProviders }, (_, i) => ({ ...cloud, id: `p${i}` }));
     renderEditor({ providers: many });
     expect((screen.getByRole('button', { name: /Add provider/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe('hosted provider cards', () => {
+  it('hides the URL field for hosted kinds and shows the fixed endpoint', () => {
+    renderEditor({ providers: [newProvider('anthropic', [])] });
+    expect(screen.queryByLabelText('Base URL')).toBeNull();
+    expect(screen.getByText('https://api.anthropic.com/v1')).toBeTruthy();
+  });
+  it('keeps the URL field for self-hosted kinds', () => {
+    renderEditor({ providers: [newProvider('ollama', [])] });
+    expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('http://localhost:11434/v1');
+  });
+  it('drops a typed URL when switching to a hosted kind', async () => {
+    const onChange = vi.fn();
+    renderEditor({ providers: [{ ...cloud, kind: 'custom', base_url: 'https://my.gw/v1' }], onChange });
+    await userEvent.click(screen.getByRole('combobox', { name: 'Provider type' }));
+    await userEvent.click(screen.getByRole('option', { name: 'OpenAI' }));
+    expect(onChange.mock.calls[0][0][0].base_url).toBe('https://api.openai.com/v1');
+  });
+  it('enables Discover for a new hosted provider once a key is typed', async () => {
+    const p = newProvider('openai', []);
+    const Editor = ({ typed }: { typed?: string }) => { const t = useTranslations('aiSettings'); return <ProviderEditor providers={[p]} savedIds={[]} secrets={typed ? { [p.id]: { key: typed, action: 'replaced' } } : {}} disabled={false} discoveringId={null} discoverError={null} discovered={{}} onChange={vi.fn()} onSecret={vi.fn()} onDiscover={vi.fn()} t={t as never} />; };
+    const view = (typed?: string) => render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><Editor typed={typed} /></NextIntlClientProvider>);
+    const empty = view();
+    expect((screen.getByRole('button', { name: 'Discover models' }) as HTMLButtonElement).disabled).toBe(true);
+    empty.unmount();
+    view('sk-x');
+    expect((screen.getByRole('button', { name: 'Discover models' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+  it('maps OpenRouter output modalities to model types', () => {
+    expect(modelTypeForModality('embeddings')).toBe('embedding');
+    expect(modelTypeForModality('rerank')).toBe('reranker');
+    expect(modelTypeForModality('image')).toBe('image');
+    expect(modelTypeForModality('weird')).toBe('llm');
   });
 });
 
