@@ -15,8 +15,8 @@ def test_validator_rules() -> None:
     gadgets.validate_renderer_sources("tasks", [])
     with pytest.raises(ValueError, match="provider_observation"):
         gadgets.validate_renderer_sources("provider_observation", [("github", "api")])
-    with pytest.raises(ValueError, match="at most one"):
-        gadgets.validate_renderer_sources("weather", [("open_meteo", "api"), ("open_meteo", "api")])
+    with pytest.raises(ValueError, match="at most 5"):
+        gadgets.validate_renderer_sources("weather", [("open_meteo", "api")] * 6)
     with pytest.raises(ValueError, match="does not accept"):
         gadgets.validate_renderer_sources("tasks", [("bbc_world", "rss")])
 
@@ -25,7 +25,7 @@ def test_catalog_read() -> None:
     """The public catalog exposes every template with its renderer's source mode and accepted shapes."""
     reads = {t.id: t for t in public.list_templates()}
     assert len(reads) == len(gadgets.TEMPLATES)
-    assert reads["metric"].source_mode == "single"
+    assert reads["metric"].source_mode == "multi"
     assert reads["metric"].accepted_shapes == ["measurement"]
     assert reads["highlights"].accepted_shapes is None
     renderers = {r.id: r for r in public.renderer_reads()}

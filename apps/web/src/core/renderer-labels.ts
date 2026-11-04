@@ -2,7 +2,7 @@ import type { useTranslations } from 'next-intl';
 
 /** Generic template kind (`templateTypes.<kind>`) shown for each available renderer. */
 export const TEMPLATE_KIND_BY_RENDERER: Record<string, string> = {
-  news_feed: 'feed', telegram_feed: 'messageList', text_panel: 'text', table_panel: 'table', video_panel: 'video',
+  news_feed: 'feed', telegram_feed: 'messageList', text_panel: 'text', table_panel: 'table', job_list: 'jobs', video_panel: 'video',
   finance_chart: 'chart', map: 'map', intelligence_panel: 'relatedSignals', highlights: 'highlights',
   watch_rules: 'watchlist', tasks: 'tasks', goals: 'goals', daily_brief: 'dailyBrief', weather: 'weather',
   provider_observation: 'metric', github_project: 'activity',

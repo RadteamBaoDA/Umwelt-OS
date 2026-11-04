@@ -166,6 +166,8 @@ export type GadgetRenderer = {
   source_mode: 'none' | 'single' | 'multi';
   /** Data shapes the renderer accepts; null means any shape. */
   accepted_shapes: DataShape[] | null;
+  /** Source ceiling for multi renderers; null means the generic selector ceiling. */
+  max_sources?: number | null;
 };
 
 /** Named gadget starting point; pre-fills renderer, accepted shapes, scope and filters only. */
@@ -183,7 +185,8 @@ export type DashboardPreset = {
   id: string;
   label: string;
   family: string;
-  slots: { slot_id: string; renderer: string }[];
+  /** `label` is the slot's own gadget name (e.g. "Live news"); null falls back to the renderer's template name. */
+  slots: { slot_id: string; renderer: string; label?: string | null }[];
 };
 
 /** Input selecting explicit source IDs for known preset slots and an optional target. */
@@ -459,7 +462,7 @@ export function previewDashboardPreset(presetId: string, payload: PresetPreviewR
 /** Applies the fingerprinted preset; backend 409 ApiError details pass through unchanged. */
 export function applyDashboardPreset(presetId: string, payload: PresetPreviewRequest & {
   preview_fingerprint: string;
-  mode?: 'create' | 'replace';
+  mode?: 'create' | 'replace' | 'append';
   name?: string | null;
   expected_revision?: number | null;
   replace_confirmed?: boolean;

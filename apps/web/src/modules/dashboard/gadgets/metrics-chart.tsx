@@ -9,6 +9,7 @@ import {
   BaseLineChart,
   ChartHistoryNote,
   formatChartValue,
+  getChartColors,
   type ChartDataPoint,
   type ChartSeries,
 } from '@/core/charts/recharts-wrapper';
@@ -44,6 +45,57 @@ function parsePointTimestampMs(timestamp: string | number): number {
   return Date.parse(timestamp);
 }
 
+/** One named series of a multi-source chart; `key` is unique across the chart (it becomes the merged row property). */
+export interface ChartSeriesData {
+  key: string;
+  name: string;
+  points: ChartDataPoint[];
+  currency?: string;
+  unit?: string;
+}
+
+/** Series drawn at most per chart: the theme palette has five colours, more lines would be indistinguishable. */
+export const MAX_CHART_SERIES = 5;
+
+/**
+ * Builds the merged rows and series descriptors of a multi-series chart for one time range. Pure.
+ *
+ * Each series is cut to the range (relative to the newest point across all series). When the series do not share
+ * one unit and currency they are rebased to the percent change from their own first visible point so they stay
+ * comparable; otherwise raw values are kept. Rows are merged by timestamp, so a series with no point at a
+ * timestamp leaves a gap (draw with connectNulls).
+ *
+ * @param seriesData Series with raw points (at least one point each is expected; empty series are dropped).
+ * @param range Active time range.
+ * @returns Merged rows, chart series, whether values were rebased, and each series' last raw point value.
+ */
+export function buildMultiChart(seriesData: readonly ChartSeriesData[], range: ChartTimeRange) {
+  const stamps = seriesData.flatMap((item) => item.points.map((point) => parsePointTimestampMs(point.timestamp))).filter(Number.isFinite);
+  const cutoff = range === 'all' || stamps.length === 0 ? -Infinity : Math.max(...stamps) - TIME_RANGE_MS[range];
+  const visible = seriesData
+    .map((item) => ({ item, points: item.points.filter((point) => parsePointTimestampMs(point.timestamp) >= cutoff) }))
+    .filter((entry) => entry.points.length > 0);
+  const first = visible[0]?.item;
+  const rebased = visible.some(({ item }) => item.unit !== first?.unit || item.currency !== first?.currency);
+  const rows = new Map<string, ChartDataPoint>();
+  for (const { item, points } of visible) {
+    const base = points[0].value;
+    for (const point of points) {
+      const key = String(point.timestamp);
+      const row = rows.get(key) ?? { timestamp: point.timestamp, value: 0 };
+      if (!rebased) row[item.key] = point.value;
+      else if (base !== 0) row[item.key] = (point.value / base - 1) * 100;
+      rows.set(key, row);
+    }
+  }
+  return {
+    data: [...rows.values()].sort((left, right) => parsePointTimestampMs(left.timestamp) - parsePointTimestampMs(right.timestamp)),
+    series: visible.map(({ item }): ChartSeries => ({ dataKey: item.key, name: item.name, unit: rebased ? '%' : item.unit, currency: rebased ? undefined : item.currency })),
+    last: visible.map(({ item, points }) => ({ item, value: points[points.length - 1].value })),
+    rebased,
+  };
+}
+
 /** Props for the MetricsChart gadget component. */
 export interface MetricsChartProps {
   /** Gadget instance configuration projection. */
@@ -56,6 +108,8 @@ export interface MetricsChartProps {
   unit?: string;
   /** Provider latency or freshness notice; shown only when the provider supplies it. */
   providerDelay?: string | null;
+  /** Several sources/series: replaces `initialData` with a compact legend and one line per series (line kind only). */
+  seriesData?: ChartSeriesData[];
 }
 
 /**
@@ -76,6 +130,7 @@ export function MetricsChart({
   currency,
   unit,
   providerDelay,
+  seriesData,
 }: MetricsChartProps) {
   const t = useTranslations('dashboard');
   const ts = useTranslations('uiSweep');
@@ -118,6 +173,27 @@ export function MetricsChart({
   }, [points, timeRange]);
 
   const chartData = visiblePoints;
+  const capped = seriesData && seriesData.length > MAX_CHART_SERIES;
+  const multi = useMemo(
+    () => (seriesData && seriesData.length >= 2 ? buildMultiChart(seriesData.slice(0, MAX_CHART_SERIES), timeRange) : null),
+    [seriesData, timeRange],
+  );
+  // Range tabs are shared by the single- and multi-series bodies.
+  const rangeTabs = (
+    <div className="flex items-center gap-1" role="group" aria-label={ts('chartRangeAria')}>
+      {(['24h', '7d', '30d', '90d', '1y', 'all'] as ChartTimeRange[]).map((range) => (
+        <button
+          key={range}
+          type="button"
+          onClick={() => setTimeRange(range)}
+          aria-pressed={timeRange === range}
+          className={`rounded px-1.5 py-0.5 text-[11px] tabular-nums transition-colors ${timeRange === range ? 'font-semibold text-foreground underline underline-offset-4' : 'text-muted-foreground hover:text-foreground'}`}
+        >
+          {range.toUpperCase()}
+        </button>
+      ))}
+    </div>
+  );
 
   // Derive current value, period change value, and percent change over the filtered visiblePoints window
   const { currentValue, changePercent, isFlat } = useMemo(() => {
@@ -152,6 +228,38 @@ export function MetricsChart({
       unit,
     },
   ];
+
+  if (multi) {
+    const palette = getChartColors().series;
+    return (
+      <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-2 overflow-y-auto overflow-x-hidden">
+        {/* Compact legend replaces the single headline figure: one row per series with its latest raw value. */}
+        <ul className="shrink-0 space-y-0.5 text-xs">
+          {multi.last.map(({ item, value }, index) => (
+            <li key={item.key} className="flex items-center justify-between gap-2">
+              <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+                <span aria-hidden className="size-2 shrink-0 rounded-full" style={{ backgroundColor: palette[index % palette.length] }} />
+                <span className="truncate">{item.name}</span>
+              </span>
+              <span className="tabular-nums text-foreground">
+                {formatChartValue(value, { currency: item.currency, unit: item.currency ? undefined : item.unit, locale: display.locale })}
+                {!item.currency && item.unit ? ` ${item.unit}` : ''}
+              </span>
+            </li>
+          ))}
+        </ul>
+        {multi.rebased && <p role="status" className="shrink-0 text-xs text-muted-foreground">{t('chartRebasedNote')}</p>}
+        {capped && <p role="status" className="shrink-0 text-xs text-muted-foreground">{t('chartTooManySeries', { max: MAX_CHART_SERIES })}</p>}
+        {multi.data.length >= 2 && <div className="flex-1 w-full min-h-[140px] shrink-0 relative">
+          <BaseLineChart data={multi.data} series={multi.series} providerDelay={providerDelay} height="100%" connectNulls />
+        </div>}
+        <div className="flex shrink-0 items-center justify-between text-xs">
+          {rangeTabs}
+          <span className="text-xs tabular-nums text-muted-foreground">{t('chartObservationCount', { count: multi.data.length })}</span>
+        </div>
+      </div>
+    );
+  }
 
   if (points.length === 0) {
     return <p role="status" className="p-3 text-sm text-muted-foreground">{daily('noGadgetData')}</p>;
@@ -232,19 +340,7 @@ export function MetricsChart({
       </div>}
       {/* Range selector as quiet text tabs under the plot */}
       <div className="flex shrink-0 items-center justify-between text-xs">
-        <div className="flex items-center gap-1" role="group" aria-label={ts('chartRangeAria')}>
-          {(['24h', '7d', '30d', '90d', '1y', 'all'] as ChartTimeRange[]).map((range) => (
-            <button
-              key={range}
-              type="button"
-              onClick={() => setTimeRange(range)}
-              aria-pressed={timeRange === range}
-              className={`rounded px-1.5 py-0.5 text-[11px] tabular-nums transition-colors ${timeRange === range ? 'font-semibold text-foreground underline underline-offset-4' : 'text-muted-foreground hover:text-foreground'}`}
-            >
-              {range.toUpperCase()}
-            </button>
-          ))}
-        </div>
+        {rangeTabs}
         <span className="text-xs tabular-nums text-muted-foreground">{t('chartObservationCount', { count: visiblePoints.length })}</span>
       </div>
       <div className="shrink-0"><ChartHistoryNote data={chartData} /></div>

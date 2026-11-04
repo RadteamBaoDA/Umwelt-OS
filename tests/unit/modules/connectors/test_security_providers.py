@@ -13,6 +13,19 @@ def _body(payload) -> bytes:
     return json.dumps(payload).encode()
 
 
+def test_cisa_kev_uses_official_github_mirror_within_spec_allowlist():
+    # cisa.gov's Akamai edge answers 403 from some egress networks (Vietnam, 2026-10-24 and 2026-11-04); CISA's
+    # cisagov/kev-data mirror serves the same catalog. The request must stay inside the spec's host/path allowlist.
+    from urllib.parse import urlsplit
+
+    from modules.connectors.provider_specs import get_provider_spec
+
+    url = urlsplit(security.cisa_kev_request().url)
+    spec = get_provider_spec("cisa_kev")
+    assert url.hostname == "raw.githubusercontent.com" and url.path.startswith("/cisagov/kev-data/")
+    assert url.hostname in spec.hosts and url.path in spec.endpoints
+
+
 def test_cisa_kev_newest_first_one_record_per_cve():
     records = map_cisa_kev(fixture("cisa_kev.json"), NOW)
     assert [r.provider_id for r in records] == ["CVE-2016-3081", "CVE-2015-5477"]

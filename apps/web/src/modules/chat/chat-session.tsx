@@ -19,6 +19,7 @@ import {
   type StreamEventsOptions,
   type InputRequest,
   type Citation,
+  type ToolStatus,
   type WebSearchOutcome,
   WEB_SEARCH_SEND_ENABLED,
 } from '@/modules/chat/api';
@@ -147,6 +148,8 @@ export function ChatSession({
   const [cancelled, setCancelled] = React.useState(false);
   const [streamingCitations, setStreamingCitations] = React.useState<Citation[]>([]);
   const [streamingWebSearch, setStreamingWebSearch] = React.useState<WebSearchOutcome | null>(null);
+  /** Tool currently running for the active run (`tool.status`); drives the transcript status line. */
+  const [activeTool, setActiveTool] = React.useState<ToolStatus['tool'] | null>(null);
   const [streamingUi, setStreamingUi] = React.useState<UiPart[]>([]);
   // Human-in-the-loop: the pending `request_user_input` of the active run (null when none).
   const [themeRequest, setThemeRequest] = React.useState<'light' | 'dark' | 'system' | null>(null);
@@ -287,6 +290,7 @@ export function ChatSession({
     setStreamingReasoning('');
     setStreamingCitations([]);
     setStreamingWebSearch(null);
+    setActiveTool(null);
     setStreamingUi([]);
     setActiveResponseId(null);
     setEditingMessageId(null);
@@ -341,10 +345,19 @@ export function ChatSession({
         if (isCurrentView()) setStreamingReasoning((prev) => prev + chunk);
       },
       onDelta: (chunk) => {
-        if (isCurrentView()) setStreamingText((prev) => prev + chunk);
+        if (isCurrentView()) {
+          setActiveTool(null);
+          setStreamingText((prev) => prev + chunk);
+        }
+      },
+      onToolStatus: ({ tool, state }) => {
+        if (isCurrentView()) setActiveTool((prev) => (state === 'running' ? tool : prev === tool ? null : prev));
       },
       onWebSearch: (outcome) => {
-        if (isCurrentView()) setStreamingWebSearch(outcome);
+        if (isCurrentView()) {
+          setActiveTool((prev) => (prev === 'web_search' ? null : prev));
+          setStreamingWebSearch(outcome);
+        }
       },
       onCitations: (cites) => {
         if (isCurrentView()) setStreamingCitations(cites);
@@ -380,6 +393,7 @@ export function ChatSession({
           setStreamingReasoning('');
           setStreamingCitations([]);
           setStreamingWebSearch(null);
+          setActiveTool(null);
           setStreamingUi([]);
           setInputRequest(null);
           setActiveResponseId(null);
@@ -403,6 +417,7 @@ export function ChatSession({
             setStreamingReasoning('');
             setStreamingCitations([]);
             setStreamingWebSearch(null);
+            setActiveTool(null);
             setStreamingUi([]);
             // A still-pending request is shown as cancelled (an expired one keeps its own state).
             setInputRequest((prev) => (prev && prev.state === 'pending' ? { ...prev, state: 'cancelled' } : prev));
@@ -420,6 +435,7 @@ export function ChatSession({
             setStreamingReasoning('');
             setStreamingCitations([]);
             setStreamingWebSearch(null);
+            setActiveTool(null);
             setStreamingUi([]);
             setInputRequest((prev) => (prev && prev.state === 'pending' ? { ...prev, state: 'cancelled' } : prev));
             setActiveResponseId(null);
@@ -512,6 +528,7 @@ export function ChatSession({
         setStreamingReasoning('');
         setStreamingCitations([]);
         setStreamingWebSearch(null);
+        setActiveTool(null);
         setStreamingUi([]);
       }
       // Only the first lost stream of a response may reattach; later ones just reset the UI (no retry storm).
@@ -556,6 +573,7 @@ export function ChatSession({
     setStreamingReasoning('');
     setStreamingCitations([]);
     setStreamingWebSearch(null);
+    setActiveTool(null);
     setStreamingUi([]);
     setError(null);
     setCancelled(false);
@@ -633,6 +651,7 @@ export function ChatSession({
       setStreamingReasoning('');
       setStreamingCitations([]);
       setStreamingWebSearch(null);
+      setActiveTool(null);
       setStreamingUi([]);
       await streamResponseRun(run.response_id, targetConversationId, isCurrentView);
     } catch (mutationError: unknown) {
@@ -838,6 +857,7 @@ export function ChatSession({
         setStreamingReasoning('');
         setStreamingCitations([]);
         setStreamingWebSearch(null);
+        setActiveTool(null);
         setStreamingUi([]);
         setInputRequest(null);
 
@@ -927,6 +947,7 @@ export function ChatSession({
     setStreamingReasoning('');
     setStreamingCitations([]);
     setStreamingWebSearch(null);
+    setActiveTool(null);
     setStreamingUi([]);
     setInputRequest(null);
     setWebSearchOn(false);
@@ -1116,6 +1137,7 @@ export function ChatSession({
           cancelled={cancelled}
           streamingCitations={streamingCitations}
           streamingWebSearch={streamingWebSearch}
+          activeTool={activeTool}
           streamingUi={streamingUi}
           isStreaming={isStreaming}
           isPending={isPending}

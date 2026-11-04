@@ -280,20 +280,26 @@ class PresetPreviewRequest(StrictConfiguration):
 
 
 class PresetApplyRequest(PresetPreviewRequest):
-    """Validate preset apply intent; replacement requires an explicit current revision."""
+    """Validate preset apply intent; replace and append require an explicit target and current revision."""
 
     preview_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
-    mode: Literal["create", "replace"] = "create"
+    mode: Literal["create", "replace", "append"] = "create"
     name: Name | None = None
     expected_revision: Revision | None = None
     replace_confirmed: StrictBool = False
 
     @model_validator(mode="after")
     def ensure_mode_fields_match(self) -> "PresetApplyRequest":
-        """Prevent accidental replacement and reject replacement-only fields in create mode."""
+        """Prevent accidental replacement and reject fields that do not belong to the chosen mode.
+
+        Append is non-destructive, so it needs the target and revision but never the replace confirmation.
+        """
         if self.mode == "create":
             if self.target_dashboard_id is not None or self.expected_revision is not None or self.replace_confirmed:
                 raise ValueError("create mode cannot include replacement fields")
+        elif self.mode == "append":
+            if self.target_dashboard_id is None or self.expected_revision is None or self.replace_confirmed:
+                raise ValueError("append mode requires target and expected_revision, without replace_confirmed")
         elif self.target_dashboard_id is None or self.expected_revision is None or not self.replace_confirmed:
             raise ValueError("replace mode requires target, expected_revision, and replace_confirmed")
         return self
@@ -507,6 +513,7 @@ class RendererRead(StrictConfiguration):
     capability_keys: list[str]
     source_mode: Literal["none", "single", "multi"] = "none"
     accepted_shapes: list[str] | None = None
+    max_sources: int | None = None
 
 
 class GadgetTemplateRead(StrictConfiguration):
@@ -547,6 +554,7 @@ class PresetSlotRead(StrictConfiguration):
 
     slot_id: str
     renderer: str
+    label: str | None = None
 
 
 class DashboardPresetRead(StrictConfiguration):

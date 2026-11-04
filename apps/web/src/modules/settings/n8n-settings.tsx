@@ -1,5 +1,6 @@
 'use client';
 
+import { TablePagination, usePagination } from '@/components/ui/pagination';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useState } from 'react';
@@ -59,6 +60,7 @@ function WorkflowsSection({ enabled }: { enabled: boolean }) {
     onSettled: () => client.invalidateQueries({ queryKey: ['n8n-workflows'] }),
   });
   const rows = query.data;
+  const pager = usePagination(rows ?? []);
   /** Translates a backend provisioning state, falling back to the raw value for unknown states. */
   const stateLabel = (state: string) => (STATES.has(state) ? t(`state_${state}` as 'state_active') : state);
   const failed = rows?.filter(failing).length ?? 0;
@@ -76,9 +78,9 @@ function WorkflowsSection({ enabled }: { enabled: boolean }) {
         <div><p className="m-0 font-medium">{t('workflowsEmpty')}</p><p className="m-0 text-sm text-muted-foreground">{t('workflowsEmptyHint')}</p></div>
         <Button asChild variant="outline"><Link href="/settings/sources">{t('addSource')}</Link></Button>
       </div>
-      : <Table>
+      : <><Table>
         <TableHeader><TableRow><TableHead>{t('colName')}</TableHead><TableHead>{t('colState')}</TableHead><TableHead>{t('colLastRun')}</TableHead><TableHead><span className="sr-only">{t('colActions')}</span></TableHead></TableRow></TableHeader>
-        <TableBody>{rows.map((row) => <TableRow key={row.source_id}>
+        <TableBody>{pager.pageItems.map((row) => <TableRow key={row.source_id}>
           <TableCell className="py-3">
             <Link className="font-medium text-foreground no-underline hover:underline" href={`/settings/sources?source=${encodeURIComponent(row.source_id)}`}>{row.source_name}</Link>
             <div className="text-xs text-muted-foreground">{row.source_type}{row.provider ? ` · ${row.provider}` : ''}</div>
@@ -94,7 +96,7 @@ function WorkflowsSection({ enabled }: { enabled: boolean }) {
             <Button type="button" size="sm" variant="ghost" disabled={!enabled || act.isPending} onClick={() => act.mutate({ id: row.source_id, kind: 'deactivate' })}>{t('deactivate')}</Button>
           </div></TableCell>
         </TableRow>)}</TableBody>
-      </Table>}
+      </Table><TablePagination {...pager} /></>}
     {act.isError ? <p className="error m-0" role="alert">{t(apiFailureKey(act.error) ?? 'actionFailed')}</p> : null}
   </section>;
 }

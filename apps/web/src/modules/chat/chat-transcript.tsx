@@ -5,7 +5,7 @@ import * as React from 'react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { AlertCircleIcon, ArrowDownIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, RefreshCwIcon } from 'lucide-react';
-import type { ChatMessage, Citation, WebSearchOutcome } from '@/modules/chat/api';
+import type { ChatMessage, Citation, ToolStatus, WebSearchOutcome } from '@/modules/chat/api';
 import { Button } from '@/components/ui/button';
 import { CitationPanel, webHost } from './citation-panel';
 import { safeHttpUrl } from '@/core/safe-url';
@@ -40,6 +40,9 @@ function RevealMarkdown(props: React.ComponentProps<typeof ChatMarkdown>) {
 /** Announced notice for a requested web search that was skipped or unavailable; renders nothing otherwise. */
 function WebSearchNotice({ outcome }: { outcome?: WebSearchOutcome | null }) {
   const t = useTranslations('chat');
+  if (outcome?.status === 'used' && outcome.reason !== 'no_results' && outcome.query) {
+    return <p data-testid="web-search-query" className="mt-1 text-xs text-muted-foreground">{t('webSearchedQuery', { query: outcome.query })}</p>;
+  }
   if (outcome?.status === 'used' && outcome.reason === 'no_results') {
     return <p data-testid="web-search-notice" className="mt-1 text-xs text-muted-foreground">{t('webNoResults')}</p>;
   }
@@ -162,6 +165,8 @@ export interface ChatTranscriptProps {
   streamingCitations?: Citation[];
   /** Web search outcome streamed for the active run. */
   streamingWebSearch?: WebSearchOutcome | null;
+  /** Server tool currently running for the active run; shown as a spinner status line. */
+  activeTool?: ToolStatus['tool'] | null;
   /** Active streaming Generative UI widget parts in arrival order (one per `part_id`). */
   streamingUi?: UiPart[];
   /** Whether response generation is actively streaming tokens. */
@@ -205,6 +210,7 @@ export function ChatTranscript({
   cancelled = false,
   streamingCitations,
   streamingWebSearch,
+  activeTool = null,
   streamingUi = [],
   isStreaming = false,
   isPending = false,
@@ -389,6 +395,16 @@ export function ChatTranscript({
           <span>{t('thinking')}</span>
         </div>
       )}
+
+      {/* Tool progress (tool.status): polite live region, cleared by the server's done/web_search event */}
+      <div role="status" aria-live="polite">
+        {activeTool && (
+          <div data-testid="tool-status" className="mr-auto flex w-full items-center gap-2 text-xs text-muted-foreground">
+            <Loader2Icon className="size-4 animate-spin text-muted-foreground" />
+            <span>{t(activeTool === 'web_search' ? 'toolSearchingWeb' : 'toolQueryingData')}</span>
+          </div>
+        )}
+      </div>
 
       {/* Active streaming assistant bubble */}
       {(streamingText || streamingReasoning || streamingUi.length > 0 || isStreaming) && (

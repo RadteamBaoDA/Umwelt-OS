@@ -1,5 +1,6 @@
 'use client';
 
+import { TablePagination, usePagination } from '@/components/ui/pagination';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'next-intl';
@@ -38,12 +39,13 @@ export function ProviderReviewTable({ rows }: { rows: PendingReview[] }) {
   const t = useTranslations('globalSettings');
   const display = useDisplayPreferences();
   const catalog = useQuery({ queryKey: connectorKeys.catalog, queryFn: ({ signal }) => getConnectorCatalog(signal), staleTime: 5 * 60_000 });
-  return <Table>
+  const pager = usePagination(rows);
+  return <><Table>
     <TableHeader><TableRow>
       <TableHead>{t('provider')}</TableHead><TableHead>{t('workspace')}</TableHead><TableHead>{t('termsVersion')}</TableHead><TableHead>{t('declaredUse')}</TableHead><TableHead><span className="sr-only">{t('review')}</span></TableHead>
     </TableRow></TableHeader>
-    <TableBody>{rows.map((row) => <ProviderReviewTableRow key={`${row.workspace_id}-${row.source_id}`} row={row} locale={display.locale} providerName={catalog.data?.find((entry) => entry.provider_id === row.provider_id)?.label ?? row.provider_id} />)}</TableBody>
-  </Table>;
+    <TableBody>{pager.pageItems.map((row) => <ProviderReviewTableRow key={`${row.workspace_id}-${row.source_id}`} row={row} locale={display.locale} providerName={catalog.data?.find((entry) => entry.provider_id === row.provider_id)?.label ?? row.provider_id} />)}</TableBody>
+  </Table><TablePagination {...pager} /></>;
 }
 
 /** One pending review row; owns the open state of its decision sheet. */

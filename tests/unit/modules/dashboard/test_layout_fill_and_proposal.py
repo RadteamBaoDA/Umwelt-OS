@@ -42,6 +42,7 @@ def test_propose_none_and_single_and_multi() -> None:
     assert gadgets.propose_slot_sources("news_feed", active) == ids[:3]
     single = next(r.id for r in gadgets.RENDERERS if r.source_mode == "single")
     assert len(gadgets.propose_slot_sources(single, active)) <= 1
+    assert len(gadgets.propose_slot_sources("finance_chart", [(UUID(int=i + 1), "vn_stock", "api") for i in range(3)])) <= 1
 
 
 def test_propose_filters_by_shape() -> None:

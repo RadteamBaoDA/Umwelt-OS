@@ -37,6 +37,7 @@ import { SourceWizard } from './source-wizard';
 import { RenameSource } from './source-rename';
 import { StarterPackWizard } from './starter-pack-wizard';
 import { matchesFilter, SourceFilter, SourceRowState, sourceRowState, SourcesTable } from './source-table';
+import { TablePagination, usePagination } from '@/components/ui/pagination';
 import { SyncHistory } from './sync-history';
 import { parseShapeFilter } from './shape-filter';
 import { templateName } from '@/core/renderer-labels';
@@ -381,6 +382,7 @@ export function SourceList() {
     const state = states.get(source.id) ?? 'active';
     return (state !== 'archived' && Boolean(operations[source.id])) || matchesFilter(state, filter);
   });
+  const pager = usePagination(visible);
   const configurationBySourceId = new Map(connectors.map((source, index) => [source.id, configurations[index]]));
   /** Invalidates the source list query after a source mutation. */
   const refresh = () => queryClient.invalidateQueries({ queryKey: sourceKeys.all });
@@ -438,8 +440,8 @@ export function SourceList() {
     {sources.isPending && <div className="skeleton" aria-label={t('loading')} />}
     {sources.isError && <p className="error" role="alert">{t('loadFailed')} <Button variant="outline" onClick={() => sources.refetch()}>{t('retry')}</Button></p>}
     {sources.isSuccess && items.length === 0 && <p className="empty-state">{t('empty')} {t('starterEmptyHint')}</p>}
-    {items.length > 0 && <SourcesTable filter={filter} counts={counts} onFilterChange={setFilter}>
-      {visible.map((source) => {
+    {items.length > 0 && <SourcesTable filter={filter} counts={counts} onFilterChange={(next) => { setFilter(next); pager.setPage(1); }} pagination={<TablePagination {...pager} />}>
+      {pager.pageItems.map((source) => {
         const configuration = configurationBySourceId.get(source.id);
         return <SourceEntry key={source.id} source={source} schedule={configuration?.data ? scheduleLabel(configuration.data.configuration.schedule_interval_minutes, t) : configuration?.isPending ? t('scheduleLoading') : t('scheduleUnknown')} timezone={configuration?.data?.configuration.timezone ?? null} realtimeMode={configuration?.data?.configuration.realtime_mode ?? null} operationId={operations[source.id] ?? ''} editingId={dialog?.kind === 'edit' ? dialog.source.id : null} onPurgeStarted={(id) => setOperations((current) => ({ ...current, [source.id]: id }))} purged={Boolean(purged[source.id])} onPurgeFinished={() => { if (purged[source.id]) return; setPurged((current) => ({ ...current, [source.id]: true })); void refresh(); }} onEdit={(value) => transition({ kind: 'edit', source: value })} onChanged={() => { void refresh(); }} onRemoved={() => headingRef.current?.focus()} />;
       })}

@@ -336,7 +336,7 @@ async def preview_preset(preset_id: str, payload: PresetPreviewRequest, session:
 async def apply_preset(preset_id: str, payload: PresetApplyRequest, session: Session, scope: WorkspaceWrite, request: Request, response: Response) -> DashboardDetail:
     """Apply a fresh fingerprinted preset atomically after explicit replacement confirmation when needed."""
     _no_store(response)
-    if payload.mode == "replace":
+    if payload.mode != "create":  # replace/append update an existing dashboard
         response.status_code = 200
     return await _call(public.apply_preset(session, preset_id, payload, scope=scope,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled))

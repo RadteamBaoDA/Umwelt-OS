@@ -186,6 +186,33 @@ describe('PresetPicker', () => {
     expect(api.applyDashboardPreset.mock.calls[0][1]).toMatchObject({ mode: 'replace', target_dashboard_id: 'd9', preview_fingerprint: REPLACE });
   });
 
+  it('appends to the current dashboard without a replace confirmation', async () => {
+    const APPEND = 'append0123456789abcdef';
+    api.previewDashboardPreset.mockImplementation(async (_id: string, body: { target_dashboard_id: string | null }) =>
+      body.target_dashboard_id ? { ...financePreview([], APPEND), target_dashboard_id: 'd9' } : financePreview([]));
+    api.applyDashboardPreset.mockResolvedValue({ id: 'd9' });
+    wrap({ id: 'd9', revision: 4 });
+    await userEvent.click(await screen.findByRole('button', { name: /Finance/ }));
+    await screen.findByText('Chart');
+    await userEvent.click(screen.getByRole('button', { name: 'Add to current dashboard' }));
+    await waitFor(() => expect(api.previewDashboardPreset.mock.calls.at(-1)?.[1].target_dashboard_id).toBe('d9'));
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    const apply = screen.getByRole('button', { name: 'Apply preset' });
+    await waitFor(() => expect((apply as HTMLButtonElement).disabled).toBe(false));
+    await userEvent.click(apply);
+    await waitFor(() => expect(api.applyDashboardPreset).toHaveBeenCalled());
+    const body = api.applyDashboardPreset.mock.calls[0][1];
+    expect(body).toMatchObject({ mode: 'append', target_dashboard_id: 'd9', expected_revision: 4, preview_fingerprint: APPEND, name: null });
+    expect(body.replace_confirmed).toBeUndefined();
+  });
+
+  it('append is unavailable without a current dashboard', async () => {
+    wrap();
+    await userEvent.click(await screen.findByRole('button', { name: /Finance/ }));
+    await screen.findByText('Chart');
+    expect((screen.getByRole('button', { name: 'Add to current dashboard' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('does not preselect a lone compatible source while more source pages remain', async () => {
     api.listGadgetSources.mockImplementation(async (_limit: number, cursor?: string) => cursor
       ? { items: [source('s2', 'Second page', ['measurement'])], next_cursor: null }

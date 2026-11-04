@@ -1,5 +1,6 @@
 'use client';
 
+import { TablePagination, usePagination } from '@/components/ui/pagination';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { RefreshCw } from 'lucide-react';
@@ -77,6 +78,7 @@ export function SystemStatusDashboard() {
   const summary = health.data ? summarizeHealth(health.data) : null;
   const runItems = useMemo(() => runs.data?.items ?? [], [runs.data]);
   const failedRuns = useMemo(() => runItems.filter(isFailedRun), [runItems]);
+  const failedPager = usePagination(failedRuns);
   const uptime = uptimePercent(buckets);
   const filled = useMemo(() => fillBuckets(buckets, bucketSeconds), [buckets, bucketSeconds]);
   // Missing slots carry null so Recharts leaves a gap instead of joining across a collection outage.
@@ -175,15 +177,15 @@ export function SystemStatusDashboard() {
     <Block title={t('failuresTitle')}>
       {runs.isPending ? <Skeleton height={120} /> : runs.isError ? <BlockError message={t('sysBlockFailed')} retry={() => void runs.refetch()} /> :
         failedRuns.length === 0 ? <p className="m-0 text-sm text-muted-foreground">{t('failuresEmpty')}</p> :
-          <Table>
+          <><Table>
             <TableHeader><TableRow><TableHead>{t('colTime')}</TableHead><TableHead>{t('colKind')}</TableHead><TableHead>{t('colError')}</TableHead><TableHead className="text-right">{t('colDuration')}</TableHead></TableRow></TableHeader>
-            <TableBody>{failedRuns.slice(0, 10).map((run) => <TableRow key={`${run.kind}:${run.id}`}>
+            <TableBody>{failedPager.pageItems.map((run) => <TableRow key={`${run.kind}:${run.id}`}>
               <TableCell className="tabular-nums">{time(run.created_at)}</TableCell>
               <TableCell>{t.has(run.kind) ? t(run.kind) : humanizeCode(run.kind)}</TableCell>
               <TableCell className="text-destructive">{run.error_code ? errorLabel(run.error_code) : DASH}</TableCell>
               <TableCell className="text-right tabular-nums">{run.duration_ms == null ? DASH : `${Math.round(run.duration_ms)} ms`}</TableCell>
             </TableRow>)}</TableBody>
-          </Table>}
+          </Table><TablePagination {...failedPager} /></>}
     </Block>
 
     <HistoryRetention oldestSampleAt={history.data?.oldest_sample_at ?? null} />

@@ -7,6 +7,9 @@ export function GadgetTemplateSample({ renderer }: { renderer: string }) {
     case 'table_panel':
       content = <><path d="M5 11h38M5 18h38M5 25h38M5 32h38M20 8v27M34 8v27" /></>;
       break;
+    case 'job_list':
+      content = <><rect x="6" y="9" width="36" height="7" rx="2" /><path d="M10 12.5h14M30 12.5h8M6 22h36M6 28h36M6 34h36M20 19v18" /></>;
+      break;
     case 'text_panel':
       content = <><path d="M7 11h31M7 17h36M7 23h29M7 29h34" /></>;
       break;

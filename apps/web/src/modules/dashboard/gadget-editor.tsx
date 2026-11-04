@@ -39,7 +39,7 @@ function templateDescription(renderer: string, t: ReturnType<typeof useTranslati
 }
 
 type FieldKey = 'keywords' | 'limit' | 'symbols' | 'metrics' | 'lookback' | 'map' | 'cii' | 'channels' | 'rules';
-const LIST_RENDERERS = ['news_feed', 'text_panel', 'table_panel', 'video_panel', 'telegram_feed', 'highlights', 'watch_rules'];
+const LIST_RENDERERS = ['news_feed', 'text_panel', 'table_panel', 'job_list', 'video_panel', 'telegram_feed', 'highlights', 'watch_rules'];
 
 /**
  * Editor fields that matter to one renderer. `symbols` is only a candidate here: the editor additionally requires the

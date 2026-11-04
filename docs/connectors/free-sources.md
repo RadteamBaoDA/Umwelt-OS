@@ -38,7 +38,7 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 | `alternative_me` | api.alternative.me | measurement | 1440 | open | none | supported | registered | [terms](https://alternative.me/crypto/fear-and-greed-index/) | economy |
 | `usgs` | earthquake.usgs.gov | event | 60 | open | none | supported | registered | [terms](https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits) | hazards |
 | `nasa_eonet` | eonet.gsfc.nasa.gov | event | 60 | review | none | supported | registered | [terms](https://eonet.gsfc.nasa.gov/what-is-eonet#disclaimer) | hazards |
-| `cisa_kev` | www.cisa.gov | event | 1440 | open | none | supported | registered | [terms](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) | security |
+| `cisa_kev` | raw.githubusercontent.com | event | 1440 | open | none | supported | registered | [terms](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) | security |
 | `coinpaprika` | api.coinpaprika.com | measurement | 15 | personal | none | supported | registered | [terms](https://docs.coinpaprika.com/api-plans) | economy |
 | `coingecko` | api.coingecko.com | measurement | 15 | review | required | supported | registered (requires API key) | [terms](https://www.coingecko.com/en/api_terms) | economy |
 | `alpha_vantage` | www.alphavantage.co | measurement | 1440 | personal | required | supported | existing adapter | [terms](https://www.alphavantage.co/terms_of_service/) | economy |

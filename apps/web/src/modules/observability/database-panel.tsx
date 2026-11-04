@@ -1,5 +1,6 @@
 'use client';
 
+import { TablePagination, usePagination } from '@/components/ui/pagination';
 import { useQuery } from '@tanstack/react-query';
 import { useLocale, useTranslations } from 'next-intl';
 import { useMemo, type ReactNode } from 'react';
@@ -73,6 +74,7 @@ function PostgresColumn({ pg, buckets, bucketSeconds, locale }: { pg: PgStats | 
   const num = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 });
   const int = new Intl.NumberFormat(locale, { maximumFractionDigits: 0 });
   const n = (v: number | null | undefined, f = int) => (v == null ? null : f.format(v));
+  const tablePager = usePagination(pg?.tables ?? []);
   const title = t('dbPostgres');
   if (!pg) return <Column title={title} tone="muted" meta={[]}><p className="m-0 text-sm text-muted-foreground">{t('dbUnavailable')}</p></Column>;
   const conn = pg.connections;
@@ -87,7 +89,7 @@ function PostgresColumn({ pg, buckets, bucketSeconds, locale }: { pg: PgStats | 
   const connData = series(buckets, bucketSeconds, (d) => ({ value: d.pg_connections_avg, max: d.pg_connections_max }));
   const tpsData = series(buckets, bucketSeconds, (d) => ({ value: d.pg_tps_avg }));
   const cacheData = series(buckets, bucketSeconds, (d) => ({ value: d.pg_cache_hit_ratio_avg == null ? null : d.pg_cache_hit_ratio_avg * 100 }));
-  const tables = (pg.tables ?? []).slice(0, 10);
+  const tables = tablePager.pageItems;
   return <Column title={title} tone={statusTone(pg.status)} meta={meta}>
     {sentence && <p className="m-0 text-sm" role="status">{sentence}</p>}
     <dl className="m-0 grid grid-cols-2 gap-x-4">
@@ -110,7 +112,7 @@ function PostgresColumn({ pg, buckets, bucketSeconds, locale }: { pg: PgStats | 
       <Trend title={t('dbCacheHit')} data={cacheData} unit="%" empty={t('sysCollecting')} keys={[{ dataKey: 'value', name: t('dbCacheHit') }]} />
     </div>
     <h4 className="m-0 mt-1 text-sm font-semibold">{t('dbTables')}</h4>
-    {tables.length === 0 ? <p className="m-0 text-sm text-muted-foreground">{t('dbTablesEmpty')}</p> : <Table>
+    {tablePager.total === 0 ? <p className="m-0 text-sm text-muted-foreground">{t('dbTablesEmpty')}</p> : <><Table>
       <TableHeader><TableRow>
         <TableHead>{t('dbColTable')}</TableHead><TableHead className="text-right">{t('dbColSize')}</TableHead><TableHead className="text-right">{t('dbColLive')}</TableHead>
         <TableHead className="text-right">{t('dbColDead')}</TableHead><TableHead className="text-right">{t('dbColScans')}</TableHead><TableHead className="text-right">{t('dbColVacuum')}</TableHead>
@@ -127,7 +129,7 @@ function PostgresColumn({ pg, buckets, bucketSeconds, locale }: { pg: PgStats | 
           <TableCell className="text-right">{ago ?? DASH}</TableCell>
         </TableRow>;
       })}</TableBody>
-    </Table>}
+    </Table><TablePagination {...tablePager} /></>}
   </Column>;
 }
 

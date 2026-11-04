@@ -1831,7 +1831,7 @@ def renderer_reads() -> list[RendererRead]:
     return [RendererRead.model_validate({"id": row.id, "config_version": row.config_version, "minimum_width": row.minimum_width,
              "minimum_height": row.minimum_height, "runtime_state": row.runtime_state,
              "capability_keys": list(row.capability_keys), "source_mode": row.source_mode,
-             "accepted_shapes": sorted(row.accepted_shapes) if row.accepted_shapes is not None else None})
+             "max_sources": row.max_sources, "accepted_shapes": sorted(row.accepted_shapes) if row.accepted_shapes is not None else None})
             for row in gadgets.RENDERERS]
 
 
@@ -1864,10 +1864,7 @@ async def _validate_selected_sources(
     if check_binding:
         gadgets.validate_renderer_sources(renderer, [(row.provider, row.type) for row in rows])
     if gadget_scope is not None:  # measurement scope is checked against each bound provider's catalog
-        if not source_ids:  # sourceless: the renderer's default-provider metric allowlist still applies
-            gadgets.validate_measurement_scope(renderer, None, gadget_scope)
-        for row in rows:
-            gadgets.validate_measurement_scope(renderer, row.provider, gadget_scope)
+        gadgets.validate_measurement_scopes(renderer, [row.provider for row in rows], gadget_scope)
 
 
 async def list_gadget_sources(
@@ -1913,7 +1910,7 @@ _RENDERER_DISPLAY_NAMES = {
     "video_panel": "Video", "finance_chart": "Chart", "map": "Map", "intelligence_panel": "Related signals",
     "highlights": "Highlights", "watch_rules": "Watchlist", "tasks": "Tasks", "goals": "Goals",
     "daily_brief": "Daily brief", "weather": "Weather", "provider_observation": "Metric",
-    "github_project": "Activity",
+    "github_project": "Activity", "job_list": "Jobs",
 }
 
 
@@ -1929,7 +1926,7 @@ def preset_definition_name(renderer_id: str) -> str:
 def preset_catalog() -> list[DashboardPresetRead]:
     """Expose the canonical source-free preset identities and renderer slots (aliases excluded)."""
     return [DashboardPresetRead.model_validate({"id": item.id, "label": item.label, "family": item.family,
-             "slots": [{"slot_id": slot.slot_id, "renderer": slot.renderer} for slot in item.slots]})
+             "slots": [{"slot_id": slot.slot_id, "renderer": slot.renderer, "label": slot.label} for slot in item.slots]})
             for item in gadgets.PRESETS]
 
 
@@ -1954,7 +1951,8 @@ async def preview_preset(
         active_kinds = await sources.list_active_source_kinds(
             session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     slot_source_ids: dict[str, list[UUID]] = {
-        slot.slot_id: list(payload.slot_sources.get(slot.slot_id) or gadgets.propose_slot_sources(slot.renderer, active_kinds))
+        slot.slot_id: list(payload.slot_sources.get(slot.slot_id)
+                           or gadgets.propose_slot_sources(slot.renderer, active_kinds, providers=slot.providers))
         for slot in preset.slots
     }
     selected = sorted({source_id for values in slot_source_ids.values() for source_id in values}, key=str)
@@ -2010,10 +2008,7 @@ async def preview_preset(
          gadgets.renderer_descriptor(slot["renderer"]).minimum_height)
         for slot in slots
     }
-    defaults = {
-        key: gadgets.renderer_default_size(slot["renderer"])
-        for key, slot in zip(minimums, slots, strict=True)
-    }
+    defaults = {key: gadgets.preset_slot_size(slot) for key, slot in zip(minimums, preset.slots, strict=True)}
     desktop = layouts.default_desktop_layout(defaults, minimum_sizes=minimums)
     mobile = layouts.default_mobile_layout(defaults, minimum_sizes=minimums)
     slot_ids_by_uuid = {
@@ -2035,7 +2030,12 @@ async def apply_preset(
     session: AsyncSession, preset_id: str, payload: PresetApplyRequest, *,
     scope: Scope, multi_workspace_enabled: bool,
 ) -> DashboardDetail:
-    """Recompute and fingerprint preset state under ordered source/dashboard locks before atomic apply."""
+    """Recompute and fingerprint preset state under ordered source/dashboard locks before atomic apply.
+
+    ``create`` makes a new dashboard; ``replace`` clears the target's groups and layouts first; ``append``
+    keeps everything on the target and adds the preset as one new group placed below the existing gadgets
+    (subject to the per-dashboard instance and group limits). Replace and append both check the revision.
+    """
     fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
     owner_id = _actor(scope)
     await _lock_owner_creation_quota(session, scope)
@@ -2047,8 +2047,9 @@ async def apply_preset(
         await _validate_selected_sources(session, slot.renderer, payload.slot_sources.get(slot.slot_id, ()), scope=scope,
             multi_workspace_enabled=multi_workspace_enabled)
     target_dashboard_id = payload.target_dashboard_id
-    if payload.mode == "replace":
-        assert target_dashboard_id is not None and payload.expected_revision is not None  # replace mode requires both
+    group_positions: list[int] = []
+    if payload.mode in ("replace", "append"):
+        assert target_dashboard_id is not None and payload.expected_revision is not None  # both modes require them
         dashboard = await _lock_dashboard(session, target_dashboard_id, scope=scope)
         _check_revision(dashboard, payload.expected_revision)
     else:
@@ -2084,6 +2085,17 @@ async def apply_preset(
         await session.flush()
         dashboard_revision = dashboard.revision
         session.add_all([DashboardLayout(dashboard_id=dashboard.id, breakpoint=bp, columns=20) for bp in ("desktop", "mobile")])
+    elif payload.mode == "append":
+        assert dashboard is not None
+        instance_count = await session.scalar(select(func.count()).select_from(GadgetInstance).where(
+            GadgetInstance.dashboard_id == dashboard.id)) or 0
+        if instance_count + len(current["slots"]) > MAX_INSTANCES_PER_DASHBOARD:
+            raise DashboardConflict("instance_limit", "Instance limit reached", dashboard.revision)
+        group_positions = list((await session.scalars(select(DashboardGroup.position).where(
+            DashboardGroup.dashboard_id == dashboard.id))).all())
+        if len(group_positions) >= MAX_GROUPS_PER_DASHBOARD:
+            raise DashboardConflict("group_limit", "Group limit reached", dashboard.revision)
+        dashboard_revision = _bump(dashboard)
     else:
         assert dashboard is not None
         dashboard_revision = _bump(dashboard)
@@ -2099,13 +2111,17 @@ async def apply_preset(
     if definition_count + len(current["slots"]) > MAX_DEFINITIONS_PER_OWNER:
         raise DashboardConflict("definition_limit", "Definition limit reached", dashboard_revision)
     assert dashboard is not None
-    group = DashboardGroup(dashboard_id=dashboard.id, name=current["name"], position=0)
+    # Append puts the preset in its own group after the existing ones; create/replace start from an empty dashboard.
+    group_position = max(group_positions, default=-1) + 1 if payload.mode == "append" else 0
+    group = DashboardGroup(dashboard_id=dashboard.id, name=current["name"], position=group_position)
     session.add(group)
     await session.flush()
     created_instances: list[tuple[GadgetInstance, GadgetDefinition, Any]] = []
-    for index, slot in enumerate(current["slots"]):
+    preset_slots = gadgets.dashboard_preset(preset_id).slots
+    for index, (slot, preset_slot) in enumerate(zip(current["slots"], preset_slots, strict=True)):
         descriptor = gadgets.renderer_descriptor(slot["renderer"])
-        definition = GadgetDefinition(workspace_id=scope.workspace_id, owner_id=owner_id, name=preset_definition_name(slot["renderer"]), renderer=slot["renderer"],
+        definition = GadgetDefinition(workspace_id=scope.workspace_id, owner_id=owner_id,
+            name=preset_slot.label or preset_definition_name(slot["renderer"]), renderer=slot["renderer"],
             source_ids=[str(item) for item in slot["source_ids"]], scope=slot["scope"], filters={"keywords": [], "exclude_keywords": [], "limit": 25}, highlight_rules=[])
         session.add(definition)
         await session.flush()
@@ -2115,14 +2131,26 @@ async def apply_preset(
         await session.flush()
         created_instances.append((instance, definition, descriptor))
     minimums = {instance.id: (descriptor.minimum_width, descriptor.minimum_height) for instance, _, descriptor in created_instances}
-    defaults = {instance.id: gadgets.renderer_default_size(definition.renderer) for instance, definition, _ in created_instances}
-    desktop = layouts.default_desktop_layout(defaults, minimum_sizes=minimums)
-    mobile = layouts.default_mobile_layout(defaults, minimum_sizes=minimums)
+    defaults = {instance.id: gadgets.preset_slot_size(preset_slot)
+                for (instance, _, _), preset_slot in zip(created_instances, preset_slots, strict=True)}
+    # Appended blocks keep the target's column count and start below its lowest placement, so nothing overlaps.
+    offsets = {"desktop": 0, "mobile": 0}
+    columns = {"desktop": 20, "mobile": 20}
+    if payload.mode == "append":
+        for breakpoint in offsets:
+            offsets[breakpoint] = await session.scalar(select(func.max(GadgetPlacement.y + GadgetPlacement.h)).where(
+                GadgetPlacement.dashboard_id == dashboard.id, GadgetPlacement.breakpoint == breakpoint)) or 0
+            columns[breakpoint] = await session.scalar(select(DashboardLayout.columns).where(
+                DashboardLayout.dashboard_id == dashboard.id, DashboardLayout.breakpoint == breakpoint)) or 20
+    desktop = layouts.default_desktop_layout(
+        {key: (min(width, columns["desktop"]), height) for key, (width, height) in defaults.items()},
+        columns["desktop"], minimum_sizes=minimums)
+    mobile = layouts.default_mobile_layout(defaults, columns["mobile"], minimum_sizes=minimums)
     for breakpoint, items in (("desktop", desktop), ("mobile", mobile)):
         assert dashboard is not None
         session.add_all([
-            GadgetPlacement(dashboard_id=dashboard.id, breakpoint=breakpoint,
-                            instance_id=item.instance_id, x=item.x, y=item.y, w=item.w, h=item.h)
+            GadgetPlacement(dashboard_id=dashboard.id, breakpoint=breakpoint, instance_id=item.instance_id,
+                            x=item.x, y=item.y + offsets[breakpoint], w=item.w, h=item.h)
             for item in items
         ])
     drafts = [make_dashboard_change("dashboard", dashboard.id, dashboard_revision, scope=scope)]

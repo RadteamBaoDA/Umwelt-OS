@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import type { GadgetInstance } from '../api';
 import { formatDateTime } from '@/core/i18n';
@@ -9,7 +9,7 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { listWorldObservationWindow } from '@/modules/observations/api';
 import { CHART_FALLBACK_LOOKBACK_DAYS, useEffectiveLookback } from './use-effective-lookback';
 import { useReportGadgetFreshness } from '../gadget-freshness';
-import { MetricsChart, type MetricsChartProps } from './metrics-chart';
+import { MetricsChart, type ChartSeriesData, type MetricsChartProps } from './metrics-chart';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { formatProviderName } from './metric-label';
 
@@ -20,7 +20,85 @@ export interface FinanceChartProps extends Omit<MetricsChartProps, 'instance'> {
 }
 
 /**
- * Standard Chart gadget template.
+ * Chart gadget: one bound source renders the single-series chart, 2+ sources (up to the backend ceiling of 5) the
+ * multi-series chart. Splitting here keeps each body's hook order fixed.
+ *
+ * @param props Gadget instance configuration and chart options.
+ * @returns Accessible finance chart component.
+ */
+export function FinanceChart(props: FinanceChartProps) {
+  return (props.instance.definition.source_ids?.length ?? 0) > 1 ? <MultiFinanceChart {...props} /> : <SingleFinanceChart {...props} />;
+}
+
+/**
+ * Multi-source Chart body: one observation query per bound source (a shared request would let symbol-less rows such
+ * as Fear & Greed drop out of a `symbols` filter and share one row budget). The scope is one union: metrics are
+ * matched per row, `symbols` apply only to symbol-keyed providers and `regions` only to region-keyed ones (unknown
+ * providers get both). Series are keyed by source, symbol and region and labelled "<source> · <series>"; MetricsChart
+ * rebases them to percent change when their units differ.
+ * ponytail: a symbol chosen for source B also shows on source A when A emits it; symbols cannot be mapped to sources.
+ *
+ * @param props Gadget instance configuration and chart options.
+ * @returns Multi-series chart, or the setup/loading/error/empty notice.
+ */
+function MultiFinanceChart(props: FinanceChartProps) {
+  const t = useTranslations('dashboard');
+  const { instance } = props;
+  const definition = instance.definition;
+  const sourceIds = definition.source_ids ?? [];
+  const symbols = definition.scope?.symbols ?? [];
+  const regions = definition.scope?.regions ?? [];
+  const metrics = definition.scope?.metrics?.length ? definition.scope.metrics : ['close'];
+  const { lookbackDays, ready: lookbackReady, catalog, sources } = useEffectiveLookback(sourceIds, definition.scope?.lookback_days, CHART_FALLBACK_LOOKBACK_DAYS);
+  const catalogReady = !catalog.isPending;
+  const queries = useQueries({
+    queries: sourceIds.map((sourceId) => {
+      const entry = sources[sourceId]?.provider ? catalog.data?.[sources[sourceId].provider as string] : undefined;
+      const useSymbols = symbols.length > 0 && (!entry || entry.symbol_keyed);
+      const useRegions = regions.length > 0 && (!entry || entry.region_keyed);
+      return {
+        queryKey: ['world-observations', 'finance', instance.id, sourceId, useSymbols ? symbols : null, useRegions ? regions : null, metrics, lookbackDays],
+        queryFn: ({ signal }: { signal: AbortSignal }) => {
+          const to = new Date(Date.now() + 86_400_000);
+          const from = new Date(to.getTime() - Math.min(lookbackDays + 1, 3660) * 86_400_000);
+          return listWorldObservationWindow({ sourceIds: [sourceId], symbols: useSymbols ? symbols : undefined, regions: useRegions ? regions : undefined, metrics, from, to, history: true }, signal);
+        },
+        enabled: lookbackReady && catalogReady, staleTime: 60_000,
+      };
+    }),
+  });
+  const items = queries.flatMap((query, index) => (query.data?.items ?? []).filter((item) => item.source_id === sourceIds[index] && item.value !== null));
+  const latest = items.reduce<(typeof items)[number] | undefined>((best, item) => (!best || item.collected_at > best.collected_at ? item : best), undefined);
+  useReportGadgetFreshness(latest?.collected_at, null);
+  // Recomputed per render (cheap, <= 5 sources); MetricsChart memoizes on the series identity it receives.
+  const seriesData: ChartSeriesData[] = (() => {
+    const groups = new Map<string, { name: string; rows: typeof items }>();
+    for (const item of items) {
+      const key = [item.source_id, item.metric, item.symbol ?? '', item.region ?? ''].join('|');
+      const source = sources[item.source_id];
+      const sourceName = source?.name || (item.provider ? formatProviderName(item.provider) : item.source_id);
+      const label = item.symbol || item.region || item.metric;
+      const group = groups.get(key) ?? { name: `${sourceName} · ${label}`, rows: [] };
+      group.rows.push(item);
+      groups.set(key, group);
+    }
+    return [...groups.entries()].map(([key, group]) => {
+      const rows = group.rows.sort((left, right) => left.observed_at.localeCompare(right.observed_at));
+      const last = rows[rows.length - 1];
+      return { key, name: group.name, points: rows.map((row) => ({ timestamp: row.observed_at, value: row.value as number })), currency: last.currency ?? undefined, unit: last.currency ? undefined : (last.unit ?? undefined) };
+    });
+  })();
+  if (queries.some((query) => query.isPending) || !lookbackReady || !catalogReady) return <GadgetSkeleton variant="chart" label={t('observationLoading')} />;
+  if (queries.every((query) => query.isError)) return <GadgetNotice kind="error" message={t('observationLoadFailed')} />;
+  if (seriesData.length === 0) return <GadgetNotice kind="empty" message={t('observationEmpty')} />;
+  return <>
+    {queries.some((query) => query.data?.truncated) && <p role="status" className="px-3 pt-2 text-xs text-muted-foreground">{t('observationTruncated')}</p>}
+    <MetricsChart {...props} seriesData={seriesData} />
+  </>;
+}
+
+/**
+ * Standard Chart gadget template (one bound source).
  * Specializes MetricsChart for any measurement series. Rows are filtered by the configured symbol and region. The
  * series key is the symbol, plus the region for region-keyed providers (World Bank countries, OpenAQ locations) per the
  * metric catalog (symbol and region when the catalog entry is unknown), so several series never merge into one
@@ -30,7 +108,7 @@ export interface FinanceChartProps extends Omit<MetricsChartProps, 'instance'> {
  * @param props Gadget instance configuration and chart options.
  * @returns Accessible finance chart component.
  */
-export function FinanceChart(props: FinanceChartProps) {
+function SingleFinanceChart(props: FinanceChartProps) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
   const { instance } = props;

@@ -14,6 +14,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { ApiError } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
+import { TablePagination, usePagination } from '@/components/ui/pagination';
+import { Table, TableBody, TableHead, TableHeader } from '@/components/ui/table';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useGuardedNavigation } from '@/core/guarded-navigation';
 import { listSources, type Source } from './api';
@@ -105,6 +107,7 @@ export function McpSettings() {
   const [grantDirty, setGrantDirty] = useState(false);
   const [editing, setEditing] = useState(false);
   const [discovery, setDiscovery] = useState<McpDiscovery | null>(null);
+  const capabilityPager = usePagination(discovery?.capabilities ?? []);
   const [grants, setGrants] = useState<McpGrant[]>([]);
   const [grantDrafts, setGrantDrafts] = useState<Record<string, GrantDraft>>({});
   const [sources, setSources] = useState<Source[]>([]);
@@ -532,11 +535,11 @@ export function McpSettings() {
         <p className="text-muted-foreground">{t('discoveryNotGrant')} {t('permLevelsNote')}</p>
         <p className="text-muted-foreground">{t('sourceScopeNote')} {t('scopeBoundsHelp')}</p>
         <div className="max-[720px]:overflow-visible">
-          <table className="w-full border-collapse text-left max-[720px]:block">
+          <Table className="border-collapse text-left max-[720px]:block" containerClassName="max-[720px]:max-h-none">
             <caption className="sr-only">{t('toolsCaption')}</caption>
-            <thead className="max-[720px]:sr-only"><tr className="border-b border-border">{(['toolColName', 'toolColRisk', 'toolColPermission'] as const).map((key) => <th key={key} scope="col" className="text-muted-foreground px-3 py-2 text-xs font-semibold">{t(key)}</th>)}</tr></thead>
-            <tbody className="max-[720px]:block">
-              {discovery.capabilities.map((item) => {
+            <TableHeader className="max-[720px]:sr-only"><tr className="border-b border-border">{(['toolColName', 'toolColRisk', 'toolColPermission'] as const).map((key) => <TableHead key={key} scope="col" className="text-muted-foreground px-3 py-2 text-xs font-semibold">{t(key)}</TableHead>)}</tr></TableHeader>
+            <TableBody className="max-[720px]:block">
+              {capabilityPager.pageItems.map((item) => {
                 const value = grantDrafts[item.id] ?? { selected: false, purpose: 'chat' as const, sources: [], destinations: '', expires: '' };
                 const level = value.selected && supported(item) ? value.purpose : 'none';
                 const description = typeof item.descriptor.description === 'string' ? item.descriptor.description : null;
@@ -558,8 +561,9 @@ export function McpSettings() {
                   </td></tr>
                 </Fragment>;
               })}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
+          <TablePagination {...capabilityPager} />
         </div>
         <Button disabled={inputsFrozen || !selected || Boolean(tokenView)} onClick={saveGrants}>{t('saveGrantReview')}</Button>
       </div>}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { formatChartValue, type ChartDataPoint } from '@/core/charts/recharts-wrapper';
 import { formatDateTime, normalizeFormattingLocale } from '@/core/i18n';
@@ -41,9 +41,9 @@ export function latestPerSeries(items: WorldObservation[]): WorldObservation[] {
   return [...latest.values()].slice(0, 20);
 }
 
-/** Series identity shared by `latestPerSeries` and `historyPerSeries`. */
+/** Series identity shared by `latestPerSeries` and `historyPerSeries`; includes the source so two sources never merge. */
 export function seriesKey(item: WorldObservation): string {
-  return `${item.provider}|${item.metric}|${item.symbol ?? ''}|${item.region ?? ''}`;
+  return `${item.source_id}|${item.provider}|${item.metric}|${item.symbol ?? ''}|${item.region ?? ''}`;
 }
 
 /**
@@ -120,7 +120,10 @@ function boundedIndexSuffix(item: WorldObservation): string | null {
 
 /**
  * Generic provider observation gadget (Fear & Greed, FX, GDP, BTC price, USGS quakes). One series renders a KPI
- * (figure, delta vs previous observation, sparkline); several render SeriesRows. Observed/published/collected times
+ * (figure, delta vs previous observation, sparkline); several render SeriesRows.
+ * Several bound sources (up to 5) each get their own query, because one shared request would drop symbol-less rows
+ * (Fear & Greed, FX) under a `symbols` filter and share a row budget; their rows are merged (labels prefixed with
+ * the source name) and the merged list is capped at 20. `symbols` apply only to symbol-keyed providers. Observed/published/collected times
  * sit in the value tooltip, attribution + freshness in the frame footer, FX reference date / annual period inline, a stale flag after two polling intervals, and keeps the last good
  * value visible with an error banner when a refresh fails.
  */
@@ -128,24 +131,32 @@ export function ProviderObservationGadget({ instance }: { instance: GadgetInstan
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
   const definition = instance.definition;
-  const sourceId = definition.source_ids?.[0] ?? '';
+  const sourceIds = definition.source_ids ?? [];
+  const sourceId = sourceIds[0] ?? '';
   const metrics = definition.scope?.metrics ?? [];
   const symbols = definition.scope?.symbols ?? [];
   // Unset lookback follows the bound provider's catalog default (annual World Bank ~10 years), never below 30 days.
-  const { lookbackDays: rawLookback, ready: lookbackReady } = useEffectiveLookback(sourceId, definition.scope?.lookback_days, METRIC_FALLBACK_LOOKBACK_DAYS, true);
+  const { lookbackDays: rawLookback, ready: lookbackReady, catalog, sources } = useEffectiveLookback(sourceIds, definition.scope?.lookback_days, METRIC_FALLBACK_LOOKBACK_DAYS, true);
   const lookbackDays = Math.min(rawLookback, 3660);
-  const query = useQuery({
-    queryKey: ['world-observations', 'provider', instance.id, sourceId, metrics, symbols, lookbackDays],
-    queryFn: ({ signal }) => {
-      const to = new Date(Date.now() + 86_400_000);
-      // `to` runs one day ahead (provider clock skew); keep the whole window within the API's 3660-day maximum.
-      const from = new Date(to.getTime() - Math.min(lookbackDays + 1, 3660) * 86_400_000);
-      return listWorldObservationWindow({ sourceIds: [sourceId], metrics, symbols, from, to, maxPages: 2, history: true }, signal);
-    },
-    enabled: Boolean(sourceId) && lookbackReady, staleTime: 60_000,
+  const queries = useQueries({
+    queries: sourceIds.map((id) => {
+      const entry = sources[id]?.provider ? catalog.data?.[sources[id].provider as string] : undefined;
+      const sourceSymbols = entry && !entry.symbol_keyed ? [] : symbols;
+      return {
+        queryKey: ['world-observations', 'provider', instance.id, id, metrics, sourceSymbols, lookbackDays],
+        queryFn: ({ signal }: { signal: AbortSignal }) => {
+          const to = new Date(Date.now() + 86_400_000);
+          // `to` runs one day ahead (provider clock skew); keep the whole window within the API's 3660-day maximum.
+          const from = new Date(to.getTime() - Math.min(lookbackDays + 1, 3660) * 86_400_000);
+          return listWorldObservationWindow({ sourceIds: [id], metrics, symbols: sourceSymbols, from, to, maxPages: 2, history: true }, signal);
+        },
+        enabled: lookbackReady, staleTime: 60_000,
+      };
+    }),
   });
+  const query = { isPending: queries.length === 0 || queries.some((item) => item.isPending), isError: queries.some((item) => item.isError) };
   const sourceQuery = useQuery({ queryKey: ['connector-configuration', sourceId], queryFn: ({ signal }) => getConnectorConfiguration(sourceId, signal), enabled: Boolean(sourceId), staleTime: 300_000 });
-  const sourceItems = (query.data?.items ?? []).filter((item) => item.source_id === sourceId);
+  const sourceItems = queries.flatMap((item, index) => (item.data?.items ?? []).filter((row) => row.source_id === sourceIds[index]));
   const items = latestPerSeries(sourceItems);
   const history = historyPerSeries(sourceItems);
   const providerNames = [...new Set(items.map((item) => PROVIDER_PRESENTATION[item.provider]?.name).filter(Boolean))].join(', ');
@@ -170,8 +181,9 @@ export function ProviderObservationGadget({ instance }: { instance: GadgetInstan
     item.published_at ? `${t('providerObsPublished')}: ${fmt(item.published_at)}` : null,
     `${t('observationCollectedAt')}: ${fmt(item.collected_at)}`,
   ].filter(Boolean).join('\n');
-  /** Row label: symbol, region or humanized metric. */
-  const labelOf = (item: WorldObservation) => item.symbol ?? item.region ?? formatMetricLabel(item.metric, t);
+  /** Row label: symbol, region or humanized metric, prefixed with the source name when several sources are bound. */
+  const baseLabel = (item: WorldObservation) => item.symbol ?? item.region ?? formatMetricLabel(item.metric, t);
+  const labelOf = (item: WorldObservation) => sourceIds.length < 2 ? baseLabel(item) : `${sources[item.source_id]?.name || PROVIDER_PRESENTATION[item.provider]?.name || item.provider} · ${baseLabel(item)}`;
   /** Unit text shown beside the figure: bounded-index suffix, else the plain unit (bare "index" adds nothing). */
   const unitOf = (item: WorldObservation) => boundedIndexSuffix(item) ?? (item.unit === 'index' ? undefined : item.unit);
   const single = items.length === 1 ? items[0] : null;

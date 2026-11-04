@@ -3,6 +3,7 @@
 import { useTranslations } from 'next-intl';
 import type { ReactNode } from 'react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Table, TableBody, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { Source } from './api';
 
@@ -33,10 +34,12 @@ export function matchesFilter(state: SourceRowState, filter: SourceFilter): bool
 }
 
 /** Filter tabs with loaded-row counts plus a semantic table; rows below 1024px collapse into stacked cards. */
-export function SourcesTable({ filter, counts, onFilterChange, children }: {
+export function SourcesTable({ filter, counts, onFilterChange, pagination, children }: {
   filter: SourceFilter;
   counts: Record<SourceFilter, number>;
   onFilterChange: (filter: SourceFilter) => void;
+  /** Pager rendered right under the table. */
+  pagination?: ReactNode;
   children: ReactNode;
 }) {
   const t = useTranslations('sources');
@@ -52,15 +55,16 @@ export function SourcesTable({ filter, counts, onFilterChange, children }: {
         {(Object.keys(labels) as SourceFilter[]).map((key) => <TabsTrigger key={key} value={key} className="min-h-9 shrink-0 pointer-coarse:min-h-11">{labels[key]} {counts[key]}</TabsTrigger>)}
       </TabsList>
     </Tabs>
-    <table className="w-full border-collapse text-left max-[1023px]:block">
+    <Table className="border-collapse max-[1023px]:block" containerClassName="max-[1023px]:max-h-none">
       <caption className="sr-only">{t('tableCaption')}</caption>
-      <thead className="max-[1023px]:sr-only">
-        <tr className="border-b border-border">
-          {(['colSource', 'colState', 'colSchedule', 'colCollected', 'colIndexed', 'colActions'] as const).map((key) => <th key={key} scope="col" className="text-muted-foreground px-3 py-2 text-sm font-medium min-[1024px]:whitespace-nowrap">{t(key)}</th>)}
-        </tr>
-      </thead>
-      <tbody className="max-[1023px]:block">{children}</tbody>
-    </table>
+      <TableHeader className="max-[1023px]:sr-only">
+        <TableRow className="border-b border-border">
+          {(['colSource', 'colState', 'colSchedule', 'colCollected', 'colIndexed', 'colActions'] as const).map((key) => <TableHead key={key} scope="col" className="text-muted-foreground px-3 py-2 text-sm font-medium min-[1024px]:whitespace-nowrap">{t(key)}</TableHead>)}
+        </TableRow>
+      </TableHeader>
+      <TableBody className="max-[1023px]:block">{children}</TableBody>
+    </Table>
+    {pagination}
     <p className="text-muted-foreground text-sm">{t('neverHelp')}</p>
   </div>;
 }
