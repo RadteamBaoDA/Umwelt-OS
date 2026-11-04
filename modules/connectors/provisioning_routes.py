@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-from typing import Annotated, Literal, cast
+from typing import Annotated, Any, Literal, cast
 from uuid import UUID
 
 import httpx
@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
+from core.errors import DomainError
 from core.ids import uuid7
 from core.realtime import commit_with_replay, make_source_change
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
@@ -53,6 +54,7 @@ from modules.connectors.provider_specs import TERMS_INELIGIBLE
 from modules.connectors.providers import rest
 from modules.connectors.public import (
     ConnectorConfig,
+    NativeCredentialRevocationSnapshot,
     NativeCredentialSnapshot,
     ProviderRateLimited,
     serialize_source_configuration,
@@ -61,7 +63,7 @@ from modules.connectors.public import (
 from modules.ingestion import public as ingestion
 from modules.settings.public import module_dependency, resolve_n8n
 from modules.sources import public as sources
-from modules.sources.schemas import ConnectorSource
+from modules.sources.schemas import ConnectorSource, SourceFence
 
 router = APIRouter(prefix="/api/v1/connectors", tags=["connectors"])
 Session = Annotated[AsyncSession, Depends(get_session)]
@@ -360,21 +362,7 @@ async def validate_draft_configuration(
     current_revision = row.desired_revision if row is not None else 0
     if payload.expected_revision != current_revision:
         raise HTTPException(status_code=409, detail="Connector configuration revision changed; reload before validating")
-    expected_auth = (
-        "telegram_bot_token" if source.provider == "telegram"
-        else "http_header" if source.provider in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS
-        else "none" if source.provider else None
-    )
-    if source.provider == "mastodon" and payload.auth_method == "none":
-        expected_auth = "none"  # Mastodon's bearer token is optional: public reads need no credential.
-    if expected_auth is not None and payload.auth_method != expected_auth:
-        raise HTTPException(status_code=422, detail="Authentication mode does not match the provider")
-    if expected_auth == "http_header" and source.provider in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS and payload.auth_header_name != "Authorization":
-        raise HTTPException(status_code=422, detail="Provider bearer credentials require the Authorization header")
-    if source.provider is None and payload.auth_method == "telegram_bot_token":
-        raise HTTPException(status_code=422, detail="Telegram authentication requires a Telegram source")
-    if payload.auth_method == "http_header" and source.type != "api":
-        raise HTTPException(status_code=422, detail="Header authentication is supported only for REST sources")
+    _check_draft_auth_mode(source, payload)
     try:
         source_configuration = serialize_source_configuration(source, payload.configuration)
     except ValueError as exc:
@@ -384,61 +372,15 @@ async def validate_draft_configuration(
         data = registry.validate(candidate)
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=_invalid_detail("Draft connector configuration is invalid", exc)) from exc
-    checks: tuple[str, ...]
     bot_id: str | None = None
     scope_verified: bool | None = None
     if source.provider == "telegram":
-        token: str
-        try:
-            previous = await provisioning.get_retained_native_credential_snapshot(
-                session, source_id, source_generation=source.generation,
-                connector_revision=payload.expected_revision,
-                multi_workspace_enabled=multi_workspace_enabled, scope=scope,
-            )
-        except ValueError as exc:
-            await session.rollback()
-            raise HTTPException(status_code=409, detail="Connector configuration changed; reload before validating") from exc
-        validation_access_fence = previous.access_fence if previous is not None else access_fence
-        if validation_access_fence != access_fence:
-            raise HTTPException(status_code=409, detail="Original Telegram access changed")
-        if payload.secret_action == "replace":
-            token = payload.secret.get_secret_value() if payload.secret is not None else ""
-        else:
-            if previous is None or previous.state != "ready":
-                raise HTTPException(status_code=409, detail="A validated Telegram token is required")
-            key = request.app.state.settings.connector_credential_encryption_key.get_secret_value()
-            try:
-                token = decrypt_native_token(key, previous)
-            except CredentialEncryptionUnavailable as exc:
-                raise HTTPException(status_code=503, detail="Stored Telegram credential is unavailable") from exc
-        await session.rollback()
-        from modules.connectors.providers.telegram import validate_telegram_scope
-
-        try:
-            verified = await validate_telegram_scope(
-                token, tuple(cast("list[str]", candidate.configuration["telegram_chat_ids"])),
-                before_request=lambda: _validation_send_fence(
-                    session, request, source, payload.expected_revision, scope=scope,
-                    access_fence=validation_access_fence, native_snapshot=previous,
-                ),
-            )
-        except ProviderRateLimited as exc:
-            raise HTTPException(status_code=503, detail="Telegram provider rate limit reached") from exc
-        except (TimeoutError, httpx.TimeoutException) as exc:
-            raise HTTPException(status_code=503, detail="Telegram validation outcome is unknown") from exc
-        except (ValueError, httpx.HTTPError) as exc:
-            status = 503 if getattr(exc, "code", None) == "telegram_provider_unavailable" else 422
-            detail = "Telegram validation outcome is unknown" if status == 503 else "Telegram bot identity and channel scope could not be verified"
-            raise HTTPException(status_code=status, detail=detail) from exc
-        await _validation_send_fence(
-            session, request, source, payload.expected_revision, scope=scope,
-            access_fence=validation_access_fence, native_snapshot=previous,
+        bot_id = await _validate_telegram_draft(
+            session, request, source_id, source, payload, candidate, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
         )
-        if previous is not None and previous.bound_bot_id not in (None, verified.verified_bot_id):
-            raise HTTPException(status_code=409, detail="A different Telegram bot requires a new source")
-        bot_id = verified.verified_bot_id
         scope_verified = True
-        checks = ("configuration", "provider_identity", "provider_scope", "receive_mode")
+        checks: tuple[str, ...] = ("configuration", "provider_identity", "provider_scope", "receive_mode")
     elif source.provider is not None:
         checks = ("configuration", "provider_identity", "provider_scope", "receive_mode")
         scope_verified = True
@@ -461,6 +403,101 @@ async def validate_draft_configuration(
         verified_bot_id=bot_id,
         scope_verified=scope_verified,
     )
+
+
+def _check_draft_auth_mode(source: ConnectorSource, payload: DraftValidationRequest) -> None:
+    """Reject draft authentication modes that do not match the provider or source type (HTTP 422).
+
+    Pure validation: no session access. Mastodon's bearer token is optional, so an explicit
+    ``none`` is accepted for it. Header-auth providers must use the ``Authorization`` header.
+    """
+    expected_auth = (
+        "telegram_bot_token" if source.provider == "telegram"
+        else "http_header" if source.provider in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS
+        else "none" if source.provider else None
+    )
+    if source.provider == "mastodon" and payload.auth_method == "none":
+        expected_auth = "none"  # Mastodon's bearer token is optional: public reads need no credential.
+    if expected_auth is not None and payload.auth_method != expected_auth:
+        raise HTTPException(status_code=422, detail="Authentication mode does not match the provider")
+    if expected_auth == "http_header" and source.provider in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS and payload.auth_header_name != "Authorization":
+        raise HTTPException(status_code=422, detail="Provider bearer credentials require the Authorization header")
+    if source.provider is None and payload.auth_method == "telegram_bot_token":
+        raise HTTPException(status_code=422, detail="Telegram authentication requires a Telegram source")
+    if payload.auth_method == "http_header" and source.type != "api":
+        raise HTTPException(status_code=422, detail="Header authentication is supported only for REST sources")
+
+
+async def _telegram_validation_token(
+    request: Request, payload: DraftValidationRequest,
+    previous: NativeCredentialSnapshot | None,
+) -> str:
+    """Return the bot token to validate: the submitted replacement or the decrypted retained one.
+
+    Raises 409 when a retained token is required but not ready and 503 when it cannot be
+    decrypted. Does not commit; the caller rolls back before provider I/O.
+    """
+    if payload.secret_action == "replace":
+        return payload.secret.get_secret_value() if payload.secret is not None else ""
+    if previous is None or previous.state != "ready":
+        raise HTTPException(status_code=409, detail="A validated Telegram token is required")
+    key = request.app.state.settings.connector_credential_encryption_key.get_secret_value()
+    try:
+        return decrypt_native_token(key, previous)
+    except CredentialEncryptionUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Stored Telegram credential is unavailable") from exc
+
+
+async def _validate_telegram_draft(
+    session: AsyncSession, request: Request, source_id: UUID, source: ConnectorSource, payload: DraftValidationRequest,
+    candidate: ConnectorSource, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+) -> str:
+    """Verify the Telegram bot identity and chat scope for a draft; return the verified bot id.
+
+    Reads the retained credential under locks, rolls back before contacting Telegram, then
+    re-fences (``_validation_send_fence``) so the result still describes the requested draft.
+    Errors: 409 for a changed configuration/access/bot, 422/503 for provider verification failures.
+    """
+    try:
+        previous = await provisioning.get_retained_native_credential_snapshot(
+            session, source_id, source_generation=source.generation,
+            connector_revision=payload.expected_revision,
+            multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        )
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Connector configuration changed; reload before validating") from exc
+    validation_access_fence = previous.access_fence if previous is not None else access_fence
+    if validation_access_fence != access_fence:
+        raise HTTPException(status_code=409, detail="Original Telegram access changed")
+    token = await _telegram_validation_token(request, payload, previous)
+    await session.rollback()
+    from modules.connectors.providers.telegram import validate_telegram_scope
+
+    try:
+        verified = await validate_telegram_scope(
+            token, tuple(cast("list[str]", candidate.configuration["telegram_chat_ids"])),
+            before_request=lambda: _validation_send_fence(
+                session, request, source, payload.expected_revision, scope=scope,
+                access_fence=validation_access_fence, native_snapshot=previous,
+            ),
+        )
+    except ProviderRateLimited as exc:
+        raise HTTPException(status_code=503, detail="Telegram provider rate limit reached") from exc
+    except (TimeoutError, httpx.TimeoutException) as exc:
+        raise HTTPException(status_code=503, detail="Telegram validation outcome is unknown") from exc
+    except (ValueError, httpx.HTTPError) as exc:
+        status = 503 if getattr(exc, "code", None) == "telegram_provider_unavailable" else 422
+        detail = "Telegram validation outcome is unknown" if status == 503 else "Telegram bot identity and channel scope could not be verified"
+        raise HTTPException(status_code=status, detail=detail) from exc
+    await _validation_send_fence(
+        session, request, source, payload.expected_revision, scope=scope,
+        access_fence=validation_access_fence, native_snapshot=previous,
+    )
+    if previous is not None and previous.bound_bot_id not in (None, verified.verified_bot_id):
+        raise HTTPException(status_code=409, detail="A different Telegram bot requires a new source")
+    return verified.verified_bot_id
 
 
 async def _source(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool) -> ConnectorSource:
@@ -792,22 +829,9 @@ async def activate_source(
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     access_fence = await _owner_access(session, request, scope)
     source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-    row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-    if row is None or row.desired_revision != payload.expected_revision:
-        raise HTTPException(status_code=409, detail="Connector configuration revision is stale")
-    if row.state == "provisioning":
-        raise HTTPException(status_code=409, detail="Connector activation is already being reconciled")
-    if row.state == "disabled" and row.error_code == "deactivation_pending":
-        raise HTTPException(status_code=409, detail="Wait for source deactivation to finish before enabling")
-    if row.transition_phase not in ("idle", "activating_new"):
-        raise HTTPException(status_code=409, detail="A backend transition is in progress")
-    if await provisioning.unresolved_credential_error(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope):
-        raise HTTPException(
-            status_code=409,
-            detail="An n8n credential operation is pending or requires recovery",
-        )
-    if source.status != "active" or source.generation != row.source_generation:
-        raise HTTPException(status_code=409, detail="Source changed; save its current configuration before enabling")
+    row = await _check_activation_preconditions(
+        session, source_id, source, payload, multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+    )
     backend = _choose_backend(payload.execution_backend, row, source)
     if backend == "native":
         return await activate_native(session, request, scope, source, payload, access_fence=access_fence)
@@ -815,94 +839,15 @@ async def activate_source(
         raise HTTPException(status_code=409, detail="Use backend-transition to change the backend")
     settings = request.app.state.settings
     n8n = await resolve_n8n(session, settings, workspace_id=scope.workspace_id)
-    if not n8n.enabled:
-        # Owner kill switch: no new n8n activation; existing workflows are left as they are.
-        raise HTTPException(status_code=503, detail="n8n_disabled")
-    api_key = n8n.api_key
-    if not api_key:
-        if connector_owner.is_native_provider(source.provider):
-            raise HTTPException(status_code=503, detail="Native activation contract is pending")
-        raise HTTPException(status_code=503, detail="n8n provisioning is not configured")
-    webhook_token = n8n.webhook_token
-    if not webhook_token:
-        raise HTTPException(status_code=503, detail="Manual trigger authentication is not configured")
-    encryption_key = settings.connector_credential_encryption_key.get_secret_value()
-    try:
-        secret_fingerprint(encryption_key, "connector-key-validation")
-    except CredentialEncryptionUnavailable as exc:
-        raise HTTPException(status_code=503, detail="Connector credential encryption is not configured") from exc
+    api_key, webhook_token, encryption_key = _require_n8n_activation_settings(n8n, settings, source)
 
     activation_id = uuid7()
-    native_bot_id: str | None = None
+    validation_access_fence = access_fence
     if source.provider == "telegram":
-        from modules.connectors.providers.telegram import validate_telegram_scope
-
-        try:
-            previous = await provisioning.get_retained_native_credential_snapshot(
-                session, source_id, source_generation=source.generation,
-                connector_revision=payload.expected_revision,
-                multi_workspace_enabled=multi_workspace_enabled, scope=scope,
-            )
-        except ValueError as exc:
-            await session.rollback()
-            raise HTTPException(status_code=409, detail="Connector configuration changed; reload before enabling") from exc
-        validation_access_fence = previous.access_fence if previous is not None else access_fence
-        if validation_access_fence != access_fence:
-            raise HTTPException(status_code=409, detail="Original Telegram access changed")
-        if payload.secret_action == "keep":
-            if previous is None or previous.state != "ready":
-                raise HTTPException(status_code=409, detail="A validated Telegram token is required")
-            try:
-                native_token = decrypt_native_token(encryption_key, previous)
-            except CredentialEncryptionUnavailable as exc:
-                raise HTTPException(status_code=503, detail="Stored Telegram credential is unavailable") from exc
-        else:
-            native_token = payload.secret.get_secret_value() if payload.secret else ""
-        await session.rollback()
-        try:
-            verified = await validate_telegram_scope(
-                native_token, tuple(cast("list[str]", source.configuration.get("telegram_chat_ids", ()))),
-                before_request=lambda: _validation_send_fence(
-                    session, request, source, payload.expected_revision, scope=scope,
-                    access_fence=validation_access_fence, native_snapshot=previous,
-                ),
-            )
-        except ProviderRateLimited as exc:
-            raise HTTPException(status_code=503, detail="Telegram provider rate limit reached") from exc
-        except (TimeoutError, httpx.TimeoutException) as exc:
-            raise HTTPException(status_code=503, detail="Telegram validation outcome is unknown") from exc
-        except (ValueError, httpx.HTTPError) as exc:
-            status = 503 if getattr(exc, "code", None) == "telegram_provider_unavailable" else 422
-            detail = "Telegram validation outcome is unknown" if status == 503 else "Telegram bot identity and channel scope could not be verified"
-            raise HTTPException(status_code=status, detail=detail) from exc
-        if previous is not None and previous.bound_bot_id not in (None, verified.verified_bot_id):
-            raise HTTPException(status_code=409, detail="A different Telegram bot requires a new source")
-        await _validation_send_fence(
-            session, request, source, payload.expected_revision, scope=scope,
-            access_fence=validation_access_fence, native_snapshot=previous,
+        validation_access_fence = await _stage_telegram_activation(
+            session, request, source_id, source, payload, activation_id=activation_id, encryption_key=encryption_key,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
         )
-        native_bot_id = verified.verified_bot_id
-        ciphertext = encrypt_native_token(
-            encryption_key, source_id=source_id, operation_id=activation_id,
-            source_generation=source.generation, configuration_revision=payload.expected_revision,
-            token=native_token, verified_bot_id=native_bot_id,
-        )
-        try:
-            await provisioning.save_native_credential(
-                session, source_id=source_id, operation_id=activation_id,
-                source_generation=source.generation, connector_revision=payload.expected_revision,
-                encrypted_token=ciphertext, token_fingerprint=secret_fingerprint(encryption_key, native_token),
-                verified_bot_id=native_bot_id, validated_at=verified.validated_at,
-                access_fence=validation_access_fence,
-                expected_native_operation_id=previous.operation_id if previous is not None else None,
-                multi_workspace_enabled=multi_workspace_enabled, scope=scope,
-            )
-        except ValueError as exc:
-            await session.rollback()
-            raise HTTPException(status_code=409, detail="Telegram credential identity or revision changed") from exc
-        except IntegrityError as exc:
-            await session.rollback()
-            raise HTTPException(status_code=409, detail="Telegram bot identity is already reserved") from exc
     elif payload.secret_action == "replace" and row.desired_configuration.get("auth_method") != "http_header":
         raise HTTPException(status_code=422, detail="This provider does not accept a replacement token")
 
@@ -915,101 +860,23 @@ async def activate_source(
     else:
         await session.rollback()
     access_fence = await _owner_access(session, request, scope, expected=access_fence)
-    source_fence, row, _slots = await provisioning.lock_connector(
+    source_fence, locked_row, _slots = await provisioning.lock_connector(
         session, source_id, provisioning._ALL_CREDENTIAL_SLOTS, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence,
     )
-    if (source_fence is None or row is None or source_fence.generation != source.generation
-            or source_fence.status != "active" or row.desired_revision != payload.expected_revision):
+    if (source_fence is None or locked_row is None or source_fence.generation != source.generation
+            or source_fence.status != "active" or locked_row.desired_revision != payload.expected_revision):
         raise HTTPException(status_code=409, detail="Original activation configuration changed")
+    row = locked_row
     if row.execution_backend != "n8n":  # fresh native->n8n switch (checked above); a new backend revision fences old work
         row.execution_backend = "n8n"
         row.backend_revision += 1
     try:
-        credential_intents: dict[str, dict[str, object]] = {}
-        required_credentials: dict[str, dict[str, object]] = {}
-
-        collector = await provisioning.get_managed_credential(session, source_id, "collector", multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-        collector_token: str | None = None
-        collector_binding = collector.resolved_binding if collector is not None else None
-        collector_scope: Literal["mcp:collect", "ingestion:write"] = "mcp:collect" if source.type == "mcp" else "ingestion:write"
-        if not (
-            collector is not None and collector.state == "ready" and collector.credential_id
-            and isinstance(collector_binding, dict)
-            and collector_binding.get("source_generation") == source.generation
-            and collector_binding.get("scope") == collector_scope
-        ):
-            collector_token = await ingestion.create_collector_credential_in_uow(
-                session, source_id, credential_scope=collector_scope, scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
-                source_fence=source_fence,
-            )
-            collector_binding = {
-                "source_generation": source.generation,
-                "scope": collector_scope,
-                "token_fingerprint": secret_fingerprint(encryption_key, collector_token),
-            }
-        required, intent = prepare_credential_assignment(
-            source_id=source_id,
-            activation_id=activation_id,
-            slot="collector",
-            credential_name=f"Umwelt-OS source collector {source_id}",
-            header_name="Authorization",
-            secret=f"Bearer {collector_token}" if collector_token is not None else None,
-            binding=collector_binding if isinstance(collector_binding, dict) else {},
-            existing=collector,
-            encryption_key=encryption_key,
+        required_credentials, credential_intents = await _stage_bundle_credentials(
+            session, source_id, source, row, payload, activation_id=activation_id, encryption_key=encryption_key,
+            webhook_token=webhook_token, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence, source_fence=source_fence,
         )
-        required_credentials["collector"] = required
-        if intent is not None:
-            credential_intents["collector"] = intent
-
-        manual = await provisioning.get_managed_credential(session, source_id, "manual_trigger", multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-        required, intent = prepare_credential_assignment(
-            source_id=source_id,
-            activation_id=activation_id,
-            slot="manual_trigger",
-            credential_name="Umwelt-OS manual trigger",
-            header_name="X-BBD-Webhook-Token",
-            secret=webhook_token,
-            binding={"binding_kind": "manual_trigger"},
-            existing=manual,
-            encryption_key=encryption_key,
-        )
-        required_credentials["manual_trigger"] = required
-        if intent is not None:
-            credential_intents["manual_trigger"] = intent
-
-        if row.desired_configuration.get("auth_method") == "http_header":
-            provider = await provisioning.get_managed_credential(session, source_id, "provider", multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-            provider_header = str(row.desired_configuration.get("auth_header_name", ""))
-            if payload.secret_action == "keep":
-                provider_binding = provider.resolved_binding if provider is not None else None
-                if (
-                    provider is None or provider.state != "ready" or not provider.credential_id
-                    or not isinstance(provider_binding, dict)
-                    or provider_binding.get("header_name") != provider_header
-                ):
-                    raise ValueError("Provide a provider credential for the current header binding")
-                provider_secret = None
-                binding = dict(provider_binding)
-            else:
-                provider_secret = payload.secret.get_secret_value() if payload.secret else None
-                binding = {"binding_kind": "provider"}
-            required, intent = prepare_credential_assignment(
-                source_id=source_id,
-                activation_id=activation_id,
-                slot="provider",
-                credential_name=f"Umwelt-OS REST source {source_id}",
-                header_name=provider_header,
-                secret=provider_secret,
-                binding=binding,
-                existing=provider,
-                encryption_key=encryption_key,
-            )
-            required_credentials["provider"] = required
-            if intent is not None:
-                credential_intents["provider"] = intent
     except (CredentialEncryptionUnavailable, ValueError) as exc:
         await session.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1039,6 +906,17 @@ async def activate_source(
         credentials,
         encryption_key,
      multi_workspace_enabled=multi_workspace_enabled, scope=scope, access_fence=access_fence)
+    return await _read_activation_outcome(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+
+
+async def _read_activation_outcome(
+    session: AsyncSession, source_id: UUID, *, multi_workspace_enabled: bool, scope: WorkspaceContext,
+) -> ActivationRead:
+    """Read the post-drive activation state and map non-active outcomes to HTTP errors.
+
+    Read-only. 404 if the state vanished, 422 when n8n rejected a credential, 503 while
+    reconciliation is still pending; otherwise the projected ``ActivationRead``.
+    """
     latest = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
     if latest is None:
         raise HTTPException(status_code=404, detail="Connector state disappeared during activation")
@@ -1047,6 +925,241 @@ async def activate_source(
             raise HTTPException(status_code=422, detail="n8n rejected a connector credential; review it and retry")
         raise HTTPException(status_code=503, detail="Connector activation is pending reconciliation")
     return await _activation_read(session, source_id, latest, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+
+
+async def _check_activation_preconditions(
+    session: AsyncSession, source_id: UUID, source: ConnectorSource, payload: ActivationRequest,
+    *, multi_workspace_enabled: bool, scope: WorkspaceContext,
+) -> ConnectorProvisioning:
+    """Read the activation row and reject stale, in-flight, or changed state (HTTP 409).
+
+    Read-only (no lock, no commit). Order matters for the reported detail: stale revision,
+    reconciling, pending deactivation, backend transition, unresolved credential operation,
+    then source status/generation. Returns the row narrowed to non-``None``.
+    """
+    row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    if row is None or row.desired_revision != payload.expected_revision:
+        raise HTTPException(status_code=409, detail="Connector configuration revision is stale")
+    if row.state == "provisioning":
+        raise HTTPException(status_code=409, detail="Connector activation is already being reconciled")
+    if row.state == "disabled" and row.error_code == "deactivation_pending":
+        raise HTTPException(status_code=409, detail="Wait for source deactivation to finish before enabling")
+    if row.transition_phase not in ("idle", "activating_new"):
+        raise HTTPException(status_code=409, detail="A backend transition is in progress")
+    if await provisioning.unresolved_credential_error(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope):
+        raise HTTPException(
+            status_code=409,
+            detail="An n8n credential operation is pending or requires recovery",
+        )
+    if source.status != "active" or source.generation != row.source_generation:
+        raise HTTPException(status_code=409, detail="Source changed; save its current configuration before enabling")
+    return row
+
+
+def _require_n8n_activation_settings(n8n: Any, settings: Any, source: ConnectorSource) -> tuple[str, str, str]:
+    """Return ``(api_key, webhook_token, encryption_key)`` or raise the matching HTTP 503.
+
+    The owner kill switch blocks new n8n activation (existing workflows are left as they are).
+    Pure: no session access. Probes the encryption key so a missing key fails before any write.
+    """
+    if not n8n.enabled:
+        raise HTTPException(status_code=503, detail="n8n_disabled")
+    api_key = n8n.api_key
+    if not api_key:
+        if connector_owner.is_native_provider(source.provider):
+            raise HTTPException(status_code=503, detail="Native activation contract is pending")
+        raise HTTPException(status_code=503, detail="n8n provisioning is not configured")
+    webhook_token = n8n.webhook_token
+    if not webhook_token:
+        raise HTTPException(status_code=503, detail="Manual trigger authentication is not configured")
+    encryption_key = settings.connector_credential_encryption_key.get_secret_value()
+    try:
+        secret_fingerprint(encryption_key, "connector-key-validation")
+    except CredentialEncryptionUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Connector credential encryption is not configured") from exc
+    return api_key, webhook_token, encryption_key
+
+
+async def _stage_telegram_activation(
+    session: AsyncSession, request: Request, source_id: UUID, source: ConnectorSource, payload: ActivationRequest,
+    *, activation_id: UUID, encryption_key: str, scope: WorkspaceContext, multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+) -> AccessFence:
+    """Verify the Telegram bot, then save its encrypted native credential for this activation.
+
+    Releases locks (rollback) before Telegram I/O, re-fences, then stages the credential
+    through ``save_native_credential``; the caller commits it. Returns the access fence the
+    validation ran under (the retained credential's fence when one exists). Errors: 409 for a
+    changed configuration/access/bot/identity, 503/422 for credential or provider failures.
+    """
+    from modules.connectors.providers.telegram import validate_telegram_scope
+
+    try:
+        previous = await provisioning.get_retained_native_credential_snapshot(
+            session, source_id, source_generation=source.generation,
+            connector_revision=payload.expected_revision,
+            multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        )
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Connector configuration changed; reload before enabling") from exc
+    validation_access_fence = previous.access_fence if previous is not None else access_fence
+    if validation_access_fence != access_fence:
+        raise HTTPException(status_code=409, detail="Original Telegram access changed")
+    if payload.secret_action == "keep":
+        if previous is None or previous.state != "ready":
+            raise HTTPException(status_code=409, detail="A validated Telegram token is required")
+        try:
+            native_token = decrypt_native_token(encryption_key, previous)
+        except CredentialEncryptionUnavailable as exc:
+            raise HTTPException(status_code=503, detail="Stored Telegram credential is unavailable") from exc
+    else:
+        native_token = payload.secret.get_secret_value() if payload.secret else ""
+    await session.rollback()
+    try:
+        verified = await validate_telegram_scope(
+            native_token, tuple(cast("list[str]", source.configuration.get("telegram_chat_ids", ()))),
+            before_request=lambda: _validation_send_fence(
+                session, request, source, payload.expected_revision, scope=scope,
+                access_fence=validation_access_fence, native_snapshot=previous,
+            ),
+        )
+    except ProviderRateLimited as exc:
+        raise HTTPException(status_code=503, detail="Telegram provider rate limit reached") from exc
+    except (TimeoutError, httpx.TimeoutException) as exc:
+        raise HTTPException(status_code=503, detail="Telegram validation outcome is unknown") from exc
+    except (ValueError, httpx.HTTPError) as exc:
+        status = 503 if getattr(exc, "code", None) == "telegram_provider_unavailable" else 422
+        detail = "Telegram validation outcome is unknown" if status == 503 else "Telegram bot identity and channel scope could not be verified"
+        raise HTTPException(status_code=status, detail=detail) from exc
+    if previous is not None and previous.bound_bot_id not in (None, verified.verified_bot_id):
+        raise HTTPException(status_code=409, detail="A different Telegram bot requires a new source")
+    await _validation_send_fence(
+        session, request, source, payload.expected_revision, scope=scope,
+        access_fence=validation_access_fence, native_snapshot=previous,
+    )
+    native_bot_id = verified.verified_bot_id
+    ciphertext = encrypt_native_token(
+        encryption_key, source_id=source_id, operation_id=activation_id,
+        source_generation=source.generation, configuration_revision=payload.expected_revision,
+        token=native_token, verified_bot_id=native_bot_id,
+    )
+    try:
+        await provisioning.save_native_credential(
+            session, source_id=source_id, operation_id=activation_id,
+            source_generation=source.generation, connector_revision=payload.expected_revision,
+            encrypted_token=ciphertext, token_fingerprint=secret_fingerprint(encryption_key, native_token),
+            verified_bot_id=native_bot_id, validated_at=verified.validated_at,
+            access_fence=validation_access_fence,
+            expected_native_operation_id=previous.operation_id if previous is not None else None,
+            multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        )
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Telegram credential identity or revision changed") from exc
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Telegram bot identity is already reserved") from exc
+    return validation_access_fence
+
+
+async def _stage_bundle_credentials(
+    session: AsyncSession, source_id: UUID, source: ConnectorSource, row: ConnectorProvisioning, payload: ActivationRequest,
+    *, activation_id: UUID, encryption_key: str, webhook_token: str, scope: WorkspaceContext,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]]]:
+    """Prepare the collector, manual-trigger and (for header auth) provider credential assignments.
+
+    Called under the connector lock. May mint a collector credential via Ingestion (flush-only)
+    and reads existing managed credentials; it never commits. Returns
+    ``(required_credentials, credential_intents)`` keyed by slot. Raises ``ValueError`` /
+    ``CredentialEncryptionUnavailable``; the caller rolls back and maps them to HTTP 422.
+    """
+    credential_intents: dict[str, dict[str, object]] = {}
+    required_credentials: dict[str, dict[str, object]] = {}
+
+    collector = await provisioning.get_managed_credential(session, source_id, "collector", multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    collector_token: str | None = None
+    collector_binding = collector.resolved_binding if collector is not None else None
+    collector_scope: Literal["mcp:collect", "ingestion:write"] = "mcp:collect" if source.type == "mcp" else "ingestion:write"
+    if not (
+        collector is not None and collector.state == "ready" and collector.credential_id
+        and isinstance(collector_binding, dict)
+        and collector_binding.get("source_generation") == source.generation
+        and collector_binding.get("scope") == collector_scope
+    ):
+        collector_token = await ingestion.create_collector_credential_in_uow(
+            session, source_id, credential_scope=collector_scope, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            source_fence=source_fence,
+        )
+        collector_binding = {
+            "source_generation": source.generation,
+            "scope": collector_scope,
+            "token_fingerprint": secret_fingerprint(encryption_key, collector_token),
+        }
+    required, intent = prepare_credential_assignment(
+        source_id=source_id,
+        activation_id=activation_id,
+        slot="collector",
+        credential_name=f"Umwelt-OS source collector {source_id}",
+        header_name="Authorization",
+        secret=f"Bearer {collector_token}" if collector_token is not None else None,
+        binding=collector_binding if isinstance(collector_binding, dict) else {},
+        existing=collector,
+        encryption_key=encryption_key,
+    )
+    required_credentials["collector"] = required
+    if intent is not None:
+        credential_intents["collector"] = intent
+
+    manual = await provisioning.get_managed_credential(session, source_id, "manual_trigger", multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    required, intent = prepare_credential_assignment(
+        source_id=source_id,
+        activation_id=activation_id,
+        slot="manual_trigger",
+        credential_name="Umwelt-OS manual trigger",
+        header_name="X-BBD-Webhook-Token",
+        secret=webhook_token,
+        binding={"binding_kind": "manual_trigger"},
+        existing=manual,
+        encryption_key=encryption_key,
+    )
+    required_credentials["manual_trigger"] = required
+    if intent is not None:
+        credential_intents["manual_trigger"] = intent
+
+    if row.desired_configuration.get("auth_method") == "http_header":
+        provider = await provisioning.get_managed_credential(session, source_id, "provider", multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+        provider_header = str(row.desired_configuration.get("auth_header_name", ""))
+        if payload.secret_action == "keep":
+            provider_binding = provider.resolved_binding if provider is not None else None
+            if (
+                provider is None or provider.state != "ready" or not provider.credential_id
+                or not isinstance(provider_binding, dict)
+                or provider_binding.get("header_name") != provider_header
+            ):
+                raise ValueError("Provide a provider credential for the current header binding")
+            provider_secret = None
+            binding = dict(provider_binding)
+        else:
+            provider_secret = payload.secret.get_secret_value() if payload.secret else None
+            binding = {"binding_kind": "provider"}
+        required, intent = prepare_credential_assignment(
+            source_id=source_id,
+            activation_id=activation_id,
+            slot="provider",
+            credential_name=f"Umwelt-OS REST source {source_id}",
+            header_name=provider_header,
+            secret=provider_secret,
+            binding=binding,
+            existing=provider,
+            encryption_key=encryption_key,
+        )
+        required_credentials["provider"] = required
+        if intent is not None:
+            credential_intents["provider"] = intent
+    return required_credentials, credential_intents
 
 
 @router.post("/{source_id}/deactivate", response_model=ActivationRead)
@@ -1073,6 +1186,36 @@ async def deactivate_source(
         make_source_change(source.id, source.generation, source.status, connector_state=row.state, scope=scope),
     ], access_fence=access_fence, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
     return await _activation_read(session, source_id, row, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+
+
+async def _capture_telegram_revocation(
+    session: AsyncSession, request: Request, source_id: UUID, source: ConnectorSource,
+    row: ConnectorProvisioning, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+) -> NativeCredentialRevocationSnapshot:
+    """Capture the Telegram credential revocation snapshot, then restart from the original access.
+
+    Reads the snapshot under locks, rolls back, and re-admits with the snapshot's own fence so
+    the later save CAS rechecks the captured Source generation/revision. 409 when the
+    credential revision or the original access changed (rolled back first).
+    """
+    try:
+        revocation_snapshot = await provisioning.get_native_credential_revocation_snapshot(
+            session, source_id, source_generation=source.generation,
+            connector_revision=row.desired_revision, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        )
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Telegram credential revision changed") from exc
+    if revocation_snapshot.access_fence != access_fence:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Original credential revocation access changed")
+    await session.rollback()
+    # Restart from the unchanged original browser/session/access; the save CAS below
+    # rechecks the captured Source G/R. No replacement capture is ever taken.
+    await _owner_access(session, request, scope, expected=revocation_snapshot.access_fence)
+    return revocation_snapshot
 
 
 @router.delete("/{source_id}/credentials/provider", response_model=ActivationRead)
@@ -1113,22 +1256,10 @@ async def remove_provider_credential(
     desired.pop("auth_header_name", None)
     revocation_snapshot = None
     if source.provider == "telegram":
-        try:
-            revocation_snapshot = await provisioning.get_native_credential_revocation_snapshot(
-                session, source_id, source_generation=source.generation,
-                connector_revision=row.desired_revision, scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
-            )
-        except ValueError as exc:
-            await session.rollback()
-            raise HTTPException(status_code=409, detail="Telegram credential revision changed") from exc
-        if revocation_snapshot.access_fence != access_fence:
-            await session.rollback()
-            raise HTTPException(status_code=409, detail="Original credential revocation access changed")
-        await session.rollback()
-        # Restart from the unchanged original browser/session/access; the save CAS below
-        # rechecks the captured Source G/R. No replacement capture is ever taken.
-        await _owner_access(session, request, scope, expected=revocation_snapshot.access_fence)
+        revocation_snapshot = await _capture_telegram_revocation(
+            session, request, source_id, source, row, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        )
     saved = await connector_owner.save_connector_configuration(
         session,
         source,
@@ -1327,7 +1458,7 @@ async def start_backend_transition(
         raise HTTPException(status_code=422, detail="This source cannot use the native backend")
     try:
         await provider_terms.require_terms_eligible(session, source)
-    except HTTPException as exc:
+    except (HTTPException, DomainError) as exc:
         if exc.detail == TERMS_INELIGIBLE:
             raise HTTPException(status_code=409, detail="terms_not_accepted") from exc
         raise

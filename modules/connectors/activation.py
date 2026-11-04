@@ -1,10 +1,12 @@
 import copy
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.errors import DomainError
 from core.ids import uuid7
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
 from modules.connectors import provider_terms, provisioning, scheduler
@@ -111,6 +113,190 @@ def prepare_credential_assignment(
     )
 
 
+@dataclass
+class _CredentialScan:
+    """Outcome of scanning an activation intent's required credentials.
+
+    ``stop`` means the caller returns ``False`` (already rolled back or committed);
+    ``pending`` names a prepared credential operation to drive; otherwise ``ready_ids``
+    maps each slot to its ready n8n credential id.
+    """
+
+    stop: bool = False
+    pending: tuple[str, UUID] | None = None
+    ready_ids: dict[str, str] = field(default_factory=dict)
+
+
+async def _intent_is_current(
+    session: AsyncSession, intent: dict[str, Any], required: Any, row: ConnectorProvisioning,
+    source_fence: SourceFence, access_fence: AccessFence, *, scope: Scope, multi_workspace_enabled: bool,
+) -> bool:
+    """Return whether the prepared intent still matches the locked rows and original fence.
+
+    Read-only under the held locks; the single awaited check is
+    ``provisioning._operation_matches``. Any mismatch (workspace, actor, membership, revision,
+    generation, state) means a newer operation owns the connector.
+    """
+    return bool(
+        isinstance(required, dict)
+        and await provisioning._operation_matches(session, intent, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        and intent.get("workspace_id") == str(access_fence.workspace_id)
+        and intent.get("actor_user_id") == access_fence.user_id
+        and intent.get("membership_revision") == access_fence.membership_revision
+        and intent.get("workspace_configuration_revision") == access_fence.configuration_revision
+        and row.desired_enabled
+        and row.state == "provisioning"
+        and source_fence.status == "active"
+        and source_fence.generation == intent.get("source_generation")
+        and row.source_generation == intent.get("source_generation")
+        and row.desired_revision == intent.get("revision")
+        and intent.get("state") == "prepared"
+    )
+
+
+def _classify_required_slot(
+    value: Any, credential: Any, intent: dict[str, Any],
+) -> tuple[str, UUID | None]:
+    """Classify one required credential slot without touching the database.
+
+    Returns ``(kind, operation_id)`` with kind ``invalid`` (malformed intent), ``pending``
+    (a prepared operation to drive), ``in_flight`` (a dispatched operation: stop), ``unresolved``
+    (binding/operation not satisfied) or ``ready``.
+    """
+    if not isinstance(value, dict):
+        return "invalid", None
+    operation_id = value.get("operation_id")
+    expected_operation_id: UUID | None = None
+    if operation_id is not None:
+        try:
+            expected_operation_id = UUID(str(operation_id))
+        except ValueError:
+            return "invalid", None
+        envelope = credential.operation_envelope if credential is not None else None
+        if (
+            isinstance(envelope, dict)
+            and envelope.get("id") == str(expected_operation_id)
+            and envelope.get("activation_id") == intent.get("id")
+            and envelope.get("state") == "prepared"
+        ):
+            return "pending", expected_operation_id
+        if (
+            credential is not None
+            and credential.state == "dispatching"
+            and credential.operation_id == expected_operation_id
+            and isinstance(envelope, dict)
+            and envelope.get("id") == str(expected_operation_id)
+            and envelope.get("activation_id") == intent.get("id")
+            and envelope.get("revision") == intent.get("revision")
+            and envelope.get("source_generation") == intent.get("source_generation")
+            and envelope.get("state") == "dispatched"
+        ):
+            return "in_flight", expected_operation_id
+    if (
+        credential is None or credential.state != "ready"
+        or not credential.credential_id
+        or credential.resolved_binding != value.get("binding")
+        or (value.get("credential_id") is not None and credential.credential_id != value.get("credential_id"))
+    ):
+        return "unresolved", None
+    if operation_id is not None:
+        envelope = credential.operation_envelope
+        if (
+            not isinstance(envelope, dict)
+            or envelope.get("id") != str(operation_id)
+            or envelope.get("state") != "succeeded"
+            or envelope.get("activation_id") != intent.get("id")
+        ):
+            return "unresolved", None
+    return "ready", None
+
+
+async def _scan_required_credentials(
+    session: AsyncSession, intent: dict[str, Any], required: Any, row: ConnectorProvisioning,
+    slots: dict[str, Any], before: Any, *, scope: Scope, multi_workspace_enabled: bool,
+) -> _CredentialScan:
+    """Walk the required slots in order and settle the first non-ready one.
+
+    Malformed or unresolved slots mark the row ``reconciliation_required`` and commit the
+    observation (one commit, then stop); an in-flight dispatched operation rolls back and stops;
+    a prepared operation is returned as ``pending`` (first wins); otherwise every slot's ready
+    credential id is collected. Mutates ``row`` only on the two reconciliation paths.
+    """
+    scan = _CredentialScan()
+    for slot, value in (required or {}).items():
+        credential = slots.get(slot)
+        kind, operation_id = _classify_required_slot(value, credential, intent)
+        if kind in ("invalid", "unresolved"):
+            row.state = "reconciliation_required"
+            row.error_code = (
+                "activation_credential_intent_invalid" if kind == "invalid"
+                else "activation_credential_binding_unresolved"
+            )
+            await provisioning.commit_connector_observation(session, before, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+            scan.stop = True
+            return scan
+        if kind == "in_flight":
+            await session.rollback()
+            scan.stop = True
+            return scan
+        if kind == "pending":
+            assert operation_id is not None
+            scan.pending = (slot, operation_id)
+            return scan
+        assert credential is not None  # kind == "ready" implies a resolved credential row
+        scan.ready_ids[slot] = credential.credential_id
+    return scan
+
+
+async def _begin_workflow_enable(
+    session: AsyncSession, source_id: UUID, row: ConnectorProvisioning, intent: dict[str, Any],
+    required: Any, ready_ids: dict[str, str], before: Any,
+    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+) -> bool:
+    """Build the workflow body and persist the prepared enable operation (commits the observation).
+
+    Returns ``False`` after a rollback when the source disappeared or ``begin_enable_in_uow``
+    refused; ``True`` after the observation commit so the driver loop re-reads the locked state.
+    """
+    source = await sources.get_connector_source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    if source is None:
+        await session.rollback()
+        return False
+    operation_id = uuid7()
+    name = (
+        row.workflow_name if row.workflow_id and row.workflow_name
+        else workflow_name(source_id, operation_id)
+    )
+    body = build_workflow(
+        source,
+        desired_revision=int(intent["revision"]),
+        workflow_operation_id=operation_id,
+        workflow_name_value=name,
+        collector_credential_id=ready_ids["collector"],
+        manual_credential_id=ready_ids["manual_trigger"],
+        provider_credential_id=ready_ids.get("provider"),
+        backend_revision=row.backend_revision,
+    )
+    prepared = await provisioning.begin_enable_in_uow(
+        session,
+        source_id,
+        int(intent["source_generation"]),
+        int(intent["revision"]),
+        dict(intent.get("configuration", {})),
+        name,
+        body,
+        operation_id,
+        required_credentials=required,
+        activation_id=UUID(str(intent["id"])),
+        access_fence=access_fence, multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+    )
+    if prepared is None:
+        await session.rollback()
+        return False
+    await provisioning.commit_connector_observation(session, before, operation_id=operation_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    return True
+
+
 async def drive_activation(
     session: AsyncSession,
     source_id: UUID,
@@ -138,9 +324,8 @@ async def drive_activation(
         return False
 
     for _ in range(8):
-        observed = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-        intent = observed.activation_intent if observed is not None else None
-        required = intent.get("required_credentials", {}) if isinstance(intent, dict) else {}
+        # Dead read kept for SQL/lock-order parity with the pre-split implementation (values unused).
+        await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
         source_fence, row, slots = await provisioning.lock_connector(
             session, source_id, provisioning._ALL_CREDENTIAL_SLOTS, expected_access_fence=access_fence,
             multi_workspace_enabled=multi_workspace_enabled, scope=scope,
@@ -150,94 +335,24 @@ async def drive_activation(
             return False
         intent = row.activation_intent
         required = intent.get("required_credentials")
-        current = bool(
-            isinstance(required, dict)
-            and await provisioning._operation_matches(session, intent, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-            and intent.get("workspace_id") == str(access_fence.workspace_id)
-            and intent.get("actor_user_id") == access_fence.user_id
-            and intent.get("membership_revision") == access_fence.membership_revision
-            and intent.get("workspace_configuration_revision") == access_fence.configuration_revision
-            and row.desired_enabled
-            and row.state == "provisioning"
-            and source_fence.status == "active"
-            and source_fence.generation == intent.get("source_generation")
-            and row.source_generation == intent.get("source_generation")
-            and row.desired_revision == intent.get("revision")
-            and intent.get("state") == "prepared"
-        )
-        if not current:
+        if not await _intent_is_current(
+            session, intent, required, row, source_fence, access_fence,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        ):
             await session.rollback()
             return False
         before = provisioning._connector_observation(source_fence, row, slots, access_fence)
 
-        pending: tuple[str, UUID] | None = None
-        ready_ids: dict[str, str] = {}
-        for slot, value in (required or {}).items():
-            if not isinstance(value, dict):
-                row.state = "reconciliation_required"
-                row.error_code = "activation_credential_intent_invalid"
-                await provisioning.commit_connector_observation(session, before, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-                return False
-            credential = slots.get(slot)
-            operation_id = value.get("operation_id")
-            if operation_id is not None:
-                try:
-                    expected_operation_id = UUID(str(operation_id))
-                except ValueError:
-                    row.state = "reconciliation_required"
-                    row.error_code = "activation_credential_intent_invalid"
-                    await provisioning.commit_connector_observation(session, before, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-                    return False
-                envelope = credential.operation_envelope if credential is not None else None
-                if (
-                    isinstance(envelope, dict)
-                    and envelope.get("id") == str(expected_operation_id)
-                    and envelope.get("activation_id") == intent.get("id")
-                    and envelope.get("state") == "prepared"
-                ):
-                    pending = (slot, expected_operation_id)
-                    break
-                if (
-                    credential is not None
-                    and credential.state == "dispatching"
-                    and credential.operation_id == expected_operation_id
-                    and isinstance(envelope, dict)
-                    and envelope.get("id") == str(expected_operation_id)
-                    and envelope.get("activation_id") == intent.get("id")
-                    and envelope.get("revision") == intent.get("revision")
-                    and envelope.get("source_generation") == intent.get("source_generation")
-                    and envelope.get("state") == "dispatched"
-                ):
-                    await session.rollback()
-                    return False
-            if (
-                credential is None or credential.state != "ready"
-                or not credential.credential_id
-                or credential.resolved_binding != value.get("binding")
-                or (value.get("credential_id") is not None and credential.credential_id != value.get("credential_id"))
-            ):
-                row.state = "reconciliation_required"
-                row.error_code = "activation_credential_binding_unresolved"
-                await provisioning.commit_connector_observation(session, before, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-                return False
-            if operation_id is not None:
-                envelope = credential.operation_envelope
-                if (
-                    not isinstance(envelope, dict)
-                    or envelope.get("id") != str(operation_id)
-                    or envelope.get("state") != "succeeded"
-                    or envelope.get("activation_id") != intent.get("id")
-                ):
-                    row.state = "reconciliation_required"
-                    row.error_code = "activation_credential_binding_unresolved"
-                    await provisioning.commit_connector_observation(session, before, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-                    return False
-            ready_ids[slot] = credential.credential_id
-
-        if pending is not None:
+        scan = await _scan_required_credentials(
+            session, intent, required, row, slots, before,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if scan.stop:
+            return False
+        if scan.pending is not None:
             await session.rollback()
             progressed = await provisioning.drive_credential_operation(
-                session, source_id, pending[0], credentials, encryption_key,
+                session, source_id, scan.pending[0], credentials, encryption_key,
                 multi_workspace_enabled=multi_workspace_enabled, scope=scope, access_fence=access_fence,
             )
             if progressed:
@@ -252,42 +367,11 @@ async def drive_activation(
                 multi_workspace_enabled=multi_workspace_enabled, scope=scope,
             )
 
-        source = await sources.get_connector_source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-        if source is None:
-            await session.rollback()
+        if not await _begin_workflow_enable(
+            session, source_id, row, intent, required, scan.ready_ids, before,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        ):
             return False
-        operation_id = uuid7()
-        name = (
-            row.workflow_name if row.workflow_id and row.workflow_name
-            else workflow_name(source_id, operation_id)
-        )
-        body = build_workflow(
-            source,
-            desired_revision=int(intent["revision"]),
-            workflow_operation_id=operation_id,
-            workflow_name_value=name,
-            collector_credential_id=ready_ids["collector"],
-            manual_credential_id=ready_ids["manual_trigger"],
-            provider_credential_id=ready_ids.get("provider"),
-            backend_revision=row.backend_revision,
-        )
-        prepared = await provisioning.begin_enable_in_uow(
-            session,
-            source_id,
-            int(intent["source_generation"]),
-            int(intent["revision"]),
-            dict(intent.get("configuration", {})),
-            name,
-            body,
-            operation_id,
-            required_credentials=required,
-            activation_id=UUID(str(intent["id"])),
-            access_fence=access_fence, multi_workspace_enabled=multi_workspace_enabled, scope=scope,
-        )
-        if prepared is None:
-            await session.rollback()
-            return False
-        await provisioning.commit_connector_observation(session, before, operation_id=operation_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
     # No mutable envelope is reconstructed after transport: this is still pre-dispatch.
     source_fence, row, slots = await provisioning.lock_connector(
         session, source_id, provisioning._ALL_CREDENTIAL_SLOTS, expected_access_fence=access_fence,
@@ -335,7 +419,7 @@ async def activate_native_in_uow(
         return "native_unsupported"
     try:
         await provider_terms.require_terms_eligible(session, source)
-    except HTTPException:
+    except (HTTPException, DomainError):
         return "terms_not_accepted"
     desired = row.desired_configuration or {}
     keyed_header = collection.KEYED_PROVIDERS.get(source.provider or "")  # fixed header, no owner-set auth config

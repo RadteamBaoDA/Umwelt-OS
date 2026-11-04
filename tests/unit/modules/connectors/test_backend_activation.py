@@ -9,6 +9,7 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
 
+from core.errors import ConflictError
 from modules.connectors import activation, backends, provisioning
 from modules.connectors.credentials import (
     CredentialEncryptionUnavailable,
@@ -16,6 +17,7 @@ from modules.connectors.credentials import (
     encrypt_rest_secret,
 )
 from modules.connectors.n8n import build_workflow
+from modules.connectors.provider_specs import TERMS_INELIGIBLE
 
 SOURCE_ID = uuid4()
 KEY = Fernet.generate_key().decode("ascii")
@@ -329,6 +331,8 @@ async def test_native_activation_refusals_change_nothing():
         ({"local_only": True}, "local_only_source"),
         ({"supported": False}, "native_unsupported"),
         ({"terms": [HTTPException(status_code=409, detail="provider_terms_ineligible")]}, "terms_not_accepted"),
+        # The real gate raises a DomainError (ConflictError), not an HTTPException.
+        ({"terms": [ConflictError(TERMS_INELIGIBLE)]}, "terms_not_accepted"),
     ]
     for kwargs, code in cases:
         r = row(execution_backend="n8n", state="saved_not_active", desired_enabled=False, applied_backend_revision=0)

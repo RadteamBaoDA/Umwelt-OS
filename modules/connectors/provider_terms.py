@@ -11,11 +11,11 @@ from datetime import UTC, date, datetime
 from typing import Literal
 from uuid import UUID
 
-from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.errors import ConflictError, NotFoundError, ValidationFailedError
 from core.workspaces.schemas import Scope
 from modules.connectors import provisioning
 from modules.connectors import public as connectors
@@ -88,6 +88,7 @@ def decide(spec: FreeProviderSpec, row: ConnectorProviderTerms | None) -> TermsD
 
 
 def _read(row: ConnectorProviderTerms, spec: FreeProviderSpec) -> ProviderTermsRead:
+    """Project a stored terms row plus its live eligibility decision into the owner-facing read model."""
     decision = decide(spec, row)
     return ProviderTermsRead(
         source_id=row.source_id, provider_id=row.provider_id, terms_revision=row.terms_revision,
@@ -142,7 +143,7 @@ async def require_terms_eligible(session: AsyncSession, source: ConnectorSource)
         return None
     row = await _terms_row(session, source)
     if not decide(spec, row).allowed:
-        raise HTTPException(status_code=409, detail=TERMS_INELIGIBLE)
+        raise ConflictError(TERMS_INELIGIBLE)
     assert row is not None  # allowed implies an acknowledged row
     return row.terms_revision
 
@@ -154,7 +155,7 @@ async def get_terms(
     source = await connectors._read_scoped_source(
         session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if source is None:
-        raise HTTPException(status_code=404, detail="Source not found")
+        raise NotFoundError("Source not found")
     spec = get_provider_spec(source.provider)
     row = await _terms_row(session, source) if spec is not None else None
     return _read(row, spec) if row is not None and spec is not None else None
@@ -172,10 +173,10 @@ async def acknowledge_terms(
         source = await connectors._read_scoped_source(
             session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if source_fence is None or source is None:
-            raise HTTPException(status_code=404, detail="Source not found")
+            raise NotFoundError("Source not found")
         spec = get_provider_spec(source.provider)
         if spec is None:
-            raise HTTPException(status_code=422, detail="Provider has no catalog terms")
+            raise ValidationFailedError("Provider has no catalog terms")
         row = await _terms_row(session, source, lock=True)
         now = datetime.now(UTC)
         if row is None:
@@ -215,11 +216,11 @@ async def record_operator_review(
             ).with_for_update().execution_options(populate_existing=True))
         spec = get_provider_spec(row.provider_id) if row is not None else None
         if row is None or spec is None:
-            raise HTTPException(status_code=404, detail="Provider terms not found")
+            raise NotFoundError("Provider terms not found")
         if body.reviewed_terms_version != row.terms_version:
-            raise HTTPException(status_code=409, detail="Review does not match the acknowledged terms version")
+            raise ConflictError("Review does not match the acknowledged terms version")
         if body.state == "approved" and body.allowed_use is None:
-            raise HTTPException(status_code=422, detail="Approval requires the allowed use")
+            raise ValidationFailedError("Approval requires the allowed use")
         row.operator_review_state = body.state
         row.reviewer_user_id, row.reviewed_at = reviewer_user_id, datetime.now(UTC)
         row.reviewed_allowed_use = body.allowed_use if body.state == "approved" else None

@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core import telemetry
 from core.config import Settings
+from core.errors import DomainError
 from core.ids import uuid7
 from core.workspaces.models import WorkspaceMembership
 from core.workspaces.schemas import InternalJobScope, Scope
@@ -743,7 +744,7 @@ async def _create_due_requests(factory: async_sessionmaker[AsyncSession], now: d
                     pg_insert(ConnectorWorkspaceDispatch).values(workspace_id=workspace_id, last_dispatched_at=now)
                     .on_conflict_do_update(index_elements=["workspace_id"], set_={"last_dispatched_at": now}))
                 await session.commit()
-            except HTTPException:
+            except (HTTPException, DomainError):
                 await session.rollback()
     return created
 

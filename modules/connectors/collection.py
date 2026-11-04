@@ -33,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.errors import DomainError
 from core.heavy_work import to_thread_joined
 from core.workspaces.public import lock_access_fence, read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope
@@ -206,7 +207,7 @@ class SendGate:
                 if source is None:
                     raise CollectionFenceLost("source_inactive", "source_inactive")
                 revision = await provider_terms.require_terms_eligible(session, source)
-            except HTTPException as exc:
+            except (HTTPException, DomainError) as exc:
                 raise TermsIneligible from exc
             finally:
                 await session.rollback()

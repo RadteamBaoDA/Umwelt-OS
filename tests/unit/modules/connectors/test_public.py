@@ -621,3 +621,16 @@ class TestStatusChecksAndGuards:
         with patch("modules.connectors.public.getaddrinfo", return_value=[(None, None, None, None, ("93.184.216.34", 443))]):
             res = await validate_public_url("https://example.com/feed.xml")
             assert res == "https://example.com/feed.xml"
+
+
+def test_public_reexports_collection_schema_dtos() -> None:
+    """Every DTO that other modules import from collection_schemas is also reachable from public."""
+    from modules.connectors import collection_schemas, public
+
+    for name in (
+        "CollectionAdmissionRead", "CollectionAdmissionRequest", "CollectionRequestRead", "CollectionRequestRef",
+        "ManagedConnectorReceipt", "ManagedCrawlRequest", "ManagedNoChanges",
+    ):
+        assert getattr(public, name) is getattr(collection_schemas, name)
+    with pytest.raises(AttributeError):
+        public.NotAnExport  # noqa: B018

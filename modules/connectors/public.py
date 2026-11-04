@@ -126,11 +126,14 @@ from modules.sources.schemas import ConnectorSource, SourceFence
 
 if TYPE_CHECKING:
     from core.config import Settings
-    from modules.connectors.collection_schemas import (
+    from modules.connectors.collection_schemas import (  # noqa: F401  # public re-exports resolved lazily by __getattr__
         CollectionAdmissionRead,
         CollectionAdmissionRequest,
         CollectionRequestRead,
         CollectionRequestRef,
+        ManagedConnectorReceipt,
+        ManagedCrawlRequest,
+        ManagedNoChanges,
     )
     from modules.connectors.github.schemas import GitHubBindingFence, GitHubSegmentProof
     from modules.connectors.github.sync import GitHubValidatedSegment
@@ -3398,3 +3401,23 @@ def default_retention_days(provider: str | None) -> int | None:
     from modules.connectors.provider_specs import get_default_retention_days
 
     return get_default_retention_days(provider)
+
+
+_COLLECTION_SCHEMA_EXPORTS = frozenset({
+    "CollectionAdmissionRead", "CollectionAdmissionRequest", "CollectionRequestRead", "CollectionRequestRef",
+    "ManagedConnectorReceipt", "ManagedCrawlRequest", "ManagedNoChanges",
+})
+
+
+def __getattr__(name: str) -> object:
+    """Lazily re-export the collection DTOs so other modules can import them from ``public``.
+
+    ``collection_schemas`` itself imports ``CollectionFence``/``ConnectorReceipt``/``CrawlRequest``
+    from this module, so an eager import here would be circular; resolving on first attribute
+    access keeps ``from modules.connectors.public import CollectionRequestRef`` working.
+    """
+    if name in _COLLECTION_SCHEMA_EXPORTS:
+        from modules.connectors import collection_schemas
+
+        return getattr(collection_schemas, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

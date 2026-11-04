@@ -12,9 +12,10 @@ from sqlalchemy.dialects import postgresql
 
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat import public as chat
-from modules.connectors import routes as connector_routes
+from modules.connectors import native_fetch
+from modules.connectors.native_fetch import GITHUB_RECONNECT_DETAIL
+from modules.connectors.native_fetch import collection_error_code as _collection_error_code
 from modules.connectors.providers.telegram import _TelegramAPIError
-from modules.connectors.routes import GITHUB_RECONNECT_DETAIL, _collection_error_code
 from modules.dashboard import public as dashboard
 from modules.knowledge.documents import public as documents
 from modules.sources import public as source_public
@@ -62,8 +63,8 @@ def test_non_httpx_auth_failures_map_to_error_code(exc: BaseException, code: str
 
 
 def test_fetch_native_provider_uses_error_code_helper_in_both_branches() -> None:
-    source = inspect.getsource(connector_routes.fetch_native_provider)
-    assert source.count("error_code=_collection_error_code(exc)") == 2
+    source = inspect.getsource(native_fetch.run_provider_fetch)
+    assert source.count("error_code=collection_error_code(exc)") == 2
 
 
 SCOPE = WorkspaceContext(user_id=7, workspace_id=WORKSPACE_ID, role="owner", membership_revision=3)

@@ -29,72 +29,96 @@ async def discover_google_resources(
     """
     budget = google_api._RequestBudget(access_token, before_request)
     if provider == "google_mail":
-        body = await budget.get(f"{google_api.GMAIL_ORIGIN}/labels")
-        payload = google_api._json(body)
-        raw_rows = payload.get("labels") if isinstance(payload, dict) else None
-        if not isinstance(raw_rows, list):
-            raise google_api.GoogleProviderError("gmail_labels_invalid")
-        label_rows: list[Any] = raw_rows
-        return _safe_rows(label_rows, kind="label"), len(label_rows) > _MAX_DISCOVERY_ITEMS
+        return await _discover_gmail_labels(budget)
     if provider == "google_calendar":
-        calendar_rows: list[Any] = []
-        page_token: str | None = None
-        for _ in range(_MAX_DISCOVERY_PAGES):
-            calendar_params: dict[str, str | int] = {"maxResults": 250}
-            if page_token:
-                calendar_params["pageToken"] = page_token
-            body = await budget.get(
-                f"https://www.googleapis.com/calendar/v3/users/me/calendarList?{urlencode(calendar_params)}"
-            )
-            payload = google_api._json(body)
-            if not isinstance(payload, dict) or not isinstance(payload.get("items", []), list):
-                raise google_api.GoogleProviderError("calendar_list_invalid")
-            items: list[Any] = payload.get("items", [])
-            calendar_rows.extend(items)
-            next_token = payload.get("nextPageToken")
-            if next_token is None:
-                return (
-                    _safe_rows(calendar_rows[:_MAX_DISCOVERY_ITEMS], kind="calendar"),
-                    len(calendar_rows) > _MAX_DISCOVERY_ITEMS,
-                )
-            if not isinstance(next_token, str) or not next_token:
-                raise google_api.GoogleProviderError("calendar_page_token_invalid")
-            page_token = next_token
-            if len(calendar_rows) >= _MAX_DISCOVERY_ITEMS:
-                return _safe_rows(calendar_rows[:_MAX_DISCOVERY_ITEMS], kind="calendar"), True
-        raise rest.CollectionIncomplete
+        return await _discover_calendars(budget)
     if provider == "google_drive":
-        if parent_id is not None and not re.fullmatch(r"[A-Za-z0-9_-]{5,200}", parent_id):
-            raise google_api.GoogleProviderError("drive_parent_invalid")
-        query_parent = parent_id or "root"
-        drive_query = f"'{query_parent.replace(chr(39), chr(92) + chr(39))}' in parents and trashed = false"
-        drive_rows: list[Any] = []
-        page_token = None
-        for _ in range(_MAX_DISCOVERY_PAGES):
-            drive_params: dict[str, str | int] = {
-                "q": drive_query,
-                "pageSize": 100,
-                "orderBy": "folder,name",
-                "fields": "nextPageToken,files(id,name,mimeType,modifiedTime)",
-            }
-            if page_token:
-                drive_params["pageToken"] = page_token
-            body = await budget.get(f"{google_api.DRIVE_ORIGIN}/files?{urlencode(drive_params)}")
-            payload = google_api._json(body)
-            if not isinstance(payload, dict) or not isinstance(payload.get("files", []), list):
-                raise google_api.GoogleProviderError("drive_file_list_invalid")
-            files: list[Any] = payload.get("files", [])
-            drive_rows.extend(files)
-            next_token = payload.get("nextPageToken")
-            if next_token is None:
-                return _drive_choices(drive_rows[:_MAX_DISCOVERY_ITEMS]), len(drive_rows) > _MAX_DISCOVERY_ITEMS
-            if not isinstance(next_token, str) or not next_token:
-                raise google_api.GoogleProviderError("drive_page_token_invalid")
-            page_token = next_token
-            if len(drive_rows) >= _MAX_DISCOVERY_ITEMS:
-                return _drive_choices(drive_rows[:_MAX_DISCOVERY_ITEMS]), True
-        raise rest.CollectionIncomplete
+        return await _discover_drive(budget, parent_id)
     raise google_api.GoogleProviderError("google_discovery_provider_invalid")
+
+
+async def _discover_gmail_labels(budget: google_api._RequestBudget) -> tuple[list[dict[str, str]], bool]:
+    """List Gmail labels with one bounded request; ``True`` flags more rows than the item cap."""
+    body = await budget.get(f"{google_api.GMAIL_ORIGIN}/labels")
+    payload = google_api._json(body)
+    raw_rows = payload.get("labels") if isinstance(payload, dict) else None
+    if not isinstance(raw_rows, list):
+        raise google_api.GoogleProviderError("gmail_labels_invalid")
+    label_rows: list[Any] = raw_rows
+    return _safe_rows(label_rows, kind="label"), len(label_rows) > _MAX_DISCOVERY_ITEMS
+
+
+async def _discover_calendars(budget: google_api._RequestBudget) -> tuple[list[dict[str, str]], bool]:
+    """Page through the calendar list (at most five pages / 500 rows).
+
+    Returns ``(rows, truncated)``. Malformed pages or tokens raise ``GoogleProviderError``;
+    exhausting the page budget with more pages pending raises ``rest.CollectionIncomplete``.
+    """
+    calendar_rows: list[Any] = []
+    page_token: str | None = None
+    for _ in range(_MAX_DISCOVERY_PAGES):
+        calendar_params: dict[str, str | int] = {"maxResults": 250}
+        if page_token:
+            calendar_params["pageToken"] = page_token
+        body = await budget.get(
+            f"https://www.googleapis.com/calendar/v3/users/me/calendarList?{urlencode(calendar_params)}"
+        )
+        payload = google_api._json(body)
+        if not isinstance(payload, dict) or not isinstance(payload.get("items", []), list):
+            raise google_api.GoogleProviderError("calendar_list_invalid")
+        items: list[Any] = payload.get("items", [])
+        calendar_rows.extend(items)
+        next_token = payload.get("nextPageToken")
+        if next_token is None:
+            return (
+                _safe_rows(calendar_rows[:_MAX_DISCOVERY_ITEMS], kind="calendar"),
+                len(calendar_rows) > _MAX_DISCOVERY_ITEMS,
+            )
+        if not isinstance(next_token, str) or not next_token:
+            raise google_api.GoogleProviderError("calendar_page_token_invalid")
+        page_token = next_token
+        if len(calendar_rows) >= _MAX_DISCOVERY_ITEMS:
+            return _safe_rows(calendar_rows[:_MAX_DISCOVERY_ITEMS], kind="calendar"), True
+    raise rest.CollectionIncomplete
+
+
+async def _discover_drive(budget: google_api._RequestBudget, parent_id: str | None) -> tuple[list[dict[str, str]], bool]:
+    """Page through one Drive folder's children (at most five pages / 500 rows).
+
+    ``parent_id`` must match the Drive id pattern (``root`` when omitted) and is quoted into the
+    query. Returns ``(folder and supported-file choices, truncated)``; malformed pages raise
+    ``GoogleProviderError`` and an exhausted page budget raises ``rest.CollectionIncomplete``.
+    """
+    if parent_id is not None and not re.fullmatch(r"[A-Za-z0-9_-]{5,200}", parent_id):
+        raise google_api.GoogleProviderError("drive_parent_invalid")
+    query_parent = parent_id or "root"
+    drive_query = f"'{query_parent.replace(chr(39), chr(92) + chr(39))}' in parents and trashed = false"
+    drive_rows: list[Any] = []
+    page_token: str | None = None
+    for _ in range(_MAX_DISCOVERY_PAGES):
+        drive_params: dict[str, str | int] = {
+            "q": drive_query,
+            "pageSize": 100,
+            "orderBy": "folder,name",
+            "fields": "nextPageToken,files(id,name,mimeType,modifiedTime)",
+        }
+        if page_token:
+            drive_params["pageToken"] = page_token
+        body = await budget.get(f"{google_api.DRIVE_ORIGIN}/files?{urlencode(drive_params)}")
+        payload = google_api._json(body)
+        if not isinstance(payload, dict) or not isinstance(payload.get("files", []), list):
+            raise google_api.GoogleProviderError("drive_file_list_invalid")
+        files: list[Any] = payload.get("files", [])
+        drive_rows.extend(files)
+        next_token = payload.get("nextPageToken")
+        if next_token is None:
+            return _drive_choices(drive_rows[:_MAX_DISCOVERY_ITEMS]), len(drive_rows) > _MAX_DISCOVERY_ITEMS
+        if not isinstance(next_token, str) or not next_token:
+            raise google_api.GoogleProviderError("drive_page_token_invalid")
+        page_token = next_token
+        if len(drive_rows) >= _MAX_DISCOVERY_ITEMS:
+            return _drive_choices(drive_rows[:_MAX_DISCOVERY_ITEMS]), True
+    raise rest.CollectionIncomplete
 
 
 def _safe_rows(values: list[Any], *, kind: str) -> list[dict[str, str]]:

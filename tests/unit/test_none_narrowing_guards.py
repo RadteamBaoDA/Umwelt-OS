@@ -1,6 +1,6 @@
 """Structural guards for two B1c fixes whose code paths need a full collector stack / graph driver to execute.
 
-fetch_native_provider (GitHub path) and _build_replacement_node (reconcile_canonical_nodes replace_from_current_support) are
+the native provider fetch dispatcher (GitHub path) and _build_replacement_node (reconcile_canonical_nodes replace_from_current_support) are
 hundreds of lines deep. Their unit-testable invariant is where the None-narrowing assert sits: an assert
 placed before the branch fires on the legitimate path where the other operand is the live one.
 """
@@ -31,10 +31,30 @@ def _asserts_under(path: str, func: str, narrowed: str, test_name: str) -> list[
 
 
 def test_github_path_never_asserts_page_present() -> None:
-    # GitHub collections have page=None; the pre-fix assert fired there (500 on every GitHub fetch).
-    found = _asserts_under("modules/connectors/routes.py", "fetch_native_provider", "page",
-                           "github_validated")
-    assert found and all(in_else for _, in_else in found)
+    # GitHub collections carry no provider page (the proof is validated into a CollectedPage); the
+    # pre-fix `assert page is not None` fired there (500 on every GitHub fetch). After the dispatcher
+    # moved to native_fetch/native_collectors, no GitHub-path function may narrow a `page`/`validated`.
+    # Every ``collect`` method in native_collectors (FeedCollector first, GithubCollector among them) is checked.
+    tree_c = ast.parse((ROOT / "modules/connectors/native_collectors.py").read_text(encoding="utf-8"))
+    collects = [n for n in ast.walk(tree_c) if isinstance(n, ast.AsyncFunctionDef) and n.name == "collect"]
+    github = next(n for n in ast.walk(tree_c) if isinstance(n, ast.ClassDef) and n.name == "GithubCollector")
+    assert any(m in collects for m in github.body), "GithubCollector.collect must be among the inspected methods"
+    for fn in collects:
+        for node in ast.walk(fn):
+            if (isinstance(node, ast.Assert) and isinstance(node.test, ast.Compare)
+                    and isinstance(node.test.left, ast.Name) and node.test.left.id in {"page", "validated"}):
+                raise AssertionError(f"collect() at line {fn.lineno} narrows {node.test.left.id}")
+    for path, func in (
+        ("modules/connectors/native_fetch.py", "_accept_page"),
+        ("modules/connectors/native_fetch.py", "run_provider_fetch"),
+    ):
+        assert not _asserts_under(path, func, "page", "github_validated"), (path, func)
+        assert not _asserts_under(path, func, "validated", "github_validated"), (path, func)
+    # The dispatcher must take a non-optional CollectedPage: that is what makes the assert unnecessary.
+    tree = ast.parse((ROOT / "modules/connectors/native_fetch.py").read_text(encoding="utf-8"))
+    accept = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "_accept_page")
+    page_arg = next(a for a in accept.args.args if a.arg == "page")
+    assert isinstance(page_arg.annotation, ast.Name) and page_arg.annotation.id == "CollectedPage"
 
 
 def test_replace_recovery_asserts_candidate_only_without_binding() -> None:

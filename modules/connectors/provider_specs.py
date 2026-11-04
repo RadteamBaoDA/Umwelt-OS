@@ -165,6 +165,7 @@ def collection_cooldown_seconds(provider: str | None, last_started: datetime | N
 
 
 def _unknown(kind: str = "provider", unit: str = "http_calls", cost: int = 1) -> QuotaWindowPolicy:
+    """Build the conservative quota window for a provider whose official daily limit is unpublished."""
     return QuotaWindowPolicy(
         "official_unknown_calls_utc_day", kind, "day", unit, None, cost, "official_unknown",  # type: ignore[arg-type]
     )
@@ -172,6 +173,7 @@ def _unknown(kind: str = "provider", unit: str = "http_calls", cost: int = 1) ->
 
 def _day(limit: int, kind: str = "provider", unit: str = "http_calls", cost: int = 1,
          key: str = "pilot_calls_utc_day") -> QuotaWindowPolicy:
+    """Build a UTC-day quota window with a fixed pilot ``limit`` of ``cost``-weighted calls."""
     return QuotaWindowPolicy(key, kind, "day", unit, limit, cost)  # type: ignore[arg-type]
 
 
@@ -179,6 +181,7 @@ def _spec(id_: str, label: str, category: str, hosts: tuple[str, ...], kind: str
           eligibility: str, attribution: str, endpoints: tuple[str, ...], quota: tuple[QuotaWindowPolicy, ...],
           execution: str = "supported", key: bool = False, secret: str | None = None,
           implemented: bool = False) -> FreeProviderSpec:
+    """Build one free-provider spec; ``code_implemented`` is true when flagged or the id is dispatchable."""
     return FreeProviderSpec(
         id=id_, hosts=hosts, data_kind=kind, key_required=key, default_interval_minutes=interval,  # type: ignore[arg-type]
         terms_url=terms_url, eligibility=eligibility, attribution=attribution, execution=execution,  # type: ignore[arg-type]

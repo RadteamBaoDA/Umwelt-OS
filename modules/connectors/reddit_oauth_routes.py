@@ -7,6 +7,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, cast
@@ -38,6 +39,8 @@ from modules.connectors.models import (
     ConnectorProvisioning,
 )
 from modules.sources import public as sources
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/connectors", tags=["connector-oauth"])
 Session = Annotated[AsyncSession, Depends(get_session)]
@@ -393,8 +396,9 @@ async def complete_reddit_authorization(request: Request, session: Session, owne
         await session.rollback()
         try:
             await _revoke(settings, tokens["refresh_token"])
-        except Exception:  # noqa: BLE001, S110
-            pass
+        except Exception:  # best-effort remote cleanup; never masks the 409 below
+            # A stale callback can never be stored; an unconfirmed remote revoke cannot restore local authority.
+            logger.debug("reddit_stale_token_revoke_failed", exc_info=True)
         raise HTTPException(status_code=409, detail="Connector changed during authorization; reconnect to continue")
     row.credential_revision += 1
     token_revision = current_token_revision + 1

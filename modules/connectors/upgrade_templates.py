@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
 from core.database import make_session_factory
+from core.errors import DomainError
 from core.realtime import commit_with_replay, make_source_change
 from core.workspaces.models import WorkspaceMembership
 from core.workspaces.public import read_access_fence
@@ -83,7 +84,7 @@ async def _upgrade_one(
             phase = await provisioning.advance_backend_transition(
                 session, source_id, api, scope=scope, multi_workspace_enabled=flag, access_fence=fence)
             return "reconciliation_required" if phase == "reconciliation_required" else "upgraded"
-        except HTTPException as exc:
+        except (HTTPException, DomainError) as exc:
             await session.rollback()
             if exc.status_code not in _DENIED and exc.status_code != 422:
                 raise
@@ -123,6 +124,7 @@ async def run(
 
 
 async def _main(args: argparse.Namespace) -> int:
+    """Open a short-lived pool, run one upgrade pass, print its JSON summary and dispose the engine."""
     settings = Settings()
     engine, factory = make_session_factory(settings.database_url, pool_size=2, max_overflow=0)
     try:
@@ -133,6 +135,7 @@ async def _main(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point: parse ``--apply/--limit/--after`` and run one idempotent upgrade pass (dry run by default)."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--apply", action="store_true", help="mutate; default is a dry run")
     parser.add_argument("--limit", type=int, default=50, help="maximum sources examined per run")
