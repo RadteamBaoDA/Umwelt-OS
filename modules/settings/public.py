@@ -22,9 +22,11 @@ from core.auth.models import Owner
 from core.auth.public import get_active_account, lock_account_admission
 from core.auth.schemas import AccountSessionRef
 from core.config import Settings
+from core.model_gateway.client import effective_provider_kind, hosted_endpoint_equivalent
 from core.model_gateway.schemas import (
     DEFAULT_PROVIDER_ID,
     HOSTED_PROVIDER_ENDPOINTS,
+    HOSTED_PROVIDER_KINDS,
     LOCAL_PROVIDER_KINDS,
     MAX_PROVIDERS,
     MODEL_ROLES,
@@ -37,6 +39,7 @@ from core.model_gateway.schemas import (
     ProviderConfig,
     ProviderModel,
     ProviderRead,
+    ProviderUpdate,
     WebSearchTarget,
 )
 from core.model_gateway.transport import approved_transport
@@ -297,7 +300,6 @@ def _destination(record: dict[str, Any], settings: Settings) -> str | None:
 def _resolve_provider(record: dict[str, Any], settings: Settings) -> ProviderConfig:
     """Validate one stored provider against deployment policy and decrypt its key; `local` comes from the kind."""
     kind = record.get("kind", "custom")
-    local = kind in LOCAL_PROVIDER_KINDS
     denied = False
     try:
         endpoint = _endpoint(record.get("base_url"), settings)
@@ -305,6 +307,10 @@ def _resolve_provider(record: dict[str, Any], settings: Settings) -> ProviderCon
         if exc.status_code != 422:
             raise
         endpoint, denied = None, True
+    # Read-time migration: a legacy hosted row pointing at a non-vendor URL (e.g. a proxy) behaves as ``custom``;
+    # URL, key and destination are untouched. The raw URL is used when policy denied the endpoint.
+    kind = effective_provider_kind(kind, endpoint or record.get("base_url"))
+    local = kind in LOCAL_PROVIDER_KINDS
     ciphertext = record.get("key_ciphertext")
     return ProviderConfig(
         kind=kind, label=record.get("label") or "", base_url=endpoint, policy_denied=denied, local=local,
@@ -591,6 +597,25 @@ def role_accepts(role: str, model: ProviderModel) -> bool:
     return model.type == role
 
 
+def _provider_endpoint(item: ProviderUpdate, previous: dict[str, Any] | None) -> tuple[str, str | None]:
+    """Choose the ``(kind_to_store, raw_url)`` for one provider being saved, before ``_endpoint`` policy validation.
+
+    Self-hosted kinds keep the client URL. Hosted kinds ignore it: a previous URL equivalent to the vendor endpoint is
+    kept verbatim (rewriting it would rotate ``destination_id``, dropping the key and privacy consent); a previous
+    non-equivalent URL under the same hosted kind is a legacy row and is saved as ``custom`` with its URL; anything
+    else gets the fixed endpoint. A converted row's kind change rotates ``gateway_identity``/``model_identity`` once,
+    so capability evidence is re-verified once; URL, key, models and consent are untouched.
+    """
+    if item.kind not in HOSTED_PROVIDER_KINDS:
+        return item.kind, str(item.base_url) if item.base_url else None
+    prev_url = previous.get("base_url") if previous else None
+    if prev_url and hosted_endpoint_equivalent(item.kind, prev_url):
+        return item.kind, prev_url
+    if prev_url and previous is not None and previous.get("kind") == item.kind:
+        return "custom", prev_url
+    return item.kind, HOSTED_PROVIDER_ENDPOINTS[item.kind]
+
+
 async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, settings: Settings, *, scope: Scope,
                            auth_sessions: tuple[AccountSessionRef, ...] = ()) -> AISettingsRead:
     """Validate and persist an optimistic, revision-checked AI settings update.
@@ -621,7 +646,8 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
             raise HTTPException(status_code=422, detail="Duplicate provider id")
         providers = {}
         for item in update.providers:
-            endpoint = _endpoint(str(item.base_url) if item.base_url else None, settings)
+            kind_to_store, raw_url = _provider_endpoint(item, stored.get(item.id))
+            endpoint = _endpoint(raw_url, settings)
             if endpoint is None:
                 raise HTTPException(status_code=422, detail="Provider endpoint is required")
             ciphertext = _kept_ciphertext(stored.get(item.id), endpoint, settings)
@@ -633,8 +659,8 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
                 ciphertext = None
             if len({m.id for m in item.models}) != len(item.models):
                 raise HTTPException(status_code=422, detail="Duplicate model id")
-            providers[item.id] = {"kind": item.kind, "label": item.label or item.id, "base_url": endpoint,
-                                  "key_ciphertext": ciphertext, "local": item.kind in LOCAL_PROVIDER_KINDS,
+            providers[item.id] = {"kind": kind_to_store, "label": item.label or item.id, "base_url": endpoint,
+                                  "key_ciphertext": ciphertext, "local": kind_to_store in LOCAL_PROVIDER_KINDS,
                                   "models": [m.model_dump(mode="json") for m in item.models]}
     chosen_defaults = {role: mapping for role in MODEL_ROLES if (mapping := getattr(update.defaults, role)) is not None}
     for mapping in chosen_defaults.values():

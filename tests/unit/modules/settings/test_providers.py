@@ -76,7 +76,7 @@ def _update(**over: object) -> AISettingsUpdate:
     return AISettingsUpdate(expected_revision=2, **over)  # type: ignore[arg-type]
 
 
-def _provider(pid: str, kind: str = "openai", url: str = GW, **over: object) -> ProviderUpdate:
+def _provider(pid: str, kind: str = "custom", url: str | None = GW, **over: object) -> ProviderUpdate:
     return ProviderUpdate(id=pid, kind=kind, label=pid.title(), base_url=url, **over)  # type: ignore[arg-type]
 
 
