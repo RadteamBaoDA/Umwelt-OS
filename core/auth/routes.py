@@ -80,8 +80,11 @@ def _is_owner_conflict(exc: IntegrityError) -> bool:
     return False
 
 
-def get_auth_redis(request: Request) -> Redis:
-    """Return the Redis client installed on application state for authentication throttling."""
+async def get_auth_redis(request: Request) -> Redis:
+    """Return the Redis client installed on application state for authentication throttling.
+
+    ``async def`` so FastAPI resolves it on the loop instead of handing a no-op attribute read to the AnyIO threadpool.
+    """
     return cast(Redis, request.app.state.redis)
 
 

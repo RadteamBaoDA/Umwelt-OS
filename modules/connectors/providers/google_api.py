@@ -10,6 +10,7 @@ from decimal import Decimal
 from typing import Any, Literal
 from urllib.parse import quote, urlencode
 
+from core.heavy_work import to_thread_joined
 from modules.connectors.providers import rest
 from modules.connectors.quota import QuotaDeferred
 from modules.ingestion.schemas import IngestionRecord
@@ -112,6 +113,11 @@ def _json(body: bytes) -> Any:
         return json.loads(body, parse_float=Decimal)
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise GoogleProviderError("response_not_json") from exc
+
+
+async def _json_async(body: bytes) -> Any:
+    """Decode provider JSON (up to 10 MB per page) off the event loop; same result/errors as ``_json``."""
+    return await to_thread_joined(_json, body)
 
 
 def _next_page(page: dict[str, Any]) -> str | None:
@@ -309,7 +315,7 @@ async def collect_gmail(
     original_cursor = cursor
     if state is None:
         try:
-            profile = _json(await budget.get(f"{GMAIL_ORIGIN}/profile"))
+            profile = await _json_async(await budget.get(f"{GMAIL_ORIGIN}/profile"))
         except _ReceiptPause as pause:
             if pause.deferred is not None:
                 raise pause.deferred
@@ -350,7 +356,7 @@ async def collect_gmail(
         if page_token:
             params["pageToken"] = page_token
         try:
-            page = _json(await budget.get(f"{GMAIL_ORIGIN}/messages?{urlencode(params, doseq=True)}"))
+            page = await _json_async(await budget.get(f"{GMAIL_ORIGIN}/messages?{urlencode(params, doseq=True)}"))
             if not isinstance(page, dict) or not isinstance(page.get("messages", []), list):
                 raise GoogleProviderError("gmail_messages_invalid")
             ids = [item["id"] for item in page.get("messages", []) if isinstance(item, dict)
@@ -359,7 +365,7 @@ async def collect_gmail(
                 raise GoogleProviderError("gmail_cursor_offset_invalid")
             for index in range(offset, len(ids)):
                 identifier = ids[index]
-                message = _json(await budget.get(
+                message = await _json_async(await budget.get(
                     f"{GMAIL_ORIGIN}/messages/{quote(identifier, safe='')}?format=full"))
                 if not isinstance(message, dict):
                     raise GoogleProviderError("gmail_message_invalid")
@@ -399,7 +405,7 @@ async def collect_gmail(
     if page_token:
         params["pageToken"] = page_token
     try:
-        page = _json(await budget.get(f"{GMAIL_ORIGIN}/history?{urlencode(params, doseq=True)}"))
+        page = await _json_async(await budget.get(f"{GMAIL_ORIGIN}/history?{urlencode(params, doseq=True)}"))
         if not isinstance(page, dict):
             raise GoogleProviderError("gmail_page_invalid")
         message_ids: list[str] = []
@@ -422,7 +428,7 @@ async def collect_gmail(
             raise GoogleProviderError("gmail_cursor_offset_invalid")
         for index in range(offset, min(len(message_ids), offset + MAX_GMAIL_DETAILS_PER_RECEIPT)):
             identifier = message_ids[index]
-            message = _json(await budget.get(
+            message = await _json_async(await budget.get(
                 f"{GMAIL_ORIGIN}/messages/{quote(identifier, safe='')}?format=full"))
             if not isinstance(message, dict):
                 raise GoogleProviderError("gmail_message_invalid")
@@ -612,7 +618,7 @@ async def collect_calendar(
                 params.update({"timeMin": time_min, "timeMax": time_max, "singleEvents": "false"})
             if page_token:
                 params["pageToken"] = page_token
-            page = _json(await budget.get(f"{base}?{urlencode(params)}"))
+            page = await _json_async(await budget.get(f"{base}?{urlencode(params)}"))
             if not isinstance(page, dict) or not isinstance(page.get("items", []), list):
                 raise GoogleProviderError("calendar_page_invalid")
             items = page.get("items", [])
@@ -730,7 +736,7 @@ async def _drive_file_metadata(budget: _RequestBudget, identifier: str) -> dict[
     """Read only Drive file metadata fields required for type filtering and provenance."""
     fields = "id,name,mimeType,modifiedTime,webViewLink,md5Checksum,version,trashed,parents"
     body = await budget.get(f"{DRIVE_ORIGIN}/files/{quote(identifier, safe='')}?{urlencode({'fields': fields})}")
-    value = _json(body)
+    value = await _json_async(body)
     if not isinstance(value, dict) or value.get("id") != identifier:
         raise GoogleProviderError("drive_file_invalid")
     return value
@@ -779,7 +785,7 @@ async def _expand_drive_scope(
             if page_token:
                 params["pageToken"] = page_token
             body = await budget.get(f"{DRIVE_ORIGIN}/files?{urlencode(params)}")
-            page = _json(body)
+            page = await _json_async(body)
             if not isinstance(page, dict) or not isinstance(page.get("files", []), list):
                 raise GoogleProviderError("drive_folder_children_invalid")
             for child in page.get("files", []):
@@ -879,7 +885,7 @@ async def collect_drive(
     try:
         if state.get("phase") == "snapshot":
             if not isinstance(state.get("change_token"), str):
-                start_page = _json(await budget.get(
+                start_page = await _json_async(await budget.get(
                     f"{DRIVE_ORIGIN}/changes/startPageToken?{urlencode({'fields': 'startPageToken'})}"))
                 start_token = start_page.get("startPageToken") if isinstance(start_page, dict) else None
                 if not isinstance(start_token, str) or not start_token:
@@ -935,7 +941,7 @@ async def collect_drive(
                 }
                 if folder.get("page_token"):
                     params["pageToken"] = folder["page_token"]
-                page = _json(await budget.get(f"{DRIVE_ORIGIN}/files?{urlencode(params)}"))
+                page = await _json_async(await budget.get(f"{DRIVE_ORIGIN}/files?{urlencode(params)}"))
                 if not isinstance(page, dict) or not isinstance(page.get("files", []), list):
                     raise GoogleProviderError("drive_folder_children_invalid")
                 children = page.get("files", [])
@@ -977,7 +983,7 @@ async def collect_drive(
             token = state.get("change_token")
             if not isinstance(token, str) or not token:
                 raise GoogleProviderError("drive_cursor_invalid")
-            page = _json(await budget.get(f"{DRIVE_ORIGIN}/changes?{urlencode({
+            page = await _json_async(await budget.get(f"{DRIVE_ORIGIN}/changes?{urlencode({
                 'pageToken': token, 'pageSize': 3,
                 'fields': 'nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,modifiedTime,webViewLink,md5Checksum,version,trashed,parents))',
             })}"))

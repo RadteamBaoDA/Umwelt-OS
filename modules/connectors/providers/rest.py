@@ -21,6 +21,8 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from core.async_runtime import run_dns_lookup
+from core.heavy_work import to_thread_joined
 from modules.connectors.providers.feed_catalog import _retry_deadline
 from modules.connectors.public import ProviderRateLimited, overlap_floor
 from modules.connectors.selection import SKEW
@@ -75,8 +77,9 @@ class Fetched:
 async def resolve_public(host: str, port: int) -> list[str]:
     """Resolve once and require every returned address to be globally routable."""
     try:
-        # wait_for bounds request latency only: a cancelled to_thread keeps running in the pool until the resolver returns.
-        infos = await asyncio.wait_for(asyncio.to_thread(getaddrinfo, host, port, 0, 0, 0), 5)
+        # wait_for bounds request latency only: a timed-out lookup keeps its thread until the resolver returns,
+        # so it runs on the dedicated DNS pool and cannot starve the shared default executor.
+        infos = await asyncio.wait_for(run_dns_lookup(getaddrinfo, host, port, 0, 0, 0), 5)
     except (OSError, TimeoutError) as exc:
         raise UnsafeDestination("host_unresolvable") from exc
     addresses = [str(item[4][0]) for item in infos]
@@ -375,12 +378,12 @@ async def collect_rest(
             result.etag, result.last_modified = fetched.etag, fetched.last_modified
         page_bytes = len(fetched.body)
         try:
-            payload = json.loads(fetched.body)
+            payload = await to_thread_joined(json.loads, fetched.body)  # up to 10 MB: keep it off the worker loop
         except (UnicodeDecodeError, ValueError) as exc:
             raise RestSchemaChanged("response_not_json") from exc
         page: list[tuple[dict[str, Any], datetime | None]] = []
         page_size = 0
-        for record, moment in map_page(payload, config, floor):
+        for record, moment in await to_thread_joined(map_page, payload, config, floor):
             identifier = str(record["provider_id"])
             if id_hash(identifier) in skip or identifier in seen_ids:
                 continue

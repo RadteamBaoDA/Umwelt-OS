@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
+from core.async_runtime import configure_default_executor
 from core.auth.deletion_worker import recover_account_deletions
 from core.auth.models import AuthSession
 from core.config import Settings
@@ -141,6 +142,7 @@ async def startup(ctx: dict[str, object]) -> None:
     invocation contexts; neither is authority or durable, and both reset on restart.
     """
     _silence_cron_logs()
+    configure_default_executor()  # explicit default thread-pool size; see core.async_runtime
     settings = Settings()
     ctx["settings"] = settings
     ctx["ingestion_dispatch_scan_state"] = {"cursor": None, "lock": asyncio.Lock()}
@@ -176,6 +178,7 @@ CHAT_DB_POOL = (10, 10)  # fixed (pool_size, max_overflow); counted as 20 in doc
 async def chat_startup(ctx: dict[str, object]) -> None:
     """Minimal chat-worker startup: bounded DB pool only (no agent registry, no worker-generation key)."""
     _silence_cron_logs()
+    configure_default_executor()  # explicit default thread-pool size; see core.async_runtime
     settings = Settings()
     ctx["settings"] = settings
     install_log_redaction()
@@ -197,6 +200,7 @@ MODEL_DB_POOL = (4 + 1, 5)  # (pool_size = ModelWorkerSettings.max_jobs + 1, max
 async def model_startup(ctx: dict[str, object]) -> None:
     """Minimal model-worker startup: bounded DB pool only (no agent registry, no worker-generation key)."""
     _silence_cron_logs()
+    configure_default_executor()  # explicit default thread-pool size; see core.async_runtime
     settings = Settings()
     ctx["settings"] = settings
     install_log_redaction()

@@ -14,6 +14,7 @@ from uuid import UUID
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.heavy_work import to_thread_joined
 from modules.connectors import quota
 from modules.connectors.live_map_catalog import CATALOG_IDS
 from modules.connectors.live_map_catalog import (
@@ -218,7 +219,11 @@ async def fetch_events(provider: str, *, country: str | None, owner: str | None,
     if body is None:
         raise ValueError("provider_empty_response")
     try:
-        return _parse(provider, body)
+        # CSV/JSON/XML parse + _item() for up to 4 MB runs on the API loop otherwise (A2). Exceptions
+        # raised in the thread propagate unchanged, so the KeyError/IndexError/TypeError mapping holds.
+        # _item() construction is deliberately NOT cut short at MAX_ITEMS: a malformed row past the
+        # cap currently raises provider_response_invalid, which an early stop would silently change.
+        return await to_thread_joined(_parse, provider, body)
     except (KeyError, IndexError, TypeError) as exc:
         raise ValueError("provider_response_invalid") from exc
 

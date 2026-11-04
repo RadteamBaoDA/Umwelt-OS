@@ -33,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.heavy_work import to_thread_joined
 from core.workspaces.public import lock_access_fence, read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.connectors import provider_options, provider_terms, provisioning, quota, scheduler
@@ -725,6 +726,17 @@ class _PageText(HTMLParser):
             self.parts.append(data.strip())
 
 
+def _parse_page(html: str) -> tuple[list[str], list[str]]:
+    """Return the visible text parts and anchor hrefs of one HTML page.
+
+    Pure CPU work (stdlib HTMLParser on up to ~10 MB), so callers run it through
+    ``to_thread_joined``; it touches no shared state and raises whatever the parser raises.
+    """
+    page = _PageText()
+    page.feed(html)
+    return page.parts, page.links
+
+
 async def _run_web(run: Run) -> None:
     """Collect static web pages through bounded HTTP or queue a fenced browser-worker crawl.
 
@@ -761,13 +773,13 @@ async def _run_web(run: Run) -> None:
             max_bytes=min(rest.MAX_PAGE_BYTES, rest.MAX_TRANSPORT_BYTES - spent), timeout=config.timeout_seconds)
         body = _require_body(fetched)
         spent += len(body)
-        page = _PageText()
-        page.feed(body.decode("utf-8", errors="replace"))
+        # HTMLParser.feed on a multi-MB page would stall the worker loop (heartbeats, heavy-slot renewal).
+        parts, links = await to_thread_joined(_parse_page, body.decode("utf-8", errors="replace"))
         records.append(normalize({
-            "provider_id": url, "content": "\n".join(page.parts)[:200_000],
+            "provider_id": url, "content": "\n".join(parts)[:200_000],
             "observed_at": datetime.now(UTC).isoformat(), "metadata": {"url": url}}))
         if depth < config.max_depth:
-            for href in page.links:
+            for href in links:
                 target = urldefrag(urljoin(url, href))[0]
                 if target not in visited and len(queue) < 100 and rest._origin(target) == origin:
                     visited.add(target)
@@ -1134,6 +1146,15 @@ def _payload(fn: Callable[..., Any], *args: Any) -> Any:
         raise  # "invalid": ValueError -> provider_response_invalid
 
 
+async def _payload_async(fn: Callable[..., Any], *args: Any) -> Any:
+    """Run ``_payload`` (decode + map of a provider body) off the event loop.
+
+    Same result and same translated exceptions as the inline call; the thread is joined on
+    cancellation so the collection lease/slot is never released under live host work.
+    """
+    return await to_thread_joined(_payload, fn, *args)
+
+
 def _coverage(records: Sequence[IngestionRecord]) -> Literal["returned_snapshot", "truncated"]:
     """Page coverage must equal the records' coverage (ingress rejects a mismatch)."""
     return "truncated" if any(r.metadata["provider_record"]["coverage"] == "truncated" for r in records) else "returned_snapshot"
@@ -1251,7 +1272,7 @@ async def _run_pure(run: Run) -> None:
     if (url := provider_options.build_url(provider, cfg, cursor=cursor, now=collected_at)) is not None:
         request = replace(request, url=url)  # owner options / native resume; headers stay the adapter's
     fetched = await _get_body(run, request, max_bytes=PURE_MAX_BYTES.get(provider, MAX_BODY_BYTES))
-    records = _payload(
+    records = await _payload_async(
         lambda *a: map_pure_provider_body(*a, **provider_options.map_options(provider, cfg)),
         provider, _require_body(fetched), collected_at)  # mapper scope follows the requested scope
     records = provider_options.filter_records(provider, cfg, records)  # region / KEV / NVD / FX / Kp (client)
@@ -1280,7 +1301,7 @@ async def _run_coinpaprika(run: Run) -> None:
             await asyncio.sleep(provider_options.COINPAPRIKA_GAP_SECONDS)
         fetched = await _get_body(run, replace(PURE_ADAPTERS["coinpaprika"].request(), url=url),
                                   max_bytes=MAX_BODY_BYTES)
-        records += _payload(lambda body, coin=coin: map_coinpaprika(decode_json(body), collected_at, coin_id=coin),
+        records += await _payload_async(lambda body, coin=coin: map_coinpaprika(decode_json(body), collected_at, coin_id=coin),
                             _require_body(fetched))
     await _accept_native(run, lease, records, _coverage(records), collected_at)
 
@@ -1304,7 +1325,7 @@ async def _run_vn_stock(run: Run) -> None:
         if index:
             await asyncio.sleep(1.0)
         fetched = await _get_body(run, request, max_bytes=MAX_BODY_BYTES)
-        records += _payload(
+        records += await _payload_async(
             lambda body, group=group: vn_stock.map_vn_stock(decode_json(body), collected_at, symbols=group),
             _require_body(fetched))
     await _accept_native(run, lease, records, _coverage(records), collected_at)
@@ -1328,7 +1349,7 @@ async def _run_vietnamworks(run: Run) -> None:
         if index:
             await asyncio.sleep(1.0)
         fetched = await _get_body(run, request, max_bytes=MAX_BODY_BYTES)
-        batches.append(_payload(
+        batches.append(await _payload_async(
             lambda body: jobs.map_vietnamworks(
                 decode_json(body), collected_at, cities=cfg.get("job_cities") or (), levels=cfg.get("job_levels") or (),
                 min_salary_usd=cfg.get("job_min_salary_usd")),
@@ -1381,7 +1402,7 @@ async def _run_itviec(run: Run) -> None:
         except rest.ProviderHttpError as exc:
             if exc.status_code not in {404, 410}:
                 raise
-    records = _payload(
+    records = await _payload_async(
         lambda: jobs.map_itviec(pages, collected_at, levels=cfg.get("job_levels") or (), min_salary_usd=cfg.get("job_min_salary_usd")))
     records, cursor_after = await _select(run, lease, records, collected_at)
     await _accept_native(run, lease, records, _coverage(records), collected_at, cursor_after=cursor_after)
@@ -1421,8 +1442,8 @@ async def _run_keyed(run: Run) -> None:
     lease = await _lease(run)
     fetched = await _get_body(run, request, max_bytes=KEYED_MAX_BYTES)
     body = _require_body(fetched)
-    payload = body if row.binary else _payload(decode_json, body)
-    records = _payload(row.mapper, payload, collected_at, cfg)
+    payload = body if row.binary else (await _payload_async(decode_json, body))
+    records = await _payload_async(row.mapper, payload, collected_at, cfg)
     await _accept_native(run, lease, records, _coverage(records), collected_at)
 
 
@@ -1523,7 +1544,7 @@ async def _run_hn(run: Run) -> None:
             if exc.status_code != 404:
                 raise
             bodies[item_id] = None  # removed item: skipped and counted by the mapper
-    result = _payload(news.map_hn_stories, ids, bodies, collected_at, provider_options.hn_limit(cfg))
+    result = await _payload_async(news.map_hn_stories, ids, bodies, collected_at, provider_options.hn_limit(cfg))
     run.extras["skipped"] = result.skipped
     records, cursor_after = await _select(run, lease, result.records, collected_at)
     await _accept_native(run, lease, records, "returned_snapshot", collected_at, cursor_after=cursor_after)
@@ -1543,7 +1564,7 @@ async def _run_gdelt(run: Run) -> None:
     if (url := provider_options.build_url("gdelt_economy", cfg, cursor=cursor, now=collected_at)) is not None:
         request = replace(request, url=url)
     fetched = await _get_body(run, request, max_bytes=MAX_BODY_BYTES, timeout=GDELT_TIMEOUT_SECONDS)
-    records = _payload(map_news_body, "gdelt_economy", _require_body(fetched), collected_at)
+    records = await _payload_async(map_news_body, "gdelt_economy", _require_body(fetched), collected_at)
     records, cursor_after = await _select(run, lease, records, collected_at)
     await _accept_native(run, lease, records, _coverage(records), collected_at, cursor_after=cursor_after)
 
@@ -1558,8 +1579,8 @@ async def _run_sec_edgar(run: Run) -> None:
     collected_at = datetime.now(UTC)
     lease = await _lease(run)
     fetched = await _get_body(run, request, max_bytes=MAX_BODY_BYTES)
-    payload = _payload(decode_json, _require_body(fetched))
-    records = _payload(filings.map_sec_edgar, payload, collected_at, cfg["sec_cik"])
+    payload = await _payload_async(decode_json, _require_body(fetched))
+    records = await _payload_async(filings.map_sec_edgar, payload, collected_at, cfg["sec_cik"])
     await _accept_native(run, lease, records, _coverage(records), collected_at)
 
 
@@ -1571,7 +1592,7 @@ async def _run_openalex(run: Run) -> None:
     request = _payload(scholarly.openalex_request, (run.attempt.source.configuration or {}).get("scholarly_query"))
     lease = await _lease(run)
     fetched = await _get_body(run, request, max_bytes=scholarly.OPENALEX_MAX_BODY)
-    records = _payload(scholarly.map_openalex, _require_body(fetched), collected_at)
+    records = await _payload_async(scholarly.map_openalex, _require_body(fetched), collected_at)
     await _accept_native(run, lease, records, _coverage(records), collected_at)
 
 

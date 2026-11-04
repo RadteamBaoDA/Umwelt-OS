@@ -20,6 +20,8 @@ from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 import httpx
 
+from core.async_runtime import run_dns_lookup
+from core.heavy_work import to_thread_joined
 from modules.ingestion.schemas import IngestionRecord
 from modules.knowledge.documents.schemas import ProviderRecordMetadata
 
@@ -100,7 +102,7 @@ async def fetch_configured_origin(
     url, scheme, host, port = _url_for_origin(configured_origin, request_url)
     try:
         rows = await asyncio.wait_for(
-            asyncio.to_thread(socket.getaddrinfo, host, port, 0, socket.SOCK_STREAM),
+            run_dns_lookup(socket.getaddrinfo, host, port, 0, socket.SOCK_STREAM),
             timeout=5,
         )
     except (OSError, TimeoutError) as exc:
@@ -169,6 +171,11 @@ def _decode_json(body: bytes) -> Any:
         return json.loads(body, parse_float=Decimal)
     except (UnicodeDecodeError, json.JSONDecodeError, InvalidOperation) as exc:
         raise LocalServiceError("response_not_json") from exc
+
+
+async def _decode_json_async(body: bytes) -> Any:
+    """Decode bounded provider JSON off the event loop; same result and errors as ``_decode_json``."""
+    return await to_thread_joined(_decode_json, body)
 
 
 def _instant(value: object) -> datetime:
@@ -290,7 +297,7 @@ async def collect_fhir_observations(
             raise LocalServiceError("pagination_loop")
         visited.add(current)
         body = await fetch_configured_origin(base_url, current, before_send=before_send, bearer_token=bearer_token)
-        bundle = _decode_json(body)
+        bundle = await _decode_json_async(body)
         if not isinstance(bundle, dict) or bundle.get("resourceType") != "Bundle" or not isinstance(bundle.get("entry", []), list):
             raise LocalServiceError("fhir_bundle_invalid")
         for entry in bundle.get("entry", []):
@@ -374,7 +381,7 @@ async def collect_home_assistant_snapshot(
         if total_bytes > MAX_HA_BATCH_BYTES:
             # Keep the current index for the next receipt; earlier entities remain committed.
             break
-        state = _decode_json(body)
+        state = await _decode_json_async(body)
         if not isinstance(state, dict) or state.get("entity_id") != entity_id:
             raise LocalServiceError("home_assistant_response_invalid")
         raw_state = state.get("state")

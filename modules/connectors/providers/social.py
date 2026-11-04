@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, quote, unquote, urljoin, urlsplit
 
 import httpx
 
+from core.heavy_work import to_thread_joined
 from modules.connectors.providers.feed_catalog import (
     _plain_text,
     _retry_deadline,
@@ -110,7 +111,7 @@ async def _get_page(
                         body.extend(chunk)
                         if len(body) > min(_MAX_PAGE_BYTES, byte_limit):
                             raise ValueError("github_response_too_large")
-                    parsed = json.loads(body)
+                    parsed = await to_thread_joined(json.loads, body)
                     next_match = _NEXT.search(response.headers.get("link", ""))
                     next_link = next_match.group(1) if next_match else None
                     return parsed, next_link, len(body)

@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.routing import Route
 
+from core.async_runtime import configure_default_executor
 from core.auth.deletion_routes import router as account_deletion_router
 from core.auth.dependencies import session_middleware_secret
 from core.auth.routes import router as auth_router
@@ -132,8 +133,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """Run the SDK manager once, hydrate bounded owner state, and always close shared clients.
 
         Admission is stopped before the SDK manager drains; Redis and SQLAlchemy are closed even
-        when manager entry or sequential owner hydration fails during startup.
+        when manager entry or sequential owner hydration fails during startup. The loop's default
+        thread executor is given an explicit size first (see ``core.async_runtime``).
         """
+        configure_default_executor()
         try:
             async with AsyncExitStack() as stack:
                 try:

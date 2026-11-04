@@ -5,13 +5,15 @@ import io
 import json
 import multiprocessing
 import zipfile
-from asyncio import to_thread, wait_for
+from asyncio import timeout, to_thread, wait_for
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty
 
 from docx import Document as DocxDocument
 from pypdf import PdfReader
+
+from core.heavy_work import to_thread_joined
 
 DOCX_EXPANDED_LIMIT = 100 * 1024 * 1024
 PDF_PAGE_LIMIT = 500
@@ -133,17 +135,22 @@ async def parse_file_bounded(
     docx_expanded_limit: int,
     pdf_page_limit: int,
 ) -> ParsedDocument:
-    """Parse in a bounded worker thread for small plain-text files or an isolated process for binary/large files."""
+    """Parse in a bounded worker thread for small plain-text files or an isolated process for binary/large files.
+
+    On the small-text path the thread is joined before ``TimeoutError`` is raised, so a hung parse is
+    not bounded by ``timeout_seconds`` itself, but the heavy slot is never released under a live thread.
+    """
     try:
         is_small_text = mime in _IN_PROCESS_TEXT_MIMES and path.stat().st_size <= _IN_PROCESS_MAX_BYTES
     except OSError:
         is_small_text = False
     if is_small_text:
         try:
-            return await wait_for(
-                to_thread(parse_file, path, mime, docx_expanded_limit, pdf_page_limit),
-                timeout_seconds,
-            )
+            # to_thread_joined inside asyncio.timeout: on expiry the cancellation waits for the parser
+            # thread to finish, so the heavy slot is never released while parse_file still runs.
+            # Expiry still surfaces as TimeoutError (asyncio.timeout converts the CancelledError).
+            async with timeout(timeout_seconds):
+                return await to_thread_joined(parse_file, path, mime, docx_expanded_limit, pdf_page_limit)
         except TimeoutError as exc:
             raise TimeoutError("File parser exceeded its time limit") from exc
         except Exception as exc:

@@ -8,6 +8,7 @@ from urllib.parse import quote
 
 import httpx
 
+from core.heavy_work import to_thread_joined
 from modules.connectors.providers.feed_catalog import (
     _parse_time,
     _retry_deadline,
@@ -56,7 +57,7 @@ async def _fetch_models(author: str, before_request: Callable[[], Awaitable[None
                         body.extend(chunk)
                         if len(body) > _MAX_PAGE_BYTES:
                             raise ValueError("huggingface_response_too_large")
-                    result = json.loads(body)
+                    result = await to_thread_joined(json.loads, body)
     except ProviderRateLimited:
         raise
     except (httpx.HTTPError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError):

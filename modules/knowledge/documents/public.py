@@ -1837,6 +1837,21 @@ def content_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+_INLINE_HASH_MAX_CHARS = 65_536
+
+
+async def content_hash_async(content: str) -> str:
+    """Return ``content_hash(content)`` without blocking the loop on very large documents.
+
+    Content up to 64 Ki characters is hashed inline (a thread handoff would cost more than the
+    ~50 us hash); larger content, up to the multi-million-character document bound, is hashed in a
+    joined worker thread. The digest is identical in both paths; no SQL or ordering is involved.
+    """
+    if len(content) <= _INLINE_HASH_MAX_CHARS:
+        return content_hash(content)
+    return await to_thread_joined(content_hash, content)
+
+
 async def ensure_demo_article(
     session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[int, int, int]:
@@ -2571,7 +2586,7 @@ async def create_document(
     if source_fence.status != "active":
         raise ValueError("Cannot add documents to an inactive source")
     await _assert_new_document_key(session, payload.source_id, payload.external_id, scope=scope)
-    digest = content_hash(payload.content)
+    digest = await content_hash_async(payload.content)
     document = Document(
         workspace_id=scope.workspace_id,
         source_id=payload.source_id,
@@ -3241,6 +3256,7 @@ async def _apply_normalized_document(
         )
         selected = current_hash_rank is None or (payload.observed_at, payload.accepted_record_hash) > current_hash_rank
     # All provider/content errors above precede the first owner mutation.
+    payload_digest = await content_hash_async(payload.content)  # pure hash, before any session.add
     created_identity_id, created_document_id = None, None
     if identity is None:
         created_identity_id = uuid7()
@@ -3254,7 +3270,7 @@ async def _apply_normalized_document(
             title=payload.title, content_type=payload.content_type,
             canonical_url=payload.canonical_url, published_at=payload.published_at,
             observed_at=payload.observed_at, current_version=0,
-            content_hash=content_hash(payload.content), extraction_status="ready",
+            content_hash=payload_digest, extraction_status="ready",
             language=_provenance_language(payload.provenance),
         )
         session.add(document)
@@ -3266,7 +3282,7 @@ async def _apply_normalized_document(
     )
     version = DocumentVersion(
         document_id=document.id, version_number=int(max_number or 0) + 1,
-        content=payload.content, content_hash=content_hash(payload.content),
+        content=payload.content, content_hash=payload_digest,
         observed_at=payload.observed_at,
     )
     session.add(version)
@@ -3775,7 +3791,7 @@ async def save_extraction(
     if current is None:
         raise RuntimeError("Current document version is missing")
     if current.content != text:
-        digest = content_hash(text)
+        digest = await content_hash_async(text)
         max_number = await session.scalar(
             select(func.coalesce(func.max(DocumentVersion.version_number), 0))
             .where(DocumentVersion.document_id == document.id)
@@ -4520,7 +4536,7 @@ async def append_content(
         .where(DocumentVersion.document_id == document.id)
     )
     next_version = int(max_number or 0) + 1
-    digest = content_hash(content)
+    digest = await content_hash_async(content)
     version = DocumentVersion(
             document_id=document_id,
             version_number=next_version,

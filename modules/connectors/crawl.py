@@ -17,6 +17,8 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
 from core.config import Settings
 from core.ids import uuid7
+from modules.connectors.crawl_digest import page_digest_and_raw, wire_size
+from modules.connectors.crawl_digest import result_digest as compute_result_digest
 from modules.connectors.n8n import read_rss
 from modules.connectors.public import CrawlRequest, RSSRequest, validate_public_url
 from modules.connectors.registry import normalize
@@ -394,8 +396,6 @@ async def _execute_static_agent_read(
     payload: AgentReadRequest, settings: Settings
 ) -> list[dict[str, object]]:
     """Fetch static pages only after per-request API permits and pinned public HTTPS resolution."""
-    import hashlib
-    import json
     import time
 
     from httpx2 import AsyncClient
@@ -479,12 +479,13 @@ async def _execute_static_agent_read(
             # Bound by UTF-8 bytes to match the worker and the DB octet_length check.
             extracted = page_text.encode("utf-8")[:20_000].decode("utf-8", "ignore")
             page_bytes += len(body)
+            content_digest, raw_content = await asyncio.to_thread(page_digest_and_raw, body)
             page: dict[str, object] = {
                 "requested_url": requested,
                 "final_url": final_url,
                 "observed_at": datetime.now(UTC).isoformat(),
-                "content_digest": hashlib.sha256(body).hexdigest(),
-                "raw_content": base64.b64encode(body).decode("ascii"),
+                "content_digest": content_digest,
+                "raw_content": raw_content,
                 "extracted_text": extracted,
             }
             pages.append(page)
@@ -501,10 +502,7 @@ async def _execute_static_agent_read(
 
     if not pages:
         raise ValueError("Browser source returned no pages within the granted scope")
-    result_digest = hashlib.sha256(json.dumps(
-        [{k: v for k, v in page.items() if k != "raw_content"} for page in pages],
-        sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-    ).encode("utf-8")).hexdigest()
+    result_digest = await asyncio.to_thread(compute_result_digest, pages)
     if not await _browser_control_callback(
         settings, payload, "complete", request_ordinal=request_ordinal,
         actual_pages=len(pages), actual_bytes=page_bytes, result_hash=result_digest,
@@ -557,10 +555,7 @@ async def agent_read(
         try:
             async with asyncio.timeout(payload.timeout_seconds + 2):
                 pages = await task
-            import json
-
-            wire = json.dumps(pages, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-            if len(wire) > 8 * 1024 * 1024:
+            if await asyncio.to_thread(wire_size, pages) > 8 * 1024 * 1024:
                 raise HTTPException(status_code=413, detail="Browser result envelope exceeded its limit")
             return {
                 "job_id": str(payload.job_id),

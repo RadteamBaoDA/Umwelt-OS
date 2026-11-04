@@ -60,3 +60,26 @@ Metrics: p50/p95/p99 first-token latency; event-loop lag; DB pool wait time and 
 - Observation dedupe, delta purge, 0.4 s stream flush, retention jobs and superseded-embedding purge: lower write volume and slower table growth.
 - r19 indexes (FK cascade paths, dedupe, GIN), dropped unused indexes, keyset indexing, vector query rewrite using the partial HNSW index, batched reads: lower query counts and delete/index cost.
 - Postgres `jit=off` and larger `max_wal_size`: effect on a 2-core host is unmeasured.
+
+## Event-loop offload (plan section 5A.2, A1-A12)
+
+Behaviour-preserving moves of CPU-bound work off the API/worker event loop. Nothing here was benchmarked end to end; the numbers are the plan's estimates and the guard test below.
+
+| Item | Change |
+|---|---|
+| A1 | `_run_web` parses each page through `_parse_page` in `to_thread_joined`. |
+| A2 | `live_map._parse` runs in `to_thread_joined`. `_item()` construction is not cut at `MAX_ITEMS`: a malformed row past the cap raises today (`provider_response_invalid`), so stopping early would change behaviour. |
+| A3 | `_prepare_crawl_records` (decode, validate, dump, canonical and per-record hashes) runs in one thread; SQL and the naive-timestamp check stay on the loop in the original order. |
+| A4 | `json.loads` of REST, Hugging Face, GitHub, Google and local-service pages, plus REST `map_page`, run in threads. |
+| A5 | Provider body decode/map calls in `collection.py` go through `_payload_async`. Request-builder calls stay inline (microseconds). |
+| A6 | Small-text parsing uses `asyncio.timeout` around `to_thread_joined`, so the parser thread is joined before the heavy slot is released. A timeout now takes effect after the thread returns; the exception type is unchanged. |
+| A7 | `content_hash_async` hashes content above 64 Ki characters in a thread; `crawl.py` offloads page digest/base64, result digest and envelope sizing. |
+| A8 | `get_auth_redis` is `async def`. |
+| A9 | Not offloaded (documented in code). The filesystem lease, mkstemp and `os.replace` are microsecond-scale on local disk. A thread hop would let a cancellation land after publication and change the atomic-publish and cleanup contract. Erasure interleaves fs calls with SQL under the lease. Revisit with the StorageBackend work. |
+| A10 | SSRF lookups use `core.async_runtime.run_dns_lookup`, a dedicated 8-thread pool, not `loop.getaddrinfo`: `loop.getaddrinfo` itself runs in the default executor, so it would not fix the starvation. The module-level `getaddrinfo` names stay patchable. The default executor is sized explicitly to asyncio's own `min(32, cpu + 4)` (override with `THREAD_POOL_WORKERS`; not enlarged, so concurrent 19 MiB argon2 hashes stay bounded on a 2-core host) in the API lifespan and the three worker startups. |
+| A11 | `docker/api.Dockerfile` bakes the `cl100k_base` BPE into `/app/.tiktoken-cache` at build time and sets `TIKTOKEN_CACHE_DIR`; `core/chunking.py` is unchanged. |
+| A12 | uvicorn stays on `--loop asyncio`. uvloop needs a benchmark (P15 k6 scenarios) before switching; no measurement was taken here. |
+
+Known limit: `json.loads` and pydantic-core validation hold the GIL for the whole native call, so a thread keeps the loop responsive only between native calls. A single 10 MB `json.loads` can still stall the loop for roughly its own duration. Only a process pool would remove that, and it is not part of this package.
+
+Guardrail: the opt-in `loop_block_guard` fixture in `tests/conftest.py` runs a test loop in asyncio debug mode with `slow_callback_duration = 0.1` and fails on any callback of 100 ms or more. `tests/unit/test_event_loop_offload.py` uses it with large inputs and negative controls. Ruff `ASYNC` was checked on the touched files only (global config untouched): the remaining `ASYNC240` hits are the A9 sites above and one `Path.stat` in `parse_file_bounded`.

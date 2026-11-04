@@ -75,6 +75,8 @@ async def erase_account_storage_page(
                     return True, {}
                 if not directory.is_dir():
                     raise ValueError("Scoped original storage root is not a directory")
+                # A9 (deliberately synchronous): these stat/scandir/unlink calls interleave with SQL under the
+                # erasure lease and fence; offloading them would split that ordering. Each step reads one entry.
                 # A recursive glob can list every sibling before finding a file. Read only one
                 # entry per level, so a large orphan tree cannot monopolize a worker invocation.
                 entry = directory

@@ -27,6 +27,7 @@ from pydantic import (
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.async_runtime import run_dns_lookup
 from core.ids import uuid7
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
@@ -3240,8 +3241,9 @@ async def validate_public_url(value: str) -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
         raise ValueError("Only credential-free HTTP(S) URLs are allowed")
     try:
-        # wait_for bounds request latency only: a cancelled to_thread keeps running in the pool until the resolver returns.
-        addresses = await asyncio.wait_for(asyncio.to_thread(
+        # wait_for bounds request latency only: a timed-out lookup keeps its thread until the resolver returns,
+        # so it runs on the dedicated DNS pool and cannot starve the shared default executor.
+        addresses = await asyncio.wait_for(run_dns_lookup(
             getaddrinfo, parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80), 0, 0, 0
         ), 5)
     except (OSError, TimeoutError) as exc:

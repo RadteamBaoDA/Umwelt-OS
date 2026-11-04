@@ -8,7 +8,7 @@ import random
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
-from typing import cast
+from typing import Any, cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -631,6 +631,37 @@ def _retry_after_seconds(response: httpx.Response) -> float | None:
             return None
 
 
+def _prepare_crawl_records(
+    response: httpx.Response,
+) -> tuple[list[ConnectorRecord], list[dict[str, Any]], str, list[str]]:
+    """Decode, validate and hash one browser-collector batch (pure CPU, no I/O, no DB).
+
+    Returns ``(records, canonical_records, payload_hash, per_record_hashes)``. Raises
+    ``ValueError("Browser collector returned invalid records")`` exactly where the former inline
+    block did (bad JSON, empty/oversized list, schema failure or native-provenance metadata).
+    Runs through ``to_thread_joined`` because a 10 MB body with 500 records costs 0.2-0.4 s of CPU;
+    the naive-timestamp check and all SQL stay on the loop in their original order.
+    """
+    try:
+        raw_records = response.json()
+        if not isinstance(raw_records, list) or not raw_records or len(raw_records) > 500:
+            raise ValueError("Browser job returned no pages or too many records")
+        records = [ConnectorRecord.model_validate(item) for item in raw_records]
+        if any({"provider_record", "world_data", "_owner_telegram_proof", "_native_telegram"}
+               & record.metadata.keys() for record in records):
+            raise ValueError("Browser metadata cannot provide native provenance")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Browser collector returned invalid records") from exc
+    canonical_records = [record.model_dump(mode="json") for record in records]
+    payload_hash = hashlib.sha256(json.dumps(canonical_records, sort_keys=True,
+        separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+    record_hashes = [hashlib.sha256(json.dumps(
+        {"version": data.get("version"), "content": data["content"], "metadata": data["metadata"]},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+        for data in canonical_records]
+    return records, canonical_records, payload_hash, record_hashes
+
+
 async def _collect_web_job(
     ctx: dict[str, object], factory: async_sessionmaker[AsyncSession], event: EventOutbox,
     run_id: UUID, stage_id: UUID, *, claim: WorkerClaim, multi_workspace_enabled: bool,
@@ -678,20 +709,9 @@ async def _collect_web_job(
         raise OSError("Browser collection transport failed") from exc
     if len(response.content) > 10 * 1024 * 1024:
         raise ValueError("Browser batch exceeds the intake bound")
-    try:
-        raw_records = response.json()
-        if not isinstance(raw_records, list) or not raw_records or len(raw_records) > 500:
-            raise ValueError("Browser job returned no pages or too many records")
-        records = [ConnectorRecord.model_validate(item) for item in raw_records]
-        if any({"provider_record", "world_data", "_owner_telegram_proof", "_native_telegram"}
-               & record.metadata.keys() for record in records):
-            raise ValueError("Browser metadata cannot provide native provenance")
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Browser collector returned invalid records") from exc
-    canonical_records = [record.model_dump(mode="json") for record in records]
+    records, canonical_records, payload_hash, record_hashes = await to_thread_joined(
+        _prepare_crawl_records, response)
     collected_at = datetime.now(UTC)
-    payload_hash = hashlib.sha256(json.dumps(canonical_records, sort_keys=True,
-        separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
     async with factory() as session:
         work = await _lock_worker_event(session, event.id, multi_workspace_enabled=multi_workspace_enabled,
             event_types=("connector.crawl.requested",), expected=claim)
@@ -702,13 +722,10 @@ async def _collect_web_job(
             raise ValueError("Crawl original claim changed during HTTP")
         received_at = datetime.now(UTC)
         observations = []
-        for record, data in zip(records, canonical_records, strict=True):
+        for record, data, record_hash in zip(records, canonical_records, record_hashes, strict=True):
             observed_at = record.observed_at
             if observed_at.tzinfo is None:
                 raise ValueError("Browser collector returned a naive observation time")
-            record_hash = hashlib.sha256(json.dumps(
-                {"version": data.get("version"), "content": data["content"], "metadata": data["metadata"]},
-                sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
             observations.append({"source_id": work.source.id, "batch_id": work.batch.id,
                 "provider_id": data["provider_id"], "record_hash": record_hash, "payload": data,
                 "observed_at": observed_at.astimezone(UTC), "received_at": received_at,
