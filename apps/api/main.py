@@ -5,6 +5,7 @@ from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontext
 from typing import Any, cast
 
 from arq.connections import ArqRedis
+from arq.constants import default_queue_name
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
@@ -16,19 +17,25 @@ from core.body_limit import BodyLimitMiddleware
 from core.config import Settings
 from core.database import make_session_factory
 from core.errors import install_error_handling
+from core.metrics import monitor_event_loop_lag, run_sampler_loop, spawn_background, stop_background
+from core.metrics_http import MetricsMiddleware, metrics_enabled
 from core.model_gateway.pool import close_pinned_clients
 from core.modules import ModuleRegistry, ordered_router_specs, register_modules
 from core.publication import PublicationGateMiddleware
 from core.realtime.routes import MAX_STREAMS_PER_API_PROCESS
 from core.telemetry import install_log_redaction
 from core.tools import ToolRegistry
+from core.tracing import TracingArqRedis, configure_tracing, instrument_engine, instrument_fastapi
+from core.worker_queues import MODEL_QUEUE
 from modules.agents.handoff import register_handoff_tool
 from modules.automations.tools import register_automation_tools
 from modules.chat.routes import MAX_CHAT_STREAMS_PER_API_PROCESS
+from modules.chat.worker import CHAT_QUEUE
 from modules.dashboard.live_map_routes import LiveMapHeadersMiddleware
 from modules.goals.tools import register_goal_tools
 from modules.mcp_widgets.server import RootPath
 from modules.mcp_widgets.server import create_http_app as create_widgets_mcp_app
+from modules.observability.metrics_sampler import build_api_samplers
 from modules.tasks.tools import register_task_tools
 from modules.tools.browser import register_browser_tool
 from modules.tools.builtins import register_builtin_tools
@@ -72,6 +79,7 @@ def _make_lifespan(redis: ArqRedis, engine: AsyncEngine) -> Callable[[FastAPI], 
         thread executor is given an explicit size first (see ``core.async_runtime``).
         """
         configure_default_executor()
+        metrics_tasks = _start_metrics_tasks(_app)
         try:
             async with AsyncExitStack() as stack:
                 try:
@@ -88,6 +96,7 @@ def _make_lifespan(redis: ArqRedis, engine: AsyncEngine) -> Callable[[FastAPI], 
                     if admission is not None:
                         admission.stop()
         finally:
+            await stop_background(metrics_tasks)
             try:
                 await close_pinned_clients()  # pooled model-gateway HTTP clients
                 await redis.aclose()
@@ -95,6 +104,22 @@ def _make_lifespan(redis: ArqRedis, engine: AsyncEngine) -> Callable[[FastAPI], 
                 await engine.dispose()
 
     return lifespan
+
+
+def _start_metrics_tasks(app: FastAPI) -> list[asyncio.Task[None]]:
+    """Start the event-loop-lag monitor and the shared-state sampler loop when ``/metrics`` can be served.
+
+    Returns the tasks so the lifespan can cancel them before closing Redis and the engine. Nothing
+    runs (no Redis or database traffic) when metrics are disabled for this deployment.
+    """
+    app_settings: Settings = app.state.settings
+    if not metrics_enabled(app_settings):
+        return []
+    samplers = build_api_samplers(app.state.redis, app.state.session_factory, (default_queue_name, MODEL_QUEUE, CHAT_QUEUE))
+    return [
+        spawn_background(monitor_event_loop_lag(), "metrics-loop-lag"),
+        spawn_background(run_sampler_loop(samplers), "metrics-samplers"),
+    ]
 
 
 def _new_app(
@@ -135,6 +160,8 @@ def _new_app(
         default_limit=app_settings.max_request_body_bytes,
         upload_limit=app_settings.upload_max_bytes + 1024 * 1024,
     )
+    # Outermost: times every request (including rejections by inner middleware) and serves /metrics.
+    app.add_middleware(MetricsMiddleware, settings=app_settings)
     return app
 
 
@@ -236,8 +263,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         statement_timeout_ms=app_settings.db_statement_timeout_ms,
         idle_tx_timeout_ms=app_settings.db_idle_tx_timeout_ms,
     )
+    tracing_on = configure_tracing(
+        app_settings.otel_exporter_otlp_endpoint, service_name="umwelt-api",
+        sample_ratio=app_settings.otel_traces_sample_ratio,
+    )
+    if tracing_on:
+        instrument_engine(engine)
     # ArqRedis subclasses Redis, so existing callers work and enqueue_job exists for chat/agent dispatch.
-    redis = ArqRedis.from_url(
+    # TracingArqRedis adds the caller's trace context to job kwargs only while tracing is on.
+    redis = TracingArqRedis.from_url(
         app_settings.redis_url,
         decode_responses=True,
         socket_timeout=5,
@@ -246,6 +280,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         max_connections=100,
     )
     app = _new_app(app_settings, csrf_secret, session_factory, redis, _make_lifespan(redis, engine))
+    instrument_fastapi(app)  # no-op unless tracing is on
     app.state.modules = register_modules()
     _include_descriptor_routers(app, app.state.modules)
     tool_registry = ToolRegistry(module_registry=app.state.modules)

@@ -34,3 +34,5 @@ apps/web/public/vendor/genui/
 
 # worktree symlink to the hoisted node_modules (the trailing-slash pattern above does not match a symlink)
 /node_modules
+# Local scrape token for the monitoring profile (docs/observability.md)
+infrastructure/monitoring/metrics_token.local

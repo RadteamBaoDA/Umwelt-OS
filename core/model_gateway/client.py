@@ -23,6 +23,7 @@ from redis.exceptions import RedisError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from core.config import Settings
+from core.metrics import record_breaker_open
 from core.model_gateway import anthropic
 from core.model_gateway.policy import may_send
 from core.model_gateway.pool import pinned_client
@@ -728,6 +729,7 @@ class ModelGateway:
             _LOG.debug("model gateway breaker check failed; proceeding", exc_info=True)
             return
         remaining = pttl if isinstance(pttl, int) and pttl > 0 else _BREAKER_OPEN_MS
+        record_breaker_open(self.protocol.display_name, remaining / 1000)  # bounded label: protocol display name
         raise ModelGatewayUnavailable(remaining / 1000)
 
     async def _breaker_fail(self, open_ms: int = 0) -> None:
@@ -742,6 +744,21 @@ class ModelGateway:
                 str(_BREAKER_WINDOW_MS), str(_BREAKER_THRESHOLD), str(open_ms), str(_BREAKER_OPEN_MS)))
         except RedisError:
             _LOG.warning("model gateway breaker record failed", exc_info=True)
+            return
+        await self._record_breaker_state(open_key)
+
+    async def _record_breaker_state(self, open_key: str) -> None:
+        """Export the open window to metrics right after a failure may have tripped the breaker.
+
+        Without this the gauge only moved on rejected calls, so a freshly opened breaker with no traffic
+        stayed invisible. Best effort: Redis errors and non-integer replies (test doubles) are ignored.
+        """
+        try:
+            pttl = await self.redis.pttl(open_key)
+        except (RedisError, AttributeError):
+            return
+        if isinstance(pttl, int) and not isinstance(pttl, bool) and pttl > 0:
+            record_breaker_open(self.protocol.display_name, pttl / 1000, rejected=False)
 
     async def _breaker_ok(self) -> None:
         """Reset the failure counter after a successful call (plain delete); Redis errors are ignored."""

@@ -1,0 +1,104 @@
+# Alert rules for Umwelt-OS. Metric catalogue and per-alert runbooks: docs/observability.md.
+# Thresholds suit a single-user 2-core/8-GB host; tune `for:` and levels to your own baseline.
+groups:
+  - name: umwelt-api
+    rules:
+      - alert: UmweltApi5xxRateHigh
+        expr: |
+          sum(rate(umwelt_http_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(umwelt_http_requests_total[5m])), 0.001) > 0.05
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: "More than 5% of API requests return 5xx"
+          runbook: "docs/observability.md#umweltapi5xxratehigh"
+
+      - alert: UmweltApiLatencyP95High
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(umwelt_http_request_duration_seconds_bucket{route!~"/api/v1/(chat|realtime).*"}[5m]))) > 2
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "API p95 latency above 2 s (streaming chat and realtime routes excluded)"
+          runbook: "docs/observability.md#umweltapilatencyp95high"
+
+  - name: umwelt-queues
+    rules:
+      - alert: UmweltQueueDepthHigh
+        expr: umwelt_arq_queue_depth > 200
+        for: 15m
+        labels: {severity: ticket}
+        annotations:
+          summary: "arq queue {{ $labels.queue }} holds more than 200 jobs"
+          runbook: "docs/observability.md#umweltqueuedepthhigh"
+
+      - alert: UmweltQueueOldestJobTooOld
+        expr: umwelt_arq_queue_oldest_job_age_seconds > 300
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "Oldest job in {{ $labels.queue }} has waited over 5 minutes"
+          runbook: "docs/observability.md#umweltqueueoldestjobtooold"
+
+      - alert: UmweltOutboxLagHigh
+        expr: umwelt_outbox_oldest_pending_age_seconds > 300
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "Oldest undelivered outbox event is over 5 minutes old"
+          runbook: "docs/observability.md#umweltoutboxlaghigh"
+
+  - name: umwelt-cron
+    rules:
+      - alert: UmweltCronJobFailing
+        expr: increase(umwelt_cron_job_failures_total[15m]) >= 3
+        labels: {severity: ticket}
+        annotations:
+          summary: "Scheduled job {{ $labels.job }} failed 3 or more times in 15 minutes"
+          runbook: "docs/observability.md#umweltcronjobfailing"
+
+      - alert: UmweltCronJobStale
+        # Only jobs that run at least every ~10 minutes on average and have succeeded since the worker started
+        # (the last-success series does not exist before the first success, so hourly/daily jobs never match).
+        expr: |
+          (time() - umwelt_cron_job_last_success_timestamp_seconds > 900)
+            and on(job, instance) (rate(umwelt_cron_job_duration_seconds_count[2h]) > 1 / 600)
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "Scheduled job {{ $labels.job }} has not succeeded for 15 minutes although it normally runs every few minutes"
+          runbook: "docs/observability.md#umweltcronjobstale"
+
+  - name: umwelt-platform
+    rules:
+      - alert: UmweltDbPoolSaturated
+        expr: umwelt_db_pool_checked_out / clamp_min(umwelt_db_pool_max_connections, 1) > 0.9
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "Database pool {{ $labels.pool }} of {{ $labels.process }} is more than 90% checked out"
+          runbook: "docs/observability.md#umweltdbpoolsaturated"
+
+      - alert: UmweltModelBreakerOpen
+        expr: umwelt_model_breaker_open_until_timestamp_seconds > time()
+        for: 2m
+        labels: {severity: ticket}
+        annotations:
+          summary: "Circuit breaker for model provider {{ $labels.provider }} is open"
+          runbook: "docs/observability.md#umweltmodelbreakeropen"
+
+      - alert: UmweltEventLoopLagHigh
+        expr: max_over_time(umwelt_event_loop_lag_seconds[5m]) > 0.5
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "{{ $labels.process }} event loop stalled for more than 0.5 s"
+          runbook: "docs/observability.md#umwelteventlooplaghigh"
+
+      - alert: UmweltScrapeTargetDown
+        expr: up{job=~"umwelt-.*"} == 0
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "Metrics target {{ $labels.instance }} ({{ $labels.process }}) is not scrapable"
+          runbook: "docs/observability.md#umweltscrapetargetdown"

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from datetime import timedelta
 from functools import wraps
@@ -24,10 +25,18 @@ from core.config import Settings
 from core.database import make_session_factory
 from core.heavy_work import HEAVY_JOB_MAX_TRIES
 from core.ids import uuid7
+from core.metrics import (
+    monitor_event_loop_lag,
+    record_cron,
+    spawn_background,
+    start_worker_metrics_server,
+    stop_background,
+)
 from core.model_gateway.pool import close_pinned_clients
 from core.modules import effective_modules, register_modules, scheduled_job_owners
 from core.system.health import ARQ_WORKER_GENERATION_KEY, ARQ_WORKER_HEALTH_KEY
 from core.telemetry import install_log_redaction, instrument_job, set_process_role
+from core.tracing import configure_tracing, instrument_engine, traced_job
 from core.worker_queues import MODEL_QUEUE
 from modules.agents.worker import (
     compose_agent_registry,
@@ -112,9 +121,32 @@ def _gate_module_job(function: Callable[..., Any]) -> Callable[..., Any]:
     return guarded
 
 
+def _observe_cron(function: Callable[..., Any]) -> Callable[..., Any]:
+    """Record each scheduled run's duration, last-success time and failures by job name.
+
+    The wrapper re-raises the job's own exception unchanged and returns its result unchanged; a
+    gated (module unavailable) run counts as a success because it did what the schedule intends.
+    """
+    name = function.__name__
+
+    @wraps(function)
+    async def observed(ctx: dict[str, object], *args: Any, **kwargs: Any) -> Any:
+        """Time the scheduled job and publish its outcome to Prometheus."""
+        started = time.perf_counter()
+        ok = False
+        try:
+            result = await function(ctx, *args, **kwargs)
+            ok = True
+            return result
+        finally:
+            record_cron(name, time.perf_counter() - started, ok)
+
+    return observed
+
+
 def cron(function: Callable[..., Any], *args: Any, **kwargs: Any) -> object:
-    """Attach the fresh owner-module availability check to worker schedules."""
-    return _cron(_gate_module_job(function), *args, **kwargs)
+    """Attach the fresh owner-module availability check and run metrics to worker schedules."""
+    return _cron(_observe_cron(_gate_module_job(function)), *args, **kwargs)
 
 HEAVY_SLOT_JOBS = frozenset({"process_uploaded_file", "process_graph_operation"})
 
@@ -134,6 +166,24 @@ def _arq_options(name: str) -> dict[str, Any]:
 def _silence_cron_logs() -> None:
     """Show arq job lifecycle logs only for warnings/errors (cron jobs fire a dozen times every 5 s)."""
     logging.getLogger("arq.worker").setLevel(logging.WARNING)
+
+
+def _install_observability(ctx: dict[str, object], settings: Settings, engine: AsyncEngine, role: str, port_offset: int) -> None:
+    """Start optional worker metrics and tracing; both are off unless configured and never block startup.
+
+    The metrics HTTP server binds ``METRICS_WORKER_PORT + port_offset`` (worker 0, chat worker 1,
+    model worker 2) so the three worker processes can coexist on one host. The event-loop lag task is
+    stored in ``ctx`` for cancellation in ``shutdown``. Tracing instruments this process's engine.
+    """
+    if settings.metrics_worker_port and start_worker_metrics_server(
+        settings.metrics_worker_port + port_offset, settings.metrics_worker_bind,
+    ):
+        ctx["metrics_tasks"] = [spawn_background(monitor_event_loop_lag(), f"{role}-loop-lag")]
+    if configure_tracing(
+        settings.otel_exporter_otlp_endpoint, service_name=f"umwelt-{role}",
+        sample_ratio=settings.otel_traces_sample_ratio,
+    ):
+        instrument_engine(engine)
 
 
 async def startup(ctx: dict[str, object]) -> None:
@@ -159,6 +209,7 @@ async def startup(ctx: dict[str, object]) -> None:
     )
     ctx["session_factory"] = factory
     ctx["db_engine"] = engine
+    _install_observability(ctx, settings, engine, "worker", 0)
     try:
         registry, admission, runtime = await compose_agent_registry(
             settings, cast(async_sessionmaker[AsyncSession], ctx["session_factory"]),
@@ -193,6 +244,7 @@ async def chat_startup(ctx: dict[str, object]) -> None:
     )
     ctx["session_factory"] = factory
     ctx["db_engine"] = engine
+    _install_observability(ctx, settings, engine, "chat-worker", 1)
 
 
 MODEL_DB_POOL = (4 + 1, 5)  # (pool_size = ModelWorkerSettings.max_jobs + 1, max_overflow); counted as 10 in docs/deployment.md
@@ -215,10 +267,12 @@ async def model_startup(ctx: dict[str, object]) -> None:
     )
     ctx["session_factory"] = factory
     ctx["db_engine"] = engine
+    _install_observability(ctx, settings, engine, "model-worker", 2)
 
 
 async def shutdown(ctx: dict[str, object]) -> None:
-    """Stop new worker MCP admissions, close pooled model-gateway HTTP clients and dispose the database engine when present."""
+    """Stop new worker MCP admissions, stop metric tasks, close pooled model-gateway HTTP clients and dispose the database engine when present."""
+    await stop_background(cast("list[asyncio.Task[None]]", ctx.get("metrics_tasks", [])))
     admission = ctx.get("agent_mcp_admission")
     if admission is not None:
         cast(Any, admission).stop()
@@ -269,7 +323,7 @@ class WorkerSettings:
         instrument_job(process_news_document_ready), purge_expired_chat_runs,
         instrument_job(process_agent_run, run_id_kind="agent_run_id"), instrument_job(process_automation_run),
     ]
-    functions = [_gate_module_job(function) for function in functions]
+    functions = [traced_job(_gate_module_job(function)) for function in functions]
     # Outbox consumers are re-enqueued under the fixed id `ingestion:{event.id}` per continuation; a
     # kept arq result (default 3600 s) would turn those enqueues into no-ops. Nothing reads arq
     # results, and the in-progress job key still dedupes concurrently queued jobs.
@@ -335,7 +389,7 @@ class ModelWorkerSettings:
     functions: ClassVar[list[Any]] = [
         process_entity_extraction_work, process_timeline_extraction_work, translate_content,
     ]
-    functions = [_gate_module_job(instrument_job(function)) for function in functions]
+    functions = [traced_job(_gate_module_job(instrument_job(function))) for function in functions]
     functions = [_arq_func(function, **_arq_options(function.__name__)) if _arq_options(function.__name__)
                  else function for function in functions]
     redis_settings = RedisSettings.from_dsn(Settings().redis_url)
@@ -355,7 +409,7 @@ class ChatWorkerSettings:
     # gated return nor an interrupted/failed job may block the fixed job id, or recovery could not re-enqueue.
     keep_result = 0
     functions: ClassVar[list[Any]] = [
-        _arq_func(_gate_module_job(instrument_job(process_chat_response)), keep_result=0),
+        _arq_func(traced_job(_gate_module_job(instrument_job(process_chat_response))), keep_result=0),
     ]
     cron_jobs: ClassVar[list[object]] = [
         cron(recover_chat_runs, second={0, 15, 30, 45}),

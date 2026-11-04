@@ -143,6 +143,15 @@ class Settings(BaseSettings):
     mcp_allowed_endpoint_cidrs: dict[tuple[str, str, int], tuple[str, ...]] = Field(
         default_factory=dict, validation_alias="MCP_ALLOWED_ENDPOINT_CIDRS", repr=False
     )
+    # Observability (docs/observability.md). /metrics: bearer METRICS_TOKEN when set; with no token it is served only
+    # to private/loopback direct clients outside production and is otherwise disabled (404).
+    metrics_token: SecretStr = Field(default=SecretStr(""), validation_alias="METRICS_TOKEN", repr=False)
+    # Worker /metrics HTTP port (0 = off). The chat worker uses port+1 and the model worker port+2.
+    metrics_worker_port: int = Field(default=0, ge=0, le=65533, validation_alias="METRICS_WORKER_PORT")
+    metrics_worker_bind: str = Field(default="127.0.0.1", validation_alias="METRICS_WORKER_BIND")
+    # OTLP/HTTP traces endpoint (e.g. http://otel-collector:4318); empty = tracing fully off (nothing imported or patched).
+    otel_exporter_otlp_endpoint: str = Field(default="", validation_alias="OTEL_EXPORTER_OTLP_ENDPOINT")
+    otel_traces_sample_ratio: float = Field(default=1.0, ge=0.0, le=1.0, validation_alias="OTEL_TRACES_SAMPLE_RATIO")
     # Widget MCP server (modules/mcp_widgets): off by default; when enabled a bearer token is mandatory.
     mcp_widgets_enabled: bool = Field(default=False, validation_alias="MCP_WIDGETS_ENABLED")
     mcp_widgets_token: SecretStr = Field(default=SecretStr(""), validation_alias="MCP_WIDGETS_TOKEN", repr=False)

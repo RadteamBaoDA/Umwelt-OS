@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from core.metrics import register_engine
+
 
 class Base(DeclarativeBase):
     """Declarative SQLAlchemy metadata base shared by application persistence models."""
@@ -52,6 +54,7 @@ def make_session_factory(
         pool_recycle=1800,
         connect_args={"server_settings": settings},
     )
+    register_engine(engine)  # pool size / checked-out / overflow gauges (read lazily at scrape time)
     return engine, async_sessionmaker(engine, expire_on_commit=False)
 
 
