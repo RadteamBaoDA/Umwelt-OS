@@ -250,7 +250,7 @@ class TestFenceRevalidation:
         mock_fence.generation = 1
         mock_fence.local_only = False
 
-        with patch("modules.chat.retrieval.sources_public.get_source_fence", new=AsyncMock(return_value=mock_fence)):
+        with patch("modules.chat.retrieval.sources_public.get_source_fences", new=AsyncMock(return_value={src_id: mock_fence})):
             is_valid, reasons = await revalidate_context_fence(MagicMock(), context, scope=SCOPE)
             assert is_valid is False
             assert any("inactive" in r for r in reasons)
@@ -269,7 +269,7 @@ class TestFenceRevalidation:
         mock_fence.generation = 2  # newer generation
         mock_fence.local_only = False
 
-        with patch("modules.chat.retrieval.sources_public.get_source_fence", new=AsyncMock(return_value=mock_fence)):
+        with patch("modules.chat.retrieval.sources_public.get_source_fences", new=AsyncMock(return_value={src_id: mock_fence})):
             is_valid, reasons = await revalidate_context_fence(MagicMock(), context, scope=SCOPE)
             assert is_valid is False
             assert any("generation changed" in r for r in reasons)
@@ -288,7 +288,7 @@ class TestFenceRevalidation:
         mock_fence.generation = 1
         mock_fence.local_only = True
 
-        with patch("modules.chat.retrieval.sources_public.get_source_fence", new=AsyncMock(return_value=mock_fence)):
+        with patch("modules.chat.retrieval.sources_public.get_source_fences", new=AsyncMock(return_value={src_id: mock_fence})):
             is_valid, reasons = await revalidate_context_fence(MagicMock(), context, destination="remote", scope=SCOPE)
             assert is_valid is False
             assert any("local_only and cannot be sent" in r for r in reasons)

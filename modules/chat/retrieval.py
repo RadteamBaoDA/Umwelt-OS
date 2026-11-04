@@ -776,16 +776,24 @@ async def _source_fence_reasons(
 ) -> list[str]:
     """Recheck each snapshotted source's existence, status, generation and local-only egress rule.
 
-    Checks are de-duplicated per (source, expected generation, expected local_only) and fences
-    are fetched at most once per source. Read-only; returns rejection reasons in snapshot order.
+    Checks are de-duplicated per (source, expected generation, expected local_only) and every
+    distinct source fence is fetched by ONE batched ``IN`` read (previously one query per source).
+    Read-only; returns rejection reasons in snapshot order.
     """
     reasons: list[str] = []
-    source_fence_cache: dict[UUID, Any] = {}
+    parsed: dict[str, UUID] = {}
+    for source_id_str in context.fence_snapshot:
+        try:
+            parsed[source_id_str] = UUID(source_id_str)
+        except ValueError:
+            continue
+    source_fence_cache: dict[UUID, Any] = (
+        await sources_public.get_source_fences(session, list(parsed.values()), **scope_kw) if parsed else {}
+    )
     seen_fence_checks: set[tuple[UUID, Any, Any]] = set()
     for source_id_str, expected in context.fence_snapshot.items():
-        try:
-            source_id = UUID(source_id_str)
-        except ValueError:
+        source_id = parsed.get(source_id_str)
+        if source_id is None:
             reasons.append(f"Invalid source identifier in fence: {source_id_str}")
             continue
 
@@ -796,11 +804,7 @@ async def _source_fence_reasons(
             continue
         seen_fence_checks.add(check_key)
 
-        if source_id not in source_fence_cache:
-            source_fence_cache[source_id] = await sources_public.get_source_fence(
-                session, source_id, **scope_kw,
-            )
-        fence = source_fence_cache[source_id]
+        fence = source_fence_cache.get(source_id)
         if fence is None:
             reasons.append(f"Source {source_id} no longer exists")
             continue
@@ -826,21 +830,27 @@ async def _evidence_chunk_reasons(
     require_current_versions: bool,
     lock_evidence: bool,
     scope_kw: dict[str, Any],
+    lightweight: bool = False,
 ) -> list[str]:
     """Recheck that every evidence chunk still exists, is active and unchanged.
 
     With ``lock_evidence`` the chunks are read through the owner's key-share locking read so
-    deletion cannot commit before the caller's publication commit. A ``ValueError`` from the
-    owner (stale exact selection) is reported as a reason, not raised.
+    deletion cannot commit before the caller's publication commit; ``lightweight`` swaps that read
+    for the lock-only state projection (same locks, ids/generation/status/local_only, no content or
+    ORM rows). A ``ValueError`` from the owner (stale exact selection) is reported as a reason.
     """
     reasons: list[str] = []
     refs = [(item.document_version_id, item.chunk_id) for item in context.evidence]
     if not refs:
         return reasons
-    read_chunks = (
-        documents_public.lock_chat_evidence_chunks if lock_evidence
-        else documents_public.read_chat_evidence_chunks
-    )
+    read_chunks: Any
+    if lock_evidence:
+        read_chunks = (
+            documents_public.lock_chat_evidence_state if lightweight
+            else documents_public.lock_chat_evidence_chunks
+        )
+    else:
+        read_chunks = documents_public.read_chat_evidence_chunks
     try:
         existing_chunks = await read_chunks(
             session, refs, require_active_source=True,
@@ -874,6 +884,7 @@ async def revalidate_context_fence(
     destination: str = "remote",
     require_current_versions: bool = False,
     lock_evidence: bool = False,
+    lightweight: bool = False,
     scope: Scope,
 ) -> tuple[bool, list[str]]:
     """Revalidate retrieved evidence at egress and publication, optionally serializing deletion.
@@ -892,6 +903,9 @@ async def revalidate_context_fence(
         destination: Target destination ('remote' or 'local').
         lock_evidence: Hold Source/Document/version/chunk key-share locks through the caller's
             publication commit so deletion cannot commit between the current check and publication.
+        lightweight: Per-flush mode. Skips the separate selection-fence pass (the locking read
+            re-validates exact selections itself) and reads only ids/generation/status/local_only of
+            the locked chunks instead of full content rows. Source fences are always one batched read.
 
     Returns:
         Tuple of (is_valid: bool, list of rejection reason strings).
@@ -899,7 +913,7 @@ async def revalidate_context_fence(
     reasons: list[str] = []
     scope_kw = await _scope_kwargs(session, scope)
 
-    if context.selection_fences:
+    if context.selection_fences and not (lightweight and lock_evidence):
         selection_valid = await documents_public.validate_gadget_document_selection_fences(
             session, tuple(context.selection_fences), **scope_kw,
         )
@@ -912,7 +926,7 @@ async def revalidate_context_fence(
     # 2. Recheck document chunks existence
     reasons.extend(await _evidence_chunk_reasons(
         session, context, destination=destination, require_current_versions=require_current_versions,
-        lock_evidence=lock_evidence, scope_kw=scope_kw,
+        lock_evidence=lock_evidence, scope_kw=scope_kw, lightweight=lightweight,
     ))
 
     return len(reasons) == 0, reasons

@@ -102,7 +102,7 @@ def seams(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(agents_public, "_find_agent_scope_match", lambda *_a: state["match"])
     monkeypatch.setattr(agents_public, "_scrub_agent_scope_payloads", lambda *_a: state["unresolved"])
 
-    async def privacy(_session: Any) -> None:
+    async def privacy(_session: Any, _workspace_id: Any = None, **_kw: Any) -> None:
         """Count privacy lock acquisitions."""
         state["privacy"] += 1
 

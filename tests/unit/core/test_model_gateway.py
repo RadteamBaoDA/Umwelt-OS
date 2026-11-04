@@ -30,6 +30,7 @@ from core.model_gateway.client import (
     PrivacyPolicyDenied,
 )
 from core.model_gateway.policy import may_send
+from core.model_gateway.pool import close_pinned_clients
 from core.model_gateway.schemas import (
     ModelMapping,
     RequestPolicy,
@@ -167,14 +168,28 @@ class TestModelGatewaySlotLeasing:
         assert redis.eval.await_count == 2  # acquire + release
 
     @pytest.mark.asyncio
-    async def test_slot_acquisition_failure_raises_model_gateway_error(self) -> None:
-        """Verify _slot raises ModelGatewayError when Redis fails."""
+    async def test_redis_failure_degrades_to_a_per_process_slot(self) -> None:
+        """A Redis error no longer fails the call: the lease falls back to the per-process semaphore."""
         redis = AsyncMock()
         redis.eval.side_effect = RedisError("Redis unavailable")
-
         gateway = _gateway(redis, destination_id="openai", timeout_seconds=0.1)
 
-        with pytest.raises(ModelGatewayError, match="Model capacity is unavailable"):
+        with patch("core.model_gateway.client._SLOTS", 1), patch("core.model_gateway.client._LOCAL_SLOTS", {}):
+            async with gateway._slot():
+                # The per-process limit still holds: a second concurrent lease cannot get the only slot.
+                with patch("core.model_gateway.client._LEASE_WAIT_SECONDS", 0.1), \
+                     pytest.raises(ModelGatewayError, match="Model capacity is unavailable"):
+                    async with gateway._slot():
+                        raise AssertionError("must not acquire")
+            async with gateway._slot():  # the slot was released on exit
+                pass
+
+    @pytest.mark.asyncio
+    async def test_persistent_connection_errors_degrade_after_the_probe_window(self) -> None:
+        redis = AsyncMock()
+        redis.eval.side_effect = RedisConnectionError("down")
+        gateway = _gateway(redis, destination_id="openai", timeout_seconds=1.0)
+        with patch("core.model_gateway.client._REDIS_PROBE_SECONDS", 0.2), patch("core.model_gateway.client._LOCAL_SLOTS", {}):
             async with gateway._slot():
                 pass
 
@@ -630,6 +645,7 @@ class _SlowModelServer:
 
     async def __aexit__(self, *_: object) -> None:
         assert self.server is not None
+        await close_pinned_clients()  # pooled keep-alive connections would otherwise hold wait_closed() open
         self.server.close()
         await self.server.wait_closed()
 

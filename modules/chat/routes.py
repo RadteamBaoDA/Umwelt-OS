@@ -30,7 +30,7 @@ from core.workspaces.dependencies import (
     require_default_workspace_write,
 )
 from core.workspaces.schemas import WorkspaceContext
-from modules.chat import conversation_service
+from modules.chat import conversation_service, signals
 from modules.chat import public as chat_public
 from modules.chat.models import (
     Conversation,
@@ -536,7 +536,7 @@ async def create_conversation(
     """
     title = (payload.title or "").strip() or "New conversation"
     scope = await owner_default_scope(session, _owner.owner_id)
-    await lock_export_privacy(session)
+    await lock_export_privacy(session, scope.workspace_id, shared=True)
     privacy = await read_export_privacy(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled())
     is_ephemeral = not privacy.store_conversation_history
     conv = Conversation(
@@ -787,7 +787,7 @@ async def send_message(
         HTTPException: 404 if the conversation is missing; 409 if another response is active.
     """
     scope = await owner_default_scope(session, _owner.owner_id)
-    await lock_export_privacy(session)
+    await lock_export_privacy(session, scope.workspace_id, shared=True)
     conv = await _lock_conversation(session, conversation_id, scope)
     _reject_expired_conversation(conv)
 
@@ -1031,7 +1031,7 @@ async def mutate_message(
             conflicts, or 422 for action-role/content mismatches.
     """
     scope = await owner_default_scope(session, _owner.owner_id)
-    await lock_export_privacy(session)
+    await lock_export_privacy(session, scope.workspace_id, shared=True)
     conversation = await _lock_conversation(session, conversation_id, scope)
     _reject_expired_conversation(conversation)
     normalized_content = payload.content.strip() if payload.content is not None else None
@@ -1220,7 +1220,7 @@ async def _locked_poll(
             return
         # Current-evidence output follows Memory privacy before Chat parent/run locks
         # for both active and terminal transcripts.
-        await lock_export_privacy(session)
+        await lock_export_privacy(session, run_hint.workspace_id, shared=True)
         parent = await session.scalar(select(Conversation).where(
             Conversation.id == run_hint.conversation_id,
         ).with_for_update().execution_options(populate_existing=True))
@@ -1266,6 +1266,7 @@ async def _sse_event_stream(
     start_seq: int,
     started: asyncio.Event,
     semaphore: asyncio.Semaphore,
+    redis: Any = None,
 ) -> AsyncGenerator[str, None]:
     """Publish batches of locked, revalidated events; wait for slow clients with no lock held.
 
@@ -1279,51 +1280,84 @@ async def _sse_event_stream(
     bytes reach `transport.write` while every lock is held. A purge/redaction/revocation therefore
     commits entirely before this read (and is seen) or entirely after the write (and the next poll
     sees it). The stream permit is released when the generator ends for any reason.
+
+    Idle waits: when ``redis`` is given the stream subscribes to ``chat:response:<id>`` BEFORE the first
+    poll and waits on that wake-up (published by the worker after each commit), polling only every
+    ``STREAM_SIGNAL_FALLBACK_INTERVAL`` as a safety net; without a subscription it keeps the original
+    0.1-0.5 s backoff. The signal only decides WHEN to poll; the locked read path, ``seq`` cursor,
+    ordering, dedup and resume semantics are untouched.
     """
     started.set()
     try:
-        current_seq = start_seq - 1
-        loop = asyncio.get_running_loop()
-        last_heartbeat = loop.time()
-        delay = STREAM_POLL_INTERVAL
-
-        while not await request.is_disconnected():
-            yield ""  # drain point: no transaction or lock is open here
-            state = _PollState(current_seq=current_seq)
-            try:
-                async with aclosing(_locked_poll(factory, response_id, token_hash, state)) as chunks:
-                    async for chunk in chunks:
-                        yield chunk
-            except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
-                logger.warning("Error querying stream events: %s", type(exc).__name__)
-                yield format_sse_event("status", {"status": "unavailable"})
-                return
-            current_seq = state.current_seq
-            if state.stop:
-                return
-            if state.auth_expired:
-                yield format_sse_event("status", {"status": "auth_expired"})
-                return
-            if state.batch_sent:
-                last_heartbeat = loop.time()
-                delay = STREAM_POLL_INTERVAL
-                if state.batch_full:
-                    continue  # more is queued: poll again without sleeping
-                # A partial batch drained the backlog; the worker flushes at most every STREAM_FLUSH_SECONDS (0.4 s).
-                await asyncio.sleep(delay)
-                continue
-            if state.terminal_without_event:
-                return
-
-            now = loop.time()
-            if now - last_heartbeat >= HEARTBEAT_INTERVAL:
-                yield ": heartbeat\n\n"
-                last_heartbeat = now
-
-            await asyncio.sleep(delay)
-            delay = min(delay * 2, STREAM_POLL_MAX_INTERVAL)
+        async with signals.subscribed(redis, response_id) as signal, aclosing(
+            _poll_loop(request, factory, response_id, token_hash, start_seq, signal),
+        ) as frames:
+            async for frame in frames:
+                yield frame
     finally:
         semaphore.release()
+
+
+async def _idle_wait(signal: signals.ResponseSignalSubscription, delay: float) -> None:
+    """Pause between polls: wait on the Redis wake-up (slow fallback poll) or, unsubscribed, sleep ``delay``.
+
+    Holds no transaction or lock. A wake-up or the fallback timeout both just trigger the next locked poll.
+    """
+    if signal.active:
+        await signal.wait(signals.STREAM_SIGNAL_FALLBACK_INTERVAL)
+    else:
+        await asyncio.sleep(delay)
+
+
+async def _poll_loop(
+    request: Request,
+    factory: async_sessionmaker[AsyncSession],
+    response_id: UUID,
+    token_hash: str | None,
+    start_seq: int,
+    signal: signals.ResponseSignalSubscription,
+) -> AsyncGenerator[str, None]:
+    """Run the poll/publish loop of one SSE connection; sleeps are signal-aware (see ``_sse_event_stream``)."""
+    current_seq = start_seq - 1
+    loop = asyncio.get_running_loop()
+    last_heartbeat = loop.time()
+    delay = STREAM_POLL_INTERVAL
+
+    while not await request.is_disconnected():
+        yield ""  # drain point: no transaction or lock is open here
+        state = _PollState(current_seq=current_seq)
+        try:
+            async with aclosing(_locked_poll(factory, response_id, token_hash, state)) as chunks:
+                async for chunk in chunks:
+                    yield chunk
+        except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
+            logger.warning("Error querying stream events: %s", type(exc).__name__)
+            yield format_sse_event("status", {"status": "unavailable"})
+            return
+        current_seq = state.current_seq
+        if state.stop:
+            return
+        if state.auth_expired:
+            yield format_sse_event("status", {"status": "auth_expired"})
+            return
+        if state.batch_sent:
+            last_heartbeat = loop.time()
+            delay = STREAM_POLL_INTERVAL
+            if state.batch_full:
+                continue  # more is queued: poll again without sleeping
+            # A partial batch drained the backlog; the worker flushes at most every STREAM_FLUSH_SECONDS (0.4 s).
+            await _idle_wait(signal, delay)
+            continue
+        if state.terminal_without_event:
+            return
+
+        now = loop.time()
+        if now - last_heartbeat >= HEARTBEAT_INTERVAL:
+            yield ": heartbeat\n\n"
+            last_heartbeat = now
+
+        await _idle_wait(signal, delay)
+        delay = min(delay * 2, STREAM_POLL_MAX_INTERVAL)
 
 
 @router.get("/api/v1/responses/{response_id}/events", dependencies=[Depends(require_default_workspace_read)])
@@ -1370,7 +1404,10 @@ async def get_response_events(
     started = asyncio.Event()
 
     return _PermitResponse(
-        _sse_event_stream(request, factory, response_id, token_hash, start_seq, started, semaphore),
+        _sse_event_stream(
+            request, factory, response_id, token_hash, start_seq, started, semaphore,
+            getattr(request.app.state, "redis", None),
+        ),
         started,
         semaphore,
         media_type="text/event-stream",
@@ -1426,7 +1463,7 @@ async def cancel_response(
 
     # Memory -> parent -> run is the same lock order as worker publications. The response row
     # serializes status and terminal sequence allocation against a concurrent delta/redaction.
-    await lock_export_privacy(session)
+    await lock_export_privacy(session, scope.workspace_id, shared=True)
     conversation = await session.scalar(select(Conversation).where(
         Conversation.id == run_hint.conversation_id,
     ).with_for_update().execution_options(populate_existing=True))
@@ -1453,7 +1490,7 @@ async def cancel_response(
             # under the same public Memory lock in a fresh Chat transaction before returning.
             await session.rollback()
             async with request.app.state.session_factory() as redaction_session:
-                await lock_export_privacy(redaction_session)
+                await lock_export_privacy(redaction_session, scope.workspace_id, shared=True)
                 current_hint = await redaction_session.scalar(select(ResponseRun).where(
                     ResponseRun.id == response_id,
                 ))
@@ -1470,6 +1507,8 @@ async def cancel_response(
     else:
         await _cancel_response_locked(session, run)
         await session.commit()
+    # Wake streams after the terminal event is committed (a spurious wake-up is harmless).
+    await signals.publish_response_signal(redis, response_id)
     return CancelResponse(response_id=run.id, status="cancelled")
 
 

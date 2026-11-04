@@ -37,7 +37,7 @@ from core.ids import uuid7
 from modules.chat.generative_ui.tool_specs import INPUT_DECLINE, RequestUserInputArgs
 from modules.chat.models import Conversation, ResponseRun, StreamEvent
 from modules.chat.stream import make_event_id
-from modules.memory.public import lock_export_privacy
+from modules.memory.public import lock_export_privacy, lock_export_privacy_workspaces
 
 logger = logging.getLogger(__name__)
 
@@ -244,12 +244,16 @@ async def expire_stale_requests(session: AsyncSession, *, now: datetime | None =
     with submit/cancel because each run is re-checked under its row lock.
     """
     now = now or datetime.now(UTC)
-    ids = list(await session.scalars(
-        select(ResponseRun.id).where(ResponseRun.status == "awaiting_input").order_by(ResponseRun.updated_at).limit(limit)
-    ))
-    if not ids:
+    candidates = (await session.execute(
+        select(ResponseRun.id, ResponseRun.workspace_id).where(ResponseRun.status == "awaiting_input")
+        .order_by(ResponseRun.updated_at).limit(limit)
+    )).all()
+    if not candidates:
         return 0
-    await lock_export_privacy(session)
+    ids = [run_id for run_id, _workspace_id in candidates]
+    # Reader: the sweep fails/expires parked runs under consent; it spans workspaces, so every
+    # affected workspace key is taken in sorted order (deadlock-free) before any run row lock.
+    await lock_export_privacy_workspaces(session, {workspace_id for _run_id, workspace_id in candidates}, shared=True)
     changed = 0
     for run_id in ids:
         run = await _lock_run(session, run_id)
@@ -302,7 +306,7 @@ async def await_user_input(
             if run.status != "awaiting_input":  # cancelled/failed/completed while parked
                 return InputOutcome("cancelled", json.dumps({"status": "cancelled"}))
             if _expired(request, now()):
-                await lock_export_privacy(session)
+                await lock_export_privacy(session, run.workspace_id, shared=True)
                 locked = await _lock_run(session, response_id)
                 if locked is not None and await expire_locked(session, locked):
                     await session.commit()

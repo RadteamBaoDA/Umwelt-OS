@@ -819,6 +819,27 @@ async def get_source_fence(session: AsyncSession, source_id: UUID, *, scope: Sco
     return source_fence_of(source)
 
 
+async def get_source_fences(
+    session: AsyncSession, source_ids: Sequence[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+) -> dict[UUID, SourceFence]:
+    """Read detached eligibility fences for many Sources with one admission and one ``IN`` query.
+
+    Batch form of ``get_source_fence`` (same projection, same workspace/internal-generation scoping,
+    no row lock, ``populate_existing``). Ids that are absent or outside the scope are simply missing
+    from the result, exactly where the single read returns ``None``. At most 500 distinct ids.
+    """
+    unique = list(dict.fromkeys(source_ids))
+    if len(unique) > 500:
+        raise ValueError("At most 500 source fences may be read at once")
+    await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if not unique:
+        return {}
+    rows = await session.scalars(select(Source).where(
+        Source.id.in_(unique), *_source_scope(scope),
+    ).execution_options(populate_existing=True))
+    return {row.id: source_fence_of(row) for row in rows}
+
+
 async def github_retirement_peer_projection_in_uow(
     session: AsyncSession,
     source_id: UUID,

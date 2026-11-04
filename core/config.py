@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     parser_timeout_seconds: int = Field(default=120, gt=0, le=3600)
     # How long a chat run parks on `request_user_input`; modules/chat/user_input.py clamps it to the worker job budget.
     chat_input_request_ttl_seconds: int = Field(default=900, ge=30, le=3600)
+    # Token flushes always re-lock the cited evidence (lock-only projection) but run the full revalidation
+    # (separate exact-selection pass + content-row reads) at most this often; 0 = every flush.
+    chat_flush_full_revalidate_seconds: float = Field(
+        default=2.0, ge=0.0, le=30.0, validation_alias="CHAT_FLUSH_FULL_REVALIDATE_SECONDS",
+    )
     docx_expanded_max_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
     pdf_page_max: int = Field(default=500, gt=0)
     # 10 MiB of text chunks in ~1 s and ~0.3 GiB; the 100 MiB docx bound would need ~3 GiB on an 8 GiB host.

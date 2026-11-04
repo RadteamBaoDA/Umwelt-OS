@@ -24,6 +24,7 @@ from core.config import Settings
 from core.database import make_session_factory
 from core.heavy_work import HEAVY_JOB_MAX_TRIES
 from core.ids import uuid7
+from core.model_gateway.pool import close_pinned_clients
 from core.modules import effective_modules, register_modules, scheduled_job_owners
 from core.system.health import ARQ_WORKER_GENERATION_KEY, ARQ_WORKER_HEALTH_KEY
 from core.telemetry import install_log_redaction, instrument_job, set_process_role
@@ -217,13 +218,16 @@ async def model_startup(ctx: dict[str, object]) -> None:
 
 
 async def shutdown(ctx: dict[str, object]) -> None:
-    """Stop new worker MCP admissions and dispose the database engine when present."""
+    """Stop new worker MCP admissions, close pooled model-gateway HTTP clients and dispose the database engine when present."""
     admission = ctx.get("agent_mcp_admission")
     if admission is not None:
         cast(Any, admission).stop()
-    engine = ctx.get("db_engine")
-    if engine is not None:
-        await cast(AsyncEngine, engine).dispose()
+    try:
+        await close_pinned_clients()  # pooled model-gateway HTTP clients
+    finally:
+        engine = ctx.get("db_engine")
+        if engine is not None:
+            await cast(AsyncEngine, engine).dispose()
 
 
 async def purge_expired_sessions(ctx: dict[str, object]) -> int:

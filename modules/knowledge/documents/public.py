@@ -8,7 +8,9 @@ and attribute access via ``modules.knowledge.documents.public`` keep working unc
 from core.workspaces import public as workspaces
 from modules.knowledge.documents._chat_evidence import (
     ChatEvidenceChunk,
+    ChatEvidenceLockState,
     lock_chat_evidence_chunks,
+    lock_chat_evidence_state,
     read_chat_evidence_chunks,
 )
 from modules.knowledge.documents._chunks import (
@@ -283,6 +285,7 @@ __all__ = [
     "_CLEANUP_LIMIT",
     "_INLINE_HASH_MAX_CHARS",
     "ChatEvidenceChunk",
+    "ChatEvidenceLockState",
     "CitationTargetRead",
     "ContentUpdate",
     "DocumentCleanupEvidenceIdentity",
@@ -435,6 +438,7 @@ __all__ = [
     "list_tool_documents",
     "list_versions",
     "lock_chat_evidence_chunks",
+    "lock_chat_evidence_state",
     "lock_document_for_extraction",
     "lock_document_ids",
     "lock_raw_uri_identity",

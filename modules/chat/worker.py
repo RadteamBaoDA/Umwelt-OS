@@ -41,7 +41,7 @@ from core.model_gateway.transport import (
 from core.model_gateway.wire import wire_protocol_for
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
-from modules.chat import media
+from modules.chat import media, signals
 from modules.chat import web_search as web
 from modules.chat.citations import (
     extract_supporting_quote,
@@ -270,9 +270,10 @@ async def is_history_storage_enabled(
     Side effects:
         Holds Memory's owner privacy advisory lock until the caller commits or rolls back.
     """
-    await lock_export_privacy(session)
+    resolved = scope or await owner_default_scope(session, owner_id)
+    await lock_export_privacy(session, resolved.workspace_id, shared=True)
     return (await read_export_privacy(
-        session, scope=scope or await owner_default_scope(session, owner_id), multi_workspace_enabled=multi_workspace_enabled(),
+        session, scope=resolved, multi_workspace_enabled=multi_workspace_enabled(),
     )).store_conversation_history
 
 
@@ -290,9 +291,9 @@ async def _require_privacy_fence(session: AsyncSession, expected: object, *, sco
     Raises:
         PrivacyFenceChanged: The stamp is missing, malformed, changed, or unavailable.
     """
-    await lock_export_privacy(session)
     if scope is None:
         raise PrivacyFenceChanged("History consent is unavailable")
+    await lock_export_privacy(session, scope.workspace_id, shared=True)
     try:
         current = await read_export_privacy(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled())
     except Exception as exc:
@@ -797,16 +798,17 @@ async def _purge_expired_conversations(session: AsyncSession, page_size: int) ->
 
     # Parent expiry owns the entire transcript and its links. Delete through Chat's public
     # contract so activity payloads are purged before the FK cascade removes their links.
-    candidate_conversations = list((await session.scalars(
-        select(Conversation.id).where(
+    candidate_conversations = list((await session.execute(
+        select(Conversation.id, Conversation.workspace_id).where(
             Conversation.ephemeral.is_(True),
             Conversation.expires_at.is_not(None),
             Conversation.expires_at <= datetime.now(UTC),
         ).order_by(Conversation.id).limit(page_size)
     )).all())
-    for conversation_id in candidate_conversations:
-        await session.commit()  # end the previous item's unit: releases the global privacy lock between items
-        await lock_export_privacy(session)
+    for conversation_id, workspace_id in candidate_conversations:
+        await session.commit()  # end the previous item's unit: releases the workspace privacy lock between items
+        # Eraser (writer): exclusive so no consent-gated publication races the purge.
+        await lock_export_privacy(session, workspace_id)
         conversation = await session.scalar(
             select(Conversation).where(Conversation.id == conversation_id)
             .with_for_update().execution_options(populate_existing=True)
@@ -850,7 +852,7 @@ async def _purge_expired_activity_links(session: AsyncSession, page_size: int) -
     # Expired activity links can belong to an otherwise retained conversation. Retain the
     # Agent run identity and effect rows while removing only payloads through the Agent API.
     candidate_links = list((await session.execute(
-        select(AgentActivityLink.id, AgentActivityLink.conversation_id)
+        select(AgentActivityLink.id, AgentActivityLink.conversation_id, Conversation.workspace_id)
         .join(Conversation, Conversation.id == AgentActivityLink.conversation_id)
         .where(
             AgentActivityLink.ephemeral.is_(True),
@@ -858,9 +860,9 @@ async def _purge_expired_activity_links(session: AsyncSession, page_size: int) -
             AgentActivityLink.expires_at <= datetime.now(UTC),
         ).order_by(AgentActivityLink.id).limit(page_size)
     )).all())
-    for link_id, conversation_id in candidate_links:
-        await session.commit()  # end the previous item's unit: releases the global privacy lock between items
-        await lock_export_privacy(session)
+    for link_id, conversation_id, workspace_id in candidate_links:
+        await session.commit()  # end the previous item's unit: releases the workspace privacy lock between items
+        await lock_export_privacy(session, workspace_id)  # eraser (writer): exclusive
         conversation = await session.scalar(
             select(Conversation).where(Conversation.id == conversation_id)
             .with_for_update().execution_options(populate_existing=True)
@@ -924,7 +926,7 @@ async def _purge_expired_runs(session: AsyncSession, page_size: int) -> int:
     # A response can expire before its persistent conversation. Remove that run, its stream
     # events, and its idempotency receipt only; the parent and transcript messages remain.
     candidate_runs = list((await session.execute(
-        select(ResponseRun.id, ResponseRun.conversation_id)
+        select(ResponseRun.id, ResponseRun.conversation_id, ResponseRun.workspace_id)
         .join(Conversation, Conversation.id == ResponseRun.conversation_id)
         .where(
             ResponseRun.ephemeral.is_(True),
@@ -937,9 +939,9 @@ async def _purge_expired_runs(session: AsyncSession, page_size: int) -> int:
             ),
         ).order_by(ResponseRun.id).limit(page_size)
     )).all())
-    for run_id, conversation_id in candidate_runs:
-        await session.commit()  # end the previous item's unit: releases the global privacy lock between items
-        await lock_export_privacy(session)
+    for run_id, conversation_id, workspace_id in candidate_runs:
+        await session.commit()  # end the previous item's unit: releases the workspace privacy lock between items
+        await lock_export_privacy(session, workspace_id)  # eraser (writer): exclusive
         conversation = await session.scalar(
             select(Conversation).where(Conversation.id == conversation_id)
             .with_for_update().execution_options(populate_existing=True)
@@ -1065,6 +1067,8 @@ class _RunCtx:
     access_fence: AccessFence | None = None
     answer_context: AnswerContext | None = None
     selected_only: bool = False
+    # Event-loop time of the last full evidence revalidation (None: none yet). Drives the flush budget.
+    last_full_revalidation: float | None = None
 
     @property
     def scope(self) -> InternalJobScope:
@@ -1174,7 +1178,7 @@ def _parse_sse_chunk(payload: str) -> _SseChunk | None:
 
 
 async def _fence_live_run(
-    session: AsyncSession, c: _RunCtx, *, check_evidence: bool,
+    session: AsyncSession, c: _RunCtx, *, check_evidence: bool, budgeted: bool = False,
 ) -> tuple[_FenceOutcome, ResponseRun]:
     """Lock the live run (privacy -> conversation -> run), honour Stop, optionally revalidate evidence.
 
@@ -1182,7 +1186,8 @@ async def _fence_live_run(
     drifted evidence (``check_evidence`` and retrieved evidence present) persists the redacted terminal state
     and commits. In both cases the outcome is not ``LIVE`` and the caller must stop publishing. On ``LIVE``
     the caller's transaction still holds every lock. Raises PrivacyFenceChanged / ResponseNoLongerActive from
-    ``_lock_live_response``.
+    ``_lock_live_response``. ``budgeted`` (token flushes only) lets ``_evidence_still_valid`` use the
+    lightweight lock-only revalidation between full ones.
     """
     _, live_run = await _lock_live_response(
         session, c.response_id, c.conversation_id, c.privacy_fence, scope=c.job_scope, access_fence=c.access_fence,
@@ -1191,23 +1196,45 @@ async def _fence_live_run(
         await _cancel_response_locked(session, live_run, c.seq)
         await session.commit()
         return _FenceOutcome.CANCELLED, live_run
-    if check_evidence and not await _evidence_still_valid(session, c, live_run):
+    if check_evidence and not await _evidence_still_valid(session, c, live_run, budgeted=budgeted):
         return _FenceOutcome.REDACTED, live_run
     return _FenceOutcome.LIVE, live_run
 
 
-async def _evidence_still_valid(session: AsyncSession, c: _RunCtx, live_run: ResponseRun) -> bool:
+def _full_revalidation_due(c: _RunCtx, now: float) -> bool:
+    """Whether this flush must run the full evidence revalidation (first one, or the budget elapsed).
+
+    ``Settings.chat_flush_full_revalidate_seconds`` bounds how long the heavy checks (separate
+    exact-selection pass and content-row reads) may be skipped; 0 disables the budget (always full).
+    The lightweight path still locks and compares the cited chunks and source state on every flush,
+    so a consent/privacy revocation, source deactivation, generation bump, local-only flip or deletion
+    stops publication on the very next flush; only the extra heavy checks wait at most this budget.
+    """
+    interval = float(getattr(c.settings, "chat_flush_full_revalidate_seconds", 0.0) or 0.0)
+    return interval <= 0.0 or c.last_full_revalidation is None or now - c.last_full_revalidation >= interval
+
+
+async def _evidence_still_valid(
+    session: AsyncSession, c: _RunCtx, live_run: ResponseRun, *, budgeted: bool = False,
+) -> bool:
     """Revalidate (and lock) every cited evidence reference; on drift redact the run and commit.
 
     Returns True when there is no evidence or every reference is current. Must run inside the live-run fence.
+    With ``budgeted`` (token flushes) the full revalidation runs at most every
+    ``chat_flush_full_revalidate_seconds``; in between a lightweight pass takes the same locks and compares
+    the same generation/status/local-only/existence state without reading content rows.
     """
     answer_context = c.answer_context
     if answer_context is None or not answer_context.evidence:
         return True
+    now = asyncio.get_running_loop().time()
+    lightweight = budgeted and not _full_revalidation_due(c, now)
     fences_ok, _fence_reasons = await revalidate_context_fence(
         session, answer_context, destination="remote",
-        require_current_versions=c.selected_only, lock_evidence=True, scope=c.scope,
+        require_current_versions=c.selected_only, lock_evidence=True, lightweight=lightweight, scope=c.scope,
     )
+    if fences_ok and not lightweight:
+        c.last_full_revalidation = now
     if fences_ok:
         return True
     await _privacy_cancel_locked(session, live_run, c.seq)
@@ -1217,7 +1244,7 @@ async def _evidence_still_valid(session: AsyncSession, c: _RunCtx, live_run: Res
 
 @contextlib.asynccontextmanager
 async def _live_run_fence(
-    c: _RunCtx, *, check_evidence: bool,
+    c: _RunCtx, *, check_evidence: bool, budgeted: bool = False,
 ) -> AsyncIterator[tuple[AsyncSession, _FenceOutcome, ResponseRun]]:
     """Open a session and yield it with the live-run fence outcome (see ``_fence_live_run``).
 
@@ -1225,7 +1252,7 @@ async def _live_run_fence(
     inside the block only when the outcome is ``LIVE``.
     """
     async with c.session_factory() as session:
-        outcome, live_run = await _fence_live_run(session, c, check_evidence=check_evidence)
+        outcome, live_run = await _fence_live_run(session, c, check_evidence=check_evidence, budgeted=budgeted)
         yield session, outcome, live_run
 
 
@@ -1720,7 +1747,7 @@ async def _flush_pending(c: _RunCtx, st: _StreamState) -> bool:
     """
     if not st.pending and not st.pending_reasoning and not st.pending_ui:
         return True
-    async with _live_run_fence(c, check_evidence=True) as (session, outcome, _run):
+    async with _live_run_fence(c, check_evidence=True, budgeted=True) as (session, outcome, _run):
         if outcome is not _FenceOutcome.LIVE:
             st.drop_pending()
             return False
@@ -2536,6 +2563,23 @@ async def run_response_generation(
     settings: Settings,
     redis: Redis,
 ) -> None:
+    """Generate a grounded response (see ``_run_response_generation``) and wake its SSE streams per commit.
+
+    While the run executes, every commit that inserted ``StreamEvent`` rows publishes a best-effort
+    ``chat:response:<id>`` Redis message AFTER the commit (``modules.chat.signals``). The message only
+    shortens SSE latency; the stream still reads events from the database in ``seq`` order and polls
+    slowly as a fallback, so a lost message changes nothing but timing.
+    """
+    with signals.signal_run_commits(response_id, redis):
+        await _run_response_generation(response_id, session_factory, settings, redis)
+
+
+async def _run_response_generation(
+    response_id: UUID,
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    redis: Redis,
+) -> None:
     """Generate a grounded response while current evidence is locked at every external boundary.
 
     Manages the lifecycle of a single ResponseRun: transitions status from pending to streaming,
@@ -2620,10 +2664,12 @@ async def _release_on_shutdown(
     abandoned run.
     """
     async with session_factory() as session:
-        await lock_export_privacy(session)
         run_hint = await session.scalar(select(ResponseRun).where(ResponseRun.id == response_id))
         if run_hint is None:
             return
+        # Reader: terminal publication only needs a stable consent read (shared, per workspace).
+        # The workspace is immutable on the run, so this lock-free hint read may precede the lock.
+        await lock_export_privacy(session, run_hint.workspace_id, shared=True)
         await session.scalar(select(Conversation).where(
             Conversation.id == run_hint.conversation_id,
         ).with_for_update().execution_options(populate_existing=True))
@@ -2846,10 +2892,12 @@ async def _mark_cancelled(
     """
     privacy_read_failed = False
     async with session_factory() as session:
-        await lock_export_privacy(session)
         run_hint = await session.scalar(select(ResponseRun).where(ResponseRun.id == response_id))
         if run_hint is None:
             return
+        # Reader: terminal publication only needs a stable consent read (shared, per workspace).
+        # The workspace is immutable on the run, so this lock-free hint read may precede the lock.
+        await lock_export_privacy(session, run_hint.workspace_id, shared=True)
         await session.scalar(select(Conversation).where(
             Conversation.id == run_hint.conversation_id,
         ).with_for_update().execution_options(populate_existing=True))
@@ -2879,10 +2927,12 @@ async def _mark_privacy_cancelled(
 ) -> None:
     """Take the canonical lock order and durably redact a response after fence failure."""
     async with session_factory() as session:
-        await lock_export_privacy(session)
         run_hint = await session.scalar(select(ResponseRun).where(ResponseRun.id == response_id))
         if run_hint is None:
             return
+        # Reader: terminal publication only needs a stable consent read (shared, per workspace).
+        # The workspace is immutable on the run, so this lock-free hint read may precede the lock.
+        await lock_export_privacy(session, run_hint.workspace_id, shared=True)
         await session.scalar(select(Conversation).where(
             Conversation.id == run_hint.conversation_id,
         ).with_for_update().execution_options(populate_existing=True))
@@ -2911,10 +2961,12 @@ async def _mark_failed(
     """
     privacy_read_failed = False
     async with session_factory() as session:
-        await lock_export_privacy(session)
         run_hint = await session.scalar(select(ResponseRun).where(ResponseRun.id == response_id))
         if run_hint is None:
             return
+        # Reader: terminal publication only needs a stable consent read (shared, per workspace).
+        # The workspace is immutable on the run, so this lock-free hint read may precede the lock.
+        await lock_export_privacy(session, run_hint.workspace_id, shared=True)
         await session.scalar(select(Conversation).where(
             Conversation.id == run_hint.conversation_id,
         ).with_for_update().execution_options(populate_existing=True))
@@ -2968,10 +3020,12 @@ async def process_chat_response(ctx: dict[str, object], response_id: str) -> Non
 async def _fail_expired_pending(response_id: UUID, session_factory: async_sessionmaker[AsyncSession]) -> None:
     """Fail a run that never started (nothing published); privacy -> conversation -> run lock order."""
     async with session_factory() as session:
-        await lock_export_privacy(session)
         hint = await session.scalar(select(ResponseRun).where(ResponseRun.id == response_id))
         if hint is None:
             return
+        # Reader: terminal publication only needs a stable consent read (shared, per workspace).
+        # The workspace is immutable on the run, so this lock-free hint read may precede the lock.
+        await lock_export_privacy(session, hint.workspace_id, shared=True)
         await session.scalar(select(Conversation).where(
             Conversation.id == hint.conversation_id,
         ).with_for_update().execution_options(populate_existing=True))

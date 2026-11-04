@@ -173,26 +173,40 @@ async def read_chat_evidence_chunks(
     return [by_ref[ref] for ref in refs if ref in by_ref]
 
 
-async def lock_chat_evidence_chunks(
+@dataclass(frozen=True)
+class ChatEvidenceLockState:
+    """Content-free lifecycle state of one locked evidence chunk (ids, generation, status, privacy flag).
+
+    Attributes mirror the ``ChatEvidenceChunk`` fields that publication fences compare, without the
+    chunk text, titles or provenance, so a per-flush revalidation never materializes ORM rows or content.
+    """
+
+    document_version_id: UUID
+    chunk_id: UUID
+    source_id: UUID
+    source_generation: int
+    source_status: str
+    local_only: bool
+
+
+async def _lock_evidence_rows(
     session: AsyncSession,
     refs: list[tuple[UUID, UUID]],
     *,
-    require_active_source: bool = True,
-    require_current_version: bool = False,
-    selection_fences: tuple[GadgetDocumentSelectionFence, ...] | None = None,
+    selection_fences: tuple[GadgetDocumentSelectionFence, ...] | None,
     scope: Scope, multi_workspace_enabled: bool,
-) -> list[ChatEvidenceChunk]:
-    """Hold key-share locks on exact evidence through Chat's short publication transaction.
+) -> bool:
+    """Admit, validate and take Source -> Document -> version -> chunk key-share locks for ``refs``.
 
-    Retained scoped identities are captured before locking in Source, Document, immutable version,
-    then chunk order. A hard delete cannot commit between this current-evidence check and the
-    caller's publication commit; callers must release locks promptly by committing or rolling back.
+    Shared by the content and the lock-only readers so both keep the identical lock order. Returns
+    False (nothing locked) for an empty ``refs``; raises ValueError for bad/duplicate references or a
+    stale exact selection. Callers own commit/rollback, which releases every lock.
     """
     access_fence = await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if len(refs) > 100 or len(set(refs)) != len(refs):
         raise ValueError("Evidence references must be unique and contain at most 100 items")
     if not refs:
-        return []
+        return False
     if selection_fences is not None and not await _validate_gadget_document_selection_fences_admitted(
         session, selection_fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         expected_access_fence=access_fence, lock_rows=False, max_documents=32,
@@ -236,6 +250,29 @@ async def lock_chat_evidence_chunks(
         expected_access_fence=access_fence, lock_rows=False, max_documents=32,
     ):
         raise ValueError("Selected document version or source privacy scope is stale")
+    return True
+
+
+async def lock_chat_evidence_chunks(
+    session: AsyncSession,
+    refs: list[tuple[UUID, UUID]],
+    *,
+    require_active_source: bool = True,
+    require_current_version: bool = False,
+    selection_fences: tuple[GadgetDocumentSelectionFence, ...] | None = None,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> list[ChatEvidenceChunk]:
+    """Hold key-share locks on exact evidence through Chat's short publication transaction.
+
+    Retained scoped identities are captured before locking in Source, Document, immutable version,
+    then chunk order. A hard delete cannot commit between this current-evidence check and the
+    caller's publication commit; callers must release locks promptly by committing or rolling back.
+    """
+    if not await _lock_evidence_rows(
+        session, refs, selection_fences=selection_fences, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    ):
+        return []
     evidence = await read_chat_evidence_chunks(
         session, refs, require_active_source=require_active_source,
         require_current_version=require_current_version,
@@ -244,3 +281,48 @@ async def lock_chat_evidence_chunks(
     if selection_fences is not None and len(evidence) != len(refs):
         raise ValueError("One or more exact selected evidence chunks are unavailable")
     return evidence
+
+
+async def lock_chat_evidence_state(
+    session: AsyncSession,
+    refs: list[tuple[UUID, UUID]],
+    *,
+    require_active_source: bool = True,
+    require_current_version: bool = False,
+    selection_fences: tuple[GadgetDocumentSelectionFence, ...] | None = None,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> list[ChatEvidenceLockState]:
+    """Lock-only variant of ``lock_chat_evidence_chunks`` for per-flush publication fences.
+
+    Takes the same Source -> Document -> version -> chunk key-share locks (deletion cannot commit
+    before the caller's publication commit) and then reads one content-free column projection of
+    ``(version, chunk, source id/generation/status/local_only)`` for the same filters: no Document,
+    Source or chunk ORM rows, no chunk text and no provenance query. Same ValueError contract for a
+    stale exact selection; refs in caller order, deleted/inactive ones omitted.
+    """
+    if not await _lock_evidence_rows(
+        session, refs, selection_fences=selection_fences, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    ):
+        return []
+    statement = (
+        select(
+            DocumentVersion.id, DocumentChunk.id, Source.id, Source.generation, Source.status, Source.local_only,
+        )
+        .select_from(Document)
+        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+        .join(DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id)
+        .join(Source, Source.id == Document.source_id)
+        .where(tuple_(DocumentVersion.id, DocumentChunk.id).in_(refs), *_document_scope(scope, allow_member=True))
+    )
+    if require_active_source:
+        statement = statement.where(Source.status == "active")
+    if require_current_version:
+        statement = statement.where(Document.current_version == DocumentVersion.version_number)
+    by_ref = {
+        (row[0], row[1]): ChatEvidenceLockState(row[0], row[1], row[2], row[3], row[4], row[5])
+        for row in (await session.execute(statement)).all()
+    }
+    if selection_fences is not None and set(by_ref) != set(refs):
+        raise ValueError("One or more exact selected evidence chunks are unavailable")
+    return [by_ref[ref] for ref in refs if ref in by_ref]

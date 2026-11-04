@@ -1244,7 +1244,7 @@ async def _cleanup_finalized_marker(
     """
     from modules.memory.public import lock_export_privacy
 
-    await lock_export_privacy(work.session)
+    await lock_export_privacy(work.session, work.workspace_id)
     run = await work.lock_run(run_id)
     marker = await work.load_marker(run_id, lock=True, populate=True)
     if _agent_cleanup_marker_state(marker) != work.preflight.marker_state:
@@ -1272,7 +1272,7 @@ async def _cleanup_unavailable_marker(
     """
     from modules.memory.public import lock_export_privacy
 
-    await lock_export_privacy(work.session)
+    await lock_export_privacy(work.session, work.workspace_id)
     run = await work.lock_run(run_id)
     marker = await work.load_marker(run_id, lock=True, populate=True)
     if _agent_cleanup_marker_state(marker) != work.preflight.marker_state:
@@ -1327,7 +1327,7 @@ async def _cleanup_phase_a(work: _CleanupPass, run_id: UUID) -> AgentCopiedEvide
     """
     from modules.memory.public import lock_export_privacy
 
-    await lock_export_privacy(work.session)
+    await lock_export_privacy(work.session, work.workspace_id)
     run = await work.lock_run(run_id)
     if run is None:
         work.advance(run_id)
@@ -1371,7 +1371,7 @@ async def _cleanup_phase_b(work: _CleanupPass, run_id: UUID) -> AgentCopiedEvide
     preflight = work.preflight
     if preflight.blocked or (preflight.lease_required and not preflight.lease_acquired):
         return await work.progress(work.encode(work.unavailable), False, work.processed, work.unavailable)
-    await lock_export_privacy(work.session)
+    await lock_export_privacy(work.session, work.workspace_id)
     run = await work.lock_run(run_id)
     marker = await work.load_marker(run_id, lock=True)
     if (_agent_cleanup_marker_state(marker) != preflight.marker_state

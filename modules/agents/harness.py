@@ -707,7 +707,7 @@ async def _lock_native_output_fences_for_publication(
     from modules.memory.public import lock_export_privacy
     from modules.sources import public as sources
 
-    await lock_export_privacy(session)
+    await lock_export_privacy(session, principal.scope.workspace_id, shared=True)
     for source_id, generation in sorted(generations.items(), key=lambda item: str(item[0])):
         source = await sources.lock_source(
             session, source_id, scope=principal.scope, multi_workspace_enabled=multi_workspace_enabled,

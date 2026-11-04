@@ -219,7 +219,7 @@ async def delete_conversation(
         scope = await owner_default_scope(session, owner_id)
     except (HTTPException, DomainError):
         return False
-    await lock_export_privacy(session)
+    await lock_export_privacy(session, scope.workspace_id)
     conversation = await session.scalar(
         _select(Conversation)
         .where(Conversation.id == conversation_id, Conversation.workspace_id == scope.workspace_id)
@@ -933,14 +933,17 @@ async def read_memory_export_origin(
     Its digest binds content, citations, and both lifecycle rows so Memory can recheck this
     evidence immediately before its download is published.
     """
-    from modules.memory.public import lock_export_privacy
-
-    await lock_export_privacy(session)
     from modules.chat.scope import multi_workspace_enabled, owner_default_scope
+    from modules.memory.public import lock_export_privacy
 
     flag = multi_workspace_enabled()
     try:
         scope = await owner_default_scope(session, owner_id)
+    except (PermissionError, HTTPException, DomainError):
+        return None
+    # Reader: only needs a consistent consent read; the workspace is known before the lock.
+    await lock_export_privacy(session, scope.workspace_id, shared=True)
+    try:
         await _require_chat_export_owner(session, owner_id, scope=scope, multi_workspace_enabled=flag)
     except (PermissionError, HTTPException, DomainError):
         return None
@@ -2070,7 +2073,7 @@ async def purge_document_copied_evidence_page(
         kind, after = _decode_cleanup_cursor(cursor, evidence)
     from modules.memory.public import bound_cleanup_lock_waits, lock_export_privacy
 
-    await lock_export_privacy(session)
+    await lock_export_privacy(session, scope.workspace_id)
     await bound_cleanup_lock_waits(session)
     kinds = ("messages", "runs", "events")
     index = kinds.index(kind)

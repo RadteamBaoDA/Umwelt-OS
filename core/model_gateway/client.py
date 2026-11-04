@@ -6,6 +6,7 @@ import random
 import re
 import secrets
 import time
+import weakref
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, aclosing, asynccontextmanager
 from dataclasses import dataclass, field
@@ -24,6 +25,7 @@ from redis.exceptions import TimeoutError as RedisTimeoutError
 from core.config import Settings
 from core.model_gateway import anthropic
 from core.model_gateway.policy import may_send
+from core.model_gateway.pool import pinned_client
 from core.model_gateway.schemas import (
     HOSTED_PROVIDER_ENDPOINTS,
     HOSTED_PROVIDER_KINDS,
@@ -32,7 +34,7 @@ from core.model_gateway.schemas import (
     ProviderKind,
     RequestPolicy,
 )
-from core.model_gateway.transport import EndpointNetworkPolicyError, approved_http_client, body_sent
+from core.model_gateway.transport import EndpointNetworkPolicyError, body_sent
 from core.model_gateway.wire import (
     CHAT_PATH,
     UnsupportedWireOperation,
@@ -46,6 +48,11 @@ from core.workspaces.schemas import InternalJobScope, Scope, WorkspaceContext
 _LEASE_PREFIX = "bbd:model-gateway:slot:"
 _SLOTS = Settings().model_gateway_slots  # MODEL_GATEWAY_SLOTS, read once per process
 _LEASE_WAIT_SECONDS = 10.0
+# Connection-level Redis errors are retried this long (pool exhaustion is transient) before the lease
+# degrades to the per-process fallback semaphore.
+_REDIS_PROBE_SECONDS = 1.0
+# Weakly keyed by loop so entries vanish with a closed loop (no id() reuse, no leak).
+_LOCAL_SLOTS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, tuple[int, asyncio.Semaphore]]" = weakref.WeakKeyDictionary()
 # A stream holds its slot for the whole generation, so it queues longer than short calls (no DB locks held while waiting).
 _STREAM_LEASE_WAIT_SECONDS = 120.0
 _CONNECT_TIMEOUT_SECONDS = 5.0
@@ -77,6 +84,15 @@ _BREAKER_RECORD = (
 )
 
 _LOG = logging.getLogger(__name__)
+
+
+def _local_semaphore() -> asyncio.Semaphore:
+    """Per-process (per event loop) fallback semaphore sized like ``MODEL_GATEWAY_SLOTS``; see ``_lease``."""
+    loop = asyncio.get_running_loop()
+    entry = _LOCAL_SLOTS.get(loop)
+    if entry is None or entry[0] != _SLOTS:
+        entry = _LOCAL_SLOTS[loop] = (_SLOTS, asyncio.Semaphore(_SLOTS))
+    return entry[1]
 
 
 def _api_base(url: str) -> str:
@@ -574,9 +590,18 @@ class ModelGateway:
         return anthropic.DEFAULT_MAX_TOKENS
 
     def _http_client(self, base_url: str) -> httpx.AsyncClient:
-        """Create a redirect-disabled HTTP client pinned to an endpoint approved by network policy."""
+        """Return the per-process shared redirect-disabled HTTP client pinned to an approved endpoint.
+
+        One client per (origin, approved CIDRs, allow_global, protocol) is reused across calls
+        (``core.model_gateway.pool``); the pinned transport still resolves and validates DNS on every
+        request, so the SSRF/DNS-pinning guarantees equal those of a per-call client. Its ``aclose`` is a
+        no-op for the SDK's context exit; the pool closes it at shutdown.
+        """
         try:
-            return approved_http_client(base_url, self.approved_endpoint_cidrs, allow_global=self.allow_public_endpoints)
+            return pinned_client(
+                base_url, self.approved_endpoint_cidrs, allow_global=self.allow_public_endpoints,
+                protocol=type(self.protocol).__name__,
+            )
         except EndpointNetworkPolicyError as exc:
             raise ModelGatewayError("Model gateway network policy is unavailable") from exc
 
@@ -601,30 +626,50 @@ class ModelGateway:
     async def _lease(self, wait_seconds: float) -> AsyncIterator[None]:
         """Acquire one of the Redis-backed gateway leases (bounded wait), hold it with a refreshed TTL, release only our token.
 
-        The timeout bounds lease acquisition only; the body runs outside it.
+        The ``MODEL_GATEWAY_SLOTS`` limit is global across API/worker processes because the slots are
+        Redis keys. When Redis cannot serve the lease (a non-connection Redis error, or connection errors
+        persisting past ``_REDIS_PROBE_SECONDS``) the call degrades to a per-process semaphore of the same
+        size with a warning: the limit is then per process (up to processes x slots overall) until Redis
+        returns, instead of failing every model call. The timeout bounds lease acquisition only (Redis
+        probe plus local wait share ``wait_seconds``); the body runs outside it.
         """
         token = secrets.token_urlsafe(18)
         keys = [f"{_LEASE_PREFIX}{slot}" for slot in range(_SLOTS)]
         key = None
         attempted = False
+        degraded = False
         refresher: asyncio.Task[None] | None = None
+        started = time.monotonic()
         try:
             try:
                 async with asyncio.timeout(wait_seconds):
+                    probe_deadline = started + _REDIS_PROBE_SECONDS
                     while key is None:
                         attempted = True
                         try:
                             slot = int(await cast("Awaitable[Any]", self.redis.eval(
                                 _ACQUIRE, len(keys), *keys, token, str(_LEASE_TTL_SECONDS * 1000))))
                         except (RedisConnectionError, RedisTimeoutError):
-                            slot = -1  # transient (e.g. pool exhausted): retry until the lease deadline
+                            if time.monotonic() >= probe_deadline:
+                                degraded = True
+                                break
+                            slot = -1  # transient (e.g. pool exhausted): retry until the probe/lease deadline
+                        except RedisError:
+                            degraded = True
+                            break
                         if slot >= 0:
                             key = keys[slot]
                         else:
                             await asyncio.sleep(0.1 + random.uniform(0, 0.05))
-            except (RedisError, TimeoutError) as exc:
+            except TimeoutError as exc:
                 raise ModelGatewayError("Model capacity is unavailable") from exc
-            refresher = asyncio.create_task(self._keep_lease(key, token))
+            if degraded:
+                _LOG.warning("Model gateway Redis unavailable; limiting slots per process")
+                remaining = max(wait_seconds - (time.monotonic() - started), 0.05)
+                async with self._local_slot(remaining):
+                    yield
+                return
+            refresher = asyncio.create_task(self._keep_lease(cast("str", key), token))
             yield
         finally:
             if refresher is not None:
@@ -636,6 +681,20 @@ class ModelGateway:
                     await asyncio.shield(cast("Awaitable[Any]", self.redis.eval(_RELEASE, len(held), *held, token)))
                 except RedisError:
                     pass
+
+    @asynccontextmanager
+    async def _local_slot(self, wait_seconds: float) -> AsyncIterator[None]:
+        """Hold one slot of the per-process fallback semaphore (degraded mode); raise when none frees in time."""
+        semaphore = _local_semaphore()
+        try:
+            async with asyncio.timeout(wait_seconds):
+                await semaphore.acquire()
+        except TimeoutError as exc:
+            raise ModelGatewayError("Model capacity is unavailable") from exc
+        try:
+            yield
+        finally:
+            semaphore.release()
 
     async def _with_slot[T](self, call: Callable[[], Awaitable[T]]) -> T:
         """Run one non-stream gateway operation under a lease with a total deadline (lease wait excluded)."""

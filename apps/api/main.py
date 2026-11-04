@@ -16,6 +16,7 @@ from core.body_limit import BodyLimitMiddleware
 from core.config import Settings
 from core.database import make_session_factory
 from core.errors import install_error_handling
+from core.model_gateway.pool import close_pinned_clients
 from core.modules import ModuleRegistry, ordered_router_specs, register_modules
 from core.publication import PublicationGateMiddleware
 from core.realtime.routes import MAX_STREAMS_PER_API_PROCESS
@@ -88,6 +89,7 @@ def _make_lifespan(redis: ArqRedis, engine: AsyncEngine) -> Callable[[FastAPI], 
                         admission.stop()
         finally:
             try:
+                await close_pinned_clients()  # pooled model-gateway HTTP clients
                 await redis.aclose()
             finally:
                 await engine.dispose()

@@ -5,6 +5,7 @@ import binascii
 import hashlib
 import json
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
@@ -520,7 +521,7 @@ async def export_page(
     in the portable projection. The workspace predicate precedes ordering and LIMIT.
     """
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    await lock_export_privacy(session)
+    await lock_export_privacy(session, scope.workspace_id, shared=True)
     if owner_id != _actor(scope) or record_kind not in {"memories", "candidates"} or not 1 <= limit <= 100:
         raise ValueError("Memory export owner, kind or page limit is invalid")
     if cursor is None:
@@ -591,7 +592,7 @@ async def validate_export_fences(
         if exc.status_code not in {401, 404}:
             raise
         return MemoryExportFenceValidation(valid=False, reason="owner_unavailable", observed_snapshot_count=0)
-    await lock_export_privacy(session)
+    await lock_export_privacy(session, scope.workspace_id, shared=True)
     if owner_id != _actor(scope) or record_kind not in {"memories", "candidates"} or len(fences) > 100:
         raise ValueError("Memory export validation input is invalid")
     observed = await _memory_export_count(session, record_kind, snapshot_at, scope)
@@ -634,18 +635,77 @@ async def bound_cleanup_lock_waits(session: AsyncSession) -> None:
     await session.execute(text(f"SET LOCAL lock_timeout = {CLEANUP_LOCK_TIMEOUT_MS}"))
 
 
-async def lock_export_privacy(session: AsyncSession) -> None:
-    """Serialize Chat consent fences with Memory privacy writes in the caller transaction.
+def privacy_lock_key(workspace_id: UUID | str) -> tuple[int, int]:
+    """Derive the stable two-int advisory key of one workspace's privacy fence.
 
-    The transaction-scoped owner lock also fences the absent-row default against a concurrent
-    privacy update that would otherwise insert the first MemoryPrivacyRecord after a Chat read.
-    Callers must keep the transaction open through their guarded read/write and commit or rollback
-    promptly; this never exposes Memory's ORM model across the public module boundary.
+    The first int is the fixed namespace; the second is the first four bytes of
+    ``sha256("privacy:<workspace uuid>")`` as a signed 32-bit integer (Postgres ``int4``). The
+    derivation is pure and process-independent so every API/worker process agrees on the key.
+    A 32-bit collision between two workspaces only adds harmless extra contention, never a
+    missed exclusion.
     """
+    digest = hashlib.sha256(f"privacy:{UUID(str(workspace_id))}".encode()).digest()
+    return _PRIVACY_LOCK_NAMESPACE, int.from_bytes(digest[:4], "big", signed=True)
+
+
+def _note_privacy_lock(session: AsyncSession, key: tuple[int, int], *, shared: bool) -> None:
+    """Warn when a transaction asks for the exclusive form after already holding the shared form.
+
+    Shared-then-exclusive on one key is a lock upgrade: two such transactions deadlock (Postgres
+    aborts one). Exclusive-then-shared is safe. The record is scoped to the current database
+    transaction object so a commit/rollback (which releases advisory xact locks) resets it.
+    """
+    sync_session = getattr(session, "sync_session", None)
+    transaction = sync_session.get_transaction() if sync_session is not None else None
+    held = session.info.get("_privacy_lock_modes") if isinstance(getattr(session, "info", None), dict) else None
+    if held is None or held.get("transaction") is not transaction:
+        held = {"transaction": transaction, "modes": {}}
+        if isinstance(getattr(session, "info", None), dict):
+            session.info["_privacy_lock_modes"] = held
+    previous = held["modes"].get(key)
+    if previous == "shared" and not shared:
+        logger.warning("privacy_lock_upgrade_shared_to_exclusive", extra={"key": key})
+    if previous != "exclusive":
+        held["modes"][key] = "shared" if shared else "exclusive"
+
+
+async def lock_export_privacy(
+    session: AsyncSession, workspace_id: UUID | str, *, shared: bool = False,
+) -> None:
+    """Serialize Chat consent fences with Memory privacy writes for one workspace.
+
+    ``shared=False`` (default, a privacy WRITER or eraser) takes ``pg_advisory_xact_lock`` on the
+    workspace key; ``shared=True`` (a READER that only needs a consistent consent read or a
+    publication fence) takes ``pg_advisory_xact_lock_shared`` on the same key. Readers never block
+    each other, writers block everyone, and different workspaces never contend. A writer must never
+    use the shared form (the call-site table in docs/privacy.md is enforced by an AST test).
+
+    The transaction-scoped lock also fences the absent-row default against a concurrent privacy
+    update that would otherwise insert the first MemoryPrivacyRecord after a Chat read. Callers must
+    keep the transaction open through their guarded read/write and commit or rollback promptly; this
+    never exposes Memory's ORM model across the public module boundary.
+    """
+    key = privacy_lock_key(workspace_id)
+    function = "pg_advisory_xact_lock_shared" if shared else "pg_advisory_xact_lock"
     await session.execute(
-        text("SELECT pg_advisory_xact_lock(:namespace, :owner_id)"),
-        {"namespace": _PRIVACY_LOCK_NAMESPACE, "owner_id": 1},
+        text(f"SELECT {function}(:namespace, :workspace_key)"),
+        {"namespace": key[0], "workspace_key": key[1]},
     )
+    _note_privacy_lock(session, key, shared=shared)
+
+
+async def lock_export_privacy_workspaces(
+    session: AsyncSession, workspace_ids: Iterable[UUID | str], *, shared: bool = False,
+) -> None:
+    """Take the privacy fence of every listed workspace in ascending key order (deadlock-free).
+
+    Account-level operations (erasure/export across workspaces) and periodic jobs that touch rows of
+    several workspaces use this so two such transactions always acquire overlapping keys in the same
+    order. Duplicate ids (and 32-bit key collisions) are locked once.
+    """
+    keyed = {privacy_lock_key(item): item for item in workspace_ids}
+    for key in sorted(keyed):
+        await lock_export_privacy(session, keyed[key], shared=shared)
 
 
 async def lock_export_privacy_in_uow(
@@ -658,8 +718,7 @@ async def lock_export_privacy_in_uow(
     """
     if await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled) != access_fence:
         raise ConflictError("Memory cleanup access fence is stale")
-    # ponytail: global privacy lock; per-workspace key if contention matters
-    await lock_export_privacy(session)
+    await lock_export_privacy(session, scope.workspace_id)
 
 
 async def _lock_live_provenance_evidence(
@@ -1304,7 +1363,7 @@ async def _verified_memory_read(
 ) -> MemoryRead | None:
     """Return a current-evidence projection or suppress a copied record whose origin is unverified."""
     try:
-        await lock_export_privacy(session)
+        await lock_export_privacy(session, scope.workspace_id, shared=True)
         if item.is_manual is not True:
             await _lock_live_provenance_evidence(
                 session, item.provenance, require_copy_evidence=True,
@@ -1337,7 +1396,7 @@ async def _verified_candidate_read(
 ) -> MemoryCandidateRead | None:
     """Return a candidate only while its copied evidence still has an owner-valid projection."""
     try:
-        await lock_export_privacy(session)
+        await lock_export_privacy(session, scope.workspace_id, shared=True)
         await _lock_live_provenance_evidence(
             session, item.provenance, require_copy_evidence=True,
             scope=scope, multi_workspace_enabled=multi_workspace_enabled,
@@ -1498,7 +1557,7 @@ class MemoryService:
             created_at, identifier = decode_cursor(unbind_page_cursor(cursor, binding))
             stmt = stmt.where(tuple_(Memory.created_at, Memory.id) < (created_at, identifier))
 
-        await lock_export_privacy(self.session)
+        await lock_export_privacy(self.session, scope.workspace_id, shared=True)
         kind_counts: dict[str, int] | None = None
         counts_capped = False
         # Counts are per kind: only unfiltered first pages carry them. A search skips them so each debounced
@@ -1546,7 +1605,7 @@ class MemoryService:
             MemoryRead if found, None otherwise.
         """
         await _admit(self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-        await lock_export_privacy(self.session)
+        await lock_export_privacy(self.session, scope.workspace_id, shared=True)
         item = await self.session.scalar(select(Memory).where(
             Memory.id == memory_id, Memory.workspace_id == scope.workspace_id,
         ))
@@ -1574,7 +1633,7 @@ class MemoryService:
         fence = await _admit(
             self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
         )
-        await lock_export_privacy(self.session)
+        await lock_export_privacy(self.session, scope.workspace_id)
         await _lock_live_provenance_evidence(
             self.session, payload.provenance, require_copy_evidence=not is_manual,
             scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
@@ -1632,7 +1691,7 @@ class MemoryService:
         hinted = hint.one_or_none()
         if hinted is None:
             return None
-        await lock_export_privacy(self.session)
+        await lock_export_privacy(self.session, scope.workspace_id)
         await _lock_live_provenance_evidence(
             self.session, hinted.provenance,
             require_copy_evidence=bool(await self.session.scalar(
@@ -1694,7 +1753,7 @@ class MemoryService:
         )).one_or_none()
         if hinted is None:
             return None
-        await lock_export_privacy(self.session)
+        await lock_export_privacy(self.session, scope.workspace_id)
         await _lock_live_provenance_evidence(
             self.session, hinted.provenance, require_copy_evidence=hinted.is_manual is False,
             scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
@@ -1760,7 +1819,7 @@ class MemoryService:
         )).one_or_none()
         if hinted is None:
             return None
-        await lock_export_privacy(self.session)
+        await lock_export_privacy(self.session, scope.workspace_id)
         await _lock_live_provenance_evidence(
             self.session, hinted.provenance, require_copy_evidence=hinted.is_manual is False,
             scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
@@ -1821,7 +1880,7 @@ class MemoryService:
         )).one_or_none()
         if hinted is None:
             return None
-        await lock_export_privacy(self.session)
+        await lock_export_privacy(self.session, scope.workspace_id)
         await _lock_live_provenance_evidence(
             self.session, hinted.provenance, require_copy_evidence=hinted.is_manual is False,
             scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
@@ -1894,7 +1953,7 @@ class MemoryService:
                 self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
             )
             # Serialize first-default insertion with consent updates and Chat's absent-row fence.
-            await lock_export_privacy(self.session)
+            await lock_export_privacy(self.session, scope.workspace_id)
             rec = await self.session.scalar(
                 _privacy_select(scope).with_for_update().execution_options(populate_existing=True)
             )
@@ -1937,7 +1996,7 @@ class MemoryService:
         fence = await _admit(
             self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=lock_fence,
         )
-        await lock_export_privacy(self.session)
+        await lock_export_privacy(self.session, scope.workspace_id)
         rec = await self.session.scalar(
             _privacy_select(scope).with_for_update().execution_options(populate_existing=True)
         )
@@ -1949,7 +2008,7 @@ class MemoryService:
                 self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
                 lock=lock_fence,
             )
-            await lock_export_privacy(self.session)
+            await lock_export_privacy(self.session, scope.workspace_id)
             rec = await self.session.scalar(
                 _privacy_select(scope).with_for_update().execution_options(populate_existing=True)
             )
@@ -1976,7 +2035,7 @@ class MemoryService:
             self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
         )
         # Consent changes share the same xact lock Chat holds through admission/publication.
-        await lock_export_privacy(self.session)
+        await lock_export_privacy(self.session, scope.workspace_id)
         rec = await self.session.scalar(
             _privacy_select(scope).with_for_update().execution_options(populate_existing=True)
         )
@@ -2233,7 +2292,7 @@ class MemoryService:
                 tuple_(MemoryCandidate.created_at, MemoryCandidate.id) < (created_at, identifier)
             )
 
-        await lock_export_privacy(self.session)
+        await lock_export_privacy(self.session, scope.workspace_id, shared=True)
         stmt = stmt.order_by(
             desc(MemoryCandidate.created_at), desc(MemoryCandidate.id)
         ).limit(101)
@@ -2279,7 +2338,7 @@ class MemoryService:
         )).one_or_none()
         if hinted is None:
             return None
-        await lock_export_privacy(self.session)
+        await lock_export_privacy(self.session, scope.workspace_id)
         await _lock_live_provenance_evidence(
             self.session, hinted.provenance, require_copy_evidence=True,
             scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
@@ -2346,7 +2405,7 @@ class MemoryService:
         )).one_or_none()
         if hinted is None:
             return None
-        await lock_export_privacy(self.session)
+        await lock_export_privacy(self.session, scope.workspace_id)
         await _lock_live_provenance_evidence(
             self.session, hinted.provenance, require_copy_evidence=True,
             scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
@@ -2389,7 +2448,7 @@ class MemoryService:
             self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
         )
         # Establish the global privacy-before-Memory-row lock order for this transaction.
-        await lock_export_privacy(self.session)
+        await lock_export_privacy(self.session, scope.workspace_id)
 
         purged_memories = 0
         purged_candidates = 0

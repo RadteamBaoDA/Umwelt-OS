@@ -31,3 +31,6 @@ apps/web/public/vendor/genui/
 **/.taste-skill/**/*.png
 **/.taste-skill/**/console.txt
 **/.taste-skill/**/map-diagnosis.json
+
+# worktree symlink to the hoisted node_modules (the trailing-slash pattern above does not match a symlink)
+/node_modules
