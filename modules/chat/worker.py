@@ -31,6 +31,7 @@ from core.model_gateway.transport import (
     approved_web_search_transport,
     body_sent,
 )
+from core.model_gateway.wire import wire_protocol_for
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
 from modules.chat import media
@@ -1556,7 +1557,7 @@ async def run_response_generation(
                                     details = delta.get("reasoning_details")
                                     # Only the Anthropic translator emits the complete list once; other providers
                                     # (OpenRouter) stream fragments, and echoing one would fail signature checks.
-                                    if (ai_config.gateway_kind == "anthropic" and isinstance(details, list)
+                                    if (wire_protocol_for(ai_config.gateway_kind).echoes_reasoning_details and isinstance(details, list)
                                             and details):
                                         round_reasoning_details = [d for d in details[:64] if isinstance(d, dict)]
                                     fragments = delta.get("tool_calls")

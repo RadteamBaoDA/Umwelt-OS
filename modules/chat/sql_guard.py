@@ -41,6 +41,9 @@ _ALLOWED_FUNCTIONS = frozenset({
     "lower", "upper", "initcap", "length", "char_length", "character_length", "btrim", "ltrim", "rtrim",
     "substring", "substr", "replace", "left", "right", "concat", "concat_ws", "position", "strpos",
     "split_part", "lpad", "rpad", "reverse", "to_char", "to_number", "overlay",
+    # SIMILAR TO is parsed into ``~ similar_to_escape(pattern)``: a pure pattern translation, no more
+    # powerful than the allowed ``~`` regex operators
+    "similar_to_escape",
     # dates (now() is STABLE and side-effect free, so it is allowed)
     "date_trunc", "date_part", "extract", "age", "now", "timezone", "to_date", "to_timestamp",
     # math
@@ -54,8 +57,9 @@ _ALLOWED_OPERATORS = frozenset({
     "+", "-", "*", "/", "%", "^", "=", "<>", "!=", "<", ">", "<=", ">=", "||", "~~", "!~~", "~~*", "!~~*",
     "~", "!~", "~*", "!~*", "->", "->>", "#>", "#>>", "@>", "<@", "?", "?|", "?&", "BETWEEN", "NOT BETWEEN",
     "BETWEEN SYMMETRIC", "NOT BETWEEN SYMMETRIC", "IN", "NOT IN", "LIKE", "NOT LIKE", "ILIKE", "NOT ILIKE",
-    "SIMILAR TO", "NOT SIMILAR TO",
 })
+# SIMILAR TO needs no entry above: the parser rewrites ``a SIMILAR TO b`` to the already-allowed regex
+# operator ``~`` applied to ``similar_to_escape(b)``, so it is permitted via that function in ``_ALLOWED_FUNCTIONS`` above.
 
 _ALLOWED_CAST_TYPES = frozenset({
     "text", "varchar", "bpchar", "char", "int2", "int4", "int8", "int", "integer", "bigint", "smallint",

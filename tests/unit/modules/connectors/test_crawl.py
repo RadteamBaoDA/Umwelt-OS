@@ -386,3 +386,28 @@ class TestRateLimitersAndConcurrencyGuards:
             assert exc.value.status_code == 413
             assert "Browser download limit exceeded" in exc.value.detail
             mock_resp.aclose.assert_awaited_once()  # closed even when the byte budget aborts the read
+
+
+def test_digest_and_wire_size_offloads_use_to_thread_joined() -> None:
+    """Digest/wire-size CPU work must run via ``to_thread_joined`` so a cancelled request waits for its thread.
+
+    A bare ``asyncio.to_thread`` would let the heavy slot be released while the host thread still hashes.
+    """
+    import ast
+    from pathlib import Path
+
+    import modules.connectors.crawl as crawl_module
+
+    tree = ast.parse(Path(crawl_module.__file__).read_text(encoding="utf-8"))
+    offloaded: dict[str, set[str]] = {"joined": set(), "bare": set()}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Name)):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == "to_thread_joined":
+            offloaded["joined"].add(node.args[0].id)
+        elif isinstance(func, ast.Attribute) and func.attr == "to_thread":
+            offloaded["bare"].add(node.args[0].id)
+    targets = {"page_digest_and_raw", "compute_result_digest", "wire_size"}
+    assert targets <= offloaded["joined"]
+    assert not targets & offloaded["bare"]

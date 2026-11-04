@@ -16,6 +16,7 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
 from core.config import Settings
+from core.heavy_work import to_thread_joined
 from core.ids import uuid7
 from modules.connectors.crawl_digest import page_digest_and_raw, wire_size
 from modules.connectors.crawl_digest import result_digest as compute_result_digest
@@ -479,7 +480,7 @@ async def _execute_static_agent_read(
             # Bound by UTF-8 bytes to match the worker and the DB octet_length check.
             extracted = page_text.encode("utf-8")[:20_000].decode("utf-8", "ignore")
             page_bytes += len(body)
-            content_digest, raw_content = await asyncio.to_thread(page_digest_and_raw, body)
+            content_digest, raw_content = await to_thread_joined(page_digest_and_raw, body)
             page: dict[str, object] = {
                 "requested_url": requested,
                 "final_url": final_url,
@@ -502,7 +503,7 @@ async def _execute_static_agent_read(
 
     if not pages:
         raise ValueError("Browser source returned no pages within the granted scope")
-    result_digest = await asyncio.to_thread(compute_result_digest, pages)
+    result_digest = await to_thread_joined(compute_result_digest, pages)
     if not await _browser_control_callback(
         settings, payload, "complete", request_ordinal=request_ordinal,
         actual_pages=len(pages), actual_bytes=page_bytes, result_hash=result_digest,
@@ -555,7 +556,7 @@ async def agent_read(
         try:
             async with asyncio.timeout(payload.timeout_seconds + 2):
                 pages = await task
-            if await asyncio.to_thread(wire_size, pages) > 8 * 1024 * 1024:
+            if await to_thread_joined(wire_size, pages) > 8 * 1024 * 1024:
                 raise HTTPException(status_code=413, detail="Browser result envelope exceeded its limit")
             return {
                 "job_id": str(payload.job_id),

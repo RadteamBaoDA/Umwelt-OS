@@ -285,9 +285,9 @@ export function AISettingsWorkspace() {
     set({ defaults: { ...defaults, [role]: mapping && role === 'embedding' ? { ...mapping, dimensions: null } : mapping } });
     if (role === 'embedding' && mapping && provider) draftProbe.mutate({ role, mapping, capability: 'embeddings', provider });
   };
-  /** Sets the chat role's reasoning effort on the current draft. */
   /** Sets or clears (null) one LLM role's optional output-token limit on the current draft. */
   const pickMaxTokens = (role: DefaultSlot, value: number | null) => { const current = defaults[role]; if (current) set({ defaults: { ...defaults, [role]: { ...current, max_output_tokens: value } } }); };
+  /** Sets the chat role's reasoning effort on the current draft. */
   const pickEffort = (effort: ReasoningEffort) => { if (defaults.chat) set({ defaults: { ...defaults, chat: { ...defaults.chat, reasoning_effort: effort } } }); };
   const advancedClass = 'border-t border-border';
   const summaryClass = 'flex min-h-9 pointer-coarse:min-h-11 cursor-pointer items-center font-semibold';

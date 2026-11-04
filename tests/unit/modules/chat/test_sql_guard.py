@@ -88,6 +88,8 @@ LEGITIMATE = [
     "SELECT symbol, value BETWEEN 1 AND 10 FROM scoped_observations WHERE symbol IS NOT NULL",
     "SELECT quality ->> 'k' FROM scoped_observations WHERE document_id IS NULL",
     "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY value) FROM scoped_observations",
+    "SELECT symbol FROM scoped_observations WHERE symbol SIMILAR TO '(BTC|ETH)%'",
+    "SELECT symbol FROM scoped_observations WHERE symbol NOT SIMILAR TO 'B#%%' ESCAPE '#'",
 ]
 
 
@@ -163,5 +165,95 @@ async def test_invalid_sql_is_rejected_before_any_statement_executes() -> None:
             allowed_source_ids=[uuid4()],
             limit=10,
             evidence_list=[],
+        )
+    assert session.statements == []
+
+
+class _FailingSession(_RecordingSession):
+    """Session double whose model query raises after the reader role was set, like a Postgres runtime error."""
+
+    async def execute(self, statement: Any, params: Any = None) -> _FakeResult:
+        """Record the statement; fail on the bounded model query only."""
+        result = await super().execute(statement, params)
+        if "_bounded_query" in str(statement):
+            raise RuntimeError("division by zero")
+        return result
+
+
+async def test_model_query_error_after_role_switch_rolls_back_savepoint_and_session_stays_usable() -> None:
+    """A query that raises after SET LOCAL ROLE still issues ROLLBACK TO + RELEASE, then re-raises the original error."""
+    session = _FailingSession()
+    with pytest.raises(RuntimeError, match="division by zero"):
+        await db_query._run_sql_as_reader(
+            session,  # type: ignore[arg-type]
+            "SELECT 1 / 0 FROM scoped_observations",
+            workspace_id=uuid4(),
+            allowed_source_ids=[uuid4()],
+            max_rows=5,
+        )
+    stmts = session.statements
+    role_idx = next(i for i, s in enumerate(stmts) if f"SET LOCAL ROLE {CHAT_SQL_READER_ROLE}" in s)
+    tail = stmts[role_idx + 1 :]
+    rollback_idx = next(i for i, s in enumerate(tail) if s.startswith("ROLLBACK TO SAVEPOINT"))
+    assert any(s.startswith("RELEASE SAVEPOINT") for s in tail[rollback_idx + 1 :])
+    # The session accepts further statements afterwards (nothing left poisoned in the double).
+    await session.execute("SELECT 1")
+    assert stmts[-1] == "SELECT 1"
+
+
+async def test_cleanup_failure_does_not_mask_the_original_query_error() -> None:
+    """If the savepoint rollback itself fails (lost connection), the model-query error is still what surfaces."""
+
+    class _Dead(_FailingSession):
+        """Fails the cleanup statements too."""
+
+        async def execute(self, statement: Any, params: Any = None) -> _FakeResult:
+            """Raise a different error for the rollback so masking would be visible."""
+            if str(statement).startswith("ROLLBACK TO SAVEPOINT"):
+                raise ConnectionError("gone")
+            return await super().execute(statement, params)
+
+    with pytest.raises(RuntimeError, match="division by zero"):
+        await db_query._run_sql_as_reader(
+            _Dead(),  # type: ignore[arg-type]
+            "SELECT 1 FROM scoped_observations",
+            workspace_id=uuid4(),
+            allowed_source_ids=[uuid4()],
+            max_rows=5,
+        )
+
+
+@pytest.mark.parametrize(
+    ("workspace_id", "source_ids"),
+    [
+        ("11111111-1111-1111-1111-111111111111", [uuid4()]),
+        (uuid4(), ["22222222-2222-2222-2222-222222222222"]),
+        (uuid4(), [uuid4(), "x'); DROP TABLE users; --"]),
+    ],
+)
+def test_scoped_view_statements_reject_non_uuid_ids(workspace_id: Any, source_ids: list[Any]) -> None:
+    """Ids are formatted into DDL, so anything that is not a uuid.UUID instance (even a valid-looking str) is refused."""
+    with pytest.raises(TypeError):
+        db_query.build_scoped_view_statements(workspace_id, source_ids)
+
+
+def test_scoped_view_statements_accept_uuid_instances() -> None:
+    """UUID instances render as quoted hex ids in both views and the GRANT is emitted last."""
+    workspace_id, source_id = uuid4(), uuid4()
+    statements = db_query.build_scoped_view_statements(workspace_id, [source_id])
+    assert len(statements) == 3 and str(workspace_id) in statements[0] and str(source_id) in statements[1]
+    assert statements[2].startswith("GRANT SELECT")
+
+
+async def test_non_uuid_ids_fail_before_any_statement_executes() -> None:
+    """The runtime type check runs before the SAVEPOINT, so nothing reaches the database."""
+    session = _RecordingSession()
+    with pytest.raises(TypeError):
+        await db_query._run_sql_as_reader(
+            session,  # type: ignore[arg-type]
+            "SELECT 1 FROM scoped_observations",
+            workspace_id=uuid4(),
+            allowed_source_ids=["not-a-uuid"],  # type: ignore[list-item]
+            max_rows=5,
         )
     assert session.statements == []

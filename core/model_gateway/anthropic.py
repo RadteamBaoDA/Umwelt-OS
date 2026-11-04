@@ -108,7 +108,7 @@ def _tool_choice(body: dict[str, Any], *, thinking: bool) -> dict[str, Any] | No
     """Anthropic ``tool_choice`` for an OpenAI one: ``none`` -> none, ``required`` -> any, function -> tool.
 
     ``auto``/absent returns None (Anthropic's default). Forcing a tool needs ``tools`` and cannot be combined
-    with extended thinking; both cases raise CapabilityUnsupported so the caller falls back visibly rather than
+    with extended thinking; both cases raise LocalCapabilityError (a CapabilityUnsupported that is never recorded as evidence) so the caller falls back visibly rather than
     silently running unforced.
     """
     choice = body.get("tool_choice")
@@ -125,13 +125,13 @@ def _tool_choice(body: dict[str, Any], *, thinking: bool) -> dict[str, Any] | No
     if forced is None:
         return None
     from core.model_gateway.client import (
-        CapabilityUnsupported,  # client imports this module
+        LocalCapabilityError,  # client imports this module
     )
 
     if not body.get("tools"):
-        raise CapabilityUnsupported("Forced tool_choice needs tools")
+        raise LocalCapabilityError("Forced tool_choice needs tools")
     if thinking:
-        raise CapabilityUnsupported("Forced tool_choice is not supported together with extended thinking")
+        raise LocalCapabilityError("Forced tool_choice is not supported together with extended thinking")
     return forced
 
 

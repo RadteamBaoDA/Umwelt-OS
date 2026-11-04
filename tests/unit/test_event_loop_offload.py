@@ -472,4 +472,4 @@ def test_crawl_collector_offloads_its_large_digests():
     assert "def page_digest_and_raw" in source
     crawl_source = (__import__("pathlib").Path(__file__).parents[2] / "modules/connectors/crawl.py").read_text()
     for helper in ("page_digest_and_raw", "compute_result_digest", "wire_size"):
-        assert f"asyncio.to_thread({helper}" in crawl_source
+        assert f"to_thread_joined({helper}" in crawl_source

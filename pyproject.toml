@@ -5,12 +5,12 @@ description = "Self-hosted personal intelligence OS"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "alembic>=1.16,<2",
-    "pglast>=7,<9",
     "argon2-cffi>=25,<26",
     "arq>=0.27,<1",
     "asyncpg>=0.30,<1",
     "fastapi>=0.116,<1",
     "httpx>=0.28,<1",
+    "pglast>=7,<9",
     "pypdf>=6,<7",
     "pydantic-settings>=2.10,<3",
     "python-multipart>=0.0.20,<1",

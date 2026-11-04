@@ -446,7 +446,14 @@ def build_scoped_view_statements(workspace_id: UUID, allowed_source_ids: list[UU
     barrier stops model predicates from being pushed below the workspace filter. Utility statements
     cannot take bind parameters, so the ids are inlined; they are ``UUID`` instances rendered by
     ``str()`` (hex and dashes only), never model text.
+
+    Raises:
+        TypeError: If ``workspace_id`` or any source id is not a ``uuid.UUID`` instance. The annotation is
+            not enough because the values are formatted straight into DDL; a plain ``str`` is refused so
+            quoting or SQL can never be smuggled in.
     """
+    if not isinstance(workspace_id, UUID) or not all(isinstance(sid, UUID) for sid in allowed_source_ids):
+        raise TypeError("workspace_id and every allowed source id must be uuid.UUID instances")
     ids = ", ".join(f"'{sid}'" for sid in allowed_source_ids)
     fmt = {"workspace_id": str(workspace_id), "source_ids": ids}
     return [
@@ -474,19 +481,34 @@ async def _run_sql_as_reader(
     4. ``ROLLBACK TO SAVEPOINT`` which reverts the role, read-only flag and temp views (SET LOCAL
        inside a released ORM savepoint would otherwise persist and make the turn's later writes fail).
     Rows are fetched before the rollback. A raw savepoint is used because an ORM rollback would
-    expire the caller's loaded objects. On error the exception propagates and the caller's own
-    savepoint rollback discards everything.
+    expire the caller's loaded objects. On error the same ``ROLLBACK TO``/``RELEASE`` pair runs
+    best-effort (so role, read-only flag and temp views never outlive a failed query), then the original
+    exception propagates and the caller's own savepoint rollback discards everything else.
+
+    Raises:
+        TypeError: ``workspace_id``/source ids are not ``uuid.UUID`` (nothing is executed).
     """
+    statements = build_scoped_view_statements(workspace_id, allowed_source_ids)  # validates ids before any I/O
     await session.execute(text(f"SAVEPOINT {_SQL_SAVEPOINT}"))
-    for statement in build_scoped_view_statements(workspace_id, allowed_source_ids):
-        await session.execute(text(statement))
-    await session.execute(text("SET LOCAL transaction_read_only = on"))
-    await session.execute(text(f"SET LOCAL ROLE {CHAT_SQL_READER_ROLE}"))
-    res = await session.execute(
-        text("SELECT * FROM (" + clean_sql + ") AS _bounded_query LIMIT :max_rows"),
-        {"max_rows": max_rows},
-    )
-    mappings = list(res.mappings().all())
+    try:
+        for statement in statements:
+            await session.execute(text(statement))
+        await session.execute(text("SET LOCAL transaction_read_only = on"))
+        await session.execute(text(f"SET LOCAL ROLE {CHAT_SQL_READER_ROLE}"))
+        res = await session.execute(
+            text("SELECT * FROM (" + clean_sql + ") AS _bounded_query LIMIT :max_rows"),
+            {"max_rows": max_rows},
+        )
+        mappings = list(res.mappings().all())
+    except Exception:
+        # A failing model query aborts the Postgres transaction and leaves the reader role / read-only flag
+        # active. Roll back to our savepoint so role, flag and temp views are reverted and the session is
+        # usable again even if the caller does not discard its own savepoint. A failure of the cleanup itself
+        # (e.g. lost connection) must not mask the original error.
+        with suppress(Exception):
+            await session.execute(text(f"ROLLBACK TO SAVEPOINT {_SQL_SAVEPOINT}"))
+            await session.execute(text(f"RELEASE SAVEPOINT {_SQL_SAVEPOINT}"))
+        raise
     await session.execute(text(f"ROLLBACK TO SAVEPOINT {_SQL_SAVEPOINT}"))
     await session.execute(text(f"RELEASE SAVEPOINT {_SQL_SAVEPOINT}"))
     return mappings
