@@ -232,16 +232,16 @@ async def test_build_context_projects_neighbors_from_nested_neighbor_read(monkey
     from modules.chat import retrieval
 
     entity_id, rel_id, other_id = uuid4(), uuid4(), uuid4()
-    entity = SimpleNamespace(name="Alpha", canonical_name="alpha", type="project", description=None)
+    entity = SimpleNamespace(id=entity_id, name="Alpha", canonical_name="alpha", type="project", description=None)
     neighbor = SimpleNamespace(
         relationship=SimpleNamespace(id=rel_id, type="depends_on"),
         entity=SimpleNamespace(id=other_id, name="Beta"),
     )
-    monkeypatch.setattr(retrieval.entities_public, "resolve_canonical_entity_id", AsyncMock(return_value=entity_id))
-    monkeypatch.setattr(retrieval.entities_public, "get_entity", AsyncMock(return_value=entity))
-    monkeypatch.setattr(retrieval.entities_public, "list_entity_evidence", AsyncMock(return_value=None))
-    monkeypatch.setattr(retrieval.relationships_public, "get_neighbors",
-                        AsyncMock(return_value=SimpleNamespace(items=[neighbor])))
+    # Entity context is read through the owners' bulk contracts (no per-entity N+1).
+    monkeypatch.setattr(retrieval.entities_public, "get_entities", AsyncMock(return_value=[entity]))
+    monkeypatch.setattr(retrieval.entities_public, "list_entity_evidence_bulk", AsyncMock(return_value=[None]))
+    monkeypatch.setattr(retrieval.relationships_public, "get_neighbors_bulk",
+                        AsyncMock(return_value=[SimpleNamespace(items=[neighbor])]))
     monkeypatch.setattr(retrieval.search_public, "search", AsyncMock(return_value=SimpleNamespace(warnings=[], items=[])))
     monkeypatch.setattr(retrieval.documents_public, "read_chat_evidence_chunks", AsyncMock(return_value=[]))
 

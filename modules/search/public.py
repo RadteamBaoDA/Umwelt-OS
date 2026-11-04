@@ -343,7 +343,9 @@ async def _lexical_ids(
     *, workspace_id: UUID, grants: Select[Any] | None = None,
 ) -> list[UUID]:
     """Retrieve bounded candidates after active/current, privacy and generation SQL filters."""
-    vector = func.to_tsvector(text("'simple'"), DocumentChunk.content)
+    # Stored generated column ``content_tsv`` (= to_tsvector('simple', content)) with a GIN index: identical
+    # match and ts_rank_cd scores to the former inline expression, without re-parsing every candidate.
+    vector = DocumentChunk.content_tsv
     query = func.websearch_to_tsquery(text("'simple'"), request.query)
     statement = _filters(
         _visible_rows(DocumentChunk.id, destination=destination, workspace_id=workspace_id, grants=grants), request, destination,

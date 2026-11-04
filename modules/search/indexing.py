@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 from sqlalchemy import Select, func, or_, select, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker
 
 from core.config import Settings
 from core.errors import ConflictError, DomainError, ForbiddenError
@@ -711,7 +711,10 @@ async def _finalize_exhausted_generation(
     Runs in the caller's locked session: prunes items whose chunk is no longer eligible, then marks
     the generation failed (``item_failed`` / ``no_indexable_chunks``) or activates it, and commits
     through ``_commit_index_change`` (which publishes the status change). A non-running generation
-    is only committed (no state change).
+    is only committed (no state change). Activation first commits this transaction and builds the HNSW
+    index with ``CREATE INDEX CONCURRENTLY`` on a separate autocommit connection (see
+    ``_build_index_outside_transaction``); if the generation changed meanwhile the session is rolled back and
+    nothing is published.
     """
     if generation.status == "running":
         await session.execute(text(
@@ -736,6 +739,10 @@ async def _finalize_exhausted_generation(
             generation.status = "failed"
             generation.error_code = "no_indexable_chunks"
         else:
+            relocked = await _build_index_outside_transaction(session, ctx, generation)
+            if relocked is None:
+                return  # state changed during the build; the generation stays running and is re-finalized later
+            generation, access_fence = relocked
             await activate_generation(session, generation, scope=ctx.scope)
     await _commit_index_change(
         session, before, generation_id=ctx.generation_id, scope=ctx.scope,
@@ -1079,19 +1086,156 @@ async def _fail_item(
         )
 
 
+def vector_index_name(generation_id: UUID) -> str:
+    """Return the per-generation partial HNSW index name (derived from a UUID, never request text)."""
+    return f"ix_search_vector_{generation_id.hex}"
+
+
+def vector_index_statements(generation_id: UUID, dimensions: int) -> tuple[str, str]:
+    """Return ``(drop_invalid_leftover, create_concurrently)`` SQL for one generation's HNSW index.
+
+    Identifier and dimensions originate from a UUID and a bounded integer (validated here), never from
+    request text, so f-string interpolation is safe. The partial predicate matches ``_vector_ids`` so the
+    planner can prove it.
+    """
+    if not 1 <= dimensions <= MAX_VECTOR_DIMENSIONS:
+        raise ValueError("Invalid generation dimensions")
+    name = vector_index_name(generation_id)
+    drop = f"DROP INDEX CONCURRENTLY IF EXISTS {name}"
+    create = (
+        f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} ON search_index_items "
+        f"USING hnsw ((embedding::vector({dimensions})) vector_cosine_ops) "
+        f"WHERE generation_id = '{generation_id}' AND status = 'succeeded'"
+    )
+    return drop, create
+
+
+async def build_vector_index_concurrently(engine: AsyncEngine, generation_id: UUID, dimensions: int) -> None:
+    """Build one generation's HNSW index with ``CREATE INDEX CONCURRENTLY`` on its own autocommit connection.
+
+    Takes no lock that blocks writes to ``search_index_items`` (the previous in-transaction build did) but must
+    not be called while the caller's own transaction holds writes on that table, because the concurrent build
+    waits for them. Statement/lock timeouts are lifted for the build and reset afterwards. An *invalid*
+    index left by an earlier interrupted build is dropped first (``IF NOT EXISTS`` would silently keep it),
+    and a build that fails here drops its own invalid leftover before re-raising so a retry starts clean.
+    """
+    drop, create = vector_index_statements(generation_id, dimensions)
+    name = vector_index_name(generation_id)
+    async with engine.connect() as raw:
+        connection = await raw.execution_options(isolation_level="AUTOCOMMIT")
+        locked = False
+        try:
+            await connection.execute(text("SET statement_timeout = 0"))
+            await connection.execute(text("SET lock_timeout = 0"))
+            # Session-level advisory lock keyed by the index name serializes builders of the same generation
+            # (the generation row lock is released before the build). Without it a second finalize would see the
+            # first builder's in-progress (indisvalid = false) index as a leftover and drop it. Blocking is
+            # intended: after the first builder finishes, the probe below finds a valid index and the create is a no-op.
+            await connection.execute(text("SELECT pg_advisory_lock(hashtext(:name))"), {"name": name})
+            locked = True
+            invalid = (await connection.execute(text(
+                "SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                "WHERE c.relname = :name AND NOT i.indisvalid"
+            ), {"name": name})).first()
+            if invalid is not None:
+                await connection.execute(text(drop))
+            try:
+                await connection.execute(text(create))
+            except BaseException:
+                # A failed/cancelled concurrent build leaves an INVALID index behind; remove it best-effort
+                # (we still hold the advisory lock, so no other builder's index can be dropped here).
+                try:
+                    await connection.execute(text(drop))
+                except Exception:  # cleanup must not mask the build failure
+                    logger.warning("Could not drop invalid HNSW index %s after a failed build", name, exc_info=True)
+                raise
+        finally:
+            # Pooled connection: release the session lock and timeouts, but never let a broken/cancelled
+            # connection mask the original error; discard it instead so the pool cannot reuse dirty state.
+            try:
+                if locked:
+                    await connection.execute(text("SELECT pg_advisory_unlock(hashtext(:name))"), {"name": name})
+                await connection.execute(text("RESET statement_timeout"))
+                await connection.execute(text("RESET lock_timeout"))
+            except BaseException:
+                logger.warning("Could not reset HNSW build connection state; invalidating it", exc_info=True)
+                try:
+                    await connection.invalidate()
+                except Exception:
+                    logger.debug("Invalidate after failed reset also failed", exc_info=True)
+
+
+def async_engine_for_session(session: AsyncSession) -> AsyncEngine:
+    """Return the ``AsyncEngine`` behind ``session`` (bound directly or through an ``AsyncConnection``).
+
+    ``AsyncEngine.engine`` is the *sync* engine, so it must never be read off an engine bind.
+
+    Raises:
+        TypeError: the session is not bound to an async engine/connection.
+    """
+    bind = session.bind
+    if isinstance(bind, AsyncEngine):
+        return bind
+    if isinstance(bind, AsyncConnection):
+        return bind.engine
+    raise TypeError("Concurrent index build requires an AsyncEngine-bound session")
+
+
+async def _build_index_outside_transaction(
+    session: AsyncSession, ctx: _RunContext, generation: IndexGeneration,
+) -> tuple[IndexGeneration, AccessFence] | None:
+    """Commit, build the generation's HNSW index concurrently, then re-lock and re-validate for activation.
+
+    Order: (1) commit the caller's transaction (releases the access-fence and generation locks and the
+    write locks the concurrent build would otherwise wait on forever), (2) ``CREATE INDEX CONCURRENTLY`` on a
+    separate autocommit connection, (3) new transaction: access fence (compared with the run's original
+    fence) then generation row ``FOR UPDATE`` -- the same lock order as a claim. Returns the re-locked
+    generation and fence, or ``None`` after a rollback when admission is denied, the generation is no longer
+    running with the same dimensions, or unfinished items appeared meanwhile (a later pass claims them and
+    finalizes again; the finished index is reused by ``IF NOT EXISTS``).
+    """
+    dimensions = generation.dimensions
+    if dimensions is None:
+        return None
+    engine = async_engine_for_session(session)  # resolve before commit so a misconfiguration fails without side effects
+    await session.commit()
+    await build_vector_index_concurrently(engine, ctx.generation_id, dimensions)
+    try:
+        access_fence = await _admit(
+            session, scope=ctx.scope, multi_workspace_enabled=ctx.multi_workspace_enabled,
+            lock=True, expected=ctx.original.fence,
+        )
+    except (DomainError, HTTPException) as exc:
+        await session.rollback()
+        if exc.status_code in {401, 403, 404, 409}:
+            return None
+        raise
+    # populate_existing: the commit above kept the old instance (expire_on_commit=False), so refresh it
+    # from the row we now hold the lock on instead of trusting pre-build attribute values.
+    current = await session.scalar(select(IndexGeneration).where(
+        IndexGeneration.id == ctx.generation_id, IndexGeneration.workspace_id == ctx.workspace_id,
+    ).with_for_update().execution_options(populate_existing=True))
+    unfinished = await session.scalar(select(func.count()).select_from(SearchIndexItem).where(
+        SearchIndexItem.generation_id == ctx.generation_id, SearchIndexItem.status != "succeeded",
+    )) if current is not None else 0
+    if current is None or current.status != "running" or current.dimensions != dimensions or unfinished:
+        await session.rollback()
+        return None
+    return current, access_fence
+
+
 async def activate_generation(
     session: AsyncSession, generation: IndexGeneration, *, scope: Scope,
 ) -> None:
-    """Create one generation's vector index and retire only its admitted workspace predecessor."""
+    """Retire only the admitted workspace's active predecessor and mark ``generation`` active.
+
+    The generation's HNSW index must already exist: it is built before this call by
+    ``build_vector_index_concurrently`` (``CREATE INDEX CONCURRENTLY`` cannot run inside this transaction
+    and a transactional build would block writes to ``search_index_items``). Locks the predecessor row
+    ``FOR UPDATE`` inside the caller's transaction; the caller commits.
+    """
     if generation.dimensions is None or not 1 <= generation.dimensions <= MAX_VECTOR_DIMENSIONS:
         raise ValueError("Invalid generation dimensions")
-    # Identifier and dimensions originate from a UUID and a bounded integer, never request text.
-    index_name = f"ix_search_vector_{generation.id.hex}"
-    await session.execute(text(
-        f"CREATE INDEX IF NOT EXISTS {index_name} ON search_index_items "
-        f"USING hnsw ((embedding::vector({generation.dimensions})) vector_cosine_ops) "
-        f"WHERE generation_id = '{generation.id}' AND status = 'succeeded'"
-    ))
     prior = await session.scalar(select(IndexGeneration).where(
         IndexGeneration.workspace_id == scope.workspace_id,
         IndexGeneration.status == "active",

@@ -394,25 +394,14 @@ async def _collect_search_refs(
         warnings.append("Search retrieval encountered an error")
 
 
-async def _resolve_one_entity(
-    session: AsyncSession,
-    entity_id: UUID,
-    scope_kw: dict[str, Any],
-    collector: _RefCollector,
-) -> EntityContextItem | None:
-    """Resolve one entity to its context item and register its backing evidence refs.
+def _entity_context_item(
+    entity_data: Any, evidence_page: Any, neighbors: Any, collector: _RefCollector,
+) -> EntityContextItem:
+    """Build one entity context item from already-read owner DTOs and register its backing evidence refs.
 
-    Issues the canonical-id, entity, evidence and neighbour reads in that order (sequential
-    awaits on the shared session). Returns ``None`` when the entity does not exist.
+    Pure apart from ``collector.add_default`` (one call per evidence row, in evidence order), so the
+    sequential and bulk resolution paths produce identical items, citations and collector state.
     """
-    canonical_id = await entities_public.resolve_canonical_entity_id(session, entity_id, **scope_kw)
-    entity_data = await entities_public.get_entity(session, canonical_id, **scope_kw)
-    if entity_data is None:
-        return None
-
-    evidence_page = await entities_public.list_entity_evidence(session, canonical_id, limit=10, **scope_kw)
-    neighbors = await relationships_public.get_neighbors(session, canonical_id, limit=10, **scope_kw)
-
     backing_refs: list[Citation] = []
     if evidence_page:
         for ev in evidence_page.items:
@@ -441,7 +430,7 @@ async def _resolve_one_entity(
     ]
 
     return EntityContextItem(
-        entity_id=canonical_id,
+        entity_id=entity_data.id,
         name=entity_data.name,
         canonical_name=entity_data.canonical_name,
         entity_type=entity_data.type,
@@ -449,6 +438,52 @@ async def _resolve_one_entity(
         backing_refs=backing_refs,
         neighbors=neighbor_dicts,
     )
+
+
+async def _resolve_one_entity(
+    session: AsyncSession,
+    entity_id: UUID,
+    scope_kw: dict[str, Any],
+    collector: _RefCollector,
+) -> EntityContextItem | None:
+    """Resolve one entity to its context item and register its backing evidence refs.
+
+    Issues the canonical-id, entity, evidence and neighbour reads in that order (sequential
+    awaits on the shared session). Returns ``None`` when the entity does not exist. This is the
+    per-entity fallback used when the batched read fails.
+    """
+    canonical_id = await entities_public.resolve_canonical_entity_id(session, entity_id, **scope_kw)
+    entity_data = await entities_public.get_entity(session, canonical_id, **scope_kw)
+    if entity_data is None:
+        return None
+
+    evidence_page = await entities_public.list_entity_evidence(session, canonical_id, limit=10, **scope_kw)
+    neighbors = await relationships_public.get_neighbors(session, canonical_id, limit=10, **scope_kw)
+    return _entity_context_item(entity_data, evidence_page, neighbors, collector)
+
+
+async def _resolve_entities_bulk(
+    session: AsyncSession,
+    entity_ids: list[UUID],
+    scope_kw: dict[str, Any],
+    collector: _RefCollector,
+) -> list[EntityContextItem]:
+    """Resolve many entities with batched owner reads (3 bulk contracts instead of ~4 awaits per entity).
+
+    Reads entities, first-page evidence (10) and neighbours (10) through the knowledge owners' bulk public
+    contracts, then builds items in request order; entities that do not resolve are skipped like the
+    sequential path. Registers backing refs on ``collector`` only after every read succeeded, so a failure
+    leaves the collector untouched and the caller can fall back to the per-entity path.
+    """
+    reads = await entities_public.get_entities(session, entity_ids, **scope_kw)
+    present = [read for read in reads if read is not None]
+    canonical_ids = [read.id for read in present]
+    evidence_pages = await entities_public.list_entity_evidence_bulk(session, canonical_ids, limit=10, **scope_kw)
+    neighbor_pages = await relationships_public.get_neighbors_bulk(session, canonical_ids, limit=10, **scope_kw)
+    return [
+        _entity_context_item(read, evidence_page, neighbors, collector)
+        for read, evidence_page, neighbors in zip(present, evidence_pages, neighbor_pages, strict=True)
+    ]
 
 
 async def _resolve_entity_context(
@@ -459,11 +494,22 @@ async def _resolve_entity_context(
 ) -> list[EntityContextItem]:
     """Resolve the requested entities (bounded by ``MAX_ENTITY_SCOPE``) into context items.
 
-    Exact gadget selections never expand into entity context. A per-entity failure is logged
-    and skipped; ``TypeError`` is re-raised so call-shape bugs surface.
+    Exact gadget selections never expand into entity context. Entities are read in one batch through the
+    owners' bulk contracts; if the batch fails (other than a ``TypeError`` call-shape bug, which is
+    re-raised) it is logged and each entity is resolved on its own so one bad entity (for example a
+    redirect cycle) is skipped without hiding the rest, exactly as before batching.
     """
+    requested = [] if request.selected_only else list(request.entity_ids[:MAX_ENTITY_SCOPE])
+    if not requested:
+        return []
+    try:
+        return await _resolve_entities_bulk(session, requested, scope_kw, collector)
+    except TypeError:
+        raise  # a call-shape bug must surface, not degrade silently
+    except Exception as exc:  # noqa: BLE001  # boundary: fall back to per-entity isolation
+        logger.warning("Bulk entity resolution failed (%s); resolving entities one by one", exc)
     entity_summaries: list[EntityContextItem] = []
-    for entity_id in (() if request.selected_only else request.entity_ids[:MAX_ENTITY_SCOPE]):
+    for entity_id in requested:
         try:
             item = await _resolve_one_entity(session, entity_id, scope_kw, collector)
             if item is not None:

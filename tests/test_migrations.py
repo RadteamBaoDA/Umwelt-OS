@@ -13,8 +13,8 @@ MERGE_REVISION = "0012_merge_live_and_capability"  # the only historical merge p
 CHAT_SQL_READER = "0013_chat_sql_reader_role"
 
 
-def _alembic(*args: str) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "DATABASE_URL": "postgresql+asyncpg://u:build-placeholder@postgres:5432/db"}
+def _alembic(*args: str, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "DATABASE_URL": "postgresql+asyncpg://u:build-placeholder@postgres:5432/db", **(extra_env or {})}
     return subprocess.run(
         [sys.executable, "-m", "alembic", *args], check=False, capture_output=True, text=True, env=env
     )
@@ -75,7 +75,9 @@ def test_offline_upgrade_final_state_has_no_retired_objects_or_v4_dependencies()
     assert "graph_enabled BOOLEAN DEFAULT true NOT NULL" in sql
     assert "rag_index_enabled BOOLEAN DEFAULT true NOT NULL" in sql
     assert "DEFAULT gen_random_uuid()" not in sql  # ids come from the application (UUIDv7)
-    assert "CONCURRENTLY" not in sql  # the baseline runs in one transaction
+    baseline = _alembic("upgrade", "base:0001_init", "--sql")
+    assert baseline.returncode == 0, baseline.stderr
+    assert "CONCURRENTLY" not in baseline.stdout  # the baseline runs in one transaction
     assert "CREATE FUNCTION uuid_generate_v7()" in sql
 
 
@@ -87,13 +89,16 @@ def test_offline_upgrade_inserts_required_seed_rows() -> None:
     assert "INSERT INTO checkpoint_migrations (v) VALUES (8)" in sql
 
 
-def test_downgrade_is_destructive_and_documented() -> None:
-    result = _alembic("downgrade", f"{BASE}:base", "--sql")
+def test_downgrade_is_destructive_guarded_and_documented() -> None:
+    refused = _alembic("downgrade", f"{BASE}:base", "--sql")
+    assert refused.returncode != 0 and "UMWELT_ALLOW_DESTRUCTIVE_DOWNGRADE" in refused.stderr
+    assert "DROP SCHEMA public CASCADE" not in refused.stdout
+    result = _alembic("downgrade", f"{BASE}:base", "--sql", extra_env={"UMWELT_ALLOW_DESTRUCTIVE_DOWNGRADE": "1"})
     assert result.returncode == 0, result.stderr
     assert "DROP SCHEMA public CASCADE" in result.stdout
     assert "CREATE SCHEMA public" in result.stdout
     doc = ScriptDirectory.from_config(Config("alembic.ini")).get_revision(BASE).module.downgrade.__doc__  # type: ignore[union-attr]
-    assert doc is not None and "DESTRUCTIVE" in doc
+    assert doc is not None and "DESTRUCTIVE" in doc and "UMWELT_ALLOW_DESTRUCTIVE_DOWNGRADE" in doc
 
 
 def test_observations_provider_ids_match_application_constant() -> None:

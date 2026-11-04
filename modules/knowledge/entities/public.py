@@ -867,6 +867,107 @@ async def get_entity(
     return _entity_read(entity, aliases.get(entity.id))
 
 
+_MAX_CANONICAL_HOPS = 32
+
+
+async def _resolve_canonical_bulk(
+    session: AsyncSession, ids: list[UUID], *, workspace_id: UUID,
+) -> dict[UUID, UUID | Exception]:
+    """Resolve many entity IDs through the owner redirect chain with one query round per hop (no admission).
+
+    Mirrors ``resolve_canonical_entity_id`` exactly, per ID: a redirect-free ID must exist in the workspace
+    (else ``LookupError("Entity reference is missing")``), a tombstoned redirect (NULL target) yields
+    ``LookupError("Entity identity was deleted")``, a revisited target ``ValueError`` (cycle) and a chain
+    longer than 32 hops ``ValueError`` (limit). Failures are returned as exception *values* so callers keep
+    the first-failure-in-input-order semantics of the sequential loop. At most 33 rounds x 2 statements.
+    """
+    unique = list(dict.fromkeys(ids))
+    state = {identifier: identifier for identifier in unique}
+    seen = {identifier: {identifier} for identifier in unique}
+    result: dict[UUID, UUID | Exception] = {}
+    pending = set(unique)
+    for _ in range(_MAX_CANONICAL_HOPS):
+        if not pending:
+            break
+        currents = {state[identifier] for identifier in pending}
+        redirects = {
+            old: target for old, target in (await session.execute(
+                select(EntityRedirect.old_entity_id, EntityRedirect.target_entity_id).where(
+                    EntityRedirect.workspace_id == workspace_id, EntityRedirect.old_entity_id.in_(currents),
+                )
+            )).all()
+        }
+        unredirected = currents - redirects.keys()
+        existing = set((await session.scalars(select(Entity.id).where(
+            Entity.id.in_(unredirected), Entity.workspace_id == workspace_id,
+        ))).all()) if unredirected else set()
+        for identifier in list(pending):
+            current = state[identifier]
+            if current not in redirects:
+                result[identifier] = current if current in existing else LookupError("Entity reference is missing")
+                pending.discard(identifier)
+                continue
+            target = redirects[current]
+            if target is None:
+                result[identifier] = LookupError("Entity identity was deleted")
+                pending.discard(identifier)
+            elif target in seen[identifier]:
+                result[identifier] = ValueError("Entity redirect cycle detected")
+                pending.discard(identifier)
+            else:
+                seen[identifier].add(target)
+                state[identifier] = target
+    for identifier in pending:
+        result[identifier] = ValueError("Entity redirect chain exceeds its limit")
+    return result
+
+
+async def resolve_canonical_entity_ids(
+    session: AsyncSession, ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[UUID | None]:
+    """Bulk ``resolve_canonical_entity_id``: canonical IDs aligned with ``ids`` (duplicates allowed, <=100).
+
+    Read-only, one admission, a constant number of queries per redirect hop. IDs that are missing or
+    deleted map to ``None`` (the singular raises ``LookupError``); a redirect cycle or over-long chain
+    raises ``ValueError`` exactly like the singular, for the first such ID in input order.
+    """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if len(ids) > 100:
+        raise ValueError("Entity bulk query must contain at most 100 IDs")
+    resolved = await _resolve_canonical_bulk(session, ids, workspace_id=scope.workspace_id)
+    canonical: list[UUID | None] = []
+    for identifier in ids:
+        outcome = resolved[identifier]
+        if isinstance(outcome, ValueError):
+            raise outcome
+        canonical.append(None if isinstance(outcome, Exception) else outcome)  # only LookupError remains here
+    return canonical
+
+
+async def get_entities(
+    session: AsyncSession, ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[EntityRead | None]:
+    """Bulk ``get_entity``: reads aligned with ``ids`` (duplicates allowed, at most 100), ``None`` if unavailable.
+
+    Follows redirects, applies the same workspace scoping and builds each read with the same alias
+    projection as ``get_entity``; costs a constant number of queries instead of ~4 per ID. Read-only.
+    """
+    canonical_ids = await resolve_canonical_entity_ids(
+        session, ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    wanted = list(dict.fromkeys(identifier for identifier in canonical_ids if identifier is not None))
+    if not wanted:
+        return [None] * len(ids)
+    rows = {row.id: row for row in (await session.scalars(select(Entity).where(
+        Entity.id.in_(wanted), Entity.workspace_id == scope.workspace_id,
+    ))).all()}
+    aliases = await _aliases(session, list(rows), scope=scope)
+    return [
+        _entity_read(rows[identifier], aliases.get(identifier)) if identifier is not None and identifier in rows else None
+        for identifier in canonical_ids
+    ]
+
+
 async def get_entity_refs(
     session: AsyncSession, ids: list[UUID], *, for_write: bool = False,
     scope: Scope, multi_workspace_enabled: bool,
@@ -883,7 +984,16 @@ async def get_entity_refs(
     if not ids:
         return []
     canonical_ids: dict[UUID, UUID] = {}
-    for identifier in ids:
+    if not for_write:
+        # Read mode: one bulk redirect resolution (constant queries) instead of two queries per ID. The first
+        # failing ID in request order raises the same exception the sequential loop below would raise.
+        resolved = await _resolve_canonical_bulk(session, ids, workspace_id=scope.workspace_id)
+        for identifier in ids:
+            outcome = resolved[identifier]
+            if isinstance(outcome, Exception):
+                raise outcome
+            canonical_ids[identifier] = outcome
+    for identifier in ids if for_write else ():
         try:
             canonical_ids[identifier] = await resolve_canonical_entity_id(
                 session, identifier, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
@@ -1136,6 +1246,76 @@ async def list_entity_evidence(
     ]
     next_cursor = encode_cursor(rows[-1].extracted_at, rows[-1].id) if has_more and rows else None
     return EntityEvidencePage(items=items, next_cursor=next_cursor)
+
+
+async def list_entity_evidence_bulk(
+    session: AsyncSession, ids: list[UUID], limit: int = 50,
+    *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[EntityEvidencePage | None]:
+    """Bulk first-page ``list_entity_evidence``: pages aligned with ``ids`` (duplicates allowed, at most 100).
+
+    Per entity the result equals ``list_entity_evidence(id, limit)`` without a cursor: redirects are followed,
+    rows are ordered ``(extracted_at, id)`` and cut at ``limit`` (``next_cursor`` set when more exist), items
+    whose evidence ref is no longer readable are dropped, and a missing entity yields ``None``. One
+    window-function query selects the first ``limit + 1`` memberships of every entity and evidence refs are
+    read in batches of at most 100 unique pairs, instead of ~3 statements per entity. Read-only.
+    """
+    if not 1 <= limit <= 100:
+        raise ValueError("Entity evidence page limit must be between 1 and 100")
+    canonical_ids = await resolve_canonical_entity_ids(
+        session, ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    wanted = list(dict.fromkeys(identifier for identifier in canonical_ids if identifier is not None))
+    rows_by_entity: dict[UUID, list[EntityEvidenceMembership]] = {identifier: [] for identifier in wanted}
+    if wanted:
+        position = func.row_number().over(
+            partition_by=EntityEvidenceMembership.entity_id,
+            order_by=(EntityEvidenceMembership.extracted_at, EntityEvidenceMembership.id),
+        )
+        ranked = select(EntityEvidenceMembership.id.label("membership_id"), position.label("position")).where(
+            EntityEvidenceMembership.entity_id.in_(wanted),
+            EntityEvidenceMembership.workspace_id == scope.workspace_id,
+        ).subquery()
+        memberships = (await session.scalars(
+            select(EntityEvidenceMembership)
+            .join(ranked, ranked.c.membership_id == EntityEvidenceMembership.id)
+            .where(ranked.c.position <= limit + 1)
+            .order_by(EntityEvidenceMembership.entity_id, EntityEvidenceMembership.extracted_at, EntityEvidenceMembership.id)
+        )).all()
+        for membership in memberships:
+            rows_by_entity[membership.entity_id].append(membership)
+    from modules.knowledge.documents import public as documents
+
+    pairs = list(dict.fromkeys(
+        (row.document_version_id, row.chunk_id)
+        for identifier in wanted for row in rows_by_entity[identifier][:limit]
+    ))
+    by_pair: dict[tuple[UUID, UUID], Any] = {}
+    for start in range(0, len(pairs), 100):  # read_evidence_refs accepts at most 100 unique pairs per call
+        for evidence_ref in await documents.read_evidence_refs(
+            session, pairs[start:start + 100], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        ):
+            by_pair[(evidence_ref.document_version_id, evidence_ref.chunk_id)] = evidence_ref
+    pages: dict[UUID, EntityEvidencePage] = {}
+    for identifier in wanted:
+        entity_rows = rows_by_entity[identifier]
+        has_more = len(entity_rows) > limit
+        entity_rows = entity_rows[:limit]
+        items = [
+            EntityEvidenceRead(
+                id=row.id, entity_id=row.entity_id, document_id=ref.document_id,
+                document_version_id=row.document_version_id, version_number=ref.version_number,
+                chunk_id=row.chunk_id, observed_at=row.observed_at, extracted_at=row.extracted_at,
+                confidence=row.confidence, source_id=ref.source_id, title=ref.title,
+                canonical_url=ref.canonical_url,
+                metadata_is_version_snapshot=ref.metadata_is_version_snapshot, excerpt=ref.excerpt,
+            )
+            for row in entity_rows
+            if (ref := by_pair.get((row.document_version_id, row.chunk_id))) is not None
+        ]
+        next_cursor = encode_cursor(entity_rows[-1].extracted_at, entity_rows[-1].id) if has_more and entity_rows else None
+        pages[identifier] = EntityEvidencePage(items=items, next_cursor=next_cursor)
+    return [pages[identifier] if identifier is not None else None for identifier in canonical_ids]
 
 
 def _review_cursor(timestamp: datetime, work_id: UUID, index: int) -> str:

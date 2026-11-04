@@ -83,3 +83,19 @@ Behaviour-preserving moves of CPU-bound work off the API/worker event loop. Noth
 Known limit: `json.loads` and pydantic-core validation hold the GIL for the whole native call, so a thread keeps the loop responsive only between native calls. A single 10 MB `json.loads` can still stall the loop for roughly its own duration. Only a process pool would remove that, and it is not part of this package.
 
 Guardrail: the opt-in `loop_block_guard` fixture in `tests/conftest.py` runs a test loop in asyncio debug mode with `slow_callback_duration = 0.1` and fails on any callback of 100 ms or more. `tests/unit/test_event_loop_offload.py` uses it with large inputs and negative controls. Ruff `ASYNC` was checked on the touched files only (global config untouched): the remaining `ASYNC240` hits are the A9 sites above and one `Path.stat` in `parse_file_bounded`.
+
+## Database schema and lifecycle (plan section 4.1 items 1, 2, 5, 6; P2, P3, P9)
+
+Nothing below was benchmarked; these are structural changes with unit tests and an integration test (`tests/integration/test_db_schema_perf.py`, run by the orchestrator).
+
+| Item | Change |
+|---|---|
+| P2 migration safety | Migration connections get `lock_timeout` 5 s and `statement_timeout` 1 h; index DDL uses `CONCURRENTLY` in `autocommit_block` via `core/migration_support.py`; the `0001` baseline downgrade refuses without `UMWELT_ALLOW_DESTRUCTIVE_DOWNGRADE=1`; `scripts/lint_migrations.py` runs in `tests/test_migration_safety.py`. |
+| P9 indexes | 0014 drops duplicate/superseded indexes (two identical `document_chunks` expression GINs, one duplicate `relationship_evidence` index), adds 23 FK indexes for delete/cascade/erasure paths, and converts three low-selectivity `status` indexes to partial ones. Effect on delete/purge latency is unmeasured. |
+| Lexical search | `document_chunks.content_tsv` stored generated column + GIN; `modules/search/public.py` matches and ranks through it. Same expression, so identical match sets and `ts_rank_cd` scores (verified against the inline expression in the integration test); candidates are no longer re-parsed at query time. Cost: one table rewrite at upgrade (see operations.md). |
+| P3 HNSW | The per-generation HNSW index is built with `CREATE INDEX CONCURRENTLY` on a separate autocommit connection before activation, so activation no longer blocks writes to `search_index_items` for the build duration. |
+| Outbox retention | `purge_delivered_outbox` now covers every event type (delivered/failed rows only; stage events 7 days, others `OUTBOX_RETENTION_DAYS`, default 30), still bounded to 1000 rows per hourly call. |
+| Autovacuum | Scale factors lowered on `event_outbox`, `chat_stream_events`, `realtime_replay_events`, `source_observations`, `system_health_samples`. |
+| Partitioning | Not implemented: unique keys on `chat_stream_events` / `realtime_replay_events` cannot carry the partition key (see operations.md). |
+| Entity context N+1 | `_resolve_entity_context` (chat retrieval) read about 4 statements/awaits per entity for up to 100 entities. It now calls `entities.get_entities`, `entities.list_entity_evidence_bulk` and `relationships.get_neighbors_bulk` (3 owner calls; redirect resolution is one query round per hop, evidence refs are read in batches of 100, neighbour entity refs in batches of 100), with a per-entity fallback if the batch fails. `entities.get_entity_refs` read mode also resolves redirects in bulk. Results and ordering match the singular contracts (unit tests compare redirect resolution against `resolve_canonical_entity_id`). |
+

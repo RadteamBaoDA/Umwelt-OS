@@ -1863,14 +1863,16 @@ async def purge_collection_receipts(ctx: dict[str, object]) -> int:
         await session.commit()
     # Same hourly cron also trims other append-only bookkeeping, each in its own short transaction so
     # one failing table cannot block the receipts above. The receipt count stays the return value.
-    for purge in (
-        connectors.purge_collection_history,
-        ingestion_api.purge_delivered_outbox,
-        ingestion_api.purge_expired_datasource_data,
+    settings = ctx.get("settings")
+    outbox_days = getattr(settings, "outbox_retention_days", None)
+    for purge, extra in (
+        (connectors.purge_collection_history, {}),
+        (ingestion_api.purge_delivered_outbox, {"retention_days": outbox_days}),
+        (ingestion_api.purge_expired_datasource_data, {}),
     ):
         try:
             async with factory() as session:
-                await purge(session, limit=1000)
+                await purge(session, limit=1000, **extra)
                 await session.commit()
         except Exception:
             logger.warning("collection retention step %s failed", purge.__name__, exc_info=True)

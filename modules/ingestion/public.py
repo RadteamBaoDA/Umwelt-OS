@@ -87,6 +87,7 @@ from modules.ingestion._outbox import (
 )
 from modules.ingestion._purge import (
     _PURGEABLE_OUTBOX_TYPES,
+    OUTBOX_GENERAL_RETENTION_DAYS,
     OUTBOX_RETENTION,
     _lock_ingestion_purge_identities,
     _source_ingestion_purge_lineage,
@@ -160,6 +161,7 @@ from modules.ingestion.schemas import (
 __all__ = [
     "COLLECTION_STATS_MAX_BYTES",
     "NORMALIZATION_VERSION",
+    "OUTBOX_GENERAL_RETENTION_DAYS",
     "OUTBOX_RETENTION",
     "_NO_EXPECTED_CURSOR",
     "_PURGEABLE_OUTBOX_TYPES",

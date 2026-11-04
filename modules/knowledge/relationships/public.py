@@ -20,6 +20,7 @@ from sqlalchemy import (
     or_,
     select,
     tuple_,
+    union,
     update,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -840,6 +841,25 @@ def _decode_neighbor_cursor(cursor: str, focus_id: UUID) -> tuple[object, UUID]:
         raise ValueError("Invalid neighbor cursor") from exc
 
 
+def _neighbor_items(rows: list[Relationship], focus: UUID, by_id: dict[UUID, Any]) -> list[NeighborRead]:
+    """Project relationship rows around ``focus`` into ``NeighborRead`` items (pure, order preserving).
+
+    ``by_id`` maps the neighbour requested id to its resolved entity reference; rows whose neighbour did not
+    resolve are dropped.
+    """
+    return [
+        NeighborRead(
+            entity=EntityGraphRead(
+                id=by_id[neighbor_id].canonical_id, type=by_id[neighbor_id].type,
+                name=by_id[neighbor_id].name, revision=by_id[neighbor_id].revision,
+            ),
+            relationship=_relationship_read(row),
+        )
+        for row in rows
+        if (neighbor_id := (row.target_entity_id if row.source_entity_id == focus else row.source_entity_id)) in by_id
+    ]
+
+
 async def get_neighbors(
     session: AsyncSession, entity_id: UUID, limit: int = 50, cursor: str | None = None,
     *, scope: Scope, multi_workspace_enabled: bool,
@@ -872,19 +892,80 @@ async def get_neighbors(
         session, neighbor_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     ) if neighbor_ids else []
     by_id = {ref.requested_id: ref for ref in refs}
-    items = [
-        NeighborRead(
-            entity=EntityGraphRead(
-            id=by_id[neighbor_id].canonical_id, type=by_id[neighbor_id].type,
-                name=by_id[neighbor_id].name, revision=by_id[neighbor_id].revision,
-            ),
-            relationship=_relationship_read(row),
-        )
-        for row in rows
-        if (neighbor_id := (row.target_entity_id if row.source_entity_id == focus else row.source_entity_id)) in by_id
-    ]
+    items = _neighbor_items(rows, focus, by_id)
     next_cursor = _encode_neighbor_cursor(focus, rows[-1].created_at, rows[-1].id) if truncated and rows else None
     return NeighborPage(items=items, truncated=truncated, next_cursor=next_cursor)
+
+
+async def get_neighbors_bulk(
+    session: AsyncSession, ids: list[UUID], limit: int = 50,
+    *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[NeighborPage | None]:
+    """Bulk first-page ``get_neighbors``: pages aligned with ``ids`` (duplicates allowed, at most 100).
+
+    Per entity the page equals ``get_neighbors(id, limit)`` without a cursor: the focus is the redirect-resolved
+    canonical entity (``None`` page when missing), relationships are ordered ``(created_at DESC, id DESC)`` and
+    cut at ``limit - 1`` with ``truncated``/``next_cursor`` set when more exist. One window-function query
+    selects every focus's first ``limit`` relationships and neighbour entity references are resolved in
+    batches of at most 100 unique ids, instead of ~4 statements per entity. Read-only; a dangling neighbour
+    raises ``LookupError`` like the singular.
+    """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if not 2 <= limit <= 100:
+        raise ValueError("Neighbor page limit must be between 2 and 100 total nodes")
+    focuses = await entities.resolve_canonical_entity_ids(
+        session, ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    wanted = list(dict.fromkeys(focus for focus in focuses if focus is not None))
+    rows_by_focus: dict[UUID, list[Relationship]] = {focus: [] for focus in wanted}
+    if wanted:
+        # UNION (not UNION ALL) so a self-loop matched on both endpoints appears once per focus, like OR.
+        matches = union(
+            select(Relationship.source_entity_id.label("focus"), Relationship.id.label("rid"),
+                   Relationship.created_at.label("created")).where(
+                Relationship.workspace_id == scope.workspace_id, Relationship.source_entity_id.in_(wanted)),
+            select(Relationship.target_entity_id.label("focus"), Relationship.id.label("rid"),
+                   Relationship.created_at.label("created")).where(
+                Relationship.workspace_id == scope.workspace_id, Relationship.target_entity_id.in_(wanted)),
+        ).subquery()
+        ranked = select(
+            matches.c.focus, matches.c.rid,
+            func.row_number().over(
+                partition_by=matches.c.focus, order_by=(matches.c.created.desc(), matches.c.rid.desc()),
+            ).label("position"),
+        ).subquery()
+        found = (await session.execute(
+            select(Relationship, ranked.c.focus).join(ranked, ranked.c.rid == Relationship.id)
+            .where(ranked.c.position <= limit)
+            .order_by(ranked.c.focus, desc(Relationship.created_at), desc(Relationship.id))
+        )).all()
+        for found_row in found:
+            relationship: Relationship = found_row[0]
+            focus_id: UUID = found_row[1]
+            rows_by_focus[focus_id].append(relationship)
+    neighbor_ids = list(dict.fromkeys(
+        row.target_entity_id if row.source_entity_id == focus else row.source_entity_id
+        for focus in wanted for row in rows_by_focus[focus][: limit - 1]
+    ))
+    by_id: dict[UUID, Any] = {}
+    for start in range(0, len(neighbor_ids), 100):  # get_entity_refs accepts at most 100 unique ids
+        for ref in await entities.get_entity_refs(
+            session, neighbor_ids[start:start + 100], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        ):
+            by_id[ref.requested_id] = ref
+    pages: dict[UUID, NeighborPage] = {}
+    for focus in wanted:
+        focus_rows = rows_by_focus[focus]
+        truncated = len(focus_rows) > limit - 1
+        focus_rows = focus_rows[: limit - 1]
+        next_cursor = (
+            _encode_neighbor_cursor(focus, focus_rows[-1].created_at, focus_rows[-1].id)
+            if truncated and focus_rows else None
+        )
+        pages[focus] = NeighborPage(
+            items=_neighbor_items(focus_rows, focus, by_id), truncated=truncated, next_cursor=next_cursor,
+        )
+    return [pages[focus] if focus is not None else None for focus in focuses]
 
 
 def _build_evidence_rows(

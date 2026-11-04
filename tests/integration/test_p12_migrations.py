@@ -22,11 +22,11 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 HEAD = ScriptDirectory.from_config(Config(str(REPOSITORY_ROOT / "alembic.ini"))).get_current_head()
 
 
-def _alembic(database_url: str, *arguments: str) -> str:
+def _alembic(database_url: str, *arguments: str, extra_env: dict[str, str] | None = None) -> str:
     result = subprocess.run(
         [sys.executable, "-m", "alembic", *arguments],
         cwd=REPOSITORY_ROOT,
-        env={**os.environ, "DATABASE_URL": database_url},
+        env={**os.environ, "DATABASE_URL": database_url, **(extra_env or {})},
         capture_output=True, text=True, check=False, timeout=600,
     )
     assert result.returncode == 0, f"alembic {' '.join(arguments)} failed:\n{result.stderr}"
@@ -135,7 +135,8 @@ async def test_downgrade_wipes_schema_and_reupgrade_restores_identical_schema(
     url = await scratch_database()
     _alembic(url, "upgrade", "head")
     at_head = await _schema(url)
-    _alembic(url, "downgrade", "base")
+    # The 0001 downgrade drops the whole schema and is refused unless explicitly confirmed.
+    _alembic(url, "downgrade", "base", extra_env={"UMWELT_ALLOW_DESTRUCTIVE_DOWNGRADE": "1"})
     assert "owner" not in (await _schema(url))["tables"]  # type: ignore[operator]
     _alembic(url, "upgrade", "head")
     assert await _schema(url) == at_head

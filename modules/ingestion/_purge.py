@@ -5,6 +5,7 @@ from uuid import UUID
 
 from sqlalchemy import String, and_, cast, delete, func, not_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.dml import Delete
 
 from core.errors import ConflictError
 from core.workspaces.schemas import AccessFence, InternalJobScope
@@ -239,29 +240,67 @@ async def purge_expired_collection_receipts(session: AsyncSession, *, now: datet
     return len(doomed)
 
 
-# Fan-out stage events nobody reads after delivery; other types stay (automations read
-# document.version.ready by cursor and cleanup receipts check fixed event ids).
+# Fan-out stage events nobody reads after delivery: they age out on the short window. Every other event
+# type (``document.version.ready`` is read by the automations/entity sweeps by keyset cursor, cleanup
+# receipts check fixed event ids) is kept for the configurable ``OUTBOX_GENERAL_RETENTION_DAYS`` so a
+# consumer that is behind by less than that never loses events.
 _PURGEABLE_OUTBOX_TYPES = ("ingestion.stage.requested", "ingestion.normalize.requested")
 
+# Only terminal rows are ever eligible; ``pending``/``queued`` rows are undelivered work and are never purged.
+_PURGEABLE_OUTBOX_STATUSES = ("delivered", "failed")
 
 OUTBOX_RETENTION = timedelta(days=7)
+OUTBOX_GENERAL_RETENTION_DAYS = 30
 
 
-async def purge_delivered_outbox(session: AsyncSession, *, now: datetime | None = None, limit: int = 1000) -> int:
-    """Delete one bounded slice of long-delivered ingestion stage events; the caller commits.
+def outbox_purge_statement(
+    *, now: datetime, limit: int, retention_days: int = OUTBOX_GENERAL_RETENTION_DAYS,
+    status: str | None = None,
+) -> Delete:
+    """Build the bounded ``DELETE`` of terminal outbox rows past their retention window (pure; no I/O).
 
-    Only ``delivered`` rows of the two ingestion stage types older than 7 days qualify, so pending,
-    queued and failed rows (still retryable or diagnostic) and every other event type are untouched.
-    ``id IN (subselect LIMIT n)`` bounds each pass; the hourly cron drains a backlog. Returns rows deleted.
+    Eligible: ``status IN ('delivered','failed')`` AND (stage-fan-out type older than ``OUTBOX_RETENTION`` OR
+    any type older than ``retention_days``). ``id IN (subselect ... LIMIT n)`` bounds one pass; the
+    hourly cron drains a backlog. ``pending``/``queued`` rows can never match. ``status`` narrows the
+    statement to one terminal status so the equality predicate matches the per-status partial index
+    (``ix_event_outbox_delivered_created`` / ``ix_event_outbox_failed_created``) instead of a seq scan.
+    """
+    if status is not None and status not in _PURGEABLE_OUTBOX_STATUSES:
+        raise ValueError("Only terminal outbox statuses can be purged")
+    statuses = (status,) if status is not None else _PURGEABLE_OUTBOX_STATUSES
+    general_cutoff = now - timedelta(days=max(1, retention_days))
+    stage_cutoff = now - OUTBOX_RETENTION
+    doomed = select(EventOutbox.id).where(
+        EventOutbox.status.in_(statuses) if status is None else EventOutbox.status == status,
+        or_(
+            and_(EventOutbox.type.in_(_PURGEABLE_OUTBOX_TYPES), EventOutbox.created_at < stage_cutoff),
+            EventOutbox.created_at < general_cutoff,
+        ),
+    ).limit(limit)
+    return delete(EventOutbox).where(EventOutbox.id.in_(doomed))
+
+
+async def purge_delivered_outbox(
+    session: AsyncSession, *, now: datetime | None = None, limit: int = 1000, retention_days: int | None = None,
+) -> int:
+    """Delete one bounded slice of expired terminal outbox events of every type; the caller commits.
+
+    Stage fan-out events expire after 7 days, all other types after ``retention_days`` (default
+    ``OUTBOX_GENERAL_RETENTION_DAYS``, configured by ``Settings.outbox_retention_days``). Only
+    ``delivered`` and ``failed`` rows qualify, so undelivered work is never lost. Returns rows deleted.
     """
     now = now or datetime.now(UTC)
-    doomed = select(EventOutbox.id).where(
-        EventOutbox.status == "delivered",
-        EventOutbox.type.in_(_PURGEABLE_OUTBOX_TYPES),
-        EventOutbox.created_at < now - OUTBOX_RETENTION,
-    ).limit(limit)
-    result = await session.execute(delete(EventOutbox).where(EventOutbox.id.in_(doomed)))
-    return int(getattr(result, "rowcount", 0) or 0)
+    deleted = 0
+    # One statement per terminal status, each bounded by the remaining budget, so each can use its partial index.
+    for status in _PURGEABLE_OUTBOX_STATUSES:
+        if deleted >= limit:
+            break
+        result = await session.execute(outbox_purge_statement(
+            now=now, limit=limit - deleted, retention_days=retention_days or OUTBOX_GENERAL_RETENTION_DAYS,
+            status=status,
+        ))
+        deleted += int(getattr(result, "rowcount", 0) or 0)
+    return deleted
 
 
 async def purge_expired_datasource_data(

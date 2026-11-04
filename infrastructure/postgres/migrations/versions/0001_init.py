@@ -18,6 +18,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
+from core.migration_support import DESTRUCTIVE_DOWNGRADE_ENV, destructive_downgrade_allowed
+
 revision: str = "0001_init"
 down_revision: str | Sequence[str] | None = None
 branch_labels: str | Sequence[str] | None = None
@@ -3767,7 +3769,14 @@ def downgrade() -> None:
     """DESTRUCTIVE: drop the whole ``public`` schema (all tables, data, functions and extensions' objects).
 
     ``0001_init`` is the baseline, so there is no earlier state to restore; downgrading wipes the database.
+    Guarded: refuses with a ``RuntimeError`` unless the operator sets ``UMWELT_ALLOW_DESTRUCTIVE_DOWNGRADE=1``
+    (revision ids and ancestry are unchanged; only this operation is gated).
     """
+    if not destructive_downgrade_allowed():
+        raise RuntimeError(
+            "Refusing to downgrade 0001_init: it drops the entire public schema and all data. "
+            f"Set {DESTRUCTIVE_DOWNGRADE_ENV}=1 to confirm."
+        )
     op.execute("DROP SCHEMA public CASCADE")
     op.execute("CREATE SCHEMA public")
     # DROP SCHEMA also removed alembic_version, but Alembic's trailing DELETE FROM alembic_version would then fail.
