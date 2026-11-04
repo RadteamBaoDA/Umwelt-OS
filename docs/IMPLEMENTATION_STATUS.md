@@ -1,3 +1,13 @@
+<!-- provider-fixed-endpoints-status:start -->
+## Fixed hosted provider endpoints and OpenRouter browser - 2026-11-04, branch feature/fix-ui
+
+- Hosted provider kinds (OpenAI, OpenRouter, Groq, Gemini, Anthropic) are key-only: the server stores the vendor's fixed endpoint and ignores any client URL. Self-hosted kinds (Ollama, LM Studio, custom) keep their URL. Hosted kinds still need `ai_allow_public_providers` or their host in `ai_allowed_endpoint_hosts`; the policy is unchanged, only the hosts are now fixed.
+- Legacy rows (a hosted kind with a non-vendor URL, e.g. a proxy) are migrated at read time to `custom` with the URL, key, models and consent untouched; `gateway_identity`/`model_identity` rotate once, so capability evidence is re-probed once. Saving such a row with a hosted kind is a deliberate switch and gets the fixed endpoint; saving it as `custom` keeps the proxy URL and key.
+- The `anthropic` kind uses the native Messages API (`anthropic-version: 2026-10-21`) through the pinned httpx client, with thinking passback (`reasoning_details`) on tool rounds, forced `tool_choice` downgraded to auto, and `max_tokens` defaulting to 4096 (32000 when streaming). Streamed `reasoning_details` is echoed only for this kind.
+- OpenRouter model browser: `POST /api/v1/settings/ai/openrouter/models` (own `openrouter_browse` budget, 30/min) with the full filter set; the browser never calls OpenRouter directly. New stored-only model types can be added from it.
+- Validation: unit, vitest, ruff and mypy pass; Docker, Playwright and live provider acceptance remain pending.
+<!-- provider-fixed-endpoints-status:end -->
+
 <!-- gadget-templates-status:start -->
 ## Dashboard gadget templates and ownership - 2026-10-29, in progress
 
