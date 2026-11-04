@@ -42,7 +42,7 @@ def _rss(items: list[tuple[str, datetime]]) -> bytes:
 def test_catalog_covers_the_eight_providers_and_stays_on_declared_hosts() -> None:
     assert PROVIDERS == sorted(
         ["tuoitre_news", "vnexpress_business", "thanhnien_news", "dantri_news", "bbc_world", "npr_news",
-         "fed_press", "lobsters"])
+         "fed_press", "lobsters", "github_trending", "wwr_jobs"])
     for provider, catalog in SECTION_CATALOG.items():
         spec = get_provider_spec(provider)
         slugs = [s.slug for s in catalog.sections]

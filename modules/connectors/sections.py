@@ -146,6 +146,25 @@ SECTION_CATALOG: dict[str, SectionCatalog] = {
         ("databases", "Databases", "Cơ sở dữ liệu", "t/databases.rss"),
         ("devops", "DevOps", "DevOps", "t/devops.rss"),
     )),
+    # Third-party mirror of github.com/trending. Fetched 2026-11-04; daily Python (1.6 MB) and daily TypeScript
+    # (0.9 MB) are omitted because they approach or exceed the 1 MiB feed cap, so the weekly lists stand in.
+    "github_trending": _catalog("daily-all", "https://mshibanami.github.io/GitHubTrendingRSS/", (
+        ("daily-all", "Daily: all languages", "Hàng ngày: mọi ngôn ngữ", "daily/all.xml"),
+        ("weekly-all", "Weekly: all languages", "Hàng tuần: mọi ngôn ngữ", "weekly/all.xml"),
+        ("weekly-typescript", "Weekly: TypeScript", "Hàng tuần: TypeScript", "weekly/typescript.xml"),
+        ("weekly-python", "Weekly: Python", "Hàng tuần: Python", "weekly/python.xml"),
+        ("daily-go", "Daily: Go", "Hàng ngày: Go", "daily/go.xml"),
+        ("daily-rust", "Daily: Rust", "Hàng ngày: Rust", "daily/rust.xml"),
+        ("daily-javascript", "Daily: JavaScript", "Hàng ngày: JavaScript", "daily/javascript.xml"),
+    )),
+    # We Work Remotely category feeds (all fetched 2026-11-04 with HTTP 200).
+    "wwr_jobs": _catalog("programming", "https://weworkremotely.com/categories/", (
+        ("programming", "Programming", "Lập trình", "remote-programming-jobs.rss"),
+        ("full-stack-programming", "Full-stack", "Full-stack", "remote-full-stack-programming-jobs.rss"),
+        ("back-end-programming", "Back-end", "Back-end", "remote-back-end-programming-jobs.rss"),
+        ("front-end-programming", "Front-end", "Front-end", "remote-front-end-programming-jobs.rss"),
+        ("devops-sysadmin", "DevOps and sysadmin", "DevOps và quản trị hệ thống", "remote-devops-sysadmin-jobs.rss"),
+    )),
 }
 
 

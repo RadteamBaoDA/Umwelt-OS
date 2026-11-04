@@ -45,6 +45,7 @@ from modules.connectors.provider_specs import (
     get_provider_spec,
     get_quota_policies,
     get_realtime_tier,
+    min_interval_minutes,
 )
 from modules.connectors.providers import news as _news
 from modules.connectors.providers import rest
@@ -69,6 +70,7 @@ PURE_PROVIDERS = (  # coingecko needs a key slot
     "world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika", "nasa_eonet", "cisa_kev",
     *JSON_FEEDS,  # table-driven JSON list/event feeds (providers/json_feed.py)
     "noaa_kp", "open_er_api", "oecd_cli", "iss_position", "disease_sh", "ioda", "nvd",  # bespoke keyless mappers
+    "vn_stock",
 )
 KEYED_PROVIDERS = {provider: row.placement for provider, row in KEYED.items()}  # provider -> stored credential header_name (header | query:<p> | path:<t>)
 SIMPLE_NATIVE = frozenset({"youtube", "arxiv", "huggingface", "bluesky", "reddit", "mastodon", "x", "github_releases", "alpha_vantage", "open_meteo", "google_mail", "google_calendar", "google_drive", "health", "home_assistant", "notion", "slack"})
@@ -408,9 +410,12 @@ async def _publish_realtime_snapshot(
 
         spec = get_provider_spec(a.source.provider)
         cfg = getattr(a.source, "configuration", None) or {}
-        interval_minutes = int(
-            cfg.get("schedule_interval_minutes")
-            or (spec.default_interval_minutes if spec is not None else 15)
+        interval_minutes = max(
+            int(
+                cfg.get("schedule_interval_minutes")
+                or (spec.default_interval_minutes if spec is not None else 15)
+            ),
+            min_interval_minutes(a.source.provider),
         )
         ttl_seconds = max(180, interval_minutes * 180)
         preview = [
@@ -1278,6 +1283,31 @@ async def _run_coinpaprika(run: Run) -> None:
     await _accept_native(run, lease, records, _coverage(records), collected_at)
 
 
+async def _run_vn_stock(run: Run) -> None:
+    """VN stocks/indices: one gated, debited GET per non-empty group (stocks, indices), so at most two per run.
+
+    The VNDirect finfo API serves stocks and indices from different endpoints. Any failing call fails the run
+    (a partial symbol set would silently drop a series); calls are spaced one second apart to stay polite to an
+    unofficial endpoint. Symbol order is the owner's, so equal selections send equal request sequences.
+    """
+    from modules.connectors.providers import vn_stock
+    from modules.connectors.providers.macro import MAX_BODY_BYTES, decode_json
+
+    cfg = run.attempt.source.configuration or {}
+    collected_at = datetime.now(UTC)
+    lease = await _lease(run)
+    records: list[IngestionRecord] = []
+    requests = _payload(vn_stock.vn_stock_requests, provider_options.selected_vn_symbols(cfg))
+    for index, (group, request) in enumerate(requests):
+        if index:
+            await asyncio.sleep(1.0)
+        fetched = await _get_body(run, request, max_bytes=MAX_BODY_BYTES)
+        records += _payload(
+            lambda body, group=group: vn_stock.map_vn_stock(decode_json(body), collected_at, symbols=group),
+            _require_body(fetched))
+    await _accept_native(run, lease, records, _coverage(records), collected_at)
+
+
 async def _keyed_secret(run: Run) -> str:
     """Owner key for this exact generation/revision, read at send time; typed ``credential_missing`` if unusable.
 
@@ -1468,6 +1498,7 @@ async def _run_openalex(run: Run) -> None:
 
 ADAPTERS.update({
     **dict.fromkeys(PURE_PROVIDERS, _run_pure),
+    "vn_stock": _run_vn_stock,  # two endpoints (stocks, indices); overrides the single-request runner
     **dict.fromkeys(KEYED, _run_keyed),
     "coingecko": _run_coingecko,
     **dict.fromkeys(_news.FEED_URLS, _run_feed),  # every fixed-URL feed preset shares one adapter

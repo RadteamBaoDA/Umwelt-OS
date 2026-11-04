@@ -25,7 +25,7 @@ _PURE_FIXTURES = {
     "ecb": "ecb_eurofxref_daily.xml", "binance": "binance_btcusdt.json", "alternative_me": "fear_greed.json",
     "usgs": "usgs_4_5_day.geojson", "coinpaprika": "coinpaprika_btc.json", "coingecko": "coingecko_btc.json",
     "noaa_kp": "noaa_kp.json", "open_er_api": "open_er_api.json", "oecd_cli": "oecd_cli.json",
-    "iss_position": "iss_position.json", "disease_sh": "disease_sh.json",
+    "iss_position": "iss_position.json", "disease_sh": "disease_sh.json", "vn_stock": "vn_stock_prices.json",
 }
 
 

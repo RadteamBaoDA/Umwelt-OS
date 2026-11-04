@@ -28,6 +28,7 @@ from modules.connectors.provider_options import (
     ALL_OPTION_NAMES,
     ISO_COUNTRY_PATTERN,
     MAX_COINS,
+    MAX_VN_SYMBOLS,
     CoinId,
     CryptoPair,
     EonetCategory,
@@ -48,6 +49,7 @@ from modules.connectors.provider_options import (
     SatnogsStatus,
     UsgsMagnitude,
     UsgsPeriod,
+    VnSymbol,
     WbIndicator,
     WikiLanguage,
 )
@@ -60,6 +62,7 @@ from modules.connectors.provider_specs import (
     deployment_use_matches,
     get_provider_spec,
     get_realtime_tier,
+    min_interval_minutes,
 )
 from modules.connectors.provisioning_routes import ActivationRequest, _owner_access, activate_native
 from modules.connectors.public import (
@@ -108,6 +111,8 @@ class BuiltinSourceRead(BaseModel):
     applicable_options: list[str] = []
     sections: list[SectionRead] | None = None
     default_section: str | None = None
+    # Hard floor for ``schedule_interval_minutes`` (the UI hides shorter choices; the API answers 422 below it).
+    min_interval_minutes: int = 15
 
 
 class BuiltinEnableRequest(BaseModel):
@@ -160,6 +165,7 @@ class BuiltinEnableRequest(BaseModel):
     fx_quotes: tuple[FxCurrency, ...] | None = Field(default=None, min_length=1, max_length=10)
     oecd_countries: tuple[OecdArea, ...] | None = Field(default=None, min_length=1, max_length=10)
     crypto_symbols: tuple[CryptoPair, ...] | None = Field(default=None, min_length=1, max_length=10)
+    vn_symbols: tuple[VnSymbol, ...] | None = Field(default=None, min_length=1, max_length=MAX_VN_SYMBOLS)
     coin_ids: tuple[CoinId, ...] | None = Field(default=None, min_length=1, max_length=MAX_COINS)
     kp_min: float | None = Field(default=None, ge=0, le=9)
     advisory_min_level: StrictInt | None = Field(default=None, ge=1, le=4)
@@ -194,6 +200,7 @@ def _read(spec: FreeProviderSpec, source: ConnectorSource | None, active: bool) 
         sections=[SectionRead(slug=x.slug, label_en=x.label_en, label_vi=x.label_vi) for x in catalog.sections]
         if catalog else None,
         default_section=catalog.default if catalog else None,
+        min_interval_minutes=min_interval_minutes(spec.id),
     )
 
 
@@ -293,7 +300,7 @@ async def enable_builtin(
     Wave D per-type options (``hn_list``, ``gdelt_*``, ``usgs_*``, ``eonet_*``, ``gdacs_*``, ``nws_*``, ``nvd_*``,
     ``min_magnitude``, ``kev_ransomware_only``, ``ioda_country``, ``region``) and wave F options (``wiki_language``,
     ``satnogs_status``, ``disease_country``, ``wb_*``, ``fx_*``, ``oecd_countries``, ``crypto_symbols``, ``coin_ids``,
-    ``kp_min``, ``advisory_min_level``) follow the same precedence and are accepted only by their own provider
+    ``vn_symbols``, ``kp_min``, ``advisory_min_level``) follow the same precedence and are accepted only by their own provider
     (422 otherwise; an enum value outside a field's curated list is rejected at request parsing, also 422).
 
     Settings precedence per field (interval, ``realtime_mode``, ``max_items``, keywords, ``max_age_days``,
@@ -301,7 +308,9 @@ async def enable_builtin(
     request value, else the Source's saved configuration, else the spec default (interval) or unset.
     Filter fields for a provider outside ``INCREMENTAL_PROVIDERS`` and ``feed_sections`` for a provider without a
     section catalog (or with a slug outside it) fail validation (422). ``name`` only
-    names a newly created Source; it is ignored when an existing Source is reused.
+    names a newly created Source; it is ignored when an existing Source is reused. An interval below the provider's
+    hard floor (``min_interval_minutes``) fails with 422 ``schedule_interval_below_minimum``; the default is
+    ``max(spec default, floor)``.
     """
     spec = _spec(provider)
     scope, gate = _owner, request.app.state.settings.multi_workspace_enabled
@@ -370,10 +379,14 @@ async def enable_builtin(
         )
         if (value := pick(field)) is not None
     }
+    floor = min_interval_minutes(provider)
+    interval = pick("schedule_interval_minutes", max(spec.default_interval_minutes, floor))
+    if isinstance(interval, int) and interval < floor:
+        raise HTTPException(status_code=422, detail=f"schedule_interval_below_minimum: minimum {floor} minutes")
     try:
         config = ConnectorConfig(
             timeout_seconds=30, history_mode="returned_snapshot",
-            schedule_interval_minutes=pick("schedule_interval_minutes", spec.default_interval_minutes),
+            schedule_interval_minutes=interval,
             realtime_mode=pick("realtime_mode"), **options)
         source_configuration = serialize_source_configuration(source, config)
         registry.validate(source.model_copy(update={"configuration": source_configuration}))

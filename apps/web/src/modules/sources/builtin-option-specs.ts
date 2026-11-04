@@ -3,10 +3,10 @@ import type { BuiltinTypeOptions } from './api';
 /** One per-type built-in option: how it renders and the bounds the server enforces. */
 export type OptionSpec = {
   key: keyof BuiltinTypeOptions;
-  kind: 'enum' | 'multi' | 'int' | 'float' | 'bool' | 'text';
+  kind: 'enum' | 'multi' | 'int' | 'float' | 'bool' | 'text' | 'tags';
   /** Enum / multi-enum values, identical to the server Literal (modules/connectors/provider_options.py). */
   values?: readonly string[];
-  /** Multi-select cap. */
+  /** Multi-select cap, or the most comma-separated terms a `tags` field accepts. */
   max?: number;
   min?: number;
   /** Numeric ceiling (inclusive). */
@@ -67,6 +67,8 @@ export const OPTION_SPECS: readonly OptionSpec[] = [
   { key: 'fx_quotes', kind: 'multi', max: 10, values: FX_CURRENCY },
   { key: 'oecd_countries', kind: 'multi', max: 10, values: ['USA', 'CHN', 'JPN', 'DEU', 'GBR', 'FRA', 'ITA', 'CAN', 'KOR', 'IND', 'BRA', 'AUS', 'ESP', 'MEX', 'TUR', 'IDN'] },
   { key: 'crypto_symbols', kind: 'multi', max: 10, values: ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT', 'ADAUSDT', 'DOGEUSDT', 'TRXUSDT', 'LINKUSDT', 'DOTUSDT', 'LTCUSDT', 'AVAXUSDT'] },
+  // Free-form tickers (e.g. FPT, VNINDEX): comma-separated, forced upper case; the server validates the 2-10 char code pattern.
+  { key: 'vn_symbols', kind: 'tags', max: 20, maxLen: 10, upper: true },
   { key: 'coin_ids', kind: 'multi', max: 5, values: ['btc-bitcoin', 'eth-ethereum', 'bnb-binance-coin', 'sol-solana', 'xrp-xrp', 'ada-cardano', 'doge-dogecoin', 'ltc-litecoin', 'dot-polkadot', 'trx-tron'] },
   { key: 'kp_min', kind: 'float', min: 0, hi: 9, step: 0.1 },
   { key: 'advisory_min_level', kind: 'int', min: 1, hi: 4 },

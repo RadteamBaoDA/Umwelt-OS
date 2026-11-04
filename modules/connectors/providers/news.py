@@ -56,6 +56,8 @@ FEED_URLS: dict[str, str] = {
     "fed_press": "https://www.federalreserve.gov/feeds/press_all.xml",
     "gdacs_rss": "https://www.gdacs.org/xml/rss.xml",
     "lobsters": "https://lobste.rs/rss",
+    "github_trending": "https://mshibanami.github.io/GitHubTrendingRSS/daily/all.xml",
+    "wwr_jobs": "https://weworkremotely.com/categories/remote-programming-jobs.rss",
     "us_travel_advisories": "https://travel.state.gov/_res/rss/TAsTWs.xml",
     "noaa_tsunami": "https://www.tsunami.gov/events/xml/PHEBAtom.xml",
     "jma_eqvol": "https://www.data.jma.go.jp/developer/xml/feed/eqvol.xml",
@@ -64,7 +66,8 @@ PUBLISHERS: dict[str, str] = {
     "bbc_world": "BBC News", "vnexpress_business": "VnExpress", "tuoitre_news": "Tuổi Trẻ",
     "thanhnien_news": "Báo Thanh Niên", "dantri_news": "Dân trí",
     "aljazeera_world": "Al Jazeera", "npr_news": "NPR", "fed_press": "Federal Reserve Board",
-    "gdacs_rss": "GDACS", "lobsters": "Lobsters", "us_travel_advisories": "U.S. Department of State",
+    "gdacs_rss": "GDACS", "lobsters": "Lobsters", "github_trending": "GitHub Trending",
+    "wwr_jobs": "We Work Remotely", "us_travel_advisories": "U.S. Department of State",
     "noaa_tsunami": "NOAA Tsunami Warning Centers", "jma_eqvol": "Japan Meteorological Agency",
 }
 

@@ -67,6 +67,8 @@ _CATALOG: Mapping[str, ProviderMetrics] = MappingProxyType({
     ), False, cadence_days=HOURLY, default_lookback_days=3),
     "alternative_me": ProviderMetrics(_m(("fear_greed_index", "index (0-100)")), False, cadence_days=1),
     "binance": ProviderMetrics(_SPOT, True, ("BTCUSDT",), seed_symbol=False, cadence_days=QUARTER_HOURLY, default_lookback_days=3),  # the pair, as crypto.map_binance writes it
+    # vn_stock writes one daily "close" series per owner-chosen ticker/index (stocks in thousand VND, indices in points).
+    "vn_stock": ProviderMetrics(_m(("close", None)), True, ("VNINDEX", "VN30", "FPT"), seed_symbol=False, cadence_days=1),
     "coinpaprika": ProviderMetrics(_SPOT, True, ("BTC",), cadence_days=QUARTER_HOURLY, default_lookback_days=3),
     "coingecko": ProviderMetrics(_SPOT, True, ("BTC",), seed_symbol=False, cadence_days=QUARTER_HOURLY, default_lookback_days=3),  # owner-configured assets
     "frankfurter": ProviderMetrics(_FX, True, ("USD/VND",), cadence_days=1),

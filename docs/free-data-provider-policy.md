@@ -129,6 +129,8 @@ Freshness: feeds/quotes stale after2configured polling intervals; explicitly sho
 
 Out of this P1/P2/P3 adapter set: existing `open_meteo` remains owned by C1 and its own terms policy; do not assign it these new open-provider defaults. SEC/FRED/TwelveData/VNstock/Yahoo/SSI/RSSHub/OpenBB/CCXT remain research-only/unavailable or reuse references according to the approved plan; no new adapters/services were authorized here.
 
+Exception (owner decision 2026-11-04): Vietnam stock and index closes use the unofficial VNDirect finfo public endpoint as the `vn_stock` built-in. It has no contract and may break or disappear without notice; TCBS was probed and rejected because it only answers behind a Cloudflare challenge, and there is no fallback between endpoints. `github_trending` (a third-party scrape mirror of github.com/trending) and `wwr_jobs` (We Work Remotely RSS) are added as review-class RSS built-ins. All three are held to a 360-minute minimum collection interval (see the per-provider floor table, `PROVIDER_MIN_INTERVAL_MINUTES`).
+
 ## 7. Built-in expansion evidence (2026-10-21)
 
 Evidence rule for the single-user built-in toggle: owner terms acknowledgement (declared use plus the catalog terms version) and, for `review` presets, operator review evidence are recorded by the same enable action, with `evidence_ref = builtin-toggle:<provider>:<terms_url>@<terms_version>`. The owner is the bootstrap operator; a non-operator gets `403 operator_required`. This is a record of the owner's own decision, not independent legal review.

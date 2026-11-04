@@ -18,7 +18,7 @@ below have not been accepted against live services in this implementation pass.
   Vietnamese press uses its named RSS feeds. GDELT returns bounded article metadata. Google News is
   an unofficial, scoped RSS preset; it is not an official Google API.
 - **Economy and markets:** `alpha_vantage`, `sec_edgar`, `world_bank`, `frankfurter`, `ecb`,
-  `binance`, `alternative_me`, `coinpaprika`, `coingecko`, `fed_press`, `open_er_api`, `oecd_cli`,
+  `binance`, `vn_stock`, `alternative_me`, `coinpaprika`, `coingecko`, `fed_press`, `open_er_api`, `oecd_cli`,
   `fred`. Credentials, usage terms, quota and provider entitlement remain provider-specific.
 - **Hazards and environment:** `usgs`, `nasa_eonet`, `gdacs_rss`, `us_travel_advisories`,
   `noaa_tsunami`, `jma_eqvol`, `gdacs_events`, `nws_alerts`, `emsc_quakes`, `bmkg_quakes`,
@@ -27,7 +27,7 @@ below have not been accepted against live services in this implementation pass.
 - **Security:** `cisa_kev`, `ioda`, `nvd`. CVE identifiers, provider timestamps and provenance are
   preserved by the registered mappers.
 - **Space:** `launch_library`, `satnogs_observations`, `noaa_kp`, `iss_position`.
-- **Technology and research:** `reddit`, `bluesky`, `openalex`, `hn_top`, `lobsters`,
+- **Technology and research:** `reddit`, `bluesky`, `openalex`, `hn_top`, `lobsters`, `github_trending`, `wwr_jobs`,
   `wikipedia_mostread`, `wikipedia_top_views`, `disease_sh`.
 - **Other and account connectors:** generic `rss`, `web`, `rest`, and `mcp`; GitHub App and public
   releases; Mastodon, X, YouTube, arXiv, Hugging Face, Telegram; Google Gmail, Calendar and Drive;
@@ -124,6 +124,7 @@ Generated from `modules/connectors/catalog.py` and `modules/connectors/provider_
 | `frankfurter` | `implemented` | open | supported | yes | no | 1440 | 2026-10-07 |
 | `ecb` | `implemented` | open | supported | yes | no | 1440 | 2026-10-07 |
 | `binance` | `implemented` | review | supported | yes | no | 15 | 2026-10-07 |
+| `vn_stock` | `implemented` | review | supported | yes | no | 360 | 2026-10-21 |
 | `alternative_me` | `implemented` | open | supported | yes | no | 1440 | 2026-10-07 |
 | `usgs` | `implemented` | open | supported | yes | no | 60 | 2026-10-07 |
 | `nasa_eonet` | `implemented` | review | supported | yes | no | 60 | 2026-10-07 |
@@ -135,6 +136,8 @@ Generated from `modules/connectors/catalog.py` and `modules/connectors/provider_
 | `fed_press` | `implemented` | open | supported | yes | no | 60 | 2026-10-21 |
 | `gdacs_rss` | `implemented` | open | supported | yes | no | 60 | 2026-10-21 |
 | `lobsters` | `implemented` | review | supported | yes | no | 60 | 2026-10-21 |
+| `github_trending` | `implemented` | review | supported | yes | no | 360 | 2026-10-21 |
+| `wwr_jobs` | `implemented` | review | supported | yes | no | 360 | 2026-10-21 |
 | `us_travel_advisories` | `implemented` | open | supported | yes | no | 360 | 2026-10-21 |
 | `noaa_tsunami` | `implemented` | open | supported | yes | no | 30 | 2026-10-21 |
 | `jma_eqvol` | `implemented` | open | supported | yes | no | 30 | 2026-10-21 |

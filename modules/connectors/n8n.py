@@ -15,6 +15,7 @@ import httpx
 
 from core.config import Settings
 from modules.connectors.backends import PROVIDER_SOURCE_TYPES, is_native_provider
+from modules.connectors.provider_specs import min_interval_minutes
 from modules.connectors.providers.news import safe_xml_root
 from modules.connectors.public import (
     default_schedule_interval_minutes,
@@ -156,6 +157,7 @@ def build_workflow(
                 if configured_interval in {15, 30, 60, 360, 1440}
                 else default_schedule_interval_minutes(source.type)
             )
+            interval = max(interval, min_interval_minutes(source.provider))
             if interval < 60:
                 schedule = {"field": "minutes", "minutesInterval": interval}
             elif interval < 1440:

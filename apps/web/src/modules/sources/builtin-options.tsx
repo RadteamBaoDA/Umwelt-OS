@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import type { BuiltinSource, BuiltinTypeOptions, ConnectorConfig } from './api';
+import { minIntervalMinutes, type BuiltinSource, type BuiltinTypeOptions, type ConnectorConfig } from './api';
 import { OPTION_SPECS, type OptionSpec } from './builtin-option-specs';
 
 const INTERVALS = [15, 30, 60, 360, 1440] as const;
@@ -43,6 +43,9 @@ function TypedOption({ spec, value, onValue, disabled }: { spec: OptionSpec; val
     return <div className="field flex items-center gap-2"><Switch id={id} aria-label={label} disabled={disabled} checked={value === true} onCheckedChange={(on) => onValue(on ? true : undefined)} />
       <Label htmlFor={id}>{label}</Label></div>;
   }
+  if (spec.kind === 'tags') {
+    return <TagsOption id={id} label={label} spec={spec} value={value} disabled={disabled} onValue={onValue} />;
+  }
   if (spec.kind === 'multi') {
     const selected = Array.isArray(value) ? (value as string[]) : [];
     const max = spec.max ?? selected.length + 1;
@@ -72,6 +75,24 @@ function TypedOption({ spec, value, onValue, disabled }: { spec: OptionSpec; val
   return <div className="field"><Label htmlFor={id}>{label}</Label>
     <Input id={id} type="number" min={spec.min} max={spec.hi} step={spec.step ?? 1} disabled={disabled} value={typeof value === 'number' ? value : ''}
       onChange={(event) => onValue(event.target.value === '' ? undefined : Number(event.target.value))} /></div>;
+}
+
+/**
+ * Comma-separated terms field (for example VN tickers) that keeps the raw text locally so a trailing comma survives typing.
+ * Reports trimmed, de-duplicated terms (upper-cased when the spec asks) capped at `spec.max`, or `undefined` when empty.
+ */
+function TagsOption({ id, label, spec, value, disabled, onValue }: { id: string; label: string; spec: OptionSpec; value: unknown; disabled: boolean; onValue: (value: unknown) => void }) {
+  const t = useTranslations('sources');
+  const [raw, setRaw] = useState(Array.isArray(value) ? (value as string[]).join(', ') : '');
+  const max = spec.max ?? 20;
+  return <div className="field"><Label htmlFor={id}>{label}</Label>
+    <Input id={id} disabled={disabled} value={raw} aria-describedby={`${id}-help`} onChange={(event) => {
+      const text = spec.upper ? event.target.value.toUpperCase() : event.target.value;
+      setRaw(text);
+      const terms = [...new Set(parseTerms(text))].slice(0, max);
+      onValue(terms.length ? terms : undefined);
+    }} />
+    <small id={`${id}-help`} className="text-muted-foreground">{t('optTagsHelp', { max })}</small></div>;
 }
 
 /** Keyword input that keeps the raw text locally so a trailing comma survives typing, while reporting parsed terms. */
@@ -104,7 +125,9 @@ export function BuiltinOptions({ builtin, values, onChange, showName = false, sh
   const applicable = new Set(builtin.applicable_options ?? []);
   const sections = builtin.sections ?? [];
   const selected = values.feed_sections ?? (builtin.default_section ? [builtin.default_section] : []);
-  const minutes = values.schedule_interval_minutes ?? 30;
+  const floor = minIntervalMinutes(builtin);
+  const intervals = INTERVALS.filter((value) => value >= floor);
+  const minutes = values.schedule_interval_minutes ?? Math.max(30, floor);
   const requestsPerDay = selected.length * Math.ceil(1440 / minutes);
   const showSections = applicable.has('feed_sections') && sections.length > 0;
   const showFilters = applicable.has('max_items') || applicable.has('include_keywords') || applicable.has('exclude_keywords') || applicable.has('max_age_days');
@@ -127,8 +150,9 @@ export function BuiltinOptions({ builtin, values, onChange, showName = false, sh
     {showSchedule && applicable.has('schedule_interval_minutes') && <div className="field"><Label htmlFor="builtin-option-schedule">{t('optSchedule')}</Label>
       <Select disabled={disabled} value={values.schedule_interval_minutes ? String(values.schedule_interval_minutes) : undefined} onValueChange={(value) => onChange('schedule_interval_minutes', Number(value) as ConnectorConfig['schedule_interval_minutes'])}>
         <SelectTrigger id="builtin-option-schedule"><SelectValue placeholder={t('optScheduleDefault')} /></SelectTrigger>
-        <SelectContent>{INTERVALS.map((value) => <SelectItem key={value} value={String(value)}>{t('everyMinutes', { minutes: value })}</SelectItem>)}</SelectContent>
-      </Select></div>}
+        <SelectContent>{intervals.map((value) => <SelectItem key={value} value={String(value)}>{t('everyMinutes', { minutes: value })}</SelectItem>)}</SelectContent>
+      </Select>
+      {floor > 15 && <small className="text-muted-foreground">{floor >= 60 ? t('minIntervalHours', { hours: floor / 60 }) : t('minIntervalMinutes', { minutes: floor })}</small>}</div>}
     {showSections && <fieldset className="field m-0 border-0 p-0" disabled={disabled}><legend className="mb-1 text-sm font-medium">{t('optSections')}</legend>
       <div className="grid gap-2 sm:grid-cols-2">{sections.map((section) => {
         const label = locale.toLowerCase().startsWith('vi') ? section.label_vi : section.label_en;

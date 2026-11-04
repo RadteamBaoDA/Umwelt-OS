@@ -24,6 +24,7 @@ import {
   getOperation,
   listBuiltinSources,
   listSources,
+  collectionTooSoonRetryAt,
   RealtimeMode,
   Source,
   sourceKeys,
@@ -33,6 +34,8 @@ import { BuiltinResumeList, BuiltinWizard } from './builtin-sources';
 import { DisconnectDialog } from './disconnect-dialog';
 import { useSourceActions } from './use-source-actions';
 import { SourceWizard } from './source-wizard';
+import { RenameSource } from './source-rename';
+import { StarterPackWizard } from './starter-pack-wizard';
 import { matchesFilter, SourceFilter, SourceRowState, sourceRowState, SourcesTable } from './source-table';
 import { SyncHistory } from './sync-history';
 import { parseShapeFilter } from './shape-filter';
@@ -74,7 +77,7 @@ function providerLabel(provider: string | null, t: ReturnType<typeof useTranslat
   if (!provider) return null;
   const keys: Record<string, string> = {
     youtube: 'providerYoutube', arxiv: 'providerArxiv', huggingface: 'providerHuggingface', github_releases: 'providerGithubReleases',
-    telegram: 'providerTelegram', rss: 'providerRss', web: 'providerWeb', rest: 'providerRest',
+    telegram: 'providerTelegram', vn_stock: 'providerVnStock', github_trending: 'providerGithubTrending', wwr_jobs: 'providerWwrJobs', rss: 'providerRss', web: 'providerWeb', rest: 'providerRest',
   };
   const key = keys[provider];
   return key ? t(key as 'providerYoutube') : catalogLabel ?? provider;
@@ -197,8 +200,23 @@ function SourceEntry({
   const effectiveRealtimeMode: RealtimeMode | null = source.type === 'manual'
     ? null
     : (realtimeMode ?? source.realtime_mode ?? catalogEntry?.realtime_tier ?? 'near_realtime');
+  // A 429 collection_too_soon names the next allowed time; Collect now stays disabled until then.
+  const [collectNextAt, setCollectNextAt] = useState<Date | null>(null);
+  const [collectBlocked, setCollectBlocked] = useState(false);
+  useEffect(() => {
+    if (!collectBlocked) return;
+    const wait = collectNextAt ? Math.max(collectNextAt.getTime() - Date.now(), 0) : 60_000;
+    const timer = window.setTimeout(() => setCollectBlocked(false), wait);
+    return () => window.clearTimeout(timer);
+  }, [collectBlocked, collectNextAt]);
   const collect = useMutation({
     mutationFn: () => triggerCollection(source.id, csrfToken),
+    onError: (cause) => {
+      const retryAt = collectionTooSoonRetryAt(cause);
+      if (retryAt === undefined) return;
+      setCollectNextAt(retryAt);
+      setCollectBlocked(true);
+    },
     onSuccess: (result) => {
       setCollectResult({ status: result.status, hasRun: Boolean(result.run_id) });
       void queryClient.invalidateQueries({ queryKey: connectorKeys.ingestion(source.id) });
@@ -222,7 +240,7 @@ function SourceEntry({
   const chipKey: Record<SourceRowState, 'statusActive' | 'statusPaused' | 'statusArchived' | 'stateSavedNotActive' | 'stateError' | 'stateReconnect'> = {
     active: 'statusActive', paused: 'statusPaused', archived: 'statusArchived', savedNotActive: 'stateSavedNotActive', error: 'stateError', reconnect: 'stateReconnect',
   };
-  const hasDetail = Boolean(collectResult || operationId || error || collect.error || activation.isError);
+  const hasDetail = Boolean(collectResult || operationId || error || collect.error || activation.isError || collectBlocked);
   const cell = 'px-3 py-3 align-top text-sm max-[1023px]:block max-[1023px]:px-0 max-[1023px]:py-1';
   /** Shows a quiet dash for unknown times while keeping "Not recorded" available to screen readers. */
   const dateOrDash = (value: string | null) => value
@@ -233,7 +251,7 @@ function SourceEntry({
     <tr className="border-b border-border max-[1023px]:block max-[1023px]:py-3">
       <th scope="row" ref={nameCellRef} tabIndex={-1} className={`${cell} font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}>
         <div className="flex flex-wrap items-center gap-2">
-          <strong>{source.name}</strong>
+          <RenameSource source={source} onRenamed={onChanged} />
           {effectiveRealtimeMode && (
             <Badge
               variant="outline"
@@ -261,7 +279,7 @@ function SourceEntry({
         <div className="flex flex-nowrap gap-1" role="group" aria-label={t('sourceActions', { name: source.name })}>
           {connector && rowState === 'savedNotActive' && source.status !== 'archived' && <SourceAction label={t('retryActivation')} icon={<RefreshCw size={16} />} disabled={busy} onClick={() => onEdit(source)} />}
           {connector && source.status !== 'archived' && <SourceAction label={t('configure')} icon={<Settings2 size={16} />} onClick={() => onEdit(source)} />}
-          {connector && source.status === 'active' && activation.data?.state === 'active' && <SourceAction label={collect.isPending ? t('collecting') : t('collectNow')} icon={<Download size={16} />} disabled={collect.isPending || busy} onClick={() => collect.mutate()} />}
+          {connector && source.status === 'active' && activation.data?.state === 'active' && <SourceAction label={collect.isPending ? t('collecting') : t('collectNow')} icon={<Download size={16} />} disabled={collect.isPending || busy || collectBlocked} onClick={() => collect.mutate()} />}
           {!editedHere && source.status !== 'archived' && <SourceAction label={busy ? t(source.status === 'paused' ? 'resuming' : 'pausing') : t(source.status === 'paused' ? 'resume' : 'pause')} icon={source.status === 'paused' ? <Play size={16} /> : <Pause size={16} />} disabled={busy} onClick={toggleStatus} />}
           {!editedHere && !purged && <DisconnectDialog sourceId={source.id} name={source.name} archived={source.status === 'archived'} disabled={busy} triggerLabel={busy ? t('disconnecting') : t(source.status === 'archived' ? 'disconnectDelete' : 'disconnectAction')} onConfirm={(deleteData) => { confirmedRef.current = true; everConfirmedRef.current = true; void disconnect(deleteData); }}
             onCloseAutoFocus={(event) => { if (!confirmedRef.current) return; confirmedRef.current = false; event.preventDefault(); nameCellRef.current?.focus(); }}
@@ -274,7 +292,8 @@ function SourceEntry({
     {hasDetail && <tr className="max-[1023px]:block"><td colSpan={6} className="px-3 pb-4 max-[1023px]:block max-[1023px]:px-0">
       {collectResult && <p className="text-muted-foreground" role="status">{t('collectResult', { status: collectResult.status })}{!collectResult.hasRun ? ` ${t('noRunId')}` : ''}</p>}
       {operationId && <PurgeProgress operationId={operationId} onSucceeded={onPurgeFinished} />}
-      {(error || collect.error || activation.isError) && <p className="error" role="alert">{t('actionFailed')}{activation.isError && ` · ${t('stateUnknown')}`}</p>}
+      {collectBlocked && <p className="text-muted-foreground" role="status">{collectNextAt ? t('collectTooSoonAt', { time: formatDate(collectNextAt.toISOString(), display.locale, display.timezone, '') }) : t('collectTooSoon')}</p>}
+      {(error || (collect.error && !collectBlocked) || activation.isError) && <p className="error" role="alert">{t('actionFailed')}{activation.isError && ` · ${t('stateUnknown')}`}</p>}
     </td></tr>}
     {connector && <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
       <DialogContent className="w-[80vw] max-w-[80vw] sm:max-w-[80vw]">
@@ -299,7 +318,7 @@ function ShapeFilterBanner({ renderer, onClear }: { renderer: string | null; onC
 }
 
 /** Which add/edit dialog is open on the sources page; null when only the table is shown. */
-type DialogState = { kind: 'builtin' } | { kind: 'connector' } | { kind: 'edit'; source: Source } | null;
+type DialogState = { kind: 'builtin' } | { kind: 'starter' } | { kind: 'connector' } | { kind: 'edit'; source: Source } | null;
 
 /**
  * Sources page header and table, with the single Add datasource menu beside the title and paused built-ins above the list.
@@ -397,6 +416,7 @@ export function SourceList() {
       </div>
       {/* One primary "Add datasource" menu replaces the former row of add buttons; each item opens its wizard via the draft-guarded transition. */}
       <div className="flex flex-wrap items-center justify-end gap-2 max-[1023px]:justify-start" role="group" aria-label={t('tableToolbar')}>
+        <Button size="sm" variant={items.length === 0 && sources.isSuccess ? 'default' : 'outline'} onClick={() => transition({ kind: 'starter' })}>{t('starterPacks')}</Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild><Button size="sm">{t('addDatasource')}<ChevronDown aria-hidden="true" /></Button></DropdownMenuTrigger>
           <DropdownMenuContent align="end">
@@ -413,10 +433,11 @@ export function SourceList() {
     {shapeFilter && <ShapeFilterBanner renderer={renderer} onClear={clearFilter} />}
     <BuiltinResumeList onChanged={() => { void refresh(); }} />
     {dialog?.kind === 'builtin' && <BuiltinWizard key={editSession} shapeFilter={shapeFilter} onClearFilter={clearFilter} onAddConnector={() => transition({ kind: 'connector' })} onClose={closeDialog} onChanged={() => { void refresh(); }} />}
-    {dialog && dialog.kind !== 'builtin' && <SourceWizard key={editSession} request={dialog} shapeFilter={shapeFilter} onClearFilter={clearFilter} registerTransitionGuard={(guard) => { transitionGuard.current = guard; }} onChanged={() => { void refresh(); }} onClose={closeDialog} />}
+    {dialog?.kind === 'starter' && <StarterPackWizard key={editSession} onAddConnector={() => transition({ kind: 'connector' })} onClose={closeDialog} onChanged={() => { void refresh(); }} />}
+    {dialog && dialog.kind !== 'builtin' && dialog.kind !== 'starter' && <SourceWizard key={editSession} request={dialog} shapeFilter={shapeFilter} onClearFilter={clearFilter} registerTransitionGuard={(guard) => { transitionGuard.current = guard; }} onChanged={() => { void refresh(); }} onClose={closeDialog} />}
     {sources.isPending && <div className="skeleton" aria-label={t('loading')} />}
     {sources.isError && <p className="error" role="alert">{t('loadFailed')} <Button variant="outline" onClick={() => sources.refetch()}>{t('retry')}</Button></p>}
-    {sources.isSuccess && items.length === 0 && <p className="empty-state">{t('empty')}</p>}
+    {sources.isSuccess && items.length === 0 && <p className="empty-state">{t('empty')} {t('starterEmptyHint')}</p>}
     {items.length > 0 && <SourcesTable filter={filter} counts={counts} onFilterChange={setFilter}>
       {visible.map((source) => {
         const configuration = configurationBySourceId.get(source.id);

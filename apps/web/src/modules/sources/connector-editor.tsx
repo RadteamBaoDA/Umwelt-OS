@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ApiError } from '@/core/api';
 import { assignAuthorizationUrl } from '@/core/safe-url';
 import { DisconnectDialog } from './disconnect-dialog';
+import { RenameSource } from './source-rename';
 import { SyncHistory } from './sync-history';
 import type { SourceAiOptions } from './source-ai-toggles';
 import { collectAndWait, useSourceActions, waitForActivation } from './use-source-actions';
@@ -36,7 +37,12 @@ import {
   ConnectorSettings,
   connectorConfigurationIsAtLeast,
   connectorKeys,
+  allowedIntervals,
+  clampInterval,
+  collectionTooSoonRetryAt,
   createConnectorSource,
+  intervalBelowMinimum,
+  minIntervalMinutes,
   ConnectorActivation,
   getConnectorActivation,
   RealtimeMode,
@@ -232,6 +238,7 @@ function formatDate(value: string, locale: AppLocaleId, timezone: string): strin
 function errorText(error: unknown): string {
   if (error instanceof ApiError && error.status === 409 && (error.code === 'builtin_already_added' || error.message === 'builtin_already_added')) return 'builtinAlreadyAdded';
   if (error instanceof ApiError && error.status === 409) return 'conflict';
+  if (intervalBelowMinimum(error)) return 'scheduleBelowMinimum';
   if (error instanceof ApiError && error.status === 422) return 'configurationInvalid';
   if (error instanceof ApiError && error.status === 503) return 'serviceUnavailable';
   if (error instanceof Error && error.message === 'source_name_required') return 'sourceNameRequired';
@@ -553,8 +560,12 @@ export function ConnectorEditor({
   // A source is created before its first save, so an unsaved one (revision 0) reloads with an empty server
   // configuration. Layer the provider defaults under the draft so required scope (e.g. Google News site, locale
   // and history mode) is never silently missing; values the owner typed or cleared still win.
-  const configuration = useMemo<ConnectorConfig>(() => (revision === 0 && currentEntry
-    ? { ...defaultConfiguration(provider, currentEntry), ...draftConfiguration } : draftConfiguration),
+  const configuration = useMemo<ConnectorConfig>(() => {
+    if (!(revision === 0 && currentEntry)) return draftConfiguration;
+    const merged = { ...defaultConfiguration(provider, currentEntry), ...draftConfiguration };
+    // A default below the provider's hard minimum would be rejected on save; start at the floor instead.
+    return { ...merged, schedule_interval_minutes: clampInterval(merged.schedule_interval_minutes, currentEntry) };
+  },
   [revision, currentEntry, provider, draftConfiguration]);
   const termsGated = isPreset(currentEntry) && Boolean(sourceId);
   const termsQuery = useQuery({ queryKey: connectorKeys.terms(sourceId), queryFn: ({ signal }) => getProviderTerms(sourceId, signal), enabled: termsGated });
@@ -771,7 +782,12 @@ export function ConnectorEditor({
       await queryClient.invalidateQueries({ queryKey: connectorKeys.ingestion(id) });
       await queryClient.invalidateQueries({ queryKey: sourceKeys.all });
     } catch (cause) {
-      if (requestIsCurrent(token)) setError(errorText(cause));
+      if (requestIsCurrent(token)) {
+        // 429 collection_too_soon is a cooldown, not a failure: show when the next manual collection is allowed.
+        const retryAt = collectionTooSoonRetryAt(cause);
+        if (retryAt === undefined) setError(errorText(cause));
+        else setNotice(retryAt ? t('collectTooSoonAt', { time: formatDate(retryAt.toISOString(), display.locale, display.timezone) }) : t('collectTooSoon'));
+      }
     } finally {
       endRequest(token);
     }
@@ -1602,6 +1618,7 @@ export function ConnectorEditor({
       </SettingsSection>
     </div>}
     {sourceId && <>
+      {source && embedded && <div hidden={!showStep('connect')} className="flex items-center gap-2"><span className="text-sm font-medium">{t('sourceName')}</span><RenameSource source={source} onRenamed={onChanged} /></div>}
       {!embedded && <header className="section-heading">
         <div>
           <h2>{name || source?.name || t('editTitle')}</h2>
@@ -1733,7 +1750,7 @@ export function ConnectorEditor({
           </SettingsSection></div>
           <div id="source-step-collect" hidden={!showStep('collect')} className="scroll-mt-4"><SettingsSection title={t('panelSchedule')} description={t('panelScheduleHint')}>
           <FieldGrid>
-          <div className="field"><Label htmlFor="source-schedule">{t('schedule')}</Label><Select value={String(configuration.schedule_interval_minutes)} onValueChange={(value) => changeConfiguration('schedule_interval_minutes', Number(value) as ConnectorConfig['schedule_interval_minutes'])}><SelectTrigger id="source-schedule"><SelectValue /></SelectTrigger><SelectContent>{(provider === 'alpha_vantage' ? [1440] : intervals).map((minutes) => <SelectItem key={minutes} value={String(minutes)}>{t('everyMinutes', { minutes })}</SelectItem>)}</SelectContent></Select></div>
+          <div className="field"><Label htmlFor="source-schedule">{t('schedule')}</Label><Select value={String(configuration.schedule_interval_minutes)} onValueChange={(value) => changeConfiguration('schedule_interval_minutes', Number(value) as ConnectorConfig['schedule_interval_minutes'])}><SelectTrigger id="source-schedule"><SelectValue /></SelectTrigger><SelectContent>{(provider === 'alpha_vantage' ? [1440] : allowedIntervals(intervals, currentEntry)).map((minutes) => <SelectItem key={minutes} value={String(minutes)}>{t('everyMinutes', { minutes })}</SelectItem>)}</SelectContent></Select>{minIntervalMinutes(currentEntry) > 15 && <small className="text-muted-foreground">{minIntervalMinutes(currentEntry) >= 60 ? t('minIntervalHours', { hours: minIntervalMinutes(currentEntry) / 60 }) : t('minIntervalMinutes', { minutes: minIntervalMinutes(currentEntry) })}</small>}</div>
           <div className="field"><Label htmlFor="source-timezone">{t('timezone')}</Label><Input id="source-timezone" aria-describedby="source-hint-timezone" value={configuration.timezone} onChange={(event) => changeConfiguration('timezone', event.target.value)} /><ScopeHint field="timezone" /></div>
           <div className="field"><Label htmlFor="source-realtime-mode">{t('trackingModeLabel')}</Label><Select value={configuration.realtime_mode ?? currentEntry?.realtime_tier ?? 'near_realtime'} onValueChange={(value) => changeConfiguration('realtime_mode', value as RealtimeMode)}><SelectTrigger id="source-realtime-mode"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="realtime">{t('trackingModeRealtime')}</SelectItem><SelectItem value="near_realtime">{t('trackingModeNearRealtime')}</SelectItem></SelectContent></Select><small className="text-muted-foreground">{t('trackingModeHelp')}</small></div>
           </FieldGrid>

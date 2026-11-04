@@ -206,7 +206,7 @@ def test_body_dispatch_and_urls_match_catalog():
     assert BINANCE_URL.startswith("https://data-api.binance.vision/")
     from modules.connectors.providers.json_feed import JSON_FEEDS
 
-    assert set(PURE_ADAPTERS) == {"world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika", "coingecko", "nasa_eonet", "cisa_kev"} | set(JSON_FEEDS) | {
+    assert set(PURE_ADAPTERS) == {"world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika", "coingecko", "nasa_eonet", "cisa_kev", "vn_stock"} | set(JSON_FEEDS) | {
         "noaa_kp", "open_er_api", "oecd_cli", "iss_position", "disease_sh", "ioda", "nvd",
     }
     for provider, adapter in PURE_ADAPTERS.items():

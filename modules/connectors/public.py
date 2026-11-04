@@ -73,6 +73,7 @@ from modules.connectors.models import (
 from modules.connectors.provider_options import (
     ISO_COUNTRY_PATTERN,
     MAX_COINS,
+    MAX_VN_SYMBOLS,
     CoinId,
     CryptoPair,
     EonetCategory,
@@ -93,6 +94,7 @@ from modules.connectors.provider_options import (
     SatnogsStatus,
     UsgsMagnitude,
     UsgsPeriod,
+    VnSymbol,
     WbIndicator,
     WikiLanguage,
     clean_query,
@@ -101,7 +103,11 @@ from modules.connectors.provider_options import (
 from modules.connectors.provider_specs import (
     BUILTIN_PROVIDERS as BUILTIN_PROVIDERS,  # noqa: PLC0414 - public re-export
 )
-from modules.connectors.provider_specs import COLLECTION_FILTER_FIELDS, INCREMENTAL_PROVIDERS
+from modules.connectors.provider_specs import (
+    COLLECTION_FILTER_FIELDS,
+    INCREMENTAL_PROVIDERS,
+    min_interval_minutes,
+)
 from modules.connectors.providers.cii import CiiProjection
 from modules.connectors.sections import MAX_SECTIONS, SECTION_CATALOG
 from modules.ingestion.schemas import IngestionRecord, TelegramRawDelivery
@@ -430,6 +436,7 @@ class ConnectorConfig(BaseModel):
     fx_quotes: tuple[FxCurrency, ...] | None = Field(default=None, min_length=1, max_length=10)
     oecd_countries: tuple[OecdArea, ...] | None = Field(default=None, min_length=1, max_length=10)
     crypto_symbols: tuple[CryptoPair, ...] | None = Field(default=None, min_length=1, max_length=10)
+    vn_symbols: tuple[VnSymbol, ...] | None = Field(default=None, min_length=1, max_length=MAX_VN_SYMBOLS)
     coin_ids: tuple[CoinId, ...] | None = Field(default=None, min_length=1, max_length=MAX_COINS)
     kp_min: float | None = Field(default=None, ge=0, le=9)
     advisory_min_level: StrictInt | None = Field(default=None, ge=1, le=4)
@@ -1123,7 +1130,7 @@ async def get_connector_configuration(
         configuration.setdefault("timezone", DEFAULT_TIMEZONE)
         configuration.setdefault(
             "schedule_interval_minutes",
-            1440 if source.provider == "alpha_vantage" else default_schedule_interval_minutes(source.type),
+            max(default_schedule_interval_minutes(source.type), min_interval_minutes(source.provider)),
         )
         if "timeout_seconds" not in source.configuration:
             configuration["timeout_seconds"] = 30
@@ -1251,7 +1258,7 @@ def serialize_source_configuration(source: ConnectorSource, config: ConnectorCon
     serialized.setdefault("timezone", DEFAULT_TIMEZONE)
     serialized.setdefault(
         "schedule_interval_minutes",
-        1440 if source.provider == "alpha_vantage" else default_schedule_interval_minutes(source.type),
+        max(default_schedule_interval_minutes(source.type), min_interval_minutes(source.provider)),
     )
     serialized["timeout_seconds"] = timeout_seconds
     return serialized
