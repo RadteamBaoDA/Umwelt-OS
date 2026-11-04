@@ -11,6 +11,7 @@ import { listGeospatialObservations } from '@/modules/observations/api';
 import type { GadgetInstance } from '../api';
 import { buildMapLayers, projectMapFeatures } from '../map-layers';
 import { GadgetNotice } from './gadget-notice';
+import { LiveMapGadget } from './live-map-gadget';
 import { formatMetricLabel, formatProviderName } from './metric-label';
 
 const FlatMap = lazy(() => import('./flat-map').then((module) => ({ default: module.FlatMap })));
@@ -26,6 +27,13 @@ function subscribePhone(onChange: () => void): () => void {
 
 /** Shared owner-scoped map controller; the range line and any empty/location-sharing notice precede a nonshrinking plot and scrollable evidence. */
 export function MapGadget({ instance, isEditMode = false }: { instance: GadgetInstance; isEditMode?: boolean }) {
+  return instance.definition.filters?.map_mode === 'live'
+    ? <LiveMapGadget instance={instance} isEditMode={isEditMode} />
+    : <SelectedSourcesMapGadget instance={instance} isEditMode={isEditMode} />;
+}
+
+/** Render the legacy authorized observation map without changing its saved source semantics. */
+function SelectedSourcesMapGadget({ instance, isEditMode = false }: { instance: GadgetInstance; isEditMode?: boolean }) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
   const definition = instance.definition;

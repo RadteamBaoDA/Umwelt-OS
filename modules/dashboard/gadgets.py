@@ -182,7 +182,8 @@ def validate_renderer_configuration(
         "finance_chart": {"symbols", "metrics", "regions", "lookback_days"},
         "weather": {"metrics", "lookback_days"},
         "provider_observation": {"metrics", "symbols", "lookback_days"},
-        "map": {"regions", "map_layer_ids", "lookback_days"},
+        "map": {"regions", "map_layer_ids", "lookback_days", "live_map_providers", "live_map_country",
+                "live_map_github_owner", "live_map_github_repo", "live_map_sec_cik"},
         "intelligence_panel": {"regions", "lookback_days", "cii_country_codes"},
     }.get(renderer_id, {"source_item_ids"})
     for field_name, values in configuration.scope.model_dump().items():
@@ -199,6 +200,7 @@ def validate_renderer_configuration(
             raise ValueError("Map and measurement selectors are not valid for the intelligence panel")
     if renderer_id != "map" and (
         configuration.filters.map_engine is not None or configuration.filters.show_precise_locations
+        or configuration.filters.map_mode is not None or configuration.filters.map_weather_layer is not None
     ):
         raise ValueError("Map display preferences are only valid for the map renderer")
     return configuration

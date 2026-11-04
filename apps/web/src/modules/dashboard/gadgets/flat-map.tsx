@@ -1,7 +1,7 @@
 'use client';
 
 import { DeckGL } from '@deck.gl/react';
-import { GeoJsonLayer, ScatterplotLayer } from '@deck.gl/layers';
+import { BitmapLayer, GeoJsonLayer, ScatterplotLayer } from '@deck.gl/layers';
 import { OrthographicView } from '@deck.gl/core';
 import { feature } from 'topojson-client';
 import worldTopology from 'world-atlas/countries-110m.json';
@@ -9,17 +9,19 @@ import type { Topology } from 'topojson-specification';
 import type { FeatureCollection } from 'geojson';
 import { useTranslations } from 'next-intl';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { MapFeature } from '../map-layers';
+import type { MapPoint } from './globe-map';
+import { useWeatherRaster, type WeatherProps } from './weather-raster';
 
 /** Props shared by the accessible map controller and local deck.gl renderer. */
-export type FlatMapProps = {
-  features: MapFeature[];
+export type FlatMapProps = WeatherProps & {
+  features: MapPoint[];
   selectedFeatureId: string | null;
   onSelectFeature: (featureId: string) => void;
   width: number;
   height: number;
   visible: boolean;
   interactive: boolean;
+  focusSelected?: boolean;
 };
 
 /** Convert the active semantic CSS token to deck.gl's numeric color contract. */
@@ -57,9 +59,9 @@ export function unwrapRing(ring: number[][]): number[][] {
   return shift ? out.map(([lon, ...rest]) => [lon + shift, ...rest]) : out;
 }
 
-/** Convert the bundled Natural Earth topology once, with antimeridian rings unwrapped; no tiles or basemap are fetched. */
-const landGeometry = (() => {
-  const collection = feature(worldTopology as unknown as Topology, 'land') as unknown as {
+/** Convert bundled Natural Earth geometry with continuous antimeridian rings for the flat projection. */
+function makeGeometry(object: 'land' | 'countries'): FeatureCollection {
+  const collection = feature(worldTopology as unknown as Topology, object) as unknown as {
     features: { geometry: { type: string; coordinates: number[][][] | number[][][][] } }[];
   };
   for (const { geometry } of collection.features) {
@@ -70,7 +72,10 @@ const landGeometry = (() => {
     }
   }
   return collection as unknown as FeatureCollection;
-})();
+}
+
+const landGeometry = makeGeometry('land');
+const countryGeometry = makeGeometry('countries');
 
 /**
  * Orthographic zoom that fits the whole world (360 x 180 degrees, Antarctica included) inside the canvas
@@ -84,14 +89,15 @@ export function fitZoom(width: number, height: number): number {
   return Math.log2(Math.min(width / 360, height / 180) * 0.92);
 }
 
-/** Render a local equirectangular plot whose 192px floor does not shrink beneath map controls. */
-export function FlatMap({ features, selectedFeatureId, onSelectFeature, width, height, visible, interactive }: FlatMapProps) {
+/** Render an equirectangular map with optional bounded weather imagery and selectable evidence points. */
+export function FlatMap({ features, selectedFeatureId, onSelectFeature, width, height, visible, interactive, weatherLayer, weatherWorkspaceId, weatherRevision, onWeatherStateChange, focusSelected = false }: FlatMapProps) {
   const t = useTranslations('dashboard');
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const contextHandlersRef = useRef<{ lost: (event: Event) => void; restored: () => void } | null>(null);
   const [contextLost, setContextLost] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const [themeRevision, setThemeRevision] = useState(0);
+  const weather = useWeatherRaster({ weatherLayer, weatherWorkspaceId, weatherRevision, onWeatherStateChange }, visible && !unavailable && !contextLost);
 
   useEffect(() => {
     const observer = new MutationObserver(() => setThemeRevision((value) => value + 1));
@@ -112,6 +118,17 @@ export function FlatMap({ features, selectedFeatureId, onSelectFeature, width, h
 
   const views = useMemo(() => [new OrthographicView({ id: 'world-flat', flipY: false })], []);
   const zoom = fitZoom(width, height);
+  const [viewState, setViewState] = useState({ target: [0, 0, 0] as [number, number, number], zoom });
+  // Resize changes the fitted external map view while preserving its current target.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { setViewState((current) => ({ ...current, zoom })); }, [zoom]);
+  const focused = focusSelected ? features.find((item) => item.feature_id === selectedFeatureId) : undefined;
+  const focusedLat = focused?.latitude, focusedLon = focused?.longitude;
+  useEffect(() => {
+    // Selection from the accessible event list must update Deck's controlled view.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (focusedLat !== undefined && focusedLon !== undefined) setViewState((current) => ({ ...current, target: [focusedLon, focusedLat, 0] }));
+  }, [selectedFeatureId, focusedLat, focusedLon]);
   const layers = useMemo(() => [
     new GeoJsonLayer({
       id: 'natural-earth-land',
@@ -123,7 +140,14 @@ export function FlatMap({ features, selectedFeatureId, onSelectFeature, width, h
       getLineColor: readDeckColor('--control', '#cfd5d0', 255),
       lineWidthMinPixels: 0.55,
     }),
-    new ScatterplotLayer<MapFeature>({
+    ...(weather ? [
+      new BitmapLayer({ id: 'weather-raster', image: weather, bounds: [-180, -90, 180, 90], pickable: false }),
+      new GeoJsonLayer({
+        id: 'weather-land-boundaries', data: countryGeometry, filled: false, stroked: true, pickable: false,
+        getLineColor: readDeckColor('--control', '#cfd5d0', 255), lineWidthMinPixels: 0.55,
+      }),
+    ] : []),
+    new ScatterplotLayer<MapPoint>({
       id: 'world-evidence-points',
       data: features,
       pickable: true,
@@ -139,7 +163,7 @@ export function FlatMap({ features, selectedFeatureId, onSelectFeature, width, h
       lineWidthMinPixels: 1,
       updateTriggers: { getRadius: [selectedFeatureId], getFillColor: [selectedFeatureId, themeRevision] },
     }),
-  ], [features, selectedFeatureId, themeRevision]);
+  ], [features, selectedFeatureId, themeRevision, weather]);
 
   /** Attach context lifecycle listeners to Deck's initialized canvas and retain them for cleanup. */
   const handleWebGLInitialized = (gl: WebGLRenderingContext) => {
@@ -167,14 +191,15 @@ export function FlatMap({ features, selectedFeatureId, onSelectFeature, width, h
   return <div className="relative h-full min-h-48 shrink-0 w-full">
     <DeckGL<typeof views>
       views={views}
-      viewState={{ 'world-flat': { target: [0, 0, 0], zoom } }}
+      viewState={{ 'world-flat': viewState }}
+      onViewStateChange={({ viewState: next }) => setViewState(next as typeof viewState)}
       controller={visible && interactive}
       _animate={visible}
       layers={layers}
       onWebGLInitialized={handleWebGLInitialized}
       onError={() => setUnavailable(true)}
       onClick={(info) => {
-        const item = info.object as MapFeature | undefined;
+        const item = info.object as MapPoint | undefined;
         if (item?.feature_id) onSelectFeature(item.feature_id);
       }}
       style={{ position: 'absolute', inset: '0' }}

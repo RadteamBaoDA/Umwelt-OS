@@ -7,6 +7,7 @@ from this inventory; it must validate the persisted deletion operation first.
 
 from core.erasure_sql import AccountErasureOwner
 
+from . import live_credentials as _live_credentials  # noqa: F401 - register live-map settings
 from . import models as _models  # noqa: F401 - register this owner's tables
 
 ERASURE_TABLES: tuple[str, ...] = (
@@ -15,6 +16,8 @@ ERASURE_TABLES: tuple[str, ...] = (
     "daily_briefs",
     "dashboard_groups",
     "dashboard_layouts",
+    "dashboard_live_credentials",
+    "dashboard_live_terms",
     "dashboards",
     "gadget_definitions",
     "gadget_highlight_progress",

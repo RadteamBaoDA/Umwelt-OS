@@ -29,8 +29,11 @@ import { getConnectorConfiguration, type CoinGeckoCoin } from '@/modules/sources
 import { GadgetTemplateSample } from './gadget-template-sample';
 import { CHART_FALLBACK_LOOKBACK_DAYS, METRIC_FALLBACK_LOOKBACK_DAYS } from './gadgets/use-effective-lookback';
 import { sourcesLinkFor } from './sources-link';
+import { LiveMapConfig } from './live-map-config';
 
 const MAX_SOURCES = 32;
+const LIVE_PROVIDERS = ['usgs', 'eonet', 'firms', 'hackernews', 'lobsters', 'cisa_kev', 'nvd', 'business', 'fed', 'github_releases', 'sec'] as const;
+const DEFAULT_LIVE_PROVIDERS = ['usgs', 'eonet', 'hackernews', 'lobsters', 'cisa_kev', 'nvd', 'business', 'fed'];
 const MAP_LAYERS = ['world_observations', 'military', 'economic', 'disaster', 'escalation'] as const;
 /** Resolves the short localized description shown beside a renderer's SVG preview. */
 function templateDescription(renderer: string, t: ReturnType<typeof useTranslations>): string {
@@ -389,6 +392,13 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
   const [channels, setChannels] = useState((definition?.scope?.channel_ids ?? []).join(', '));
   const [cii, setCii] = useState((definition?.scope?.cii_country_codes ?? []).join(', '));
   const [layers, setLayers] = useState<string[]>(definition?.scope?.map_layer_ids ?? []);
+  const [mapMode, setMapMode] = useState<'live' | 'selected_sources'>(definition ? definition.filters?.map_mode ?? 'selected_sources' : 'live');
+  const [liveProviders, setLiveProviders] = useState<string[]>(definition?.filters?.map_mode === 'live' ? definition.scope?.live_map_providers ?? [] : definition?.scope?.live_map_providers?.length ? definition.scope.live_map_providers : DEFAULT_LIVE_PROVIDERS);
+  const [country, setCountry] = useState(definition?.scope?.live_map_country ?? '');
+  const [githubOwner, setGithubOwner] = useState(definition?.scope?.live_map_github_owner ?? '');
+  const [githubRepo, setGithubRepo] = useState(definition?.scope?.live_map_github_repo ?? '');
+  const [secCik, setSecCik] = useState(definition?.scope?.live_map_sec_cik ?? '');
+  const [weatherLayer, setWeatherLayer] = useState<'none' | 'temperature' | 'precipitation' | 'wind' | 'clouds'>(definition?.filters?.map_weather_layer ?? 'none');
   const [engine, setEngine] = useState<'globe' | 'flat'>(definition?.filters?.map_engine ?? 'globe');
   const [precise, setPrecise] = useState(definition?.filters?.show_precise_locations ?? false);
   const [rules, setRules] = useState<HighlightRule[]>(definition?.highlight_rules ?? []);
@@ -402,7 +412,7 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
   const sourceMode = descriptor?.source_mode ?? 'none';
   const acceptedShapes = descriptor?.accepted_shapes ?? null;
   // Existing gadgets with no source keep saving; new ones must pick a datasource when the renderer reads sources.
-  const needsSource = sourceMode !== 'none' && (!definition || definition.source_ids.length > 0);
+  const needsSource = !(renderer === 'map' && mapMode === 'live') && sourceMode !== 'none' && (!definition || definition.source_ids.length > 0);
   const limitNumber = Number(limit);
   const limitValid = Number.isInteger(limitNumber) && limitNumber >= 1 && limitNumber <= 100;
   // Empty means unset. Map/intelligence windows are capped to 30 on save, so only the other renderers can be out of range.
@@ -441,6 +451,9 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
     // `template` still reflects the previous renderer here, so resolve the picked one explicitly.
     const picked = templates.data?.find((item) => item.renderer === nextRenderer);
     setChoice(nextRenderer);
+    setMapMode('live');
+    setLiveProviders(DEFAULT_LIVE_PROVIDERS);
+    setCountry(''); setGithubOwner(''); setGithubRepo(''); setSecCik(''); setWeatherLayer('none');
     // Reset every draft field so nothing typed for a previous template leaks into the next one.
     setSourceIds([]);
     setKeywords((picked?.filters.keywords ?? []).join(', '));
@@ -511,7 +524,7 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
         limit: limitNumber,
         keywords: splitList(keywords).length > 0 ? [...new Set(splitList(keywords))] : undefined,
         exclude_keywords: splitList(exclude).length > 0 ? [...new Set(splitList(exclude))] : undefined,
-        ...(renderer === 'map' ? { map_engine: engine, show_precise_locations: precise } : {}),
+        ...(renderer === 'map' ? { map_engine: engine, show_precise_locations: precise, map_mode: mapMode, map_weather_layer: weatherLayer === 'none' ? null : weatherLayer } : {}),
       };
       // Empty means unset (stored null stays null); JSON drops the undefined key.
       const days = lookback.trim() === '' ? undefined : Number(lookback);
@@ -539,7 +552,7 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
           // A Metric gadget on a symbol-keyed provider keeps its picked symbols; clearing them must persist, so always send the list.
           : renderer === 'provider_observation' ? { metrics: splitList(metrics), symbols: entry && !entry.symbol_keyed ? [] : splitList(symbols, true), lookback_days: days }
           : renderer === 'weather' ? { metrics: splitList(metrics), lookback_days: days }
-            : renderer === 'map' ? { regions: splitList(regions), map_layer_ids: layers, lookback_days: capped }
+            : renderer === 'map' ? { regions: splitList(regions), map_layer_ids: layers, lookback_days: capped, ...(mapMode === 'live' ? { live_map_providers: liveProviders, live_map_country: country.trim().toUpperCase() || undefined, live_map_github_owner: githubOwner.trim() || undefined, live_map_github_repo: githubRepo.trim() || undefined, live_map_sec_cik: secCik.trim() || undefined } : {}) }
               : renderer === 'intelligence_panel' ? { regions: splitList(regions), cii_country_codes: splitList(cii, true), lookback_days: capped }
                 : renderer === 'telegram_feed' ? { channel_ids: splitList(channels) }
                   : splitList(symbols, true).length > 0 ? { symbols: splitList(symbols, true) } : {}),
@@ -590,7 +603,7 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
         {templates.data.flatMap((item) => {
           const info = renderers.data.find((rendererInfo) => rendererInfo.id === item.renderer && rendererInfo.runtime_state === 'available');
           if (!info) return [];
-          const count = info.source_mode === 'none' ? null : counts.data?.[item.renderer] ?? null;
+          const count = info.source_mode === 'none' || item.renderer === 'map' ? null : counts.data?.[item.renderer] ?? null;
           const body = <>
             <GadgetTemplateSample renderer={item.renderer} />
             <span className="min-w-0"><span className="block text-sm font-semibold">{templateName(item.renderer, t)}</span>
@@ -615,7 +628,8 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
         <span>{templateName(renderer, t)}</span>
         <Button type="button" variant="ghost" size="sm" onClick={() => { setChoice(null); setRenderer(''); }}>{t('backToTemplates')}</Button>
       </div>}
-      {sourceMode !== 'none' && <div>
+      {renderer === 'map' && <div className="space-y-1.5"><Label htmlFor={`${nameId}-mode`}>{td('liveMapMode')}</Label><Select value={mapMode} onValueChange={(value) => setMapMode(value as 'live' | 'selected_sources')}><SelectTrigger id={`${nameId}-mode`}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="live">{td('liveMapModeLive')}</SelectItem><SelectItem value="selected_sources">{td('liveMapModeSources')}</SelectItem></SelectContent></Select></div>}
+      {sourceMode !== 'none' && !(renderer === 'map' && mapMode === 'live') && <div>
         <DatasourcePicker acceptedShapes={acceptedShapes} mode={sourceMode === 'single' ? 'single' : 'multi'} value={sourceIds} onChange={changeSources}
           invalid={!sourceValid} describedBy={!sourceValid ? sourceErrorId : undefined} sourcesHref={descriptor ? sourcesLinkFor(descriptor) : undefined} />
         {fieldError('source_ids') && <p role="alert" className="mt-1 text-xs text-destructive">{fieldError('source_ids')}</p>}
@@ -672,8 +686,8 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
             {fieldError('lookback_days') && <p role="alert" data-field="lookback_days" className="text-xs text-destructive">{fieldError('lookback_days')}</p>}</div>}
           {(fields.has('map') || fields.has('cii')) && <section className="space-y-3 rounded-md border border-border p-3">
             <h4 className="text-sm font-semibold">{renderer === 'map' ? td('mapScopeTitle') : td('intelligenceScopeTitle')}</h4>
-            <div className="space-y-1.5"><Label htmlFor={`${nameId}-reg`} className="text-xs font-semibold">{td('mapRegionsLabel')}</Label><Input id={`${nameId}-reg`} value={regions} onChange={(event) => setRegions(event.target.value)} placeholder={td('mapRegionsPlaceholder')} className="h-8 font-mono text-xs" /><p className="text-xs text-muted-foreground">{td('mapRegionsHelp')}</p></div>
-            <div className="space-y-1.5"><Label htmlFor={`${nameId}-mlook`} className="text-xs font-semibold">{td('mapLookbackLabel')}</Label><Input id={`${nameId}-mlook`} type="number" min={1} max={30} value={lookback} onChange={(event) => setLookback(event.target.value)} className="h-8 font-mono text-xs" /></div>
+            {(renderer !== 'map' || mapMode === 'selected_sources') && <><div className="space-y-1.5"><Label htmlFor={`${nameId}-reg`} className="text-xs font-semibold">{td('mapRegionsLabel')}</Label><Input id={`${nameId}-reg`} value={regions} onChange={(event) => setRegions(event.target.value)} placeholder={td('mapRegionsPlaceholder')} className="h-8 font-mono text-xs" /><p className="text-xs text-muted-foreground">{td('mapRegionsHelp')}</p></div>
+            <div className="space-y-1.5"><Label htmlFor={`${nameId}-mlook`} className="text-xs font-semibold">{td('mapLookbackLabel')}</Label><Input id={`${nameId}-mlook`} type="number" min={1} max={30} value={lookback} onChange={(event) => setLookback(event.target.value)} className="h-8 font-mono text-xs" /></div></>}
             {fields.has('map') && <>
               <div className="space-y-1.5">
                 <Label htmlFor={`${nameId}-eng`} className="text-xs font-semibold">{td('mapEngineLabel')}</Label>
@@ -682,7 +696,10 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
                   <SelectContent><SelectItem value="globe">{td('mapGlobeEngine')}</SelectItem><SelectItem value="flat">{td('mapFlatEngine')}</SelectItem></SelectContent>
                 </Select>
               </div>
-              <fieldset data-field="map_layer_ids" className="space-y-2">
+              {mapMode === 'live' && <><LiveMapConfig /><fieldset className="space-y-2"><legend className="text-xs font-semibold">{td('liveMapProviders')}</legend>{LIVE_PROVIDERS.map((provider) => <label key={provider} className="flex items-center gap-2 text-xs"><Checkbox checked={liveProviders.includes(provider)} onCheckedChange={(checked) => setLiveProviders((current) => checked === true ? [...current, provider] : current.filter((item) => item !== provider))} />{provider}</label>)}</fieldset>
+                <div className="grid gap-2 sm:grid-cols-2">{([[td('liveMapCountry'), country, setCountry], [td('liveMapGithubOwner'), githubOwner, setGithubOwner], [td('liveMapGithubRepo'), githubRepo, setGithubRepo], [td('liveMapSecCik'), secCik, setSecCik]] as const).map(([label, value, set]) => <label key={label} className="space-y-1 text-xs"><span>{label}</span><Input value={value} onChange={(event) => set(event.target.value)} /></label>)}</div>
+                <div className="space-y-1.5"><Label htmlFor={`${nameId}-weather`}>{td('liveMapWeather')}</Label><Select value={weatherLayer} onValueChange={(value) => setWeatherLayer(value as typeof weatherLayer)}><SelectTrigger id={`${nameId}-weather`}><SelectValue /></SelectTrigger><SelectContent>{(['none', 'temperature', 'precipitation', 'wind', 'clouds'] as const).map((item) => <SelectItem key={item} value={item}>{td(`liveMapWeather_${item}`)}</SelectItem>)}</SelectContent></Select></div></>}
+              {mapMode === 'selected_sources' && <><fieldset data-field="map_layer_ids" className="space-y-2">
                 <legend className="text-xs font-semibold">{td('mapLayerLabel')}</legend>
                 {MAP_LAYERS.map((layerId) => <label key={layerId} className="flex items-start gap-2 text-xs">
                   <Checkbox checked={layers.includes(layerId)} disabled={layerId !== 'world_observations' && !layers.includes(layerId)} onCheckedChange={(checked) => setLayers((current) => checked === true ? [...current, layerId] : current.filter((item) => item !== layerId))} />
@@ -690,7 +707,7 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
                 </label>)}
               {fieldError('map_layer_ids') && <p role="alert" className="text-xs text-destructive">{fieldError('map_layer_ids')}</p>}
               </fieldset>
-              <label className="flex items-start gap-2 text-xs"><Checkbox checked={precise} onCheckedChange={(checked) => setPrecise(checked === true)} /><span>{td('mapPreciseLocationOptIn')}</span></label>
+              <label className="flex items-start gap-2 text-xs"><Checkbox checked={precise} onCheckedChange={(checked) => setPrecise(checked === true)} /><span>{td('mapPreciseLocationOptIn')}</span></label></>}
             </>}
             {fields.has('cii') && <div className="space-y-1.5"><Label htmlFor={`${nameId}-cii`} className="text-xs font-semibold">{td('ciiCountryScopeLabel')}</Label><Input id={`${nameId}-cii`} value={cii} onChange={(event) => setCii(event.target.value)} placeholder="US, VN" className="h-8 font-mono text-xs uppercase" /><p className="text-xs text-muted-foreground">{td('ciiCountryScopeHelp')}</p></div>}
           </section>}

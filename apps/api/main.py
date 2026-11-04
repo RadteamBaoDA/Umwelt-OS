@@ -41,6 +41,10 @@ from modules.connectors.provisioning_routes import router as connector_provision
 from modules.connectors.reddit_oauth_routes import router as reddit_oauth_router
 from modules.connectors.routes import operator_router as connectors_operator_router
 from modules.connectors.routes import router as connectors_router
+from modules.dashboard.live_config_routes import operator_router as live_map_operator_router
+from modules.dashboard.live_config_routes import router as live_map_config_router
+from modules.dashboard.live_map_routes import LiveMapHeadersMiddleware
+from modules.dashboard.live_map_routes import router as live_map_router
 from modules.dashboard.routes import router as dashboard_router
 from modules.export.routes import router as export_router
 from modules.goals.routes import router as goals_router
@@ -172,6 +176,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     install_log_redaction()
     install_error_handling(app)
     app.add_middleware(PublicationGateMiddleware)
+    app.add_middleware(LiveMapHeadersMiddleware)
     app.add_middleware(
         BodyLimitMiddleware,
         default_limit=app_settings.max_request_body_bytes,
@@ -205,6 +210,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(model_gateway_router)
     app.include_router(search_router)
     app.include_router(dashboard_router)
+    app.include_router(live_map_router)
+    app.include_router(live_map_config_router)
+    app.include_router(live_map_operator_router)
     app.include_router(realtime_router)
     app.include_router(tasks_router)
     app.include_router(goals_router)

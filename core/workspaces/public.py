@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy import Select, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.auth.schemas import AccountSessionRef
 from core.ids import uuid7
 from core.workspaces.access import (
     authorize_internal_job as authorize_internal_job,  # noqa: PLC0414  # deliberate public re-export for mypy/ruff
@@ -49,6 +50,57 @@ from core.workspaces.schemas import (
     WorkspaceContext,
     WorkspaceRead,
 )
+
+
+async def bump_configuration_revision(
+    session: AsyncSession, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+    auth_sessions: tuple[AccountSessionRef, ...],
+) -> int:
+    """Advance the owner's workspace fence under an exclusive exact-session lock; caller commits.
+
+    Call before taking domain locks. In-flight publications carrying the old fence are
+    rejected, including when a secret is changed while a provider request is running.
+    """
+    if scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    fence = await lock_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        auth_sessions=auth_sessions, read=False,
+    )
+    workspace = await session.scalar(select(Workspace).where(
+        Workspace.id == scope.workspace_id, Workspace.owner_user_id == scope.user_id,
+    ).execution_options(populate_existing=True))
+    if workspace is None or workspace.configuration_revision != fence.configuration_revision:
+        raise HTTPException(status_code=409, detail="Workspace access fence changed")
+    workspace.configuration_revision += 1
+    await session.flush()
+    return workspace.configuration_revision
+
+
+async def bump_operator_review_revision(
+    session: AsyncSession, *, workspace_id: UUID, auth_session: AccountSessionRef,
+) -> None:
+    """Lock the exact operator session and workspace before a narrowly scoped terms review.
+
+    The caller must independently admit the account-1 operator and enforce CSRF; this
+    grants no general workspace write authority. The caller commits the review and bump.
+    """
+    from core.auth.public import lock_account_admission
+
+    if auth_session.account_id != 1:
+        raise HTTPException(status_code=403, detail="Instance operator required")
+    owner_id = await session.scalar(select(Workspace.owner_user_id).where(Workspace.id == workspace_id))
+    if owner_id is None:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    accounts = await lock_account_admission(session, (1, owner_id), actor_user_id=1,
+                                            multi_workspace_enabled=True, auth_sessions=(auth_session,))
+    workspace, memberships = await lock_workspace_memberships(session, workspace_id, (owner_id,))
+    owner = memberships.get(owner_id)
+    if (accounts.get(owner_id) is None or workspace.owner_user_id != owner_id or owner is None
+            or owner.role != "owner" or owner.owner_user_id != owner_id):
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    workspace.configuration_revision += 1
+    await session.flush()
 
 
 def new_invitation_secret() -> tuple[str, str]:

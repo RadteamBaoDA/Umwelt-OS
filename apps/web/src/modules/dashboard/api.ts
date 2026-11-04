@@ -52,6 +52,11 @@ export type GadgetScope = {
   symbols?: string[];
   regions?: string[];
   map_layer_ids?: string[];
+  live_map_providers?: string[];
+  live_map_country?: string | null;
+  live_map_github_owner?: string | null;
+  live_map_github_repo?: string | null;
+  live_map_sec_cik?: string | null;
   cii_country_codes?: string[];
   metrics?: string[];
   lookback_days?: number | null;
@@ -70,6 +75,8 @@ export type GadgetFilters = {
   exclude_keywords?: string[];
   limit?: number;
   map_engine?: 'globe' | 'flat' | null;
+  map_mode?: 'live' | 'selected_sources' | null;
+  map_weather_layer?: 'temperature' | 'precipitation' | 'wind' | 'clouds' | null;
   show_precise_locations?: boolean;
 };
 

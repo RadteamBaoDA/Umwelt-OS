@@ -10,6 +10,7 @@ import { uiSweepMessages } from '@/core/messages/ui-sweep';
 
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'c' }) }));
+vi.mock('./live-map-config', () => ({ LiveMapConfig: () => null }));
 vi.mock('next/link', () => ({ default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a> }));
 const api = vi.hoisted(() => ({
   listGadgetSources: vi.fn(), listCompatibleSourceCounts: vi.fn(), listGadgetRenderers: vi.fn(), listGadgetTemplates: vi.fn(), createGadgetDefinition: vi.fn(), patchGadgetDefinition: vi.fn(), getMetricCatalog: vi.fn(),
@@ -314,11 +315,27 @@ describe('GadgetEditor', () => {
     expect(await screen.findByLabelText('Items shown')).toHaveProperty('value', '40');
   });
 
+  it('creates a live map without requiring a datasource', async () => {
+    api.listGadgetRenderers.mockResolvedValue([renderer('map')]);
+    api.listGadgetTemplates.mockResolvedValue([tpl('m', 'map')]);
+    api.listCompatibleSourceCounts.mockResolvedValue({ map: 0 });
+    api.createGadgetDefinition.mockResolvedValue({ id: 'map', revision: 1 });
+    wrap();
+    await userEvent.click(await screen.findByRole('button', { name: /Map/ }));
+    expect(screen.queryByText('Choose a datasource')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Save to library' }));
+    await waitFor(() => expect(api.createGadgetDefinition).toHaveBeenCalled());
+    expect(api.createGadgetDefinition.mock.calls[0][0].filters.map_mode).toBe('live');
+    expect(api.createGadgetDefinition.mock.calls[0][0].source_ids).toEqual([]);
+  });
+
   it('unavailable map layers disabled', async () => {
     api.listGadgetRenderers.mockResolvedValue([renderer('map')]);
     api.listGadgetTemplates.mockResolvedValue([tpl('m', 'map')]);
     const { container } = wrap();
     await userEvent.click(await screen.findByRole('button', { name: /Map/ }));
+    await userEvent.click(screen.getByRole('combobox', { name: 'Map mode' }));
+    await userEvent.click(screen.getByRole('option', { name: 'Selected sources' }));
     (container.querySelector('details') as HTMLDetailsElement).open = true;
     expect((await screen.findByRole('checkbox', { name: /Military/ })).hasAttribute('disabled')).toBe(true);
     expect(screen.getByRole('checkbox', { name: /World observations/ }).hasAttribute('disabled')).toBe(false);

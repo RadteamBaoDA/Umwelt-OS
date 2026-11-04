@@ -31,6 +31,7 @@ type PendingReview = {
   workspace_id: string;
   workspace_name: string;
   source_id: string;
+  acknowledged_at?: string;
   provider_id: string;
   terms_url: string;
   terms_version: string;
@@ -50,7 +51,6 @@ function GlobalSettingsContent() {
   const session = useWorkspaceSession();
   const { workspaces, selectWorkspace } = useWorkspace();
   const router = useRouter();
-  const client = useQueryClient();
   const configuration = useQuery({
     queryKey: ['global-system-configuration'],
     enabled: session.isInstanceAdmin,
@@ -62,11 +62,17 @@ function GlobalSettingsContent() {
     queryFn: ({ signal }) => apiRequest<PendingReview[]>('/api/v1/operator/connectors/terms-review', { signal }),
   });
 
+  const liveReviews = useQuery({
+    queryKey: ['operator-live-map-terms-review'],
+    enabled: session.isInstanceAdmin,
+    queryFn: ({ signal }) => apiRequest<PendingReview[]>('/api/v1/operator/live-map/terms-review', { signal }),
+  });
+
   if (!session.isInstanceAdmin) return <p role="alert" className="text-muted-foreground">{t('accessDenied')}</p>;
-  if (configuration.isPending || reviews.isPending) return <div className="content-panel skeleton" aria-label={t('loading')} />;
-  if (configuration.isError || reviews.isError) return <section className="content-panel">
+  if (configuration.isPending || reviews.isPending || liveReviews.isPending) return <div className="content-panel skeleton" aria-label={t('loading')} />;
+  if (configuration.isError || reviews.isError || liveReviews.isError) return <section className="content-panel">
     <p role="alert" className="text-destructive">{t('loadFailed')}</p>
-    <Button variant="outline" onClick={() => { void configuration.refetch(); void reviews.refetch(); }}>{t('retry')}</Button>
+    <Button variant="outline" onClick={() => { void configuration.refetch(); void reviews.refetch(); void liveReviews.refetch(); }}>{t('retry')}</Button>
   </section>;
 
   /** Switches the selected workspace and opens its read-only or owner dashboard. */
@@ -97,8 +103,8 @@ function GlobalSettingsContent() {
       </ul>
     </SettingsSection>
     <SettingsSection title={t('providerReviews')}>
-      {reviews.data.length === 0 ? <p className="m-0 text-sm text-muted-foreground">{t('noProviderReviews')}</p> :
-        <div className="flex flex-col gap-4">{reviews.data.map((row) => <ProviderReviewRow key={`${row.workspace_id}-${row.source_id}`} row={row} />)}</div>}
+      {reviews.data.length === 0 && liveReviews.data.length === 0 ? <p className="m-0 text-sm text-muted-foreground">{t('noProviderReviews')}</p> :
+        <div className="flex flex-col gap-4">{[...reviews.data, ...liveReviews.data].map((row) => <ProviderReviewRow key={`${row.workspace_id}-${row.source_id ?? `live-${row.provider_id}`}`} row={row} />)}</div>}
     </SettingsSection>
   </div>;
 }
@@ -123,14 +129,18 @@ function ProviderReviewRow({ row }: { row: PendingReview }) {
   );
   const mutation = useMutation({
     mutationFn: ({ state, allowed_use, evidence_ref }: Omit<ReviewDecision, 'row'>) => apiRequest(
-      `/api/v1/operator/connectors/${encodeURIComponent(row.workspace_id)}/${encodeURIComponent(row.source_id)}/terms-review`,
+      row.acknowledged_at
+        ? `/api/v1/operator/live-map/${encodeURIComponent(row.workspace_id)}/${encodeURIComponent(row.provider_id)}/terms-review`
+        : `/api/v1/operator/connectors/${encodeURIComponent(row.workspace_id)}/${encodeURIComponent(row.source_id)}/terms-review`,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', ...csrfHeaders(session.csrfToken) },
-        body: JSON.stringify({ state, ...(allowed_use ? { allowed_use } : {}), evidence_ref, reviewed_terms_version: row.terms_version }),
+        body: JSON.stringify(row.acknowledged_at
+          ? { state, evidence_ref, version: row.terms_version, declared_use: row.declared_use, acknowledged_at: row.acknowledged_at }
+          : { state, ...(allowed_use ? { allowed_use } : {}), evidence_ref, reviewed_terms_version: row.terms_version }),
       },
     ),
-    onSuccess: () => client.invalidateQueries({ queryKey: ['operator-provider-terms-review'] }),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: ['operator-provider-terms-review'] }); void client.invalidateQueries({ queryKey: ['operator-live-map-terms-review'] }); },
   });
 
   /** Submits one decision only when the required evidence and approval scope are present. */
@@ -151,14 +161,14 @@ function ProviderReviewRow({ row }: { row: PendingReview }) {
     <form className="flex flex-col gap-3" onSubmit={(event) => submit(event, 'approved')}>
       <div className="grid gap-2 sm:grid-cols-2">
         <div className="flex flex-col gap-2">
-          <Label htmlFor={`evidence-${row.source_id}`}>{t('evidence')}</Label>
-          <Input id={`evidence-${row.source_id}`} required value={evidence} onChange={(event) => setEvidence(event.target.value)} aria-describedby={`evidence-help-${row.source_id}`} />
-          <p id={`evidence-help-${row.source_id}`} className="m-0 text-xs text-muted-foreground">{t('evidenceHelp')}</p>
+          <Label htmlFor={`evidence-${`${row.workspace_id}-${row.source_id ?? row.provider_id}`}`}>{t('evidence')}</Label>
+          <Input id={`evidence-${`${row.workspace_id}-${row.source_id ?? row.provider_id}`}`} required value={evidence} onChange={(event) => setEvidence(event.target.value)} aria-describedby={`evidence-help-${`${row.workspace_id}-${row.source_id ?? row.provider_id}`}`} />
+          <p id={`evidence-help-${`${row.workspace_id}-${row.source_id ?? row.provider_id}`}`} className="m-0 text-xs text-muted-foreground">{t('evidenceHelp')}</p>
         </div>
         <div className="flex flex-col gap-2">
-          <Label htmlFor={`allowed-use-${row.source_id}`}>{t('allowedUse')}</Label>
-          <Select value={allowedUse} onValueChange={(value) => setAllowedUse(value as NonNullable<ReviewDecision['allowed_use']>)}>
-            <SelectTrigger id={`allowed-use-${row.source_id}`}><SelectValue placeholder={t('allowedUse')} /></SelectTrigger>
+          <Label htmlFor={`allowed-use-${`${row.workspace_id}-${row.source_id ?? row.provider_id}`}`}>{t('allowedUse')}</Label>
+          <Select disabled={Boolean(row.acknowledged_at)} value={allowedUse} onValueChange={(value) => setAllowedUse(value as NonNullable<ReviewDecision['allowed_use']>)}>
+            <SelectTrigger id={`allowed-use-${`${row.workspace_id}-${row.source_id ?? row.provider_id}`}`}><SelectValue placeholder={t('allowedUse')} /></SelectTrigger>
             <SelectContent>
               <SelectItem value="personal">{t('use.personal')}</SelectItem>
               <SelectItem value="noncommercial">{t('use.noncommercial')}</SelectItem>

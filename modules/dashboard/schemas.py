@@ -54,6 +54,14 @@ class GadgetScope(StrictConfiguration):
     map_layer_ids: list[Annotated[str, Field(min_length=1, max_length=80)]] = Field(
         default_factory=list, max_length=32
     )
+    live_map_providers: list[Literal[
+        "usgs", "eonet", "firms", "hackernews", "lobsters", "cisa_kev", "nvd",
+        "business", "fed", "github_releases", "sec",
+    ]] = Field(default_factory=list, max_length=11)
+    live_map_country: Annotated[str, Field(pattern=r"^[A-Z]{3}$")] | None = None
+    live_map_github_owner: Annotated[str, Field(pattern=r"^[A-Za-z0-9-]{1,39}$")] | None = None
+    live_map_github_repo: Annotated[str, Field(pattern=r"^[A-Za-z0-9_.-]{1,100}$")] | None = None
+    live_map_sec_cik: Annotated[str, Field(pattern=r"^[0-9]{10}$")] | None = None
     cii_country_codes: list[Annotated[str, Field(pattern=r"^[A-Z]{2}$")]] = Field(
         default_factory=list, max_length=31
     )
@@ -84,6 +92,8 @@ class GadgetFilters(StrictConfiguration):
     )
     limit: Annotated[StrictInt, Field(ge=1, le=100)] = 25
     map_engine: Literal["globe", "flat"] | None = None
+    map_mode: Literal["live", "selected_sources"] | None = None
+    map_weather_layer: Literal["temperature", "precipitation", "wind", "clouds"] | None = None
     show_precise_locations: StrictBool = False
 
 

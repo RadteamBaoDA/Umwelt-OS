@@ -44,6 +44,12 @@ from modules.connectors.data_shapes import (
 from modules.connectors.data_shapes import (
     source_data_shapes as source_data_shapes,  # noqa: PLC0414 - public re-export
 )
+from modules.connectors.live_map_catalog import (
+    CATALOG_IDS as CATALOG_IDS,  # noqa: PLC0414 - public re-export
+)
+from modules.connectors.live_map_catalog import (
+    live_terms_catalog as live_terms_catalog,  # noqa: PLC0414 - public re-export
+)
 from modules.connectors.metric_catalog import (
     MetricInfo as MetricInfo,  # noqa: PLC0414 - public re-export
 )

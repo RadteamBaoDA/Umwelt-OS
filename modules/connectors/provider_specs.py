@@ -55,6 +55,18 @@ _NON_FREE_QUOTA_POLICIES: dict[str, tuple[QuotaWindowPolicy, ...]] = {
     )
 }
 
+# Separate live-map pilot budgets are local ceilings, not statements of provider entitlement.
+_NON_FREE_QUOTA_POLICIES.update({
+    "live_github_releases": (
+        QuotaWindowPolicy("pilot_calls_utc_minute", "provider", "minute", "http_calls", 10),
+        QuotaWindowPolicy("pilot_calls_utc_day", "provider", "day", "http_calls", 48),
+    ),
+    "live_openweather_tiles": (
+        QuotaWindowPolicy("pilot_calls_utc_minute", "credential", "minute", "http_calls", 60),
+        QuotaWindowPolicy("pilot_calls_utc_day", "credential", "day", "http_calls", 600),
+    ),
+})
+
 
 @dataclass(frozen=True)
 class FreeProviderSpec:

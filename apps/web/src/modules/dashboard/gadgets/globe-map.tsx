@@ -1,24 +1,34 @@
 'use client';
 
 import GlobeRenderer, { type GlobeInstance } from 'globe.gl';
-import { MeshBasicMaterial } from 'three';
+import { CanvasTexture, MeshBasicMaterial, SRGBColorSpace } from 'three';
 import { feature } from 'topojson-client';
 import worldTopology from 'world-atlas/countries-110m.json';
 import type { GeometryCollection, Topology } from 'topojson-specification';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import type { MapFeature } from '../map-layers';
 import { FlatMap } from './flat-map';
+import { useWeatherRaster, type WeatherProps } from './weather-raster';
+
+/** Coordinates and stable identity shared by evidence and live-event map points. */
+export type MapPoint = {
+  feature_id: string;
+  latitude: number;
+  longitude: number;
+  metric?: string;
+  observed_at?: string;
+};
 
 /** Props shared by the accessible map controller and the lazy 3D renderer. */
-export type GlobeMapProps = {
-  features: MapFeature[];
+export type GlobeMapProps = WeatherProps & {
+  features: MapPoint[];
   selectedFeatureId: string | null;
   onSelectFeature: (featureId: string) => void;
   width: number;
   height: number;
   visible: boolean;
   interactive: boolean;
+  focusSelected?: boolean;
 };
 
 /** True for the only colour syntaxes globe.gl's polished parser accepts here: hex, rgb(a) and hsl(a). */
@@ -61,11 +71,11 @@ function fitAltitude(width: number, height: number): number {
   return Math.sqrt(1 + x * x) / x - 1;
 }
 
-/** Narrow the globe.gl object-accessor contract to this map's detached evidence DTO. */
-function isMapFeature(value: object): value is MapFeature {
+/** Identify a renderable point from globe.gl's object-accessor input. */
+function isMapFeature(value: object): value is MapPoint {
   return 'feature_id' in value && typeof value.feature_id === 'string'
-    && 'metric' in value && typeof value.metric === 'string'
-    && 'observed_at' in value && typeof value.observed_at === 'string';
+    && 'latitude' in value && typeof value.latitude === 'number'
+    && 'longitude' in value && typeof value.longitude === 'number';
 }
 
 /**
@@ -98,10 +108,10 @@ function assertWebGLAvailable(): void {
 }
 
 /**
- * Render a local bare sphere in a nonshrinking 192px plot without requesting remote imagery or tiles.
+ * Render a sphere with optional same-origin weather imagery in a nonshrinking 192px plot.
  * When the globe cannot be created or its context is lost, the FlatMap is rendered over it with a visible note.
  */
-export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, height, visible, interactive }: GlobeMapProps) {
+export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, height, visible, interactive, weatherLayer, weatherWorkspaceId, weatherRevision, onWeatherStateChange, focusSelected = false }: GlobeMapProps) {
   const t = useTranslations('dashboard');
   const hostRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<GlobeInstance | null>(null);
@@ -112,6 +122,8 @@ export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, 
   const [unavailable, setUnavailable] = useState(false);
   const [contextLost, setContextLost] = useState(false);
   const isSized = width > 0 && height > 0;
+  const failed = unavailable || contextLost;
+  const weather = useWeatherRaster({ weatherLayer, weatherWorkspaceId, weatherRevision, onWeatherStateChange: failed ? undefined : onWeatherStateChange }, visible && !failed && isSized);
   useLayoutEffect(() => {
     selectedFeatureRef.current = selectedFeatureId;
     visibleRef.current = visible;
@@ -149,7 +161,7 @@ export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, 
         .pointColor((feature) => isMapFeature(feature) && feature.feature_id === selectedFeatureRef.current
           ? readMapToken('--accent', '#176a4a')
           : readMapToken('--chart-1', '#176a4a'))
-        .pointLabel((feature) => isMapFeature(feature) ? `${feature.metric} · ${feature.observed_at}` : '')
+        .pointLabel((feature) => isMapFeature(feature) ? [feature.metric, feature.observed_at].filter(Boolean).join(' ? ') : '')
         .onPointClick((feature) => { if (isMapFeature(feature)) onSelectFeature(feature.feature_id); });
       renderer = activeRenderer;
       rendererRef.current = activeRenderer;
@@ -228,31 +240,81 @@ export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, 
     else renderer.pauseAnimation();
   }, [features, height, interactive, selectedFeatureId, visible, width]);
 
-  /** Re-center on the evidence centroid when the point set changes (data arrives after the globe is created). */
+  const focused = focusSelected ? features.find((item) => item.feature_id === selectedFeatureId) : undefined;
+  const focusedLat = focused?.latitude, focusedLon = focused?.longitude;
+  const hasFocus = focusedLat !== undefined && focusedLon !== undefined;
   useEffect(() => {
-    const view = centroidView(features);
-    if (view) rendererRef.current?.pointOfView(view);
-  }, [features]);
+    if (focusedLat !== undefined && focusedLon !== undefined) rendererRef.current?.pointOfView({ lat: focusedLat, lng: focusedLon }, 500);
+  }, [selectedFeatureId, focusedLat, focusedLon]);
+
+  const center = centroidView(features);
+  const centerLat = center?.lat;
+  const centerLng = center?.lng;
+  /** Re-center only when the geographic centroid changes, preserving user rotation across data refreshes. */
+  useEffect(() => {
+    if (!hasFocus && centerLat !== undefined && centerLng !== undefined) {
+      rendererRef.current?.pointOfView({ lat: centerLat, lng: centerLng });
+    }
+  }, [centerLat, centerLng, hasFocus]);
 
   useEffect(() => {
     const renderer = rendererRef.current;
     const material = materialRef.current;
     if (!renderer || !material) return;
     const observer = new MutationObserver(() => {
-      material.color.setStyle(readGlobeColors().ocean);
-      renderer.polygonCapColor(() => readGlobeColors().land).polygonSideColor(() => readGlobeColors().land).polygonStrokeColor(() => readGlobeColors().stroke);
+      if (material.map && weather) {
+        const canvas = material.map.image as HTMLCanvasElement;
+        const context = canvas.getContext('2d');
+        if (context) {
+          context.fillStyle = readGlobeColors().ocean;
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          context.drawImage(weather, 0, 0);
+          material.map.needsUpdate = true;
+        }
+      } else material.color.setStyle(readGlobeColors().ocean);
+      renderer.polygonCapColor(() => material.map ? 'rgba(0,0,0,0)' : readGlobeColors().land).polygonSideColor(() => readGlobeColors().land).polygonStrokeColor(() => readGlobeColors().stroke);
       renderer.pointColor((feature) => isMapFeature(feature) && feature.feature_id === selectedFeatureRef.current
         ? readMapToken('--accent', '#176a4a') : readMapToken('--chart-1', '#176a4a'));
     });
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
     return () => observer.disconnect();
-  }, [isSized, selectedFeatureId]);
+  }, [isSized, onSelectFeature, selectedFeatureId, weather]);
 
-  const failed = unavailable || contextLost;
+  useEffect(() => {
+    const renderer = rendererRef.current;
+    const material = materialRef.current;
+    if (!renderer || !material) return;
+    let texture: CanvasTexture | null = null;
+    if (weather) {
+      const canvas = document.createElement('canvas');
+      canvas.width = weather.width;
+      canvas.height = weather.height;
+      const context = canvas.getContext('2d');
+      if (context) {
+        context.fillStyle = readGlobeColors().ocean;
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(weather, 0, 0);
+        texture = new CanvasTexture(canvas);
+        texture.colorSpace = SRGBColorSpace;
+      }
+    }
+    material.map = texture;
+    if (texture) material.color.setRGB(1, 1, 1);
+    else material.color.setStyle(readGlobeColors().ocean);
+    material.needsUpdate = true;
+    // Transparent land caps keep outlines above the weather texture without hiding it.
+    renderer.polygonCapColor(() => texture ? 'rgba(0,0,0,0)' : readGlobeColors().land);
+    return () => {
+      material.map = null;
+      material.needsUpdate = true;
+      texture?.dispose();
+    };
+  }, [weather, isSized, onSelectFeature]);
+
   return <div className="relative h-full min-h-48 shrink-0 w-full" aria-hidden={failed ? undefined : 'true'}>
     <div ref={hostRef} className={failed ? 'hidden' : 'h-full w-full'} />
     {failed && <>
-      <FlatMap features={features} selectedFeatureId={selectedFeatureId} onSelectFeature={onSelectFeature} width={width} height={height} visible={visible} interactive={interactive} />
+      <FlatMap features={features} selectedFeatureId={selectedFeatureId} onSelectFeature={onSelectFeature} width={width} height={height} visible={visible} interactive={interactive} weatherLayer={weatherLayer} weatherWorkspaceId={weatherWorkspaceId} weatherRevision={weatherRevision} onWeatherStateChange={onWeatherStateChange} focusSelected={focusSelected} />
       <p role="status" className="absolute bottom-2 left-2 rounded bg-card px-2 py-1 text-xs text-muted-foreground">{t('mapWebglUnavailable')}</p>
     </>}
   </div>;

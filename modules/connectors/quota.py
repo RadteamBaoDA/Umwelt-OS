@@ -154,6 +154,40 @@ async def debit_send(
     return send_id
 
 
+async def debit_transient_send(session: AsyncSession, *, provider_id: str, now: datetime | None = None) -> None:
+    """Atomically debit live provider windows without creating per-request ledger records.
+
+    The caller commits before sending; failed or abandoned sends are not refunded. All
+    live requests share an instance-wide subject, including across key rotation.
+    """
+    now = now or datetime.now(UTC)
+    async with session.begin_nested():
+        for policy, subject, start, end in _plan(provider_id, now, None, None):
+            limit, cost = policy.limit_units, policy.cost_per_send
+            if limit is not None and cost > limit:
+                raise QuotaDeferred(policy.policy_key, end)
+            admitted = (await session.execute(
+                pg_insert(_W).values(
+                    provider_id=provider_id, budget_kind=policy.budget_kind, subject_hash=subject,
+                    policy_key=policy.policy_key, window_start=start, window_end=end, unit=policy.unit,
+                    limit_units=limit, used_units=cost, policy_revision=QUOTA_POLICY_REVISION,
+                ).on_conflict_do_update(
+                    index_elements=[_W.provider_id, _W.budget_kind, _W.subject_hash, _W.policy_key, _W.window_start],
+                    set_={"used_units": _W.used_units + cost, "limit_units": limit, "unit": policy.unit,
+                          "policy_revision": QUOTA_POLICY_REVISION},
+                    where=and_(True if limit is None else _W.used_units + cost <= limit,
+                               or_(_W.blocked_until.is_(None), _W.blocked_until <= now)),
+                ).returning(_W.used_units)
+            )).first()
+            if admitted is None:
+                row = (await session.execute(select(_W.blocked_until).where(
+                    _W.provider_id == provider_id, _W.budget_kind == policy.budget_kind,
+                    _W.subject_hash == subject, _W.policy_key == policy.policy_key, _W.window_start == start,
+                ))).first()
+                blocked = row[0] if row is not None else None
+                raise QuotaDeferred(policy.policy_key, blocked if blocked is not None and blocked > now else end)
+
+
 async def defer_provider(
     session: AsyncSession, *, provider_id: str, until: datetime, credential: str | None = None,
     egress: str | None = None, now: datetime | None = None,

@@ -52,6 +52,7 @@ Reviewed 21 October 2026. This is the registered SQL model inventory, not eviden
 | `daily_brief_evidence` | [modules/dashboard/erasure.py](../modules/dashboard/erasure.py) | Delete scoped rows in bounded pages; verify absence before identity finalization. |
 | `daily_briefs` | [modules/dashboard/erasure.py](../modules/dashboard/erasure.py) | Delete scoped rows in bounded pages; verify absence before identity finalization. |
 | `dashboard_groups` | [modules/dashboard/erasure.py](../modules/dashboard/erasure.py) | Delete scoped rows in bounded pages; verify absence before identity finalization. |
+| `dashboard_live_credentials` | [modules/dashboard/erasure.py](../modules/dashboard/erasure.py) | Delete the workspace's encrypted live-map settings before identity finalization. |
 | `dashboard_layouts` | [modules/dashboard/erasure.py](../modules/dashboard/erasure.py) | Delete scoped rows in bounded pages; verify absence before identity finalization. |
 | `dashboards` | [modules/dashboard/erasure.py](../modules/dashboard/erasure.py) | Delete scoped rows in bounded pages; verify absence before identity finalization. |
 | `demo_seed_receipts` | [core/auth/deletion_cleanup.py](../core/auth/deletion_cleanup.py) | Delete scoped rows in bounded pages; verify absence before identity finalization. |
