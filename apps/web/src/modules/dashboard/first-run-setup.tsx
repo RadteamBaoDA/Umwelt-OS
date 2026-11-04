@@ -8,7 +8,7 @@ import type { ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { apiRequest } from '@/core/api';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { fetchTopics } from '@/modules/news/api';
+import { fetchTopics } from '@/modules/news';
 import { dailyKeys, generateBrief, getDailyContext } from './daily-api';
 import { isoDateInZone } from './selected-day';
 

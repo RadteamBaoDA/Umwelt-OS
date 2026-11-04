@@ -5,11 +5,37 @@ import { useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { getCorrelations } from '../intelligence-api';
+import { getCorrelations, type CorrelationBucket } from '../intelligence-api';
 import type { GadgetInstance } from '../api';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { formatReasonLabel } from './metric-label';
 import { BareButton } from '@/components/bare-button';
+
+/** Sources, regions and the 1..30 day window the panel queries (defaults: none, none, 30 days). */
+function readCorrelationScope(instance: GadgetInstance) {
+  const scope = instance.definition.scope;
+  return {
+    sourceIds: instance.definition.source_ids ?? [],
+    regions: scope?.regions ?? [],
+    days: Math.max(1, Math.min(scope?.lookback_days ?? 30, 30)),
+  };
+}
+
+/** One correlation group: region and window time, signal count, evidence ids (one click away) and omitted-support note. */
+function CorrelationGroupItem({ group }: { group: CorrelationBucket }) {
+  const t = useTranslations('dashboard');
+  const display = useDisplayPreferences();
+  const ids = group.event_evidence_ids.length ? group.event_evidence_ids : group.observation_ids.length ? group.observation_ids : group.document_ids;
+  return <li className="py-2 text-xs">
+    <div className="flex items-center justify-between gap-2"><span className="font-medium">{group.region}</span><time dateTime={group.window_start} className="text-muted-foreground">{formatDateTime(group.window_start, display.locale, display.timezone)}</time></div>
+    <p className="mt-1 text-muted-foreground">{t('correlationSignals', { count: group.signal_count, domains: group.domains_present.join(', ') })}</p>
+    {/* Raw ids are noise by default; keep them one click away. */}
+    {ids.length === 0
+      ? <p className="mt-1 text-xs text-muted-foreground">{t('correlationEvidence')} {t('correlationNoEvidenceIds')}</p>
+      : <details className="mt-1 text-xs text-muted-foreground"><summary className="cursor-pointer">{t('correlationEvidence').replace(/:\s*$/, '')} ({ids.length})</summary><p className="mt-1 break-all text-xs tabular-nums">{ids.slice(0, 8).join(', ')}</p></details>}
+    {(group.omitted_document_ids + group.omitted_document_version_ids + group.omitted_event_evidence_ids) > 0 && <p role="status" className="mt-1 text-muted-foreground">{t('correlationSupportOmitted', { documents: group.omitted_document_ids, versions: group.omitted_document_version_ids, evidence: group.omitted_event_evidence_ids })}</p>}
+  </li>;
+}
 
 /**
  * Display bounded, evidence-backed co-occurrence, strongest groups (most signals) first, with coverage and uncertainty in a collapsed details block.
@@ -18,11 +44,7 @@ import { BareButton } from '@/components/bare-button';
  */
 export function IntelligencePanel({ instance }: { instance: GadgetInstance }) {
   const t = useTranslations('dashboard');
-  const display = useDisplayPreferences();
-  const scope = instance.definition.scope;
-  const sourceIds = instance.definition.source_ids ?? [];
-  const regions = scope?.regions ?? [];
-  const days = Math.max(1, Math.min(scope?.lookback_days ?? 30, 30));
+  const { sourceIds, regions, days } = readCorrelationScope(instance);
   const [pageState, setPageState] = useState({ key: '', count: 20 });
   const scopeKey = `${instance.id}:${sourceIds.join(',')}:${regions.join(',')}:${days}`;
   // The page size resets whenever the scope changes.
@@ -59,18 +81,7 @@ export function IntelligencePanel({ instance }: { instance: GadgetInstance }) {
           {correlation.data.uncertainty_reasons.length > 0 && <p role="status" className="mt-1">{t('correlationUncertainty', { reasons: correlation.data.uncertainty_reasons.map((reason) => formatReasonLabel(reason, t)).join(' ') })}</p>}
         </details>
         {correlation.data.groups.length === 0 ? <GadgetNotice kind="empty" message={t('correlationEmpty')} action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }} className="my-auto px-0 py-1 text-xs" /> : <ul className="divide-y divide-border">
-          {[...correlation.data.groups].sort((a, b) => b.signal_count - a.signal_count).slice(0, visibleGroups).map((group) => <li key={`${group.region}:${group.window_start}`} className="py-2 text-xs">
-            <div className="flex items-center justify-between gap-2"><span className="font-medium">{group.region}</span><time dateTime={group.window_start} className="text-muted-foreground">{formatDateTime(group.window_start, display.locale, display.timezone)}</time></div>
-            <p className="mt-1 text-muted-foreground">{t('correlationSignals', { count: group.signal_count, domains: group.domains_present.join(', ') })}</p>
-            {(() => {
-              const ids = group.event_evidence_ids.length ? group.event_evidence_ids : group.observation_ids.length ? group.observation_ids : group.document_ids;
-              // Raw ids are noise by default; keep them one click away.
-              return ids.length === 0
-                ? <p className="mt-1 text-xs text-muted-foreground">{t('correlationEvidence')} {t('correlationNoEvidenceIds')}</p>
-                : <details className="mt-1 text-xs text-muted-foreground"><summary className="cursor-pointer">{t('correlationEvidence').replace(/:\s*$/, '')} ({ids.length})</summary><p className="mt-1 break-all text-xs tabular-nums">{ids.slice(0, 8).join(', ')}</p></details>;
-            })()}
-            {(group.omitted_document_ids + group.omitted_document_version_ids + group.omitted_event_evidence_ids) > 0 && <p role="status" className="mt-1 text-muted-foreground">{t('correlationSupportOmitted', { documents: group.omitted_document_ids, versions: group.omitted_document_version_ids, evidence: group.omitted_event_evidence_ids })}</p>}
-          </li>)}
+          {[...correlation.data.groups].sort((a, b) => b.signal_count - a.signal_count).slice(0, visibleGroups).map((group) => <CorrelationGroupItem key={`${group.region}:${group.window_start}`} group={group} />)}
         </ul>}
         {visibleGroups < correlation.data.groups.length && <BareButton type="button" onClick={() => setVisibleGroups((count) => Math.min(correlation.data?.groups.length ?? count, count + 20))} className="text-xs text-primary underline">{t('correlationMoreGroups', { count: correlation.data.groups.length - visibleGroups })}</BareButton>}
       </>}

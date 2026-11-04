@@ -8,7 +8,7 @@ import { TablePagination, usePagination } from '@/components/ui/pagination';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge/api';
+import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge';
 import type { GadgetInstance } from '../api';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';

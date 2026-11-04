@@ -48,6 +48,17 @@ function parseFields(text: string): Map<string, string> {
 }
 
 /**
+ * Resolves title and company: a provider company field wins; otherwise a WWR headline
+ * "Company: Job title" is split at the first colon only.
+ */
+function splitHeadline(title: string, company: string | null): { title: string; company: string | null } {
+  if (company) return { title, company };
+  const at = title.indexOf(':');
+  if (at > 0 && at < title.length - 1) return { title: title.slice(at + 1).trim(), company: clean(title.slice(0, at)) };
+  return { title, company };
+}
+
+/**
  * Turns one collected job document into a table row. Company/location/salary/level come from the
  * provider summary (`Company: X; Location: Y; ...`); when no company field exists (We Work Remotely)
  * a `"Company: Title"` headline is split. Pure; never throws.
@@ -59,16 +70,7 @@ export function parseJobPosting(item: JobPostingInput): JobPosting {
   const sourceFields = item.provider_metadata?.source_fields ?? {};
   const summary = typeof sourceFields.summary === 'string' ? sourceFields.summary : '';
   const fields = parseFields(item.excerpt?.includes(':') ? item.excerpt : summary);
-  let title = item.title.trim();
-  let company = clean(fields.get('company'));
-  if (!company) {
-    // WWR headlines read "Company: Job title"; split at the first colon only.
-    const at = title.indexOf(':');
-    if (at > 0 && at < title.length - 1) {
-      company = clean(title.slice(0, at));
-      title = title.slice(at + 1).trim();
-    }
-  }
+  const { title, company } = splitHeadline(item.title.trim(), clean(fields.get('company')));
   const salary = clean(fields.get('salary'));
   const publisher = typeof sourceFields.publisher === 'string' ? clean(sourceFields.publisher) : null;
   return {

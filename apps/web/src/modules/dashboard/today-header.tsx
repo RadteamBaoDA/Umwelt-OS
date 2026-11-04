@@ -6,10 +6,11 @@ import { useState } from 'react';
 import { fetchOwnerPreferences, OWNER_PREFERENCES_KEY } from '@/core/preferences';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { normalizeFormattingLocale } from '@/core/i18n';
-import { listWorldObservationWindow } from '@/modules/observations/public-api';
-import { fetchTopics } from '@/modules/news/api';
-import { fetchStories } from '@/modules/news/story-api';
+import { listWorldObservationWindow } from '@/modules/observations';
+import { fetchTopics } from '@/modules/news';
+import { fetchStories } from '@/modules/news';
 import { LocalWeather } from './local-weather';
+import { getDateTimeFormat, getNumberFormat } from '@/modules/shared';
 
 /** Per-device last-visit marker. ponytail: localStorage only; sync to the server when multi-device matters. */
 export const LAST_VISIT_KEY = 'umwelt.dashboard.lastVisit';
@@ -67,9 +68,9 @@ export function TodayHeader({ name: nameProp, sourceIds, weatherSource }: { name
     const at = Date.now();
     return { now: new Date(at), lastVisit: consumeLastVisit(at) };
   });
-  const hour = Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: timezone }).format(now));
+  const hour = Number(getDateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: timezone }).format(now));
   const greeting = t(greetingKey(hour));
-  const date = new Intl.DateTimeFormat(normalizeFormattingLocale(locale), { dateStyle: 'full', timeZone: timezone }).format(now);
+  const date = getDateTimeFormat(normalizeFormattingLocale(locale), { dateStyle: 'full', timeZone: timezone }).format(now);
   const counts = useQuery({
     queryKey: ['today-since', lastVisit, sourceIds.join(',')],
     enabled: lastVisit !== null && sourceIds.length > 0,
@@ -100,7 +101,7 @@ export function TodayHeader({ name: nameProp, sourceIds, weatherSource }: { name
   const temperature = weather.data ?? null;
   const weatherText = temperature === null ? '' : (() => {
     // Celsius with no unit style noise: "Hanoi 24°" with a place, "24°C" without.
-    const degrees = new Intl.NumberFormat(normalizeFormattingLocale(locale), { maximumFractionDigits: 0 }).format(temperature);
+    const degrees = getNumberFormat(normalizeFormattingLocale(locale), { maximumFractionDigits: 0 }).format(temperature);
     return weatherSource?.name ? `${weatherSource.name} ${degrees}°` : `${degrees}°C`;
   })();
   const summary = (counts.data ?? []).map((row) => `${row.name} ${row.count}`).join(' · ');

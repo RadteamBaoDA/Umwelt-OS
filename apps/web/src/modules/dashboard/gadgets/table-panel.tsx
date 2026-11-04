@@ -9,10 +9,11 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { cleanExcerpt } from '@/modules/news/excerpt';
-import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge/api';
+import { cleanExcerpt } from '@/modules/news';
+import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 import type { GadgetInstance } from '../api';
+import type { FeedDocument } from './feed-model';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 
 /** Props for the source-backed table gadget. */
@@ -51,6 +52,53 @@ function distinctExcerpt(title: string, excerpt: string | null | undefined): str
   return !text || !folded || fold(title).includes(folded) ? null : text;
 }
 
+/** One stacked record row: optional selection checkbox, title with severity badge, distinct excerpt and date. */
+function TableRecordRow({ record, selectMode, checked, setSelectedRecords, toggle }: {
+  record: FeedDocument;
+  selectMode: boolean;
+  checked: boolean;
+  setSelectedRecords: React.Dispatch<React.SetStateAction<Record<string, SelectedRecordIdentity>>>;
+  /** The select-mode toggle, rendered in the first row at rest. */
+  toggle: React.ReactNode;
+}) {
+  const t = useTranslations('dashboard');
+  const display = useDisplayPreferences();
+  const shown = splitSeverity(record.title);
+  const excerpt = distinctExcerpt(record.title, record.excerpt);
+  return (
+    <li className="flex flex-wrap items-start gap-x-3 gap-y-0.5 py-2">
+      {selectMode && (
+        <Checkbox
+          aria-label={t('selectRecord', { title: record.title })}
+          checked={checked}
+          onCheckedChange={(next) => setSelectedRecords((current) => {
+            if (next !== true) {
+              const remaining = { ...current };
+              delete remaining[record.document_id];
+              return remaining;
+            }
+            if (Object.keys(current).length >= 32) return current;
+            return { ...current, [record.document_id]: {
+              sourceId: record.source_id,
+              documentId: record.document_id,
+              documentVersionId: record.document_version_id,
+              versionNumber: record.version_number,
+            } };
+          })}
+        />
+      )}
+      <div className="min-w-0 flex-1 basis-48">
+        <p className="text-sm font-medium leading-snug">{shown.title}{shown.severity && <Badge variant="outline" className="ml-2 align-middle">{t(`severity_${shown.severity}`)}</Badge>}</p>
+        {excerpt && <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{excerpt}</p>}
+      </div>
+      <div className="flex shrink-0 flex-col items-end gap-0.5">
+        {toggle}
+        <time className="whitespace-nowrap text-xs tabular-nums text-muted-foreground" dateTime={record.published_at ?? record.observed_at ?? undefined}>{formatDateTime(record.published_at ?? record.observed_at, display.locale, display.timezone)}</time>
+      </div>
+    </li>
+  );
+}
+
 /**
  * Render current source records as stacked rows in a bounded scroll root. The count and freshness go to the
  * frame footer; selection (and Ask AI with the exact selected versions, max 32) is behind a selection-mode toggle.
@@ -58,7 +106,6 @@ function distinctExcerpt(title: string, excerpt: string | null | undefined): str
 export function TablePanel({ instance }: TablePanelProps) {
   const t = useTranslations('dashboard');
   const { openDrawer } = useChatController();
-  const display = useDisplayPreferences();
   const sourceIds = [...new Set(instance.definition.source_ids)].slice(0, 32);
   // Row checkboxes and the Ask AI action exist only in selection mode.
   const [selectMode, setSelectMode] = useState(false);
@@ -129,42 +176,12 @@ export function TablePanel({ instance }: TablePanelProps) {
               : (
                 // Stacked rows: title/excerpt on the left, date right on wide bodies and wrapped below on narrow ones.
                 <ul className="min-h-0 flex-1 divide-y divide-border/60 overflow-y-auto">
-                  {records.map((record, index) => {
-                    const shown = splitSeverity(record.title);
-                    const excerpt = distinctExcerpt(record.title, record.excerpt);
-                    return (
-                      <li key={record.document_id} className="flex flex-wrap items-start gap-x-3 gap-y-0.5 py-2">
-                        {selectMode && (
-                          <Checkbox
-                            aria-label={t('selectRecord', { title: record.title })}
-                            checked={selectedIds.has(record.document_id)}
-                            onCheckedChange={(next) => setSelectedRecords((current) => {
-                              if (next !== true) {
-                                const remaining = { ...current };
-                                delete remaining[record.document_id];
-                                return remaining;
-                              }
-                              if (Object.keys(current).length >= 32) return current;
-                              return { ...current, [record.document_id]: {
-                                sourceId: record.source_id,
-                                documentId: record.document_id,
-                                documentVersionId: record.document_version_id,
-                                versionNumber: record.version_number,
-                              } };
-                            })}
-                          />
-                        )}
-                        <div className="min-w-0 flex-1 basis-48">
-                          <p className="text-sm font-medium leading-snug">{shown.title}{shown.severity && <Badge variant="outline" className="ml-2 align-middle">{t(`severity_${shown.severity}`)}</Badge>}</p>
-                          {excerpt && <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{excerpt}</p>}
-                        </div>
-                        <div className="flex shrink-0 flex-col items-end gap-0.5">
-                          {index === 0 && !selectMode && toggle}
-                          <time className="whitespace-nowrap text-xs tabular-nums text-muted-foreground" dateTime={record.published_at ?? record.observed_at ?? undefined}>{formatDateTime(record.published_at ?? record.observed_at, display.locale, display.timezone)}</time>
-                        </div>
-                      </li>
-                    );
-                  })}
+                  {records.map((record, index) => (
+                    <TableRecordRow
+                      key={record.document_id} record={record} selectMode={selectMode} checked={selectedIds.has(record.document_id)}
+                      setSelectedRecords={setSelectedRecords} toggle={index === 0 && !selectMode ? toggle : null}
+                    />
+                  ))}
                 </ul>
               )}
     </section>

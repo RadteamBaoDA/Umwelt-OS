@@ -14,9 +14,10 @@ export interface BriefGadgetProps {
  * Daily brief gadget: shows the selected day's saved, cited brief revision and the current-record
  * summaries (tasks, goals, stories, events). Content comes from `/api/v1/context/daily`; nothing is mocked.
  *
- * @param _props Gadget instance (the brief has no per-instance configuration yet).
+ * @param props Gadget instance (the brief has no per-instance configuration yet).
  * @returns The daily brief panel.
  */
-export function BriefGadget(_props: BriefGadgetProps) {
+export function BriefGadget(props: BriefGadgetProps) {
+  void props; // The brief has no per-instance configuration yet; the prop keeps the shared gadget contract.
   return <DailyBrief />;
 }

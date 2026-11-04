@@ -1,26 +1,19 @@
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
+import type { ApiResponse } from '@/core/api-contract';
+import type { components } from '@/core/api-types.gen';
 import type { DataShape } from '@/core/data-shapes';
 
-/** Dashboard summary returned by the owner-scoped collection endpoint. */
-export type DashboardSummary = {
-  id: string;
-  name: string;
-  revision: number;
-  created_at: string;
-  updated_at: string;
-};
+/** Backend OpenAPI schemas; DTOs below that match the contract are derived from them so drift fails `tsc`. */
+type Schemas = components['schemas'];
 
-/** Persisted rectangle for one gadget instance in a single breakpoint layout. */
-export type DashboardPlacement = {
-  instance_id: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-};
+/** Dashboard summary returned by the owner-scoped collection endpoint (derived from the OpenAPI schema). */
+export type DashboardSummary = ApiResponse<'/api/v1/dashboards'>[number];
 
-/** Complete saved layout for one breakpoint, including its independent column count. */
-export type DashboardBreakpointLayout = { columns: number; items: DashboardPlacement[] };
+/** Persisted rectangle for one gadget instance in a single breakpoint layout (derived from the OpenAPI schema). */
+export type DashboardPlacement = Schemas['LayoutItemRead'];
+
+/** Complete saved layout for one breakpoint, including its independent column count (derived from the OpenAPI schema). */
+export type DashboardBreakpointLayout = Schemas['DashboardBreakpointRead'];
 
 /** Warning metadata describing planned rendering or unavailable source/capability state. */
 export type DashboardWarning = {
@@ -130,13 +123,8 @@ export type GadgetInstance = {
   definition: GadgetDefinition;
 };
 
-/** Ordered dashboard group as returned in detail and group collection responses. */
-export type DashboardGroup = {
-  id: string;
-  dashboard_id: string;
-  name: string;
-  position: number;
-};
+/** Ordered dashboard group as returned in detail and group collection responses (derived from the OpenAPI schema). */
+export type DashboardGroup = Schemas['DashboardGroupRead'];
 
 /** Full owner-scoped dashboard configuration, without rendered payload data. */
 export type Dashboard = DashboardSummary & {

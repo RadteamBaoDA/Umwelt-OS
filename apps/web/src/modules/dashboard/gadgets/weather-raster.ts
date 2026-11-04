@@ -14,6 +14,35 @@ export type WeatherProps = {
 };
 
 /**
+ * Stitches the four 256px Web Mercator tiles (row-major) and reprojects them to a 512x256 equirectangular canvas.
+ * Web Mercator has no pixels beyond 85.051 degrees, so the polar caps stay transparent.
+ *
+ * @param bitmaps Decoded tiles in row-major order.
+ * @returns The reprojected canvas.
+ * @throws Error when a 2D canvas context is unavailable.
+ */
+function reprojectToEquirectangular(bitmaps: ImageBitmap[]): HTMLCanvasElement {
+  const mercator = document.createElement('canvas');
+  mercator.width = mercator.height = 512;
+  const source = mercator.getContext('2d');
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 256;
+  const target = canvas.getContext('2d');
+  if (!source || !target) throw new Error('Canvas unavailable');
+  bitmaps.forEach((bitmap, index) => source.drawImage(bitmap, (index % 2) * 256, Math.floor(index / 2) * 256, 256, 256));
+  // Web Mercator has no pixels beyond 85.051 degrees; leave polar caps transparent.
+  for (let row = 0; row < canvas.height; row++) {
+    const latitude = 90 - (row + 0.5) * 180 / canvas.height;
+    if (Math.abs(latitude) > 85.05112878) continue;
+    const radians = latitude * Math.PI / 180;
+    const sourceY = (1 - Math.asinh(Math.tan(radians)) / Math.PI) * 256;
+    target.drawImage(mercator, 0, sourceY, 512, 1, 0, row, 512, 1);
+  }
+  return canvas;
+}
+
+/**
  * Load four same-origin Mercator tiles at zoom 1, then resample them into a bounded
  * equirectangular image for both map engines. Results are memory-only and aborted
  * when the selection, workspace, revision, or visibility changes; refreshes every 60 seconds while visible.
@@ -78,23 +107,7 @@ export function useWeatherRaster({ weatherLayer, weatherWorkspaceId, weatherRevi
             if (abort.signal.aborted) return;
           }
         }
-        const mercator = document.createElement('canvas');
-        mercator.width = mercator.height = 512;
-        const source = mercator.getContext('2d');
-        const canvas = document.createElement('canvas');
-        canvas.width = 512;
-        canvas.height = 256;
-        const target = canvas.getContext('2d');
-        if (!source || !target) throw new Error('Canvas unavailable');
-        bitmaps.forEach((bitmap, index) => source.drawImage(bitmap, (index % 2) * 256, Math.floor(index / 2) * 256, 256, 256));
-        // Web Mercator has no pixels beyond 85.051 degrees; leave polar caps transparent.
-        for (let row = 0; row < canvas.height; row++) {
-          const latitude = 90 - (row + 0.5) * 180 / canvas.height;
-          if (Math.abs(latitude) > 85.05112878) continue;
-          const radians = latitude * Math.PI / 180;
-          const sourceY = (1 - Math.asinh(Math.tan(radians)) / Math.PI) * 256;
-          target.drawImage(mercator, 0, sourceY, 512, 1, 0, row, 512, 1);
-        }
+        const canvas = reprojectToEquirectangular(bitmaps);
         // A completed response must not republish data after the selected workspace changes.
         if (!abort.signal.aborted && workspaceGeneration() !== generation) abort.abort();
         if (!abort.signal.aborted) {

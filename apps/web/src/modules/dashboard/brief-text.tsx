@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { useContentTranslation } from '@/modules/translations/public-api';
+import { useContentTranslation } from '@/modules/translations';
 import { TranslatedBadge } from '@/modules/translations';
 import { TranslationNote } from '@/modules/translations';
 import type { DailyBriefRevision } from './daily-api';

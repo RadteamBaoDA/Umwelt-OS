@@ -12,8 +12,9 @@ import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { TaskForm } from '@/modules/tasks';
 import { TaskList } from '@/modules/tasks';
 import { TaskDetail } from '@/modules/tasks';
-import { fetchTasks } from '@/modules/tasks/public-api';
+import { fetchTasks } from '@/modules/tasks';
 import type { Task } from '@/modules/tasks';
+import { getDateTimeFormat } from '@/modules/shared';
 
 /** Props required to render the persisted task gadget instance against owner task APIs. */
 export interface TasksGadgetProps { instance: GadgetInstance }
@@ -43,7 +44,7 @@ export function TasksGadget({ instance }: TasksGadgetProps) {
   if (!session.data) return <GadgetNotice kind="error" message={t('sessionUnavailable')} />;
   const token = session.data.csrfToken;
   // Day keys are compared as YYYY-MM-DD in the owner's timezone so "today" matches what the owner sees.
-  const dayFormat = new Intl.DateTimeFormat('en-CA', { timeZone: display.timezone });
+  const dayFormat = getDateTimeFormat('en-CA', { timeZone: display.timezone });
   const today = dayFormat.format(new Date());
   const open = (summaryQuery.data?.items ?? []).filter((task) => task.status !== 'done' && task.status !== 'cancelled');
   /** Calendar day a task is due: its date-only `due_date`, else `due_at` rendered in the owner's timezone; null when undated. */

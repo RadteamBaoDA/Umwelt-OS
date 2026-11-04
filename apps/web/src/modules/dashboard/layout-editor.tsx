@@ -104,52 +104,22 @@ export interface LayoutEditorProps {
   onDismissSaveError?: () => void;
 }
 
+/** Add-flow inputs taken from the editor props. */
+type AddFlowProps = Pick<LayoutEditorProps, 'groups' | 'activeGroupId' | 'onAddGadgetInstance' | 'onBeginAddGadgetInstance' | 'onCancelPendingAdd'>;
+
 /**
- * Toolbar and dirty navigation guard for dashboard layout editing.
- * Provides explicit Save/Cancel/Undo/Redo controls, optional readable-size adoption, and the Add dialog (template editor or library pick).
- * Shows a Save / Discard / Stay modal before discarding unsaved layout changes,
- * and retains draft state upon failed save attempts.
+ * State and behaviour of the Add gadget dialog: target group, error text and the definition-to-instance placement.
  *
- * @param props Toolbar state flags and action callbacks.
- * @returns Accessible toolbar and owner decision dialogs.
+ * Placement is single-flight: while one add runs, a second definition created for a concurrent call is deleted
+ * again (never left orphaned) and the dialog cannot be closed. Failures leave the dialog open with a localized error.
  */
-export function LayoutEditor({
-  dashboardName,
-  editCount,
-  baseRevision,
-  isDirty,
-  isSaving,
-  canUndo,
-  canRedo,
-  onSave,
-  onCancel,
-  onUndo,
-  onRedo,
-  onTidyLayout,
-  canTidyLayout = false,
-  onUseReadableMobileSizes,
-  canUseReadableMobileSizes = false,
-  onOpenPresetPicker,
-  onAddGroup,
-  onAddGadgetInstance,
-  onBeginAddGadgetInstance,
-  onCancelPendingAdd,
-  groups,
-  activeGroupId,
-  dirtyModalOpen,
-  dirtyDescription,
-  onDirtyModalResolution,
-  saveError,
-  onDismissSaveError,
-}: LayoutEditorProps) {
-  const t = useTranslations('dashboard');
+function useAddGadgetFlow({ groups, activeGroupId, onAddGadgetInstance, onBeginAddGadgetInstance, onCancelPendingAdd }: AddFlowProps) {
   const session = useWorkspaceSession();
+  const tg = useTranslations('gadgetSettings');
   const [addDialogOpen, setAddDialogOpen] = useState<boolean>(false);
   const isAddingRef = useRef(false);
-
   const [targetGroupId, setTargetGroupId] = useState<string>(activeGroupId || groups[0]?.id || '');
   const [addError, setAddError] = useState<string | null>(null);
-  const tg = useTranslations('gadgetSettings');
 
   /**
    * Places the newly-created definition on the dashboard and deletes it if reservation or instance creation fails.
@@ -198,170 +168,214 @@ export function LayoutEditor({
     }
   }, [groups, onAddGadgetInstance, onBeginAddGadgetInstance, onCancelPendingAdd, session.csrfToken, targetGroupId, tg]);
 
+  /** Opens the dialog with a cleared error. */
+  const openAddDialog = useCallback(() => { setAddError(null); setAddDialogOpen(true); }, []);
+  /** Applies a dialog open-state change unless an add is running (the dialog cannot close mid-flight). */
+  const setOpenUnlessAdding = useCallback((open: boolean) => { if (!isAddingRef.current) setAddDialogOpen(open); }, []);
+  return { addDialogOpen, openAddDialog, setOpenUnlessAdding, targetGroupId, setTargetGroupId, addError, addDefinition };
+}
+
+/** Top edit toolbar (DashboardEdit artboard): title + edit state left, explicit Cancel / Save right. */
+function EditToolbar(props: LayoutEditorProps & { onOpenAdd: () => void }) {
+  const t = useTranslations('dashboard');
+  const { dashboardName, editCount, baseRevision, isDirty, isSaving, canUndo, canRedo, canTidyLayout = false, canUseReadableMobileSizes = false } = props;
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-4 py-3">
+      <div className="mr-auto flex min-w-0 flex-col">
+        <strong className="text-[15px] font-semibold text-foreground">{t('editingTitle', { name: dashboardName })}</strong>
+        <span role="status" className="flex items-center text-xs text-muted-foreground">
+          <span className={`mr-1.5 inline-block size-2 rounded-full ${isDirty ? 'bg-primary' : 'bg-border'}`} aria-hidden="true" />
+          {isDirty ? <>{t('unsavedChanges')} {'·'} </> : null}
+          {t('editCount', { count: editCount })}
+          {baseRevision != null ? <> {'·'} {t('draftOf', { revision: baseRevision })}</> : null}
+        </span>
+      </div>
+
+      <Button type="button" variant="outline" disabled={!canUndo || isSaving} onClick={props.onUndo}>
+        <Undo2 className="size-4" aria-hidden="true" />{t('undo')}
+      </Button>
+      <Button type="button" variant="outline" disabled={!canRedo || isSaving} onClick={props.onRedo}>
+        <Redo2 className="size-4" aria-hidden="true" />{t('redo')}
+      </Button>
+      <span aria-hidden="true" className="mx-1 h-7 w-px bg-border" />
+      {props.onTidyLayout && (
+        <Button type="button" variant="outline" disabled={!canTidyLayout || isSaving} onClick={props.onTidyLayout}>
+          {t('tidyLayout')}
+        </Button>
+      )}
+      {props.onUseReadableMobileSizes && (
+        <Button type="button" variant="outline" disabled={!canUseReadableMobileSizes || isSaving} onClick={props.onUseReadableMobileSizes}>
+          {t('useReadableMobileSizes')}
+        </Button>
+      )}
+      <Button type="button" variant="outline" disabled={isSaving} onClick={props.onOpenAdd}>
+        <Plus className="size-4" aria-hidden="true" />{t('addGadget')}
+      </Button>
+      {props.onAddGroup && (
+        <Button type="button" variant="outline" disabled={isSaving} onClick={props.onAddGroup}>
+          <FolderPlus className="size-4" aria-hidden="true" />{t('addGroup')}
+        </Button>
+      )}
+      <Button type="button" variant="outline" disabled={isSaving} onClick={props.onOpenPresetPicker}>
+        <LayoutTemplate className="size-4" aria-hidden="true" />{t('presets')}
+      </Button>
+      <span aria-hidden="true" className="mx-1 h-7 w-px bg-border" />
+      <Button type="button" variant="outline" disabled={isSaving} onClick={props.onCancel}>
+        {t('cancelEdit')}
+      </Button>
+      <Button type="button" className="font-semibold" disabled={isSaving || !isDirty} onClick={props.onSave}>
+        {isSaving ? t('saving') : <><Check className="size-4" aria-hidden="true" />{t('saveLayout')}</>}
+      </Button>
+    </div>
+  );
+}
+
+/** Legend of the grid guides plus the keyboard hint. */
+function GridLegend() {
+  const t = useTranslations('dashboard');
+  return (
+    <ul aria-label={t('gridLegend')} className="m-0 flex list-none flex-wrap items-center gap-x-4 gap-y-1 p-0 text-xs text-muted-foreground">
+      <li className="flex items-center gap-1.5"><span aria-hidden="true" className="h-3 w-3 rounded-sm border border-border" />{t('legendFree')}</li>
+      <li className="flex items-center gap-1.5"><span aria-hidden="true" className="h-3 w-3 rounded-sm border border-primary bg-primary/15" />{t('legendDrop')}</li>
+      <li className="flex items-center gap-1.5"><span aria-hidden="true" className="h-3 w-3 rounded-sm border border-destructive bg-destructive/15" />{t('legendOverlap')}</li>
+      <li>{t('keyboardHelp')}</li>
+    </ul>
+  );
+}
+
+/** Save error alert banner with an optional dismiss button. */
+function SaveErrorBanner({ message, onDismiss }: { message: string; onDismiss?: () => void }) {
+  return (
+    <div className="mb-4 p-3 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive text-xs flex items-center justify-between">
+      <div className="flex items-center gap-2">
+        <AlertCircle className="w-4 h-4 shrink-0" />
+        <span className="font-medium">{message}</span>
+      </div>
+      {onDismiss && (
+        <BareButton
+          type="button"
+          onClick={onDismiss}
+          className="p-1 hover:bg-destructive/20 rounded"
+        >
+          <X className="w-3.5 h-3.5" />
+        </BareButton>
+      )}
+    </div>
+  );
+}
+
+/** Dirty switch warning modal (Save / Discard / Stay). */
+function DirtyModal({ open, description, isSaving, onResolve }: {
+  open: boolean;
+  description?: string;
+  isSaving: boolean;
+  onResolve: LayoutEditorProps['onDirtyModalResolution'];
+}) {
+  const t = useTranslations('dashboard');
+  return (
+    <AlertDialog open={open}>
+      <AlertDialogContent className="sm:max-w-md">
+        <AlertDialogHeader>
+          <AlertDialogTitle className="flex items-center gap-2 text-foreground">
+            <AlertCircle className="w-5 h-5 text-muted-foreground" />
+            <span>{t('dirtyWarningTitle')}</span>
+          </AlertDialogTitle>
+          <AlertDialogDescription className="text-muted-foreground text-sm">
+            {description ?? t('dirtyWarningDesc')}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+
+        <AlertDialogFooter className="flex-col sm:flex-row gap-2 mt-4">
+          <Button type="button" disabled={isSaving} className="secondary w-full sm:w-auto text-xs" onClick={() => onResolve('stay')}>
+            {t('stayOnPage')}
+          </Button>
+          <Button type="button" disabled={isSaving} className="secondary text-destructive hover:bg-destructive/10 w-full sm:w-auto text-xs" onClick={() => onResolve('discard')}>
+            {t('discardChanges')}
+          </Button>
+          <Button type="button" disabled={isSaving} className="w-full sm:w-auto text-xs font-semibold" onClick={() => onResolve('save')}>
+            {t('saveAndContinue')}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+/** Add gadget dialog: target group select plus the shared gadget editor. */
+function AddGadgetDialog({ flow, groups }: { flow: ReturnType<typeof useAddGadgetFlow>; groups: DashboardGroup[] }) {
+  const t = useTranslations('dashboard');
+  const tg = useTranslations('gadgetSettings');
+  const { targetGroupId } = flow;
+  return (
+    <Dialog open={flow.addDialogOpen} onOpenChange={flow.setOpenUnlessAdding}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{t('addGadgetTitle')}</DialogTitle>
+          <DialogDescription className="text-xs text-muted-foreground">
+            {tg('addDescription')}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          {/* Target Group */}
+          {groups.length > 0 && (
+            <div className="space-y-1">
+              <Label htmlFor="inst-group" className="text-xs">
+                {t('selectGroup')}
+              </Label>
+              <Select value={targetGroupId || groups[0]?.id} onValueChange={flow.setTargetGroupId}>
+                <SelectTrigger id="inst-group" className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {groups.map((group) => (
+                    <SelectItem key={group.id} value={group.id} className="text-xs">
+                      {group.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {/* Save creates the definition, then places its instance; failure removes the unused new definition. */}
+          <GadgetEditor
+            onSaved={flow.addDefinition}
+            onCancel={() => flow.setOpenUnlessAdding(false)}
+            saveLabel={t('addGadget')}
+          />
+          {flow.addError && <p role="alert" className="text-xs text-destructive">{flow.addError}</p>}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Toolbar and dirty navigation guard for dashboard layout editing.
+ * Provides explicit Save/Cancel/Undo/Redo controls, optional readable-size adoption, and the Add dialog (template editor or library pick).
+ * Shows a Save / Discard / Stay modal before discarding unsaved layout changes,
+ * and retains draft state upon failed save attempts.
+ *
+ * @param props Toolbar state flags and action callbacks.
+ * @returns Accessible toolbar and owner decision dialogs.
+ */
+export function LayoutEditor(props: LayoutEditorProps) {
+  const flow = useAddGadgetFlow(props);
   return (
     <>
       {/* Top Edit Toolbar (DashboardEdit artboard): title + edit state left, explicit Cancel / Save right */}
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-4 py-3">
-        <div className="mr-auto flex min-w-0 flex-col">
-          <strong className="text-[15px] font-semibold text-foreground">{t('editingTitle', { name: dashboardName })}</strong>
-          <span role="status" className="flex items-center text-xs text-muted-foreground">
-            <span className={`mr-1.5 inline-block size-2 rounded-full ${isDirty ? 'bg-primary' : 'bg-border'}`} aria-hidden="true" />
-            {isDirty ? <>{t('unsavedChanges')} {'·'} </> : null}
-            {t('editCount', { count: editCount })}
-            {baseRevision != null ? <> {'·'} {t('draftOf', { revision: baseRevision })}</> : null}
-          </span>
-        </div>
-
-        <Button type="button" variant="outline" disabled={!canUndo || isSaving} onClick={onUndo}>
-          <Undo2 className="size-4" aria-hidden="true" />{t('undo')}
-        </Button>
-        <Button type="button" variant="outline" disabled={!canRedo || isSaving} onClick={onRedo}>
-          <Redo2 className="size-4" aria-hidden="true" />{t('redo')}
-        </Button>
-        <span aria-hidden="true" className="mx-1 h-7 w-px bg-border" />
-        {onTidyLayout && (
-          <Button type="button" variant="outline" disabled={!canTidyLayout || isSaving} onClick={onTidyLayout}>
-            {t('tidyLayout')}
-          </Button>
-        )}
-        {onUseReadableMobileSizes && (
-          <Button type="button" variant="outline" disabled={!canUseReadableMobileSizes || isSaving} onClick={onUseReadableMobileSizes}>
-            {t('useReadableMobileSizes')}
-          </Button>
-        )}
-        <Button type="button" variant="outline" disabled={isSaving} onClick={() => { setAddError(null); setAddDialogOpen(true); }}>
-          <Plus className="size-4" aria-hidden="true" />{t('addGadget')}
-        </Button>
-        {onAddGroup && (
-          <Button type="button" variant="outline" disabled={isSaving} onClick={onAddGroup}>
-            <FolderPlus className="size-4" aria-hidden="true" />{t('addGroup')}
-          </Button>
-        )}
-        <Button type="button" variant="outline" disabled={isSaving} onClick={onOpenPresetPicker}>
-          <LayoutTemplate className="size-4" aria-hidden="true" />{t('presets')}
-        </Button>
-        <span aria-hidden="true" className="mx-1 h-7 w-px bg-border" />
-        <Button type="button" variant="outline" disabled={isSaving} onClick={onCancel}>
-          {t('cancelEdit')}
-        </Button>
-        <Button type="button" className="font-semibold" disabled={isSaving || !isDirty} onClick={onSave}>
-          {isSaving ? t('saving') : <><Check className="size-4" aria-hidden="true" />{t('saveLayout')}</>}
-        </Button>
-      </div>
-
-      <ul aria-label={t('gridLegend')} className="m-0 flex list-none flex-wrap items-center gap-x-4 gap-y-1 p-0 text-xs text-muted-foreground">
-        <li className="flex items-center gap-1.5"><span aria-hidden="true" className="h-3 w-3 rounded-sm border border-border" />{t('legendFree')}</li>
-        <li className="flex items-center gap-1.5"><span aria-hidden="true" className="h-3 w-3 rounded-sm border border-primary bg-primary/15" />{t('legendDrop')}</li>
-        <li className="flex items-center gap-1.5"><span aria-hidden="true" className="h-3 w-3 rounded-sm border border-destructive bg-destructive/15" />{t('legendOverlap')}</li>
-        <li>{t('keyboardHelp')}</li>
-      </ul>
+      <EditToolbar {...props} onOpenAdd={flow.openAddDialog} />
+      <GridLegend />
 
       {/* Save Error Alert Banner */}
-      {saveError && (
-        <div className="mb-4 p-3 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive text-xs flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span className="font-medium">{saveError}</span>
-          </div>
-          {onDismissSaveError && (
-            <BareButton
-              type="button"
-              onClick={onDismissSaveError}
-              className="p-1 hover:bg-destructive/20 rounded"
-            >
-              <X className="w-3.5 h-3.5" />
-            </BareButton>
-          )}
-        </div>
-      )}
+      {props.saveError && <SaveErrorBanner message={props.saveError} onDismiss={props.onDismissSaveError} />}
 
       {/* Dirty Switch Warning Modal (Save / Discard / Stay) */}
-      <AlertDialog open={dirtyModalOpen}>
-        <AlertDialogContent className="sm:max-w-md">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2 text-foreground">
-              <AlertCircle className="w-5 h-5 text-muted-foreground" />
-              <span>{t('dirtyWarningTitle')}</span>
-            </AlertDialogTitle>
-            <AlertDialogDescription className="text-muted-foreground text-sm">
-              {dirtyDescription ?? t('dirtyWarningDesc')}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-
-          <AlertDialogFooter className="flex-col sm:flex-row gap-2 mt-4">
-            <Button
-              type="button"
-              disabled={isSaving}
-              className="secondary w-full sm:w-auto text-xs"
-              onClick={() => onDirtyModalResolution('stay')}
-            >
-              {t('stayOnPage')}
-            </Button>
-            <Button
-              type="button"
-              disabled={isSaving}
-              className="secondary text-destructive hover:bg-destructive/10 w-full sm:w-auto text-xs"
-              onClick={() => onDirtyModalResolution('discard')}
-            >
-              {t('discardChanges')}
-            </Button>
-            <Button
-              type="button"
-              disabled={isSaving}
-              className="w-full sm:w-auto text-xs font-semibold"
-              onClick={() => onDirtyModalResolution('save')}
-            >
-              {t('saveAndContinue')}
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <DirtyModal open={props.dirtyModalOpen} description={props.dirtyDescription} isSaving={props.isSaving} onResolve={props.onDirtyModalResolution} />
 
       {/* Add Gadget Dialog */}
-      <Dialog open={addDialogOpen} onOpenChange={(open) => { if (!isAddingRef.current) setAddDialogOpen(open); }}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>{t('addGadgetTitle')}</DialogTitle>
-            <DialogDescription className="text-xs text-muted-foreground">
-              {tg('addDescription')}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4 py-2">
-            {/* Target Group */}
-            {groups.length > 0 && (
-              <div className="space-y-1">
-                <Label htmlFor="inst-group" className="text-xs">
-                  {t('selectGroup')}
-                </Label>
-                <Select
-                  value={targetGroupId || groups[0]?.id}
-                  onValueChange={setTargetGroupId}
-                >
-                  <SelectTrigger id="inst-group" className="h-8 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {groups.map((group) => (
-                      <SelectItem key={group.id} value={group.id} className="text-xs">
-                        {group.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-
-            {/* Save creates the definition, then places its instance; failure removes the unused new definition. */}
-            <GadgetEditor
-              onSaved={addDefinition}
-              onCancel={() => { if (!isAddingRef.current) setAddDialogOpen(false); }}
-              saveLabel={t('addGadget')}
-            />
-            {addError && <p role="alert" className="text-xs text-destructive">{addError}</p>}
-          </div>
-        </DialogContent>
-      </Dialog>
+      <AddGadgetDialog flow={flow} groups={props.groups} />
     </>
   );
 }

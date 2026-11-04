@@ -17,6 +17,12 @@ export interface DeltaPillProps {
   periodLabel?: string;
 }
 
+/** Outcome tone: flat or neutral-direction deltas are neutral; otherwise positive when the move matches `better`. */
+function deltaTone(flat: boolean, up: boolean, better: 'up' | 'down' | 'neutral'): 'neutral' | 'positive' | 'negative' {
+  if (flat || better === 'neutral') return 'neutral';
+  return (up ? better === 'up' : better === 'down') ? 'positive' : 'negative';
+}
+
 /**
  * Signed percent-change pill. Colour reflects outcome (good/bad per `better`); the sign, arrow and text
  * carry the meaning too, so colour is never the only cue. Zero or unknown change is neutral with no arrow.
@@ -28,11 +34,7 @@ export function DeltaPill({ percent, better = 'neutral', periodLabel }: DeltaPil
   const known = percent !== null && percent !== undefined && Number.isFinite(percent);
   const flat = !known || percent === 0;
   const up = !flat && (percent as number) > 0;
-  const tone = flat || better === 'neutral'
-    ? 'neutral'
-    : (up ? better === 'up' : better === 'down')
-      ? 'positive'
-      : 'negative';
+  const tone = deltaTone(flat, up, better);
   const toneClass = tone === 'positive'
     ? 'bg-pill-positive text-pill-positive-foreground'
     : tone === 'negative'

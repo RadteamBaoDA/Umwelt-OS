@@ -10,6 +10,7 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { getLocalWeather, type LocalWeather as LocalWeatherReading } from './api';
 import { toUnit, useWeatherUnit, weatherCondition, WeatherCard } from './weather-card';
 import { BareButton } from '@/components/bare-button';
+import { getNumberFormat } from '@/modules/shared';
 
 type Coords = { lat: number; lon: number };
 type Phase = 'checking' | 'ask' | 'granted' | 'hidden';
@@ -97,7 +98,7 @@ function WeatherSummary({ data }: { data: LocalWeatherReading }) {
   const [unit] = useWeatherUnit();
   const [open, setOpen] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const degrees = new Intl.NumberFormat(normalizeFormattingLocale(locale), { maximumFractionDigits: 0 }).format(toUnit(data.temperature_c, unit));
+  const degrees = getNumberFormat(normalizeFormattingLocale(locale), { maximumFractionDigits: 0 }).format(toUnit(data.temperature_c, unit));
   const { key } = weatherCondition(data.weather_code, data.is_day);
 
   /** Cancels a pending hover close. */

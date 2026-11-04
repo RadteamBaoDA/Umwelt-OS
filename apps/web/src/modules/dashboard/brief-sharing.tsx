@@ -7,8 +7,8 @@ import { ApiError } from '@/core/api';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useWorkspace } from '@/core/workspace-context';
-import { getDocument, grantShare, type ShareRow, type WorkspaceMember } from '@/modules/knowledge/api';
-import { ShareDialog, shareErrorKey } from '@/modules/knowledge/document-sharing';
+import { getDocument, grantShare, type ShareRow, type WorkspaceMember } from '@/modules/knowledge';
+import { ShareDialog, shareErrorKey } from '@/modules/knowledge';
 import { BriefText } from './brief-text';
 import { dailyKeys, listBriefRevisions, type DailyBriefRevision } from './daily-api';
 

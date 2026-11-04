@@ -28,6 +28,11 @@ export interface FreshnessTick {
 
 type TickSource = Pick<Source, 'id' | 'name' | 'last_success_at' | 'last_error_at' | 'last_error_code' | 'collection_error_code' | 'next_due_at'>;
 
+/** Epoch ms of an optional ISO timestamp; NaN when absent or malformed. */
+function parseTimestamp(value: string | null | undefined): number {
+  return value ? Date.parse(value) : NaN;
+}
+
 /**
  * Pure placement and status rule for one source: position on the 24 h axis, clamped at the left
  * edge when older; failing when the latest error is newer than the latest success; fresh while
@@ -38,12 +43,12 @@ type TickSource = Pick<Source, 'id' | 'name' | 'last_success_at' | 'last_error_a
  * @returns Tick geometry and status; malformed timestamps count as unknown, never throw.
  */
 export function computeFreshnessTick(source: TickSource, now: number): FreshnessTick {
-  const success = source.last_success_at ? Date.parse(source.last_success_at) : NaN;
-  const error = source.last_error_at ? Date.parse(source.last_error_at) : NaN;
+  const success = parseTimestamp(source.last_success_at);
+  const error = parseTimestamp(source.last_error_at);
   const hasSuccess = Number.isFinite(success);
   const age = hasSuccess ? Math.max(0, now - success) : Infinity;
   const failing = Number.isFinite(error) && (!hasSuccess || error > success);
-  const due = source.next_due_at ? Date.parse(source.next_due_at) : NaN;
+  const due = parseTimestamp(source.next_due_at);
   const fresh = hasSuccess && (Number.isFinite(due) ? now <= due : age < FRESH_FALLBACK_MS);
   return {
     id: source.id,

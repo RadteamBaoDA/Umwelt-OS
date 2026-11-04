@@ -6,8 +6,8 @@ import { useTranslations } from 'next-intl';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 import type { GadgetInstance } from '../api';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
-import { cleanExcerpt } from '@/modules/news/excerpt';
-import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge/api';
+import { cleanExcerpt } from '@/modules/news';
+import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge';
 
 /** Props for the TextPanel gadget component. */
 export interface TextPanelProps {

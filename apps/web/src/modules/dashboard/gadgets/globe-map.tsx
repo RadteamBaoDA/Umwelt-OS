@@ -109,63 +109,150 @@ function assertWebGLAvailable(): void {
 }
 
 /**
- * Render a sphere with optional same-origin weather imagery in a nonshrinking 192px plot.
- * When the globe cannot be created or its context is lost, the FlatMap is rendered over it with a visible note.
+ * Creates the globe renderer and its ocean material on `host`: bundled Natural Earth land polygons, graticules and
+ * clickable evidence points. Selection colour is read through `selectedFeatureRef` at draw time, so it never needs a rebuild.
+ *
+ * @returns The renderer and material; the caller owns disposing both.
+ * @throws Error when WebGL is unavailable or renderer creation fails.
  */
-export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, height, visible, interactive, weatherLayer, weatherWorkspaceId, weatherRevision, onWeatherStateChange, focusSelected = false }: GlobeMapProps) {
-  const t = useTranslations('dashboard');
-  const hostRef = useRef<HTMLDivElement>(null);
-  const rendererRef = useRef<GlobeInstance | null>(null);
-  const materialRef = useRef<MeshBasicMaterial | null>(null);
-  const selectedFeatureRef = useRef<string | null>(selectedFeatureId);
-  // Location-set key the camera was last centred on; refreshes of the same places must not undo the user's rotation/zoom.
-  const centredKeyRef = useRef<string | null>(null);
-  const visibleRef = useRef(visible);
-  const interactiveRef = useRef(interactive);
-  const [unavailable, setUnavailable] = useState(false);
-  const [contextLost, setContextLost] = useState(false);
-  const isSized = width > 0 && height > 0;
-  const failed = unavailable || contextLost;
-  const weather = useWeatherRaster({ weatherLayer, weatherWorkspaceId, weatherRevision, onWeatherStateChange: failed ? undefined : onWeatherStateChange }, visible && !failed && isSized);
-  useLayoutEffect(() => {
-    selectedFeatureRef.current = selectedFeatureId;
-    visibleRef.current = visible;
-    interactiveRef.current = interactive;
-  });
+function buildGlobe(host: HTMLDivElement, selectedFeatureRef: { current: string | null }, onSelectFeature: (featureId: string) => void) {
+  assertWebGLAvailable();
+  const activeMaterial = new MeshBasicMaterial({ color: readGlobeColors().ocean });
+  const activeRenderer = new GlobeRenderer(host, { rendererConfig: { antialias: true, alpha: true } })
+    // globe.gl parses colours with polished, which has no `transparent` keyword (throws error #5 and the globe never draws).
+    .backgroundColor('rgba(0,0,0,0)')
+    .globeMaterial(activeMaterial)
+    .showAtmosphere(false)
+    .showGraticules(true)
+    .polygonsData(countries)
+    .polygonAltitude(0.004)
+    .polygonCapColor(() => readGlobeColors().land)
+    .polygonSideColor(() => readGlobeColors().land)
+    .polygonStrokeColor(() => readGlobeColors().stroke)
+    // Radius is in degrees of arc: 0.48 was under one pixel on a ~190px sphere. 1.6 reads as a ~3px dot, and the
+    // altitude lifts it clear of the land cap (0.004) so the dot is never z-fought into the polygon fill.
+    // globe.gl reads `lat`/`lng` by default; MapFeature uses latitude/longitude, so without these accessors every
+    // point resolved to NaN and nothing was drawn.
+    .pointLat((feature) => isMapFeature(feature) ? feature.latitude : 0)
+    .pointLng((feature) => isMapFeature(feature) ? feature.longitude : 0)
+    .pointRadius(1.6)
+    .pointAltitude(0.015)
+    .pointColor((feature) => isMapFeature(feature) && feature.feature_id === selectedFeatureRef.current
+      ? readMapToken('--accent', '#176a4a')
+      : readMapToken('--chart-1', '#176a4a'))
+    .pointLabel((feature) => isMapFeature(feature) ? [feature.metric, feature.observed_at].filter(Boolean).join(' ? ') : '')
+    .onPointClick((feature) => { if (isMapFeature(feature)) onSelectFeature(feature.feature_id); });
+  return { activeRenderer, activeMaterial };
+}
 
+/**
+ * Keeps the globe material in sync with the weather raster and the theme: the raster becomes the sphere texture
+ * (land caps turn transparent so outlines stay above it); a theme class change repaints ocean, land and point colours.
+ * Effects run theme observer first, then texture, as before.
+ */
+function useGlobeWeather(
+  refs: { rendererRef: { current: GlobeInstance | null }; materialRef: { current: MeshBasicMaterial | null }; selectedFeatureRef: { current: string | null } },
+  weather: HTMLCanvasElement | null,
+  isSized: boolean,
+  onSelectFeature: (featureId: string) => void,
+  selectedFeatureId: string | null,
+) {
+  const { rendererRef, materialRef, selectedFeatureRef } = refs;
+  useEffect(() => {
+    const renderer = rendererRef.current;
+    const material = materialRef.current;
+    if (!renderer || !material) return;
+    const observer = new MutationObserver(() => {
+      if (material.map && weather) {
+        const canvas = material.map.image as HTMLCanvasElement;
+        const context = canvas.getContext('2d');
+        if (context) {
+          context.fillStyle = readGlobeColors().ocean;
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          context.drawImage(weather, 0, 0);
+          material.map.needsUpdate = true;
+        }
+      } else material.color.setStyle(readGlobeColors().ocean);
+      renderer.polygonCapColor(() => material.map ? 'rgba(0,0,0,0)' : readGlobeColors().land).polygonSideColor(() => readGlobeColors().land).polygonStrokeColor(() => readGlobeColors().stroke);
+      renderer.pointColor((feature) => isMapFeature(feature) && feature.feature_id === selectedFeatureRef.current
+        ? readMapToken('--accent', '#176a4a') : readMapToken('--chart-1', '#176a4a'));
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, [isSized, onSelectFeature, selectedFeatureId, weather, rendererRef, materialRef, selectedFeatureRef]);
+
+  useEffect(() => {
+    const renderer = rendererRef.current;
+    const material = materialRef.current;
+    if (!renderer || !material) return;
+    let texture: CanvasTexture | null = null;
+    if (weather) {
+      const canvas = document.createElement('canvas');
+      canvas.width = weather.width;
+      canvas.height = weather.height;
+      const context = canvas.getContext('2d');
+      if (context) {
+        context.fillStyle = readGlobeColors().ocean;
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(weather, 0, 0);
+        texture = new CanvasTexture(canvas);
+        texture.colorSpace = SRGBColorSpace;
+      }
+    }
+    material.map = texture;
+    if (texture) material.color.setRGB(1, 1, 1);
+    else material.color.setStyle(readGlobeColors().ocean);
+    material.needsUpdate = true;
+    // Transparent land caps keep outlines above the weather texture without hiding it.
+    renderer.polygonCapColor(() => texture ? 'rgba(0,0,0,0)' : readGlobeColors().land);
+    return () => {
+      material.map = null;
+      material.needsUpdate = true;
+      texture?.dispose();
+    };
+  }, [weather, isSized, onSelectFeature, rendererRef, materialRef]);
+
+}
+
+/** Inputs of {@link useGlobeLifecycle}. */
+interface GlobeLifecycleInputs {
+  refs: {
+    hostRef: { current: HTMLDivElement | null };
+    rendererRef: { current: GlobeInstance | null };
+    materialRef: { current: MeshBasicMaterial | null };
+    selectedFeatureRef: { current: string | null };
+    centredKeyRef: { current: string | null };
+    visibleRef: { current: boolean };
+    interactiveRef: { current: boolean };
+  };
+  features: MapPoint[];
+  width: number;
+  height: number;
+  visible: boolean;
+  interactive: boolean;
+  isSized: boolean;
+  onSelectFeature: (featureId: string) => void;
+  setContextLost: (lost: boolean) => void;
+  setUnavailable: (unavailable: boolean) => void;
+}
+
+/**
+ * Creates the globe renderer once the plot is measurable and tears it down (destructor, forced context loss, material
+ * dispose) when it is not, or when the click handler changes. Reports WebGL context loss / restoration and a failed
+ * creation through the setters so the map can fall back to the flat view. Also verifies the context one frame after
+ * creation so a silently dead context falls back instead of leaving an empty plot.
+ */
+function useGlobeLifecycle(inputs: GlobeLifecycleInputs) {
+  const { refs, features, width, height, visible, interactive, isSized, onSelectFeature, setContextLost, setUnavailable } = inputs;
+  const { hostRef, rendererRef, materialRef, selectedFeatureRef, centredKeyRef, visibleRef, interactiveRef } = refs;
   useEffect(() => {
     const host = hostRef.current;
     if (!host || !isSized) return;
     let renderer: GlobeInstance | null = null;
     let material: MeshBasicMaterial | null = null;
     try {
-      assertWebGLAvailable();
-      const activeMaterial = new MeshBasicMaterial({ color: readGlobeColors().ocean });
+      const { activeRenderer, activeMaterial } = buildGlobe(host, selectedFeatureRef, onSelectFeature);
       material = activeMaterial;
-      const activeRenderer = new GlobeRenderer(host, { rendererConfig: { antialias: true, alpha: true } })
-        // globe.gl parses colours with polished, which has no `transparent` keyword (throws error #5 and the globe never draws).
-        .backgroundColor('rgba(0,0,0,0)')
-        .globeMaterial(activeMaterial)
-        .showAtmosphere(false)
-        .showGraticules(true)
-        .polygonsData(countries)
-        .polygonAltitude(0.004)
-        .polygonCapColor(() => readGlobeColors().land)
-        .polygonSideColor(() => readGlobeColors().land)
-        .polygonStrokeColor(() => readGlobeColors().stroke)
-        // Radius is in degrees of arc: 0.48 was under one pixel on a ~190px sphere. 1.6 reads as a ~3px dot, and the
-        // altitude lifts it clear of the land cap (0.004) so the dot is never z-fought into the polygon fill.
-        // globe.gl reads `lat`/`lng` by default; MapFeature uses latitude/longitude, so without these accessors every
-        // point resolved to NaN and nothing was drawn.
-        .pointLat((feature) => isMapFeature(feature) ? feature.latitude : 0)
-        .pointLng((feature) => isMapFeature(feature) ? feature.longitude : 0)
-        .pointRadius(1.6)
-        .pointAltitude(0.015)
-        .pointColor((feature) => isMapFeature(feature) && feature.feature_id === selectedFeatureRef.current
-          ? readMapToken('--accent', '#176a4a')
-          : readMapToken('--chart-1', '#176a4a'))
-        .pointLabel((feature) => isMapFeature(feature) ? [feature.metric, feature.observed_at].filter(Boolean).join(' ? ') : '')
-        .onPointClick((feature) => { if (isMapFeature(feature)) onSelectFeature(feature.feature_id); });
       renderer = activeRenderer;
       rendererRef.current = activeRenderer;
       materialRef.current = activeMaterial;
@@ -192,7 +279,6 @@ export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, 
       canvas.addEventListener('webglcontextlost', handleContextLost);
       canvas.addEventListener('webglcontextrestored', handleContextRestored);
       // Renderer creation is an external-system sync; clearing the failure flag belongs here.
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- the WebGL renderer was just (re)created by this effect, so the earlier context-lost flag is stale external state.
       setUnavailable(false);
       // The renderer can be built while the lazy chunk/layout is still settling and then never paint (stale size, paused loop,
       // or a context that died silently). Re-apply size and resume on the next frame, then verify the context one frame later
@@ -225,7 +311,41 @@ export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, 
       material?.dispose();
       setUnavailable(true);
     }
+  // The renderer is rebuilt only when it becomes measurable or the click handler changes; size, visibility, data and
+  // interactivity are synced by the dedicated effects below so a user's rotation survives those updates.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSized, onSelectFeature]);
+}
+
+/**
+ * Render a sphere with optional same-origin weather imagery in a nonshrinking 192px plot.
+ * When the globe cannot be created or its context is lost, the FlatMap is rendered over it with a visible note.
+ */
+export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, height, visible, interactive, weatherLayer, weatherWorkspaceId, weatherRevision, onWeatherStateChange, focusSelected = false }: GlobeMapProps) {
+  const t = useTranslations('dashboard');
+  const hostRef = useRef<HTMLDivElement>(null);
+  const rendererRef = useRef<GlobeInstance | null>(null);
+  const materialRef = useRef<MeshBasicMaterial | null>(null);
+  const selectedFeatureRef = useRef<string | null>(selectedFeatureId);
+  // Location-set key the camera was last centred on; refreshes of the same places must not undo the user's rotation/zoom.
+  const centredKeyRef = useRef<string | null>(null);
+  const visibleRef = useRef(visible);
+  const interactiveRef = useRef(interactive);
+  const [unavailable, setUnavailable] = useState(false);
+  const [contextLost, setContextLost] = useState(false);
+  const isSized = width > 0 && height > 0;
+  const failed = unavailable || contextLost;
+  const weather = useWeatherRaster({ weatherLayer, weatherWorkspaceId, weatherRevision, onWeatherStateChange: failed ? undefined : onWeatherStateChange }, visible && !failed && isSized);
+  useLayoutEffect(() => {
+    selectedFeatureRef.current = selectedFeatureId;
+    visibleRef.current = visible;
+    interactiveRef.current = interactive;
+  });
+
+  useGlobeLifecycle({
+    refs: { hostRef, rendererRef, materialRef, selectedFeatureRef, centredKeyRef, visibleRef, interactiveRef },
+    features, width, height, visible, interactive, isSized, onSelectFeature, setContextLost, setUnavailable,
+  });
 
   /** Re-fit the sphere to ~90% of the plot after a resize, keeping the user's current rotation. */
   useEffect(() => {
@@ -265,59 +385,7 @@ export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, 
     centredKeyRef.current = key;
   }, [features, hasFocus]);
 
-  useEffect(() => {
-    const renderer = rendererRef.current;
-    const material = materialRef.current;
-    if (!renderer || !material) return;
-    const observer = new MutationObserver(() => {
-      if (material.map && weather) {
-        const canvas = material.map.image as HTMLCanvasElement;
-        const context = canvas.getContext('2d');
-        if (context) {
-          context.fillStyle = readGlobeColors().ocean;
-          context.fillRect(0, 0, canvas.width, canvas.height);
-          context.drawImage(weather, 0, 0);
-          material.map.needsUpdate = true;
-        }
-      } else material.color.setStyle(readGlobeColors().ocean);
-      renderer.polygonCapColor(() => material.map ? 'rgba(0,0,0,0)' : readGlobeColors().land).polygonSideColor(() => readGlobeColors().land).polygonStrokeColor(() => readGlobeColors().stroke);
-      renderer.pointColor((feature) => isMapFeature(feature) && feature.feature_id === selectedFeatureRef.current
-        ? readMapToken('--accent', '#176a4a') : readMapToken('--chart-1', '#176a4a'));
-    });
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
-    return () => observer.disconnect();
-  }, [isSized, onSelectFeature, selectedFeatureId, weather]);
-
-  useEffect(() => {
-    const renderer = rendererRef.current;
-    const material = materialRef.current;
-    if (!renderer || !material) return;
-    let texture: CanvasTexture | null = null;
-    if (weather) {
-      const canvas = document.createElement('canvas');
-      canvas.width = weather.width;
-      canvas.height = weather.height;
-      const context = canvas.getContext('2d');
-      if (context) {
-        context.fillStyle = readGlobeColors().ocean;
-        context.fillRect(0, 0, canvas.width, canvas.height);
-        context.drawImage(weather, 0, 0);
-        texture = new CanvasTexture(canvas);
-        texture.colorSpace = SRGBColorSpace;
-      }
-    }
-    material.map = texture;
-    if (texture) material.color.setRGB(1, 1, 1);
-    else material.color.setStyle(readGlobeColors().ocean);
-    material.needsUpdate = true;
-    // Transparent land caps keep outlines above the weather texture without hiding it.
-    renderer.polygonCapColor(() => texture ? 'rgba(0,0,0,0)' : readGlobeColors().land);
-    return () => {
-      material.map = null;
-      material.needsUpdate = true;
-      texture?.dispose();
-    };
-  }, [weather, isSized, onSelectFeature]);
+  useGlobeWeather({ rendererRef, materialRef, selectedFeatureRef }, weather, isSized, onSelectFeature, selectedFeatureId);
 
   return <div className="relative h-full min-h-48 shrink-0 w-full" aria-hidden={failed ? undefined : 'true'}>
     <div ref={hostRef} className={failed ? 'hidden' : 'h-full w-full'} />
