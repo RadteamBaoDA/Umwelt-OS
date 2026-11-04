@@ -228,31 +228,65 @@ class _RealtimeResponse(Response):
                 denial = _denial_failure(exc)
                 if denial is None:
                     raise
-                if not start_attempted:
-                    async with asyncio.timeout(SEND_TIMEOUT_SECONDS):
-                        # Use the installed HTTP error envelope rather than FastAPI's
-                        # raw detail shape, retaining status/headers/redaction/request ID.
-                        handler = self.request.app.exception_handlers[StarletteHTTPException]
-                        error_response = await handler(self.request, denial)
-                        error_response.headers.update(_PRIVATE_HEADERS)
-                        await error_response(scope, receive, send)
-                elif started and not finished and not send_uncertain:
-                    try:
-                        async with asyncio.timeout(SEND_TIMEOUT_SECONDS):
-                            await send({"type": "http.response.body", "body": b"", "more_body": False})
-                    except (TimeoutError, OSError):
-                        pass
+                await self._finish_denied(
+                    denial, scope, receive, send,
+                    start_attempted=start_attempted, started=started, finished=finished,
+                    send_uncertain=send_uncertain,
+                )
         finally:
+            await self._release_response()
+
+    async def _finish_denied(
+        self,
+        denial: HTTPException,
+        scope: ASGIScope,
+        receive: Receive,
+        send: Send,
+        *,
+        start_attempted: bool,
+        started: bool,
+        finished: bool,
+        send_uncertain: bool,
+    ) -> None:
+        """Complete a denied response without ever issuing a second ``http.response.start``.
+
+        Before any start attempt, render the installed HTTP error envelope (status, headers,
+        redaction and request ID preserved) plus private cache headers. After a confirmed
+        start that is not finished and whose last send was not uncertain, close with an empty
+        terminal body, ignoring timeout/OS errors. Otherwise do nothing. Each send is bounded
+        by ``SEND_TIMEOUT_SECONDS``.
+        """
+        if not start_attempted:
+            async with asyncio.timeout(SEND_TIMEOUT_SECONDS):
+                # Use the installed HTTP error envelope rather than FastAPI's
+                # raw detail shape, retaining status/headers/redaction/request ID.
+                handler = self.request.app.exception_handlers[StarletteHTTPException]
+                error_response = await handler(self.request, denial)
+                error_response.headers.update(_PRIVATE_HEADERS)
+                await error_response(scope, receive, send)
+        elif started and not finished and not send_uncertain:
             try:
-                iterator = getattr(self.response, "body_iterator", None)
-                if iterator is not None and hasattr(iterator, "aclose"):
-                    with anyio.CancelScope(shield=True):
-                        with anyio.fail_after(CLEANUP_TIMEOUT_SECONDS):
-                            await iterator.aclose()
-            finally:
-                if self.stream_semaphore is not None:
-                    self.stream_semaphore.release()
-                    self.stream_semaphore = None
+                async with asyncio.timeout(SEND_TIMEOUT_SECONDS):
+                    await send({"type": "http.response.body", "body": b"", "more_body": False})
+            except (TimeoutError, OSError):
+                pass
+
+    async def _release_response(self) -> None:
+        """Close the wrapped body iterator under a shielded bounded scope, then release the permit once.
+
+        The permit is released (and cleared so it cannot be released twice) even if closing the
+        iterator fails or times out; that failure then propagates to the caller.
+        """
+        try:
+            iterator = getattr(self.response, "body_iterator", None)
+            if iterator is not None and hasattr(iterator, "aclose"):
+                with anyio.CancelScope(shield=True):
+                    with anyio.fail_after(CLEANUP_TIMEOUT_SECONDS):
+                        await iterator.aclose()
+        finally:
+            if self.stream_semaphore is not None:
+                self.stream_semaphore.release()
+                self.stream_semaphore = None
 
 
 def _parse_workspace_selection(value: str | None) -> UUID | None:

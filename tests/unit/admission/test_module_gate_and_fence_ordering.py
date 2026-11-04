@@ -1,4 +1,4 @@
-"""P2/P3 phase-review regressions."""
+"""Module gate, workspace fence ordering and member-scope regressions."""
 
 from contextlib import asynccontextmanager
 from types import SimpleNamespace

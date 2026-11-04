@@ -28,7 +28,11 @@ from modules.chat.schemas import WEB_SEARCH_OUTCOME_KEY, AnswerContext
 from modules.chat.web_search import WebSearchError, WebSearchResult
 from modules.chat.web_search import search as real_search
 from tests.unit.modules.chat.test_p14_generation_worker import _Gen
-from tests.unit.test_b1c_regressions import _config, _evidence, _factory
+from tests.unit.typing_regressions.test_none_handling_regressions import (
+    _config,
+    _evidence,
+    _factory,
+)
 
 NOW_UTC = datetime(2026, 10, 7, tzinfo=UTC)
 SETTINGS = SimpleNamespace(

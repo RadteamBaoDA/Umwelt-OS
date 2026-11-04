@@ -18,7 +18,11 @@ from modules.chat import routes, worker
 from modules.chat.models import Message, StreamEvent
 from modules.chat.schemas import AnswerContext
 from modules.settings.public import VizRouterResolved
-from tests.unit.test_b1c_regressions import _config, _evidence, _factory
+from tests.unit.typing_regressions.test_none_handling_regressions import (
+    _config,
+    _evidence,
+    _factory,
+)
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 

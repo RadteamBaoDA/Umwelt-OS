@@ -9,9 +9,9 @@ from datetime import UTC, datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
 from core import pagination
+from core.errors import ValidationFailedError
 
 STAMP = datetime(2026, 5, 1, 12, 30, tzinfo=UTC)
 
@@ -41,7 +41,7 @@ def test_fingerprinted_cursor_rejects_cross_query_and_garbage() -> None:
     cursor = pagination.encode_fingerprinted_cursor("fp", STAMP, uuid4())
     naive = pagination.b64url_encode(json.dumps(["fp", "2026-05-01T12:00:00", str(uuid4())]).encode())
     for bad in (cursor, "!!!", "A" * 3000, naive):
-        with pytest.raises(HTTPException) as failure:
+        with pytest.raises(ValidationFailedError) as failure:
             pagination.decode_fingerprinted_cursor(bad, "other" if bad == cursor else "fp", detail="nope")
         assert failure.value.status_code == 422 and failure.value.detail == "nope"
 
@@ -54,6 +54,6 @@ def test_scoped_offset_roundtrip_and_bounds() -> None:
     assert cursor == base64.urlsafe_b64encode(b"abc123:40").decode().rstrip("=")
     for bad, scope, bound in ((cursor, "other", 100), (cursor, "abc123", 10), (cursor + "=", "abc123", 100),
                               (pagination.encode_scoped_offset("abc123", -1), "abc123", 100)):
-        with pytest.raises(HTTPException) as failure:
+        with pytest.raises(ValidationFailedError) as failure:
             pagination.decode_scoped_offset(bad, scope, max_offset=bound, detail="Invalid search cursor")
         assert failure.value.status_code == 422 and failure.value.detail == "Invalid search cursor"

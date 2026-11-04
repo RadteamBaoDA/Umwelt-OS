@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import HTTPException
+from core.errors import ValidationFailedError
 
 
 def encode_cursor(created_at: datetime, identifier: UUID) -> str:
@@ -44,7 +44,7 @@ def decode_cursor(cursor: str) -> tuple[datetime, UUID]:
         UnicodeDecodeError,
         binascii.Error,
     ) as exc:
-        raise HTTPException(status_code=422, detail="Invalid cursor") from exc
+        raise ValidationFailedError("Invalid cursor") from exc
 
 
 # --- Fingerprinted cursors -------------------------------------------------------------------
@@ -103,7 +103,7 @@ def decode_fingerprinted_cursor(
     admission revisions), becomes HTTP 422 with ``detail``.
     """
     if len(cursor) > max_length:
-        raise HTTPException(status_code=422, detail=detail)
+        raise ValidationFailedError(detail)
     try:
         identity, stamp, row_id = json.loads(b64url_decode(cursor))
         if identity != fingerprint:
@@ -114,7 +114,7 @@ def decode_fingerprinted_cursor(
             raise ValueError("Cursor timestamp or identifier is not canonical")
         return parsed.astimezone(UTC), parsed_id
     except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
-        raise HTTPException(status_code=422, detail=detail) from exc
+        raise ValidationFailedError(detail) from exc
 
 
 def encode_scoped_offset(scope: str, offset: int) -> str:
@@ -126,7 +126,7 @@ def decode_scoped_offset(cursor: str, scope: str, *, max_offset: int, detail: st
     """Decode a scoped ranked offset, requiring the exact scope, bounds and canonical encoding.
 
     Raises:
-        HTTPException: 422 with ``detail`` for any malformed, out-of-range, cross-scope or
+        ValidationFailedError: 422 with ``detail`` for any malformed, out-of-range, cross-scope or
             non-canonical cursor.
     """
     try:
@@ -137,4 +137,4 @@ def decode_scoped_offset(cursor: str, scope: str, *, max_offset: int, detail: st
             raise ValueError("Cursor does not match this query")
         return offset
     except (ValueError, UnicodeDecodeError, IndexError, binascii.Error) as exc:
-        raise HTTPException(status_code=422, detail=detail) from exc
+        raise ValidationFailedError(detail) from exc

@@ -13,7 +13,11 @@ from apps.worker.main import HEAVY_SLOT_JOBS, ModelWorkerSettings, WorkerSetting
 from core.config import Settings
 from core.system import health as health_module
 from core.worker_queues import MODEL_JOBS, MODEL_QUEUE, queue_for
-from tests.unit.test_b1c_regressions import _factory, _recovery_session, _recovery_setup
+from tests.unit.typing_regressions.test_none_handling_regressions import (
+    _factory,
+    _recovery_session,
+    _recovery_setup,
+)
 
 
 def _names(functions: Any) -> set[str]:

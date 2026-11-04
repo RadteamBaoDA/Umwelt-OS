@@ -1,4 +1,4 @@
-"""P1 phase-review regressions: stale call shapes in Chat, model-gateway workers and entity export."""
+"""Regressions for stale call shapes in Chat, model-gateway workers and entity export."""
 
 import ast
 import importlib
@@ -21,7 +21,7 @@ from core.model_gateway.schemas import (
 )
 from core.workspaces.schemas import InternalJobScope, WorkspaceContext
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 OWNER = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=2)
 ALIASES = {
     "documents_public": "modules.knowledge.documents.public",

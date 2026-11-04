@@ -1223,3 +1223,11 @@ Implemented (uncommitted, pending owner review/commit): gadget templates flow in
 ## Follow-up: nonce-based script CSP - 2026-11-04
 
 Open item from F2.7. `script-src 'unsafe-inline'` remains in `apps/web/next.config.ts` and `infrastructure/proxy/Caddyfile` because generative-UI `srcdoc` sandbox frames inherit the host CSP (a nonce policy would block widget inline scripts and import maps) and Next's per-page inline hydration scripts cannot be covered by one hash. Planned removal path (see `docs/security.md`): serve widget frames from a dedicated route with their own CSP, then switch the host to a per-request nonce CSP set in `apps/web/src/proxy.ts` and used by the `app/layout.tsx` accent-init script.
+
+## Deferred: DomainError migration for remaining core non-route code
+
+`core/pagination.py` raises `DomainError`. These still raise `HTTPException` and are deferred to a
+cross-cutting wave after the parallel work packages merge (about 129 `except HTTPException` sites and
+315 `pytest.raises(HTTPException)` assertions live in modules owned by other packages): `core/workspaces/{access,admission,public,dependencies}.py`,
+`core/auth/public.py`, `core/rate_limit.py`, `core/realtime/service.py`. Plan: first move callers to
+`core.errors.is_http_error`, then convert the raisers.

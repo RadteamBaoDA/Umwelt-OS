@@ -28,7 +28,18 @@ from core.storage.backend import (
 
 
 def storage_path(root: Path, relative_path: str) -> Path:
-    """Resolve a storage-relative path beneath the configured root and reject traversal or absolute paths."""
+    """Resolve a storage-relative path beneath the configured root and reject traversal or absolute paths.
+
+    Backslashes and drive-letter prefixes are rejected on every platform: on POSIX a backslash is an
+    ordinary filename character, but keys are always generated with ``/`` separators, so a backslash
+    or ``C:`` form can only be a Windows traversal/absolute attempt that would escape the root if the
+    same key were ever resolved on Windows (or by a backend that normalises separators).
+
+    Raises:
+        ValueError: ``"Invalid storage path"`` for any rejected or escaping path.
+    """
+    if "\\" in relative_path or (len(relative_path) > 1 and relative_path[:1].isalpha() and relative_path[1] == ":"):
+        raise ValueError("Invalid storage path")
     candidate = Path(relative_path)
     if candidate.is_absolute() or any(part in ("", ".", "..") for part in candidate.parts):
         raise ValueError("Invalid storage path")
