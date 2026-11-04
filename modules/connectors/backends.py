@@ -14,6 +14,7 @@ PROVIDER_SOURCE_TYPES = MappingProxyType({
     # P2/P3 fixed-endpoint providers: no owner-supplied scope, one catalog request per run.
     "bbc_world": "rss", "vnexpress_business": "rss", "dantri_news": "rss", "thanhnien_news": "rss", "tuoitre_news": "rss", "hn_top": "api", "gdelt_economy": "api",
     "world_bank": "api", "frankfurter": "api", "ecb": "api", "binance": "api", "vn_stock": "api", "vietnamworks_jobs": "api",
+    "itviec_jobs": "api",
     "alternative_me": "api", "usgs": "api", "coinpaprika": "api", "nasa_eonet": "api", "cisa_kev": "api",
     "coingecko": "api",  # owner-selected assets; Demo key lives in connector_rest_credentials
     "google_news": "rss",  # scoped free preset: URL is built server-side from validated query/site/locale

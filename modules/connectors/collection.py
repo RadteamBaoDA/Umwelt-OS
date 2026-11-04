@@ -1154,7 +1154,7 @@ def _require_body(fetched: rest.Fetched) -> bytes:
 
 
 SOCIAL_WALK_PROVIDERS = frozenset({"bluesky", "reddit", "mastodon", "x"})  # catch-up walk (providers/social_walk.py)
-DEDUP_ONLY_PROVIDERS = frozenset({"hn_top", "google_news", "vietnamworks_jobs"})  # late-surfacing feeds: a cursor floor would drop items
+DEDUP_ONLY_PROVIDERS = frozenset({"hn_top", "google_news", "vietnamworks_jobs", "itviec_jobs"})  # late-surfacing feeds: a cursor floor would drop items
 
 
 def _run_stats(run: Run, taken: Sequence[IngestionRecord]) -> dict[str, Any] | None:
@@ -1334,6 +1334,56 @@ async def _run_vietnamworks(run: Run) -> None:
                 min_salary_usd=cfg.get("job_min_salary_usd")),
             _require_body(fetched)))
     records, cursor_after = await _select(run, lease, jobs.merge_keyword_records(batches), collected_at)
+    await _accept_native(run, lease, records, _coverage(records), collected_at, cursor_after=cursor_after)
+
+
+async def _run_itviec(run: Run) -> None:
+    """ITviec jobs: <= 3 gated search pages, then <= 10 gated posting pages, every request >= 2 s apart.
+
+    Owner-approved static crawl (docs/connectors/free-sources.md): plain HTTP GET, JSON-LD only. Search pages yield
+    vetted posting URLs; only URLs this source has not stored yet are fetched, rotated by a 6-hour slot so
+    postings rejected by the salary/level filters (never stored, so never "seen") cannot starve newer ones. A
+    posting that is gone (404/410) is skipped; any other failing request fails the run, as for VietnamWorks.
+    """
+    from modules.connectors.providers import jobs
+    from modules.connectors.providers.macro import MAX_BODY_BYTES
+
+    cfg: dict[str, Any] = run.attempt.source.configuration or {}
+    source = run.attempt.source
+    collected_at = datetime.now(UTC)
+    lease = await _lease(run)
+    searches = _payload(jobs.itviec_search_requests, provider_options.selected_job_keywords(cfg), cfg.get("job_cities") or ())
+    urls: dict[str, None] = {}
+    first = True
+
+    async def page(request: Any) -> str:
+        nonlocal first
+        if not first:
+            await asyncio.sleep(jobs.ITVIEC_REQUEST_GAP_SECONDS)
+        first = False
+        return _require_body(await _get_body(run, request, max_bytes=MAX_BODY_BYTES)).decode("utf-8", errors="replace")
+
+    for request in searches:
+        urls.update(dict.fromkeys(jobs.parse_itviec_item_list(await page(request))))
+    async with run.factory() as session:
+        seen = await ingestion.seen_provider_ids(
+            session, source_id=source.id, source_generation=source.generation,
+            provider_ids=[f"itviec:{u.rsplit('/', 1)[1]}" for u in urls])
+        await session.rollback()
+    fresh = [u for u in urls if f"itviec:{u.rsplit('/', 1)[1]}" not in seen]
+    if fresh:
+        shift = int(collected_at.timestamp() // 21600) % len(fresh)
+        fresh = fresh[shift:] + fresh[:shift]
+    pages: list[tuple[str, str]] = []
+    for url in fresh[:jobs.ITVIEC_MAX_DETAIL_FETCHES]:
+        try:
+            pages.append((url, await page(jobs.itviec_detail_request(url))))
+        except rest.ProviderHttpError as exc:
+            if exc.status_code not in {404, 410}:
+                raise
+    records = _payload(
+        lambda: jobs.map_itviec(pages, collected_at, levels=cfg.get("job_levels") or (), min_salary_usd=cfg.get("job_min_salary_usd")))
+    records, cursor_after = await _select(run, lease, records, collected_at)
     await _accept_native(run, lease, records, _coverage(records), collected_at, cursor_after=cursor_after)
 
 
@@ -1528,6 +1578,7 @@ async def _run_openalex(run: Run) -> None:
 ADAPTERS.update({
     **dict.fromkeys(PURE_PROVIDERS, _run_pure),
     "vietnamworks_jobs": _run_vietnamworks,
+    "itviec_jobs": _run_itviec,
     "vn_stock": _run_vn_stock,  # two endpoints (stocks, indices); overrides the single-request runner
     **dict.fromkeys(KEYED, _run_keyed),
     "coingecko": _run_coingecko,

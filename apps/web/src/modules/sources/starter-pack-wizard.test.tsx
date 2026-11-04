@@ -36,7 +36,7 @@ beforeEach(() => {
   Object.values(api).forEach((mock) => mock.mockReset());
   api.listSources.mockResolvedValue({ items: [], next_cursor: null });
   api.getConnectorCatalog.mockResolvedValue([]);
-  api.listBuiltinSources.mockResolvedValue([row('hn_top'), row('lobsters', { source_id: 'x', enabled: true }), row('vn_stock', { min_interval_minutes: 360 }), row('wwr_jobs'), row('vietnamworks_jobs', { min_interval_minutes: 360 }), row('bbc_world')]);
+  api.listBuiltinSources.mockResolvedValue([row('hn_top'), row('lobsters', { source_id: 'x', enabled: true }), row('vn_stock', { min_interval_minutes: 360 }), row('wwr_jobs'), row('itviec_jobs', { min_interval_minutes: 360 }), row('vietnamworks_jobs', { min_interval_minutes: 360 }), row('bbc_world')]);
   api.enableBuiltinSource.mockResolvedValue(row('hn_top'));
   api.createScopedSource.mockResolvedValue({ id: 'new' });
 });
@@ -104,6 +104,15 @@ describe('StarterPackWizard', () => {
     await waitFor(() => expect(api.enableBuiltinSource).toHaveBeenCalled());
     const call = api.enableBuiltinSource.mock.calls.find((args) => args[0] === 'vietnamworks_jobs')!;
     expect(call[4]).toMatchObject({ job_keywords: ['Data Engineer', 'python'], job_cities: ['ho_chi_minh'] });
+  }, 20000);
+
+  it('enables ITviec jobs with the default developer keyword and Ho Chi Minh city', async () => {
+    wrap();
+    await keepOnly(['itviec_jobs']);
+    await userEvent.click(await screen.findByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(api.enableBuiltinSource).toHaveBeenCalled());
+    const call = api.enableBuiltinSource.mock.calls.find((args) => args[0] === 'itviec_jobs')!;
+    expect(call[4]).toMatchObject({ job_keywords: ['developer'], job_cities: ['ho_chi_minh'] });
   }, 20000);
 
   it('blocks Next on an invalid ticker', async () => {
