@@ -13,6 +13,7 @@ import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { AgentSettingsWorkspace } from '@/modules/agents/agent-settings';
 import { CheckboxField, SettingsActions, SettingsPageHeader, SettingsSection } from './settings-layout';
 import { AutomationSettings } from '@/modules/automations/rule-list';
+import type { BrowseOpenRouter, OpenRouterBrowseResult } from './openrouter-model-browser';
 import { mappingFor, ModelDefaults, ModelsPanel, pruneDefaults, type DefaultSlot, type Defaults, type Mapping, type ReasoningEffort } from './models-section';
 import { modelTestKey, parseDraftSnapshot, ProviderEditor, testRoleByType, type ModelTestState, type ProviderModel, type ProviderRead, type ProviderSecret } from './provider-editor';
 
@@ -164,6 +165,8 @@ export function AISettingsWorkspace() {
     onError: (error, provider) => setDiscoverError({ id: provider.id, text: describeError(error, t, 'discoveryFailed') }),
     onSettled: () => setDiscoveringId(null),
   });
+  /** Builds the browse call for one OpenRouter provider: a saved provider uses its stored key, a draft one the typed key. */
+  const browseOpenRouter = (provider: ProviderRead): BrowseOpenRouter => (filters, offset, limit) => apiRequest<OpenRouterBrowseResult>('/api/v1/settings/ai/openrouter/models', { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ provider_id: savedIds.includes(provider.id) ? provider.id : undefined, api_key: secrets[provider.id]?.key ?? '', filters, offset, limit }) });
   /** Probes the saved embedding default through the role endpoint, the only path that persists embeddings evidence. */
   const embeddingProbe = useMutation({
     mutationFn: () => apiRequest<Capability>('/api/v1/settings/models/embedding/test', { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ capability: 'embeddings' }) }),
@@ -283,7 +286,7 @@ export function AISettingsWorkspace() {
       {/* Models need a provider; with none, only the Providers block (and its empty state) is shown. */}
       {saved.providers.length > 0 && (
         <SettingsSection title={t('modelsSection')} description={t('modelsHelp')}>
-          <ModelsPanel providers={saved.providers} discovered={discovered} modelTests={shownTests} checkedAt={checkedAt} details={testDetails} disabled={save.isPending} onChange={changeModels} onTestModel={(provider, model) => testModel.mutate({ provider, model })} t={t as never} />
+          <ModelsPanel providers={saved.providers} discovered={discovered} modelTests={shownTests} checkedAt={checkedAt} details={testDetails} disabled={save.isPending} onChange={changeModels} onTestModel={(provider, model) => testModel.mutate({ provider, model })} browseOpenRouter={browseOpenRouter} t={t as never} />
           <ModelDefaults providers={saved.providers} defaults={defaults} disabled={save.isPending} embeddingStatus={embeddingStatus} onPick={pickDefault} onEffort={pickEffort} t={t as never} />
           {embeddingDimsChanged && <p className="error m-0 text-sm" role="status">{t('dimensionsChangedWarning')}</p>}
         </SettingsSection>

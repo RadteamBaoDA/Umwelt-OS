@@ -9,7 +9,8 @@ import { SearchableSelect } from '@/components/ui/searchable-select';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { guessModelType, mappingProviderId, modelTestKey, ModelTestChip, selectableModelTypes, testRoleByType, type ModelTestState, type ModelType, type ProviderModel, type ProviderRead } from './provider-editor';
+import { OpenRouterModelBrowser, type BrowseOpenRouter } from './openrouter-model-browser';
+import { guessModelType, mappingProviderId, modelTestKey, ModelTestChip, openRouterOnlyModelTypes, selectableModelTypes, testRoleByType, type ModelTestState, type ModelType, type ProviderModel, type ProviderRead } from './provider-editor';
 import { FieldGrid } from './settings-layout';
 
 type Translate = (key: string, values?: Record<string, string | number>) => string;
@@ -37,10 +38,10 @@ export function pruneDefaults(prev: ProviderRead[], next: ProviderRead[], defaul
   return Object.fromEntries(Object.entries(defaults).map(([role, m]) => [role, m?.model && gone.has(modelTestKey(mappingProviderId(m.provider_id, prev), m.model)) ? null : m]));
 }
 
-type ModelsProps = { providers: ProviderRead[]; discovered: Record<string, string[]>; modelTests: Record<string, ModelTestState>; checkedAt?: Record<string, string>; details?: Record<string, string>; disabled: boolean; onChange: (providers: ProviderRead[]) => void; onTestModel: (provider: ProviderRead, model: ProviderModel) => void; t: Translate };
+type ModelsProps = { providers: ProviderRead[]; discovered: Record<string, string[]>; modelTests: Record<string, ModelTestState>; checkedAt?: Record<string, string>; details?: Record<string, string>; disabled: boolean; onChange: (providers: ProviderRead[]) => void; onTestModel: (provider: ProviderRead, model: ProviderModel) => void; browseOpenRouter?: (provider: ProviderRead) => BrowseOpenRouter; t: Translate };
 
-/** The single Models area: add row (provider, discovered model, type, vision) and one table of every added model. */
-export function ModelsPanel({ providers, discovered, modelTests, checkedAt = {}, details = {}, disabled, onChange, onTestModel, t }: ModelsProps) {
+/** The single Models area: add row (provider, discovered model or OpenRouter browser, type, vision) and one table of every added model. OpenRouter providers get output-only types and the catalogue browser when `browseOpenRouter` is supplied. */
+export function ModelsPanel({ providers, discovered, modelTests, checkedAt = {}, details = {}, disabled, onChange, onTestModel, browseOpenRouter, t }: ModelsProps) {
   const [providerId, setProviderId] = useState('');
   const [pending, setPending] = useState('');
   const [type, setType] = useState<ModelType>('llm');
@@ -50,6 +51,8 @@ export function ModelsPanel({ providers, discovered, modelTests, checkedAt = {},
   const options = (provider ? discovered[provider.id] ?? [] : []).filter((id) => !added.has(id));
   // With no provider the add row is inert; the "Add a provider first" note below explains why.
   const noProvider = providers.length === 0;
+  const browsing = provider?.kind === 'openrouter' && browseOpenRouter !== undefined;
+  const typeChoices = provider?.kind === 'openrouter' ? [...selectableModelTypes, ...openRouterOnlyModelTypes] : selectableModelTypes;
   const noProviderNote = noProvider ? 'models-no-provider-note' : undefined;
   const rows = providers.flatMap((item) => (item.models ?? []).map((model) => ({ provider: item, model })));
   const pager = usePagination(rows);
@@ -58,19 +61,20 @@ export function ModelsPanel({ providers, discovered, modelTests, checkedAt = {},
   return <div className="flex flex-col gap-3">
     <div className="grid items-end gap-2 sm:grid-cols-[minmax(0,10rem)_minmax(9rem,1fr)_minmax(0,11rem)_auto]">
       <div className="field"><span className="label">{t('providerColumn')}</span>
-        <Select disabled={disabled || providers.length === 0} value={provider?.id ?? ''} onValueChange={(id) => { setProviderId(id); setPending(''); }}><SelectTrigger aria-label={t('providerColumn')} aria-describedby={noProviderNote}><SelectValue placeholder={t('providersNone')} /></SelectTrigger><SelectContent>{providers.map((item) => <SelectItem key={item.id} value={item.id}>{item.label || item.id}</SelectItem>)}</SelectContent></Select></div>
+        <Select disabled={disabled || providers.length === 0} value={provider?.id ?? ''} onValueChange={(id) => { setProviderId(id); setPending(''); setType('llm'); }}><SelectTrigger aria-label={t('providerColumn')} aria-describedby={noProviderNote}><SelectValue placeholder={t('providersNone')} /></SelectTrigger><SelectContent>{providers.map((item) => <SelectItem key={item.id} value={item.id}>{item.label || item.id}</SelectItem>)}</SelectContent></Select></div>
       {/* minmax(0,1fr): let the model picker shrink inside its track instead of overflowing into Type at tablet widths. */}
       <div className="field grid-cols-[minmax(0,1fr)]"><span className="label">{t('modelColumn')}</span>
-        <SearchableSelect aria-label={t('modelColumn')} aria-describedby={noProviderNote} value={pending} options={options} disabled={disabled || options.length === 0} placeholder={t('selectModel')} searchLabel={t('modelPickerSearch')} emptyLabel={t('modelPickerEmpty')} onValueChange={(id) => {
+        {browsing ? <p className="text-muted-foreground m-0 break-all text-sm" aria-live="polite">{pending || t('selectModel')}</p> : <SearchableSelect aria-label={t('modelColumn')} aria-describedby={noProviderNote} value={pending} options={options} disabled={disabled || options.length === 0} placeholder={t('selectModel')} searchLabel={t('modelPickerSearch')} emptyLabel={t('modelPickerEmpty')} onValueChange={(id) => {
           // Legacy guesses (vision/asr/tts) fold into Chat; a vision-looking id also pre-ticks the vision flag.
           const guess = guessModelType(id);
           setPending(id); setType((selectableModelTypes as readonly string[]).includes(guess) ? guess : 'llm'); setVision(guess === 'vision');
-        }} /></div>
+        }} />}</div>
       <div className="field"><span className="label">{t('typeColumn')}</span>
-        <Select disabled={disabled || noProvider} value={type} onValueChange={(next) => setType(next as ModelType)}><SelectTrigger aria-label={t('typeColumn')} aria-describedby={noProviderNote}><SelectValue /></SelectTrigger><SelectContent>{selectableModelTypes.map((item) => <SelectItem key={item} value={item}>{t(`type_${item}`)}</SelectItem>)}</SelectContent></Select></div>
+        <Select disabled={disabled || noProvider} value={type} onValueChange={(next) => setType(next as ModelType)}><SelectTrigger aria-label={t('typeColumn')} aria-describedby={noProviderNote}><SelectValue /></SelectTrigger><SelectContent>{typeChoices.map((item) => <SelectItem key={item} value={item}>{t(`type_${item}`)}</SelectItem>)}</SelectContent></Select></div>
       <Button type="button" variant="outline" disabled={disabled || !provider || !pending} onClick={() => { patch(provider!.id, [...(provider!.models ?? []), type === 'llm' && vision ? { id: pending, type, vision: true } : { id: pending, type }]); setPending(''); setVision(false); }}><Plus className="size-4" aria-hidden="true" /> {t('modelAdd')}</Button>
       {type === 'llm' && <label className="flex items-center gap-2 text-sm sm:col-span-4"><Checkbox disabled={disabled || noProvider} aria-describedby={noProviderNote} checked={vision} onCheckedChange={(next) => setVision(next === true)} />{t('modelVision')}</label>}
     </div>
+    {browsing && provider && <OpenRouterModelBrowser providerId={provider.id} browse={browseOpenRouter!(provider)} excluded={added} disabled={disabled} t={t} onPick={(model, picked) => { setPending(model.id); setType(picked); setVision(model.input_modalities.includes('image') && picked === 'llm'); }} />}
     {rows.length === 0 ? <p id={noProvider ? 'models-no-provider-note' : undefined} className="text-muted-foreground m-0">{t(providers.length === 0 ? 'modelsNoProvider' : 'modelsEmpty')}</p> : <TooltipProvider delayDuration={200}><div><Table aria-label={t('modelsTable')}>
       <TableHeader><TableRow><TableHead>{t('providerColumn')}</TableHead><TableHead>{t('modelColumn')}</TableHead><TableHead>{t('typeColumn')}</TableHead><TableHead>{t('visionColumn')}</TableHead><TableHead>{t('actionsColumn')}</TableHead></TableRow></TableHeader>
       <TableBody>{pager.pageItems.map(({ provider: owner, model }) => {

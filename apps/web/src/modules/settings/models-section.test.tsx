@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider, useTranslations } from 'next-intl';
@@ -9,11 +10,12 @@ import type { ProviderRead } from './provider-editor';
 const cloud: ProviderRead = { id: 'default', kind: 'openai', label: 'OpenAI', base_url: 'https://api.openai.com/v1', destination_id: 'remote:x', credential_configured: true, local: false, policy_denied: false, models: [{ id: 'gpt-4o', type: 'llm' }] };
 const m = (model: string, provider_id = 'default'): Mapping => ({ model, version: null, destination: 'remote', provider_id });
 
-function Panel({ providers, onChange = vi.fn(), onTestModel = vi.fn(), discovered = {} }: { providers: ProviderRead[]; onChange?: (p: ProviderRead[]) => void; onTestModel?: (p: ProviderRead, model: { id: string; type: string }) => void; discovered?: Record<string, string[]> }) {
+function Panel({ providers, onChange = vi.fn(), onTestModel = vi.fn(), discovered = {}, browse }: { browse?: (p: ProviderRead) => never; providers: ProviderRead[]; onChange?: (p: ProviderRead[]) => void; onTestModel?: (p: ProviderRead, model: { id: string; type: string }) => void; discovered?: Record<string, string[]> }) {
   const t = useTranslations('aiSettings');
-  return <ModelsPanel providers={providers} discovered={discovered} modelTests={{}} disabled={false} onChange={onChange} onTestModel={onTestModel as never} t={t as never} />;
+  return <ModelsPanel providers={providers} discovered={discovered} modelTests={{}} disabled={false} onChange={onChange} onTestModel={onTestModel as never} browseOpenRouter={browse} t={t as never} />;
 }
-const renderPanel = (props: Parameters<typeof Panel>[0]) => render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><Panel {...props} /></NextIntlClientProvider>);
+const renderPanel = (props: Parameters<typeof Panel>[0]) => render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><QueryClientProvider client={new QueryClient()}><Panel {...props} /></QueryClientProvider></NextIntlClientProvider>);
+const routed: ProviderRead = { ...cloud, id: 'or', kind: 'openrouter', label: 'OpenRouter', models: [] };
 
 describe('models panel', () => {
   it('shows the empty state until a model is added', () => {
@@ -54,7 +56,36 @@ describe('models panel', () => {
   });
 });
 
+describe('openrouter models', () => {
+  const flux = { id: 'black-forest-labs/flux-2', name: 'FLUX.2', created: null, context_length: null, input_modalities: ['text'], output_modalities: ['image'], pricing_prompt: null, pricing_completion: null, supported_parameters: [] };
+  it('uses the browser for openrouter providers and adds an image model', async () => {
+    const onChange = vi.fn();
+    const browse = vi.fn().mockResolvedValue({ ok: true, error: null, models: [flux], total_count: 1, next_offset: null });
+    renderPanel({ providers: [routed], onChange, browse: () => browse as never });
+    await userEvent.click(screen.getByRole('tab', { name: 'Image' }));
+    await userEvent.click(await screen.findByRole('button', { name: /FLUX\.2/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Add' }));
+    expect(onChange).toHaveBeenLastCalledWith([{ ...routed, models: [{ id: 'black-forest-labs/flux-2', type: 'image' }] }]);
+  });
+  it('offers output-only types only for OpenRouter providers', async () => {
+    renderPanel({ providers: [cloud] });
+    await userEvent.click(screen.getByRole('combobox', { name: 'Type' }));
+    expect(screen.queryByRole('option', { name: 'Image' })).toBeNull();
+  });
+});
+
 describe('model defaults', () => {
+  it('never lists output-only types in role defaults', async () => {
+    const odd: ProviderRead = { ...cloud, models: [{ id: 'img', type: 'image' }, { id: 'chat1', type: 'llm' }] };
+    function Block() {
+      const t = useTranslations('aiSettings');
+      return <ModelDefaults providers={[odd]} defaults={{}} disabled={false} embeddingStatus="idle" onPick={vi.fn()} t={t as never} />;
+    }
+    render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><Block /></NextIntlClientProvider>);
+    await userEvent.click(screen.getByRole('combobox', { name: 'Background model' }));
+    expect(screen.queryByRole('option', { name: /img/ })).toBeNull();
+  });
+
   it('prunes defaults whose model was removed', () => {
     const next = [{ ...cloud, models: [] }];
     const out = pruneDefaults([cloud], next, { chat: m('gpt-4o'), embedding: m('keep') });
