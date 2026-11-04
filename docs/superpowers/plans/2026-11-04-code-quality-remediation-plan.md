@@ -221,7 +221,9 @@ Scale 0–10. A score of 9 or more means it meets the standard of an enterprise 
 | Data/worker/cron/ops layer | 5.1 | §4.1 |
 | Frontend performance | 5 | No `next/dynamic`; Recharts loaded eagerly; 41% client components |
 | Testing & safety net | 5 | ~350 unit test files and good chat coverage; critical functions (`delete_episode`, `accept_native_collection`) have nearly 0 coverage; no load tests |
-| **Overall (simple average)** | **≈ 4.9/10** | Detailed and careful in correctness (locks, fences, provenance), weak in operability and maintainability |
+| Async correctness (no event-loop blocking) | 8 | §5A.2: argon2, parsing, chunking, uploads and DNS are all offloaded; still left: HTMLParser on the worker loop (up to ~6 s), live-map parsing on the API loop (~0.5 s) |
+| File storage / S3 readiness | 3 | §5A.1: local filesystem only, no storage abstraction, OS file-lock fence, multiple modules access the path directly |
+| **Overall (simple average)** | **≈ 5.0/10** | Detailed and careful in correctness (locks, fences, provenance, async offload), weak in operability, maintainability and storage scalability |
 
 ---
 
@@ -249,6 +251,81 @@ Each item first needs a benchmark or `EXPLAIN (ANALYZE, BUFFERS)` baseline, then
 
 ---
 
+## 5A. File processing / S3 and async (event loop) review
+
+### 5A.1 File processing and S3: current state
+
+**Conclusion: the codebase has no S3 at all.** There is no `boto3`/`aioboto3`/`minio`/`obstore` in `pyproject.toml` or the code. Files are stored on the **local filesystem** (`core/storage.py`, `core/storage_admission.py`, a shared volume between api and worker). The spec only requires "storage abstraction so MinIO can be added later" (`specs/personal-intelligence-os-spec-v2.md:384`), and that abstraction **does not exist yet**.
+
+**Current upload/processing flow (works well on local disk):**
+
+| Step | Implementation | Blocks the loop? | Assessment |
+|---|---|---|---|
+| Receive upload | `save_upload` (`core/storage.py:39`) reads 1 MB at a time, writes and fsyncs via `to_thread_joined`, streaming SHA-256, temp file + `os.replace` (atomic), checks symlink/traversal | No (only mkdir/mkstemp/replace are synchronous, at µs–ms scale) | ✅ Good: bounded, atomic, joins the thread on cancel |
+| Workspace fence | `workspace_filesystem_lease` (`core/storage_admission.py:21`): OS file lock `LOCK_NB` + permanent deletion flag with fsync | No (non-blocking lock, < 1 ms on local disk) | ✅ Correct on local disk; ❌ **does not work on S3** (no flock, no inode) |
+| Validate upload | `to_thread_joined` (`modules/ingestion/routes.py:225`) | No | ✅ |
+| Parse PDF/DOCX | `parse_file_bounded`: separate **spawn process** + timeout + terminate/join (`modules/ingestion/parsers.py:128-173`) | No (`Process.start()` inline ~5–30 ms) | ✅ Very good: isolates CPU and memory, can be killed |
+| Small-text parse | `wait_for(to_thread(...))` (`parsers.py:141-145`) | No | ⚠️ On timeout the thread keeps running after the heavy slot is released, which breaks the "join before release" rule |
+| Chunking/tiktoken | `to_thread_joined(chunk_text, …)` (`ingestion/worker.py:1483`) | No | ✅ |
+| Download | `FileResponse` streams asynchronously, `nosniff` + attachment (`documents/routes.py:284`) | No | ✅ |
+| Erasure / orphan cleanup | `unlink`/`scandir`/`rmdir` inline (`knowledge/documents/erasure.py:86-146`, `worker.py:564`); orphan sweep via `to_thread` (`ingestion/worker.py:1584`) | Very small on local disk | ⚠️ Becomes noticeable if the volume is NFS or EBS |
+
+**Blockers when moving to S3/MinIO (or when scaling api/worker across multiple hosts):**
+
+1. **No storage abstraction:** `storage_path(root, …)`, `Path`, `os.replace` and `FileResponse(path)` are used directly in ingestion, documents, erasure and chat media. Every caller depends on the filesystem.
+2. **The workspace fence relies on OS file locks and a deletion-flag file.** S3 has no equivalent, and on S3 the fence would lose its account-erasure guarantee. A fence based on Postgres (advisory lock/row) or a Redis lease plus a durable deletion flag in the DB is needed.
+3. **Atomic publish with temp + `os.replace`:** on S3 this needs multipart upload + `If-None-Match: *` (conditional put), or a write to a staging key followed by a DB pointer update.
+4. **The parser process needs a local path:** objects must be downloaded to a temp file (streaming, bounded) before parsing, and temp space has to be cleaned up.
+5. **Download through `FileResponse`:** this has to change to a streaming proxy or a presigned URL with a short TTL. A presigned URL bypasses API authorization and the `nosniff`/attachment headers, so it needs `response-content-disposition` and a short TTL.
+6. **A shared volume is required between api and worker:** this is the main constraint on horizontal scaling (P10/§4.1 #12).
+7. **Orphan cleanup uses `glob` on the filesystem:** on S3 this needs a prefix listing + lifecycle rules, or a reference table.
+
+**Plan S (storage), intentional behaviour change, after R0 and R1:**
+
+| # | Item | Notes |
+|---|---|---|
+| S1 | Define a `StorageBackend` Protocol in `core/storage/` with async methods: `put_stream(key, aiter, max_bytes) -> (size, sha256)`, `open_stream(key)`, `download_to_temp(key) -> Path`, `delete(key)`, `exists(key)`, `list_prefix(prefix)` | First step **with no behaviour change**: `LocalFilesystemBackend` wraps the current code 1:1 |
+| S2 | Move every caller (ingestion routes/worker, documents erasure/routes, chat media, orphan sweep) onto the protocol | Pure R-track refactor; tests kept unchanged |
+| S3 | Separate the **fence** from the filesystem: a `StorageFence` interface. The local implementation keeps the flock; the S3 implementation uses a PG advisory lock per workspace + a `workspace_storage_state(deleted_at)` row | Keep the "deletion flag is never undone" invariant |
+| S4 | `S3Backend` (`aioboto3` or `obstore`, both async): streaming multipart, conditional put, SSE-S3/KMS encryption, explicit `endpoint_url` for MinIO, credentials from env/secret, prefix `workspaces/<uuid>/documents/<uuid>/` | Add MinIO to `docker-compose.dev.yml` as an option; add `.env.example` placeholders |
+| S5 | Download: keep streaming through the API by default (keeps authorization and headers); presigned URLs are an option with TTL ≤ 60 s + `response-content-disposition=attachment` | |
+| S6 | Parse: `download_to_temp` (bounded, streaming) → parser process → delete temp in `finally` | |
+| S7 | Lifecycle/orphans: a reference table + paginated `list_prefix`, or S3 lifecycle rules for the `staging/` prefix | |
+| S8 | Tests: contract tests that run the same suite against `LocalFilesystemBackend` and `S3Backend` (MinIO in the integration harness) | Needs owner approval for Docker |
+
+### 5A.2 Async / event-loop blocking in the Python API and workers
+
+**Conclusion: good, rated 8/10.** The design is clearly async-aware.
+- 0 of 361 routes are synchronous `def` handlers.
+- Every client is async: SQLAlchemy async, `redis.asyncio`, `AsyncOpenAI`, Neo4j `AsyncGraphDatabase`, LangGraph `ainvoke`, MCP `create_subprocess_exec`.
+- There is no `requests`, `httpx.Client`, `time.sleep` or `subprocess.run` in request or job code.
+- argon2 runs in `to_thread`, including the dummy verify that keeps login timing uniform. Parsing, chunking, upload I/O, DNS for SSRF checks, XML/feed parsing, BeautifulSoup and export rendering are all offloaded.
+- `to_thread_joined` joins the thread on cancel.
+
+What still blocks (track A, all are `to_thread` wrappers with **no logic change**: same input/output and order, only moved off the loop):
+
+| # | Severity | Location | What blocks | Worst case | Process | Fix |
+|---|---|---|---|---|---|---|
+| A1 | 🔴 High | `modules/connectors/collection.py:764-765` (`_run_web`) | Pure-Python `HTMLParser.feed()` on pages up to 10 MB | ~2.6 s/page of 10 MB, ~6 s per run → stalls all 6 arq slots + cron (heartbeat, heavy-slot renew) | Worker | Move the parse into a sync helper returning `(parts, links)` and call it with `to_thread_joined` (`crawl.py:176/477` already does this) |
+| A2 | 🟠 Medium | `modules/connectors/live_map.py:123-221` via `dashboard/live_map_routes.py:291` | CSV/JSON parse up to 4 MB + `sorted()` + `_item()` for every row | ~0.3–0.6 s on a cache miss | **API** | `await asyncio.to_thread(_parse, provider, body)`. Stopping item construction after `MAX_ITEMS` is a separate optimisation that keeps the row count |
+| A3 | 🟠 Medium | `modules/ingestion/worker.py:676-710` (`_collect_web_job`) | `json()` 10 MB + 500× `model_validate`/`model_dump` + canonical dumps + sha256 | ~0.2–0.4 s | Worker | Gather the validate/dump/hash steps into a sync helper and run it in `to_thread`; SQL stays where it is |
+| A4 | 🟠 Medium | `connectors/providers/rest.py:378` (+ `map_page`), `research.py:59`, `social.py:113`, `google_api.py:112`, `local_services.py:169` | `json.loads` on pages up to 10 MB + mapping | ~70–150 ms/page | Worker | `await asyncio.to_thread(json.loads, body)`; offload `map_page` too |
+| A5 | 🟢 Low–Med | `connectors/collection.py:1253-1574` (direct `_payload(...)` calls) | JSON decode + map for macro/SEC/OpenAlex/GDELT… | ~30–100 ms | Worker | Wrap with `to_thread`, as the feed path already does (`:1451/1490`) |
+| A6 | 🟢 Low | `ingestion/parsers.py:141-145` | `wait_for(to_thread)`: a timed-out thread outlives the heavy slot | — | Worker | `to_thread_joined` inside `asyncio.timeout` |
+| A7 | 🟢 Low | `knowledge/documents/public.py:1835` `content_hash`, `crawl.py:485-561` | sha256/json.dumps on up to 10M characters | ~20–40 ms | API/worker | Fold into the existing `to_thread_joined` |
+| A8 | 🟢 Low | `core/auth/routes.py:83` `get_auth_redis` | The only **sync dependency**, which runs through the AnyIO threadpool for no reason | µs + handoff | API | Make it `async def` |
+| A9 | 🟢 Low | `core/storage.py:60-83`, `storage_admission.py:21-74`, `documents/erasure.py:86-146` | Sync mkdir/replace/unlink/fsync/scandir | ms on local disk; noticeable on NFS/EBS | API/worker | Optional: `to_thread_joined` around the publish/erase block when storage is a network volume (S2 will cover this) |
+| A10 | ℹ️ | SSRF DNS `to_thread(getaddrinfo)` + `wait_for(5)` (`connectors/public.py:3244`, `rest.py:79`, `local_services.py:103`) | Timed-out lookups occupy threads in the shared default executor (`min(32, cpu+4)`), which can starve argon2/uploads | — | API/worker | `loop.getaddrinfo` or a separate small executor for DNS; consider `set_default_executor` with an explicit size |
+| A11 | ℹ️ Startup | `core/chunking.py:8` | `tiktoken.get_encoding` downloads the BPE at import time if it is not cached, so offline startup fails | — | API + worker | Pre-cache in `docker/api.Dockerfile` + `TIKTOKEN_CACHE_DIR` |
+| A12 | ℹ️ | `docker/api.Dockerfile:21` `--loop asyncio` | uvloop is not used even though it is installed | Throughput | API | Consider `--loop uvloop` after benchmarking (P15) |
+
+**Guardrails so the loop does not regress:**
+- A pytest fixture enables `asyncio` debug mode with `loop.slow_callback_duration = 0.1` in the integration/worker tests, and logs and fails on any callback blocking for more than 100 ms.
+- Production: a Prometheus metric for event-loop lag (P1).
+- Ruff `ASYNC` rules (`ASYNC210/230/251`) are added to the `select` list in R0.
+
+---
+
 ## 6. Order and PR breakdown (all PRs go into `feature/fix-ui`)
 
 | Step | Content | Type |
@@ -259,12 +336,13 @@ Each item first needs a benchmark or `EXPLAIN (ANALYZE, BUFFERS)` baseline, then
 | 4 | R2 mechanical cleanup (Python, then Next.js; prettier formatting in a separate PR) | R |
 | 5 | R1 characterization tests | Tests |
 | 6 | R3.1, R3.2 (chat worker, harness) | R |
-| 7 | P2, P3, P9 (migration safety, CONCURRENTLY, indexes) | P |
+| 7 | P2, P3, P9 (migration safety, CONCURRENTLY, indexes) + A1–A8 (async offload, small PRs, same input/output) | P / R |
 | 8 | R3.3 to R3.6 (one PR per module) | R |
 | 9 | F2.5 to F2.7 | F |
 | 10 | P1, P4, P5, P6, P7, P8 | P |
 | 11 | R4 SOLID/architecture + folder restructure | R |
 | 12 | P10 to P15 | P |
+| 13 | S1–S2 (StorageBackend + LocalFilesystemBackend, no behaviour change), then S3–S8 (fence, S3/MinIO backend) | R → F |
 
 Merge strategy: each PR is rebased onto the latest `feature/fix-ui`. Merging `main` into `feature/fix-ui` (30 commits ahead) is a separate decision for the owner and is not part of this plan.
 
