@@ -9,11 +9,11 @@ from typing import Any, cast
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import Select, delete, desc, exists, false, func, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.errors import ConflictError, ForbiddenError
 from core.realtime import (
     ReplayDraft,
     commit_with_replay,
@@ -21,6 +21,7 @@ from core.realtime import (
     make_timeline_collection_change,
 )
 from core.workspaces import public as workspaces
+from core.workspaces.admission import actor_id as _actor
 from core.workspaces.schemas import (
     AccessFence,
     AdminWorkspaceReadContext,
@@ -59,11 +60,6 @@ from modules.timeline.schemas import (
 )
 
 
-def _actor(scope: Scope) -> int:
-    """Return the principal recorded by a real workspace or durable job scope."""
-    return scope.user_id if isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext)) else scope.actor_user_id
-
-
 async def _admit(
     session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
     lock: bool = False, expected: AccessFence | None = None,
@@ -72,9 +68,9 @@ async def _admit(
     if not isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext, InternalJobScope)):
         raise TypeError("An explicit timeline workspace scope is required")
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
+        raise ForbiddenError("Workspace owner required")
     if lock and isinstance(scope, AdminWorkspaceReadContext):
-        raise HTTPException(status_code=403, detail="Admin workspace access is read-only")
+        raise ForbiddenError("Admin workspace access is read-only")
     if type(multi_workspace_enabled) is not bool:
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     if lock:
@@ -90,6 +86,21 @@ from modules.timeline.seed import (
 
 # Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
 __all__ = [
+    "BriefEventSupport",
+    "CorrelationSignalPage",
+    "CorrelationSignalRead",
+    "EventCreate",
+    "EventPage",
+    "EventPatch",
+    "EventRead",
+    "TimelineExportEvidence",
+    "TimelineExportFence",
+    "TimelineExportFenceValidation",
+    "TimelineExportPage",
+    "TimelineExportParticipant",
+    "TimelineExportRead",
+    "TimelinePage",
+    "TimelineQuery",
     "ensure_demo_events",
 ]
 
@@ -908,33 +919,34 @@ async def create_event(
     return await _event_read(session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
 
-async def update_event(
-    session: AsyncSession, event_id: UUID, payload: EventPatch, *, scope: Scope,
-    multi_workspace_enabled: bool,
-) -> EventRead | None:
-    """Apply a revision-fenced owner correction after locking its immutable support closure.
-
-    Locks source, document, canonical participant and event rows in that order.
-    Any revision or support change while those locks are acquired aborts before
-    mutation; the caller commits the correction, audit and replay atomically.
-    Explicit null clears nullable fields, participant links, or evidence lists.
-    """
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
-    initial = (await session.execute(select(Event.revision, Event.origin, Event.deleted_at).where(
-        Event.workspace_id == scope.workspace_id, Event.id == event_id, Event.deleted_at.is_(None),
-    ))).one_or_none()
-    if initial is None:
-        return None
-    initial_evidence = list((await session.execute(select(
+async def _event_support_snapshot(
+    session: AsyncSession, event_id: UUID, *, scope: Scope,
+) -> tuple[list[Any], list[Any]]:
+    """Read the event's evidence and participant identity rows, ordered by ID, for drift comparison."""
+    evidence = list((await session.execute(select(
         EventEvidence.id, EventEvidence.source_id, EventEvidence.document_id,
         EventEvidence.document_version_id, EventEvidence.chunk_id,
-    ).where(EventEvidence.workspace_id == scope.workspace_id, EventEvidence.event_id == event_id).order_by(EventEvidence.id))).all())
-    initial_participants = list((await session.execute(select(
+    ).where(EventEvidence.workspace_id == scope.workspace_id,
+            EventEvidence.event_id == event_id).order_by(EventEvidence.id))).all())
+    participants = list((await session.execute(select(
         EventParticipant.id, EventParticipant.entity_id, EventParticipant.role, EventParticipant.origin,
     ).where(EventParticipant.event_id == event_id,
             EventParticipant.event_id.in_(select(Event.id).where(Event.workspace_id == scope.workspace_id))).order_by(EventParticipant.id))).all())
+    return evidence, participants
+
+
+async def _lock_correction_support(
+    session: AsyncSession, event_id: UUID, payload: EventPatch, initial_participants: list[Any],
+    fence: AccessFence, *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[Any]:
+    """Lock the correction's evidence closure and canonical participants; returns the new participants.
+
+    Lock order: sources (sorted), documents (sorted, batches of 100), then canonical entities.
+    The evidence closure is read before and after the document locks and must be identical;
+    participant entities must still be canonical. Raises ``ValueError`` on drift. The caller
+    owns the transaction.
+    """
     fields = payload.model_fields_set
-    supplied = payload.model_dump(exclude_unset=True, exclude={"expected_revision", "reason", "participants", "evidence"})
     old_pairs = [(row.document_version_id, row.chunk_id) for row in (await session.scalars(
         select(EventEvidence).where(EventEvidence.workspace_id == scope.workspace_id,
                                    EventEvidence.event_id == event_id).order_by(EventEvidence.id)
@@ -971,27 +983,16 @@ async def update_event(
             item.canonical_id != item.requested_id for item in canonical_refs
         ):
             raise ValueError("participant entity is missing or redirected; retry the correction")
-    event = await session.scalar(select(Event).where(Event.workspace_id == scope.workspace_id,
-        Event.id == event_id).with_for_update().execution_options(populate_existing=True))
-    if event is None or event.deleted_at is not None:
-        return None
-    current_evidence = list((await session.execute(select(
-        EventEvidence.id, EventEvidence.source_id, EventEvidence.document_id,
-        EventEvidence.document_version_id, EventEvidence.chunk_id,
-    ).where(EventEvidence.workspace_id == scope.workspace_id,
-            EventEvidence.event_id == event_id).order_by(EventEvidence.id))).all())
-    current_participants = list((await session.execute(select(
-        EventParticipant.id, EventParticipant.entity_id, EventParticipant.role, EventParticipant.origin,
-    ).where(EventParticipant.event_id == event_id,
-            EventParticipant.event_id.in_(select(Event.id).where(Event.workspace_id == scope.workspace_id))).order_by(EventParticipant.id))).all())
-    if (
-        event.revision != initial.revision or event.origin != initial.origin
-        or event.deleted_at != initial.deleted_at
-        or current_evidence != initial_evidence or current_participants != initial_participants
-        or event.revision != payload.expected_revision
-    ):
-        raise ValueError("stale event revision or support closure; retry the correction")
-    prior = event.revision
+    return participant_values
+
+
+def _apply_scalar_corrections(event: Event, supplied: dict[str, Any]) -> dict[str, object]:
+    """Apply supplied scalar fields to the locked event and return the changed-field map.
+
+    Derived events record each changed field as owner-corrected. The fully merged temporal shape
+    is validated through ``EventCreate`` before any durable revision is published (raises
+    ``ValueError``/``ValidationError`` for an invalid merge). Mutates ``event`` only; no I/O.
+    """
     changed: dict[str, object] = {}
     for field, value in supplied.items():
         if field in {"participants", "evidence"}:
@@ -1019,6 +1020,79 @@ async def update_event(
         occurrence_timezone=event.occurrence_timezone, observed_at=event.observed_at,
         valid_from=event.valid_from, valid_to=event.valid_to,
     )
+    return changed
+
+
+async def _replace_event_evidence(
+    session: AsyncSession, event: Event, payload: EventPatch, *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[str]:
+    """Replace the event's evidence with the patch's pairs (one source only); return their keys.
+
+    Deletes the old rows, inserts the new snapshots, updates ``event.source_id``, prunes derived
+    participants that lost support, and marks ``evidence`` owner-corrected on derived events.
+    Raises ``ValueError`` when the pairs span several sources. The caller owns the transaction.
+    """
+    evidence_pairs = payload.evidence or []
+    refs = await _evidence_rows(session, evidence_pairs, for_write=bool(evidence_pairs), scope=scope,
+                                multi_workspace_enabled=multi_workspace_enabled)
+    evidence_sources = {ref.source_id for ref in refs}
+    if len(evidence_sources) > 1:
+        raise ValueError("event evidence must belong to one source")
+    await session.execute(delete(EventEvidence).where(EventEvidence.workspace_id == scope.workspace_id,
+                                                      EventEvidence.event_id == event.id))
+    for ref in refs:
+        session.add(EventEvidence(workspace_id=scope.workspace_id, event_id=event.id, source_id=ref.source_id, document_id=ref.document_id,
+            document_version_id=ref.document_version_id, chunk_id=ref.chunk_id,
+            version_number=ref.version_number, observed_at=ref.observed_at, title_snapshot=ref.title,
+            url_snapshot=ref.canonical_url, evidence_metadata={},
+            metadata_is_version_snapshot=ref.metadata_is_version_snapshot))
+    event.source_id = next(iter(evidence_sources), None)
+    if event.origin == "derived":
+        await _remove_unsupported_derived_participants(session, event.id, scope=scope)
+    keys = [f"{ref.document_version_id}:{ref.chunk_id}" for ref in refs]
+    if event.origin == "derived":
+        event.owner_fields = sorted(set(event.owner_fields) | {"evidence"})
+    return keys
+
+
+async def update_event(
+    session: AsyncSession, event_id: UUID, payload: EventPatch, *, scope: Scope,
+    multi_workspace_enabled: bool,
+) -> EventRead | None:
+    """Apply a revision-fenced owner correction after locking its immutable support closure.
+
+    Locks source, document, canonical participant and event rows in that order.
+    Any revision or support change while those locks are acquired aborts before
+    mutation; the caller commits the correction, audit and replay atomically.
+    Explicit null clears nullable fields, participant links, or evidence lists.
+    """
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    initial = (await session.execute(select(Event.revision, Event.origin, Event.deleted_at).where(
+        Event.workspace_id == scope.workspace_id, Event.id == event_id, Event.deleted_at.is_(None),
+    ))).one_or_none()
+    if initial is None:
+        return None
+    initial_evidence, initial_participants = await _event_support_snapshot(session, event_id, scope=scope)
+    fields = payload.model_fields_set
+    supplied = payload.model_dump(exclude_unset=True, exclude={"expected_revision", "reason", "participants", "evidence"})
+    participant_values = await _lock_correction_support(
+        session, event_id, payload, initial_participants, fence,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    event = await session.scalar(select(Event).where(Event.workspace_id == scope.workspace_id,
+        Event.id == event_id).with_for_update().execution_options(populate_existing=True))
+    if event is None or event.deleted_at is not None:
+        return None
+    current_evidence, current_participants = await _event_support_snapshot(session, event_id, scope=scope)
+    if (
+        event.revision != initial.revision or event.origin != initial.origin
+        or event.deleted_at != initial.deleted_at
+        or current_evidence != initial_evidence or current_participants != initial_participants
+        or event.revision != payload.expected_revision
+    ):
+        raise ValueError("stale event revision or support closure; retry the correction")
+    prior = event.revision
+    changed = _apply_scalar_corrections(event, supplied)
     if "participants" in fields:
         await _set_participants(session, event.id, participant_values, origin="manual", scope=scope,
                                 multi_workspace_enabled=multi_workspace_enabled)
@@ -1026,26 +1100,9 @@ async def update_event(
         if event.origin == "derived":
             event.owner_fields = sorted(set(event.owner_fields) | {"participants"})
     if "evidence" in fields:
-        evidence_pairs = payload.evidence or []
-        refs = await _evidence_rows(session, evidence_pairs, for_write=bool(evidence_pairs), scope=scope,
-                                    multi_workspace_enabled=multi_workspace_enabled)
-        evidence_sources = {ref.source_id for ref in refs}
-        if len(evidence_sources) > 1:
-            raise ValueError("event evidence must belong to one source")
-        await session.execute(delete(EventEvidence).where(EventEvidence.workspace_id == scope.workspace_id,
-                                                          EventEvidence.event_id == event.id))
-        for ref in refs:
-            session.add(EventEvidence(workspace_id=scope.workspace_id, event_id=event.id, source_id=ref.source_id, document_id=ref.document_id,
-                document_version_id=ref.document_version_id, chunk_id=ref.chunk_id,
-                version_number=ref.version_number, observed_at=ref.observed_at, title_snapshot=ref.title,
-                url_snapshot=ref.canonical_url, evidence_metadata={},
-                metadata_is_version_snapshot=ref.metadata_is_version_snapshot))
-        event.source_id = next(iter(evidence_sources), None)
-        if event.origin == "derived":
-            await _remove_unsupported_derived_participants(session, event.id, scope=scope)
-        changed["evidence"] = [f"{ref.document_version_id}:{ref.chunk_id}" for ref in refs]
-        if event.origin == "derived":
-            event.owner_fields = sorted(set(event.owner_fields) | {"evidence"})
+        changed["evidence"] = await _replace_event_evidence(
+            session, event, payload, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
     if not changed:
         raise ValueError("event correction contains no changes")
     event.revision += 1
@@ -1320,6 +1377,253 @@ async def finish_extraction_work(session: AsyncSession, work_id: UUID, lease_own
     return True
 
 
+def _proposal_participants(
+    proposal: Any, memberships: list[Any], membership_by_id: dict[UUID, Any],
+) -> dict[tuple[UUID, str], Any]:
+    """Resolve a proposal's participants to canonical ``(entity, role)`` keys, merging duplicate roles.
+
+    Every participant must cite a known membership, a subset of the event's evidence, and
+    exactly the chunks that canonical entity is a member of; otherwise ``ValueError``. Pure.
+    """
+    participants: dict[tuple[UUID, str], Any] = {}
+    for participant in proposal.participants:
+        membership = membership_by_id.get(participant.membership_id)
+        if membership is None or membership.chunk_id not in participant.chunk_ids:
+            raise ValueError("model returned an unknown participant membership")
+        if not set(participant.chunk_ids) <= set(proposal.evidence_chunk_ids):
+            raise ValueError("participant support must be a subset of event evidence")
+        exact = {item.chunk_id for item in memberships if item.entity_id == membership.entity_id
+                 and item.chunk_id in participant.chunk_ids}
+        if exact != set(participant.chunk_ids):
+            raise ValueError("participant role lacks exact canonical membership support")
+        key = (membership.entity_id, participant.role)
+        previous = participants.get(key)
+        if previous is not None:
+            participant = previous.model_copy(update={
+                "chunk_ids": sorted(set(previous.chunk_ids) | set(participant.chunk_ids), key=str),
+            })
+        participants[key] = participant
+    return participants
+
+
+def _candidate_hash(proposal: Any, participants: dict[tuple[UUID, str], Any]) -> str:
+    """Hash the proposal's canonical identity (type, title, occurrence, participants, evidence). Pure."""
+    from hashlib import sha256
+
+    participant_identity = [
+        (str(entity_id), role, sorted(map(str, item.chunk_ids)))
+        for (entity_id, role), item in participants.items()
+    ]
+    data = proposal.model_dump(mode="json")
+    fingerprint = {
+        "type": proposal.type, "title": proposal.title,
+        "occurrence": [data.get(name) for name in ("date_precision", "started_at", "ended_at", "occurred_date", "end_date")],
+        "participants": sorted(participant_identity),
+        "evidence": sorted(map(str, proposal.evidence_chunk_ids)),
+    }
+    return sha256(json.dumps(fingerprint, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _normalize_proposals(
+    proposals: Any, chunk_ids: list[UUID], memberships: list[Any], membership_by_id: dict[UUID, Any],
+) -> tuple[list[tuple[Any, str, dict[tuple[UUID, str], Any]]], set[UUID]]:
+    """Validate proposals against the allowed evidence and coalesce equal candidates.
+
+    Returns ``(normalized, entity_ids)`` where candidates sharing a canonical hash keep the one
+    with the smallest canonical JSON (deterministic), ordered by hash, and ``entity_ids`` are
+    every canonical participant entity. Raises ``ValueError`` on unknown evidence. Pure.
+    """
+    allowed = set(chunk_ids)
+    normalized: list[tuple[Any, str, dict[tuple[UUID, str], Any]]] = []
+    entity_ids: set[UUID] = set()
+    for proposal in proposals.events:
+        if not set(proposal.evidence_chunk_ids) <= allowed:
+            raise ValueError("model returned unknown event evidence")
+        participants = _proposal_participants(proposal, memberships, membership_by_id)
+        entity_ids.update(entity_id for entity_id, _role in participants)
+        normalized.append((proposal, _candidate_hash(proposal, participants), participants))
+    unique_by_candidate: dict[str, tuple[Any, str, dict[tuple[UUID, str], Any]]] = {}
+    for item in normalized:
+        previous = unique_by_candidate.get(item[1])
+        item_json = json.dumps(item[0].model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+        previous_json = json.dumps(previous[0].model_dump(mode="json"), sort_keys=True, separators=(",", ":")) if previous else ""
+        if previous is None or item_json < previous_json:
+            unique_by_candidate[item[1]] = item
+    return [unique_by_candidate[key] for key in sorted(unique_by_candidate)], entity_ids
+
+
+async def _lock_extraction_entities(
+    session: AsyncSession, entity_ids: set[UUID], proposals: Any, membership_by_id: dict[UUID, Any],
+    membership_revisions: dict[UUID, int], *, scope: Scope, multi_workspace_enabled: bool,
+) -> None:
+    """Lock participant entities (sorted) and require the pre-inference canonical identity and revision.
+
+    No graph lock is held during provider inference; sorted canonical entity revisions and then
+    events are acquired only after a validated response exists. Raises ``ValueError`` on drift.
+    """
+    if not entity_ids:
+        return
+    entity_refs = await entities.get_entity_refs(session, sorted(entity_ids, key=str), for_write=True,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if {item.canonical_id for item in entity_refs} != entity_ids:
+        raise ValueError("participant canonical identity changed during extraction")
+    expected_revisions = {
+        membership_by_id[participant.membership_id].entity_id:
+        membership_revisions[participant.membership_id]
+        for proposal in proposals.events for participant in proposal.participants
+    }
+    if any(item.revision != expected_revisions.get(item.canonical_id) for item in entity_refs):
+        raise ValueError("participant canonical revision changed during extraction")
+
+
+def _event_fields_from_proposal(proposal: Any) -> dict[str, Any]:
+    """Return the refreshable event columns of a proposal, with instants normalized to UTC. Pure."""
+    return {
+        "title": proposal.title, "summary": proposal.summary, "type": proposal.type,
+        "subtype": proposal.subtype, "importance_score": proposal.importance_score,
+        "confidence": proposal.confidence, "date_precision": proposal.date_precision,
+        "started_at": proposal.started_at.astimezone(UTC) if proposal.started_at else None,
+        "ended_at": proposal.ended_at.astimezone(UTC) if proposal.ended_at else None,
+        "occurred_date": proposal.occurred_date, "end_date": proposal.end_date,
+        "occurrence_timezone": proposal.occurrence_timezone,
+        "valid_from": proposal.valid_from.astimezone(UTC) if proposal.valid_from else None,
+        "valid_to": proposal.valid_to.astimezone(UTC) if proposal.valid_to else None,
+    }
+
+
+def _refresh_derived_event(
+    event: Event, proposal: Any, candidate_hash: str, refresh_conflicts: dict[str, list[str]],
+) -> None:
+    """Refresh an existing derived event from a new proposal without touching owner-corrected fields.
+
+    Owner fields always win. When the merged temporal shape would be invalid, the unowned
+    temporal group is skipped and recorded in ``refresh_conflicts`` while safe fields still
+    refresh; a non-temporal validation failure re-raises. A real change bumps the revision.
+    Mutates ``event`` and ``refresh_conflicts`` only; no I/O.
+    """
+    owners = set(event.owner_fields)
+    refreshed = _event_fields_from_proposal(proposal)
+    pending_updates = {
+        field: value for field, value in refreshed.items()
+        if field not in owners and getattr(event, field) != value
+    }
+    base_values = {
+        "type": event.type, "subtype": event.subtype, "title": event.title,
+        "summary": event.summary, "importance_score": event.importance_score,
+        "confidence": event.confidence, "metadata": event.metadata_json,
+        "date_precision": event.date_precision, "started_at": event.started_at,
+        "ended_at": event.ended_at, "occurred_date": event.occurred_date,
+        "end_date": event.end_date, "occurrence_timezone": event.occurrence_timezone,
+        "observed_at": event.observed_at, "valid_from": event.valid_from,
+        "valid_to": event.valid_to,
+    }
+    temporal_fields = {
+        "date_precision", "started_at", "ended_at", "occurred_date", "end_date",
+        "occurrence_timezone", "valid_from", "valid_to",
+    }
+    candidate_values = {**base_values, **pending_updates}
+    try:
+        EventCreate(**candidate_values)
+    except ValidationError:
+        temporal_conflicts = sorted(set(pending_updates) & temporal_fields)
+        if not temporal_conflicts:
+            raise
+        # Retain the previously valid owner-corrected temporal shape;
+        # a conflicting unowned boundary is not allowed to replace it.
+        pending_updates = {
+            field: value for field, value in pending_updates.items()
+            if field not in temporal_fields
+        }
+        candidate_values = {**base_values, **pending_updates}
+        EventCreate(**candidate_values)
+        refresh_conflicts[candidate_hash] = temporal_conflicts
+    changed = bool(pending_updates)
+    for field, value in pending_updates.items():
+        setattr(event, field, value)
+    if changed:
+        event.revision += 1
+        event.updated_at = datetime.now(UTC)
+
+
+async def _insert_derived_evidence(
+    session: AsyncSession, event: Event, proposal: Any, candidate_hash: str, evidence_by_chunk: dict[UUID, Any],
+    ready: Any, identity: str, *, scope: Scope,
+) -> None:
+    """Insert the proposal's evidence snapshots in one idempotent executemany.
+
+    The unique constraint keeps retries idempotent exactly as a per-row insert would; one
+    round trip per event instead of one per chunk. Flush-only; the caller owns the transaction.
+    """
+    from sqlalchemy.dialects.postgresql import insert
+
+    extracted_at = datetime.now(UTC)
+    evidence_values = []
+    for chunk_id in proposal.evidence_chunk_ids:
+        ref = evidence_by_chunk[chunk_id]
+        evidence_values.append({
+            "workspace_id": scope.workspace_id, "event_id": event.id, "source_id": ref.source_id, "document_id": ref.document_id,
+            "document_version_id": ref.document_version_id, "chunk_id": ref.chunk_id,
+            "version_number": ref.version_number, "source_generation": ready.source_generation,
+            "extraction_identity": identity, "candidate_hash": candidate_hash,
+            "confidence": proposal.confidence, "extracted_at": extracted_at,
+            "observed_at": ref.observed_at, "title_snapshot": ref.title, "url_snapshot": ref.canonical_url,
+            "evidence_metadata": {}, "excerpt": ref.excerpt,
+            "metadata_is_version_snapshot": ref.metadata_is_version_snapshot,
+        })
+    if evidence_values:
+        await session.execute(
+            insert(EventEvidence).on_conflict_do_nothing(constraint="uq_timeline_event_evidence"),
+            evidence_values,
+        )
+
+
+async def _link_derived_participants(
+    session: AsyncSession, event: Event, participants: dict[tuple[UUID, str], Any], *, scope: Scope,
+) -> None:
+    """Upsert each derived participant row (locked) and link it to its exact evidence rows idempotently."""
+    from sqlalchemy.dialects.postgresql import insert
+
+    for (entity_id, _role), participant in participants.items():
+        row = await session.scalar(select(EventParticipant).where(
+            EventParticipant.event_id == event.id,
+            EventParticipant.event_id.in_(select(Event.id).where(Event.workspace_id == scope.workspace_id)),
+            EventParticipant.entity_id == entity_id,
+            EventParticipant.role == participant.role,
+        ).with_for_update())
+        if row is None:
+            row = EventParticipant(event_id=event.id, entity_id=entity_id, role=participant.role,
+                                   metadata_json={}, origin="derived")
+            session.add(row)
+            await session.flush()
+        rows = (await session.scalars(select(EventEvidence).where(
+            EventEvidence.workspace_id == scope.workspace_id, EventEvidence.event_id == event.id,
+            EventEvidence.chunk_id.in_(participant.chunk_ids)
+        ))).all()
+        if rows:
+            await session.execute(
+                insert(ParticipantEvidence).on_conflict_do_nothing(
+                    constraint="uq_timeline_participant_evidence"),
+                [{"participant_id": row.id, "event_evidence_id": evidence_row.id} for evidence_row in rows],
+            )
+
+
+def _new_derived_event(proposal: Any, candidate_hash: str, ready: Any, identity: str, *, scope: Scope) -> Event:
+    """Build an unflushed derived event row from a proposal and the ready version. Pure."""
+    return Event(
+        workspace_id=scope.workspace_id, source_id=ready.source_id, type=proposal.type, subtype=proposal.subtype,
+        title=proposal.title, summary=proposal.summary, importance_score=proposal.importance_score,
+        confidence=proposal.confidence, metadata_json={}, origin="derived",
+        date_precision=proposal.date_precision,
+        started_at=proposal.started_at.astimezone(UTC) if proposal.started_at else None,
+        ended_at=proposal.ended_at.astimezone(UTC) if proposal.ended_at else None,
+        occurred_date=proposal.occurred_date, end_date=proposal.end_date,
+        occurrence_timezone=proposal.occurrence_timezone, observed_at=ready.observed_at,
+        valid_from=proposal.valid_from.astimezone(UTC) if proposal.valid_from else None,
+        valid_to=proposal.valid_to.astimezone(UTC) if proposal.valid_to else None,
+        extraction_identity=identity, candidate_hash=candidate_hash,
+    )
+
+
 async def publish_extracted_events(session: AsyncSession, *, work_id: UUID, lease_owner: str,
                                    ready: Any, proposals: Any, model: str | None,
                                    membership_revisions: dict[UUID, int], scope: Scope,
@@ -1333,11 +1637,8 @@ async def publish_extracted_events(session: AsyncSession, *, work_id: UUID, leas
     refresh group is skipped and named while safe fields, evidence, and results
     publish.
     It flushes only; the worker commits results, replay and success atomically.
+    Returns ``False`` (nothing published) when the lease or its version/generation is lost.
     """
-    from hashlib import sha256
-
-    from sqlalchemy.dialects.postgresql import insert
-
     from modules.timeline.extraction import EXTRACTOR_VERSION, PROMPT_VERSION
     from modules.timeline.models import TimelineExtractionWork
     work = await session.scalar(select(TimelineExtractionWork).where(
@@ -1366,67 +1667,12 @@ async def publish_extracted_events(session: AsyncSession, *, work_id: UUID, leas
         memberships.extend(await entities.list_version_membership_refs(session, ready.document_version_id,
             chunk_ids[offset:offset + 100], scope=scope, multi_workspace_enabled=multi_workspace_enabled))
     membership_by_id = {item.membership_id: item for item in memberships}
-    allowed = set(chunk_ids)
-    normalized: list[tuple[Any, str, dict[tuple[UUID, str], Any]]] = []
-    entity_ids: set[UUID] = set()
     identity = f"{ready.document_version_id}:{ready.source_generation}:{EXTRACTOR_VERSION}:{PROMPT_VERSION}"
-    for proposal in proposals.events:
-        if not set(proposal.evidence_chunk_ids) <= allowed:
-            raise ValueError("model returned unknown event evidence")
-        participants: dict[tuple[UUID, str], Any] = {}
-        for participant in proposal.participants:
-            membership = membership_by_id.get(participant.membership_id)
-            if membership is None or membership.chunk_id not in participant.chunk_ids:
-                raise ValueError("model returned an unknown participant membership")
-            if not set(participant.chunk_ids) <= set(proposal.evidence_chunk_ids):
-                raise ValueError("participant support must be a subset of event evidence")
-            exact = {item.chunk_id for item in memberships if item.entity_id == membership.entity_id
-                     and item.chunk_id in participant.chunk_ids}
-            if exact != set(participant.chunk_ids):
-                raise ValueError("participant role lacks exact canonical membership support")
-            key = (membership.entity_id, participant.role)
-            previous = participants.get(key)
-            if previous is not None:
-                participant = previous.model_copy(update={
-                    "chunk_ids": sorted(set(previous.chunk_ids) | set(participant.chunk_ids), key=str),
-                })
-            participants[key] = participant
-            entity_ids.add(membership.entity_id)
-        participant_identity = [
-            (str(entity_id), role, sorted(map(str, item.chunk_ids)))
-            for (entity_id, role), item in participants.items()
-        ]
-        data = proposal.model_dump(mode="json")
-        fingerprint = {
-            "type": proposal.type, "title": proposal.title,
-            "occurrence": [data.get(name) for name in ("date_precision", "started_at", "ended_at", "occurred_date", "end_date")],
-            "participants": sorted(participant_identity),
-            "evidence": sorted(map(str, proposal.evidence_chunk_ids)),
-        }
-        candidate_hash = sha256(json.dumps(fingerprint, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        normalized.append((proposal, candidate_hash, participants))
-    unique_by_candidate: dict[str, tuple[Any, str, dict[tuple[UUID, str], Any]]] = {}
-    for item in normalized:
-        previous = unique_by_candidate.get(item[1])
-        item_json = json.dumps(item[0].model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
-        previous_json = json.dumps(previous[0].model_dump(mode="json"), sort_keys=True, separators=(",", ":")) if previous else ""
-        if previous is None or item_json < previous_json:
-            unique_by_candidate[item[1]] = item
-    normalized = [unique_by_candidate[key] for key in sorted(unique_by_candidate)]
-    # No graph lock is held during provider inference; acquire sorted canonical
-    # entity revisions and then events only after a validated response exists.
-    if entity_ids:
-        entity_refs = await entities.get_entity_refs(session, sorted(entity_ids, key=str), for_write=True,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-        if {item.canonical_id for item in entity_refs} != entity_ids:
-            raise ValueError("participant canonical identity changed during extraction")
-        expected_revisions = {
-            membership_by_id[participant.membership_id].entity_id:
-            membership_revisions[participant.membership_id]
-            for proposal in proposals.events for participant in proposal.participants
-        }
-        if any(item.revision != expected_revisions.get(item.canonical_id) for item in entity_refs):
-            raise ValueError("participant canonical revision changed during extraction")
+    normalized, entity_ids = _normalize_proposals(proposals, chunk_ids, memberships, membership_by_id)
+    await _lock_extraction_entities(
+        session, entity_ids, proposals, membership_by_id, membership_revisions,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     candidates = [item[1] for item in normalized]
     existing = list((await session.scalars(select(Event).where(
         Event.workspace_id == scope.workspace_id, Event.extraction_identity == identity,
@@ -1445,120 +1691,18 @@ async def publish_extracted_events(session: AsyncSession, *, work_id: UUID, leas
             continue
         event = by_hash.get(candidate_hash)
         if event is None:
-            event = Event(
-                workspace_id=scope.workspace_id, source_id=ready.source_id, type=proposal.type, subtype=proposal.subtype,
-                title=proposal.title, summary=proposal.summary, importance_score=proposal.importance_score,
-                confidence=proposal.confidence, metadata_json={}, origin="derived",
-                date_precision=proposal.date_precision,
-                started_at=proposal.started_at.astimezone(UTC) if proposal.started_at else None,
-                ended_at=proposal.ended_at.astimezone(UTC) if proposal.ended_at else None,
-                occurred_date=proposal.occurred_date, end_date=proposal.end_date,
-                occurrence_timezone=proposal.occurrence_timezone, observed_at=ready.observed_at,
-                valid_from=proposal.valid_from.astimezone(UTC) if proposal.valid_from else None,
-                valid_to=proposal.valid_to.astimezone(UTC) if proposal.valid_to else None,
-                extraction_identity=identity, candidate_hash=candidate_hash,
-            )
+            event = _new_derived_event(proposal, candidate_hash, ready, identity, scope=scope)
             session.add(event)
             await session.flush()
         else:
-            owners = set(event.owner_fields)
-            refreshed = {
-                "title": proposal.title, "summary": proposal.summary, "type": proposal.type,
-                "subtype": proposal.subtype, "importance_score": proposal.importance_score,
-                "confidence": proposal.confidence, "date_precision": proposal.date_precision,
-                "started_at": proposal.started_at.astimezone(UTC) if proposal.started_at else None,
-                "ended_at": proposal.ended_at.astimezone(UTC) if proposal.ended_at else None,
-                "occurred_date": proposal.occurred_date, "end_date": proposal.end_date,
-                "occurrence_timezone": proposal.occurrence_timezone,
-                "valid_from": proposal.valid_from.astimezone(UTC) if proposal.valid_from else None,
-                "valid_to": proposal.valid_to.astimezone(UTC) if proposal.valid_to else None,
-            }
-            pending_updates = {
-                field: value for field, value in refreshed.items()
-                if field not in owners and getattr(event, field) != value
-            }
-            base_values = {
-                "type": event.type, "subtype": event.subtype, "title": event.title,
-                "summary": event.summary, "importance_score": event.importance_score,
-                "confidence": event.confidence, "metadata": event.metadata_json,
-                "date_precision": event.date_precision, "started_at": event.started_at,
-                "ended_at": event.ended_at, "occurred_date": event.occurred_date,
-                "end_date": event.end_date, "occurrence_timezone": event.occurrence_timezone,
-                "observed_at": event.observed_at, "valid_from": event.valid_from,
-                "valid_to": event.valid_to,
-            }
-            temporal_fields = {
-                "date_precision", "started_at", "ended_at", "occurred_date", "end_date",
-                "occurrence_timezone", "valid_from", "valid_to",
-            }
-            candidate_values = {**base_values, **pending_updates}
-            try:
-                EventCreate(**candidate_values)
-            except ValidationError:
-                temporal_conflicts = sorted(set(pending_updates) & temporal_fields)
-                if not temporal_conflicts:
-                    raise
-                # Retain the previously valid owner-corrected temporal shape;
-                # a conflicting unowned boundary is not allowed to replace it.
-                pending_updates = {
-                    field: value for field, value in pending_updates.items()
-                    if field not in temporal_fields
-                }
-                candidate_values = {**base_values, **pending_updates}
-                EventCreate(**candidate_values)
-                refresh_conflicts[candidate_hash] = temporal_conflicts
-            changed = bool(pending_updates)
-            for field, value in pending_updates.items():
-                setattr(event, field, value)
-            if changed:
-                event.revision += 1
-                event.updated_at = datetime.now(UTC)
+            _refresh_derived_event(event, proposal, candidate_hash, refresh_conflicts)
         published.append((event, proposal))
         if "evidence" not in event.owner_fields:
-            # One executemany per event instead of a round trip per chunk; the unique constraint
-            # keeps retries idempotent exactly as the per-row insert did.
-            extracted_at = datetime.now(UTC)
-            evidence_values = []
-            for chunk_id in proposal.evidence_chunk_ids:
-                ref = evidence_by_chunk[chunk_id]
-                evidence_values.append({
-                    "workspace_id": scope.workspace_id, "event_id": event.id, "source_id": ref.source_id, "document_id": ref.document_id,
-                    "document_version_id": ref.document_version_id, "chunk_id": ref.chunk_id,
-                    "version_number": ref.version_number, "source_generation": ready.source_generation,
-                    "extraction_identity": identity, "candidate_hash": candidate_hash,
-                    "confidence": proposal.confidence, "extracted_at": extracted_at,
-                    "observed_at": ref.observed_at, "title_snapshot": ref.title, "url_snapshot": ref.canonical_url,
-                    "evidence_metadata": {}, "excerpt": ref.excerpt,
-                    "metadata_is_version_snapshot": ref.metadata_is_version_snapshot,
-                })
-            if evidence_values:
-                await session.execute(
-                    insert(EventEvidence).on_conflict_do_nothing(constraint="uq_timeline_event_evidence"),
-                    evidence_values,
-                )
+            await _insert_derived_evidence(
+                session, event, proposal, candidate_hash, evidence_by_chunk, ready, identity, scope=scope,
+            )
         if "participants" not in event.owner_fields and "evidence" not in event.owner_fields:
-            for (entity_id, _role), participant in participants.items():
-                row = await session.scalar(select(EventParticipant).where(
-                    EventParticipant.event_id == event.id,
-                    EventParticipant.event_id.in_(select(Event.id).where(Event.workspace_id == scope.workspace_id)),
-                    EventParticipant.entity_id == entity_id,
-                    EventParticipant.role == participant.role,
-                ).with_for_update())
-                if row is None:
-                    row = EventParticipant(event_id=event.id, entity_id=entity_id, role=participant.role,
-                                           metadata_json={}, origin="derived")
-                    session.add(row)
-                    await session.flush()
-                rows = (await session.scalars(select(EventEvidence).where(
-                    EventEvidence.workspace_id == scope.workspace_id, EventEvidence.event_id == event.id,
-                    EventEvidence.chunk_id.in_(participant.chunk_ids)
-                ))).all()
-                if rows:
-                    await session.execute(
-                        insert(ParticipantEvidence).on_conflict_do_nothing(
-                            constraint="uq_timeline_participant_evidence"),
-                        [{"participant_id": row.id, "event_evidence_id": evidence_row.id} for evidence_row in rows],
-                    )
+            await _link_derived_participants(session, event, participants, scope=scope)
     await session.flush()
     proposals_json = [{
         "event_id": str(event.id), "candidate_hash": event.candidate_hash,
@@ -1759,11 +1903,12 @@ def _require_cleanup_fences(
     actual: AccessFence, *, closure: TimelineSupportClosure, scope: Scope,
     access_fence: AccessFence, source_fence: SourceFence,
 ) -> None:
+    """Require the held fences to still match a fresh read and the closure; else 409 ``Cleanup authority changed``."""
     if (
         actual != access_fence or source_fence.id != closure.source_id
         or source_fence.workspace_id != scope.workspace_id
     ):
-        raise HTTPException(status_code=409, detail="Cleanup authority changed")
+        raise ConflictError("Cleanup authority changed")
 
 
 async def support_cleanup_ids(
@@ -1858,7 +2003,7 @@ async def correction_event_ids(
     The correction transaction already holds owner admission; this read adds only the role guard and workspace scope.
     """
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
+        raise ForbiddenError("Workspace owner required")
     if not entity_ids:
         return []
     ids = list((await session.scalars(select(EventParticipant.event_id).join(

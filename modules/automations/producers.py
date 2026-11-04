@@ -26,6 +26,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from core.errors import DomainError
 from core.realtime import commit_with_replay
 from core.workspaces.schemas import AccessFence, Scope
 from modules.automations import execution
@@ -286,7 +287,7 @@ async def sweep(
                 total += await run(session, fence)
                 await commit_with_replay(
                     session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
-        except HTTPException as exc:
+        except (HTTPException, DomainError) as exc:
             if exc.status_code in DENIED_STATUSES:
                 raise
             logger.warning("automation producer sweep %s failed (%s)", name, type(exc).__name__)

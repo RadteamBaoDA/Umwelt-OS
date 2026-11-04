@@ -8,7 +8,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
-from core.errors import ConflictError
+from core.errors import ConflictError, DomainError, error_status
 from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.ingestion import public as ingestion
 from modules.knowledge.documents.schemas import DocumentCleanupPreparationLimitError
@@ -167,9 +167,10 @@ async def test_discovery_sql_is_workspace_qualified() -> None:
 @pytest.mark.parametrize("module", [entities, relationships, timeline, temporal, observations])
 async def test_member_denied_before_any_query(module) -> None:
     rec = Rec()
-    with pytest.raises(HTTPException) as caught:
+    # Owners migrate to DomainError at their own pace; the invariant is a 403 before any SQL.
+    with pytest.raises((HTTPException, DomainError)) as caught:
         await _REAL_ADMIT[module](rec, scope=MEMBER, multi_workspace_enabled=False)
-    assert caught.value.status_code == 403 and rec.stmts == []
+    assert error_status(caught.value) == 403 and rec.stmts == []
 
 
 @pytest.mark.asyncio

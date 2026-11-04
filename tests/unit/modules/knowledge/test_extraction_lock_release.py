@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
 from core.errors import ConflictError, error_status
 from core.model_gateway.client import PrivacyPolicyDenied
@@ -199,11 +198,10 @@ async def test_before_send_access_fence_change_is_409(monkeypatch: pytest.Monkey
     await m.run()
     m.fence[0] = "f2"
     assert _Gateway.instance is not None
-    # The entity worker raises the ConflictError domain error; the timeline worker still raises HTTPException.
-    with pytest.raises((HTTPException, ConflictError)) as exc:
+    # Both the entity and timeline workers raise the ConflictError domain error.
+    with pytest.raises(ConflictError) as exc:
         await _Gateway.instance.before_send()
     assert error_status(exc.value) == 409
-    assert isinstance(exc.value, ConflictError) == (name == "entities")
 
 
 @pytest.mark.parametrize("name", NAMES)

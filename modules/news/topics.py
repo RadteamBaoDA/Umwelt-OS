@@ -35,9 +35,11 @@ from sqlalchemy.types import Uuid
 from core.auth.dependencies import require_account, require_account_write
 from core.auth.models import AuthSession
 from core.database import Base, get_session
+from core.errors import ForbiddenError, PayloadTooLargeError, ValidationFailedError
 from core.ids import uuid7
 from core.realtime import commit_with_replay
 from core.workspaces import public as workspaces
+from core.workspaces.admission import actor_id as _actor
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.schemas import AccessFence, AdminWorkspaceReadContext, Scope, WorkspaceContext
 
@@ -47,20 +49,15 @@ MAX_KEYWORD_LENGTH = 100
 MAX_ENTITIES = 100
 
 
-def _actor(scope: Scope) -> int:
-    """Return the admitted owner actor used by this workspace-local row."""
-    return scope.user_id if isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext)) else scope.actor_user_id
-
-
 async def _admit(
     session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
     lock: bool = False, expected: AccessFence | None = None,
 ) -> AccessFence:
     """Admit owner scope before topic or entity reads and return its publication fence."""
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
+        raise ForbiddenError("Workspace owner required")
     if lock and isinstance(scope, AdminWorkspaceReadContext):
-        raise HTTPException(status_code=403, detail="Admin workspace access is read-only")
+        raise ForbiddenError("Admin workspace access is read-only")
     if type(multi_workspace_enabled) is not bool:
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     if lock:
@@ -558,7 +555,7 @@ def _decode_topic_export_cursor(
             raise ValueError
         return snapshot_at, created_at, topic_id
     except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
-        raise HTTPException(status_code=422, detail="Topic export cursor is invalid") from exc
+        raise ValidationFailedError("Topic export cursor is invalid") from exc
 
 
 def _topic_export_scope(owner_id: int, snapshot_at: datetime, scope: Scope) -> tuple[ColumnElement[bool], ...]:
@@ -595,7 +592,7 @@ async def export_page(
     encoded = [item.model_dump_json().encode("utf-8") for item in items]
     payload_bytes = 2 + sum(map(len, encoded)) + max(0, len(items) - 1)
     if payload_bytes > 16_777_216:
-        raise HTTPException(status_code=413, detail="Topic export page exceeds its byte bound")
+        raise PayloadTooLargeError("Topic export page exceeds its byte bound")
     fences = [TopicExportFence(
         id=row.id, created_at=row.created_at, updated_at=row.updated_at, revision=row.revision,
         content_digest=hashlib.sha256(raw).hexdigest(),

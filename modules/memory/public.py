@@ -5,7 +5,7 @@ import binascii
 import hashlib
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
@@ -23,9 +23,18 @@ from sqlalchemy import ColumnElement, Select, delete, desc, func, or_, select, t
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.errors import (
+    ConflictError,
+    DomainError,
+    ForbiddenError,
+    PayloadTooLargeError,
+    UnavailableError,
+    ValidationFailedError,
+)
 from core.pagination import decode_cursor, encode_cursor
 from core.realtime import commit_with_replay
 from core.workspaces import public as workspaces
+from core.workspaces.admission import actor_id as _actor
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.memory.models import Memory, MemoryCandidate, MemoryPrivacyRecord
 from modules.memory.schemas import (
@@ -53,6 +62,29 @@ from modules.memory.selection import (
     extract_candidate_proposals,
 )
 
+# Schema/DTO classes re-exported so other modules can import them from the public contract
+# instead of the private ``schemas`` module.
+__all__ = [
+    "MemoryCandidateExportRead",
+    "MemoryCandidatePage",
+    "MemoryCandidateRead",
+    "MemoryCreate",
+    "MemoryExportFence",
+    "MemoryExportFenceValidation",
+    "MemoryExportPage",
+    "MemoryExportPrivacy",
+    "MemoryExportProvenance",
+    "MemoryExportRead",
+    "MemoryPage",
+    "MemoryPrivacyConfig",
+    "MemoryPrivacyUpdate",
+    "MemoryPurgeRequest",
+    "MemoryPurgeResponse",
+    "MemoryRead",
+    "MemorySupersedeRequest",
+    "MemoryUpdate",
+]
+
 logger = logging.getLogger(__name__)
 
 CACHE_KEY_MEMORIES_ACTIVE = "cache:memory:active"
@@ -69,11 +101,6 @@ def _privacy_select(scope: Scope) -> Select[MemoryPrivacyRecord]:
         MemoryPrivacyRecord.workspace_id == scope.workspace_id,
         MemoryPrivacyRecord.owner_id == _actor(scope),
     )
-
-
-def _actor(scope: Scope) -> int:
-    """Return the principal recorded by a real workspace or durable job scope."""
-    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
 
 
 def _owned(model: Any, scope: Scope) -> tuple[ColumnElement[bool], ColumnElement[bool]]:
@@ -95,7 +122,7 @@ async def _admit(
     if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
         raise TypeError("An explicit Memory workspace scope is required")
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
+        raise ForbiddenError("Workspace owner required")
     if type(multi_workspace_enabled) is not bool:
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     if lock:
@@ -170,7 +197,7 @@ def unbind_page_cursor(cursor: str, binding: str) -> str:
             raise ValueError("Cursor binding does not match")
         return envelope["position"]
     except (ValueError, TypeError, binascii.Error) as exc:
-        raise HTTPException(status_code=422, detail="Invalid cursor") from exc
+        raise ValidationFailedError("Invalid cursor") from exc
 
 
 def _encode_memory_export_cursor(
@@ -208,7 +235,7 @@ def _decode_memory_export_cursor(
             raise ValueError
         return snapshot_at, created_at, identifier
     except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
-        raise HTTPException(status_code=422, detail="Memory export cursor is invalid") from exc
+        raise ValidationFailedError("Memory export cursor is invalid") from exc
 
 
 def _memory_export_provenance(value: object) -> MemoryExportProvenance | None:
@@ -248,28 +275,40 @@ def _candidate_export_read(
     )
 
 
-async def _memory_export_source_fence(
-    session: AsyncSession, row: Memory | MemoryCandidate, *, scope: Scope, multi_workspace_enabled: bool,
-) -> tuple[dict[str, object], MemoryExportProvenance | None]:
-    """Project only independently verified provenance and fence its live owner evidence.
+_EXPORT_PROVENANCE_KEYS = {"conversation_id", "message_id", "source_id", "document_id",
+                           "document_version_id", "chunk_id", "origin"}
 
-    Chat, Document and Source evidence is resolved under the caller's workspace scope, so a
-    copy whose provenance names a foreign-workspace identity is treated as removed.
 
-    Explicitly manual Memory remains exportable after optional evidence is removed. Every
-    model-derived or candidate copy needs exact retained Chat message or document evidence.
+@dataclass
+class _ExportProvenance:
+    """Parsed persisted provenance identifiers plus the evidence accumulated while verifying them."""
+
+    raw: dict[str, Any]
+    manual: bool
+    conversation_id: UUID | None = None
+    message_id: UUID | None = None
+    document_id: UUID | None = None
+    version_id: UUID | None = None
+    chunk_id: UUID | None = None
+    explicit_source_id: UUID | None = None
+    raw_doc_fields: bool = False
+    complete_doc: bool = False
+    safe: dict[str, object] = field(default_factory=dict)
+    source_fence_data: dict[str, object] = field(default_factory=dict)
+    chat_evidence: dict[str, object] = field(default_factory=dict)
+    doc_evidence: "EvidenceReferenceRead | None" = None
+
+
+def _parse_export_provenance(row: Memory | MemoryCandidate) -> _ExportProvenance:
+    """Parse a row's provenance identifiers without trusting persisted JSON types.
+
+    Non-manual rows with unknown keys or unparsable identifiers/origin raise ``ConflictError``
+    (409): copied content must be fully verifiable. Pure; no I/O.
     """
-    from modules.chat import public as chat_public
-    from modules.knowledge.documents import public as documents_public
-    from modules.sources import public as sources_public
-    from modules.sources.schemas import SourceExportFence
-
     raw = row.provenance if isinstance(row.provenance, dict) else {}
-    allowed = {"conversation_id", "message_id", "source_id", "document_id",
-               "document_version_id", "chunk_id", "origin"}
     manual_memory = isinstance(row, Memory) and row.is_manual is True
-    if raw.keys() - allowed and not manual_memory:
-        raise HTTPException(status_code=409, detail="Memory export cannot verify copied-content provenance")
+    if raw.keys() - _EXPORT_PROVENANCE_KEYS and not manual_memory:
+        raise ConflictError("Memory export cannot verify copied-content provenance")
 
     def optional_uuid(key: str) -> UUID | None:
         """Parse one optional provenance identifier without trusting persisted JSON types."""
@@ -281,116 +320,172 @@ async def _memory_export_source_fence(
         except (ValueError, TypeError, AttributeError):
             return None
 
-    conversation_id, message_id = optional_uuid("conversation_id"), optional_uuid("message_id")
-    document_id, version_id, chunk_id = (
-        optional_uuid("document_id"), optional_uuid("document_version_id"), optional_uuid("chunk_id"),
+    parsed = _ExportProvenance(
+        raw=raw, manual=manual_memory,
+        conversation_id=optional_uuid("conversation_id"), message_id=optional_uuid("message_id"),
+        document_id=optional_uuid("document_id"), version_id=optional_uuid("document_version_id"),
+        chunk_id=optional_uuid("chunk_id"), explicit_source_id=optional_uuid("source_id"),
     )
-    raw_doc_fields = any(raw.get(key) is not None for key in ("document_id", "document_version_id", "chunk_id"))
-    complete_doc = all(value is not None for value in (document_id, version_id, chunk_id))
-    explicit_source_id = optional_uuid("source_id")
+    parsed.raw_doc_fields = any(raw.get(key) is not None for key in ("document_id", "document_version_id", "chunk_id"))
+    parsed.complete_doc = all(value is not None for value in (parsed.document_id, parsed.version_id, parsed.chunk_id))
     if not manual_memory:  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
-        if ((raw.get("conversation_id") is not None and conversation_id is None)
-                or (raw.get("message_id") is not None and message_id is None)
-                or (raw.get("source_id") is not None and explicit_source_id is None)
+        if ((raw.get("conversation_id") is not None and parsed.conversation_id is None)
+                or (raw.get("message_id") is not None and parsed.message_id is None)
+                or (raw.get("source_id") is not None and parsed.explicit_source_id is None)
                 or (raw.get("origin") is not None
                     and (not isinstance(raw.get("origin"), str)
                          or raw.get("origin") not in {"agent", "model"}))):
-            raise HTTPException(status_code=409, detail="Memory export cannot verify copied-content provenance")
-    safe_provenance: dict[str, object] = {}
-    source_fence_data: dict[str, object] = {}
-    chat_evidence: dict[str, object] = {}
-    doc_evidence: EvidenceReferenceRead | None = None
+            raise ConflictError("Memory export cannot verify copied-content provenance")
+    return parsed
 
-    if conversation_id is not None or message_id is not None:
-        if conversation_id is None or message_id is None:
-            if not manual_memory:
-                raise HTTPException(status_code=409, detail="Memory export cannot verify partial conversation provenance")
-        else:
-            origin = await chat_public.read_memory_export_origin(
-                session, owner_id=_actor(scope), conversation_id=conversation_id, message_id=message_id,
-            )
-            if origin is None:
-                if not manual_memory:
-                    raise HTTPException(status_code=409, detail="Memory transcript evidence was removed or is not retained")
-            else:
-                safe_provenance.update(conversation_id=conversation_id, message_id=message_id)
-                chat_evidence = {
-                    "conversation_id": origin.conversation_id,
-                    "message_id": origin.message_id,
-                    "chat_evidence_digest": hashlib.sha256(origin.model_dump_json().encode("utf-8")).hexdigest(),
-                    "chat_privacy_persisted": origin.privacy_persisted,
-                    "chat_privacy_updated_at": origin.privacy_updated_at,
-                }
 
-    if raw_doc_fields:
-        if not complete_doc:
-            if not manual_memory:
-                raise HTTPException(status_code=409, detail="Memory export cannot verify incomplete document provenance")
-        else:
-            try:
-                assert version_id is not None and chunk_id is not None  # complete_doc
-                refs = await documents_public.read_evidence_refs(
-                    session, [(version_id, chunk_id)], scope=scope,
-                    multi_workspace_enabled=multi_workspace_enabled,
-                )
-            except ValueError:
-                refs = []
-            if (len(refs) == 1 and refs[0].document_id == document_id
-                    and (explicit_source_id is None or refs[0].source_id == explicit_source_id)):
-                doc_evidence = refs[0]
-                safe_provenance.update(
-                    document_id=document_id, document_version_id=version_id, chunk_id=chunk_id,
-                )
-            elif not manual_memory:
-                raise HTTPException(status_code=409, detail="Memory document evidence was removed or is being purged")
+async def _verify_export_chat_evidence(
+    session: AsyncSession, prov: _ExportProvenance, *, scope: Scope,
+) -> None:
+    """Verify retained Chat message evidence; fills ``prov.safe``/``prov.chat_evidence``.
 
-    source_id = explicit_source_id
-    if doc_evidence is not None:
-        source_id = doc_evidence.source_id
-    if source_id is not None:
-        source = await sources_public.get_source_fence(
-            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    A partial or removed transcript reference is a 409 unless the Memory is manual, which
+    simply drops the annotation. Resolved under the caller's workspace owner. Read-only.
+    """
+    from modules.chat import public as chat_public
+
+    if prov.conversation_id is None and prov.message_id is None:
+        return
+    if prov.conversation_id is None or prov.message_id is None:
+        if not prov.manual:
+            raise ConflictError("Memory export cannot verify partial conversation provenance")
+        return
+    origin = await chat_public.read_memory_export_origin(
+        session, owner_id=_actor(scope), conversation_id=prov.conversation_id, message_id=prov.message_id,
+    )
+    if origin is None:
+        if not prov.manual:
+            raise ConflictError("Memory transcript evidence was removed or is not retained")
+        return
+    prov.safe.update(conversation_id=prov.conversation_id, message_id=prov.message_id)
+    prov.chat_evidence = {
+        "conversation_id": origin.conversation_id,
+        "message_id": origin.message_id,
+        "chat_evidence_digest": hashlib.sha256(origin.model_dump_json().encode("utf-8")).hexdigest(),
+        "chat_privacy_persisted": origin.privacy_persisted,
+        "chat_privacy_updated_at": origin.privacy_updated_at,
+    }
+
+
+async def _verify_export_document_evidence(
+    session: AsyncSession, prov: _ExportProvenance, *, scope: Scope, multi_workspace_enabled: bool,
+) -> None:
+    """Verify the exact retained Document chunk evidence; fills ``prov.doc_evidence``/``prov.safe``.
+
+    Incomplete or removed Document evidence is a 409 unless the Memory is manual. A mismatching
+    document or explicit source also counts as removed. Read-only.
+    """
+    from modules.knowledge.documents import public as documents_public
+
+    if not prov.raw_doc_fields:
+        return
+    if not prov.complete_doc:
+        if not prov.manual:
+            raise ConflictError("Memory export cannot verify incomplete document provenance")
+        return
+    try:
+        assert prov.version_id is not None and prov.chunk_id is not None  # complete_doc
+        refs = await documents_public.read_evidence_refs(
+            session, [(prov.version_id, prov.chunk_id)], scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
-        # Export eligibility reopens when a purge succeeds, so source-only copies also need the
-        # durable fence: once any data purge exists, no new Source-tied copy may be admitted.
-        eligible = bool(source and await sources_public.filter_export_eligible_sources(
-            session, [SourceExportFence(
-                source_id=source_id, workspace_id=scope.workspace_id, generation=source.generation,
-            )], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        ) and not await sources_public.source_data_purge_exists(
-            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        ))
-        if not eligible:
-            if not manual_memory:
-                raise HTTPException(status_code=409, detail="Memory source evidence was removed or is being purged")
-            safe_provenance.pop("source_id", None)
-            if doc_evidence is not None:
-                for key in ("document_id", "document_version_id", "chunk_id"):
-                    safe_provenance.pop(key, None)
-                doc_evidence = None
-        else:
-            safe_provenance["source_id"] = source_id
-            assert source is not None
-            source_fence_data = {"source_id": source.id, "source_generation": source.generation}
-
-    if doc_evidence is not None and source_fence_data:
-        safe_provenance.update(
-            document_id=document_id, document_version_id=version_id, chunk_id=chunk_id,
+    except ValueError:
+        refs = []
+    if (len(refs) == 1 and refs[0].document_id == prov.document_id
+            and (prov.explicit_source_id is None or refs[0].source_id == prov.explicit_source_id)):
+        prov.doc_evidence = refs[0]
+        prov.safe.update(
+            document_id=prov.document_id, document_version_id=prov.version_id, chunk_id=prov.chunk_id,
         )
-        source_fence_data.update(
-            document_id=document_id, document_version_id=version_id, chunk_id=chunk_id,
-        )
-    elif doc_evidence is not None:
-        source_fence_data.update(document_id=document_id, document_version_id=version_id, chunk_id=chunk_id)
+    elif not prov.manual:
+        raise ConflictError("Memory document evidence was removed or is being purged")
 
-    if not doc_evidence and not chat_evidence and not manual_memory:
-        raise HTTPException(status_code=409, detail="Memory export cannot verify copied-content provenance")
-    if manual_memory:
-        safe_provenance["origin"] = "manual"
-    elif isinstance(raw.get("origin"), str) and raw.get("origin") in {"agent", "model"}:
-        safe_provenance["origin"] = raw["origin"]
-    projected = MemoryExportProvenance.model_validate(safe_provenance) if safe_provenance else None
-    return {**source_fence_data, **chat_evidence}, projected
+
+async def _fence_export_source(
+    session: AsyncSession, prov: _ExportProvenance, *, scope: Scope, multi_workspace_enabled: bool,
+) -> None:
+    """Fence the owning Source of the verified evidence; fills ``prov.source_fence_data``.
+
+    Export eligibility reopens when a purge succeeds, so source-only copies also need the
+    durable fence: once any data purge exists, no new Source-tied copy may be admitted. An
+    ineligible Source is a 409 for derived copies and strips the Source/Document annotations of
+    manual ones. Read-only.
+    """
+    from modules.sources import public as sources_public
+    from modules.sources.schemas import SourceExportFence
+
+    source_id = prov.explicit_source_id
+    if prov.doc_evidence is not None:
+        source_id = prov.doc_evidence.source_id
+    if source_id is None:
+        return
+    source = await sources_public.get_source_fence(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    eligible = bool(source and await sources_public.filter_export_eligible_sources(
+        session, [SourceExportFence(
+            source_id=source_id, workspace_id=scope.workspace_id, generation=source.generation,
+        )], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ) and not await sources_public.source_data_purge_exists(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ))
+    if not eligible:
+        if not prov.manual:
+            raise ConflictError("Memory source evidence was removed or is being purged")
+        prov.safe.pop("source_id", None)
+        if prov.doc_evidence is not None:
+            for key in ("document_id", "document_version_id", "chunk_id"):
+                prov.safe.pop(key, None)
+            prov.doc_evidence = None
+    else:
+        prov.safe["source_id"] = source_id
+        assert source is not None
+        prov.source_fence_data = {"source_id": source.id, "source_generation": source.generation}
+
+
+async def _memory_export_source_fence(
+    session: AsyncSession, row: Memory | MemoryCandidate, *, scope: Scope, multi_workspace_enabled: bool,
+) -> tuple[dict[str, object], MemoryExportProvenance | None]:
+    """Project only independently verified provenance and fence its live owner evidence.
+
+    Chat, Document and Source evidence is resolved under the caller's workspace scope, so a
+    copy whose provenance names a foreign-workspace identity is treated as removed.
+
+    Explicitly manual Memory remains exportable after optional evidence is removed. Every
+    model-derived or candidate copy needs exact retained Chat message or document evidence.
+    Read-only; verification order is parse, Chat, Document, then Source.
+    """
+    prov = _parse_export_provenance(row)
+    await _verify_export_chat_evidence(session, prov, scope=scope)
+    await _verify_export_document_evidence(
+        session, prov, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    await _fence_export_source(session, prov, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if prov.doc_evidence is not None and prov.source_fence_data:
+        prov.safe.update(
+            document_id=prov.document_id, document_version_id=prov.version_id, chunk_id=prov.chunk_id,
+        )
+        prov.source_fence_data.update(
+            document_id=prov.document_id, document_version_id=prov.version_id, chunk_id=prov.chunk_id,
+        )
+    elif prov.doc_evidence is not None:
+        prov.source_fence_data.update(
+            document_id=prov.document_id, document_version_id=prov.version_id, chunk_id=prov.chunk_id,
+        )
+
+    if not prov.doc_evidence and not prov.chat_evidence and not prov.manual:
+        raise ConflictError("Memory export cannot verify copied-content provenance")
+    if prov.manual:
+        prov.safe["origin"] = "manual"
+    elif isinstance(prov.raw.get("origin"), str) and prov.raw.get("origin") in {"agent", "model"}:
+        prov.safe["origin"] = prov.raw["origin"]
+    projected = MemoryExportProvenance.model_validate(prov.safe) if prov.safe else None
+    return {**prov.source_fence_data, **prov.chat_evidence}, projected
 
 
 def _memory_export_scope(
@@ -452,7 +547,7 @@ async def export_page(
             provenance_fence, provenance = await _memory_export_source_fence(
                 session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
-        except HTTPException as exc:
+        except (HTTPException, DomainError) as exc:
             if exc.status_code != 409:
                 raise
             omitted_count += 1
@@ -464,7 +559,7 @@ async def export_page(
         if proposed_bytes > MEMORY_EXPORT_PAGE_MAX_BYTES:
             if not items:
                 raise ValueError("Memory export record exceeds its page byte bound")
-            raise HTTPException(status_code=413, detail="Memory export page exceeds its byte bound")
+            raise PayloadTooLargeError("Memory export page exceeds its byte bound")
         payload_bytes = proposed_bytes
         items.append(item)
         fences.append(MemoryExportFence(
@@ -492,7 +587,7 @@ async def validate_export_fences(
     """Recheck admission, privacy, retained workspace rows, exact content and inventory before publication."""
     try:
         await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    except HTTPException as exc:
+    except (HTTPException, DomainError) as exc:
         if exc.status_code not in {401, 404}:
             raise
         return MemoryExportFenceValidation(valid=False, reason="owner_unavailable", observed_snapshot_count=0)
@@ -513,7 +608,7 @@ async def validate_export_fences(
             source_fence, provenance = await _memory_export_source_fence(
                 session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
-        except HTTPException:
+        except (HTTPException, DomainError):
             return MemoryExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
         item = (_memory_export_read(cast(Memory, row), provenance) if record_kind == "memories"
                 else _candidate_export_read(cast(MemoryCandidate, row), provenance))
@@ -562,7 +657,7 @@ async def lock_export_privacy_in_uow(
     a revoked membership or changed configuration never reaches the shared privacy lock.
     """
     if await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled) != access_fence:
-        raise HTTPException(status_code=409, detail="Memory cleanup access fence is stale")
+        raise ConflictError("Memory cleanup access fence is stale")
     # ponytail: global privacy lock; per-workspace key if contention matters
     await lock_export_privacy(session)
 
@@ -579,7 +674,7 @@ async def _lock_live_provenance_evidence(
     admission) is compared before each Source lock so a revoked membership cannot publish.
     """
     if not isinstance(provenance, dict):
-        raise HTTPException(status_code=409, detail="Memory provenance is not verifiable")
+        raise ConflictError("Memory provenance is not verifiable")
     from modules.chat import public as chat_public
     from modules.knowledge.documents import public as documents_public
     from modules.sources import public as sources_public
@@ -590,18 +685,18 @@ async def _lock_live_provenance_evidence(
         "conversation_id", "message_id", "source_id", "document_id",
         "document_version_id", "chunk_id", "origin",
     }:
-        raise HTTPException(status_code=409, detail="Memory provenance contains unsupported copied fields")
+        raise ConflictError("Memory provenance contains unsupported copied fields")
     source_value = raw.get("source_id")
     source_id = _provenance_uuid(source_value) if source_value is not None else None
     if source_value is not None and source_id is None:
-        raise HTTPException(status_code=409, detail="Memory source provenance is not verifiable")
+        raise ConflictError("Memory source provenance is not verifiable")
     document_values = [raw.get(key) for key in ("document_id", "document_version_id", "chunk_id")]
     has_document_identity = any(value is not None for value in document_values)
     document_verified = False
     if has_document_identity:
         document_id, version_id, chunk_id = (_provenance_uuid(value) for value in document_values)
         if document_id is None or version_id is None or chunk_id is None:
-            raise HTTPException(status_code=409, detail="Memory document provenance is incomplete")
+            raise ConflictError("Memory document provenance is incomplete")
         try:
             refs = await documents_public.read_evidence_refs(
                 session, [(version_id, chunk_id)], scope=scope,
@@ -613,7 +708,7 @@ async def _lock_live_provenance_evidence(
             refs = []
         if (len(refs) != 1 or refs[0].document_id != document_id
                 or (source_id is not None and refs[0].source_id != source_id)):
-            raise HTTPException(status_code=409, detail="Memory document evidence is removed or unavailable")
+            raise ConflictError("Memory document evidence is removed or unavailable")
         source_id = refs[0].source_id
         document_verified = True
     elif source_id is not None:
@@ -629,7 +724,7 @@ async def _lock_live_provenance_evidence(
             session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         ))
         if not eligible:
-            raise HTTPException(status_code=409, detail="Memory source evidence is removed or unavailable")
+            raise ConflictError("Memory source evidence is removed or unavailable")
 
     conversation_value, message_value = raw.get("conversation_id"), raw.get("message_id")
     conversation_id = _provenance_uuid(conversation_value) if conversation_value is not None else None
@@ -637,14 +732,14 @@ async def _lock_live_provenance_evidence(
     chat_verified = False
     if conversation_value is not None or message_value is not None:
         if conversation_id is None or message_id is None:
-            raise HTTPException(status_code=409, detail="Memory conversation provenance is incomplete")
+            raise ConflictError("Memory conversation provenance is incomplete")
         chat_verified = await chat_public.read_memory_export_origin(
             session, owner_id=_actor(scope), conversation_id=conversation_id, message_id=message_id,
         ) is not None
         if not chat_verified:
-            raise HTTPException(status_code=409, detail="Memory transcript evidence is removed or unavailable")
+            raise ConflictError("Memory transcript evidence is removed or unavailable")
     if require_copy_evidence and not (document_verified or chat_verified):
-        raise HTTPException(status_code=409, detail="Memory copied-content evidence is not verifiable")
+        raise ConflictError("Memory copied-content evidence is not verifiable")
 
 
 async def read_export_privacy(
@@ -673,7 +768,7 @@ async def read_export_privacy(
     store_history, updated_at = row
     if (type(store_history) is not bool or not isinstance(updated_at, datetime)
             or updated_at.tzinfo is None or updated_at.utcoffset() is None):
-        raise HTTPException(status_code=503, detail="Memory export privacy state is invalid")
+        raise UnavailableError("Memory export privacy state is invalid")
     return MemoryExportPrivacy(
         store_conversation_history=store_history, persisted=True, updated_at=updated_at,
     )
@@ -831,6 +926,97 @@ def _scrub_candidate(item: MemoryCandidate, now: datetime) -> None:
     item.updated_at = now
 
 
+@dataclass
+class _DocumentSweepTally:
+    """Counters accumulated across the Memory and Candidate pages of one Document cleanup call."""
+
+    scrubbed_memories: int = 0
+    scrubbed_candidates: int = 0
+    unresolved: int = 0
+    examined: int = 0
+
+
+async def _lock_linked_candidate(
+    session: AsyncSession, candidate_id: UUID | None, *, scope: Scope,
+) -> MemoryCandidate | None:
+    """Row-lock the workspace/actor-owned Candidate linked to a Memory (``None`` when unlinked/absent)."""
+    if candidate_id is None:
+        return None
+    return await session.scalar(select(MemoryCandidate).where(
+        MemoryCandidate.id == candidate_id, *_owned(MemoryCandidate, scope),
+    ).with_for_update().execution_options(populate_existing=True))
+
+
+async def _sweep_document_memory_page(
+    session: AsyncSession, evidence: "DocumentCleanupEvidenceScope", after: UUID | None, remaining: int,
+    now: datetime, tally: _DocumentSweepTally, *, scope: Scope,
+) -> tuple[bool, UUID | None]:
+    """Lock and scrub up to ``remaining`` Memory rows after ``after``; returns ``(has_more, last_id)``.
+
+    Selects ``remaining + 1`` rows ``FOR UPDATE`` (the extra is a lookahead that is not touched),
+    locks at most one linked Candidate per row, and updates ``tally``. Manual rows lose only the
+    matching Document annotations; derived rows matching directly or through their Candidate are
+    physically erased; uncertain provenance is counted unresolved. Caller owns the transaction.
+    """
+    statement = select(Memory).where(*_owned(Memory, scope)).order_by(Memory.id).limit(remaining + 1)
+    if after is not None:
+        statement = statement.where(Memory.id > after)
+    rows = list((await session.scalars(statement.with_for_update())).all())
+    has_more = len(rows) > remaining
+    rows = rows[:remaining]
+    for item in rows:
+        matched, uncertain = _document_provenance_match(item.provenance, evidence)
+        candidate = await _lock_linked_candidate(session, item.candidate_id, scope=scope)
+        candidate_match, candidate_uncertain = (
+            _document_provenance_match(candidate.provenance, evidence)
+            if candidate is not None else (False, False)
+        )
+        if item.is_manual is True:
+            if matched:
+                scrubbed = _scrub_manual_document_provenance(item.provenance, evidence)
+                if scrubbed is not None and scrubbed != item.provenance:
+                    item.provenance = scrubbed
+                    item.updated_at = now
+                    tally.scrubbed_memories += 1
+        elif matched or candidate_match:
+            _scrub_derived_memory(item, now)
+            tally.scrubbed_memories += 1
+        elif uncertain or candidate_uncertain:
+            tally.unresolved += 1
+        tally.examined += 1
+    return has_more, rows[-1].id if rows else after
+
+
+async def _sweep_document_candidate_page(
+    session: AsyncSession, evidence: "DocumentCleanupEvidenceScope", after: UUID | None, remaining: int,
+    now: datetime, tally: _DocumentSweepTally, *, scope: Scope,
+) -> tuple[bool, UUID | None]:
+    """Scrub up to ``remaining`` Candidates after ``after``; returns ``(has_more, last_id)``.
+
+    Runs only after the full Memory sweep so shared Candidate lineage survives until every
+    linked derived Memory copy was examined. IDs are listed first, then each row is locked
+    individually (a vanished row is skipped without counting). Updates ``tally``.
+    """
+    id_statement = select(MemoryCandidate.id).where(*_owned(MemoryCandidate, scope)).order_by(MemoryCandidate.id).limit(remaining + 1)
+    if after is not None:
+        id_statement = id_statement.where(MemoryCandidate.id > after)
+    candidate_ids = list((await session.scalars(id_statement)).all())
+    has_more = len(candidate_ids) > remaining
+    candidate_ids = candidate_ids[:remaining]
+    for candidate_id in candidate_ids:
+        candidate = await _lock_linked_candidate(session, candidate_id, scope=scope)
+        if candidate is None:
+            continue
+        matched, uncertain = _document_provenance_match(candidate.provenance, evidence)
+        if matched:
+            _scrub_candidate(candidate, now)
+            tally.scrubbed_candidates += 1
+        elif uncertain:
+            tally.unresolved += 1
+        tally.examined += 1
+    return has_more, candidate_ids[-1] if candidate_ids else after
+
+
 async def purge_document_copied_evidence_page(
     session: AsyncSession,
     evidence: "DocumentCleanupEvidenceScope",
@@ -853,89 +1039,42 @@ async def purge_document_copied_evidence_page(
         raise ValueError("Memory cleanup page size must be between 1 and 100")
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if evidence.workspace_id != scope.workspace_id or evidence.actor_user_id != _actor(scope):
-        raise HTTPException(status_code=409, detail="Document cleanup evidence belongs to another workspace")
+        raise ConflictError("Document cleanup evidence belongs to another workspace")
     await bound_cleanup_lock_waits(session)
     kind, after = _decode_document_memory_cleanup_cursor(cursor, evidence) if cursor else ("memories", None)
-    scrubbed_memories = scrubbed_candidates = unresolved = examined = 0
+    tally = _DocumentSweepTally()
     now = datetime.now(UTC)
 
-    while examined < limit and kind in {"memories", "candidates"}:
-        remaining = limit - examined
+    next_cursor: str | None  # declared only: the loop always binds it before use
+    while tally.examined < limit and kind in {"memories", "candidates"}:
+        remaining = limit - tally.examined
         if kind == "memories":
-            statement = select(Memory).where(*_owned(Memory, scope)).order_by(Memory.id).limit(remaining + 1)
-            if after is not None:
-                statement = statement.where(Memory.id > after)
-            rows = list((await session.scalars(statement.with_for_update())).all())
-            has_more = len(rows) > remaining
-            rows = rows[:remaining]
-            for item in rows:
-                matched, uncertain = _document_provenance_match(item.provenance, evidence)
-                candidate = None
-                if item.candidate_id is not None:
-                    candidate = await session.scalar(select(MemoryCandidate).where(
-                        MemoryCandidate.id == item.candidate_id, *_owned(MemoryCandidate, scope),
-                    ).with_for_update().execution_options(populate_existing=True))
-                candidate_match, candidate_uncertain = (
-                    _document_provenance_match(candidate.provenance, evidence)
-                    if candidate is not None else (False, False)
-                )
-                if item.is_manual is True:
-                    if matched:
-                        scrubbed = _scrub_manual_document_provenance(item.provenance, evidence)
-                        if scrubbed is not None and scrubbed != item.provenance:
-                            item.provenance = scrubbed
-                            item.updated_at = now
-                            scrubbed_memories += 1
-                elif matched or candidate_match:
-                    _scrub_derived_memory(item, now)
-                    scrubbed_memories += 1
-                elif uncertain or candidate_uncertain:
-                    unresolved += 1
-                examined += 1
-            last = rows[-1].id if rows else after
+            has_more, last = await _sweep_document_memory_page(
+                session, evidence, after, remaining, now, tally, scope=scope,
+            )
             if has_more:
                 next_cursor = _encode_document_memory_cleanup_cursor(evidence, kind, last)
                 break
             kind, after = "candidates", None
             next_cursor = _encode_document_memory_cleanup_cursor(evidence, kind, None)
-            if examined == limit:
+            if tally.examined == limit:
                 break
         else:
-            id_statement = select(MemoryCandidate.id).where(*_owned(MemoryCandidate, scope)).order_by(MemoryCandidate.id).limit(remaining + 1)
-            if after is not None:
-                id_statement = id_statement.where(MemoryCandidate.id > after)
-            candidate_ids = list((await session.scalars(id_statement)).all())
-            has_more = len(candidate_ids) > remaining
-            candidate_ids = candidate_ids[:remaining]
-            for candidate_id in candidate_ids:
-                candidate = await session.scalar(select(MemoryCandidate).where(
-                    MemoryCandidate.id == candidate_id, *_owned(MemoryCandidate, scope),
-                ).with_for_update().execution_options(populate_existing=True))
-                if candidate is None:
-                    continue
-                matched, uncertain = _document_provenance_match(candidate.provenance, evidence)
-                if matched:
-                    _scrub_candidate(candidate, now)
-                    scrubbed_candidates += 1
-                elif uncertain:
-                    unresolved += 1
-                examined += 1
-            last = candidate_ids[-1] if candidate_ids else after
-            if has_more:
-                next_cursor = _encode_document_memory_cleanup_cursor(evidence, kind, last)
-                break
-            next_cursor = None
+            has_more, last = await _sweep_document_candidate_page(
+                session, evidence, after, remaining, now, tally, scope=scope,
+            )
+            next_cursor = _encode_document_memory_cleanup_cursor(evidence, kind, last) if has_more else None
             break
 
     complete = next_cursor is None
     return DocumentMemoryCleanupProgress(
         complete=complete,
         next_cursor=next_cursor,
-        changed=bool(scrubbed_memories or scrubbed_candidates),
-        scrubbed_memories=scrubbed_memories,
-        scrubbed_candidates=scrubbed_candidates,
-        unresolved_count=unresolved,
-        unresolved_reason=_DOCUMENT_MEMORY_UNRESOLVED_REASON if unresolved else None,
+        changed=bool(tally.scrubbed_memories or tally.scrubbed_candidates),
+        scrubbed_memories=tally.scrubbed_memories,
+        scrubbed_candidates=tally.scrubbed_candidates,
+        unresolved_count=tally.unresolved,
+        unresolved_reason=_DOCUMENT_MEMORY_UNRESOLVED_REASON if tally.unresolved else None,
     )
 
 
@@ -993,6 +1132,60 @@ def _source_progress(
     )
 
 
+async def _sweep_source_memory_page(
+    session: AsyncSession, evidence: SourceCopiedEvidenceScope, after: UUID | None, limit: int, now: datetime,
+    *, scope: Scope,
+) -> tuple[bool, UUID | None, int, bool]:
+    """Scrub one keyset page of Memory rows tied to the purged Source.
+
+    Selects ``limit + 1`` rows ``FOR UPDATE`` (the extra is an untouched lookahead). Verified-manual
+    rows lose only Source/Document annotations; derived rows with the Source identity directly or
+    through their linked Candidate are erased together with that Candidate. Returns
+    ``(has_more, last_id, processed, changed)``. Caller owns the transaction.
+    """
+    source_text = str(evidence.source_id)
+    linked_candidates = select(MemoryCandidate.id).where(
+        MemoryCandidate.provenance["source_id"].astext == source_text,
+        *_owned(MemoryCandidate, scope),
+    )
+    statement = select(Memory).where(*_owned(Memory, scope), or_(
+        Memory.provenance["source_id"].astext == source_text,
+        Memory.candidate_id.in_(linked_candidates),
+    )).order_by(Memory.id).limit(limit + 1)
+    if after is not None:
+        statement = statement.where(Memory.id > after)
+    rows = list((await session.scalars(
+        statement.with_for_update().execution_options(populate_existing=True)
+    )).all())
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    changed = False
+    processed = 0
+    for item in rows:
+        own = isinstance(item.provenance, dict) and (
+            _provenance_uuid(item.provenance.get("source_id")) == evidence.source_id)
+        candidate = None
+        if item.candidate_id is not None:
+            candidate = await session.scalar(select(MemoryCandidate).where(
+                MemoryCandidate.id == item.candidate_id, *_owned(MemoryCandidate, scope),
+            ).with_for_update().execution_options(populate_existing=True))
+        candidate_linked = candidate is not None and isinstance(candidate.provenance, dict) and (
+            _provenance_uuid(candidate.provenance.get("source_id")) == evidence.source_id)
+        if item.is_manual is True:
+            # Same rule as the accepted Document page: manual is independent, strip annotations only.
+            if own:
+                item.provenance = _scrub_manual_source_provenance(item.provenance)
+                item.updated_at = now
+                changed = True
+        elif own or candidate_linked:
+            _scrub_derived_memory(item, now)
+            if candidate is not None and (candidate.content or candidate.status != "expired"):
+                _scrub_candidate(candidate, now)
+            changed = True
+        processed += 1
+    return has_more, rows[-1].id if rows else after, processed, changed
+
+
 async def purge_source_copied_evidence_page_in_uow(
     session: AsyncSession,
     evidence: SourceCopiedEvidenceScope,
@@ -1024,59 +1217,24 @@ async def purge_source_copied_evidence_page_in_uow(
     if not 1 <= limit <= 100:
         raise ValueError("Source Memory cleanup page size must be between 1 and 100")
     if await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled) != access_fence:
-        raise HTTPException(status_code=409, detail="Memory cleanup access fence is stale")
+        raise ConflictError("Memory cleanup access fence is stale")
     if (source_fence.workspace_id != scope.workspace_id or source_fence.id != evidence.source_id
             or source_fence.generation != evidence.generation
             or scope.source_id != evidence.source_id or scope.source_generation != evidence.generation):
-        raise HTTPException(status_code=409, detail="Source cleanup fence does not match the receipt")
+        raise ConflictError("Source cleanup fence does not match the receipt")
     await bound_cleanup_lock_waits(session)
     kind, after = _decode_source_memory_cursor(cursor, evidence) if cursor else ("memories", None)
-    source_text = str(evidence.source_id)
     now = datetime.now(UTC)
     changed = False
     unresolved = processed = 0
 
     if kind == "memories":
-        linked_candidates = select(MemoryCandidate.id).where(
-            MemoryCandidate.provenance["source_id"].astext == source_text,
-            *_owned(MemoryCandidate, scope),
+        has_more, last, processed, changed = await _sweep_source_memory_page(
+            session, evidence, after, limit, now, scope=scope,
         )
-        statement = select(Memory).where(*_owned(Memory, scope), or_(
-            Memory.provenance["source_id"].astext == source_text,
-            Memory.candidate_id.in_(linked_candidates),
-        )).order_by(Memory.id).limit(limit + 1)
-        if after is not None:
-            statement = statement.where(Memory.id > after)
-        rows = list((await session.scalars(
-            statement.with_for_update().execution_options(populate_existing=True)
-        )).all())
-        has_more = len(rows) > limit
-        rows = rows[:limit]
-        for item in rows:
-            own = isinstance(item.provenance, dict) and (
-                _provenance_uuid(item.provenance.get("source_id")) == evidence.source_id)
-            candidate = None
-            if item.candidate_id is not None:
-                candidate = await session.scalar(select(MemoryCandidate).where(
-                    MemoryCandidate.id == item.candidate_id, *_owned(MemoryCandidate, scope),
-                ).with_for_update().execution_options(populate_existing=True))
-            candidate_linked = candidate is not None and isinstance(candidate.provenance, dict) and (
-                _provenance_uuid(candidate.provenance.get("source_id")) == evidence.source_id)
-            if item.is_manual is True:
-                # Same rule as the accepted Document page: manual is independent, strip annotations only.
-                if own:
-                    item.provenance = _scrub_manual_source_provenance(item.provenance)
-                    item.updated_at = now
-                    changed = True
-            elif own or candidate_linked:
-                _scrub_derived_memory(item, now)
-                if candidate is not None and (candidate.content or candidate.status != "expired"):
-                    _scrub_candidate(candidate, now)
-                changed = True
-            processed += 1
         if has_more:
             return _source_progress(
-                evidence, "memories", rows[-1].id, complete=False,
+                evidence, "memories", last, complete=False,
                 processed=processed, unresolved=unresolved, changed=changed,
             )
         kind, after = "candidates", None
@@ -1088,7 +1246,7 @@ async def purge_source_copied_evidence_page_in_uow(
 
     remaining = limit - processed
     candidate_statement = select(MemoryCandidate).where(
-        MemoryCandidate.provenance["source_id"].astext == source_text,
+        MemoryCandidate.provenance["source_id"].astext == str(evidence.source_id),
         *_owned(MemoryCandidate, scope),
     ).order_by(MemoryCandidate.id).limit(remaining + 1)
     if after is not None:
@@ -1158,13 +1316,13 @@ async def _verified_memory_read(
                     session, item.provenance, require_copy_evidence=False,
                     scope=scope, multi_workspace_enabled=multi_workspace_enabled,
                 )
-            except HTTPException as exc:
+            except (HTTPException, DomainError) as exc:
                 if exc.status_code != 409:
                     raise
         _, provenance = await _memory_export_source_fence(
             session, item, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
-    except HTTPException as exc:
+    except (HTTPException, DomainError) as exc:
         if exc.status_code == 409:
             return None
         raise
@@ -1187,7 +1345,7 @@ async def _verified_candidate_read(
         _, provenance = await _memory_export_source_fence(
             session, item, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
-    except HTTPException as exc:
+    except (HTTPException, DomainError) as exc:
         if exc.status_code == 409:
             return None
         raise
@@ -1448,7 +1606,7 @@ class MemoryService:
         await self._invalidate_cache(scope)
         projected = await _verified_memory_read(self.session, item, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if projected is None:
-            raise HTTPException(status_code=409, detail="Memory evidence is removed or unavailable")
+            raise ConflictError("Memory evidence is removed or unavailable")
         return projected
 
     async def update_memory(
@@ -1490,7 +1648,7 @@ class MemoryService:
         if item is None or item.status != "active":
             return None
         if item.provenance != hinted.provenance:
-            raise HTTPException(status_code=409, detail="Memory evidence changed while it was being updated")
+            raise ConflictError("Memory evidence changed while it was being updated")
 
         now = datetime.now(UTC)
         if payload.content is not None:
@@ -1547,7 +1705,7 @@ class MemoryService:
         if item is None:
             return None
         if item.provenance != hinted.provenance:
-            raise HTTPException(status_code=409, detail="Memory evidence changed while it was being forgotten")
+            raise ConflictError("Memory evidence changed while it was being forgotten")
 
         now = datetime.now(UTC)
         item.status = "forgotten"
@@ -1577,7 +1735,7 @@ class MemoryService:
         await self._invalidate_cache(scope)
         projected = await _verified_memory_read(self.session, item, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if projected is None:
-            raise HTTPException(status_code=409, detail="Memory evidence is removed or unavailable")
+            raise ConflictError("Memory evidence is removed or unavailable")
         return projected
 
     async def invalidate_memory(
@@ -1613,7 +1771,7 @@ class MemoryService:
         if item is None:
             return None
         if item.provenance != hinted.provenance:
-            raise HTTPException(status_code=409, detail="Memory evidence changed while it was being invalidated")
+            raise ConflictError("Memory evidence changed while it was being invalidated")
 
         now = datetime.now(UTC)
         item.status = "invalidated"
@@ -1629,7 +1787,7 @@ class MemoryService:
         await self._invalidate_cache(scope)
         projected = await _verified_memory_read(self.session, item, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if projected is None:
-            raise HTTPException(status_code=409, detail="Memory evidence is removed or unavailable")
+            raise ConflictError("Memory evidence is removed or unavailable")
         return projected
 
     async def supersede_memory(
@@ -1674,7 +1832,7 @@ class MemoryService:
         if old_item is None:
             return None
         if old_item.provenance != hinted.provenance:
-            raise HTTPException(status_code=409, detail="Memory evidence changed while it was being superseded")
+            raise ConflictError("Memory evidence changed while it was being superseded")
 
         now = datetime.now(UTC)
         derived_replacement = old_item.is_manual is False
@@ -1715,7 +1873,7 @@ class MemoryService:
         old_read = await _verified_memory_read(self.session, old_item, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         new_read = await _verified_memory_read(self.session, new_item, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if old_read is None or new_read is None:
-            raise HTTPException(status_code=409, detail="Memory evidence is removed or unavailable")
+            raise ConflictError("Memory evidence is removed or unavailable")
         return old_read, new_read
 
     async def get_privacy_config(
@@ -1796,7 +1954,7 @@ class MemoryService:
                 _privacy_select(scope).with_for_update().execution_options(populate_existing=True)
             )
         if rec is None:
-            raise HTTPException(status_code=503, detail="Memory privacy settings are unavailable")
+            raise UnavailableError("Memory privacy settings are unavailable")
         return MemoryPrivacyConfig(
             store_conversation_history=rec.store_conversation_history,
             store_agent_memory=rec.store_agent_memory,
@@ -1890,6 +2048,79 @@ class MemoryService:
             "should_auto_accept": evaluation.should_auto_accept,
         }
 
+    async def _active_contents(self, *, scope: Scope, multi_workspace_enabled: bool) -> list[str]:
+        """Return the contents of the workspace's top-100 active Memories that still verify.
+
+        Ordered by confidence then recency before the limit; each row is re-verified against
+        live evidence so unverifiable copies never influence duplicate detection. Read-only.
+        """
+        source_rows = list((await self.session.scalars(
+            select(Memory).where(Memory.workspace_id == scope.workspace_id, Memory.status == "active")
+            .order_by(desc(Memory.confidence), desc(Memory.created_at)).limit(100)
+        )).all())
+        active_contents: list[str] = []
+        for row in source_rows:
+            if await _verified_memory_read(self.session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled) is not None:
+                active_contents.append(row.content)
+        return active_contents
+
+    def _stage_candidates(
+        self, proposals: list[dict[str, Any]], prov: dict[str, Any], active_contents: list[str],
+        auto_accept_memory: bool, *, scope: Scope,
+    ) -> list[tuple[MemoryCandidate, Memory | None]]:
+        """Evaluate proposals and build (but do not add) candidates and auto-accepted Memories.
+
+        Obvious duplicates are skipped. Pure apart from reading the clock; the caller adds the
+        rows and flushes them in order so candidate IDs exist before the Memory links to them.
+        All proposals are evaluated before the first add/flush, so an evaluation error on a
+        later proposal leaves nothing flushed (previously earlier proposals were already flushed
+        into the still-uncommitted transaction); the SQL on the success path is unchanged.
+        """
+        now = datetime.now(UTC)
+        staged: list[tuple[MemoryCandidate, Memory | None]] = []
+        for p in proposals:
+            evaluation = evaluate_candidate(
+                p["content"],
+                p["type"],
+                active_contents,
+                auto_accept_enabled=auto_accept_memory,
+            )
+
+            # Skip obvious duplicates
+            if evaluation.is_duplicate:
+                continue
+
+            cand = MemoryCandidate(
+                workspace_id=scope.workspace_id, actor_user_id=_actor(scope),
+                content=p["content"],
+                memory_type=p["type"],
+                provenance=prov,
+                confidence=evaluation.confidence_score,
+                novelty_score=evaluation.novelty_score,
+                usefulness_score=evaluation.usefulness_score,
+                reason=evaluation.reason,
+                status="accepted" if evaluation.should_auto_accept else "pending",
+                created_at=now,
+                updated_at=now,
+                evaluated_at=now,
+            )
+            staged.append((cand, None))
+            if evaluation.should_auto_accept:
+                staged[-1] = (cand, Memory(
+                    workspace_id=scope.workspace_id, actor_user_id=_actor(scope),
+                    content=cand.content,
+                    memory_type=cand.memory_type,
+                    provenance=prov,
+                    confidence=cand.confidence,
+                    reason=cand.reason,
+                    status="active",
+                    is_manual=False,
+                    candidate_id=None,
+                    created_at=now,
+                    updated_at=now,
+                ))
+        return staged
+
     async def suggest_candidates(
         self,
         text: str,
@@ -1904,6 +2135,9 @@ class MemoryService:
 
         If store_agent_memory is disabled in privacy settings, candidate suggestions are skipped.
         If auto_accept_memory is enabled, passing candidates are immediately converted into active memories.
+        Order: privacy read with the fence locked, live provenance evidence lock, active-memory
+        read, candidate inserts, one commit with replay, cache eviction, then a verified re-read
+        of every created candidate (unverifiable ones are dropped from the result).
 
         Args:
             text: Utterance or conversation content to scan.
@@ -1935,62 +2169,18 @@ class MemoryService:
             scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
         )
 
-        source_rows = list((await self.session.scalars(
-            select(Memory).where(Memory.workspace_id == scope.workspace_id, Memory.status == "active")
-            .order_by(desc(Memory.confidence), desc(Memory.created_at)).limit(100)
-        )).all())
-        active_contents: list[str] = []
-        for row in source_rows:
-            if await _verified_memory_read(self.session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled) is not None:
-                active_contents.append(row.content)
-
-        now = datetime.now(UTC)
+        active_contents = await self._active_contents(scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        staged = self._stage_candidates(
+            proposals, prov, active_contents, privacy.auto_accept_memory, scope=scope,
+        )
         results: list[MemoryCandidateRead] = []
-
-        for p in proposals:
-            evaluation = evaluate_candidate(
-                p["content"],
-                p["type"],
-                active_contents,
-                auto_accept_enabled=privacy.auto_accept_memory,
-            )
-
-            # Skip obvious duplicates
-            if evaluation.is_duplicate:
-                continue
-
-            cand = MemoryCandidate(
-                workspace_id=scope.workspace_id, actor_user_id=_actor(scope),
-                content=p["content"],
-                memory_type=p["type"],
-                provenance=prov,
-                confidence=evaluation.confidence_score,
-                novelty_score=evaluation.novelty_score,
-                usefulness_score=evaluation.usefulness_score,
-                reason=evaluation.reason,
-                status="accepted" if evaluation.should_auto_accept else "pending",
-                created_at=now,
-                updated_at=now,
-                evaluated_at=now,
-            )
+        for cand, mem in staged:
             self.session.add(cand)
             await self.session.flush()
 
             # If auto-accepted, create active Memory immediately
-            if evaluation.should_auto_accept:
-                mem = Memory(
-                    workspace_id=scope.workspace_id, actor_user_id=_actor(scope),
-                    content=cand.content,
-                    memory_type=cand.memory_type,
-                    provenance=prov,
-                    confidence=cand.confidence,
-                    reason=cand.reason,
-                    status="active",
-                    is_manual=False,
-                    candidate_id=cand.id,
-                    created_at=now,
-                    updated_at=now,
-                )
+            if mem is not None:
+                mem.candidate_id = cand.id
                 self.session.add(mem)
 
             results.append(_to_candidate_read(cand))
@@ -2100,9 +2290,9 @@ class MemoryService:
         if cand is None or cand.status != "pending":
             return None
         if cand.provenance != hinted.provenance:
-            raise HTTPException(status_code=409, detail="Candidate evidence changed while it was being accepted")
+            raise ConflictError("Candidate evidence changed while it was being accepted")
         if await _verified_candidate_read(self.session, cand, scope=scope, multi_workspace_enabled=multi_workspace_enabled) is None:
-            raise HTTPException(status_code=409, detail="Candidate evidence is removed or unavailable")
+            raise ConflictError("Candidate evidence is removed or unavailable")
 
         now = datetime.now(UTC)
         cand.status = "accepted"
@@ -2130,7 +2320,7 @@ class MemoryService:
         await self._invalidate_cache(scope)
         projected = await _verified_memory_read(self.session, mem, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if projected is None:
-            raise HTTPException(status_code=409, detail="Candidate evidence is removed or unavailable")
+            raise ConflictError("Candidate evidence is removed or unavailable")
         return projected
 
     async def reject_candidate(
@@ -2167,7 +2357,7 @@ class MemoryService:
         if cand is None:
             return None
         if cand.provenance != hinted.provenance:
-            raise HTTPException(status_code=409, detail="Candidate evidence changed while it was being rejected")
+            raise ConflictError("Candidate evidence changed while it was being rejected")
 
         now = datetime.now(UTC)
         cand.status = "rejected"
@@ -2181,7 +2371,7 @@ class MemoryService:
         await self.session.refresh(cand)
         projected = await _verified_candidate_read(self.session, cand, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if projected is None:
-            raise HTTPException(status_code=409, detail="Candidate evidence is removed or unavailable")
+            raise ConflictError("Candidate evidence is removed or unavailable")
         return projected
 
     async def purge_memories(

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.auth.dependencies import require_account
 from core.auth.models import AuthSession
 from core.database import get_session
+from core.errors import DomainError
 from core.workspaces.dependencies import require_default_workspace_read
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat import public as chat_public
@@ -290,7 +291,8 @@ async def download_export(
     response.headers["Pragma"] = "no-cache"
     try:
         return await _build_export_response(output_format, session, owner, scope, request, response)
-    except HTTPException as exc:
+    except (HTTPException, DomainError) as exc:
+        # Owner modules raise DomainError subclasses; both families expose a mutable ``headers``.
         headers = dict(exc.headers or {})
         headers.update({"Cache-Control": "private, no-store, max-age=0", "Pragma": "no-cache"})
         exc.headers = headers

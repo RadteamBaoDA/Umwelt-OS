@@ -6,10 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 from sqlalchemy import literal, select
 from sqlalchemy.dialects import postgresql
 
+from core.errors import DomainError
 from core.workspaces.schemas import AccessFence, GrantRef, WorkspaceContext
 from modules.news import stories
 from modules.news.models import NewsObservation
@@ -90,7 +90,7 @@ async def test_member_list_uses_authorized_title_and_counts_only() -> None:
 
 @pytest.mark.asyncio
 async def test_member_topic_filter_forbidden() -> None:
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await stories._member_list_stories(
             FakeSession(), StoryFilter(topic_id=uuid4()), MEMBER, FENCE, None, NOW)  # type: ignore[arg-type]
     assert exc.value.status_code == 403

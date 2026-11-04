@@ -7,16 +7,17 @@ import binascii
 import hashlib
 import json
 import re
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
-from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import Select, and_, func, select, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.errors import ForbiddenError, ValidationFailedError
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
 from modules.connectors.provider_specs import get_provider_spec
@@ -143,6 +144,54 @@ def _initial_signal_provenance() -> dict[str, object]:
     }
 
 
+async def _lock_and_find_identity_story(
+    session: AsyncSession, identities: list[tuple[str, str]], *, scope: Scope,
+) -> tuple[str, str, NewsStory | None]:
+    """Serialize equal identities, then return the first known identity's locked story.
+
+    Takes one transaction advisory lock per identity key in sorted key order (deadlock-free
+    across concurrent writers), then probes identities in canonical-URL-first order and
+    row-locks the first matching story (``FOR UPDATE``). Returns ``(kind, key, story)``;
+    without a match the kind/key are the primary identity and the story is ``None``.
+    """
+    kind, key = identities[0]
+    for _identity_kind, identity_key in sorted(identities, key=lambda item: item[1]):
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:identity, 0))"),
+            {"identity": f"news:{identity_key}"},
+        )
+    story = None
+    for identity_kind, identity_key in identities:
+        identity = await session.scalar(select(NewsStoryIdentity).where(
+            NewsStoryIdentity.identity_key == identity_key,
+            NewsStoryIdentity.workspace_id == scope.workspace_id,
+            NewsStoryIdentity.algorithm_version == ALGORITHM_VERSION,
+        ))
+        if identity is not None:
+            kind, key = identity_kind, identity_key
+            story = await session.scalar(select(NewsStory).where(
+                NewsStory.id == identity.story_id, NewsStory.workspace_id == scope.workspace_id,
+            ).with_for_update())
+            break
+    return kind, key, story
+
+
+async def _register_story_identities(
+    session: AsyncSession, story: NewsStory, identities: list[tuple[str, str]], *, scope: Scope,
+) -> None:
+    """Attach each not-yet-known identity key to ``story`` (adds rows; the caller flushes/commits)."""
+    for identity_kind, identity_key in identities:
+        if await session.scalar(select(NewsStoryIdentity.id).where(
+            NewsStoryIdentity.identity_key == identity_key,
+            NewsStoryIdentity.workspace_id == scope.workspace_id,
+            NewsStoryIdentity.algorithm_version == ALGORITHM_VERSION,
+        )) is None:
+            session.add(NewsStoryIdentity(
+                workspace_id=scope.workspace_id, story_id=story.id, identity_key=identity_key, identity_kind=identity_kind,
+                algorithm_version=ALGORITHM_VERSION,
+            ))
+
+
 async def cluster_observation(
     session: AsyncSession, *, document_id: UUID, expected_source_generation: int,
     scope: Scope, multi_workspace_enabled: bool,
@@ -191,25 +240,7 @@ async def cluster_observation(
     excerpt = _plain_excerpt(title, representative.content)
     observed_at = projection.observed_at.astimezone(UTC)
     identities = _identity_keys(projection.canonical_url, projection.content_hash)
-    kind, key = identities[0]
-    for _identity_kind, identity_key in sorted(identities, key=lambda item: item[1]):
-        await session.execute(
-            text("SELECT pg_advisory_xact_lock(hashtextextended(:identity, 0))"),
-            {"identity": f"news:{identity_key}"},
-        )
-    story = None
-    for identity_kind, identity_key in identities:
-        identity = await session.scalar(select(NewsStoryIdentity).where(
-            NewsStoryIdentity.identity_key == identity_key,
-            NewsStoryIdentity.workspace_id == scope.workspace_id,
-            NewsStoryIdentity.algorithm_version == ALGORITHM_VERSION,
-        ))
-        if identity is not None:
-            kind, key = identity_kind, identity_key
-            story = await session.scalar(select(NewsStory).where(
-                NewsStory.id == identity.story_id, NewsStory.workspace_id == scope.workspace_id,
-            ).with_for_update())
-            break
+    kind, key, story = await _lock_and_find_identity_story(session, identities, scope=scope)
     match_method = kind
     match_evidence: dict[str, object] = {
         "identity_kind": kind, "identity_key": key, "algorithm_version": ALGORITHM_VERSION,
@@ -230,16 +261,7 @@ async def cluster_observation(
         story = NewsStory(workspace_id=scope.workspace_id, identity_key=key, identity_kind=kind, algorithm_version=ALGORITHM_VERSION)
         session.add(story)
         await session.flush()
-    for identity_kind, identity_key in identities:
-        if await session.scalar(select(NewsStoryIdentity.id).where(
-            NewsStoryIdentity.identity_key == identity_key,
-            NewsStoryIdentity.workspace_id == scope.workspace_id,
-            NewsStoryIdentity.algorithm_version == ALGORITHM_VERSION,
-        )) is None:
-            session.add(NewsStoryIdentity(
-                workspace_id=scope.workspace_id, story_id=story.id, identity_key=identity_key, identity_kind=identity_kind,
-                algorithm_version=ALGORITHM_VERSION,
-            ))
+    await _register_story_identities(session, story, identities, scope=scope)
     session.add(NewsObservation(
         workspace_id=scope.workspace_id, story_id=story.id, document_id=projection.document_id,
         document_version_id=projection.document_version_id, chunk_id=representative.id,
@@ -358,7 +380,7 @@ def _decode_cursor(value: str, access_fence: AccessFence, filters: StoryFilter) 
             raise ValueError
         return cursor
     except (ValueError, UnicodeDecodeError, ValidationError) as exc:
-        raise HTTPException(status_code=422, detail="Invalid story cursor") from exc
+        raise ValidationFailedError("Invalid story cursor") from exc
 
 
 async def _resolve_source_scope(
@@ -379,34 +401,40 @@ async def _resolve_source_scope(
     return tuple(item.id for item in page.items), page.next_cursor is not None
 
 
-async def _live_story_rows(
-    session: AsyncSession, source_ids: tuple[UUID, ...], as_of: datetime, *,
-    scope: Scope, multi_workspace_enabled: bool,
-    after: tuple[datetime, UUID] | None = None, story_id: UUID | None = None,
-    evidence_after: tuple[UUID, UUID, UUID] | None = None,
-    support_limit: int = 100,
-    candidate_limit: int = 50,
-    projection_cache: dict[UUID, Any] | None = None,
-) -> LiveStoryRows:
-    """Keyset-page durable story candidates, then reproject a bounded support window.
+async def _current_projection(
+    session: AsyncSession, observation: NewsObservation, *, scope: Scope, multi_workspace_enabled: bool,
+    projection_cache: dict[UUID, Any] | None,
+) -> Any:
+    """Return the document projection for an observation's source generation, via the request cache.
 
-    The keyset is ordered by latest eligible observation and story ID at the fixed
-    ``as_of`` snapshot. Detail callers can constrain one story directly, avoiding a
-    global prefix scan. Current Documents/Sources authority is rechecked for output,
-    optionally populating ``projection_cache`` so downstream scoring and filtering
-    Within the same request can reuse live document projections without N+1 queries.
+    A cached projection from another source generation counts as absent (``None``) and is not
+    refetched; a fresh read is cached only when it is non-``None``. Read-only.
     """
-    if not source_ids:
-        return LiveStoryRows([], False)
-    selections = await sources.get_gadget_sources(session, source_ids,
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    active = {item.id for item in selections if item.status == "active"}
-    if not active:
-        return LiveStoryRows([], False)
-    scope_status = await documents.news_current_scope_status(
-        session, tuple(sorted(active, key=str)), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    if projection_cache is not None and observation.document_id in projection_cache:
+        cached = projection_cache[observation.document_id]
+        return (
+            cached
+            if cached is not None and cached.current_source_generation == observation.source_generation
+            else None
+        )
+    current = await documents.get_news_document_projection(
+        session, observation.document_id, expected_source_generation=observation.source_generation,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
-    incomplete_reasons: set[str] = set(scope_status.incomplete_reasons)
+    if projection_cache is not None and current is not None:
+        projection_cache[observation.document_id] = current
+    return current
+
+
+async def _candidate_story_page(
+    session: AsyncSession, active: set[UUID], as_of: datetime, *, scope: Scope, story_id: UUID | None,
+    after: tuple[datetime, UUID] | None, evidence_after: tuple[UUID, UUID, UUID] | None, candidate_limit: int,
+) -> tuple[list[Any], bool]:
+    """Keyset-select candidate story IDs (latest eligible observation desc, story ID desc).
+
+    Fetches ``candidate_limit + 1`` rows to detect another page; returns the bounded rows and
+    whether more candidates exist (always ``False`` for single-story detail reads). One read.
+    """
     latest_observed = func.max(NewsObservation.observed_at)
     candidate_query = select(NewsObservation.story_id, latest_observed.label("latest_observed_at")).where(
         NewsObservation.workspace_id == scope.workspace_id,
@@ -429,10 +457,18 @@ async def _live_story_rows(
         candidate_query.order_by(latest_observed.desc(), NewsObservation.story_id.desc()).limit(candidate_limit + 1)
     )).all())
     has_more = story_id is None and len(candidate_rows) > candidate_limit
-    candidate_rows = candidate_rows[:candidate_limit]
-    candidate_ids = [row.story_id for row in candidate_rows]
-    if not candidate_ids:
-        return LiveStoryRows([], False, incomplete_reasons)
+    return candidate_rows[:candidate_limit], has_more
+
+
+async def _ranked_support_rows(
+    session: AsyncSession, candidate_ids: list[UUID], active: set[UUID], as_of: datetime, *, scope: Scope,
+    story_id: UUID | None, evidence_after: tuple[UUID, UUID, UUID] | None, support_limit: int,
+) -> list[tuple[NewsStory, NewsObservation, int]]:
+    """Read at most ``support_limit + 1`` ranked support rows per candidate story.
+
+    Detail reads rank by support key; list reads by newest observation. The extra row lets the
+    caller detect a truncated support window. One read.
+    """
     support_order_by = (
         (NewsObservation.source_id, NewsObservation.document_version_id, NewsObservation.chunk_id)
         if story_id is not None else
@@ -456,7 +492,7 @@ async def _live_story_rows(
         ) > evidence_after] if story_id is not None and evidence_after is not None else []),
     ).subquery()
     # The subquery column is untyped to SQLAlchemy's stubs; the select order fixes the row shape.
-    rows = cast(list[tuple[NewsStory, NewsObservation, int]], list((await session.execute(
+    return cast(list[tuple[NewsStory, NewsObservation, int]], list((await session.execute(
         select(NewsStory, NewsObservation, support_rank.c.support_rank)
         .join(NewsObservation, NewsObservation.story_id == NewsStory.id)
         .join(support_rank, support_rank.c.observation_id == NewsObservation.id)
@@ -469,6 +505,19 @@ async def _live_story_rows(
             (NewsObservation.story_id, NewsObservation.observed_at.desc(), NewsObservation.id)
         ))
     )).all()))
+
+
+async def _group_live_supports(
+    session: AsyncSession, rows: list[tuple[NewsStory, NewsObservation, int]], selections: Sequence[Any],
+    incomplete_reasons: set[str], *, scope: Scope, multi_workspace_enabled: bool, support_limit: int,
+    projection_cache: dict[UUID, Any] | None,
+) -> tuple[dict[UUID, tuple[NewsStory, list[NewsObservation], list[StoryEvidence]]], tuple[UUID, UUID, UUID] | None]:
+    """Reproject each ranked support against current Documents/Sources authority and group by story.
+
+    Rows beyond ``support_limit`` only mark ``support_scan_limit`` and set the continuation key
+    to the last in-window support. Unavailable scope adds ``scope_unavailable``. ``incomplete_reasons``
+    is mutated in place; reads only.
+    """
     grouped: dict[UUID, tuple[NewsStory, list[NewsObservation], list[StoryEvidence]]] = {}
     last_evidence_key: dict[UUID, tuple[UUID, UUID, UUID]] = {}
     next_evidence = None
@@ -481,20 +530,10 @@ async def _live_story_rows(
         last_evidence_key[story.id] = (
             observation.source_id, observation.document_version_id, observation.chunk_id,
         )
-        if projection_cache is not None and observation.document_id in projection_cache:
-            cached = projection_cache[observation.document_id]
-            current = (
-                cached
-                if cached is not None and cached.current_source_generation == observation.source_generation
-                else None
-            )
-        else:
-            current = await documents.get_news_document_projection(
-                session, observation.document_id, expected_source_generation=observation.source_generation,
-                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            )
-            if projection_cache is not None and current is not None:
-                projection_cache[observation.document_id] = current
+        current = await _current_projection(
+            session, observation, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            projection_cache=projection_cache,
+        )
         if current is None or current.document_version_id != observation.document_version_id:
             if current is None and await documents.news_projection_scope_unavailable(
                 session, observation.document_id, observation.source_generation,
@@ -518,6 +557,54 @@ async def _live_story_rows(
         existing = grouped.setdefault(story.id, (story, [], []))
         existing[1].append(observation)
         existing[2].append(entry)
+    return grouped, next_evidence
+
+
+async def _live_story_rows(
+    session: AsyncSession, source_ids: tuple[UUID, ...], as_of: datetime, *,
+    scope: Scope, multi_workspace_enabled: bool,
+    after: tuple[datetime, UUID] | None = None, story_id: UUID | None = None,
+    evidence_after: tuple[UUID, UUID, UUID] | None = None,
+    support_limit: int = 100,
+    candidate_limit: int = 50,
+    projection_cache: dict[UUID, Any] | None = None,
+) -> LiveStoryRows:
+    """Keyset-page durable story candidates, then reproject a bounded support window.
+
+    The keyset is ordered by latest eligible observation and story ID at the fixed
+    ``as_of`` snapshot. Detail callers can constrain one story directly, avoiding a
+    global prefix scan. Current Documents/Sources authority is rechecked for output,
+    optionally populating ``projection_cache`` so downstream scoring and filtering
+    Within the same request can reuse live document projections without N+1 queries.
+    Read-only; order is source selection, scope status, candidate page, support rows, reprojection.
+    """
+    if not source_ids:
+        return LiveStoryRows([], False)
+    selections = await sources.get_gadget_sources(session, source_ids,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    active = {item.id for item in selections if item.status == "active"}
+    if not active:
+        return LiveStoryRows([], False)
+    scope_status = await documents.news_current_scope_status(
+        session, tuple(sorted(active, key=str)), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    incomplete_reasons: set[str] = set(scope_status.incomplete_reasons)
+    candidate_rows, has_more = await _candidate_story_page(
+        session, active, as_of, scope=scope, story_id=story_id, after=after,
+        evidence_after=evidence_after, candidate_limit=candidate_limit,
+    )
+    candidate_ids = [row.story_id for row in candidate_rows]
+    if not candidate_ids:
+        return LiveStoryRows([], False, incomplete_reasons)
+    rows = await _ranked_support_rows(
+        session, candidate_ids, active, as_of, scope=scope, story_id=story_id,
+        evidence_after=evidence_after, support_limit=support_limit,
+    )
+    grouped, next_evidence = await _group_live_supports(
+        session, rows, selections, incomplete_reasons, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, support_limit=support_limit,
+        projection_cache=projection_cache,
+    )
     next_candidate = None
     if has_more and candidate_rows and story_id is None:
         last = candidate_rows[-1]
@@ -543,20 +630,10 @@ async def _current_entity_ids(
     output: set[str] = set()
     incomplete_reason = None
     for observation in observations[:100]:
-        if projection_cache is not None and observation.document_id in projection_cache:
-            cached = projection_cache[observation.document_id]
-            current = (
-                cached
-                if cached is not None and cached.current_source_generation == observation.source_generation
-                else None
-            )
-        else:
-            current = await documents.get_news_document_projection(
-                session, observation.document_id, expected_source_generation=observation.source_generation,
-                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            )
-            if projection_cache is not None and current is not None:
-                projection_cache[observation.document_id] = current
+        current = await _current_projection(
+            session, observation, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            projection_cache=projection_cache,
+        )
         if current is None or current.document_version_id != observation.document_version_id:
             continue
         if current.chunks_truncated:
@@ -576,13 +653,160 @@ async def _current_entity_ids(
     return output, incomplete_reason
 
 
+async def _filter_live_story(
+    session: AsyncSession, row: tuple[NewsStory, list[NewsObservation], list[StoryEvidence]],
+    filters: StoryFilter, profile: Any, query_tokens: set[str], page_incomplete_reasons: set[str], *,
+    scope: Scope, multi_workspace_enabled: bool, projection_cache: dict[UUID, Any],
+) -> tuple[NewsStory, list[NewsObservation], list[StoryEvidence], StoryEvidence, set[str]] | None:
+    """Apply date, entity, topic-profile and text filters to one live story.
+
+    Returns ``(story, observations, evidence, representative, story_reasons)`` or ``None`` when the
+    story is filtered out. Entity-membership overflow marks both the story and
+    ``page_incomplete_reasons`` (mutated in place) and keeps the story rather than inventing an
+    empty match. Reads only (through the shared ``projection_cache``).
+    """
+    story, observations, evidence = row
+    story_incomplete_reasons = {
+        reason for observation in observations if observation.incomplete_reason
+        for reason in observation.incomplete_reason.split(",")
+    }
+    if (filters.date_from or filters.date_to) and not any(
+        (filters.date_from is None or item.observed_at >= filters.date_from)
+        and (filters.date_to is None or item.observed_at < filters.date_to)
+        for item in evidence
+    ):
+        return None
+    current_entities: set[str] | None = None
+    membership_incomplete = None
+    if filters.entity_id or profile:
+        current_entities, membership_incomplete = await _current_entity_ids(session, observations,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            projection_cache=projection_cache)
+        if membership_incomplete:
+            story_incomplete_reasons.add(membership_incomplete)
+            page_incomplete_reasons.add(membership_incomplete)
+    if (
+        filters.entity_id and not membership_incomplete
+        and str(filters.entity_id) not in (current_entities or set())
+    ):
+        return None
+    if profile:
+        profile_tokens = _tokens(" ".join([profile.name, profile.description or "", *profile.keywords]))
+        lexical_hit = any(profile_tokens.intersection(_tokens(item.title + " " + item.excerpt)) for item in evidence)
+        entity_hit = bool({str(value) for value in profile.entity_ids}.intersection(current_entities or set()))
+        if not lexical_hit and not entity_hit and not membership_incomplete:
+            return None
+    if query_tokens and not any(query_tokens.issubset(_tokens(item.title + " " + item.excerpt)) for item in evidence):
+        return None
+    representative = max(evidence, key=lambda item: (item.published_at or item.observed_at, str(item.document_id)))
+    return story, observations, evidence, representative, story_incomplete_reasons
+
+
+async def _enrich_with_relevance(
+    session: AsyncSession, item: StoryRead, *, scope: Scope, multi_workspace_enabled: bool, as_of: datetime,
+    preloaded_topics: list[Any] | None, preloaded_goals: list[Any] | None, projection_cache: dict[UUID, Any],
+) -> StoryRead:
+    """Return a copy of ``item`` carrying its seven-signal relevance and any entity-scan reason."""
+    from modules.news.relevance import score_relevance
+
+    relevance = await score_relevance(
+        session, item, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, as_of=as_of,
+        preloaded_topics=preloaded_topics, preloaded_goals=preloaded_goals,
+        projection_cache=projection_cache,
+    )
+    entity_reason = {
+        "membership_limit": "entity_membership_limit",
+        "chunk_limit": "chunk_limit",
+    }.get(relevance.signals["entity"].method)
+    return item.model_copy(update={
+        "relevance": relevance.score, "why_relevant": relevance.why_relevant,
+        "relevance_signals": {name: value.model_dump() for name, value in relevance.signals.items()},
+        "relevance_weights": relevance.weights, "relevance_as_of": relevance.as_of,
+        "relevance_profile_revisions": relevance.profile_revisions,
+        "relevance_state": "available" if all(value.available for value in relevance.signals.values()) else "partial",
+        "incomplete_reasons": sorted(set(item.incomplete_reasons) | (
+            {entity_reason} if entity_reason else set()
+        )),
+    })
+
+
+async def _evidence_still_current(
+    session: AsyncSession, enriched: StoryRead, page: list[Any], source_ids: tuple[UUID, ...], *,
+    scope: Scope, multi_workspace_enabled: bool, projection_cache: dict[UUID, Any],
+) -> bool:
+    """Verify each evidence item against the resolved projection cache.
+
+    Falls back to a direct projection read only when a document is absent from the cache (and
+    caches a non-``None`` result), so the page's support stays valid at response time. Stops at
+    the first stale item. Read-only.
+    """
+    story_row = next((row for row in page if row[0].id == enriched.id), None)
+    generation_by_document = {
+        observation.document_id: observation.source_generation
+        for observation in story_row[1]
+    } if story_row is not None else {}
+    for story_evidence in enriched.evidence:
+        expected_gen = generation_by_document.get(story_evidence.document_id)
+        if story_evidence.document_id in projection_cache:
+            cached = projection_cache[story_evidence.document_id]
+            current = (
+                cached
+                if cached is not None and (
+                    expected_gen is None or cached.current_source_generation == expected_gen
+                )
+                else None
+            )
+        else:
+            current = await documents.get_news_document_projection(
+                session, story_evidence.document_id,
+                expected_source_generation=expected_gen,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            if current is not None:
+                projection_cache[story_evidence.document_id] = current
+        if (
+            current is None or current.document_version_id != story_evidence.document_version_id
+            or current.source_id != story_evidence.source_id or current.source_id not in source_ids
+        ):
+            return False
+    return True
+
+
+def _next_story_cursor(
+    live: LiveStoryRows, page: list[Any], has_more: bool, access_fence: AccessFence, filters: StoryFilter,
+    as_of: datetime, source_ids: tuple[UUID, ...], source_selection_incomplete: bool,
+) -> str | None:
+    """Encode the continuation cursor from the last returned story or the scan-limit candidate. Pure."""
+    continuation_key = None
+    if has_more and page:
+        continuation_key = live.candidate_keys.get(page[-1][0].id)
+    elif live.next_candidate is not None:
+        continuation_key = live.next_candidate
+    if continuation_key is None:
+        return None
+    return _encode_cursor(StoryCursor(
+        domain="news_stories", workspace_id=access_fence.workspace_id,
+        actor_user_id=access_fence.user_id,
+        membership_revision=access_fence.membership_revision,
+        configuration_revision=access_fence.configuration_revision,
+        filter_hash=_filter_hash(filters), sort="observed_at_desc_story_id_desc", as_of=as_of,
+        after_observed_at=continuation_key[0], after_story_id=continuation_key[1],
+        resolved_source_ids=list(source_ids), source_selection_incomplete=source_selection_incomplete,
+    ))
+
+
 async def list_stories(
     session: AsyncSession, filters: StoryFilter, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> StoryPage:
-    """Return a bounded keyset page whose titles and counts use live authorized supports only."""
+    """Return a bounded keyset page whose titles and counts use live authorized supports only.
+
+    Read-only; order is admission snapshot, cursor/source resolution, live rows, topic profile,
+    per-story filters, relevance preloads, scoring, then the final support recheck.
+    """
     access_fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if filters.date_from and filters.date_to and filters.date_from >= filters.date_to:
-        raise HTTPException(status_code=422, detail="date_from must be earlier than date_to")
+        raise ValidationFailedError("date_from must be earlier than date_to")
     as_of = datetime.now(UTC)
     cursor = _decode_cursor(filters.cursor, access_fence, filters) if filters.cursor else None
     if isinstance(scope, WorkspaceContext) and scope.role == "member":
@@ -614,40 +838,13 @@ async def list_stories(
             multi_workspace_enabled=multi_workspace_enabled)
         if not profile.is_active:
             return StoryPage(items=[], next_cursor=None, as_of=as_of)
-    for story, observations, evidence in live:
-        story_incomplete_reasons = {
-            reason for observation in observations if observation.incomplete_reason
-            for reason in observation.incomplete_reason.split(",")
-        }
-        if (filters.date_from or filters.date_to) and not any(
-            (filters.date_from is None or item.observed_at >= filters.date_from)
-            and (filters.date_to is None or item.observed_at < filters.date_to)
-            for item in evidence
-        ):
-            continue
-        current_entities: set[str] | None = None
-        if filters.entity_id or profile:
-            current_entities, membership_incomplete = await _current_entity_ids(session, observations,
-                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-                projection_cache=projection_cache)
-            if membership_incomplete:
-                story_incomplete_reasons.add(membership_incomplete)
-                page_incomplete_reasons.add(membership_incomplete)
-        if (
-            filters.entity_id and not membership_incomplete
-            and str(filters.entity_id) not in (current_entities or set())
-        ):
-            continue
-        if profile:
-            profile_tokens = _tokens(" ".join([profile.name, profile.description or "", *profile.keywords]))
-            lexical_hit = any(profile_tokens.intersection(_tokens(item.title + " " + item.excerpt)) for item in evidence)
-            entity_hit = bool({str(value) for value in profile.entity_ids}.intersection(current_entities or set()))
-            if not lexical_hit and not entity_hit and not membership_incomplete:
-                continue
-        if query_tokens and not any(query_tokens.issubset(_tokens(item.title + " " + item.excerpt)) for item in evidence):
-            continue
-        representative = max(evidence, key=lambda item: (item.published_at or item.observed_at, str(item.document_id)))
-        filtered.append((story, observations, evidence, representative, story_incomplete_reasons))
+    for row in live:
+        kept = await _filter_live_story(
+            session, row, filters, profile, query_tokens, page_incomplete_reasons, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled, projection_cache=projection_cache,
+        )
+        if kept is not None:
+            filtered.append(kept)
     filtered.sort(key=lambda item: live.candidate_keys.get(item[0].id, (as_of, item[0].id)), reverse=True)
     page = filtered[:filters.limit + 1]
     has_more = len(page) > filters.limit
@@ -659,7 +856,7 @@ async def list_stories(
         translation_revision=_translation_revision(story.id, representative),
         incomplete_reasons=sorted(story_reasons),
     ) for story, _observations, evidence, representative, story_reasons in page]
-    from modules.news.relevance import load_active_goals, load_active_topics, score_relevance
+    from modules.news.relevance import load_active_goals, load_active_topics
 
     preloaded_topics = (
         await load_active_topics(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
@@ -671,79 +868,20 @@ async def list_stories(
     )
     scored = []
     for item in items:
-        relevance = await score_relevance(
-            session, item, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, as_of=as_of,
-            preloaded_topics=preloaded_topics, preloaded_goals=preloaded_goals,
-            projection_cache=projection_cache,
+        enriched = await _enrich_with_relevance(
+            session, item, scope=scope, multi_workspace_enabled=multi_workspace_enabled, as_of=as_of,
+            preloaded_topics=preloaded_topics, preloaded_goals=preloaded_goals, projection_cache=projection_cache,
         )
-        entity_reason = {
-            "membership_limit": "entity_membership_limit",
-            "chunk_limit": "chunk_limit",
-        }.get(relevance.signals["entity"].method)
-        enriched = item.model_copy(update={
-            "relevance": relevance.score, "why_relevant": relevance.why_relevant,
-            "relevance_signals": {name: value.model_dump() for name, value in relevance.signals.items()},
-            "relevance_weights": relevance.weights, "relevance_as_of": relevance.as_of,
-            "relevance_profile_revisions": relevance.profile_revisions,
-            "relevance_state": "available" if all(value.available for value in relevance.signals.values()) else "partial",
-            "incomplete_reasons": sorted(set(item.incomplete_reasons) | (
-                {entity_reason} if entity_reason else set()
-            )),
-        })
-        # Verify each evidence item against the resolved projection cache (falling back to a
-        # direct projection read only when absent from cache) so support remains valid.
-        still_current = True
-        story_row = next((row for row in page if row[0].id == enriched.id), None)
-        generation_by_document = {
-            observation.document_id: observation.source_generation
-            for observation in story_row[1]
-        } if story_row is not None else {}
-        for story_evidence in enriched.evidence:
-            expected_gen = generation_by_document.get(story_evidence.document_id)
-            if story_evidence.document_id in projection_cache:
-                cached = projection_cache[story_evidence.document_id]
-                current = (
-                    cached
-                    if cached is not None and (
-                        expected_gen is None or cached.current_source_generation == expected_gen
-                    )
-                    else None
-                )
-            else:
-                current = await documents.get_news_document_projection(
-                    session, story_evidence.document_id,
-                    expected_source_generation=expected_gen,
-                    scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-                )
-                if current is not None:
-                    projection_cache[story_evidence.document_id] = current
-            if (
-                current is None or current.document_version_id != story_evidence.document_version_id
-                or current.source_id != story_evidence.source_id or current.source_id not in source_ids
-            ):
-                still_current = False
-                break
-        if still_current:
+        if await _evidence_still_current(
+            session, enriched, page, source_ids, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled, projection_cache=projection_cache,
+        ):
             scored.append(enriched)
         else:
             page_incomplete_reasons.add("evidence_changed_during_read")
-    next_cursor = None
-    continuation_key = None
-    if has_more and page:
-        continuation_key = live.candidate_keys.get(page[-1][0].id)
-    elif live.next_candidate is not None:
-        continuation_key = live.next_candidate
-    if continuation_key is not None:
-        next_cursor = _encode_cursor(StoryCursor(
-            domain="news_stories", workspace_id=access_fence.workspace_id,
-            actor_user_id=access_fence.user_id,
-            membership_revision=access_fence.membership_revision,
-            configuration_revision=access_fence.configuration_revision,
-            filter_hash=_filter_hash(filters), sort="observed_at_desc_story_id_desc", as_of=as_of,
-            after_observed_at=continuation_key[0], after_story_id=continuation_key[1],
-            resolved_source_ids=list(source_ids), source_selection_incomplete=source_selection_incomplete,
-        ))
+    next_cursor = _next_story_cursor(
+        live, page, has_more, access_fence, filters, as_of, source_ids, source_selection_incomplete,
+    )
     page_reasons = sorted(page_incomplete_reasons | {
         reason for item in scored for reason in item.incomplete_reasons
     })
@@ -805,7 +943,31 @@ def _decode_detail_cursor(
         after = (UUID(parts["after"][0]), UUID(parts["after"][1]), UUID(parts["after"][2]))
         return tuple(UUID(item) for item in parts["source_ids"]), as_of, after, parts["source_selection_incomplete"]
     except (ValueError, TypeError, KeyError, UnicodeDecodeError, binascii.Error) as exc:
-        raise HTTPException(status_code=422, detail="Invalid story evidence cursor") from exc
+        raise ValidationFailedError("Invalid story evidence cursor") from exc
+
+
+async def _detail_support_is_current(
+    session: AsyncSession, evidence: list[StoryEvidence], generation_by_document: dict[UUID, int],
+    source_ids: tuple[UUID, ...], *, scope: Scope, multi_workspace_enabled: bool,
+) -> bool:
+    """Recheck the exact revisions used in a detail response against current Documents/Sources.
+
+    The page query may await scope and source calls, so each distinct (document, version) is
+    reprojected immediately before the detached response is built. Stops at the first stale
+    item and returns ``False``; reads only.
+    """
+    for item in evidence:
+        current = await documents.get_news_document_projection(
+            session, item.document_id,
+            expected_source_generation=generation_by_document.get(item.document_id),
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if (
+            current is None or current.document_version_id != item.document_version_id
+            or current.source_id != item.source_id or current.source_id not in source_ids
+        ):
+            return False
+    return True
 
 
 async def get_story(
@@ -885,26 +1047,20 @@ async def get_story(
         observation.document_id: observation.source_generation
         for observation in [*observations, *page_observations]
     }
-    fence_evidence = {
+    fence_evidence = list({
         (item.document_id, item.document_version_id): item
         for item in [*base_evidence, *evidence_page]
-    }.values()
-    for item in fence_evidence:
-        current = await documents.get_news_document_projection(
-            session, item.document_id,
-            expected_source_generation=generation_by_document.get(item.document_id),
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    }.values())
+    if not await _detail_support_is_current(
+        session, fence_evidence, generation_by_document, source_ids,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ):
+        if next_evidence_cursor is None:
+            return None
+        return StoryDetail(
+            story=None, evidence_cursor=next_evidence_cursor,
+            incomplete_reasons=sorted(set(incomplete_reasons) | {"evidence_changed_during_read", "stale_support_omitted"}),
         )
-        if (
-            current is None or current.document_version_id != item.document_version_id
-            or current.source_id != item.source_id or current.source_id not in source_ids
-        ):
-            if next_evidence_cursor is None:
-                return None
-            return StoryDetail(
-                story=None, evidence_cursor=next_evidence_cursor,
-                incomplete_reasons=sorted(set(incomplete_reasons) | {"evidence_changed_during_read", "stale_support_omitted"}),
-            )
     return StoryDetail(story=StoryRead(
         id=story.id, title=representative.title, excerpt=representative.excerpt,
         observed_at=max(item.observed_at for item in title_evidence),
@@ -992,7 +1148,7 @@ async def _member_list_stories(
 ) -> StoryPage:
     """Page stories over the member's authorized evidence only; zero authorized evidence hides the story."""
     if filters.topic_id or filters.entity_id:
-        raise HTTPException(status_code=403, detail="Workspace owner required")
+        raise ForbiddenError("Workspace owner required")
     if cursor:
         as_of = cursor.as_of
     source_ids = tuple(cursor.resolved_source_ids) if cursor else tuple(filters.source_ids)

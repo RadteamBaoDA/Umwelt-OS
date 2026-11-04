@@ -15,6 +15,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.errors import DomainError
 from core.events import DomainEvent
 from core.realtime import ReplayDraft, commit_with_replay, make_knowledge_change, make_source_change
 from core.worker_cursors import STATE_KEY, read_cursor, write_cursor
@@ -563,7 +564,7 @@ async def process_source_memory_coverage(ctx: dict[str, object], event_id: str) 
             await _evict_memory_cache_after_commit(factory, redis, eviction[0], identifier, scope=scope,
                 multi_workspace_enabled=flag, dispatched_at=dispatched_at, attempt=eviction[1],
                 access_fence=snapshot_fence)
-    except HTTPException:
+    except (HTTPException, DomainError):
         # Permission loss is never rewritten as cursor failure or an upgraded job epoch.
         raise
     except Exception as exc:  # noqa: BLE001
