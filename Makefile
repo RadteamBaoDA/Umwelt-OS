@@ -1,4 +1,4 @@
-.PHONY: setup dev stop migrate seed workspace-up workspace-stop workspace-seed reset-preview reset lint typecheck test e2e build
+.PHONY: setup dev stop migrate seed workspace-up workspace-stop workspace-seed reset-preview reset lint typecheck test e2e build audit
 export WORKSPACE CONFIRM_FINGERPRINT
 
 setup:
@@ -44,6 +44,9 @@ typecheck:
 
 test:
 	PYTEST_TARGET="$(PYTEST_TARGET)" E2E_TARGET="$(E2E_TARGET)" bash scripts/test.sh
+
+audit:
+	bash scripts/audit.sh
 
 build:
 	npm run build
