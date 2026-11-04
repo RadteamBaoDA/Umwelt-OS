@@ -570,6 +570,244 @@ async def _execute_sql_mode(
     )
 
 
+def _observation_filters(
+    args: QueryCollectedDataArgs,
+    *,
+    workspace_id: UUID,
+    allowed_source_ids: list[UUID],
+    date_from: datetime | None,
+    date_to: datetime | None,
+) -> list[Any]:
+    """Build the workspace/source-scoped SQLAlchemy filter list for observation queries.
+
+    Pure: builds expressions only, no I/O. The workspace and allowed-source predicates are
+    always first so the permission boundary can never be dropped by an optional filter.
+    """
+    obs_filters: list[Any] = [
+        Observation.workspace_id == workspace_id,
+        Observation.source_id.in_(allowed_source_ids),
+    ]
+    if args.current_only and args.aggregation not in ("timeseries", "avg", "min", "max", "sum", "count"):
+        obs_filters.append(Observation.is_current.is_(True))
+    if args.providers:
+        obs_filters.append(
+            func.lower(Observation.provider).in_([p.strip().lower() for p in args.providers if p.strip()])
+        )
+    if args.metrics:
+        obs_filters.append(
+            func.lower(Observation.metric).in_([m.strip().lower() for m in args.metrics if m.strip()])
+        )
+    if args.symbols:
+        obs_filters.append(
+            func.upper(Observation.symbol).in_([s.strip().upper() for s in args.symbols if s.strip()])
+        )
+    if args.region:
+        obs_filters.append(func.upper(Observation.region) == args.region.strip().upper())
+    if date_from is not None:
+        obs_filters.append(Observation.observed_at >= date_from)
+    if date_to is not None:
+        obs_filters.append(Observation.observed_at <= date_to)
+    return obs_filters
+
+
+async def _observation_aggregates(
+    session: AsyncSession, obs_filters: list[Any], limit: int
+) -> list[dict[str, Any]]:
+    """Run the grouped observation aggregate query and return JSON-ready aggregate rows.
+
+    Read-only; one SELECT on ``session`` ordered by latest observation, bounded by ``limit``.
+    """
+    agg_rows = (
+        await session.execute(
+            select(
+                Observation.provider,
+                Observation.metric,
+                Observation.symbol,
+                Observation.unit,
+                Observation.currency,
+                func.count(Observation.id).label("row_count"),
+                func.avg(Observation.value).label("avg_value"),
+                func.min(Observation.value).label("min_value"),
+                func.max(Observation.value).label("max_value"),
+                func.sum(Observation.value).label("sum_value"),
+                func.max(Observation.observed_at).label("latest_observed_at"),
+            )
+            .where(*obs_filters)
+            .group_by(
+                Observation.provider,
+                Observation.metric,
+                Observation.symbol,
+                Observation.unit,
+                Observation.currency,
+            )
+            .order_by(desc(func.max(Observation.observed_at)))
+            .limit(limit)
+        )
+    ).all()
+    return [
+        {
+            "provider": r.provider,
+            "metric": r.metric,
+            "symbol": r.symbol,
+            "unit": r.unit,
+            "currency": r.currency,
+            "count": int(r.row_count or 0),
+            "avg": float(r.avg_value) if r.avg_value is not None else None,
+            "min": float(r.min_value) if r.min_value is not None else None,
+            "max": float(r.max_value) if r.max_value is not None else None,
+            "sum": float(r.sum_value) if r.sum_value is not None else None,
+            "latest_observed_at": r.latest_observed_at.isoformat() if r.latest_observed_at else None,
+        }
+        for r in agg_rows
+    ]
+
+
+def _document_filters(
+    args: QueryCollectedDataArgs,
+    *,
+    workspace_id: UUID,
+    allowed_source_ids: list[UUID],
+    date_from: datetime | None,
+    date_to: datetime | None,
+) -> list[Any]:
+    """Build the workspace/source-scoped filter list (incl. full-text/ILIKE) for document queries.
+
+    Pure expression builder; the workspace and allowed-source predicates are always first.
+    """
+    doc_filters: list[Any] = [
+        Document.workspace_id == workspace_id,
+        Document.source_id.in_(allowed_source_ids),
+    ]
+    if args.providers:
+        doc_filters.append(
+            func.lower(Source.provider).in_([p.strip().lower() for p in args.providers if p.strip()])
+        )
+    if date_from is not None:
+        doc_filters.append(func.coalesce(Document.observed_at, Document.created_at) >= date_from)
+    if date_to is not None:
+        doc_filters.append(func.coalesce(Document.observed_at, Document.created_at) <= date_to)
+    if args.text_query and args.text_query.strip():
+        q = args.text_query.strip()
+        ts_query = func.websearch_to_tsquery("simple", q)
+        ts_vec = func.to_tsvector(
+            "simple",
+            func.concat(Document.title, " ", func.coalesce(DocumentVersion.content, "")),
+        )
+        pattern = f"%{q}%"
+        doc_filters.append(
+            or_(
+                ts_vec.op("@@")(ts_query),
+                Document.title.ilike(pattern),
+                DocumentVersion.content.ilike(pattern),
+            )
+        )
+    return doc_filters
+
+
+async def _select_structured_documents(
+    session: AsyncSession, doc_filters: list[Any], limit: int
+) -> list[Any]:
+    """Select the newest matching documents joined to source and current version (one SELECT)."""
+    return list(
+        (
+            await session.execute(
+                select(
+                    Document.id.label("document_id"),
+                    Document.source_id.label("source_id"),
+                    Source.provider.label("provider"),
+                    Source.name.label("source_name"),
+                    Document.title.label("title"),
+                    Document.canonical_url.label("url"),
+                    Document.published_at.label("published_at"),
+                    Document.observed_at.label("observed_at"),
+                    DocumentVersion.id.label("document_version_id"),
+                    func.left(DocumentVersion.content, 500).label("excerpt"),
+                )
+                .join(Source, and_(Source.id == Document.source_id, Source.workspace_id == Document.workspace_id))
+                .join(
+                    DocumentVersion,
+                    and_(
+                        DocumentVersion.document_id == Document.id,
+                        DocumentVersion.version_number == Document.current_version,
+                    ),
+                )
+                .where(*doc_filters)
+                .order_by(desc(func.coalesce(Document.observed_at, Document.created_at)), desc(Document.id))
+                .limit(limit)
+            )
+        ).all()
+    )
+
+
+async def _hot_cache_snapshots(
+    redis: Any, workspace_id: UUID, allowed_source_ids: list[UUID]
+) -> list[dict[str, Any]]:
+    """Read up to 8 connector hot-cache snapshots from Redis; any failure yields what was read.
+
+    The cache is a best-effort enrichment, so every error is suppressed (never raises).
+    """
+    hot_snapshots: list[dict[str, Any]] = []
+    with suppress(Exception):
+        for sid in allowed_source_ids[:8]:
+            raw_snap = await redis.get(f"connector:snapshot:{workspace_id}:{sid}")
+            if raw_snap:
+                snap = json.loads(raw_snap.decode("utf-8") if isinstance(raw_snap, bytes) else str(raw_snap))
+                if isinstance(snap, dict):
+                    hot_snapshots.append(
+                        {
+                            "provider": snap.get("provider"),
+                            "realtime_tier": snap.get("realtime_tier"),
+                            "collected_at": snap.get("collected_at"),
+                            "record_count": snap.get("record_count"),
+                        }
+                    )
+    return hot_snapshots
+
+
+def _serialize_observations(obs_rows: Any, citation_map: dict[UUID, int]) -> list[dict[str, Any]]:
+    """Serialise observation rows, attaching ``[n]`` citation markers from ``citation_map``."""
+    return [
+        {
+            "provider": obs.provider,
+            "metric": obs.metric,
+            "symbol": obs.symbol,
+            "region": obs.region,
+            "value": obs.value,
+            "unit": obs.unit,
+            "currency": obs.currency,
+            "observed_at": obs.observed_at.isoformat(),
+            "is_current": obs.is_current,
+            "citation": (
+                f"[{citation_map[obs.document_version_id]}]"
+                if obs.document_version_id in citation_map
+                else None
+            ),
+        }
+        for obs in obs_rows
+    ]
+
+
+def _serialize_documents(doc_rows: list[Any], citation_map: dict[UUID, int]) -> list[dict[str, Any]]:
+    """Serialise structured document rows, attaching ``[n]`` citation markers from ``citation_map``."""
+    return [
+        {
+            "provider": d.provider,
+            "source_name": d.source_name,
+            "title": d.title,
+            "url": d.url,
+            "published_at": d.published_at.isoformat() if d.published_at else None,
+            "observed_at": d.observed_at.isoformat() if d.observed_at else None,
+            "excerpt": d.excerpt,
+            "citation": (
+                f"[{citation_map[d.document_version_id]}]"
+                if d.document_version_id in citation_map
+                else None
+            ),
+        }
+        for d in doc_rows
+    ]
+
+
 async def _execute_structured_mode(
     session: AsyncSession,
     args: QueryCollectedDataArgs,
@@ -581,211 +819,55 @@ async def _execute_structured_mode(
     evidence_list: list[EvidenceItem],
     redis: Any = None,
 ) -> str:
-    """Execute parameterized SQLAlchemy queries for observations and/or documents."""
+    """Execute parameterized SQLAlchemy queries for observations and/or documents.
+
+    Query order is fixed: optional observation aggregate, observation rows, document rows, then
+    evidence registration (which appends to ``evidence_list``), then the best-effort Redis
+    hot-cache read. Read-only on ``session``; no commit. Returns the JSON payload string.
+    """
     out: dict[str, Any] = {"mode": "structured", "aggregation": args.aggregation}
     version_pairs: list[tuple[UUID, UUID]] = []
+    want_obs = args.target in ("observations", "both")
+    want_docs = args.target in ("documents", "both")
 
-    if args.target in ("observations", "both"):
-        obs_filters = [
-            Observation.workspace_id == workspace_id,
-            Observation.source_id.in_(allowed_source_ids),
-        ]
-        if args.current_only and args.aggregation not in ("timeseries", "avg", "min", "max", "sum", "count"):
-            obs_filters.append(Observation.is_current.is_(True))
-        if args.providers:
-            obs_filters.append(
-                func.lower(Observation.provider).in_([p.strip().lower() for p in args.providers if p.strip()])
-            )
-        if args.metrics:
-            obs_filters.append(
-                func.lower(Observation.metric).in_([m.strip().lower() for m in args.metrics if m.strip()])
-            )
-        if args.symbols:
-            obs_filters.append(
-                func.upper(Observation.symbol).in_([s.strip().upper() for s in args.symbols if s.strip()])
-            )
-        if args.region:
-            obs_filters.append(func.upper(Observation.region) == args.region.strip().upper())
-        if date_from is not None:
-            obs_filters.append(Observation.observed_at >= date_from)
-        if date_to is not None:
-            obs_filters.append(Observation.observed_at <= date_to)
-
+    obs_rows: list[Any] = []
+    if want_obs:
+        obs_filters = _observation_filters(
+            args, workspace_id=workspace_id, allowed_source_ids=allowed_source_ids,
+            date_from=date_from, date_to=date_to,
+        )
         if args.aggregation in ("avg", "min", "max", "sum", "count"):
-            agg_rows = (
-                await session.execute(
-                    select(
-                        Observation.provider,
-                        Observation.metric,
-                        Observation.symbol,
-                        Observation.unit,
-                        Observation.currency,
-                        func.count(Observation.id).label("row_count"),
-                        func.avg(Observation.value).label("avg_value"),
-                        func.min(Observation.value).label("min_value"),
-                        func.max(Observation.value).label("max_value"),
-                        func.sum(Observation.value).label("sum_value"),
-                        func.max(Observation.observed_at).label("latest_observed_at"),
-                    )
-                    .where(*obs_filters)
-                    .group_by(
-                        Observation.provider,
-                        Observation.metric,
-                        Observation.symbol,
-                        Observation.unit,
-                        Observation.currency,
-                    )
-                    .order_by(desc(func.max(Observation.observed_at)))
-                    .limit(args.limit)
-                )
-            ).all()
-            out["observation_aggregates"] = [
-                {
-                    "provider": r.provider,
-                    "metric": r.metric,
-                    "symbol": r.symbol,
-                    "unit": r.unit,
-                    "currency": r.currency,
-                    "count": int(r.row_count or 0),
-                    "avg": float(r.avg_value) if r.avg_value is not None else None,
-                    "min": float(r.min_value) if r.min_value is not None else None,
-                    "max": float(r.max_value) if r.max_value is not None else None,
-                    "sum": float(r.sum_value) if r.sum_value is not None else None,
-                    "latest_observed_at": r.latest_observed_at.isoformat() if r.latest_observed_at else None,
-                }
-                for r in agg_rows
-            ]
-
-        obs_rows = (
-            await session.execute(
-                select(Observation)
-                .where(*obs_filters)
-                .order_by(desc(Observation.observed_at), desc(Observation.id))
-                .limit(args.limit)
-            )
-        ).scalars().all()
-        for obs in obs_rows:
-            version_pairs.append((obs.document_id, obs.document_version_id))
-
-    doc_rows_raw: list[Any] = []
-    if args.target in ("documents", "both"):
-        doc_filters = [
-            Document.workspace_id == workspace_id,
-            Document.source_id.in_(allowed_source_ids),
-        ]
-        if args.providers:
-            doc_filters.append(
-                func.lower(Source.provider).in_([p.strip().lower() for p in args.providers if p.strip()])
-            )
-        if date_from is not None:
-            doc_filters.append(func.coalesce(Document.observed_at, Document.created_at) >= date_from)
-        if date_to is not None:
-            doc_filters.append(func.coalesce(Document.observed_at, Document.created_at) <= date_to)
-        if args.text_query and args.text_query.strip():
-            q = args.text_query.strip()
-            ts_query = func.websearch_to_tsquery("simple", q)
-            ts_vec = func.to_tsvector(
-                "simple",
-                func.concat(Document.title, " ", func.coalesce(DocumentVersion.content, "")),
-            )
-            pattern = f"%{q}%"
-            doc_filters.append(
-                or_(
-                    ts_vec.op("@@")(ts_query),
-                    Document.title.ilike(pattern),
-                    DocumentVersion.content.ilike(pattern),
-                )
-            )
-
-        doc_rows_raw = list(
+            out["observation_aggregates"] = await _observation_aggregates(session, obs_filters, args.limit)
+        obs_rows = list(
             (
                 await session.execute(
-                    select(
-                        Document.id.label("document_id"),
-                        Document.source_id.label("source_id"),
-                        Source.provider.label("provider"),
-                        Source.name.label("source_name"),
-                        Document.title.label("title"),
-                        Document.canonical_url.label("url"),
-                        Document.published_at.label("published_at"),
-                        Document.observed_at.label("observed_at"),
-                        DocumentVersion.id.label("document_version_id"),
-                        func.left(DocumentVersion.content, 500).label("excerpt"),
-                    )
-                    .join(Source, and_(Source.id == Document.source_id, Source.workspace_id == Document.workspace_id))
-                    .join(
-                        DocumentVersion,
-                        and_(
-                            DocumentVersion.document_id == Document.id,
-                            DocumentVersion.version_number == Document.current_version,
-                        ),
-                    )
-                    .where(*doc_filters)
-                    .order_by(desc(func.coalesce(Document.observed_at, Document.created_at)), desc(Document.id))
+                    select(Observation)
+                    .where(*obs_filters)
+                    .order_by(desc(Observation.observed_at), desc(Observation.id))
                     .limit(args.limit)
                 )
-            ).all()
+            ).scalars().all()
         )
-        for d in doc_rows_raw:
-            version_pairs.append((d.document_id, d.document_version_id))
+        version_pairs.extend((obs.document_id, obs.document_version_id) for obs in obs_rows)
+
+    doc_rows_raw: list[Any] = []
+    if want_docs:
+        doc_filters = _document_filters(
+            args, workspace_id=workspace_id, allowed_source_ids=allowed_source_ids,
+            date_from=date_from, date_to=date_to,
+        )
+        doc_rows_raw = await _select_structured_documents(session, doc_filters, args.limit)
+        version_pairs.extend((d.document_id, d.document_version_id) for d in doc_rows_raw)
 
     citation_map = await _register_evidence_for_versions(session, version_pairs, evidence_list)
 
-    if args.target in ("observations", "both"):
-        out["observations"] = [
-            {
-                "provider": obs.provider,
-                "metric": obs.metric,
-                "symbol": obs.symbol,
-                "region": obs.region,
-                "value": obs.value,
-                "unit": obs.unit,
-                "currency": obs.currency,
-                "observed_at": obs.observed_at.isoformat(),
-                "is_current": obs.is_current,
-                "citation": (
-                    f"[{citation_map[obs.document_version_id]}]"
-                    if obs.document_version_id in citation_map
-                    else None
-                ),
-            }
-            for obs in obs_rows
-        ]
-    if args.target in ("documents", "both"):
-        out["documents"] = [
-            {
-                "provider": d.provider,
-                "source_name": d.source_name,
-                "title": d.title,
-                "url": d.url,
-                "published_at": d.published_at.isoformat() if d.published_at else None,
-                "observed_at": d.observed_at.isoformat() if d.observed_at else None,
-                "excerpt": d.excerpt,
-                "citation": (
-                    f"[{citation_map[d.document_version_id]}]"
-                    if d.document_version_id in citation_map
-                    else None
-                ),
-            }
-            for d in doc_rows_raw
-        ]
+    if want_obs:
+        out["observations"] = _serialize_observations(obs_rows, citation_map)
+    if want_docs:
+        out["documents"] = _serialize_documents(doc_rows_raw, citation_map)
 
     if redis is not None and callable(getattr(redis, "get", None)):
-        hot_snapshots: list[dict[str, Any]] = []
-        with suppress(Exception):
-            for sid in allowed_source_ids[:8]:
-                raw_snap = await redis.get(f"connector:snapshot:{workspace_id}:{sid}")
-                if raw_snap:
-                    snap = json.loads(raw_snap.decode("utf-8") if isinstance(raw_snap, bytes) else str(raw_snap))
-                    if isinstance(snap, dict):
-                        hot_snapshots.append(
-                            {
-                                "provider": snap.get("provider"),
-                                "realtime_tier": snap.get("realtime_tier"),
-                                "collected_at": snap.get("collected_at"),
-                                "record_count": snap.get("record_count"),
-                            }
-                        )
+        hot_snapshots = await _hot_cache_snapshots(redis, workspace_id, allowed_source_ids)
         if hot_snapshots:
             out["hot_cache_snapshots"] = hot_snapshots
 

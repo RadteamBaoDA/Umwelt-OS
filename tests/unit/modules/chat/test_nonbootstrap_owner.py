@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
+from core.errors import DomainError
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat import public as chat_public
 from modules.chat import scope as chat_scope
@@ -40,7 +40,7 @@ async def test_link_agent_run_allows_owner_7_and_denies_other_actor(monkeypatch)
     (link,) = [c.args[0] for c in session.add.call_args_list if isinstance(c.args[0], AgentActivityLink)]
     assert link.owner_id == 7 and link.workspace_id == WS
     conv.actor_user_id = 8  # a member/other actor cannot link onto someone else's conversation
-    with pytest.raises(HTTPException) as denied:
+    with pytest.raises(DomainError) as denied:
         await chat_public.link_agent_run(session, conv.id, uuid4(), 7, "h" * 64)
     assert denied.value.status_code == 404
 
@@ -101,9 +101,9 @@ async def test_agent_activity_allows_owner_7_filters_workspace(monkeypatch):
 async def test_agent_activity_and_run_listing_deny_member_403(monkeypatch):
     _flag(monkeypatch)
     session = MagicMock(scalar=AsyncMock())
-    with pytest.raises(HTTPException) as a:
+    with pytest.raises(DomainError) as a:
         await chat_public.get_agent_activity(session, uuid4(), uuid4(), 7, "h", scope=MEMBER7)
-    with pytest.raises(HTTPException) as b:
+    with pytest.raises(DomainError) as b:
         await chat_public.list_agent_run_ids_for_owner(session, uuid4(), 7, "h", scope=MEMBER7)
     assert a.value.status_code == b.value.status_code == 403
     session.scalar.assert_not_awaited()
@@ -114,11 +114,11 @@ async def test_agent_activity_foreign_workspace_is_404(monkeypatch):
     _flag(monkeypatch)
     monkeypatch.setattr("core.auth.public.revalidate_account_session", AsyncMock(return_value=True))
     session = MagicMock(scalar=AsyncMock(return_value=None))  # workspace predicate matches nothing
-    with pytest.raises(HTTPException) as a:
+    with pytest.raises(DomainError) as a:
         await chat_public.get_agent_activity(session, uuid4(), uuid4(), 7, "h", scope=OWNER7)
-    with pytest.raises(HTTPException) as b:
+    with pytest.raises(DomainError) as b:
         await chat_public.list_agent_run_ids_for_owner(session, uuid4(), 7, "h", scope=OWNER7)
     other_user = WorkspaceContext(user_id=8, workspace_id=uuid4(), role="owner", membership_revision=1)
-    with pytest.raises(HTTPException) as c:
+    with pytest.raises(DomainError) as c:
         await chat_public.list_agent_run_ids_for_owner(session, uuid4(), 7, "h", scope=other_user)
     assert a.value.status_code == b.value.status_code == c.value.status_code == 404

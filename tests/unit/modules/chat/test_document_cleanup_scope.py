@@ -4,8 +4,8 @@ import inspect
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
+from core.errors import DomainError
 from modules.chat import public as chat
 from tests.unit.modules._cleanup_scope import CTX, MEMBER_CTX, Recorder, admitted, evidence
 
@@ -20,7 +20,7 @@ def test_signature_is_the_frozen_one() -> None:
 
 async def test_member_denied_before_sql() -> None:
     session = Recorder()
-    with admitted(), pytest.raises(HTTPException) as caught:
+    with admitted(), pytest.raises(DomainError) as caught:
         await chat.purge_document_copied_evidence_page(session, evidence(), **MEMBER_CTX)  # type: ignore[arg-type]
     assert caught.value.status_code == 403 and session.sql == []
 
@@ -28,7 +28,7 @@ async def test_member_denied_before_sql() -> None:
 async def test_foreign_evidence_rejected_before_sql() -> None:
     session = Recorder()
     for bad in (evidence(workspace_id=uuid4()), evidence(actor_user_id=99)):
-        with admitted(), pytest.raises(HTTPException) as caught:
+        with admitted(), pytest.raises(DomainError) as caught:
             await chat.purge_document_copied_evidence_page(session, bad, **CTX)  # type: ignore[arg-type]
         assert caught.value.status_code == 409
     assert session.sql == []

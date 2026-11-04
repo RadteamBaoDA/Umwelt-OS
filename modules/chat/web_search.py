@@ -59,6 +59,7 @@ class WebSearchError(Exception):
     """
 
     def __init__(self, code: FailureCode, reason: str | None = None) -> None:
+        """Store the failure ``code`` (also the exception message) and the optional safe ``reason``."""
         super().__init__(code)
         self.code = code
         self.reason = reason
@@ -117,6 +118,7 @@ def sanitize_url(raw: str) -> tuple[str, str] | None:
 
 
 def _result(title: Any, url: Any, snippet: Any) -> WebSearchResult | None:
+    """Build a sanitized result from raw provider fields; ``None`` when any field is unusable."""
     if not (isinstance(title, str) and isinstance(url, str) and isinstance(snippet, str)):
         return None
     checked = sanitize_url(url)

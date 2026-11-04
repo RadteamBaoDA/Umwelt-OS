@@ -1,11 +1,11 @@
 import pytest
-from fastapi import HTTPException
 
+from core.errors import DomainError
 from modules.chat import public as chat_public
 
 
 async def _code(context):
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         await chat_public.resolve_gadget_context(  # type: ignore[arg-type]
             None, context, scope=None, multi_workspace_enabled=False,
         )

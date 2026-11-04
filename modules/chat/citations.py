@@ -92,7 +92,28 @@ def extract_supporting_quote(
     if len(stripped_chunk) <= min(200, effective_max):
         return stripped_chunk
 
-    # Identify sentences in the answer that cite citation_number, falling back to full answer.
+    query_tokens = _quote_query_tokens(answer, citation_number)
+    if not query_tokens:
+        return fallback
+
+    spans = _sentence_spans(stripped_chunk)
+    if not spans:
+        return fallback
+
+    best_quote, best_score = _best_scoring_segment(
+        stripped_chunk, _candidate_ranges(spans, effective_max), query_tokens, effective_max
+    )
+    if best_score <= 0 or not best_quote:
+        return fallback
+    return best_quote
+
+
+def _quote_query_tokens(answer: str, citation_number: int | None) -> set[str]:
+    """Return the content-word set of the answer sentences citing ``citation_number``.
+
+    Falls back to the whole answer when no sentence cites the number, or when the citing
+    sentences contain no content words. Pure function; no side effects.
+    """
     target_sentences: list[str] = []
     if citation_number is not None and answer:
         for sent in _SENTENCE_SPLIT_RE.split(answer):
@@ -106,61 +127,69 @@ def extract_supporting_quote(
     query_tokens = _tokenize_content_words(query_text)
     if not query_tokens and answer and target_sentences:
         query_tokens = _tokenize_content_words(answer)
-    if not query_tokens:
-        return fallback
+    return query_tokens
 
-    # Partition chunk_content into sentence-like spans while preserving exact character offsets.
+
+def _sentence_spans(text: str) -> list[tuple[int, int]]:
+    """Partition ``text`` into sentence-like ``(start, end)`` spans preserving exact offsets."""
     spans: list[tuple[int, int]] = []
     last_end = 0
-    for split_match in _SENTENCE_SPLIT_RE.finditer(stripped_chunk):
+    for split_match in _SENTENCE_SPLIT_RE.finditer(text):
         if split_match.start() > last_end:
             spans.append((last_end, split_match.start()))
         last_end = split_match.end()
-    if last_end < len(stripped_chunk):
-        spans.append((last_end, len(stripped_chunk)))
+    if last_end < len(text):
+        spans.append((last_end, len(text)))
+    return spans
 
-    if not spans:
-        return fallback
 
-    best_quote = ""
-    best_score = 0
-
-    # Evaluate individual sentence spans and pairs of adjacent spans that fit within effective_max.
+def _candidate_ranges(spans: list[tuple[int, int]], effective_max: int) -> list[tuple[int, int]]:
+    """Return single spans plus adjacent span pairs whose joint length fits ``effective_max``."""
     candidate_ranges: list[tuple[int, int]] = list(spans)
     for i in range(len(spans) - 1):
         pair_start, pair_end = spans[i][0], spans[i + 1][1]
         if pair_end - pair_start <= effective_max:
             candidate_ranges.append((pair_start, pair_end))
+    return candidate_ranges
 
-    for start_idx, end_idx in candidate_ranges:
-        segment = stripped_chunk[start_idx:end_idx].strip()
+
+def _best_scoring_segment(
+    chunk: str,
+    ranges: list[tuple[int, int]],
+    query_tokens: set[str],
+    effective_max: int,
+) -> tuple[str, int]:
+    """Pick the segment/window of ``chunk`` with the highest lexical overlap with the query.
+
+    Ranges longer than ``effective_max`` are scanned with a sliding window. Ties keep the
+    earliest candidate (strictly-greater comparison). Returns ``("", 0)`` when nothing overlaps.
+    """
+    best_quote = ""
+    best_score = 0
+    for start_idx, end_idx in ranges:
+        segment = chunk[start_idx:end_idx].strip()
         if not segment:
             continue
         if len(segment) <= effective_max:
-            seg_tokens = _tokenize_content_words(segment)
-            overlap = len(query_tokens & seg_tokens)
+            overlap = len(query_tokens & _tokenize_content_words(segment))
             if overlap > best_score:
                 best_score = overlap
                 best_quote = segment
-        else:
-            # Slide a character window across a long span at word boundaries to stay <= effective_max.
-            step = max(20, effective_max // 3)
-            for offset in range(start_idx, end_idx, step):
-                win_end = min(end_idx, offset + effective_max)
-                window = stripped_chunk[offset:win_end].strip()
-                if not window:
-                    continue
-                win_tokens = _tokenize_content_words(window)
-                overlap = len(query_tokens & win_tokens)
-                if overlap > best_score:
-                    best_score = overlap
-                    best_quote = window
-                if win_end >= end_idx:
-                    break
-
-    if best_score <= 0 or not best_quote:
-        return fallback
-    return best_quote
+            continue
+        # Slide a character window across a long span to stay <= effective_max.
+        step = max(20, effective_max // 3)
+        for offset in range(start_idx, end_idx, step):
+            win_end = min(end_idx, offset + effective_max)
+            window = chunk[offset:win_end].strip()
+            if not window:
+                continue
+            overlap = len(query_tokens & _tokenize_content_words(window))
+            if overlap > best_score:
+                best_score = overlap
+                best_quote = window
+            if win_end >= end_idx:
+                break
+    return best_quote, best_score
 
 
 def post_hoc_attribute_citations(
@@ -272,6 +301,7 @@ def renumber_citation_markers(answer: str, mapping: dict[int, int], evidence_cou
     integers (``[2023]``) and code regions are left untouched.
     """
     def repl(match: re.Match[str]) -> str:
+        """Rewrite one marker run: renumber known citations, drop unknown ones, keep non-citations."""
         nums = _run_numbers(match.group(2))
         if not any(1 <= n <= evidence_count for n in nums):
             return match.group(0)
@@ -339,73 +369,12 @@ def validate_citations(
 
     for raw in citations:
         raw_dict = raw.model_dump(by_alias=True) if isinstance(raw, Citation) else dict(raw)
-
-        # Extract identifiers from either camelCase or snake_case keys
-        source_id = _to_uuid(raw_dict.get("sourceId") or raw_dict.get("source_id"))
-        doc_id = _to_uuid(raw_dict.get("documentId") or raw_dict.get("document_id"))
-        version_id = _to_uuid(raw_dict.get("documentVersionId") or raw_dict.get("document_version_id"))
-        chunk_id = _to_uuid(raw_dict.get("chunkId") or raw_dict.get("chunk_id"))
-        quote = str(raw_dict.get("quote") or "").strip()
-
-        if not version_id or not chunk_id:
+        outcome = _validate_one_citation(raw_dict, evidence_map)
+        if isinstance(outcome, str):
             rejected_citations.append(raw_dict)
-            rejection_reasons.append("Citation is missing valid documentVersionId or chunkId")
-            continue
-
-        evidence_item = evidence_map.get((version_id, chunk_id))
-        if evidence_item is None:
-            rejected_citations.append(raw_dict)
-            rejection_reasons.append(
-                f"Reference (version={version_id}, chunk={chunk_id}) not in retrieved evidence set"
-            )
-            continue
-
-        if doc_id and doc_id != evidence_item.document_id:
-            rejected_citations.append(raw_dict)
-            rejection_reasons.append(
-                f"Document ID {doc_id} does not match evidence document ID {evidence_item.document_id}"
-            )
-            continue
-
-        if source_id and source_id != evidence_item.source_id:
-            rejected_citations.append(raw_dict)
-            rejection_reasons.append(
-                f"Source ID {source_id} does not match evidence source ID {evidence_item.source_id}"
-            )
-            continue
-
-        if not quote:
-            rejected_citations.append(raw_dict)
-            rejection_reasons.append("Citation quote is empty")
-            continue
-
-        if len(quote) > MAX_QUOTE_LENGTH:
-            rejected_citations.append(raw_dict)
-            rejection_reasons.append(
-                f"Citation quote length ({len(quote)}) exceeds maximum allowable length ({MAX_QUOTE_LENGTH})"
-            )
-            continue
-
-        if not _contains_quote(quote, evidence_item.content):
-            rejected_citations.append(raw_dict)
-            rejection_reasons.append(
-                f"Quote not found in evidence chunk content for chunk {chunk_id}"
-            )
-            continue
-
-        # Construct authoritative citation using evidence metadata
-        canonical_citation = Citation(
-            sourceType="document",
-            sourceId=evidence_item.source_id,
-            documentId=evidence_item.document_id,
-            documentVersionId=evidence_item.document_version_id,
-            chunkId=evidence_item.chunk_id,
-            title=evidence_item.title,
-            url=evidence_item.canonical_url,
-            observedAt=evidence_item.observed_at,
-            quote=quote,
-        )
-        valid_citations.append(canonical_citation)
+            rejection_reasons.append(outcome)
+        else:
+            valid_citations.append(outcome)
 
     is_valid = len(rejected_citations) == 0 and len(valid_citations) > 0
     return CitationValidationResult(
@@ -413,6 +382,54 @@ def validate_citations(
         valid_citations=valid_citations,
         rejected_citations=rejected_citations,
         rejection_reasons=rejection_reasons,
+    )
+
+
+def _validate_one_citation(
+    raw_dict: dict[str, Any],
+    evidence_map: dict[tuple[UUID, UUID], EvidenceItem],
+) -> Citation | str:
+    """Validate one raw citation dict against ``evidence_map``.
+
+    Returns the authoritative ``Citation`` (metadata copied from evidence, never from the
+    client) or the human-readable rejection reason. Checks run in a fixed order: identifiers,
+    evidence membership, document id, source id, empty quote, quote length, quote containment.
+    """
+    # Extract identifiers from either camelCase or snake_case keys
+    source_id = _to_uuid(raw_dict.get("sourceId") or raw_dict.get("source_id"))
+    doc_id = _to_uuid(raw_dict.get("documentId") or raw_dict.get("document_id"))
+    version_id = _to_uuid(raw_dict.get("documentVersionId") or raw_dict.get("document_version_id"))
+    chunk_id = _to_uuid(raw_dict.get("chunkId") or raw_dict.get("chunk_id"))
+    quote = str(raw_dict.get("quote") or "").strip()
+
+    if not version_id or not chunk_id:
+        return "Citation is missing valid documentVersionId or chunkId"
+
+    evidence_item = evidence_map.get((version_id, chunk_id))
+    if evidence_item is None:
+        return f"Reference (version={version_id}, chunk={chunk_id}) not in retrieved evidence set"
+    if doc_id and doc_id != evidence_item.document_id:
+        return f"Document ID {doc_id} does not match evidence document ID {evidence_item.document_id}"
+    if source_id and source_id != evidence_item.source_id:
+        return f"Source ID {source_id} does not match evidence source ID {evidence_item.source_id}"
+    if not quote:
+        return "Citation quote is empty"
+    if len(quote) > MAX_QUOTE_LENGTH:
+        return f"Citation quote length ({len(quote)}) exceeds maximum allowable length ({MAX_QUOTE_LENGTH})"
+    if not _contains_quote(quote, evidence_item.content):
+        return f"Quote not found in evidence chunk content for chunk {chunk_id}"
+
+    # Construct authoritative citation using evidence metadata
+    return Citation(
+        sourceType="document",
+        sourceId=evidence_item.source_id,
+        documentId=evidence_item.document_id,
+        documentVersionId=evidence_item.document_version_id,
+        chunkId=evidence_item.chunk_id,
+        title=evidence_item.title,
+        url=evidence_item.canonical_url,
+        observedAt=evidence_item.observed_at,
+        quote=quote,
     )
 
 
