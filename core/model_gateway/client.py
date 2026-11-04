@@ -23,7 +23,7 @@ from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from core.config import Settings
 from core.model_gateway.policy import may_send
-from core.model_gateway.schemas import ModelMapping, RequestPolicy
+from core.model_gateway.schemas import HOSTED_PROVIDER_ENDPOINTS, HOSTED_PROVIDER_KINDS, ModelMapping, RequestPolicy
 from core.model_gateway.transport import EndpointNetworkPolicyError, approved_http_client, body_sent
 from core.telemetry import record_model_call
 from core.workspaces.schemas import InternalJobScope, Scope, WorkspaceContext
@@ -67,6 +67,30 @@ _LOG = logging.getLogger(__name__)
 def _api_base(url: str) -> str:
     """Append /v1 unless the path already carries a version segment (Gemini /v1beta/openai, Groq /openai/v1)."""
     return url if re.search(r"/v1(beta\d*)?(/|$)", urlsplit(url).path) else f"{url}/v1"
+
+
+def hosted_endpoint_equivalent(kind: str, url: str | None) -> bool:
+    """True iff ``kind`` is a hosted vendor and ``url`` resolves to the same effective API base as its fixed endpoint.
+
+    Only scheme and host are lowercased (the path is case-sensitive) and a trailing slash is ignored, so
+    ``https://API.openai.com`` equals ``https://api.openai.com/v1``. Pure; no I/O.
+    """
+    fixed = HOSTED_PROVIDER_ENDPOINTS.get(kind)
+    if not fixed or not url:
+        return False
+    parts = urlsplit(url.rstrip("/"))
+    lowered = parts._replace(scheme=parts.scheme.lower(), netloc=parts.netloc.lower()).geturl()
+    return _api_base(lowered) == _api_base(fixed)
+
+
+def effective_provider_kind(kind: str, url: str | None) -> str:
+    """Return ``"custom"`` for a hosted kind whose stored URL is not the vendor endpoint, else ``kind`` unchanged.
+
+    Legacy rows (e.g. ``openai`` pointed at a proxy) keep working as ``custom`` without touching URL or key.
+    """
+    if kind in HOSTED_PROVIDER_KINDS and url and not hosted_endpoint_equivalent(kind, url):
+        return "custom"
+    return kind
 
 
 def _raise_if_policy_denied(exc: BaseException) -> None:

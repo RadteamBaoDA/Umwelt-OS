@@ -7,12 +7,25 @@ Capability = Literal["chat", "streaming", "embeddings", "structured", "tools", "
 ProviderKind = Literal["openai", "openrouter", "groq", "gemini", "anthropic", "ollama", "lmstudio", "custom"]
 # "background" tags models for entity extraction, timeline, translation and graph work; vision/asr/tts are
 # legacy tags still accepted when reading stored provider rows.
-ModelType = Literal["llm", "embedding", "reranker", "decision", "background", "vision", "asr", "tts"]
+# image/video/speech/audio/transcription are OpenRouter output types stored for later features; they serve no role.
+ModelType = Literal[
+    "llm", "embedding", "reranker", "decision", "background", "vision", "asr", "tts",
+    "image", "video", "speech", "audio", "transcription",
+]
 ModelRole = Literal["chat", "brief", "background", "embedding", "reranker", "vision"]
 MODEL_ROLES: tuple[ModelRole, ...] = ("chat", "brief", "background", "embedding", "reranker", "vision")
 ReasoningEffort = Literal["off", "low", "medium", "high"]
 WebSearchProvider = Literal["none", "tavily", "brave", "searxng", "omniroute"]
 LOCAL_PROVIDER_KINDS = frozenset({"ollama", "lmstudio"})
+# Single source of truth for hosted vendors: the server fixes their endpoint, clients only supply a key.
+HOSTED_PROVIDER_ENDPOINTS: dict[str, str] = {
+    "openai": "https://api.openai.com/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+    "groq": "https://api.groq.com/openai/v1",
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "anthropic": "https://api.anthropic.com/v1",
+}
+HOSTED_PROVIDER_KINDS = frozenset(HOSTED_PROVIDER_ENDPOINTS)
 MAX_PROVIDERS = 8
 DEFAULT_PROVIDER_ID = "default"
 ProviderId = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,31}$")]
@@ -157,7 +170,7 @@ class AISettingsUpdate(BaseModel):
 class ConnectionDraft(BaseModel):
     """Temporary endpoint and credential input for a gateway probe."""
     model_config = ConfigDict(extra="forbid")
-    base_url: AnyHttpUrl
+    base_url: AnyHttpUrl | None = None  # ignored for hosted kinds; the server derives it from ``kind``
     api_key: str = Field(default="", max_length=4096, repr=False)
     provider_id: ProviderId | None = None  # empty api_key falls back to this stored provider's key
     kind: ProviderKind | None = None  # lets an unsaved local provider (no key) be tried
@@ -166,7 +179,7 @@ class ConnectionDraft(BaseModel):
 class DraftProbeRequest(BaseModel):
     """Temporary endpoint/model/capability input for an unpersisted connection probe."""
     model_config = ConfigDict(extra="forbid")
-    base_url: AnyHttpUrl
+    base_url: AnyHttpUrl | None = None  # ignored for hosted kinds; the server derives it from ``kind``
     api_key: str = Field(default="", max_length=4096, repr=False)
     model: str = Field(min_length=1, max_length=200)
     version: str | None = Field(default=None, max_length=200)

@@ -24,6 +24,7 @@ from core.auth.schemas import AccountSessionRef
 from core.config import Settings
 from core.model_gateway.schemas import (
     DEFAULT_PROVIDER_ID,
+    HOSTED_PROVIDER_ENDPOINTS,
     LOCAL_PROVIDER_KINDS,
     MAX_PROVIDERS,
     MODEL_ROLES,
@@ -79,7 +80,7 @@ from modules.settings.schemas import (
 )
 
 VIZ_TYPESAFE_DESTINATION = "typesafe:api.typesafe.ai"
-VIZ_OPENROUTER_URL = "https://openrouter.ai/api/v1"
+VIZ_OPENROUTER_URL = HOSTED_PROVIDER_ENDPOINTS["openrouter"]
 VIZ_CLOUDFLARE_URL = "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
 VIZ_CLOUDFLARE_ACCOUNT = re.compile(r"[0-9a-f]{32}")
 VIZ_KEYED_KINDS = ("openrouter", "cloudflare")  # self-contained OpenAI-compatible routers with their own endpoint and key
