@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { TablePagination } from '@/components/ui/pagination';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useDisplayPreferences } from '@/core/query-provider';
@@ -101,13 +102,7 @@ export function SyncHistory({ source, intervalMinutes }: { source: Source; inter
           {displayed.length === 0 && <TableRow><TableCell colSpan={5} className="text-muted-foreground">{t('runNoMatches')}</TableCell></TableRow>}
         </TableBody>
       </Table>
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-sm text-muted-foreground">{t('runPage', { page: pageIndex + 1 })}</span>
-        <div className="flex gap-2">
-          <Button type="button" size="sm" variant="outline" disabled={pageIndex === 0 || history.isFetching} onClick={() => setCursors((current) => current.slice(0, -1))}>{t('runPreviousPage')}</Button>
-          <Button type="button" size="sm" variant="outline" disabled={!history.data.next_cursor || history.isFetching} onClick={nextPage}>{t('runNextPage')}</Button>
-        </div>
-      </div>
+      <TablePagination page={pageIndex + 1} hasPrev={pageIndex > 0} hasNext={Boolean(history.data.next_cursor)} disabled={history.isFetching} onPrev={() => setCursors((current) => current.slice(0, -1))} onNext={nextPage} />
     </>}
     {['youtube', 'arxiv', 'huggingface', 'github_releases', 'telegram'].includes(source.provider ?? '') && <p className="text-sm text-muted-foreground">{t('providerHistoryCaveat')}</p>}
     <p className="text-sm text-muted-foreground">{t('embeddedStatus')}</p>

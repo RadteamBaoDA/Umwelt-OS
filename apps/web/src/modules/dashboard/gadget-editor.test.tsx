@@ -23,7 +23,7 @@ import { ApiError } from '@/core/api';
 import gadgetRenderers from '@/test/fixtures/gadget-renderers.json';
 import gadgetTemplates from '@/test/fixtures/gadget-templates.json';
 import metricCatalog from '@/test/fixtures/metric-catalog.json';
-import { GadgetEditor, fieldsFor } from './gadget-editor';
+import { GadgetEditor, fieldsFor, mergeCatalogEntries } from './gadget-editor';
 
 /** Backend renderer descriptor snapshot (verified against `renderer_reads()` by pytest). */
 const backendRenderer = (id: string) => {
@@ -146,7 +146,7 @@ describe('GadgetEditor', () => {
     await userEvent.click(await screen.findByRole('button', { name: /Metric/ }));
     const save = await screen.findByRole('button', { name: 'Save to library' });
     expect(save.hasAttribute('disabled')).toBe(true);
-    await userEvent.click(await screen.findByRole('radio', { name: /Binance spot/ }));
+    await userEvent.click(await screen.findByRole('checkbox', { name: /Binance spot/ }));
     expect(save.hasAttribute('disabled')).toBe(false);
     await userEvent.click(save);
     await waitFor(() => expect(api.createGadgetDefinition).toHaveBeenCalled());
@@ -219,7 +219,7 @@ describe('GadgetEditor', () => {
     api.listGadgetTemplates.mockResolvedValue([tpl('fin', 'finance_chart')]);
     const view = wrap();
     await userEvent.click(await screen.findByRole('button', { name: /Chart/ }));
-    await userEvent.click(await screen.findByRole('radio', { name: new RegExp(sourceName) }));
+    await userEvent.click(await screen.findByRole('checkbox', { name: new RegExp(sourceName) }));
     return view;
   }
 
@@ -227,7 +227,7 @@ describe('GadgetEditor', () => {
   async function pickMetric(sourceName: string) {
     wrap();
     await userEvent.click(await screen.findByRole('button', { name: /Metric/ }));
-    await userEvent.click(await screen.findByRole('radio', { name: new RegExp(sourceName) }));
+    await userEvent.click(await screen.findByRole('checkbox', { name: new RegExp(sourceName) }));
   }
 
   it('chart metric picker lists noaa_kp metrics', async () => {
@@ -440,7 +440,8 @@ describe('GadgetEditor', () => {
     api.listGadgetSources.mockResolvedValue({ items: [source('p1', 'Paprika', 'coinpaprika', ['measurement']), source('f1', 'Frank', 'frankfurter', ['measurement'])], next_cursor: null });
     api.createGadgetDefinition.mockResolvedValue({ id: 'n1' });
     await pickChart('Paprika');
-    await userEvent.click(screen.getByRole('radio', { name: /Frank/ }));
+    await userEvent.click(screen.getByRole('checkbox', { name: /Paprika/ })); // unbind the old source: a chart now accepts several
+    await userEvent.click(screen.getByRole('checkbox', { name: /Frank/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Save to library' }));
     await waitFor(() => expect(api.createGadgetDefinition).toHaveBeenCalled());
     // BTC (preselected for CoinPaprika) is not a Frankfurter suggestion: dropped, and the empty list takes its first suggestion.
@@ -451,7 +452,8 @@ describe('GadgetEditor', () => {
     api.listGadgetSources.mockResolvedValue({ items: [source('p1', 'Paprika', 'coinpaprika', ['measurement']), source('c1', 'Gecko', 'coingecko', ['measurement'])], next_cursor: null });
     api.createGadgetDefinition.mockResolvedValue({ id: 'n1' });
     await pickChart('Paprika');
-    await userEvent.click(screen.getByRole('radio', { name: /Gecko/ }));
+    await userEvent.click(screen.getByRole('checkbox', { name: /Paprika/ })); // unbind the old source: a chart now accepts several
+    await userEvent.click(screen.getByRole('checkbox', { name: /Gecko/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Save to library' }));
     await waitFor(() => expect(api.createGadgetDefinition).toHaveBeenCalled());
     expect(api.createGadgetDefinition.mock.calls[0][0].scope.symbols).toEqual([]);
@@ -496,7 +498,8 @@ describe('GadgetEditor', () => {
     const saved = { id: 'm9', name: 'Spot', revision: 1, renderer: 'provider_observation', source_ids: ['b1'], scope: { metrics: ['spot_price'], symbols: ['BTCUSDT'] }, filters: { limit: 25 }, highlight_rules: [], config_version: 1, runtime_state: 'available' as const };
     api.patchGadgetDefinition.mockResolvedValue({ ...saved, revision: 2 });
     wrap({ definition: saved });
-    await userEvent.click(await screen.findByRole('radio', { name: /NOAA Kp/ }));
+    await userEvent.click(await screen.findByRole('checkbox', { name: /Binance spot/ })); // unbind the old source, then bind the new one
+    await userEvent.click(await screen.findByRole('checkbox', { name: /NOAA Kp/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Save to library' }));
     await waitFor(() => expect(api.patchGadgetDefinition).toHaveBeenCalled());
     expect(api.patchGadgetDefinition.mock.calls[0][1].scope.metrics).not.toContain('spot_price');
@@ -507,7 +510,7 @@ describe('GadgetEditor', () => {
     api.createGadgetDefinition.mockResolvedValue({ id: 'n1' });
     await pickChart('FRED one');
     await addSymbol('CPIAUCSL');
-    await userEvent.click(screen.getByRole('radio', { name: /FRED two/ }));
+    await userEvent.click(screen.getByRole('checkbox', { name: /FRED two/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Save to library' }));
     await waitFor(() => expect(api.createGadgetDefinition).toHaveBeenCalled());
     expect(api.createGadgetDefinition.mock.calls[0][0].scope.symbols).toEqual(['CPIAUCSL']);
@@ -534,7 +537,7 @@ describe('GadgetEditor', () => {
     const legacy = { ...orphanChart, id: 'd8', source_ids: ['gone'], scope: { symbols: ['NVDA'], metrics: ['close', 'volume'], lookback_days: null } };
     api.patchGadgetDefinition.mockResolvedValue({ ...legacy, revision: 3 });
     wrap({ definition: legacy });
-    await userEvent.click(await screen.findByRole('radio', { name: /Custom series/ }));
+    await userEvent.click(await screen.findByRole('checkbox', { name: /Custom series/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Save to library' }));
     await waitFor(() => expect(api.patchGadgetDefinition).toHaveBeenCalled());
     expect(api.patchGadgetDefinition.mock.calls[0][1].scope.metrics).toEqual(['close']);
@@ -559,7 +562,7 @@ describe('GadgetEditor', () => {
     const lookback = screen.getByLabelText('Date range (days)');
     await userEvent.clear(lookback);
     await userEvent.type(lookback, '45');
-    await userEvent.click(screen.getByRole('radio', { name: /World Bank GDP/ }));
+    await userEvent.click(screen.getByRole('checkbox', { name: /World Bank GDP/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Save to library' }));
     await waitFor(() => expect(api.createGadgetDefinition).toHaveBeenCalled());
     expect(api.createGadgetDefinition.mock.calls[0][0].scope.lookback_days).toBe(45);
@@ -774,7 +777,8 @@ describe('GadgetEditor', () => {
     api.listGadgetSources.mockResolvedValue({ items: [source('a1', 'Alpha', 'alpha_vantage', ['measurement']), source('w1', 'World Bank GDP', 'world_bank', ['measurement'])], next_cursor: null });
     api.createGadgetDefinition.mockResolvedValue({ id: 'n1' });
     await pickChart('Alpha');
-    await userEvent.click(screen.getByRole('radio', { name: /World Bank GDP/ }));
+    await userEvent.click(screen.getByRole('checkbox', { name: /World Bank GDP/ }));
+    await userEvent.click(screen.getByRole('checkbox', { name: /Alpha/ })); // unbind the old source: a chart now accepts several
     await userEvent.click(screen.getByRole('button', { name: 'Save to library' }));
     await waitFor(() => expect(api.createGadgetDefinition).toHaveBeenCalled());
     expect(api.createGadgetDefinition.mock.calls[0][0].scope.metrics).toEqual(['gdp_current_usd']);
@@ -784,7 +788,7 @@ describe('GadgetEditor', () => {
     api.listGadgetSources.mockResolvedValue({ items: [source('b1', 'Binance spot', 'binance', ['measurement']), source('a1', 'Alpha', 'alpha_vantage', ['measurement'])], next_cursor: null });
     api.createGadgetDefinition.mockResolvedValue({ id: 'n1' });
     await pickChart('Binance spot');
-    await userEvent.click(screen.getByRole('radio', { name: /Alpha/ }));
+    await userEvent.click(screen.getByRole('checkbox', { name: /Alpha/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Save to library' }));
     await waitFor(() => expect(api.createGadgetDefinition).toHaveBeenCalled());
     expect(api.createGadgetDefinition.mock.calls[0][0].scope.symbols).toEqual([]);
@@ -808,9 +812,27 @@ describe('GadgetEditor', () => {
     expect(region.getAttribute('aria-labelledby')).toBe(label.id);
     const help = document.getElementById(region.getAttribute('aria-describedby') ?? '');
     expect(help?.textContent).toBe(gadgetSettingsMessages['en-us'].regionHelp);
-    await userEvent.click(screen.getByRole('radio', { name: /Binance spot/ }));
+    await userEvent.click(screen.getByRole('checkbox', { name: /Binance spot/ }));
     const symbols = await screen.findByRole('combobox', { name: 'Symbols' });
     expect(screen.getByText('Symbols').tagName).toBe('LABEL');
     expect(symbols.getAttribute('aria-labelledby')).toBe(screen.getByText('Symbols').id);
+  });
+});
+
+describe('mergeCatalogEntries', () => {
+  const entry = (over: Record<string, unknown>) => ({ metrics: [], symbol_keyed: false, suggested_symbols: [], metrics_open: false, charts_as_series: true, region_keyed: false, suggested_regions: [], seed_symbol: true, cadence_days: 1, default_lookback_days: null, ...over }) as never;
+  it('returns the entry itself for one provider and undefined when any is unknown', () => {
+    const one = entry({});
+    expect(mergeCatalogEntries([one])).toBe(one);
+    expect(mergeCatalogEntries([one, undefined])).toBeUndefined();
+    expect(mergeCatalogEntries([])).toBeUndefined();
+  });
+  it('unions metrics and suggestions, any-of keyed flags and the widest lookback', () => {
+    const merged = mergeCatalogEntries([
+      entry({ metrics: [{ id: 'close', unit: 'VND' }], symbol_keyed: true, suggested_symbols: ['FPT'], default_lookback_days: 30 }),
+      entry({ metrics: [{ id: 'close', unit: 'USD' }, { id: 'spot', unit: 'USD' }], seed_symbol: false, default_lookback_days: 365 }),
+    ])!;
+    expect(merged.metrics).toEqual([{ id: 'close', unit: null }, { id: 'spot', unit: 'USD' }]);
+    expect([merged.symbol_keyed, merged.seed_symbol, merged.default_lookback_days]).toEqual([true, false, 365]);
   });
 });

@@ -29,11 +29,23 @@ export function previewAccent(id: AccentId): void {
 
 /**
  * Applies an accent to <html> and persists it. `ink` removes the attribute and the stored key.
- * ponytail: per-device (localStorage); move to owner preferences server-side if cross-device sync is wanted.
  */
 export function applyAccent(id: AccentId): void {
   previewAccent(id);
   try {
     if (id === 'ink') localStorage.removeItem(ACCENT_STORAGE_KEY); else localStorage.setItem(ACCENT_STORAGE_KEY, id);
   } catch { /* storage blocked: the accent still applies for this page view */ }
+}
+
+/**
+ * Server-wins sync: when the owner's stored accent differs from this device's, applies it and updates localStorage.
+ * A null/unknown server value is ignored (legacy rows keep the device's existing choice instead of resetting it).
+ *
+ * @param serverAccent Accent from the preferences response.
+ * @returns True when the device accent changed.
+ */
+export function syncServerAccent(serverAccent: string | null | undefined): boolean {
+  if (!serverAccent || !(ACCENTS as readonly string[]).includes(serverAccent) || serverAccent === readAccent()) return false;
+  applyAccent(serverAccent as AccentId);
+  return true;
 }

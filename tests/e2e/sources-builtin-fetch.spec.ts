@@ -10,16 +10,15 @@ import { BUILTINS, collectedRecordCount, deleteSources, enableBuiltinViaSettings
  */
 
 /**
- * Providers whose endpoint refuses this network from outside the app (evidence recorded 2026-10-24, Vietnam egress):
- * cisa.gov answers HTTP 403 to every client (curl, browser UA, python) from the host and from the container, while the
- * official mirror raw.githubusercontent.com/cisagov/kev-data answers 200. The app must then fail with the readable code
- * below; on a network where the endpoint is reachable the normal records assertion applies instead.
+ * Providers whose endpoint refuses this network from outside the app. The app must then fail with the readable code
+ * below; on a network where the endpoint is reachable the normal records assertion applies instead. (cisa_kev left this
+ * table on 2026-11-04 when it moved from cisa.gov, 403 from Vietnam egress, to the cisagov/kev-data GitHub mirror.)
  */
 /** Wikimedia publishes a UTC day's data some hours after midnight UTC; same tolerance as dashboard-datasources.spec.ts. */
 const DAILY_LAG = new Set(['wikipedia_mostread', 'wikipedia_top_views']);
 const LAG_CODES = ['provider_rejected', 'provider_response_invalid'];
 
-const EXTERNAL_BLOCK: Record<string, string> = { cisa_kev: 'provider_rejected' };
+const EXTERNAL_BLOCK: Record<string, string> = {};
 
 /**
  * Providers throttled by the remote side: GDELT answers 429 ("one request every 5 seconds") for minutes after a burst.

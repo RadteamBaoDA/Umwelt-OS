@@ -1,0 +1,7 @@
+schema_version: "1.1"
+name: vague-vietnamese-weather-blank
+expected_outcome: |
+  Turns the vague Vietnamese report into a concrete flow: header weather component in apps/web calling
+  GET /api/v1/weather/local (modules/dashboard/routes.py, Open-Meteo + Nominatim). Identifies the
+  candidate failure points with evidence, either a confirmed cause or a clear statement of what is
+  unverified and one focused question. Replies in Vietnamese, does not edit the repo.

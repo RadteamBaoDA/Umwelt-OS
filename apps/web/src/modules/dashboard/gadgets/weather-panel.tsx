@@ -11,6 +11,7 @@ import { useReportGadgetFreshness } from '../gadget-freshness';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { Sparkline } from './sparkline';
 import { formatMetricLabel } from './metric-label';
+import { useSourceInfo } from './use-effective-lookback';
 
 const DAY_MS = 86_400_000;
 
@@ -44,6 +45,72 @@ export function nearestReading<T extends { ts: number }>(readings: T[], now: num
 }
 
 /**
+ * Weather gadget dispatcher: one bound source renders the full panel, 2+ (up to 5 cities) a compact per-city list.
+ * Splitting keeps each body's hook order fixed.
+ *
+ * @param props Gadget instance whose source ids and metric scope select the Open-Meteo readings.
+ * @returns Single-city panel or the multi-city list.
+ */
+export function WeatherPanel(props: { instance: GadgetInstance }) {
+  return (props.instance.definition.source_ids?.length ?? 0) > 1 ? <WeatherCityList instance={props.instance} /> : <SingleWeatherPanel {...props} />;
+}
+
+/**
+ * Compact multi-city list: one row per bound source (name, current temperature, today's low/high, 24h sparkline).
+ * Each row owns its query so one failing city never blanks the others.
+ *
+ * @param props Gadget instance with 2+ Open-Meteo sources.
+ * @returns Accessible list of city rows.
+ */
+function WeatherCityList({ instance }: { instance: GadgetInstance }) {
+  const t = useTranslations('dashboard');
+  const ids = instance.definition.source_ids ?? [];
+  const info = useSourceInfo(ids);
+  return <section className="flex h-full min-h-0 flex-col gap-2 overflow-y-auto overflow-x-hidden bg-card p-3 text-card-foreground">
+    <ul className="divide-y divide-border" aria-label={t('weatherCities')}>
+      {ids.map((id, index) => <WeatherCityRow key={id} instanceId={instance.id} sourceId={id} name={info.data?.[id]?.name || `${t('weatherTitle')} ${index + 1}`}
+        metrics={instance.definition.scope?.metrics ?? []} lookbackDays={Math.min(instance.definition.scope?.lookback_days ?? 3, 3)} />)}
+    </ul>
+    <a className="mt-auto text-xs text-muted-foreground underline" href="https://open-meteo.com/" target="_blank" rel="noreferrer">{t('openMeteoAttribution')}</a>
+  </section>;
+}
+
+/**
+ * One city row of {@link WeatherCityList}: reads its own source's readings and shows the reading nearest to now,
+ * today's low/high in the reading's timezone and a 24h temperature sparkline.
+ *
+ * @param props Source to read, its display name and the shared metric/lookback scope.
+ * @returns List item, with a placeholder while loading or on failure/no data.
+ */
+function WeatherCityRow({ instanceId, sourceId, name, metrics, lookbackDays }: { instanceId: string; sourceId: string; name: string; metrics: string[]; lookbackDays: number }) {
+  const t = useTranslations('dashboard');
+  const display = useDisplayPreferences();
+  const query = useQuery({
+    queryKey: ['world-observations', 'weather', instanceId, sourceId, metrics, lookbackDays],
+    queryFn: ({ signal }) => listWorldObservationWindow({ sourceIds: [sourceId], metrics, from: new Date(Date.now() - DAY_MS), to: new Date(Date.now() + lookbackDays * DAY_MS) }, signal),
+    staleTime: 60_000,
+  });
+  const items = (query.data?.items ?? []).filter((item) => item.source_id === sourceId && item.provider === 'open_meteo');
+  const temps = readingsOf(items, (m) => m.startsWith('temperature'));
+  const now = query.dataUpdatedAt || Math.max(...temps.map((r) => r.ts), 0);
+  const current = nearestReading(temps, now);
+  const zone = current?.zone ?? display.timezone;
+  /** Calendar-day key in the reading's timezone. */
+  const dayKey = (ts: number) => new Intl.DateTimeFormat('en-CA', { dateStyle: 'short', timeZone: zone }).format(new Date(ts));
+  const todays = temps.filter((r) => dayKey(r.ts) === dayKey(now));
+  const unit = current?.unit ?? '';
+  const next24h = temps.filter((r) => r.ts >= now && r.ts <= now + DAY_MS).map((r) => ({ timestamp: r.ts, value: r.value }));
+  return <li className="flex items-center gap-3 py-2" data-testid="weather-city">
+    <span className="min-w-0 flex-1 truncate text-sm text-foreground">{name}</span>
+    {query.isPending ? <span className="text-xs text-muted-foreground">…</span> : current ? <>
+      {next24h.length >= 2 && <span className="hidden w-20 shrink-0 @[24rem]/gadget:block" role="img" aria-label={t('weatherNext24h')}><Sparkline data={next24h} height={28} forecastFrom={now} line /></span>}
+      {todays.length > 0 && <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{t('weatherLowHigh', { min: `${Math.round(Math.min(...todays.map((r) => r.value)))}${unit}`, max: `${Math.round(Math.max(...todays.map((r) => r.value)))}${unit}` })}</span>}
+      <span className="w-16 shrink-0 text-right text-sm font-semibold tabular-nums text-foreground" data-testid="weather-city-temp">{Math.round(current.value * 10) / 10}{unit}</span>
+    </> : <span className="text-xs text-muted-foreground">{query.isError ? t('observationLoadFailed') : t('weatherMissingValue')}</span>}
+  </li>;
+}
+
+/**
  * Weather gadget: current temperature hero with wind/precipitation beside it, a combined timeline (temperature line
  * past solid / forecast dashed, precipitation bars, "now" marker) and per-day min-max rows. The window runs from 24h
  * back to the configured forecast horizon (max 3 days). Container width decides what shows: small = hero only,
@@ -52,7 +119,7 @@ export function nearestReading<T extends { ts: number }>(readings: T[], now: num
  * @param props Gadget instance whose first source and metric scope select the Open-Meteo readings.
  * @returns Weather panel, or a setup/loading/error/empty notice.
  */
-export function WeatherPanel({ instance }: { instance: GadgetInstance }) {
+function SingleWeatherPanel({ instance }: { instance: GadgetInstance }) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
   const definition = instance.definition;

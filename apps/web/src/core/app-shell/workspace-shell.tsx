@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslations } from 'next-intl';
-import { LayoutDashboard, MessageSquare, Settings, type LucideIcon } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, PanelLeftClose, PanelLeftOpen, Settings, type LucideIcon } from 'lucide-react';
 import { UmweltLogo, UmweltMark } from '@/components/brand/umwelt-mark';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -25,7 +25,9 @@ import { GoogleLink } from '@/modules/account/google-link';
 import { AccountDeletionSection } from '@/modules/account/account-deletion';
 import { LegalLinks } from '@/modules/legal/legal-links';
 import { UserMenu } from '@/modules/account/user-menu';
-import { OwnerPreferences, PreferencesDialog } from '@/modules/account/preferences-dialog';
+import { syncServerAccent } from '@/core/accent';
+import { fetchOwnerPreferences, OWNER_PREFERENCES_KEY } from '@/core/preferences';
+import { PreferencesDialog } from '@/modules/account/preferences-dialog';
 import { ChatDrawer } from '@/modules/chat/chat-drawer';
 import { NotificationBell } from '@/modules/notifications/notification-bell';
 
@@ -44,6 +46,28 @@ function useBrowserOnline() {
     () => navigator.onLine,
     () => true,
   );
+}
+
+/** Per-device rail preference; the rail stays icon-only until the owner expands it. */
+const NAV_EXPANDED_KEY = 'umwelt.nav.expanded';
+const NAV_EXPANDED_EVENT = 'umwelt:nav-expanded';
+
+/**
+ * Expanded/collapsed state of the desktop navigation rail, persisted in localStorage.
+ * Server render and blocked storage report collapsed; the setter notifies other subscribers in this tab.
+ * @returns The current state and a toggle that flips and persists it.
+ */
+function useNavExpanded(): [boolean, () => void] {
+  const expanded = useSyncExternalStore(
+    (notify) => { window.addEventListener(NAV_EXPANDED_EVENT, notify); window.addEventListener('storage', notify); return () => { window.removeEventListener(NAV_EXPANDED_EVENT, notify); window.removeEventListener('storage', notify); }; },
+    () => { try { return localStorage.getItem(NAV_EXPANDED_KEY) === '1'; } catch { return false; } },
+    () => false,
+  );
+  const toggle = useCallback(() => {
+    try { if (expanded) localStorage.removeItem(NAV_EXPANDED_KEY); else localStorage.setItem(NAV_EXPANDED_KEY, '1'); } catch { /* storage blocked: keep current state */ }
+    window.dispatchEvent(new Event(NAV_EXPANDED_EVENT));
+  }, [expanded]);
+  return [expanded, toggle];
 }
 const SessionContext = createContext<Session | null>(null);
 
@@ -91,6 +115,7 @@ let ownerSignOutInFlight = false;
 /**
  * Render the authenticated app shell with session, route, and responsive main-navigation state.
  * Navigation is a 56px icon rail (logo at its top, tooltip plus accessible name per destination) beside a 48px top bar;
+ * a toggle at the rail's foot expands it to a 200px labelled column (per-device preference).
  * at 720px and below the rail becomes the labelled bottom bar. The shell keeps the header,
  * navigation, and top-bar connection status fixed while `.workspace-main` owns page scrolling.
  * @param children The current route content rendered inside the main scroll region.
@@ -104,6 +129,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   const realtime = useRealtime();
   const role = useWorkspace().selection?.role;
   const online = useBrowserOnline();
+  const [navExpanded, toggleNav] = useNavExpanded();
   const [accountOpen, setAccountOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
@@ -126,10 +152,10 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   });
   const generation = display.authGeneration;
   const preferences = useQuery({
-    queryKey: ['owner-preferences'],
+    queryKey: OWNER_PREFERENCES_KEY,
     enabled: Boolean(session.data),
     queryFn: async ({ signal }) => {
-      const value = await apiRequest<OwnerPreferences>('/api/v1/settings/preferences', { signal });
+      const value = await fetchOwnerPreferences(signal);
       if (!display.isCurrentGeneration(generation)) throw new Error('Stale preference response');
       return value;
     },
@@ -139,6 +165,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (session.data && preferences.data && display.isCurrentGeneration(generation)) {
       display.confirmPreferences(preferences.data, generation);
+      syncServerAccent(preferences.data.accent);
     }
   }, [session.data, preferences.data, generation, display.confirmPreferences, display.isCurrentGeneration]);
 
@@ -196,7 +223,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   /** Loads owner preferences for the dialog retry; returns null on request failure, abort, or stale auth generation. */
   const reloadPreferences = useCallback(async (signal: AbortSignal) => {
     try {
-      const value = await apiRequest<OwnerPreferences>('/api/v1/settings/preferences', { signal });
+      const value = await fetchOwnerPreferences(signal);
       return signal.aborted || !display.isCurrentGeneration(generation) ? null : value;
     } catch {
       return null;
@@ -253,9 +280,9 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
         <a href="#main-content" className="skip-link">{t('skipToContent')}</a>
         <div className="workspace">
           <TooltipProvider delayDuration={300}>
-            <nav id="workspace-nav" className="workspace-nav" aria-label={t('mainNavigation')}>
+            <nav id="workspace-nav" className="workspace-nav" data-expanded={navExpanded || undefined} aria-label={t('mainNavigation')}>
               <div className="workspace-nav-header">
-                <Link href="/dashboard" className="brand-name workspace-brand" aria-label="Umwelt-OS"><UmweltMark /></Link>
+                <Link href="/dashboard" className="brand-name workspace-brand" aria-label="Umwelt-OS">{navExpanded ? <UmweltLogo /> : <UmweltMark />}</Link>
               </div>
               <div className="workspace-nav-links">
                 {visibleMainNavigation.map((item) => {
@@ -269,12 +296,22 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
                     <Icon className="size-[18px] shrink-0" aria-hidden="true" />
                     <span className="workspace-nav-label">{t(item.messageKey)}</span>
                   </Link>;
-                  return <Tooltip key={item.id}>
+                  // Expanded rail shows the label itself, so the tooltip would only repeat it.
+                  return navExpanded ? link : <Tooltip key={item.id}>
                     <TooltipTrigger asChild>{link}</TooltipTrigger>
                     <TooltipContent className="workspace-nav-tooltip" side="right">{t(item.messageKey)}</TooltipContent>
                   </Tooltip>;
                 })}
               </div>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button type="button" className="workspace-nav-link workspace-nav-toggle" onClick={toggleNav} aria-expanded={navExpanded} aria-controls="workspace-nav">
+                    {navExpanded ? <PanelLeftClose className="size-[18px] shrink-0" aria-hidden="true" /> : <PanelLeftOpen className="size-[18px] shrink-0" aria-hidden="true" />}
+                    <span className="workspace-nav-label">{t(navExpanded ? 'collapseSidebar' : 'expandSidebar')}</span>
+                  </button>
+                </TooltipTrigger>
+                {!navExpanded && <TooltipContent className="workspace-nav-tooltip" side="right">{t('expandSidebar')}</TooltipContent>}
+              </Tooltip>
             </nav>
           </TooltipProvider>
           <div className="workspace-column">

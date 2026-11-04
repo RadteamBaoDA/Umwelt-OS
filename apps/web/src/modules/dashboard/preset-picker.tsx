@@ -36,6 +36,10 @@ import { DatasourcePicker, useSourceRows } from './gadget-editor';
 import { templateName } from '@/core/renderer-labels';
 import { sourcesLinkFor } from './sources-link';
 
+/** Where an applied preset lands: a new dashboard, appended below the current one's gadgets, or replacing them. */
+type ApplyMode = 'create' | 'append' | 'replace';
+
+
 /** Slot id to explicitly chosen datasource ids; slots without an entry stay unbound. */
 type SlotSources = Record<string, string[]>;
 
@@ -71,7 +75,7 @@ export interface PresetPickerProps {
 }
 
 /** Backend preview/apply 409 codes that have dedicated `dashboard.presetError.<code>` copy. */
-const PRESET_ERROR_CODES = ['dashboard_limit', 'definition_limit', 'preview_changed', 'revision_conflict', 'revision_exhausted'];
+const PRESET_ERROR_CODES = ['dashboard_limit', 'definition_limit', 'group_limit', 'instance_limit', 'preview_changed', 'revision_conflict', 'revision_exhausted'];
 
 /**
  * Modal dialog that allows owners to browse, preview, and apply curated dashboard presets.
@@ -92,11 +96,13 @@ export function PresetPicker({
   const tg = useTranslations('gadgetSettings');
   const newNameId = useId();
   const confirmId = useId();
+  const catalogHeadingId = useId();
+  const layoutHeadingId = useId();
   const session = useWorkspaceSession();
   const queryClient = useQueryClient();
 
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
-  const [applyMode, setApplyMode] = useState<'create' | 'replace'>('create');
+  const [applyMode, setApplyMode] = useState<ApplyMode>('create');
   const [newDashboardName, setNewDashboardName] = useState<string>('');
   const [replaceConfirmed, setReplaceConfirmed] = useState<boolean>(false);
   /** Localized copy for a failed preview/apply: the 409 code first (limits, stale preview), else the failure class. */
@@ -138,14 +144,14 @@ export function PresetPicker({
 
   // Preview query mutation
   const previewMutation = useMutation({
-    mutationFn: async ({ preset, sources, mode = applyMode }: { preset: DashboardPreset; sources: SlotSources; mode?: 'create' | 'replace' }) => {
+    mutationFn: async ({ preset, sources, mode = applyMode }: { preset: DashboardPreset; sources: SlotSources; mode?: ApplyMode }) => {
       setPreviewError(null);
       return previewDashboardPreset(
         preset.id,
         {
           slot_sources: boundSlotSources(sources),
           // The fingerprint covers the target, so the preview must be requested for the mode that will be applied.
-          target_dashboard_id: mode === 'replace' ? currentDashboardId : null,
+          target_dashboard_id: mode === 'create' ? null : currentDashboardId,
         },
         session.csrfToken,
       );
@@ -172,8 +178,8 @@ export function PresetPicker({
           slot_sources: boundSlotSources(slotSources),
           mode: applyMode,
           name: applyMode === 'create' ? newDashboardName.trim() || params.preview.name : null,
-          target_dashboard_id: applyMode === 'replace' ? currentDashboardId : null,
-          expected_revision: applyMode === 'replace' ? currentDashboardRevision : null,
+          target_dashboard_id: applyMode === 'create' ? null : currentDashboardId,
+          expected_revision: applyMode === 'create' ? null : currentDashboardRevision,
           replace_confirmed: applyMode === 'replace' ? replaceConfirmed : undefined,
         },
         session.csrfToken,
@@ -279,11 +285,11 @@ export function PresetPicker({
   );
 
   /**
-   * Switches create/replace and re-previews, because the preview fingerprint includes the replace target and
+   * Switches create/append/replace and re-previews, because the preview fingerprint includes the target and
    * applying with a create-mode fingerprint would always conflict (`preview_changed`).
    */
   const handleApplyMode = useCallback(
-    (mode: 'create' | 'replace') => {
+    (mode: ApplyMode) => {
       setApplyMode(mode);
       if (selectedPreset && mode !== applyMode) previewMutation.mutate({ preset: selectedPreset, sources: slotSources, mode });
     },
@@ -304,251 +310,218 @@ export function PresetPicker({
   // Aggregate missing access / capability warnings across all slots
   const allWarnings: DashboardWarning[] =
     previewMutation.data?.slots.flatMap((slot) => slot.warnings) ?? [];
+  /** Display name of a slot: the preset's own label ("Live news"), else the renderer's template name. */
+  const slotName = (slotId: string, renderer: string): string =>
+    selectedPreset?.slots.find((slot) => slot.slot_id === slotId)?.label ?? templateName(renderer, tg);
+  const modes: { mode: ApplyMode; label: string; needsTarget: boolean }[] = [
+    { mode: 'create', label: t('applyModeCreate'), needsTarget: false },
+    { mode: 'append', label: t('applyModeAppend'), needsTarget: true },
+    { mode: 'replace', label: t('applyModeReplace'), needsTarget: true },
+  ];
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col p-0 gap-0 overflow-hidden">
-        <DialogHeader className="p-6 pb-4 border-b border-border">
-          <div className="flex items-center gap-2 text-primary font-semibold text-sm">
-            <LayoutTemplate className="w-4 h-4" />
-            <span>{t('presetPickerTitle')}</span>
-          </div>
-          <DialogTitle className="text-xl font-semibold">{t('presetPickerTitle')}</DialogTitle>
-          <DialogDescription className="text-muted-foreground text-sm">
-            {t('presetPickerDesc')}
-          </DialogDescription>
+      <DialogContent className="flex h-[min(88dvh,52rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-6xl">
+        <DialogHeader className="border-b border-border px-6 py-4">
+          <DialogTitle className="flex items-center gap-2 text-lg font-semibold">
+            <LayoutTemplate className="size-4 text-muted-foreground" aria-hidden />
+            {t('presetPickerTitle')}
+          </DialogTitle>
+          <DialogDescription className="text-sm text-muted-foreground">{t('presetPickerDesc')}</DialogDescription>
         </DialogHeader>
 
-        <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Preset list selection column */}
-          <div className="space-y-3">
-            <h3 className="text-sm font-semibold text-foreground flex items-center justify-between">
+        {/* Three panes on desktop (catalog, layout, target and sources); one scrolling column on phones. */}
+        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto md:grid-cols-[15rem_minmax(0,1fr)_22rem] md:overflow-hidden">
+          <section aria-labelledby={catalogHeadingId} className="flex min-h-0 flex-col border-border md:border-r">
+            <h3 id={catalogHeadingId} className="flex items-center justify-between px-4 pt-4 pb-2 text-sm font-semibold text-foreground">
               <span>{t('selectPreset')}</span>
-              {presetsQuery.isLoading && <span className="text-xs text-muted-foreground motion-safe:animate-pulse">{ts('ppLoading')}</span>}
+              {presetsQuery.isLoading && <span className="text-xs font-normal text-muted-foreground motion-safe:animate-pulse">{ts('ppLoading')}</span>}
             </h3>
-
-            <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
+            <div className="space-y-1 px-2 pb-4 md:min-h-0 md:flex-1 md:overflow-y-auto">
               {presets.map((preset) => {
                 const isSelected = preset.id === selectedPresetId;
                 return (
                   <button
                     key={preset.id}
                     type="button"
+                    aria-pressed={isSelected}
                     onClick={() => handleSelectPreset(preset)}
-                    className={`w-full text-left p-3.5 rounded-lg border transition-all flex items-start justify-between gap-3 ${
-                      isSelected
-                        ? 'border-primary bg-primary/10'
-                        : 'border-border bg-card hover:bg-primary/5'
+                    className={`flex w-full items-start justify-between gap-2 rounded-md px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                      isSelected ? 'bg-primary/10 text-foreground' : 'hover:bg-muted'
                     }`}
                   >
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-foreground text-sm">{preset.label}</span>
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {t('presetSlotsCount', { count: preset.slots.length })}: {preset.slots.map((s) => templateName(s.renderer, tg)).join(', ')}
-                      </p>
-                    </div>
-                    <ChevronRight
-                      className={`w-4 h-4 mt-1 transition-transform ${
-                        isSelected ? 'text-primary rotate-90' : 'text-muted-foreground'
-                      }`}
-                    />
+                    <span className="min-w-0">
+                      <span className="block text-sm font-semibold text-foreground">{preset.label}</span>
+                      <span className="mt-0.5 line-clamp-2 block text-xs text-muted-foreground">
+                        {t('presetSlotsCount', { count: preset.slots.length })}: {preset.slots.map((s) => s.label ?? templateName(s.renderer, tg)).join(', ')}
+                      </span>
+                    </span>
+                    <ChevronRight className={`mt-0.5 size-4 shrink-0 ${isSelected ? 'text-primary' : 'text-muted-foreground'}`} aria-hidden />
                   </button>
                 );
               })}
             </div>
-          </div>
+          </section>
 
-          {/* Preset preview and apply configuration column */}
-          <div className="flex flex-col gap-4 border-l border-border md:pl-6">
-            {!selectedPreset ? (
-              <div className="flex-1 flex flex-col items-center justify-center p-8 text-center border border-dashed border-border rounded-lg text-muted-foreground">
-                <Sparkles className="w-8 h-8 mb-2 opacity-50" />
-                <p className="text-sm">{t('selectPreset')}</p>
-              </div>
-            ) : (
-              <div className="space-y-4 flex-1">
-                <div>
-                  <h4 className="text-base font-semibold text-foreground flex items-center gap-2">
-                    <span>{selectedPreset.label}</span>
-                    <span className="text-xs font-normal text-muted-foreground">
-                      ({t('presetGadgetsCount', { count: selectedPreset.slots.length })})
-                    </span>
-                  </h4>
-                  {previewMutation.isPending && (
-                    <p className="text-xs text-muted-foreground motion-safe:animate-pulse mt-1">
-                      {t('previewingPreset')}
-                    </p>
-                  )}
-                  {previewError && (
-                    <div className="p-2.5 mt-2 rounded bg-destructive/10 text-destructive text-xs flex items-center gap-2">
-                      <AlertCircle className="w-4 h-4 shrink-0" />
-                      <span>{previewError}</span>
-                    </div>
-                  )}
-                </div>
-
-                {/* Resolved slots preview */}
-                {previewMutation.data && (
-                  <div className="space-y-3">
-                    {/* Per-gadget readiness: warnings come from the preview; nothing is connected on the owner's behalf */}
-                    <div className="space-y-1.5">
-                      <p className="text-xs font-semibold text-foreground">
-                        {t('slotsReadiness', {
-                          ready: previewMutation.data.slots.filter((slot) => slot.warnings.length === 0).length,
-                          setup: previewMutation.data.slots.filter((slot) => slot.warnings.length > 0).length,
-                        })}
-                      </p>
-                      <ul className="divide-y divide-border rounded-md border border-border">
-                        {previewMutation.data.slots.map((slot) => {
-                          const descriptor = renderersById.get(slot.renderer);
-                          const bindsSources = descriptor?.source_mode === 'single' || descriptor?.source_mode === 'multi';
-                          // An unbound slot is fixed by the selector below and a missing scope is set in the gadget editor after applying;
-                          // only the remaining warnings need the Sources page.
-                          const needsSourcesPage = slot.warnings.some((warning) => warning.code !== 'source_unbound' && warning.code !== 'scope_required');
-                          return (
-                            <li key={slot.slot_id} className="space-y-2 px-2.5 py-1.5 text-xs">
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="min-w-0 truncate">{templateName(slot.renderer, tg)}</span>
-                                {slot.warnings.length === 0 ? (
-                                  <span className="shrink-0 text-muted-foreground">{t('slotReady')}</span>
-                                ) : (
-                                  <span className="flex shrink-0 items-center gap-2">
-                                    <span className="font-semibold text-destructive">{t('slotNeedsSetup')}</span>
-                                    {/* Renderers that bind no sources have nothing to configure in Sources. */}
-                                    {descriptor?.source_mode !== 'none' && needsSourcesPage && <Link href={descriptor ? sourcesLinkFor(descriptor) : '/settings/sources'} className="inline-flex min-h-9 pointer-coarse:min-h-11 items-center text-primary underline underline-offset-4">{t('slotConfigure')}</Link>}
-                                  </span>
-                                )}
-                              </div>
-                              {bindsSources && (
-                                <DatasourcePicker
-                                  acceptedShapes={descriptor.accepted_shapes}
-                                  mode={descriptor.source_mode === 'single' ? 'single' : 'multi'}
-                                  value={slotSources[slot.slot_id] ?? []}
-                                  onChange={(ids) => handleSlotSources(slot.slot_id, ids)}
-                                  sourcesHref={sourcesLinkFor(descriptor)}
-                                />
-                              )}
-                            </li>
-                          );
-                        })}
-                      </ul>
-                      <p className="text-[11px] text-muted-foreground">{t('presetsNoConnect')}</p>
-                    </div>
-
-                    {/* Missing access / capability warnings banner */}
-                    {allWarnings.length > 0 && (
-                      <div className="p-3 rounded-md bg-muted/30 border border-border text-foreground text-xs space-y-1.5">
-                        <div className="font-semibold flex items-center gap-1.5">
-                          <AlertCircle className="w-4 h-4 shrink-0" />
-                          <span>{t('missingAccessWarnings')} ({allWarnings.length})</span>
-                        </div>
-                        <ul className="list-disc list-inside space-y-0.5 text-[11px] pl-1">
-                          {allWarnings.slice(0, 5).map((warning, idx) => (
-                            <li key={idx}>
-                              {warning.capability
-                                ? ts('ppCapability', { capability: warning.capability })
-                                : t.has(`presetWarning.${warning.code}`) ? t(`presetWarning.${warning.code}` as 'cancel') : warning.code}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-
-                    {/* Mode selection: Create vs Replace */}
-                    <div className="space-y-2 pt-2 border-t border-border">
-                      <Label className="text-xs font-semibold">{t('applyMode')}</Label>
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleApplyMode('create')}
-                          className={`p-2.5 text-xs font-medium rounded-md border text-center transition-colors ${
-                            applyMode === 'create'
-                              ? 'border-primary bg-primary/10 font-semibold text-foreground'
-                              : 'border-border text-muted-foreground hover:bg-primary/5'
-                          }`}
-                        >
-                          {t('applyModeCreate')}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={!currentDashboardId}
-                          onClick={() => handleApplyMode('replace')}
-                          className={`p-2.5 text-xs font-medium rounded-md border text-center transition-colors ${
-                            applyMode === 'replace'
-                              ? 'border-destructive bg-destructive/10 font-semibold text-destructive'
-                              : 'border-border text-muted-foreground hover:bg-primary/5 disabled:opacity-40'
-                          }`}
-                        >
-                          {t('applyModeReplace')}
-                        </button>
-                      </div>
-
-                      {applyMode === 'create' ? (
-                        <div className="space-y-1 pt-1">
-                          <Label htmlFor={newNameId} className="text-xs">
-                            {t('dashboardName')}
-                          </Label>
-                          <Input
-                            id={newNameId}
-                            value={newDashboardName}
-                            onChange={(e) => setNewDashboardName(e.target.value)}
-                            placeholder={selectedPreset.label}
-                            className="h-8 text-xs"
-                          />
-                        </div>
-                      ) : (
-                        <div className="p-2.5 rounded bg-destructive/10 border border-destructive/20 text-xs space-y-2 mt-2">
-                          <p className="text-destructive font-medium leading-relaxed">
-                            {t('confirmReplaceWarning')}
-                          </p>
-                          <div className="flex items-center space-x-2 pt-1">
-                            <Checkbox
-                              id={confirmId}
-                              checked={replaceConfirmed}
-                              onCheckedChange={(checked) => setReplaceConfirmed(Boolean(checked))}
-                            />
-                            <label
-                              htmlFor={confirmId}
-                              className="text-[11px] font-medium leading-none cursor-pointer text-foreground"
-                            >
-                              {t('confirmReplaceCheckbox')}
-                            </label>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+          <section aria-labelledby={layoutHeadingId} className="flex min-h-0 flex-col gap-3 bg-muted/40 p-4 md:overflow-y-auto">
+            <div className="flex items-baseline justify-between gap-3">
+              <h3 id={layoutHeadingId} className="text-sm font-semibold text-foreground">
+                {selectedPreset ? selectedPreset.label : t('layoutPreview')}
+                {selectedPreset && (
+                  <span className="ml-2 text-xs font-normal text-muted-foreground">{t('presetGadgetsCount', { count: selectedPreset.slots.length })}</span>
                 )}
+              </h3>
+              {previewMutation.data && (
+                <span className="text-xs text-muted-foreground">
+                  {t('slotsReadiness', {
+                    ready: previewMutation.data.slots.filter((slot) => slot.warnings.length === 0).length,
+                    setup: previewMutation.data.slots.filter((slot) => slot.warnings.length > 0).length,
+                  })}
+                </span>
+              )}
+            </div>
+            {previewMutation.isPending && <p className="text-xs text-muted-foreground motion-safe:animate-pulse">{t('previewingPreset')}</p>}
+            {previewError && (
+              <div role="alert" className="flex items-center gap-2 rounded-md bg-destructive/10 p-2.5 text-xs text-destructive">
+                <AlertCircle className="size-4 shrink-0" aria-hidden />
+                <span>{previewError}</span>
               </div>
             )}
-          </div>
+            {!selectedPreset ? (
+              <div className="flex flex-1 flex-col items-center justify-center gap-2 py-12 text-center text-sm text-muted-foreground">
+                <Sparkles className="size-6 opacity-60" aria-hidden />
+                <p>{t('layoutPreviewEmpty')}</p>
+              </div>
+            ) : previewMutation.data?.layouts ? (
+              <PresetLayoutPreview
+                append={applyMode === 'append'}
+                layout={previewMutation.data.layouts.desktop}
+                slots={previewMutation.data.slots.map((slot) => ({ id: slot.slot_id, name: slotName(slot.slot_id, slot.renderer), ready: slot.warnings.length === 0 }))}
+              />
+            ) : null}
+            {allWarnings.length > 0 && (
+              <div className="space-y-1.5 rounded-md bg-background p-3 text-xs text-foreground">
+                <div className="flex items-center gap-1.5 font-semibold">
+                  <AlertCircle className="size-4 shrink-0" aria-hidden />
+                  <span>{t('missingAccessWarnings')} ({allWarnings.length})</span>
+                </div>
+                <ul className="list-inside list-disc space-y-0.5 pl-1">
+                  {allWarnings.slice(0, 5).map((warning, idx) => (
+                    <li key={idx}>
+                      {warning.capability
+                        ? ts('ppCapability', { capability: warning.capability })
+                        : t.has(`presetWarning.${warning.code}`) ? t(`presetWarning.${warning.code}` as 'cancel') : warning.code}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </section>
+
+          <section className="flex min-h-0 flex-col gap-4 border-border p-4 md:overflow-y-auto md:border-l">
+            {selectedPreset && previewMutation.data && (
+              <>
+                <fieldset className="space-y-2">
+                  <legend className="mb-2 text-sm font-semibold text-foreground">{t('applyMode')}</legend>
+                  <div className="grid grid-cols-1 gap-1 rounded-md bg-muted p-1">
+                    {modes.map(({ mode, label, needsTarget }) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        aria-pressed={applyMode === mode}
+                        disabled={needsTarget && !currentDashboardId}
+                        onClick={() => handleApplyMode(mode)}
+                        className={`rounded px-3 py-2 text-left text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40 ${
+                          applyMode === mode
+                            ? mode === 'replace' ? 'bg-background text-destructive' : 'bg-background text-foreground'
+                            : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {applyMode === 'create' && (
+                    <div className="space-y-1 pt-1">
+                      <Label htmlFor={newNameId} className="text-xs">{t('dashboardName')}</Label>
+                      <Input id={newNameId} value={newDashboardName} onChange={(e) => setNewDashboardName(e.target.value)} placeholder={selectedPreset.label} className="h-8 text-xs" />
+                    </div>
+                  )}
+                  {applyMode === 'append' && <p className="text-xs text-muted-foreground">{t('appendHint')}</p>}
+                  {applyMode === 'replace' && (
+                    <div className="space-y-2 rounded-md bg-destructive/10 p-2.5 text-xs">
+                      <p className="font-medium leading-relaxed text-destructive">{t('confirmReplaceWarning')}</p>
+                      <div className="flex items-center gap-2">
+                        <Checkbox id={confirmId} checked={replaceConfirmed} onCheckedChange={(checked) => setReplaceConfirmed(Boolean(checked))} />
+                        <label htmlFor={confirmId} className="cursor-pointer text-xs font-medium leading-none text-foreground">{t('confirmReplaceCheckbox')}</label>
+                      </div>
+                    </div>
+                  )}
+                </fieldset>
+
+                {/* Per-gadget readiness: warnings come from the preview; nothing is connected on the owner's behalf */}
+                <div className="space-y-1.5">
+                  <ul className="divide-y divide-border rounded-md border border-border">
+                    {previewMutation.data.slots.map((slot) => {
+                      const descriptor = renderersById.get(slot.renderer);
+                      const bindsSources = descriptor?.source_mode === 'single' || descriptor?.source_mode === 'multi';
+                      // An unbound slot is fixed by the selector below and a missing scope is set in the gadget editor after applying;
+                      // only the remaining warnings need the Sources page.
+                      const needsSourcesPage = slot.warnings.some((warning) => warning.code !== 'source_unbound' && warning.code !== 'scope_required');
+                      return (
+                        <li key={slot.slot_id} className="space-y-2 px-2.5 py-2 text-xs">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="min-w-0 truncate font-medium">{slotName(slot.slot_id, slot.renderer)}</span>
+                            {slot.warnings.length === 0 ? (
+                              <span className="shrink-0 text-muted-foreground">{t('slotReady')}</span>
+                            ) : (
+                              <span className="flex shrink-0 items-center gap-2">
+                                <span className="font-semibold text-destructive">{t('slotNeedsSetup')}</span>
+                                {/* Renderers that bind no sources have nothing to configure in Sources. */}
+                                {descriptor?.source_mode !== 'none' && needsSourcesPage && <Link href={descriptor ? sourcesLinkFor(descriptor) : '/settings/sources'} className="inline-flex min-h-9 pointer-coarse:min-h-11 items-center text-primary underline underline-offset-4">{t('slotConfigure')}</Link>}
+                              </span>
+                            )}
+                          </div>
+                          {bindsSources && (
+                            <DatasourcePicker
+                              acceptedShapes={descriptor.accepted_shapes}
+                              mode={descriptor.source_mode === 'single' ? 'single' : 'multi'}
+                              value={slotSources[slot.slot_id] ?? []}
+                              onChange={(ids) => handleSlotSources(slot.slot_id, ids)}
+                              sourcesHref={sourcesLinkFor(descriptor)}
+                              max={descriptor.max_sources ?? undefined}
+                            />
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <p className="text-xs text-muted-foreground">{t('presetsNoConnect')}</p>
+                </div>
+              </>
+            )}
+          </section>
         </div>
 
         {applyError && (
-          <div className="px-6 py-2.5 bg-destructive/10 border-t border-destructive/20 text-destructive text-xs flex items-center justify-between">
+          <div role="alert" className="flex items-center justify-between border-t border-destructive/20 bg-destructive/10 px-6 py-2.5 text-xs text-destructive">
             <div className="flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0" />
+              <AlertCircle className="size-4 shrink-0" aria-hidden />
               <span>{applyError}</span>
             </div>
-            <button
-              type="button"
-              onClick={() => setApplyError(null)}
-              className="text-xs underline hover:no-underline"
-            >
-              <X className="w-3.5 h-3.5" />
+            <button type="button" aria-label={t('cancel')} onClick={() => setApplyError(null)} className="rounded p-1 hover:bg-destructive/10">
+              <X className="size-3.5" aria-hidden />
             </button>
           </div>
         )}
 
-        <DialogFooter className="p-4 border-t border-border flex items-center justify-between gap-2 bg-muted/10 sm:justify-between">
+        <DialogFooter className="flex items-center justify-between gap-2 border-t border-border px-6 py-3 sm:justify-between">
           <Button type="button" variant="outline" onClick={handleClose}>
             {t('cancel')}
           </Button>
-
           <Button
             type="button"
+            variant={applyMode === 'replace' ? 'destructive' : 'default'}
             disabled={
               !selectedPreset ||
               !previewMutation.data ||
@@ -557,15 +530,12 @@ export function PresetPicker({
               (applyMode === 'replace' && !replaceConfirmed)
             }
             onClick={handleApply}
-            className={`font-semibold ${
-              applyMode === 'replace' ? 'bg-destructive text-destructive-foreground' : ''
-            }`}
           >
             {applyMutation.isPending ? (
               t('applyingPreset')
             ) : (
               <span className="flex items-center gap-1.5">
-                <CheckCircle2 className="w-4 h-4" />
+                <CheckCircle2 className="size-4" aria-hidden />
                 <span>{t('applyPreset')}</span>
               </span>
             )}
@@ -573,5 +543,45 @@ export function PresetPicker({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** One proposed gadget in the layout miniature. */
+type LayoutSlot = { id: string; name: string; ready: boolean };
+
+/**
+ * Draws the preset's proposed desktop rectangles on the dashboard's own column grid, so the owner sees the
+ * arrangement (map beside live news, tiles below) before applying. It duplicates the slot list visually,
+ * so it is hidden from assistive technology; in append mode a dashed band marks the existing gadgets kept above.
+ *
+ * @param layout Proposed desktop breakpoint from the preview (columns and slot rectangles).
+ * @param slots Display name and readiness per slot id.
+ * @param append Whether the preset is added below existing gadgets.
+ */
+function PresetLayoutPreview({ layout, slots, append }: {
+  layout: PresetPreview['layouts']['desktop'];
+  slots: LayoutSlot[];
+  append: boolean;
+}) {
+  const byId = new Map(slots.map((slot) => [slot.id, slot]));
+  return (
+    <div aria-hidden className="space-y-1">
+      {append && <div className="h-6 rounded-sm border border-dashed border-border bg-background/60" />}
+      <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${layout.columns}, minmax(0, 1fr))`, gridAutoRows: '0.875rem' }}>
+        {layout.items.map((item) => {
+          const slot = byId.get(item.slot_id);
+          return (
+            <div
+              key={item.slot_id}
+              style={{ gridColumn: `${item.x + 1} / span ${item.w}`, gridRow: `${item.y + 1} / span ${item.h}` }}
+              className={`flex min-w-0 flex-col justify-between rounded-sm bg-background p-1.5 ${slot?.ready ? 'border border-border' : 'border border-dashed border-destructive/60'}`}
+            >
+              <span className="truncate text-[11px] font-medium text-foreground">{slot?.name ?? item.slot_id}</span>
+              {!slot?.ready && <span className="size-1.5 self-end rounded-full bg-destructive" />}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }

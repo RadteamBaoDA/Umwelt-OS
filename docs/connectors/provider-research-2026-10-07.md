@@ -46,7 +46,7 @@ These do not provide free quotes for this product. None of them has an adapter.
 - **SEC EDGAR filings.** Research only. Filing metadata is not a price quote.
 - **FRED.** Research only. A free key does not establish redistribution or commercial use.
 - **TwelveData free tier.** Research only. Free-tier limits and terms were not verified in this slice.
-- **Vietnam stock quotes.** Unavailable until an endpoint and its terms are verified. No unofficial Yahoo or SSI endpoint is used.
+- **Vietnam stock quotes.** Update 2026-11-04: the owner approved the unofficial VNDirect finfo public endpoint (`vn_stock`); TCBS was probed and rejected (Cloudflare challenge). It has no contract and may break without notice. No Yahoo or SSI endpoint is used.
 - **Manual file import** is the only fallback. No paid fallback is added.
 
 ## Primary references listed by the research brief

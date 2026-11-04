@@ -2,11 +2,24 @@
 
 import Link from 'next/link';
 import { useRef, useState, type RefObject } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { UserIcon } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { fetchOwnerPreferences, OWNER_PREFERENCES_KEY } from '@/core/preferences';
 import { useWorkspace } from '@/core/workspace-context';
 import { NotificationItems, useNotificationFeed } from '@/modules/notifications/notification-bell';
+
+/**
+ * Avatar initials: first letter of the first and last words, upper-cased by code point (so "Đoàn Bảo" gives "ĐB").
+ * A single word gives one letter; blank gives an empty string so the caller can fall back to the icon.
+ */
+export function initialsOf(name: string | null | undefined): string {
+  const words = (name ?? '').trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '';
+  const first = (word: string) => Array.from(word)[0].toLocaleUpperCase();
+  return words.length === 1 ? first(words[0]) : first(words[0]) + first(words[words.length - 1]);
+}
 
 export type UserMenuProps = {
   onOpenPreferences: () => void;
@@ -29,13 +42,16 @@ export function UserMenu({ onOpenPreferences, onOpenAccount, onOpenChangePasswor
   const { workspaces, selection, selectWorkspace } = useWorkspace();
   // Below 640px the bell is hidden, so unread state surfaces as a dot on the avatar (shares the bell's cached query).
   const { unread } = useNotificationFeed();
+  // Read-only subscription to the preferences the shell already loaded (disabled: never fetches here; queryFn only backs shared refetches).
+  const prefs = useQuery({ queryKey: OWNER_PREFERENCES_KEY, queryFn: ({ signal }) => fetchOwnerPreferences(signal), enabled: false });
+  const initials = initialsOf(prefs.data?.resolved_display_name ?? prefs.data?.display_name);
   const [open, setOpen] = useState(false);
   const suppressFocusRef = useRef(false);
   /** Runs a dialog-opening action without the menu stealing focus back on close. */
   const openDialog = (action: () => void) => () => { suppressFocusRef.current = true; action(); };
   return <DropdownMenu open={open} onOpenChange={setOpen}>
     <DropdownMenuTrigger asChild>
-      <button ref={triggerRef} type="button" className="avatar-button relative" aria-label={t('userMenu')}><UserIcon className="size-4" aria-hidden="true" />{unread > 0 && <span data-testid="avatar-unread-dot" aria-hidden="true" className="absolute right-0 top-0 size-2.5 rounded-full border-2 border-background bg-primary sm:hidden" />}</button>
+      <button ref={triggerRef} type="button" className="avatar-button relative" aria-label={t('userMenu')}>{initials ? <span data-testid="avatar-initials" aria-hidden="true" className="text-xs font-semibold leading-none">{initials}</span> : <UserIcon className="size-4" aria-hidden="true" />}{unread > 0 && <span data-testid="avatar-unread-dot" aria-hidden="true" className="absolute right-0 top-0 size-2.5 rounded-full border-2 border-background bg-primary sm:hidden" />}</button>
     </DropdownMenuTrigger>
     <DropdownMenuContent align="end" onCloseAutoFocus={(event) => {
       if (suppressFocusRef.current) {

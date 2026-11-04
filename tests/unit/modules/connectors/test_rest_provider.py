@@ -56,6 +56,17 @@ async def _noop():
 
 
 @pytest.mark.asyncio
+async def test_json_body_turns_the_request_into_a_pinned_post():
+    """`json_body` sends a POST with a JSON content type; without it the request stays a GET with no body."""
+    seen = []
+    transport = httpx.MockTransport(lambda r: seen.append((r.method, r.headers.get("content-type"), r.content)) or httpx.Response(200, json={}))
+    await rest.fetch_bounded("https://api.example.com/s", before_send=_noop, resolve=public, transport=transport,
+                             json_body=b'{"query":"x"}')
+    await rest.fetch_bounded("https://api.example.com/s", before_send=_noop, resolve=public, transport=transport)
+    assert seen == [("POST", "application/json", b'{"query":"x"}'), ("GET", None, b"")]
+
+
+@pytest.mark.asyncio
 async def test_default_user_agent_is_sent_but_caller_user_agent_wins():
     seen = []
     transport = httpx.MockTransport(lambda r: seen.append(r.headers["user-agent"]) or httpx.Response(200, json={}))

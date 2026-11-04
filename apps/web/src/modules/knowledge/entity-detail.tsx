@@ -1,5 +1,6 @@
 'use client';
 
+import { TablePagination, usePagination } from '@/components/ui/pagination';
 import Link from 'next/link';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useRouter } from 'next/navigation';
@@ -183,6 +184,8 @@ export function EntityDetail() {
     onSuccess: (value) => { saved(); const nextId = value.replacement_entity_ids[0] ?? value.canonical_entity_id; setSelected([]); setSelectionRevision(null); splitPreview.reset(); correction.reset(); setTargetSearch(''); setSelectedMergeTarget(null); router.replace(`/knowledge/entities/${nextId}`); },
   });
 
+  // Called before the early returns below so hook order stays stable.
+  const neighborsPager = usePagination(neighbors.data?.pages.flatMap((page) => page.items) ?? []);
   if (documentReadyId !== entityId || entity.isPending) return <section className="rounded-lg border bg-card p-6"><div className="skeleton" aria-label={t('loadingEntity')} /></section>;
   if (entity.isError || !entity.data) return <section className="rounded-lg border bg-card p-6"><p className="error" role="alert">{t('unavailable')} <Button variant="outline" onClick={() => entity.refetch()}>{t('retry')}</Button></p></section>;
   const value = entity.data;
@@ -315,11 +318,11 @@ export function EntityDetail() {
         </div>
         <div className="flex min-w-0 flex-col gap-3 min-[900px]:col-span-3"><h2 className="m-0 text-[15px] font-semibold">{t('relationships')}</h2>
     {neighbors.isError && <p className="error" role="alert">{t('relationshipUnavailable')} <Button variant="outline" onClick={() => neighbors.refetch()}>{t('retry')}</Button></p>}
-    {neighborsItems.length > 0 && <Table><TableBody>{neighborsItems.map(({ entity: neighbor, relationship }) => <TableRow key={relationship.id}>
+    {neighborsItems.length > 0 && <><Table><TableBody>{neighborsPager.pageItems.map(({ entity: neighbor, relationship }) => <TableRow key={relationship.id}>
       <TableCell><Link className="font-semibold" href={`/knowledge/entities/${neighbor.id}`}>{neighbor.name ?? t(`type_${neighbor.type}` as 'type_person')}</Link><span className="meta block">{relationship.type}</span></TableCell>
       <TableCell><Badge variant="outline" className={relationship.origin === 'derived' ? 'border-dashed' : undefined}>{relationship.origin}</Badge></TableCell>
       <TableCell className="text-end"><Button type="button" variant="outline" aria-pressed={selectedRelationshipId === relationship.id} onClick={() => setSelectedRelationshipId(relationship.id)}>{t('selectRelationship')}</Button></TableCell>
-    </TableRow>)}</TableBody></Table>}
+    </TableRow>)}</TableBody></Table><TablePagination {...neighborsPager} /></>}
     {neighbors.hasNextPage && <Button variant="outline" disabled={neighbors.isFetchingNextPage} onClick={() => neighbors.fetchNextPage()}>{t('loadRelationships')}</Button>}
     {!neighborsItems.length && <p className="text-muted-foreground">{t('noRelationships')}</p>}
     <EntityGraph entityId={value.id} title={value.name ?? t('unnamedEntity')} selectedRelationshipId={selectedRelationshipId ?? undefined} onSelectRelationship={setSelectedRelationshipId} />

@@ -15,6 +15,7 @@ import { MetricsChart } from './gadgets/metrics-chart';
 import { NewsFeed } from './gadgets/news-feed';
 import { ProviderObservationGadget } from './gadgets/provider-observation-gadget';
 import { PersonalContext } from './gadgets/personal-context';
+import { JobListGadget } from './gadgets/job-list';
 import { TablePanel } from './gadgets/table-panel';
 import { TasksGadget } from './gadgets/tasks-gadget';
 import { TelegramFeed } from './gadgets/telegram-feed';
@@ -45,6 +46,7 @@ const GADGET_REGISTRY: Record<string, React.ComponentType<GadgetRendererProps>> 
   feed: (props) => <FeedGadget instance={props.instance} />,
   text_panel: (props) => <TextPanel instance={props.instance} />,
   table_panel: (props) => <TablePanel instance={props.instance} />,
+  job_list: (props) => <JobListGadget instance={props.instance} />,
   video_panel: (props) => <VideoPanel instance={props.instance} />,
   watch_rules: (props) => <WatchlistGadget instance={props.instance} />,
   highlights: (props) => <WatchlistGadget instance={props.instance} />,
@@ -71,7 +73,7 @@ export const GADGET_READING_BODY_FLOORS: Record<string, number> = {
   // FeedGadget: three h-16 skeletons plus loading gaps/padding, root p-3 and fixed action-bar chrome.
   news_feed: 280, telegram_feed: 280, feed: 280,
   // Fixed renderer roots reserve the common baseline plus bounded controls and outer padding.
-  text_panel: 180, table_panel: 204, video_panel: 180, watch_rules: 204,
+  text_panel: 180, table_panel: 204, job_list: 204, video_panel: 180, watch_rules: 204,
   highlights: 204,
   // MetricsChart: h-[140px] plot + p-3, two space-y-3 gaps, fixed chart header and range controls.
   finance_chart: 276, metrics_chart: 276,

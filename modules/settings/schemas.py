@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator
 
 from core.model_gateway.schemas import ModelMapping, PrivacySettings
+from modules.settings.display_name import normalize_display_name
 
 
 class OwnerPreferencesRead(BaseModel):
@@ -14,6 +15,10 @@ class OwnerPreferencesRead(BaseModel):
     theme: Literal["light", "dark", "system"]
     locale: Literal["en-us", "vi-vi"]
     timezone: str
+    display_name: str | None = None
+    # Never null: stored name, else derived from the owner's email ("Owner" when none).
+    resolved_display_name: str = "Owner"
+    accent: Literal["ink", "moss", "sea", "earth", "plum"] | None = None
 
 
 class OwnerPreferencesUpdate(BaseModel):
@@ -24,6 +29,14 @@ class OwnerPreferencesUpdate(BaseModel):
     theme: Literal["light", "dark", "system"]
     locale: Literal["en-us", "vi-vi"]
     timezone: str = Field(min_length=1, max_length=100)
+    display_name: str | None = Field(default=None, max_length=200)
+    accent: Literal["ink", "moss", "sea", "earth", "plum"] | None = None
+
+    @field_validator("display_name")
+    @classmethod
+    def normalize_display_name(cls, value: str | None) -> str | None:
+        """Trim the name, map blank to None, and reject control characters or names over 80 characters."""
+        return normalize_display_name(value)
 
     @field_validator("timezone")
     @classmethod

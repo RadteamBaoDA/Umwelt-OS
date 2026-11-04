@@ -7,6 +7,7 @@ from alembic.script import ScriptDirectory
 
 BASE = "0001_init"
 SECOND = "0002_observations_provider_ids"
+PROVIDERS_LATEST = "0010_observations_vn_stock"  # newest revision that rewrites ck_observations_provider
 HEAD = ScriptDirectory.from_config(Config("alembic.ini")).get_current_head()  # derived: later revisions advance it
 
 
@@ -90,8 +91,10 @@ def test_downgrade_is_destructive_and_documented() -> None:
 def test_observations_provider_ids_match_application_constant() -> None:
     from modules.knowledge.documents.schemas import MEASUREMENT_PROVIDER_IDS
 
-    module = ScriptDirectory.from_config(Config("alembic.ini")).get_revision(SECOND).module  # type: ignore[union-attr]
+    module = ScriptDirectory.from_config(Config("alembic.ini")).get_revision(PROVIDERS_LATEST).module  # type: ignore[union-attr]
     assert list(module._PROVIDER_IDS) == sorted(MEASUREMENT_PROVIDER_IDS)
-    assert "ck_observations_provider CHECK (provider IN ('alpha_vantage', 'alternative_me'" in _upgrade_sql()
+    sql = _upgrade_sql()
+    final_check = sql.rsplit("ADD CONSTRAINT ck_observations_provider ", 1)[1].split(";", 1)[0]
+    assert "'vn_stock'" in final_check
     doc = module.downgrade.__doc__
     assert doc is not None and "raises" in doc

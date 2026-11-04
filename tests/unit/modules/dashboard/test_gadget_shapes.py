@@ -21,10 +21,13 @@ def test_shape_rules() -> None:
 
 
 def test_source_limit_and_sourceless() -> None:
-    """Single-source renderers cap at one source; sourceless renderers reject any."""
-    with pytest.raises(gadgets.GadgetConfigError) as exc:
-        gadgets.validate_renderer_sources("weather", [("open_meteo", "api"), ("open_meteo", "api")])
-    assert exc.value.code == "source_limit"
+    """Single-source renderers cap at one source, measurement ones at five; sourceless renderers reject any."""
+    gadgets.validate_renderer_sources("weather", [("open_meteo", "api")] * 5)
+    for renderer, sources in [("weather", [("open_meteo", "api")] * 6),
+                              ("github_project", [("github", "api")] * 2)]:
+        with pytest.raises(gadgets.GadgetConfigError) as exc:
+            gadgets.validate_renderer_sources(renderer, sources)
+        assert exc.value.code == "source_limit"
     with pytest.raises(gadgets.GadgetConfigError):
         gadgets.validate_renderer_sources("tasks", [("bbc_world", "rss")])
     gadgets.validate_renderer_sources("highlights", [("bbc_world", "rss"), (None, "manual")])
@@ -598,3 +601,34 @@ def test_preset_definition_names_use_display_names() -> None:
     assert public.preset_definition_name("news_feed") == "Feed"
     assert public.preset_definition_name("map") == "Map"
     assert public.preset_definition_name("unknown_thing") == "unknown_thing"
+
+
+def test_job_providers_fit_job_list_and_still_feed() -> None:
+    """Job providers emit job+news; job_list accepts only job sources and proposes only them."""
+    from modules.connectors.data_shapes import source_data_shapes
+
+    jobs = ("vietnamworks_jobs", "itviec_jobs", "wwr_jobs")
+    for provider in jobs:
+        assert {"job", "news"} <= source_data_shapes(provider, "api")
+    assert "job" not in source_data_shapes("bbc_world", "rss")
+    assert next(r for r in public.renderer_reads() if r.id == "job_list").accepted_shapes == ["job"]
+    gadgets.validate_renderer_sources("job_list", [(jobs[0], "api"), (jobs[2], "rss")])
+    with pytest.raises(gadgets.GadgetConfigError):
+        gadgets.validate_renderer_sources("job_list", [("bbc_world", "rss")])
+    active = [(uuid4(), "bbc_world", "rss"), (uuid4(), "itviec_jobs", "api"), (uuid4(), "wwr_jobs", "rss")]
+    assert gadgets.propose_slot_sources("job_list", active) == [active[1][0], active[2][0]]
+
+
+def test_validate_measurement_scopes() -> None:
+    """Multi-provider scope is one union: closed catalogs must each match one chart metric."""
+    scopes = gadgets.validate_measurement_scopes
+    scopes("finance_chart", ["vn_stock", "binance"], GadgetScope(metrics=["close", "spot_price"], symbols=["FPT", "BTCUSDT"]))
+    for providers, scope in [
+        (["vn_stock", "binance"], GadgetScope(metrics=["close"], symbols=["FPT"])),
+        (["alpha_vantage", "vn_stock"], GadgetScope(metrics=["close", "open"], symbols=["FPT"])),
+        (["vn_stock", "binance"], GadgetScope(metrics=["close", "spot_price"])),
+    ]:
+        with pytest.raises(gadgets.GadgetConfigError):
+            scopes("finance_chart", providers, scope)
+    scopes("weather", ["open_meteo", "open_meteo"], GadgetScope(metrics=["temperature_2m"]))
+    scopes("provider_observation", ["alternative_me", "frankfurter"], GadgetScope())

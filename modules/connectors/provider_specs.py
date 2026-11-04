@@ -8,6 +8,7 @@ caps are recorded as ``limit_units=None`` (never unlimited).
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Literal
 
 from modules.connectors.provider_options import option_fields
@@ -100,10 +101,10 @@ class FreeProviderSpec:
 # Code presence only; runtime_verified stays False.
 DISPATCHABLE = frozenset({
     "bbc_world", "vnexpress_business", "dantri_news", "thanhnien_news", "tuoitre_news", "hn_top", "gdelt_economy",
-    "world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika",
+    "world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika", "vn_stock", "vietnamworks_jobs", "itviec_jobs",
     "coingecko", "google_news", "nasa_eonet", "cisa_kev", "sec_edgar", "openalex", "bluesky",
     # Built-in RSS/Atom world-data feeds (providers/news.py FEED_URLS).
-    "aljazeera_world", "npr_news", "fed_press", "gdacs_rss", "lobsters", "us_travel_advisories",
+    "aljazeera_world", "npr_news", "fed_press", "gdacs_rss", "lobsters", "github_trending", "wwr_jobs", "us_travel_advisories",
     "noaa_tsunami", "jma_eqvol",
     # Built-in table-driven JSON feeds (providers/json_feed.py JSON_FEEDS).
     "gdacs_events", "nws_alerts", "emsc_quakes", "launch_library", "wikipedia_mostread", "wikipedia_top_views", "bmkg_quakes", "satnogs_observations",
@@ -111,6 +112,56 @@ DISPATCHABLE = frozenset({
     # Keyed free-tier presets (providers/keyed.py); each needs an owner-entered key and fails closed without one.
     "fred", "finnhub_news", "newsapi", "openweathermap", "openaq", "nasa_firms",
 })
+
+
+# Hard minimum collection interval (minutes) per provider, the single source of truth for save-time validation,
+# the runtime clamp and the manual "Collect now" cooldown. Rule: unofficial/scraped endpoints and job boards 6 h;
+# data published once a day 24 h; small community sites and strict free tiers 1 h; publisher feeds 30 min;
+# real-time prices/hazards and owner-credential sources keep the 15-minute default (absent from the table).
+PROVIDER_MIN_INTERVAL_MINUTES: dict[str, int] = {
+    **dict.fromkeys((
+        "world_bank", "frankfurter", "ecb", "alternative_me", "open_er_api", "oecd_cli", "wikipedia_mostread",
+        "wikipedia_top_views", "disease_sh", "openalex", "fred", "alpha_vantage",
+    ), 1440),
+    **dict.fromkeys((
+        "vn_stock", "vietnamworks_jobs", "itviec_jobs", "wwr_jobs", "github_trending", "launch_library",
+        "satnogs_observations", "us_travel_advisories", "nvd", "sec_edgar", "newsapi", "nasa_firms", "cisa_kev",
+        "arxiv",
+    ), 360),
+    **dict.fromkeys((
+        "lobsters", "fed_press", "noaa_kp", "ioda", "open_meteo", "github_releases", "youtube", "huggingface",
+        "openweathermap", "openaq", "finnhub_news",
+    ), 60),
+    **dict.fromkeys((
+        "google_news", "gdelt_economy", "bluesky", "gdacs_rss", "gdacs_events", "emsc_quakes", "bmkg_quakes",
+        "noaa_tsunami", "jma_eqvol", "bbc_world", "aljazeera_world", "npr_news", "vnexpress_business",
+        "tuoitre_news", "thanhnien_news", "dantri_news",
+    ), 30),
+}
+DEFAULT_MIN_INTERVAL_MINUTES = 15
+# Floors at or above this are slow/unofficial sources: manual "Collect now" is rate-limited to the floor too.
+COLLECT_COOLDOWN_FLOOR_MINUTES = 360
+
+
+def min_interval_minutes(provider: str | None) -> int:
+    """Return the hard minimum schedule interval in minutes for a provider.
+
+    Providers with no entry (generic rss/web/rest/mcp sources, owner-credential and real-time providers) get the
+    15-minute default, so the clamp is a no-op for them.
+    """
+    return PROVIDER_MIN_INTERVAL_MINUTES.get(provider or "", DEFAULT_MIN_INTERVAL_MINUTES)
+
+
+def collection_cooldown_seconds(provider: str | None, last_started: datetime | None, now: datetime) -> int:
+    """Return how many seconds a manual "Collect now" must still wait, or 0 when it may proceed.
+
+    Only slow/unofficial providers (floor at least ``COLLECT_COOLDOWN_FLOOR_MINUTES``) are throttled, to the
+    same floor as their schedule; every other provider (and a source never collected) always returns 0.
+    """
+    floor = min_interval_minutes(provider)
+    if last_started is None or floor < COLLECT_COOLDOWN_FLOOR_MINUTES:
+        return 0
+    return max(0, int(floor * 60 - (now - last_started).total_seconds()))
 
 
 def _unknown(kind: str = "provider", unit: str = "http_calls", cost: int = 1) -> QuotaWindowPolicy:
@@ -212,6 +263,28 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
            QuotaWindowPolicy("pilot_request_weight_utc_minute", "provider", "minute", "request_weight", 4, 2),
            QuotaWindowPolicy("official_request_weight_unknown", "ip", "minute", "request_weight", None, 2,
                              "official_unknown"))),
+    # Unofficial VNDirect finfo endpoint (no contract; may change or vanish). Owner-approved 2026-11-04; TCBS rejected
+    # because it only answers behind a Cloudflare challenge. Terms URL is the site root (the terms page returns 403
+    # to automated fetches, so it could not be verified). Two calls per run (stocks + indices), 6 h floor.
+    _spec("vn_stock", "Vietnam stocks (VNDirect, unofficial)", "economy", ("api-finfo.vndirect.com.vn",), "measurement", 360,
+          "https://www.vndirect.com.vn/", "review",
+          "Credit VNDirect; unofficial public endpoint, prices in thousand VND (indices in points), may break without notice.",
+          ("/v4/stock_prices?q=code:FPT,VCB,HPG,VNM,MWG&sort=date:desc&size=60",
+           "/v4/vnmarket_prices?q=code:VNINDEX,VN30&sort=date:desc&size=24"), (_day(48), _unknown())),
+    # Unofficial VietnamWorks job-search endpoint (no contract; may change or vanish). Owner-approved 2026-11-04.
+    # The terms page is a client-rendered app, so terms were not machine-verified. At most 5 POSTs per run (one per
+    # keyword), 6 h floor. Recruiter contact and demographic fields are never stored.
+    _spec("vietnamworks_jobs", "VietnamWorks jobs (unofficial)", "tech", ("ms.vietnamworks.com",), "news", 360,
+          "https://www.vietnamworks.com/terms-of-use", "review",
+          "Credit VietnamWorks and link the job posting; unofficial search endpoint, may break without notice.",
+          ("/job-search/v1.0/search",), (_day(40), _unknown())),
+    # ITviec job pages (schema.org JSON-LD only). Owner decision 2026-11-04: built despite terms section 2.2
+    # (retrieval limited to "reasonable personal use"); the owner accepts that terms risk. At most 3 search pages
+    # and 10 detail pages per run, 2 s apart, 6 h floor.
+    _spec("itviec_jobs", "ITviec jobs (crawled)", "tech", ("itviec.com",), "news", 360,
+          "https://itviec.com/blog/terms-and-conditions/", "review",
+          "Credit ITviec and link the job posting; static JSON-LD only, owner accepted the terms risk 2026-11-04.",
+          ("/it-jobs/{keyword}/{city}", "/it-jobs/{slug}"), (_day(60), _unknown())),
     _spec("alternative_me", "Alternative.me Fear and Greed", "economy", ("api.alternative.me",), "measurement", 1440,
           "https://alternative.me/crypto/fear-and-greed-index/", "open",
           "Display Alternative.me with a link adjacent to the index, including translated output.",
@@ -225,10 +298,10 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
           "https://eonet.gsfc.nasa.gov/what-is-eonet#disclaimer", "review",
           "Credit NASA EONET and the event's listed sources; data is for visualization and general information only, not official extents.",
           ("/api/v3/events?status=open&limit=50",), (_day(48), _unknown())),
-    _spec("cisa_kev", "CISA Known Exploited Vulnerabilities", "security", ("www.cisa.gov",), "event", 1440,
+    _spec("cisa_kev", "CISA Known Exploited Vulnerabilities", "security", ("raw.githubusercontent.com",), "event", 1440,
           "https://www.cisa.gov/known-exploited-vulnerabilities-catalog", "open",
           "Credit CISA Known Exploited Vulnerabilities Catalog (official feed, CC0).",
-          ("/sites/default/files/feeds/known_exploited_vulnerabilities.json",), (_day(8), _unknown())),
+          ("/cisagov/kev-data/develop/known_exploited_vulnerabilities.json",), (_day(8), _unknown())),
     _spec("coinpaprika", "CoinPaprika BTC ticker", "economy", ("api.coinpaprika.com",), "measurement", 15,
           "https://docs.coinpaprika.com/api-plans", "personal",
           "Credit CoinPaprika; free use is personal with no redistribution.",
@@ -281,6 +354,16 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
           "https://lobste.rs/about", "review",
           "Credit Lobsters and link the story; the feed carries submitter links and titles only.",
           ("/rss",), (_day(SECTION_DAILY_CAP), _unknown())),
+    # Third-party mirror that scrapes github.com/trending (GitHub has no trending API): unofficial, may lag or break.
+    _spec("github_trending", "GitHub Trending (mirror)", "tech", ("mshibanami.github.io",), "news", 360,
+          "https://github.com/mshibanami/GitHubTrendingRSS", "review",
+          "Credit GitHub and the GitHubTrendingRSS mirror; link the repository. Unofficial scrape of github.com/trending.",
+          ("/GitHubTrendingRSS/daily/all.xml",), (_day(SECTION_DAILY_CAP), _unknown())),
+    # The terms URL is the site's RSS page (its other pages answer 403 to automated fetches, so terms were not read).
+    _spec("wwr_jobs", "We Work Remotely jobs", "tech", ("weworkremotely.com",), "news", 360,
+          "https://weworkremotely.com/remote-job-rss-feed", "review",
+          "Credit We Work Remotely and link the job posting; feed-only title, summary and link.",
+          ("/categories/remote-programming-jobs.rss",), (_day(SECTION_DAILY_CAP), _unknown())),
     _spec("us_travel_advisories", "U.S. travel advisories", "hazards", ("travel.state.gov",), "event", 360,
           "https://www.state.gov/copyright-information/", "open",
           "Credit the U.S. Department of State; advisories are a point-in-time statement, check the original.",
@@ -411,6 +494,11 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
 # the date doubles as the terms version the owner acknowledges, so it must not claim the older check.
 EXPANSION_CHECKED_ON = "2026-10-21"
 _EXPANSION_IDS = frozenset({
+    "vn_stock",
+    "vietnamworks_jobs",
+    "itviec_jobs",
+    "github_trending",
+    "wwr_jobs",
     "npr_news",
     "fed_press",
     "gdacs_rss",

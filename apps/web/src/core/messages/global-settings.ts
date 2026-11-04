@@ -3,7 +3,7 @@ export const globalSettingsMessages = {
   'en-us': {
     title: 'Global settings', description: 'System-wide status, workspaces, and provider terms review.',
     system: 'System status', healthOnSystem: 'See service health on the', healthOnSystemEnd: ' page.', overall: 'Overall status: {status}', service: 'Service', status: 'Status',
-    st_ok: 'Healthy', st_healthy: 'Healthy', st_degraded: 'Degraded', st_down: 'Down', st_error: 'Error', st_unavailable: 'Unavailable', st_unconfigured: 'Not configured', st_configured: 'Configured', st_not_configured: 'Not configured',
+    st_ok: 'Healthy', st_healthy: 'Healthy', st_degraded: 'Degraded', st_down: 'Down', st_error: 'Error', st_unavailable: 'Unavailable', st_unconfigured: 'Not configured', st_configured: 'Configured', st_not_configured: 'Not configured', st_not_installed: 'Not installed',
     configuration: 'Deployment configuration', enabled: 'Enabled', disabled: 'Disabled',
     multiWorkspace: 'Multiple workspaces', secureCookies: 'Secure cookies', googleLogin: 'Google sign-in',
     githubApp: 'GitHub App', n8n: 'n8n', mcpWidgets: 'MCP widgets',
@@ -15,12 +15,12 @@ export const globalSettingsMessages = {
     reviewFailed: 'Could not save this provider review. Reload and try again.',
     loadFailed: 'Could not load global settings. Reload and try again.',
     accessDenied: 'Global settings are available only to the instance administrator.',
-    loading: 'Loading global settings',
+    loading: 'Loading global settings', providerReviewsPending: 'Provider terms review ({count})', workspace: 'Workspace', review: 'Review', reviewTitle: 'Review provider terms', evidenceRequired: 'Add an evidence reference to enable approval.', viewServices: 'View service status →', deployment: 'Deployment configuration',
   },
   'vi-vi': {
     title: 'Cài đặt toàn hệ thống', description: 'Trạng thái hệ thống, không gian làm việc và duyệt điều khoản nhà cung cấp.',
     system: 'Trạng thái hệ thống', healthOnSystem: 'Xem tình trạng dịch vụ tại trang', healthOnSystemEnd: '.', overall: 'Trạng thái chung: {status}', service: 'Dịch vụ', status: 'Trạng thái',
-    st_ok: 'Bình thường', st_healthy: 'Bình thường', st_degraded: 'Suy giảm', st_down: 'Ngừng hoạt động', st_error: 'Lỗi', st_unavailable: 'Không khả dụng', st_unconfigured: 'Chưa cấu hình', st_configured: 'Đã cấu hình', st_not_configured: 'Chưa cấu hình',
+    st_ok: 'Bình thường', st_healthy: 'Bình thường', st_degraded: 'Suy giảm', st_down: 'Ngừng hoạt động', st_error: 'Lỗi', st_unavailable: 'Không khả dụng', st_unconfigured: 'Chưa cấu hình', st_configured: 'Đã cấu hình', st_not_configured: 'Chưa cấu hình', st_not_installed: 'Chưa cài đặt',
     configuration: 'Cấu hình triển khai', enabled: 'Đã bật', disabled: 'Đã tắt',
     multiWorkspace: 'Nhiều không gian làm việc', secureCookies: 'Cookie bảo mật', googleLogin: 'Đăng nhập Google',
     githubApp: 'Ứng dụng GitHub', n8n: 'n8n', mcpWidgets: 'Tiện ích MCP',
@@ -32,6 +32,6 @@ export const globalSettingsMessages = {
     reviewFailed: 'Không thể lưu quyết định duyệt. Hãy tải lại rồi thử lại.',
     loadFailed: 'Không thể tải cài đặt toàn hệ thống. Hãy tải lại trang.',
     accessDenied: 'Chỉ quản trị viên hệ thống mới được truy cập cài đặt này.',
-    loading: 'Đang tải cài đặt toàn hệ thống',
+    loading: 'Đang tải cài đặt toàn hệ thống', providerReviewsPending: 'Duyệt điều khoản nhà cung cấp ({count})', workspace: 'Không gian làm việc', review: 'Duyệt', reviewTitle: 'Duyệt điều khoản nhà cung cấp', evidenceRequired: 'Nhập tham chiếu bằng chứng để bật nút chấp thuận.', viewServices: 'Xem trạng thái dịch vụ →', deployment: 'Cấu hình triển khai',
   },
 } as const;

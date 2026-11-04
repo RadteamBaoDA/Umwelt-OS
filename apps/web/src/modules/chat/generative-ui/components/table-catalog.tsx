@@ -21,6 +21,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { TablePagination, usePagination } from '@/components/ui/pagination';
 import {
   Table,
   TableBody,
@@ -332,6 +333,8 @@ export function TableCatalog({
     });
   }, [canonicalLocale, filterText, normalizedColumns, resolvedLocale, resolvedRows, sortState]);
 
+  const pager = usePagination(filteredAndSortedRows);
+
   /**
    * Builds and sends a follow-up prompt summarizing the selected row.
    */
@@ -386,7 +389,7 @@ export function TableCatalog({
           <Input
             type="search"
             value={filterText}
-            onChange={(e) => setFilterText(e.target.value)}
+            onChange={(e) => { setFilterText(e.target.value); pager.setPage(1); }}
             placeholder={catalog.genUiTableFilterPlaceholder}
             aria-label={catalog.genUiTableFilterPlaceholder}
             data-testid="table-catalog-filter-input"
@@ -412,7 +415,7 @@ export function TableCatalog({
                     {col.sortable !== false ? (
                       <button
                         type="button"
-                        onClick={() => handleSortColumn(col.key)}
+                        onClick={() => { handleSortColumn(col.key); pager.setPage(1); }}
                         aria-label={copy.sortByLabel(col.label)}
                         data-testid={`table-sort-${col.key}`}
                         className="inline-flex items-center gap-1.5 font-semibold text-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -457,7 +460,9 @@ export function TableCatalog({
                 </TableCell>
               </TableRow>
             ) : (
-              filteredAndSortedRows.map((row, rowIdx) => {
+              pager.pageItems.map((row, pageIdx) => {
+                // Global index keeps ids and test ids stable across pages.
+                const rowIdx = (pager.page - 1) * pager.pageSize + pageIdx;
                 const rowId =
                   !Array.isArray(row) && (typeof row.id === 'string' || typeof row.id === 'number')
                     ? String(row.id)
@@ -513,6 +518,7 @@ export function TableCatalog({
             )}
           </TableBody>
         </Table>
+        <div className="px-3 pb-2"><TablePagination {...pager} /></div>
       </CardContent>
 
       {source && (

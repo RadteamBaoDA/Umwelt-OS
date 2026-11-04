@@ -45,6 +45,7 @@ from core.workspaces.public import (
     resolve_workspace_owner_context,
 )
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
+from modules.settings.display_name import derive_display_name, normalize_display_name
 from modules.settings.models import AISettingsRecord, OwnerPreferencesRecord
 
 # Re-exported for the model_gateway routes (strict mypy forbids implicit re-export, hence the aliases).
@@ -1137,6 +1138,28 @@ async def save_viz_router(session: AsyncSession, update: VizRouterUpdate, settin
     return await read_viz_router(session, settings, scope=scope)
 
 
+async def _resolved_display_name(session: AsyncSession, owner_id: int, stored: str | None) -> str:
+    """Return the stored name, else one derived from the owner's email (never empty); read-only."""
+    if stored:
+        return stored
+    return derive_display_name(await session.scalar(select(Owner.email).where(Owner.id == owner_id)))
+
+
+async def set_initial_owner_display_name(session: AsyncSession, *, owner_id: int, display_name: str | None) -> None:
+    """Store the first-run name in the caller's transaction (no commit); blank/None is a no-op.
+
+    Creates the preferences row with column defaults. Used by setup right after the owner row is
+    flushed, so the owner and name commit or roll back together.
+    """
+    name = normalize_display_name(display_name)
+    if name is None:
+        return
+    await session.execute(
+        insert(OwnerPreferencesRecord).values(owner_id=owner_id, display_name=name)
+        .on_conflict_do_update(index_elements=["owner_id"], set_={"display_name": name})
+    )
+
+
 async def read_owner_preferences(session: AsyncSession, *, actor_user_id: int, multi_workspace_enabled: bool) -> OwnerPreferencesRead:
     """Return active account preferences/defaults; selected workspace is irrelevant."""
     await require_preferences_account(session, actor_user_id=actor_user_id, multi_workspace_enabled=multi_workspace_enabled)
@@ -1152,6 +1175,7 @@ async def read_owner_preferences(session: AsyncSession, *, actor_user_id: int, m
             theme="system",
             locale="en-us",
             timezone="Asia/Ho_Chi_Minh",
+            resolved_display_name=await _resolved_display_name(session, actor_user_id, None),
         )
     return OwnerPreferencesRead(
         configuration_revision=row.configuration_revision,
@@ -1159,6 +1183,9 @@ async def read_owner_preferences(session: AsyncSession, *, actor_user_id: int, m
         theme=row.theme,
         locale=row.locale,
         timezone=row.timezone,
+        display_name=row.display_name,
+        resolved_display_name=await _resolved_display_name(session, actor_user_id, row.display_name),
+        accent=row.accent,
     )
 
 
@@ -1219,6 +1246,8 @@ async def save_owner_preferences(
     row.theme = update.theme
     row.locale = update.locale
     row.timezone = update.timezone
+    row.display_name = update.display_name
+    row.accent = update.accent
     row.configuration_revision += 1
     await session.flush()
     return OwnerPreferencesRead(
@@ -1227,6 +1256,9 @@ async def save_owner_preferences(
         theme=row.theme,
         locale=row.locale,
         timezone=row.timezone,
+        display_name=row.display_name,
+        resolved_display_name=await _resolved_display_name(session, actor_user_id, row.display_name),
+        accent=row.accent,
     )
 
 

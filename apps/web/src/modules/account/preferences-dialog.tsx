@@ -8,6 +8,7 @@ import { applyAccent, previewAccent, readAccent, type AccentId } from '@/core/ac
 import { AccentPicker } from '@/modules/account/accent-picker';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -22,6 +23,9 @@ export type OwnerPreferences = {
   theme: ThemePreference;
   locale: AppLocaleId;
   timezone: string;
+  display_name?: string | null;
+  resolved_display_name?: string;
+  accent?: AccentId | null;
 };
 
 type PreferencesDialogProps = {
@@ -67,7 +71,7 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
   const client = useQueryClient();
   const { locale, timezone, setPreview, isCurrentGeneration } = useDisplayPreferences();
   const [draft, setDraft] = useState<OwnerPreferences | null>(null);
-  // Accent is per-device, not part of the saved owner preferences: draft + baseline are tracked beside the draft.
+  // Accent draft + baseline are tracked beside the draft; Save sends it to the server and mirrors it to localStorage for first paint.
   const [accentDraft, setAccentDraft] = useState<AccentId>('ink');
   const [accentBaseline, setAccentBaseline] = useState<AccentId>('ink');
   const [reloadPending, setReloadPending] = useState(false);
@@ -93,6 +97,8 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
         theme: value.theme,
         locale: value.locale,
         timezone: value.timezone,
+        display_name: value.display_name?.trim() || null,
+        accent: accentDraft === 'ink' ? null : accentDraft,
       }),
     }),
     onSuccess: (value) => {
@@ -160,8 +166,8 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
     setBaselineValues(values);
     save.reset();
     setDraft({ ...preferences, ...values });
-    setAccentDraft(readAccent());
-    setAccentBaseline(readAccent());
+    setAccentDraft(preferences.accent ?? readAccent());
+    setAccentBaseline(preferences.accent ?? readAccent());
     setPreview(values, authGeneration);
   }, [open, preferences, authGeneration, draft, setPreview, save.reset]);
 
@@ -199,7 +205,7 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
   };
 
   const dirty = Boolean(draft && (!draft.persisted ||
-    draft.theme !== baselineValues.theme || draft.locale !== baselineValues.locale || draft.timezone !== baselineValues.timezone || accentDraft !== accentBaseline
+    draft.theme !== baselineValues.theme || draft.locale !== baselineValues.locale || draft.timezone !== baselineValues.timezone || (draft.display_name ?? '') !== (preferences?.display_name ?? '') || accentDraft !== accentBaseline
   ));
   const hasConflict = save.error instanceof ApiError && save.error.status === 409;
   /** Aborts the previous request and starts a reload attempt bound to this edit session and auth generation. */
@@ -290,6 +296,12 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
                 </span>
               </Label>)}
             </RadioGroup>
+          </div>
+          <div className="field">
+            <Label htmlFor="preference-display-name">{t('displayName')}</Label>
+            <Input id="preference-display-name" value={draft.display_name ?? ''} placeholder={preferences?.resolved_display_name} maxLength={80} autoComplete="nickname"
+              aria-describedby="preference-display-name-help" onChange={(event) => setDraft({ ...draft, display_name: event.target.value })} />
+            <p id="preference-display-name-help" className="text-muted-foreground text-xs">{t('displayNameHelp')}</p>
           </div>
           <AccentPicker value={accentDraft} onChange={setAccentDraft} />
           <div className="field">

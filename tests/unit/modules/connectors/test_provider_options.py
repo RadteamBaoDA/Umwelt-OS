@@ -18,7 +18,7 @@ from modules.ingestion.schemas import IngestionRecord
 from modules.sources.schemas import PROVIDER_SOURCE_TYPES, ConnectorSource
 
 NOW = datetime(2026, 11, 2, 12, 0, 0, tzinfo=UTC)
-BASE = {"history_mode": "returned_snapshot", "schedule_interval_minutes": 30, "timeout_seconds": 30}
+BASE = {"history_mode": "returned_snapshot", "schedule_interval_minutes": 1440, "timeout_seconds": 30}  # 1440 clears every provider floor
 
 
 def _src(provider: str, configuration: dict) -> ConnectorSource:

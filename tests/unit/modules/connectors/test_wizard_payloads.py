@@ -13,6 +13,7 @@ import pytest
 from modules.connectors import registry
 from modules.connectors.backends import GENERIC_CATALOG_SOURCE_TYPES, PROVIDER_SOURCE_TYPES
 from modules.connectors.catalog import get_catalog_entry, list_catalog
+from modules.connectors.provider_specs import min_interval_minutes
 from modules.connectors.provisioning_routes import ConnectorSettingsRequest
 from modules.connectors.public import serialize_source_configuration
 from modules.sources.schemas import ConnectorSource
@@ -71,7 +72,7 @@ def frontend_default(provider: str) -> dict[str, Any]:
     if provider in PROVIDER_SOURCE_TYPES:  # native default branch
         base: dict[str, Any] = {
             "timeout_seconds": 30, "timezone": "Asia/Ho_Chi_Minh",
-            "schedule_interval_minutes": 1440 if provider == "alpha_vantage" else 15 if provider in ("youtube", "arxiv") else 30,
+            "schedule_interval_minutes": max(30, min_interval_minutes(provider)),  # the editor default respects the provider floor
             "history_mode": "pending_updates" if provider == "telegram" else "returned_snapshot",
         }
         if provider == "open_meteo":

@@ -48,14 +48,14 @@ export const gadgetSettingsMessages = {
     advanced: 'Advanced', newFromTemplate: 'New / built-in', fromLibrary: 'From library', symbols: 'Tracked symbols (comma-separated)', keywordsPlaceholder: 'AI, semiconductor, architecture', excludePlaceholder: 'spam, promotion',
     configureDescription: 'Change the data source, filters and highlight rules of this {renderer} gadget. It updates everywhere the saved gadget is used.', addDescription: 'Choose a display template, then select an active compatible data source.', addFailed: 'Could not add the gadget to the dashboard. Try again.', libraryEmptyAdd: 'Your library is empty. Use New / built-in to create a gadget.',
     renderers: {
-      news_feed: 'News feed', telegram_feed: 'Telegram feed', text_panel: 'Text panel', table_panel: 'Table panel', video_panel: 'Video panel',
+      news_feed: 'News feed', telegram_feed: 'Telegram feed', text_panel: 'Text panel', table_panel: 'Table panel', job_list: 'Jobs', video_panel: 'Video panel',
       finance_chart: 'Finance chart', personal_context: 'Personal context', map: 'Map', intelligence_panel: 'Intelligence panel',
       highlights: 'Highlights', watch_rules: 'Watch rules', tasks: 'Tasks', goals: 'Goals', daily_brief: 'Daily brief', weather: 'Weather',
       provider_observation: 'Provider observation', research: 'Research', github_project: 'GitHub project',
     },
     templateTypes: {
       feed: { name: 'Feed', description: 'A stream of recent items.' }, messageList: { name: 'Message list', description: 'Messages ordered by time.' }, text: { name: 'Text', description: 'Readable text and document content.' },
-      table: { name: 'Table', description: 'Records arranged in rows and columns.' }, video: { name: 'Video', description: 'A list of collected videos.' }, chart: { name: 'Chart', description: 'Values plotted across time.' },
+      table: { name: 'Table', description: 'Records arranged in rows and columns.' }, video: { name: 'Video', description: 'A list of collected videos.' }, jobs: { name: 'Jobs', description: 'Job postings from job boards in one searchable table.' }, chart: { name: 'Chart', description: 'Values plotted across time.' },
       map: { name: 'Map', description: 'Location based observations.' }, relatedSignals: { name: 'Related signals', description: 'Signals appearing in the same time and place.' },
       highlights: { name: 'Highlights', description: 'Items matching saved rules.' }, watchlist: { name: 'Watchlist', description: 'Tracked items in a compact list.' },
       tasks: { name: 'Tasks', description: 'Open tasks in this workspace.' }, goals: { name: 'Goals', description: 'Progress toward selected goals.' }, dailyBrief: { name: 'Daily brief', description: 'A concise daily summary.' },
@@ -110,14 +110,14 @@ export const gadgetSettingsMessages = {
     advanced: 'Nâng cao', newFromTemplate: 'Mới / có sẵn', fromLibrary: 'Từ thư viện', symbols: 'Mã theo dõi (phân tách bằng dấu phẩy)', keywordsPlaceholder: 'AI, bán dẫn, kiến trúc', excludePlaceholder: 'spam, khuyến mãi',
     configureDescription: 'Thay đổi nguồn dữ liệu, bộ lọc và quy tắc làm nổi bật của tiện ích {renderer} này. Thay đổi áp dụng ở mọi nơi dùng tiện ích đã lưu.', addDescription: 'Bắt đầu từ một tiện ích có sẵn hoặc dùng lại tiện ích trong thư viện.', addFailed: 'Không thể thêm tiện ích vào bảng điều khiển. Hãy thử lại.', libraryEmptyAdd: 'Thư viện đang trống. Hãy dùng Mới / có sẵn để tạo tiện ích.',
     renderers: {
-      news_feed: 'Bảng tin', telegram_feed: 'Tin Telegram', text_panel: 'Khung văn bản', table_panel: 'Khung bảng', video_panel: 'Khung video',
+      news_feed: 'Bảng tin', telegram_feed: 'Tin Telegram', text_panel: 'Khung văn bản', table_panel: 'Khung bảng', job_list: 'Việc làm', video_panel: 'Khung video',
       finance_chart: 'Biểu đồ tài chính', personal_context: 'Ngữ cảnh cá nhân', map: 'Bản đồ', intelligence_panel: 'Khung tình báo',
       highlights: 'Nổi bật', watch_rules: 'Quy tắc theo dõi', tasks: 'Công việc', goals: 'Mục tiêu', daily_brief: 'Bản tin hằng ngày', weather: 'Thời tiết',
       provider_observation: 'Quan sát từ nhà cung cấp', research: 'Nghiên cứu', github_project: 'Dự án GitHub',
     },
     templateTypes: {
       feed: { name: 'Bảng tin', description: 'Dòng các mục mới nhất.' }, messageList: { name: 'Danh sách tin nhắn', description: 'Tin nhắn được sắp xếp theo thời gian.' }, text: { name: 'Văn bản', description: 'Nội dung văn bản và tài liệu dễ đọc.' },
-      table: { name: 'Bảng dữ liệu', description: 'Bản ghi được sắp xếp theo hàng và cột.' }, video: { name: 'Video', description: 'Danh sách video đã thu thập.' }, chart: { name: 'Biểu đồ', description: 'Giá trị được vẽ theo thời gian.' },
+      table: { name: 'Bảng dữ liệu', description: 'Bản ghi được sắp xếp theo hàng và cột.' }, video: { name: 'Video', description: 'Danh sách video đã thu thập.' }, jobs: { name: 'Việc làm', description: 'Tin tuyển dụng từ các trang việc làm trong một bảng có thể tìm kiếm.' }, chart: { name: 'Biểu đồ', description: 'Giá trị được vẽ theo thời gian.' },
       map: { name: 'Bản đồ', description: 'Quan sát có thông tin vị trí.' }, relatedSignals: { name: 'Tín hiệu liên quan', description: 'Các tín hiệu xuất hiện cùng thời gian và địa điểm.' },
       highlights: { name: 'Mục nổi bật', description: 'Các mục khớp quy tắc đã lưu.' }, watchlist: { name: 'Danh sách theo dõi', description: 'Các mục đang theo dõi trong danh sách gọn.' },
       tasks: { name: 'Công việc', description: 'Công việc đang mở trong workspace.' }, goals: { name: 'Mục tiêu', description: 'Tiến độ các mục tiêu đã chọn.' }, dailyBrief: { name: 'Bản tin hằng ngày', description: 'Tóm tắt ngắn gọn trong ngày.' },

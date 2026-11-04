@@ -8,6 +8,7 @@ import type { GeometryCollection, Topology } from 'topojson-specification';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { FlatMap } from './flat-map';
+import { locationKey, shouldRecentre } from './globe-view';
 import { useWeatherRaster, type WeatherProps } from './weather-raster';
 
 /** Coordinates and stable identity shared by evidence and live-event map points. */
@@ -117,6 +118,8 @@ export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, 
   const rendererRef = useRef<GlobeInstance | null>(null);
   const materialRef = useRef<MeshBasicMaterial | null>(null);
   const selectedFeatureRef = useRef<string | null>(selectedFeatureId);
+  // Location-set key the camera was last centred on; refreshes of the same places must not undo the user's rotation/zoom.
+  const centredKeyRef = useRef<string | null>(null);
   const visibleRef = useRef(visible);
   const interactiveRef = useRef(interactive);
   const [unavailable, setUnavailable] = useState(false);
@@ -168,6 +171,7 @@ export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, 
       materialRef.current = activeMaterial;
       activeRenderer.pointsData(features).width(width).height(height);
       activeRenderer.pointOfView({ ...centroidView(features), altitude: fitAltitude(width, height) });
+      centredKeyRef.current = locationKey(features);
       activeRenderer.controls().enabled = visible && interactive;
       // A context created while the browser's context budget is exhausted is lost before any listener can attach; detect it now.
       if (activeRenderer.renderer().getContext().isContextLost()) throw new Error('WebGL context lost on creation');
@@ -247,15 +251,19 @@ export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, 
     if (focusedLat !== undefined && focusedLon !== undefined) rendererRef.current?.pointOfView({ lat: focusedLat, lng: focusedLon }, 500);
   }, [selectedFeatureId, focusedLat, focusedLon]);
 
-  const center = centroidView(features);
-  const centerLat = center?.lat;
-  const centerLng = center?.lng;
-  /** Re-center only when the geographic centroid changes, preserving user rotation across data refreshes. */
+  /**
+   * Re-center on the evidence centroid only when the set of point locations changes (data arrives after the globe is
+   * created, or places are added/removed). Value/timestamp refreshes keep the key equal, so the user's view is kept;
+   * a dragged or zoomed globe thus stays put until the locations themselves change.
+   */
   useEffect(() => {
-    if (!hasFocus && centerLat !== undefined && centerLng !== undefined) {
-      rendererRef.current?.pointOfView({ lat: centerLat, lng: centerLng });
-    }
-  }, [centerLat, centerLng, hasFocus]);
+    const key = locationKey(features);
+    if (hasFocus || !shouldRecentre(centredKeyRef.current, key)) return;
+    const view = centroidView(features);
+    if (!view || !rendererRef.current) return;
+    rendererRef.current.pointOfView(view);
+    centredKeyRef.current = key;
+  }, [features, hasFocus]);
 
   useEffect(() => {
     const renderer = rendererRef.current;

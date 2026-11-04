@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,6 +7,7 @@ import { WeatherPanel, nearestReading } from './weather-panel';
 
 const api = vi.hoisted(() => ({ listWorldObservationWindow: vi.fn() }));
 vi.mock('@/modules/observations/api', () => ({ listWorldObservationWindow: api.listWorldObservationWindow }));
+vi.mock('./use-effective-lookback', () => ({ useSourceInfo: () => ({ data: { s1: { provider: 'open_meteo', name: 'Hanoi' }, s2: { provider: 'open_meteo', name: 'Hue' } } }) }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
 vi.mock('recharts', async (original) => ({ ...(await original<typeof import('recharts')>()), ResponsiveContainer: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 
@@ -64,5 +65,18 @@ describe('nearestReading', () => {
   it('picks the smallest time distance', () => {
     expect(nearestReading([{ ts: 0 }, { ts: 90 }, { ts: 200 }], 100)).toEqual({ ts: 90 });
     expect(nearestReading([], 100)).toBeUndefined();
+  });
+});
+
+describe('WeatherPanel with several sources', () => {
+  it('renders one compact row per city and queries each source on its own', async () => {
+    api.listWorldObservationWindow.mockImplementation(async (query: { sourceIds: string[] }) => ({ truncated: false, items: [
+      { ...reading(`t-${query.sourceIds[0]}`, 'temperature_2m', 0, query.sourceIds[0] === 's1' ? 20 : 30, '°C'), source_id: query.sourceIds[0] },
+    ] }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const instance = { id: 'w2', title: '', definition: { source_ids: ['s1', 's2'], scope: { metrics: [] } } } as never;
+    render(<QueryClientProvider client={client}><NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}><WeatherPanel instance={instance} /></NextIntlClientProvider></QueryClientProvider>);
+    await waitFor(() => expect(screen.getAllByTestId('weather-city-temp').map((item) => item.textContent)).toEqual(['20°C', '30°C']));
+    expect(api.listWorldObservationWindow).toHaveBeenCalledTimes(2);
   });
 });

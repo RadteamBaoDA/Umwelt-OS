@@ -22,6 +22,7 @@ from modules.connectors.models import (
     GithubOAuthGrant,
 )
 from modules.connectors.n8n import N8nApi, build_workflow, workflow_name
+from modules.connectors.provider_specs import min_interval_minutes
 from modules.sources import public as sources
 from modules.sources.schemas import SourceFence
 
@@ -379,6 +380,8 @@ async def activate_native_in_uow(
     interval = source.configuration.get("schedule_interval_minutes")
     if interval not in {15, 30, 60, 360, 1440}:
         interval = public.default_schedule_interval_minutes(source.type)
+    # Sources saved before the per-provider floor existed are clamped here instead of migrated.
+    interval = max(int(interval), min_interval_minutes(source.provider))
     await scheduler.upsert_schedule(
-        session, workspace_id=source.workspace_id, source_id=source_id, interval_minutes=int(interval), enabled=True)
+        session, workspace_id=source.workspace_id, source_id=source_id, interval_minutes=interval, enabled=True)
     return ""

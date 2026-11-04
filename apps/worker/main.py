@@ -66,6 +66,7 @@ from modules.knowledge.entities.worker import (
 from modules.knowledge.temporal.worker import process_graph_operation, recover_graph_work
 from modules.news.backfill_attribution import backfill_news_attribution
 from modules.news.worker import process_news_document_ready, recover_news_work
+from modules.observability.history import sample_system_health
 from modules.observability.maintenance import run_retention_maintenance
 from modules.search.indexing import index_pending_chunks
 from modules.sources.worker import (
@@ -273,6 +274,7 @@ class WorkerSettings:
         cron(recover_account_deletions, second={0, 30}, run_at_startup=True),
         cron(purge_collection_receipts, minute=7),
         cron(run_retention_maintenance, minute=0),
+        cron(sample_system_health, second=0),
         cron(cleanup_storage_orphans, minute=set(range(0, 60, 5))),
         cron(dispatch_pending_work, second=set(range(0, 60, 5)), run_at_startup=True),
         cron(index_pending_chunks, minute=set(range(0, 60, 1))),

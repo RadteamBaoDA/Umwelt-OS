@@ -11,7 +11,7 @@ from typing import Literal
 from modules.connectors.metric_catalog import provider_metrics
 from modules.connectors.provider_specs import get_provider_spec
 
-DataShape = Literal["news", "measurement", "event", "located", "messages", "video", "project_activity", "weather", "series"]
+DataShape = Literal["news", "measurement", "event", "located", "messages", "video", "project_activity", "weather", "series", "job"]
 
 # Providers outside the free-provider catalog (no FreeProviderSpec); health/home_assistant adapters
 # emit no metric observations, so they stay `news`.
@@ -29,6 +29,10 @@ _EXTRA: MappingProxyType[str, frozenset[DataShape]] = MappingProxyType({
     "openaq": frozenset({"located"}),  # coordinates nullable per location
     "nasa_firms": frozenset({"located", "measurement"}),  # fire_radiative_power at hotspot lat/lon
     "iss_position": frozenset({"located"}),
+    # Job postings stay news documents (Feed keeps working) and also fit the Jobs table gadget.
+    "vietnamworks_jobs": frozenset({"job"}),
+    "itviec_jobs": frozenset({"job"}),
+    "wwr_jobs": frozenset({"job"}),
 })
 
 

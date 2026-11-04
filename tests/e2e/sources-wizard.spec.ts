@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures';
-import { collectedRecordCount, connectWizardSource, deleteSources, findSources, hasLiveKeys, openWizard, WIZARD_CASES } from './sources-helpers';
+import { collectedRecordCount, connectWizardSource, deleteSources, findSources, hasLiveKeys, openWizard, skipIfYoutubeOutage, WIZARD_CASES } from './sources-helpers';
 
 /**
  * Walks the "Add datasource" > "Connect an API" wizard to its last step ("Save and test fetch") for every provider card it offers as
@@ -30,6 +30,7 @@ for (const c of WIZARD_CASES.filter((x) => !only || only.includes(x.id))) {
 
       const [source] = await findSources(page, name);
       if (c.expect === 'fetch') {
+        if (!outcome.ok) await skipIfYoutubeOutage(c.id);
         expect(outcome.ok, outcome.text).toBe(true);
         const count = await collectedRecordCount(page, source.id);
         test.info().annotations.push({ type: 'records', description: String(count) });

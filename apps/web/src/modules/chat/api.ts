@@ -48,6 +48,14 @@ export interface WebSearchOutcome {
   status: 'used' | 'unavailable' | 'skipped';
   reason?: WebSearchReason | string | null;
   result_count?: number;
+  /** The query actually sent to the search provider (may be an LLM rewrite of the prompt). */
+  query?: string | null;
+}
+
+/** Progress of a server-side tool (`tool.status` SSE event). */
+export interface ToolStatus {
+  tool: 'web_search' | 'query_collected_data';
+  state: 'running' | 'done';
 }
 
 /**
@@ -228,6 +236,7 @@ export interface StreamEventsOptions {
   onReasoning?: (text: string) => void;
   onCitations?: (citations: Citation[]) => void;
   onWebSearch?: (outcome: WebSearchOutcome) => void;
+  onToolStatus?: (status: ToolStatus) => void;
   onUiDelta?: (ui: Record<string, unknown>) => void;
   onUiDone?: (ui: Record<string, unknown>) => void;
   /** The server rejected a streamed widget (`message.ui.discard`); drop its partial snapshots. */
@@ -661,6 +670,17 @@ export async function streamResponseEvents(
             if (parsed && typeof parsed.status === 'string') options.onWebSearch?.(parsed as WebSearchOutcome);
           } catch (err) {
             console.warn('Failed to parse web_search SSE payload', err);
+          }
+        } else if (eventType === 'tool.status') {
+          try {
+            const parsed = JSON.parse(eventData);
+            const known = parsed?.tool === 'web_search' || parsed?.tool === 'query_collected_data';
+            // Redacted/malformed payloads (`{}`) are ignored.
+            if (known && (parsed.state === 'running' || parsed.state === 'done')) {
+              options.onToolStatus?.({ tool: parsed.tool, state: parsed.state });
+            }
+          } catch (err) {
+            console.warn('Failed to parse tool.status SSE payload', err);
           }
         } else if (eventType === 'status') {
           try {

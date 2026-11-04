@@ -17,7 +17,7 @@ from core.rate_limit import require_budget
 from core.workspaces import public as workspaces
 from core.workspaces.dependencies import require_workspace_observer_read, require_workspace_write
 from core.workspaces.schemas import AdminWorkspaceReadContext, PublicationFence, WorkspaceContext
-from modules.dashboard import brief_sharing, briefs, context, public
+from modules.dashboard import brief_sharing, briefs, context, local_weather, public
 from modules.dashboard.daily_schemas import (
     BriefGenerateRequest,
     BriefRead,
@@ -336,7 +336,7 @@ async def preview_preset(preset_id: str, payload: PresetPreviewRequest, session:
 async def apply_preset(preset_id: str, payload: PresetApplyRequest, session: Session, scope: WorkspaceWrite, request: Request, response: Response) -> DashboardDetail:
     """Apply a fresh fingerprinted preset atomically after explicit replacement confirmation when needed."""
     _no_store(response)
-    if payload.mode == "replace":
+    if payload.mode != "create":  # replace/append update an existing dashboard
         response.status_code = 200
     return await _call(public.apply_preset(session, preset_id, payload, scope=scope,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled))
@@ -348,6 +348,20 @@ def _timezone(value: str) -> str:
         return validate_timezone(value)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail={"code": "invalid_timezone", "message": str(exc), "details": {}}) from exc
+
+
+@router.get("/weather/local", response_model=local_weather.LocalWeather)
+async def local_weather_route(
+    scope: WorkspaceRead, response: Response,
+    lat: Annotated[float, Query(ge=-90, le=90)], lon: Annotated[float, Query(ge=-180, le=180)],
+    locale: Annotated[str, Query(pattern="^(en|vi)$")] = "en",
+) -> local_weather.LocalWeather:
+    """Return current weather and place name for browser-supplied coordinates (owner-only, never stored)."""
+    _no_store(response)
+    try:
+        return await local_weather.local_weather(lat, lon, locale)
+    except local_weather.LocalWeatherUnavailable as exc:
+        raise HTTPException(status_code=502, detail={"code": "local_weather_unavailable", "message": "Weather provider unavailable", "details": {}}) from exc
 
 
 @router.get("/context/current", response_model=DailyContext)

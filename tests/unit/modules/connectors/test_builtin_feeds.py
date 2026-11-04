@@ -40,3 +40,24 @@ def test_atom_family_uses_entry_id_and_updated_when_no_published():
 @pytest.mark.parametrize("provider", NEW_FEEDS)
 def test_every_new_feed_has_an_adapter_request(provider):
     assert news.news_adapters()[provider].request().url == news.FEED_URLS[provider]
+
+
+def test_github_trending_and_wwr_jobs_map_titles_links_and_publisher():
+    """The two table-driven RSS built-ins reuse the feed mapper: title, summary, link, publisher label."""
+    trending = news.map_feed("github_trending", fixture("github_trending_rss.xml"), NOW)
+    assert {r.metadata["title"] for r in trending} == {"example-org/agent-toolkit", "example-org/fast-parser"}
+    fields = trending[0].metadata["provider_record"]["source_fields"]
+    assert fields["publisher"] == "GitHub Trending" and fields["canonical_url"].startswith("https://github.com/example-org/")
+    (job,) = news.map_feed("wwr_jobs", fixture("wwr_jobs_rss.xml"), NOW)
+    job_fields = job.metadata["provider_record"]["source_fields"]
+    assert job_fields["publisher"] == "We Work Remotely" and job_fields["canonical_url"].startswith("https://weworkremotely.com/remote-jobs/")
+    assert "Senior Backend Engineer" in job.metadata["title"]
+
+
+def test_github_trending_and_wwr_jobs_sections_resolve_to_declared_hosts():
+    """Non-default sections build URLs on the preset host; the default equals the legacy single feed URL."""
+    assert news.section_urls("github_trending", {"feed_sections": ["weekly-typescript", "daily-all"]}) == [
+        ("weekly-typescript", "https://mshibanami.github.io/GitHubTrendingRSS/weekly/typescript.xml"),
+        ("daily-all", news.FEED_URLS["github_trending"])]
+    assert news.section_urls("wwr_jobs", {"feed_sections": ["devops-sysadmin"]}) == [
+        ("devops-sysadmin", "https://weworkremotely.com/categories/remote-devops-sysadmin-jobs.rss")]

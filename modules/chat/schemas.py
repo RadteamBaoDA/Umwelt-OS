@@ -109,6 +109,8 @@ class WebSearchOutcomeRead(BaseModel):
     status: Literal["used", "unavailable", "skipped"]
     reason: str | None = Field(default=None, max_length=64)
     result_count: int = Field(default=0, ge=0, le=100)
+    # The query actually sent to the provider (LLM-rewritten or literal); absent on outcomes persisted earlier.
+    query: str | None = Field(default=None, max_length=200)
 
 
 class EvidenceItem(BaseModel):

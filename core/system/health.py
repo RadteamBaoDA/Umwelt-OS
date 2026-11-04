@@ -1,4 +1,5 @@
 import asyncio
+import time
 from typing import Any
 
 from redis.asyncio import Redis
@@ -20,16 +21,22 @@ async def system_health(
     session: AsyncSession, redis: Redis, settings: Settings
 ) -> dict[str, Any]:
     """Probe PostgreSQL, Redis, and worker heartbeat with bounded timeouts and report configured optional services without claiming connectivity."""
+    started = time.perf_counter()
     try:
         await asyncio.wait_for(session.execute(text("SELECT 1")), PROBE_TIMEOUT_SECONDS)
         postgres = "healthy"
+        postgres_ms = round((time.perf_counter() - started) * 1000)
     except (SQLAlchemyError, TimeoutError):
         postgres = "unavailable"
+        postgres_ms = None
 
     redis_memory: dict[str, int] = {}
+    redis_ms: int | None = None
     try:
         async with asyncio.timeout(PROBE_TIMEOUT_SECONDS):
+            started = time.perf_counter()
             await redis.ping()
+            redis_ms = round((time.perf_counter() - started) * 1000)
             worker_heartbeat = await redis.get(ARQ_WORKER_HEALTH_KEY)
             chat_heartbeat = await redis.get(ARQ_CHAT_WORKER_HEALTH_KEY)
             model_heartbeat = await redis.get(ARQ_MODEL_WORKER_HEALTH_KEY)
@@ -63,8 +70,8 @@ async def system_health(
         pass
     gateway_status = "configured" if gateway_configured else "unconfigured"
     components = {
-        "postgres": {"status": postgres},
-        "redis": {"status": redis_status, **({"memory": redis_memory} if redis_memory else {})},
+        "postgres": {"status": postgres, "latency_ms": postgres_ms},
+        "redis": {"status": redis_status, "latency_ms": redis_ms, **({"memory": redis_memory} if redis_memory else {})},
         "worker": {"status": worker_status},
         "chat_worker": {"status": chat_worker_status},
         "model_worker": {"status": model_worker_status},

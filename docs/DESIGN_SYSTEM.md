@@ -28,7 +28,7 @@ Main navigation contains exactly **Dashboard / Chat / Settings**. Settings keeps
 | General user preferences | **Dialog**, RadioGroup, Select, Button | Theme/language preview, Save, Cancel, translated labels/errors |
 | Quick chat | **Sheet**, ScrollArea, Textarea, Button | Right side, large width, New chat/messages/composer/close only |
 | Full Chat page | History list, ScrollArea, Textarea, Sheet on mobile | History, open thread, search/manage history, context and advanced controls |
-| Data tables | Table; shadcn Data Table recipe when needed | Semantic header/cells; sort/filter/pagination only when useful |
+| Data tables | Table; shadcn Data Table recipe when needed | Semantic header/cells. Every data table uses the `Table` primitive (bounded height, scrolls inside, sticky header) plus `usePagination`/`TablePagination` from `components/ui/pagination` (client paging, rows-per-page selector; cursor mode for server-paged lists) |
 | Financial charts | ChartContainer, ChartTooltip, ChartLegend + Recharts | Explicit sizing, locale-aware axes/tooltips, timestamps/units, accessible alternative |
 | Destructive actions | AlertDialog | Explicit consequence and affected items |
 | Feedback | Skeleton, Alert, Badge, Sonner | Save/loading/error/stale state; notifications do not replace inline errors |

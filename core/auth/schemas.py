@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,8 +28,17 @@ class AccountSessionRef:
 
 
 class SetupRequest(BaseModel):
-    """Validated first-run owner password request."""
+    """Validated first-run owner password request with an optional display name."""
     password: str = Field(min_length=12, max_length=128)
+    display_name: str | None = Field(default=None, max_length=200)
+
+    @field_validator("display_name")
+    @classmethod
+    def _normalize_display_name(cls, value: str | None) -> str | None:
+        """Apply the settings module's name rules (trim, blank->None, <=80, no control chars)."""
+        from modules.settings.display_name import normalize_display_name
+
+        return normalize_display_name(value)
 
 
 class SetupStatus(BaseModel):

@@ -89,6 +89,7 @@ class OwnerPreferencesRecord(Base):
         CheckConstraint("configuration_revision > 0", name="ck_owner_preferences_revision_positive"),
         CheckConstraint("theme IN ('light', 'dark', 'system')", name="ck_owner_preferences_theme"),
         CheckConstraint("locale IN ('en-us', 'vi-vi')", name="ck_owner_preferences_locale"),
+        CheckConstraint("accent IS NULL OR accent IN ('ink', 'moss', 'sea', 'earth', 'plum')", name="ck_owner_preferences_accent"),
     )
 
     owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), primary_key=True)
@@ -96,6 +97,9 @@ class OwnerPreferencesRecord(Base):
     theme: Mapped[str] = mapped_column(String(8), nullable=False, server_default="system")
     locale: Mapped[str] = mapped_column(String(8), nullable=False, server_default="en-us")
     timezone: Mapped[str] = mapped_column(String(100), nullable=False, server_default="Asia/Ho_Chi_Minh")
+    # Optional greeting name and accent palette; NULL means unset / default ink.
+    display_name: Mapped[str | None] = mapped_column(String(80))
+    accent: Mapped[str | None] = mapped_column(String(8))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 

@@ -52,3 +52,29 @@ describe('ChatTranscript empty state', () => {
     expect(screen.getByTestId('starter-suggestions').querySelectorAll('button')).toHaveLength(3);
   });
 });
+
+describe('ChatTranscript tool status', () => {
+  it('shows a polite status line for the running tool', () => {
+    renderTranscript({ isPending: true, activeTool: 'web_search' });
+    expect(screen.getByTestId('tool-status').textContent).toBe(messages['en-us'].chat.toolSearchingWeb);
+  });
+
+  it('shows the data-query copy and nothing when idle', () => {
+    const { rerender } = renderTranscript({ activeTool: 'query_collected_data' });
+    expect(screen.getByTestId('tool-status').textContent).toBe(messages['en-us'].chat.toolQueryingData);
+    rerender(
+      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+        <ChatTranscript messages={[]} mode="full" activeTool={null} />
+      </NextIntlClientProvider>,
+    );
+    expect(screen.queryByTestId('tool-status')).toBeNull();
+  });
+
+  it('shows the searched query for a used web search', () => {
+    renderTranscript({
+      isStreaming: true,
+      streamingWebSearch: { status: 'used', reason: null, result_count: 2, query: 'vinfast stock price' },
+    });
+    expect(screen.getByTestId('web-search-query').textContent).toBe('Searched: vinfast stock price');
+  });
+});

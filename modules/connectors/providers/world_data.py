@@ -30,6 +30,7 @@ from modules.connectors.providers.macro import (
 )
 from modules.connectors.providers.security import SECURITY_ADAPTERS
 from modules.connectors.providers.space import SPACE_ADAPTERS
+from modules.connectors.providers.vn_stock import VN_STOCK_ADAPTERS
 from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
 from modules.ingestion.schemas import IngestionRecord
 from modules.sources.schemas import ConnectorSource, SourceFence
@@ -379,7 +380,7 @@ async def collect_world_data(
     return ProviderCollectionPage(records=tuple(records), coverage="returned_snapshot", credential_operation_id=operation_id)
 
 
-PURE_ADAPTERS: dict[str, PureAdapter] = {**MACRO_ADAPTERS, **CRYPTO_ADAPTERS, **DISASTER_ADAPTERS, **HAZARD_ADAPTERS, **SECURITY_ADAPTERS, **SPACE_ADAPTERS, **json_feed_adapters()}
+PURE_ADAPTERS: dict[str, PureAdapter] = {**MACRO_ADAPTERS, **CRYPTO_ADAPTERS, **DISASTER_ADAPTERS, **HAZARD_ADAPTERS, **SECURITY_ADAPTERS, **SPACE_ADAPTERS, **VN_STOCK_ADAPTERS, **json_feed_adapters()}
 
 
 def map_pure_provider_body(

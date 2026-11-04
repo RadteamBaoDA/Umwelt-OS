@@ -34,6 +34,7 @@ class DashboardDescriptor:
         "/api/v1/dashboard-presets",
         "/api/v1/dashboard-presets/{preset_id}/preview",
         "/api/v1/dashboard-presets/{preset_id}/apply",
+        "/api/v1/weather/local",
         "/api/v1/context/current",
         "/api/v1/context/daily",
         "/api/v1/briefs",

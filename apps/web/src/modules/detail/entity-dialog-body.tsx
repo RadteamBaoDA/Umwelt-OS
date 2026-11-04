@@ -6,6 +6,8 @@ import { ArrowLeft } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { TablePagination, usePagination } from '@/components/ui/pagination';
+import { Table, TableBody, TableCaption, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
@@ -40,6 +42,7 @@ export function EntityDialogBody({ entityId, canGoBack, onBack, onOpenEntity }: 
   const documents = evidence.data?.pages.flatMap((page) => page.items) ?? [];
   const events = timeline.data?.pages.flatMap((page) => page.timeline.items) ?? [];
   const relations = neighbors.data?.pages.flatMap((page) => page.items) ?? [];
+  const relationsPager = usePagination(relations);
   /** Appends "+" when more pages exist so counts never overstate what is loaded. */
   const count = (n: number, more: boolean) => `${n}${more ? '+' : ''}`;
   const typeLabel = (type: string) => t.has(`type_${type}`) ? t(`type_${type}` as 'type_person') : type;
@@ -74,16 +77,16 @@ export function EntityDialogBody({ entityId, canGoBack, onBack, onOpenEntity }: 
           <h3 className="text-sm font-semibold">{t('relationships')}</h3>
           {neighbors.isError && <p className="error" role="alert">{t('relationshipUnavailable')} <Button type="button" variant="outline" size="sm" onClick={() => { void neighbors.refetch(); }}>{t('retry')}</Button></p>}
           {neighbors.isSuccess && !relations.length && <p className="text-muted-foreground text-sm">{t('noRelationships')}</p>}
-          {!!relations.length && <div className="overflow-x-auto"><table className="w-full border-collapse text-sm">
-            <caption className="sr-only">{t('relationships')}</caption>
-            <thead className="sr-only"><tr><th scope="col">{d('colTo')}</th><th scope="col">{d('colBasis')}</th><th scope="col">{d('colValid')}</th><th scope="col">{d('colEvidence')}</th></tr></thead>
-            <tbody>{relations.map(({ entity: other, relationship }) => <tr key={relationship.id} className="border-t border-border align-top">
+          {!!relations.length && <div><Table className="border-collapse" containerClassName="max-h-64">
+            <TableCaption className="sr-only">{t('relationships')}</TableCaption>
+            <TableHeader className="sr-only"><TableRow><TableHead scope="col">{d('colTo')}</TableHead><TableHead scope="col">{d('colBasis')}</TableHead><TableHead scope="col">{d('colValid')}</TableHead><TableHead scope="col">{d('colEvidence')}</TableHead></TableRow></TableHeader>
+            <TableBody>{relationsPager.pageItems.map(({ entity: other, relationship }) => <tr key={relationship.id} className="border-t border-border align-top">
               <td className="px-2 py-2"><button type="button" className="min-h-9 pointer-coarse:min-h-11 text-left font-semibold text-primary underline-offset-4 hover:underline" onClick={() => onOpenEntity(other.id)}>{nameOf(other.name)}</button><span className="block text-xs text-muted-foreground">{relationship.type}</span></td>
               <td className="px-2 py-2"><span className={`${badgeClass} ${relationship.origin === 'derived' ? 'border-dashed' : ''}`}>{relationship.origin === 'derived' ? d('basisInferred') : d('basisConfirmed')}</span></td>
               <td className="px-2 py-2 text-xs text-muted-foreground">{relationship.validity_precision === 'bounded' && (relationship.valid_from || relationship.valid_to) ? `${relationship.valid_from ? formatDateTime(relationship.valid_from, display.locale, display.timezone) : d('openStart')} – ${relationship.valid_to ? formatDateTime(relationship.valid_to, display.locale, display.timezone) : d('openEnd')}` : d('validityUnknown')}</td>
               <td className="px-2 py-2"><Button type="button" variant="ghost" size="sm" aria-pressed={selectedRelationshipId === relationship.id} onClick={() => setRelationshipId({ entityId, id: relationship.id })}>{d('showEvidence')}</Button></td>
-            </tr>)}</tbody>
-          </table></div>}
+            </tr>)}</TableBody>
+          </Table><TablePagination {...relationsPager} /></div>}
           {neighbors.hasNextPage && <Button type="button" variant="outline" className="w-fit" disabled={neighbors.isFetchingNextPage} onClick={() => { void neighbors.fetchNextPage(); }}>{t('loadRelationships')}</Button>}
           <p className="text-xs text-muted-foreground">{d('relationshipLegend')}</p>
           {selectedRelationshipId && <div className="grid gap-2" aria-live="polite">

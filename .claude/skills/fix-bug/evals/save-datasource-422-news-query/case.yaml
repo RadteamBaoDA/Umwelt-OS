@@ -1,0 +1,7 @@
+schema_version: "1.1"
+name: save-datasource-422-news-query
+expected_outcome: |
+  Traces the 422 to the news_query Field(min_length=1) in modules/connectors/public.py and the
+  before-validator that does not turn an empty string into None, or to the web form sending "" for an
+  empty optional field. Gives file:line evidence, proposes a root-cause fix, and stops for approval
+  without editing the repo.

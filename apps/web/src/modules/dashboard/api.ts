@@ -173,6 +173,8 @@ export type GadgetRenderer = {
   source_mode: 'none' | 'single' | 'multi';
   /** Data shapes the renderer accepts; null means any shape. */
   accepted_shapes: DataShape[] | null;
+  /** Source ceiling for multi renderers; null means the generic selector ceiling. */
+  max_sources?: number | null;
 };
 
 /** Named gadget starting point; pre-fills renderer, accepted shapes, scope and filters only. */
@@ -190,7 +192,8 @@ export type DashboardPreset = {
   id: string;
   label: string;
   family: string;
-  slots: { slot_id: string; renderer: string }[];
+  /** `label` is the slot's own gadget name (e.g. "Live news"); null falls back to the renderer's template name. */
+  slots: { slot_id: string; renderer: string; label?: string | null }[];
 };
 
 /** Input selecting explicit source IDs for known preset slots and an optional target. */
@@ -466,7 +469,7 @@ export function previewDashboardPreset(presetId: string, payload: PresetPreviewR
 /** Applies the fingerprinted preset; backend 409 ApiError details pass through unchanged. */
 export function applyDashboardPreset(presetId: string, payload: PresetPreviewRequest & {
   preview_fingerprint: string;
-  mode?: 'create' | 'replace';
+  mode?: 'create' | 'replace' | 'append';
   name?: string | null;
   expected_revision?: number | null;
   replace_confirmed?: boolean;
@@ -484,4 +487,26 @@ const highlightRuleErrorKeys: Record<string, string> = {
 /** Maps a rule-condition 422 to a localized gadgetSettings key, or null when the code is not a rule error. */
 export function highlightRuleErrorKey(error: unknown): string | null {
   return error instanceof ApiError && error.status === 422 ? highlightRuleErrorKeys[error.code ?? ''] ?? null : null;
+}
+
+/** Current local weather returned by the owner-only proxy; coordinates are never echoed back. */
+export type LocalWeather = {
+  temperature_c: number;
+  weather_code: number;
+  place: string | null;
+  observed_at: string;
+  attribution: string[];
+  /** Secondary readings; null/absent when the provider omitted them. */
+  humidity_pct?: number | null;
+  wind_kmh?: number | null;
+  precipitation_probability_pct?: number | null;
+  is_day?: boolean | null;
+  /** Next 24 forecast hours (UTC instants); empty when the provider sent none. */
+  hourly?: { at: string; temperature_c: number | null; precipitation_probability_pct: number | null; wind_kmh: number | null }[];
+};
+
+/** Reads current weather and place name for browser coordinates (already rounded by the caller) via the backend proxy. */
+export function getLocalWeather(lat: number, lon: number, locale: 'en' | 'vi', signal?: AbortSignal) {
+  const query = new URLSearchParams({ lat: String(lat), lon: String(lon), locale });
+  return apiRequest<LocalWeather>(`/api/v1/weather/local?${query}`, { signal });
 }

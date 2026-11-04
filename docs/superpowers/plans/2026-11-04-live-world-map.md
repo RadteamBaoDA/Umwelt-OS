@@ -62,3 +62,12 @@
 - Target extracted the existing operator review UI into `modules/settings/provider-review.tsx`; integrate live terms there without losing target settings changes. Target globe now uses `globe-view.ts` location keys to preserve user camera state; reconcile with live selection focus and weather rendering. Preserve both locale catalogs.
 - Target migration head is `0010_observations_vn_stock`; live `0008_live_map_config` currently branches from `0007`. Reconcile the migration ancestry after target integration, before a migration check or merge.
 - Focused suite now passes 37 Python tests, including HTTP-level denial for anonymous, nonoperator, and operator without CSRF. The temporary index is only a rehearsal, not a merge or proof of runtime compatibility.
+
+## Integration progress
+
+- Created feature checkpoint commit `283864bc` and merged target `4f25f88b` into the isolated worktree for conflict resolution; target checkout and its staged/unstaged changes were not touched. This merge is not yet committed or integrated back.
+- Combined live reviews with target's existing provider-review table, preserving connector payloads; focused review and dashboard tests passed (74 frontend). Preserved target globe location-key behavior alongside live selection and weather. Python focused suite passed (37).
+- Added `0011_merge_live_map` with both existing migration heads as parents; offline Alembic history now shows one head. PostgreSQL migration execution and concurrency remain unverified.
+
+- After reconciliation, 56 existing Dashboard Python tests and 74 focused frontend tests passed; Alembic generated offline SQL from `0010_observations_vn_stock` through the merged head. Webpack completed after a Next.js security warning, but omitted 27 standalone trace files outside the junction tracing root.
+- Reindexed the merged working tree and ran GitNexus `detect_changes(scope=all)` twice. Both reported critical risk, 1,415 changed symbols and `truncated: true` (1,000 shown); the merge includes target history and this is not a clean or complete graph audit. The source review and targeted tests cover selected seams only.

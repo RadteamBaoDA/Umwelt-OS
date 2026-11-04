@@ -79,7 +79,7 @@ def test_message_read_web_search_shape() -> None:
     dumped = MessageRead(
         **common, web_search={"status": "unavailable", "reason": "timeout", "result_count": 0},
     ).model_dump(mode="json")
-    assert dumped["web_search"] == {"status": "unavailable", "reason": "timeout", "result_count": 0}
+    assert dumped["web_search"] == {"status": "unavailable", "reason": "timeout", "result_count": 0, "query": None}
     with pytest.raises(ValidationError):
         MessageRead(**common, web_search={"status": "bogus", "reason": None, "result_count": 0})
 

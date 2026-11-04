@@ -59,6 +59,28 @@ data: {}
     expect(onUiDiscard.mock.calls).toEqual([['r1-t1']]);
   });
 
+  it('dispatches tool.status and ignores malformed or redacted payloads', async () => {
+    mockSse(`event: tool.status
+data: {"tool":"web_search","state":"running"}
+
+event: tool.status
+data: {}
+
+event: tool.status
+data: {"tool":"other","state":"running"}
+
+event: tool.status
+data: {"tool":"query_collected_data","state":"done"}
+
+`);
+    const onToolStatus = vi.fn();
+    await streamResponseEvents('r1', { onToolStatus });
+    expect(onToolStatus.mock.calls.map((c) => c[0])).toEqual([
+      { tool: 'web_search', state: 'running' },
+      { tool: 'query_collected_data', state: 'done' },
+    ]);
+  });
+
   it('forwards part_id on ui events and done.generative_ui_parts', async () => {
     const a = { kind: 'table', part_id: 'a', status: 'completed', table: { rows: [] } };
     const b = { kind: 'plan', part_id: 'b', status: 'streaming', plan: { steps: [] } };

@@ -1,5 +1,6 @@
 'use client';
 
+import { TablePagination, usePagination } from '@/components/ui/pagination';
 import { Check, Info, Plus, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -51,6 +52,7 @@ export function ModelsPanel({ providers, discovered, modelTests, checkedAt = {},
   const noProvider = providers.length === 0;
   const noProviderNote = noProvider ? 'models-no-provider-note' : undefined;
   const rows = providers.flatMap((item) => (item.models ?? []).map((model) => ({ provider: item, model })));
+  const pager = usePagination(rows);
   /** Replaces one provider's model list. */
   const patch = (id: string, models: ProviderModel[]) => onChange(providers.map((item) => (item.id === id ? { ...item, models } : item)));
   return <div className="flex flex-col gap-3">
@@ -69,9 +71,9 @@ export function ModelsPanel({ providers, discovered, modelTests, checkedAt = {},
       <Button type="button" variant="outline" disabled={disabled || !provider || !pending} onClick={() => { patch(provider!.id, [...(provider!.models ?? []), type === 'llm' && vision ? { id: pending, type, vision: true } : { id: pending, type }]); setPending(''); setVision(false); }}><Plus className="size-4" aria-hidden="true" /> {t('modelAdd')}</Button>
       {type === 'llm' && <label className="flex items-center gap-2 text-sm sm:col-span-4"><Checkbox disabled={disabled || noProvider} aria-describedby={noProviderNote} checked={vision} onCheckedChange={(next) => setVision(next === true)} />{t('modelVision')}</label>}
     </div>
-    {rows.length === 0 ? <p id={noProvider ? 'models-no-provider-note' : undefined} className="text-muted-foreground m-0">{t(providers.length === 0 ? 'modelsNoProvider' : 'modelsEmpty')}</p> : <TooltipProvider delayDuration={200}><Table aria-label={t('modelsTable')}>
+    {rows.length === 0 ? <p id={noProvider ? 'models-no-provider-note' : undefined} className="text-muted-foreground m-0">{t(providers.length === 0 ? 'modelsNoProvider' : 'modelsEmpty')}</p> : <TooltipProvider delayDuration={200}><div><Table aria-label={t('modelsTable')}>
       <TableHeader><TableRow><TableHead>{t('providerColumn')}</TableHead><TableHead>{t('modelColumn')}</TableHead><TableHead>{t('typeColumn')}</TableHead><TableHead>{t('visionColumn')}</TableHead><TableHead>{t('actionsColumn')}</TableHead></TableRow></TableHeader>
-      <TableBody>{rows.map(({ provider: owner, model }) => {
+      <TableBody>{pager.pageItems.map(({ provider: owner, model }) => {
         const state = modelTests[modelTestKey(owner.id, model.id)];
         return <TableRow key={modelTestKey(owner.id, model.id)}>
           <TableCell>{owner.label || owner.id}</TableCell>
@@ -90,7 +92,7 @@ export function ModelsPanel({ providers, discovered, modelTests, checkedAt = {},
           </div></TableCell>
         </TableRow>;
       })}</TableBody>
-    </Table></TooltipProvider>}
+    </Table><TablePagination {...pager} /></div></TooltipProvider>}
     <p className="text-muted-foreground m-0 text-sm">{t('modelTypesHelp')}</p>
   </div>;
 }

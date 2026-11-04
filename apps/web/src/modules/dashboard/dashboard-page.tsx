@@ -1240,7 +1240,10 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
         </Button>}
       </div>
       {isOwner && !showFirstRun && (
-        <TodayHeader sourceIds={(allSourcesQuery.data?.items ?? []).filter((s) => s.status === 'active').map((s) => s.id)} />
+        <TodayHeader
+          sourceIds={(allSourcesQuery.data?.items ?? []).filter((s) => s.status === 'active').map((s) => s.id)}
+          weatherSource={(allSourcesQuery.data?.items ?? []).find((s) => s.status === 'active' && s.provider === 'open_meteo')}
+        />
       )}
       <FreshnessStrip sources={dashboardSources} locale={display.locale} />
       {/* Group tabs: rendered only when the dashboard has groups */}
