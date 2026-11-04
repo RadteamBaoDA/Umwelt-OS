@@ -10,7 +10,7 @@ per workspace, not cancellation of remote HTTP already sent by an expired attemp
 """
 
 from datetime import UTC, datetime, timedelta
-from typing import Literal, cast
+from typing import Any, Literal, cast
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core import telemetry
 from core.config import Settings
-from core.errors import DomainError
+from core.errors import ConflictError, DomainError, NotFoundError, RateLimitedError
 from core.ids import uuid7
 from core.workspaces.models import WorkspaceMembership
 from core.workspaces.schemas import InternalJobScope, Scope
@@ -82,7 +82,7 @@ def _read(request: ConnectorCollectionRequest) -> CollectionRequestRead:
     )
 
 
-def denial_code(exc: HTTPException) -> str:
+def denial_code(exc: HTTPException | DomainError) -> str:
     """Terminal code for a denied job: 409 (after one re-resolve) is stale_scope, 401/404/other permission_lost."""
     return "stale_scope" if exc.status_code == 409 else "permission_lost"
 
@@ -136,21 +136,21 @@ async def _open_request(
     source = await sources.get_connector_source(
         session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if source_fence is None or source is None:
-        raise HTTPException(status_code=404, detail="Source not found")
+        raise NotFoundError("Source not found")
     if (
         source.status != "active" or row is None or row.state != "active"
         or row.source_generation != source.generation or row.applied_revision != row.desired_revision
     ):
-        raise HTTPException(status_code=409, detail="Enable this source from connector settings before collecting")
+        raise ConflictError("Enable this source from connector settings before collecting")
     if expected_revision is not None and expected_revision != row.desired_revision:
-        raise HTTPException(status_code=409, detail="Connector revision changed")
+        raise ConflictError("Connector revision changed")
     if not await connectors.require_collection_fence(
         session, source, connectors.CollectionFence(
             source_generation=source.generation, connector_revision=row.desired_revision,
             backend_revision=row.backend_revision),
         lock=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     ):
-        raise HTTPException(status_code=409, detail="Connector collection fence is stale")
+        raise ConflictError("Connector collection fence is stale")
 
     now = datetime.now(UTC)
     active = await session.scalar(
@@ -162,7 +162,7 @@ async def _open_request(
         select(ConnectorSchedule).where(ConnectorSchedule.source_id == source_id)
         .with_for_update().execution_options(populate_existing=True))
     if schedule is not None and schedule.blocked_error_code is not None:
-        raise HTTPException(status_code=409, detail=f"Action required: {schedule.blocked_error_code}")
+        raise ConflictError(f"Action required: {schedule.blocked_error_code}")
     # Terms/eligibility gate for manual, scheduled and retry alike, before any queueing or network.
     terms_revision = await provider_terms.require_terms_eligible(session, source)
     if active is not None and active.status == "queued" and (
@@ -179,13 +179,13 @@ async def _open_request(
         if schedule is None or not schedule.enabled or schedule.next_due_at > now or (
             schedule.next_eligible_at is not None and schedule.next_eligible_at > now
         ):
-            raise HTTPException(status_code=409, detail="Collection is not due")
+            raise ConflictError("Collection is not due")
         schedule.next_due_at = next_due_after(now, schedule.next_due_at, schedule.interval_minutes)
         schedule.last_dispatch_at = now
     if active is not None:
         return active
     if schedule is not None and schedule.next_eligible_at is not None and schedule.next_eligible_at > now:
-        raise HTTPException(status_code=429, detail="Provider asked to retry later")
+        raise RateLimitedError("Provider asked to retry later")
     request = ConnectorCollectionRequest(
         id=uuid7(), workspace_id=scope.workspace_id,
         source_id=source_id, actor_user_id=connectors._connector_actor(scope),
@@ -230,7 +230,7 @@ async def get_collection_request(
             ConnectorCollectionRequest.workspace_id == scope.workspace_id,
         ).execution_options(populate_existing=True))
     if source is None or request is None:
-        raise HTTPException(status_code=404, detail="Collection request not found")
+        raise NotFoundError("Collection request not found")
     return _read(request)
 
 
@@ -277,6 +277,69 @@ async def _stale_reason(
     return None
 
 
+async def _lock_admission_rows(
+    session: AsyncSession, request_id: UUID, source_id: UUID, scope: InternalJobScope,
+    *, multi_workspace_enabled: bool,
+) -> tuple[tuple[Any, Any, Any, ConnectorCollectionRequest | None] | None, str | None]:
+    """Re-admit the request's recorded principal and lock Source, provisioning and request rows.
+
+    Returns ``((source_fence, provisioning_row, source, request), None)`` on success. A 409 is
+    re-resolved once; any other denial, or a second 409, returns ``(None, denial_code)``. A
+    disabled connectors module rolls back and returns ``(None, None)`` without touching the
+    request. Every failure path has already rolled the session back.
+    """
+    from modules.settings.public import module_is_enabled
+    from modules.sources import public as sources
+
+    for resolve in (1, 2):  # a 409 is re-resolved once, then becomes terminal stale_scope
+        try:
+            await connectors._connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            if not await module_is_enabled(
+                session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            ):
+                await session.rollback()
+                return None, None
+            source_fence, row, _ = await provisioning.lock_connector(
+                session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            source = await sources.get_connector_source(
+                session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            request = await session.scalar(
+                select(ConnectorCollectionRequest).where(ConnectorCollectionRequest.id == request_id)
+                .with_for_update().execution_options(populate_existing=True))
+            return (source_fence, row, source, request), None
+        except (DomainError, HTTPException) as exc:
+            await session.rollback()
+            if exc.status_code == 409 and resolve == 1:
+                continue
+            return None, denial_code(exc)
+    return None, None  # unreachable: the second pass always returns
+
+
+async def _select_admission_slot(
+    session: AsyncSession, request: ConnectorCollectionRequest, now: datetime,
+) -> ConnectorAdmissionSlot | None:
+    """Pick a free global admission slot for the request, or None when it must be deferred.
+
+    No slot is offered while the workspace already occupies one or the Source's ingestion lease
+    is still live. Otherwise the lowest free slot is locked with ``skip_locked`` so concurrent
+    admitters never block each other.
+    """
+    from modules.ingestion.models import SourceIngestionState
+
+    state = await session.scalar(
+        select(SourceIngestionState).where(SourceIngestionState.source_id == request.source_id)
+        .execution_options(populate_existing=True))
+    workspace_busy = await session.scalar(
+        select(ConnectorAdmissionSlot.slot_id).where(ConnectorAdmissionSlot.workspace_id == request.workspace_id))
+    slot = None if (
+        workspace_busy is not None
+        or (state is not None and state.lease_expires_at is not None and state.lease_expires_at > now)
+    ) else await session.scalar(
+        select(ConnectorAdmissionSlot).where(ConnectorAdmissionSlot.occupied_request_id.is_(None))
+        .order_by(ConnectorAdmissionSlot.slot_id).limit(1).with_for_update(skip_locked=True))
+    return slot
+
+
 async def admit_collection_request(
     session: AsyncSession, request_id: UUID, *, multi_workspace_enabled: bool,
 ) -> CollectionAdmissionRead | None:
@@ -285,10 +348,6 @@ async def admit_collection_request(
     Busy source, workspace or capacity defers without burning an attempt. Revision changes
     cancel the request; the sixth admission fails it. Commits before any provider I/O.
     """
-    from modules.ingestion.models import SourceIngestionState
-    from modules.settings.public import module_is_enabled
-    from modules.sources import public as sources
-
     peek = await session.get(ConnectorCollectionRequest, request_id)
     if peek is None or peek.status != "queued":
         await session.rollback()
@@ -296,29 +355,10 @@ async def admit_collection_request(
     scope = _request_scope(peek)
     source_id = peek.source_id
     await session.rollback()
-    denied: str | None = None
-    for resolve in (1, 2):  # a 409 is re-resolved once, then becomes terminal stale_scope
-        try:
-            await connectors._connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-            if not await module_is_enabled(
-                session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            ):
-                await session.rollback()
-                return None  # durable request untouched until the module is re-enabled
-            source_fence, row, _ = await provisioning.lock_connector(
-                session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-            source = await sources.get_connector_source(
-                session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-            request = await session.scalar(
-                select(ConnectorCollectionRequest).where(ConnectorCollectionRequest.id == request_id)
-                .with_for_update().execution_options(populate_existing=True))
-            break
-        except HTTPException as exc:
-            await session.rollback()
-            if exc.status_code == 409 and resolve == 1:
-                continue
-            denied = denial_code(exc)
-            break
+    rows, denied = await _lock_admission_rows(
+        session, request_id, source_id, scope, multi_workspace_enabled=multi_workspace_enabled)
+    if rows is None and denied is None:
+        return None  # module disabled: the durable request is untouched until it is re-enabled
     if denied is not None:
         # Lost permission or stale scope: terminal, no retry, no data exposed.
         await session.execute(
@@ -327,6 +367,8 @@ async def admit_collection_request(
             .values(status="cancelled", error_code=denied))
         await session.commit()
         return None
+    assert rows is not None
+    source_fence, row, source, request = rows
     now = datetime.now(UTC)
     if request is None or request.status != "queued" or request.available_at > now:
         await session.rollback()
@@ -340,17 +382,7 @@ async def admit_collection_request(
             _penalize(await session.get(ConnectorSchedule, source_id, with_for_update=True), request.provider_deadline)
         await session.commit()
         return None
-    state = await session.scalar(
-        select(SourceIngestionState).where(SourceIngestionState.source_id == source_id)
-        .execution_options(populate_existing=True))
-    workspace_busy = await session.scalar(
-        select(ConnectorAdmissionSlot.slot_id).where(ConnectorAdmissionSlot.workspace_id == request.workspace_id))
-    slot = None if (
-        workspace_busy is not None
-        or (state is not None and state.lease_expires_at is not None and state.lease_expires_at > now)
-    ) else await session.scalar(
-        select(ConnectorAdmissionSlot).where(ConnectorAdmissionSlot.occupied_request_id.is_(None))
-        .order_by(ConnectorAdmissionSlot.slot_id).limit(1).with_for_update(skip_locked=True))
+    slot = await _select_admission_slot(session, request, now)
     if slot is None:
         from modules.connectors.provider_specs import get_realtime_tier
 
@@ -449,7 +481,7 @@ async def renew_admission(
             return False
         reason = await _stale_reason(
             session, request, scope, source_fence, source, row, multi_workspace_enabled=multi_workspace_enabled)
-    except HTTPException as exc:
+    except (DomainError, HTTPException) as exc:
         reason = denial_code(exc)
     if reason is not None:
         await session.rollback()
@@ -652,7 +684,7 @@ async def admit_managed_collection(
             or request.connector_revision != fence.connector_revision
             or request.backend_revision != fence.backend_revision
         ):
-            raise HTTPException(status_code=409, detail="Managed collection fence is stale")
+            raise ConflictError("Managed collection fence is stale")
         request_id = request.id
         await session.commit()
     except BaseException:
@@ -661,7 +693,7 @@ async def admit_managed_collection(
     admission = await admit_collection_request(
         session, request_id, multi_workspace_enabled=multi_workspace_enabled)
     if admission is None:
-        raise HTTPException(status_code=409, detail="Collection is busy")
+        raise ConflictError("Collection is busy")
     return admission
 
 
@@ -744,7 +776,7 @@ async def _create_due_requests(factory: async_sessionmaker[AsyncSession], now: d
                     pg_insert(ConnectorWorkspaceDispatch).values(workspace_id=workspace_id, last_dispatched_at=now)
                     .on_conflict_do_update(index_elements=["workspace_id"], set_={"last_dispatched_at": now}))
                 await session.commit()
-            except (HTTPException, DomainError):
+            except (DomainError, HTTPException):
                 await session.rollback()
     return created
 

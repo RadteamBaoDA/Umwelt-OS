@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
+from core.errors import DomainError
 from modules.connectors import builtins
 from modules.connectors.backends import FIXED_SCOPE_PROVIDERS, PROVIDER_SOURCE_TYPES
 from modules.connectors.provider_specs import (
@@ -372,6 +373,6 @@ async def test_activation_statuses_maps_rows_and_404s_on_invisible_source() -> N
     assert got == {a: row, b: None} and session.scalars.await_count == 1
     with patch.object(provisioning, "_connector_access", AsyncMock()), \
             patch.object(provisioning.sources, "get_connector_sources", AsyncMock(return_value={a: 1})), \
-            pytest.raises(HTTPException) as exc:
+            pytest.raises(DomainError) as exc:
         await provisioning.activation_statuses(session, frozenset({a, b}), scope=SCOPE, multi_workspace_enabled=False)  # type: ignore[arg-type]
     assert exc.value.status_code == 404

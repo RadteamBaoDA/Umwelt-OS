@@ -28,6 +28,7 @@ from core.auth.models import AuthSession, Owner
 from core.auth.public import authenticated_session_ref
 from core.config import Settings
 from core.database import get_session
+from core.errors import DomainError
 from core.ids import uuid7
 from core.realtime import commit_with_replay
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
@@ -537,7 +538,7 @@ async def _google_discovery_access(
             await _publish(session, request, scope, fence)
         else:
             await session.rollback()
-    except HTTPException:
+    except (DomainError, HTTPException):
         raise
     except Exception:  # noqa: BLE001  # Authlib transport/protocol failures have provider-specific types.
         await session.rollback()
@@ -636,7 +637,7 @@ async def discover_google_source_resources(
             provider, access, parent_id=parent_id, before_request=before_request,
         )
         await before_request()
-    except HTTPException:
+    except (DomainError, HTTPException):
         raise
     except Exception as exc:  # noqa: BLE001  # Normalize transport and provider failures before returning to the UI.
         from modules.connectors.providers import rest

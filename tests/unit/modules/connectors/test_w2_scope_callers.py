@@ -19,6 +19,7 @@ from core.workspaces.schemas import AccessFence, InternalJobScope, WorkspaceCont
 from modules.connectors import mcp, worker
 from modules.connectors import public as connectors_public
 from modules.connectors.github import mapping, routes
+from modules.connectors.service import collection_requests as collection_requests_service
 
 WORKSPACE_ID = uuid4()
 SOURCE_ID = uuid4()
@@ -105,8 +106,8 @@ async def test_public_map_github_version_does_not_read_principal_off_ready_ref()
     ready = SimpleNamespace(source_id=SOURCE_ID, source_generation=4)  # no principal attributes at all
     source = SimpleNamespace(provider="github", status="active", generation=4)
     inner = AsyncMock(return_value=True)
-    with patch.object(connectors_public, "_connector_access", AsyncMock(return_value=FENCE)), \
-            patch.object(connectors_public, "_read_scoped_source", AsyncMock(return_value=source)) as read, \
+    with patch.object(collection_requests_service, "_connector_access", AsyncMock(return_value=FENCE)), \
+            patch.object(collection_requests_service, "_read_scoped_source", AsyncMock(return_value=source)) as read, \
             patch("modules.connectors.github.mapping.map_github_version", inner):
         assert await connectors_public.map_github_version(
             MagicMock(), ready, scope=SCOPE, multi_workspace_enabled=False,
@@ -120,8 +121,8 @@ async def test_public_map_github_version_does_not_read_principal_off_ready_ref()
 async def test_public_map_github_version_rejects_foreign_or_stale_source(source) -> None:
     ready = SimpleNamespace(source_id=SOURCE_ID, source_generation=4)
     inner = AsyncMock(return_value=True)
-    with patch.object(connectors_public, "_connector_access", AsyncMock(return_value=FENCE)), \
-            patch.object(connectors_public, "_read_scoped_source", AsyncMock(return_value=source)), \
+    with patch.object(collection_requests_service, "_connector_access", AsyncMock(return_value=FENCE)), \
+            patch.object(collection_requests_service, "_read_scoped_source", AsyncMock(return_value=source)), \
             patch("modules.connectors.github.mapping.map_github_version", inner):
         assert await connectors_public.map_github_version(
             MagicMock(), ready, scope=SCOPE, multi_workspace_enabled=False,

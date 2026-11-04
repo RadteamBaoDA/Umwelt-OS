@@ -24,6 +24,7 @@ from core.auth.models import AuthSession
 from core.auth.public import authenticated_session_ref
 from core.config import Settings
 from core.database import get_session
+from core.errors import DomainError
 from core.ids import uuid7
 from core.realtime import commit_with_replay
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
@@ -273,7 +274,7 @@ async def _mark_github_reconciliation(
             session, source_id, provisioning._ALL_CREDENTIAL_SLOTS, scope=scope,
             multi_workspace_enabled=flag, expected_access_fence=fence,
         )
-    except HTTPException as exc:
+    except (DomainError, HTTPException) as exc:
         await session.rollback()
         if exc.status_code not in _DENIED:
             raise
@@ -605,7 +606,7 @@ async def refresh_github_authorization(
         source_fence, current_provisioning, _no_slots = await provisioning.lock_connector(
             session, source_uuid, (), scope=scope, multi_workspace_enabled=flag, expected_access_fence=fence,
         )
-    except HTTPException:
+    except (DomainError, HTTPException):
         await session.rollback()
         await _mark_github_reconciliation(session, request, scope, fence, source_uuid, operation_id, "token_refresh_outcome_unknown")
         raise
@@ -627,7 +628,7 @@ async def refresh_github_authorization(
     # This must remain the final awaited authorization check after every lifecycle lock.
     try:
         await _require_current_owner_session(request, session, _owner)
-    except HTTPException:
+    except (DomainError, HTTPException):
         await session.rollback()
         await _mark_github_reconciliation(session, request, scope, fence, source_uuid, operation_id, "token_refresh_outcome_unknown")
         raise
@@ -743,7 +744,7 @@ async def complete_github_authorization(
         source_fence, current, _no_slots = await provisioning.lock_connector(
             session, source_id, (), scope=scope, multi_workspace_enabled=flag, expected_access_fence=fence,
         )
-    except HTTPException:
+    except (DomainError, HTTPException):
         await session.rollback()
         await _mark_github_reconciliation(session, request, scope, fence, source_id, attempt_id, "authorization_outcome_unknown")
         raise
@@ -771,7 +772,7 @@ async def complete_github_authorization(
     # Revalidate after all locked rows, immediately before publishing the grant.
     try:
         await _require_current_owner_session(request, session, owner)
-    except HTTPException:
+    except (DomainError, HTTPException):
         await session.rollback()
         await _mark_github_reconciliation(session, request, scope, fence, source_id, attempt_id, "authorization_outcome_unknown")
         raise
@@ -1018,7 +1019,7 @@ async def revoke_github_grant(
         # Local grants remain fenced; the owner can see cleanup is unresolved without exposing credentials.
         try:
             await _admit(session, request, scope, expected=fence)
-        except HTTPException as exc:
+        except (DomainError, HTTPException) as exc:
             await session.rollback()
             if exc.status_code not in _DENIED:
                 raise

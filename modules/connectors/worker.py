@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any, cast
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.sql.elements import ColumnElement
 
 from core.config import Settings
+from core.errors import DomainError
 from core.ids import uuid7
 from core.realtime import commit_with_replay
 from core.worker_cursors import STATE_KEY, read_cursor, write_cursor
@@ -66,6 +68,7 @@ async def _write_cursor(ctx: dict[str, object] | None, key: str, last: UUID | No
 
 
 def _slot_state(ctx: dict[str, object] | None) -> dict[str, str] | None:
+    """Return the worker's shared per-pass cursor state mapping, or ``None`` without a worker context."""
     return cast(dict[str, str], ctx[STATE_KEY]) if ctx is not None else None
 
 
@@ -147,7 +150,7 @@ async def _admit_lineage(
     scope, original = lineage
     try:
         current = await read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    except HTTPException as exc:
+    except (DomainError, HTTPException) as exc:
         await session.rollback()
         if exc.status_code not in _DENIED:
             raise
@@ -176,7 +179,7 @@ async def _admit_source_job(
             await session.rollback()
             return None
         fence = await read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    except HTTPException as exc:
+    except (DomainError, HTTPException) as exc:
         await session.rollback()
         if exc.status_code not in _DENIED:
             raise
@@ -273,6 +276,173 @@ _DELETED_SOURCE_REVOKE = "provider_revoke_pending_source_deleted"
 _COORDINATOR_STALE_AFTER = timedelta(minutes=5)
 
 
+@dataclass
+class _DeletedGrantRevoke:
+    """State carried between the three phases of one deleted-Source grant revoke.
+
+    Captures the admitted worker subject and the exact grant operation/token revision seen in
+    phase 1 so phase 3 can re-lock under the ORIGINAL access fence and write only for that
+    operation. ``claim`` is set only when this pass took the actor-wide coordinator; ``token`` is
+    the decrypted access token and is never logged.
+    """
+
+    scope: InternalJobScope
+    fence: AccessFence
+    actor: int
+    grant_operation: UUID
+    token_revision: int
+    token: str | None = None
+    claim: UUID | None = None
+    outcome: str = "provider_revoke_failed_source_deleted"
+
+
+def _idle_coordinator(coordinator: Any) -> None:
+    """Return an OAuth coordinator row to ``idle`` and clear its operation and error code."""
+    coordinator.state, coordinator.operation_id, coordinator.error_code = "idle", None, None
+
+
+def _open_grant_access_token(key: str, grant: Any) -> str | None:
+    """Decrypt a grant's access token; any cipher failure yields ``None`` (revoke is then skipped).
+
+    The token is returned to the caller only and is never logged.
+    """
+    from modules.connectors.github import oauth
+
+    try:
+        opened = oauth._open_token_cipher(
+            key, grant.encrypted_tokens, grant.source_id, grant.operation_id,
+            grant.source_generation, grant.configuration_revision,
+        )
+        candidate = opened.get("access_token")
+        return candidate if isinstance(candidate, str) else None
+    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
+        return None
+
+
+async def _claim_deleted_grant_revoke(
+    session: AsyncSession, source_id: UUID, *, flag: bool, key: str,
+) -> _DeletedGrantRevoke | None:
+    """Phase 1: admit the archived Source, lock it, claim the coordinator and open the token.
+
+    Lock order: access fence, Source/provisioning, grant, then the actor-wide OAuth coordinator.
+    Returns ``None`` (after rollback or releasing a stale claim of this module) when the Source
+    is not admissible, the grant no longer needs revoking, or the coordinator is busy. Otherwise
+    commits (with replay) and returns the state for phases 2 and 3; a live peer Source on the
+    same grant turns the revoke into a recorded skip. Denied-admission errors propagate to the
+    caller, which rolls back.
+    """
+    from modules.connectors.models import GithubOAuthCoordinator, GithubOAuthGrant
+
+    admitted = await _admit_source_job(session, source_id, multi_workspace_enabled=flag)
+    if admitted is None:
+        return None
+    scope, fence = admitted
+    actor = scope.actor_user_id
+    anchor, _row, _slots = await provisioning.lock_connector(
+        session, source_id, (), scope=scope, multi_workspace_enabled=flag,
+        expected_access_fence=fence,
+    )
+    grant = await session.scalar(
+        select(GithubOAuthGrant).where(GithubOAuthGrant.source_id == source_id)
+        .with_for_update().execution_options(populate_existing=True)
+    )
+    if (
+        anchor is None or grant is None or grant.encrypted_tokens is None
+        or grant.error_code != _DELETED_SOURCE_REVOKE
+    ):
+        await session.rollback()
+        return None
+    coordinator = await session.scalar(
+        select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == actor).with_for_update()
+    )
+    if coordinator is None:
+        coordinator = GithubOAuthCoordinator(owner_id=actor, state="idle")
+        session.add(coordinator)
+        await session.flush()
+    if coordinator.state != "idle":
+        if (
+            coordinator.state == "revoking" and coordinator.error_code == _DELETED_SOURCE_REVOKE
+            and coordinator.updated_at <= datetime.now(UTC) - _COORDINATOR_STALE_AFTER
+        ):
+            # Our own claim from a crashed pass: release it, retry on the next pass.
+            _idle_coordinator(coordinator)
+            await commit_with_replay(
+                session, scope=scope, multi_workspace_enabled=flag, access_fence=fence,
+            )
+        else:
+            await session.rollback()
+        return None
+    state = _DeletedGrantRevoke(
+        scope=scope, fence=fence, actor=actor,
+        grant_operation=grant.operation_id, token_revision=grant.token_revision,
+    )
+    if await provisioning.github_grant_has_active_peer(
+        session, grant, scope=scope, multi_workspace_enabled=flag,
+    ):
+        state.outcome = "provider_revoke_skipped_source_deleted"
+    else:
+        state.token = _open_grant_access_token(key, grant)
+        if state.token is not None:
+            state.claim = uuid7()
+            coordinator.state, coordinator.operation_id = "revoking", state.claim
+            coordinator.error_code = _DELETED_SOURCE_REVOKE
+    await commit_with_replay(session, scope=scope, multi_workspace_enabled=flag, access_fence=fence)
+    return state
+
+
+async def _record_deleted_grant_revoke(
+    factory: async_sessionmaker[AsyncSession], source_id: UUID, state: _DeletedGrantRevoke, *, flag: bool,
+) -> bool:
+    """Phase 3: re-lock under the original fence, record the outcome and release our claim.
+
+    Returns True when the outcome was committed. On a denied admission (401/403/404/409) nothing
+    is recorded; if this pass holds the coordinator claim it is undone in its own transaction so
+    the actor's OAuth routes in other workspaces are not wedged, and False is returned. Other
+    HTTP-shaped errors propagate.
+    """
+    from modules.connectors.models import GithubOAuthCoordinator
+
+    async with factory() as session:
+        try:
+            # Lock order matches the routes: access, Source, provisioning, grant, coordinator last.
+            await provisioning.lock_connector(
+                session, source_id, (), scope=state.scope, multi_workspace_enabled=flag,
+                expected_access_fence=state.fence,
+            )
+            await provisioning.finish_deleted_source_grant_revoke(
+                session, source_id, state.outcome, scope=state.scope, multi_workspace_enabled=flag,
+                access_fence=state.fence, grant_operation_id=state.grant_operation,
+                token_revision=state.token_revision,
+            )
+            if state.claim is not None:
+                coordinator = await session.scalar(
+                    select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == state.actor).with_for_update()
+                )
+                if coordinator is not None and coordinator.operation_id == state.claim:
+                    _idle_coordinator(coordinator)
+            await commit_with_replay(
+                session, scope=state.scope, multi_workspace_enabled=flag, access_fence=state.fence,
+            )
+        except (DomainError, HTTPException) as exc:
+            await session.rollback()
+            if exc.status_code not in _DENIED:
+                raise
+            if state.claim is not None:
+                # Account-scoped row, no workspace data: undo only this job's own claim so the
+                # actor's OAuth routes in other workspaces are not wedged by lost access here.
+                coordinator = await session.scalar(
+                    select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == state.actor).with_for_update()
+                )
+                if coordinator is not None and coordinator.operation_id == state.claim:
+                    _idle_coordinator(coordinator)
+                    await session.commit()
+                else:
+                    await session.rollback()
+            logger.warning("deleted-source grant revoke result not recorded: HTTP %s", exc.status_code)
+            return False
+    return True
+
+
 async def revoke_deleted_source_github_grants(
     factory: async_sessionmaker[AsyncSession], settings: Settings, *, limit: int = 10,
     cursor_ctx: dict[str, object] | None = None,
@@ -296,7 +466,7 @@ async def revoke_deleted_source_github_grants(
     denied grants cannot starve later ones.
     """
     from modules.connectors.github import oauth
-    from modules.connectors.models import GithubOAuthCoordinator, GithubOAuthGrant
+    from modules.connectors.models import GithubOAuthGrant
 
     flag = settings.multi_workspace_enabled
     key = settings.connector_credential_encryption_key.get_secret_value()
@@ -311,116 +481,24 @@ async def revoke_deleted_source_github_grants(
     await _write_cursor(cursor_ctx, "connectors_deleted_revoke", pending[-1] if len(pending) >= limit else None)
     handled = 0
     for source_id in pending:
-        token: str | None = None
-        claim: UUID | None = None
-        outcome = "provider_revoke_failed_source_deleted"
         async with factory() as session:
             try:
-                admitted = await _admit_source_job(session, source_id, multi_workspace_enabled=flag)
-                if admitted is None:
-                    continue
-                scope, fence = admitted
-                actor = scope.actor_user_id
-                anchor, _row, _slots = await provisioning.lock_connector(
-                    session, source_id, (), scope=scope, multi_workspace_enabled=flag,
-                    expected_access_fence=fence,
-                )
-                grant = await session.scalar(
-                    select(GithubOAuthGrant).where(GithubOAuthGrant.source_id == source_id)
-                    .with_for_update().execution_options(populate_existing=True)
-                )
-                if (
-                    anchor is None or grant is None or grant.encrypted_tokens is None
-                    or grant.error_code != _DELETED_SOURCE_REVOKE
-                ):
-                    await session.rollback()
-                    continue
-                coordinator = await session.scalar(
-                    select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == actor).with_for_update()
-                )
-                if coordinator is None:
-                    coordinator = GithubOAuthCoordinator(owner_id=actor, state="idle")
-                    session.add(coordinator)
-                    await session.flush()
-                if coordinator.state != "idle":
-                    if (
-                        coordinator.state == "revoking" and coordinator.error_code == _DELETED_SOURCE_REVOKE
-                        and coordinator.updated_at <= datetime.now(UTC) - _COORDINATOR_STALE_AFTER
-                    ):
-                        # Our own claim from a crashed pass: release it, retry on the next pass.
-                        coordinator.state, coordinator.operation_id, coordinator.error_code = "idle", None, None
-                        await commit_with_replay(
-                            session, scope=scope, multi_workspace_enabled=flag, access_fence=fence,
-                        )
-                    else:
-                        await session.rollback()
-                    continue
-                grant_operation, token_revision = grant.operation_id, grant.token_revision
-                if await provisioning.github_grant_has_active_peer(
-                    session, grant, scope=scope, multi_workspace_enabled=flag,
-                ):
-                    outcome = "provider_revoke_skipped_source_deleted"
-                else:
-                    try:
-                        opened = oauth._open_token_cipher(
-                            key, grant.encrypted_tokens, grant.source_id, grant.operation_id,
-                            grant.source_generation, grant.configuration_revision,
-                        )
-                        candidate = opened.get("access_token")
-                        token = candidate if isinstance(candidate, str) else None
-                    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
-                        token = None
-                    if token is not None:
-                        claim = uuid7()
-                        coordinator.state, coordinator.operation_id = "revoking", claim
-                        coordinator.error_code = _DELETED_SOURCE_REVOKE
-                await commit_with_replay(session, scope=scope, multi_workspace_enabled=flag, access_fence=fence)
-            except HTTPException as exc:
+                state = await _claim_deleted_grant_revoke(session, source_id, flag=flag, key=key)
+            except (DomainError, HTTPException) as exc:
                 await session.rollback()
                 if exc.status_code not in _DENIED:
                     raise
                 continue
-        if token is not None:
+        if state is None:
+            continue
+        if state.token is not None:
             try:
-                await oauth.revoke_github_grant(settings, token)
-                outcome = "provider_revoked_source_deleted"
+                await oauth.revoke_github_grant(settings, state.token)
+                state.outcome = "provider_revoked_source_deleted"
             except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
-                outcome = "provider_revoke_failed_source_deleted"
-        async with factory() as session:
-            try:
-                # Lock order matches the routes: access, Source, provisioning, grant, coordinator last.
-                await provisioning.lock_connector(
-                    session, source_id, (), scope=scope, multi_workspace_enabled=flag, expected_access_fence=fence,
-                )
-                await provisioning.finish_deleted_source_grant_revoke(
-                    session, source_id, outcome, scope=scope, multi_workspace_enabled=flag,
-                    access_fence=fence, grant_operation_id=grant_operation, token_revision=token_revision,
-                )
-                if claim is not None:
-                    coordinator = await session.scalar(
-                        select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == actor).with_for_update()
-                    )
-                    if coordinator is not None and coordinator.operation_id == claim:
-                        coordinator.state, coordinator.operation_id, coordinator.error_code = "idle", None, None
-                await commit_with_replay(session, scope=scope, multi_workspace_enabled=flag, access_fence=fence)
-            except HTTPException as exc:
-                await session.rollback()
-                if exc.status_code not in _DENIED:
-                    raise
-                if claim is not None:
-                    # Account-scoped row, no workspace data: undo only this job's own claim so the
-                    # actor's OAuth routes in other workspaces are not wedged by lost access here.
-                    coordinator = await session.scalar(
-                        select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == actor).with_for_update()
-                    )
-                    if coordinator is not None and coordinator.operation_id == claim:
-                        coordinator.state, coordinator.operation_id, coordinator.error_code = "idle", None, None
-                        await session.commit()
-                    else:
-                        await session.rollback()
-                logger.warning("deleted-source grant revoke result not recorded: HTTP %s", exc.status_code)
-                continue
-        handled += 1
+                state.outcome = "provider_revoke_failed_source_deleted"
+        if await _record_deleted_grant_revoke(factory, source_id, state, flag=flag):
+            handled += 1
     return handled
 
 
@@ -622,6 +700,43 @@ async def _drive_workflow(session: AsyncSession, settings: Settings, source_id: 
     ))
 
 
+async def _discover_created_workflow(
+    api: N8nApi, original: dict[str, Any], step: dict[str, Any], source_id: UUID,
+) -> tuple[UUID | None, str | None]:
+    """Look up the remote workflow an uncertain create may have produced, by exact name and body.
+
+    Holds no session. Returns ``(operation_id, workflow_id)``; ``workflow_id`` is set only when
+    exactly one workflow carries the recorded name and its body matches the recorded request.
+    Transport or shape failures leave it ``None`` (logged at debug) so the create stays "unknown"
+    and is retried by a later pass; discovery never counts as success on its own.
+    """
+    name, body = original.get("workflow_name"), step.get("request")
+    created_operation_id: UUID | None = None
+    workflow_id: str | None = None
+    try:
+        created_operation_id = UUID(str(original.get("id")))
+        matches = await find_workflows_by_name(api, str(name))
+        if (
+            len(matches) == 1
+            and isinstance(matches[0].get("id"), str)
+            and isinstance(body, dict)
+        ):
+            candidate_id = str(matches[0]["id"])
+            actual = await api.get_workflow(candidate_id)
+            if workflow_matches(body, actual):
+                workflow_id = candidate_id
+    except Exception as exc:
+        # Deliberately broad: lookup is discovery only. Any failure (transport, shape, or the egress
+        # policy's ``EndpointNetworkPolicyError``, a RuntimeError) leaves ``workflow_id`` unset so the
+        # create stays "unknown" and is retried by a later pass instead of aborting the whole
+        # reconcile pass; it is never treated as a success.
+        logger.debug(
+            "connector_unknown_create_lookup_failed source_id=%s error=%s", source_id, type(exc).__name__,
+            exc_info=True,
+        )
+    return created_operation_id, workflow_id
+
+
 async def _recover_unknown_create(
     factory: async_sessionmaker[AsyncSession], settings: Settings, source_id: UUID, *, flag: bool,
 ) -> int:
@@ -667,23 +782,8 @@ async def _recover_unknown_create(
             return 0
         await session.rollback()
     scope, fence = admitted
-    operation_value, step_value, name, body = original.get("id"), step.get("id"), original.get("workflow_name"), step.get("request")
-    created_operation_id: UUID | None = None
-    workflow_id: str | None = None
-    try:
-        created_operation_id = UUID(str(operation_value))
-        matches = await find_workflows_by_name(api, str(name))
-        if (
-            len(matches) == 1
-            and isinstance(matches[0].get("id"), str)
-            and isinstance(body, dict)
-        ):
-            candidate_id = str(matches[0]["id"])
-            actual = await api.get_workflow(candidate_id)
-            if workflow_matches(body, actual):
-                workflow_id = candidate_id
-    except Exception:  # noqa: BLE001, S110  # best-effort cleanup/optional step; failure intentionally ignored
-        pass
+    operation_value, step_value = original.get("id"), step.get("id")
+    created_operation_id, workflow_id = await _discover_created_workflow(api, original, step, source_id)
     if workflow_id is not None and created_operation_id is not None:
         async with factory() as session:
             try:
@@ -782,7 +882,7 @@ async def _advance_transitions(
                 await provisioning.advance_backend_transition(
                     session, source_id, api, scope=scope, multi_workspace_enabled=flag, access_fence=fence)
                 advanced += 1
-            except HTTPException as exc:
+            except (DomainError, HTTPException) as exc:
                 await session.rollback()
                 if exc.status_code not in _DENIED:
                     raise
@@ -856,7 +956,7 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
                 completed += await _delete_credential(
                     session, settings, source_id, slot, operation_id, multi_workspace_enabled=flag,
                 )
-            except HTTPException as exc:
+            except (DomainError, HTTPException) as exc:
                 await session.rollback()
                 if exc.status_code not in _DENIED:
                     raise
@@ -865,7 +965,7 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
         async with factory() as session:
             try:
                 completed += await _drive_workflow(session, settings, source_id, flag=flag)
-            except HTTPException as exc:
+            except (DomainError, HTTPException) as exc:
                 await session.rollback()
                 if exc.status_code not in _DENIED:
                     raise
@@ -873,7 +973,7 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
     for source_id in unknown_create_ids:
         try:
             completed += await _recover_unknown_create(factory, settings, source_id, flag=flag)
-        except HTTPException as exc:
+        except (DomainError, HTTPException) as exc:
             if exc.status_code not in _DENIED:
                 raise
 
@@ -881,7 +981,7 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
         async with factory() as session:
             try:
                 completed += await _resume_activation(session, source_id, settings)
-            except HTTPException as exc:
+            except (DomainError, HTTPException) as exc:
                 await session.rollback()
                 if exc.status_code not in _DENIED:
                     raise
@@ -893,325 +993,401 @@ def _webhook_retry_delay(attempt: int) -> int:
     return int(min(30 * (2 ** max(0, attempt - 1)), 3600))
 
 
-async def dispatch_github_webhooks(ctx: dict[str, object]) -> int:
-    """Fan out bounded frozen binding pages with durable target admissions and fair hint recovery.
+_OUTBOX_OPEN_STATES = frozenset({"pending", "dispatched", "needs_attention"})
 
-    Binding snapshots are fetched without Source/outbox locks, then frozen under an exact outbox
-    cursor check. Each public binding DTO is explicitly dumped and validated into the stricter
-    private persisted DTO, preserving its field, identity, and bounds checks. Per-target admission
-    and hint/capacity effects commit together; page advancement clears that ledger only after the
-    same cursor/page still owns the result. Deferred hints that cannot revalidate current authority
-    get a durable retry deadline and never reserve or wake.
 
-    The receiver ledger (deliveries, outboxes, capacity) is a deliberate instance global, so binding
-    discovery runs under explicit operator admission (``instance_operator=True``). Each binding is then
-    a separate subject: its real workspace, actor, membership revision, Source and generation come
-    from the frozen page entry, ``enqueue_github_hint`` admits that original identity itself, and a
-    denied, disabled or vanished binding is skipped (webhook content is only a hint; polling and
-    reauthorization remain authoritative) instead of failing the whole delivery for every workspace.
-    Deferred-hint recovery and the wake use Recipe S per Source, with the connectors module checked
-    per workspace after admission.
+async def _snapshot_outbox(
+    factory: async_sessionmaker[AsyncSession], outbox_id: UUID,
+) -> tuple[Any, Any, dict[str, Any]] | None:
+    """Read an outbox and its delivery without holding locks and return a detached snapshot.
+
+    Returns ``(binding_cursor, fanout_page, delivery_fields)`` or ``None`` when either row is
+    gone. The read session is always rolled back before returning, so no row stays locked while
+    binding discovery and per-binding admission run in their own transactions.
     """
-    from datetime import UTC, datetime, timedelta
+    async with factory() as session:
+        outbox = await session.get(GithubWebhookOutbox, outbox_id)
+        delivery = await session.get(GithubWebhookDelivery, outbox.delivery_id) if outbox else None
+        if outbox is None or delivery is None:
+            await session.rollback()
+            return None
+        snapshot: dict[str, Any] = {
+            "id": delivery.id, "app_id": delivery.app_id,
+            "installation_id": delivery.installation_id,
+            "repository_id": delivery.repository_id,
+            "targets": delivery.targets,
+        }
+        cursor, stored_page = outbox.binding_cursor, outbox.fanout_page
+        await session.rollback()
+    return cursor, stored_page, snapshot
 
+
+async def _complete_outbox_without_installation(
+    factory: async_sessionmaker[AsyncSession], outbox_id: UUID, cursor: Any, stored_page: Any,
+) -> bool:
+    """Complete an outbox whose delivery has no installation and release its capacity slot.
+
+    The outbox is locked and compared to the snapshot (state, cursor, page); a changed row is
+    left alone. Returns True when the outbox was completed and committed, False when skipped.
+    """
+    async with factory() as session:
+        current = await session.scalar(select(GithubWebhookOutbox).where(
+            GithubWebhookOutbox.id == outbox_id,
+        ).with_for_update())
+        if (
+            current is None or current.state not in _OUTBOX_OPEN_STATES
+            or current.binding_cursor != cursor or current.fanout_page != stored_page
+        ):
+            await session.rollback()
+            return False
+        capacity = await session.scalar(select(GithubWebhookCapacity).where(
+            GithubWebhookCapacity.id == 1,
+        ).with_for_update())
+        current.state = "complete"
+        current.binding_cursor = None
+        current.fanout_page = None
+        if current.capacity_reserved and capacity is not None and capacity.pending_count > 0:
+            capacity.pending_count -= 1
+        if current.capacity_reserved:
+            current.capacity_reserved = False
+        await session.commit()
+    return True
+
+
+async def _resolve_fanout_page(
+    factory: async_sessionmaker[AsyncSession], outbox_id: UUID, cursor: Any, stored_page: Any,
+    delivery: dict[str, Any], *, flag: bool,
+) -> tuple[Any, bool] | None:
+    """Return the frozen fanout page for an outbox (reusing or freezing one) and a failure flag.
+
+    A stored page is revalidated against the outbox cursor. Otherwise binding snapshots are
+    fetched with explicit instance-operator admission and no row locks, converted to the strict
+    private DTO, then frozen onto the outbox under its lock with an exact cursor re-check. Any
+    discovery or validation error sets the failure flag (the caller schedules a retry). Returns
+    ``None`` when the outbox changed or vanished while freezing, meaning skip it this pass.
+    """
     from modules.connectors import public as connectors
-    from modules.connectors.github.webhooks import GitHubTargetHint
     from modules.connectors.public import (
         _GitHubFanoutBinding,
         _GitHubFanoutPage,
         _validated_github_fanout_page,
     )
+
+    fanout_page: _GitHubFanoutPage | None = None
+    failed = False
+    if stored_page is not None:
+        try:
+            candidate = _validated_github_fanout_page(stored_page)
+            if candidate.cursor_before != cursor:
+                raise ValueError("github_fanout_page_cursor_stale")
+            fanout_page = candidate
+        except ValueError:
+            failed = True
+        return fanout_page, failed
+    detached_bindings = None
+    try:
+        async with factory() as session:
+            detached_bindings = await connectors.list_github_event_bindings(
+                session, app_id=str(delivery["app_id"]),
+                installation_id=str(delivery["installation_id"]),
+                repository_id=str(delivery["repository_id"]) if delivery["repository_id"] else None,
+                limit=50, cursor=cursor,
+                multi_workspace_enabled=flag, instance_operator=True,
+            )
+            await session.rollback()
+    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
+        failed = True
+    if detached_bindings is None:
+        return fanout_page, failed
+    try:
+        # Convert the public DTO to a mapping explicitly; strict private DTO validation
+        # does not coerce a distinct Pydantic model instance by attribute name.
+        frozen_bindings = tuple(
+            _GitHubFanoutBinding.model_validate(item.model_dump(mode="python"))
+            for item in detached_bindings.items
+        )
+        candidate = _GitHubFanoutPage(
+            cursor_before=cursor,
+            cursor_after=detached_bindings.next_cursor,
+            bindings=frozen_bindings,
+            admissions=(),
+        )
+    except (TypeError, ValueError):
+        return fanout_page, True
+    async with factory() as session:
+        current = await session.scalar(select(GithubWebhookOutbox).where(
+            GithubWebhookOutbox.id == outbox_id,
+        ).with_for_update())
+        if (
+            current is None or current.state not in _OUTBOX_OPEN_STATES
+            or current.binding_cursor != cursor
+        ):
+            await session.rollback()
+            return None
+        if current.fanout_page is None:
+            current.fanout_page = candidate.model_dump(mode="json")
+            await session.commit()
+            fanout_page = candidate
+        else:
+            try:
+                persisted = _validated_github_fanout_page(current.fanout_page)
+                if persisted.cursor_before != cursor:
+                    raise ValueError("github_fanout_page_cursor_stale")
+                fanout_page = persisted
+                await session.rollback()
+            except ValueError:
+                await session.rollback()
+                failed = True
+    return fanout_page, failed
+
+
+def _target_applies_to_binding(binding: Any, target: Any, delivery_repository_id: Any) -> bool:
+    """Return whether a delivery target concerns this binding's installation and repository.
+
+    Installation/repository-scoped targets must name the binding's own identifiers; any other
+    target is restricted to the delivery's repository when the delivery names one.
+    """
+    if target.locator_kind == "installation" and target.locator != binding.installation_id:
+        return False
+    if target.locator_kind == "repository" and target.locator != binding.repository_id:
+        return False
+    return not (
+        delivery_repository_id and target.locator_kind not in {"installation"}
+        and target.locator_kind != "repository" and binding.repository_id != delivery_repository_id
+    )
+
+
+async def _admit_binding_target(
+    factory: async_sessionmaker[AsyncSession], fanout_page: Any, binding: Any, target: Any,
+    delivery_id: Any, *, flag: bool,
+) -> bool:
+    """Admit one target for one frozen binding under that binding's original identity.
+
+    Returns True when the whole delivery attempt must be marked failed (capacity exhausted,
+    stale progress or an unexpected error) and False otherwise. A disabled module or a denied
+    owner (401/403/404/409) only skips this binding; other bindings still proceed.
+    """
+    from modules.connectors import public as connectors
     from modules.settings.public import module_is_enabled
 
-    settings = cast(Settings, ctx["settings"])
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
-    flag = settings.multi_workspace_enabled
-    now = datetime.now(UTC)
-    progressed = await expire_github_webhook_details(factory, now=now)
-    progressed += await reclaim_github_webhook_digests(factory, now=now)
-    progressed += await revoke_deleted_source_github_grants(factory, settings, cursor_ctx=_cursor_ctx(ctx))
-    async with factory() as session:
-        outbox_ids = list((await session.scalars(select(GithubWebhookOutbox.id).where(
-            GithubWebhookOutbox.state.in_(("pending", "dispatched", "needs_attention")),
-            GithubWebhookOutbox.next_attempt_at <= now,
-        ).order_by(GithubWebhookOutbox.next_attempt_at, GithubWebhookOutbox.id).limit(50))).all())
-
-    for outbox_id in outbox_ids:
+    try:
+        binding_scope = InternalJobScope(
+            workspace_id=binding.workspace_id, actor_user_id=binding.actor_user_id,
+            membership_revision=binding.membership_revision, source_id=binding.source_id,
+            source_generation=binding.source_generation,
+        )
         async with factory() as session:
-            outbox = await session.get(GithubWebhookOutbox, outbox_id)
-            delivery = await session.get(GithubWebhookDelivery, outbox.delivery_id) if outbox else None
-            if outbox is None or delivery is None:
-                await session.rollback()
-                continue
-            cursor = outbox.binding_cursor
-            stored_page = outbox.fanout_page
-            delivery_snapshot: dict[str, Any] = {
-                "id": delivery.id, "app_id": delivery.app_id,
-                "installation_id": delivery.installation_id,
-                "repository_id": delivery.repository_id,
-                "targets": delivery.targets,
-            }
-            await session.rollback()
-
-        if not delivery_snapshot["installation_id"]:
-            async with factory() as session:
-                current = await session.scalar(select(GithubWebhookOutbox).where(
-                    GithubWebhookOutbox.id == outbox_id,
-                ).with_for_update())
-                if (
-                    current is None or current.state not in {"pending", "dispatched", "needs_attention"}
-                    or current.binding_cursor != cursor or current.fanout_page != stored_page
-                ):
-                    await session.rollback()
-                    continue
-                capacity = await session.scalar(select(GithubWebhookCapacity).where(
-                    GithubWebhookCapacity.id == 1,
-                ).with_for_update())
-                current.state = "complete"
-                current.binding_cursor = None
-                current.fanout_page = None
-                if current.capacity_reserved and capacity is not None and capacity.pending_count > 0:
-                    capacity.pending_count -= 1
-                if current.capacity_reserved:
-                    current.capacity_reserved = False
-                await session.commit()
-            progressed += 1
-            continue
-
-        fanout_page: _GitHubFanoutPage | None = None
-        failed = False
-        if stored_page is not None:
-            try:
-                candidate = _validated_github_fanout_page(stored_page)
-                if candidate.cursor_before != cursor:
-                    raise ValueError("github_fanout_page_cursor_stale")
-                fanout_page = candidate
-            except ValueError:
-                failed = True
-        else:
-            detached_bindings = None
-            try:
-                async with factory() as session:
-                    detached_bindings = await connectors.list_github_event_bindings(
-                        session, app_id=str(delivery_snapshot["app_id"]),
-                        installation_id=str(delivery_snapshot["installation_id"]),
-                        repository_id=str(delivery_snapshot["repository_id"]) if delivery_snapshot["repository_id"] else None,
-                        limit=50, cursor=cursor,
-                        multi_workspace_enabled=flag, instance_operator=True,
-                    )
-                    await session.rollback()
-            except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
-                failed = True
-            if detached_bindings is not None:
-                try:
-                    # Convert the public DTO to a mapping explicitly; strict private DTO validation
-                    # does not coerce a distinct Pydantic model instance by attribute name.
-                    frozen_bindings = tuple(
-                        _GitHubFanoutBinding.model_validate(item.model_dump(mode="python"))
-                        for item in detached_bindings.items
-                    )
-                    candidate = _GitHubFanoutPage(
-                        cursor_before=cursor,
-                        cursor_after=detached_bindings.next_cursor,
-                        bindings=frozen_bindings,
-                        admissions=(),
-                    )
-                except (TypeError, ValueError):
-                    candidate = None
-                    failed = True
-                if candidate is None:
-                    detached_bindings = None
-            if detached_bindings is not None and candidate is not None:
-                async with factory() as session:
-                    current = await session.scalar(select(GithubWebhookOutbox).where(
-                        GithubWebhookOutbox.id == outbox_id,
-                    ).with_for_update())
-                    if (
-                        current is None or current.state not in {"pending", "dispatched", "needs_attention"}
-                        or current.binding_cursor != cursor
-                    ):
-                        await session.rollback()
-                        continue
-                    if current.fanout_page is None:
-                        current.fanout_page = candidate.model_dump(mode="json")
-                        await session.commit()
-                        fanout_page = candidate
-                    else:
-                        try:
-                            persisted = _validated_github_fanout_page(current.fanout_page)
-                            if persisted.cursor_before != cursor:
-                                raise ValueError("github_fanout_page_cursor_stale")
-                            fanout_page = persisted
-                            await session.rollback()
-                        except ValueError:
-                            await session.rollback()
-                            failed = True
-        if fanout_page is not None and not failed:
-            for binding in fanout_page.bindings:
-                if binding.app_id != delivery_snapshot["app_id"] or binding.installation_id != delivery_snapshot["installation_id"]:
-                    continue
-                if delivery_snapshot["repository_id"] and binding.repository_id != delivery_snapshot["repository_id"]:
-                    continue
-                for raw_target in delivery_snapshot["targets"]:
-                    try:
-                        target = GitHubTargetHint.model_validate(raw_target)
-                    except (TypeError, ValueError):
-                        failed = True
-                        break
-                    if target.locator_kind == "installation" and target.locator != binding.installation_id:
-                        continue
-                    if target.locator_kind == "repository" and target.locator != binding.repository_id:
-                        continue
-                    if delivery_snapshot["repository_id"] and target.locator_kind not in {"installation"} and target.locator_kind != "repository" and binding.repository_id != delivery_snapshot["repository_id"]:
-                        continue
-                    try:
-                        binding_scope = InternalJobScope(
-                            workspace_id=binding.workspace_id, actor_user_id=binding.actor_user_id,
-                            membership_revision=binding.membership_revision, source_id=binding.source_id,
-                            source_generation=binding.source_generation,
-                        )
-                        async with factory() as session:
-                            if not await module_is_enabled(
-                                session, "connectors", scope=binding_scope, multi_workspace_enabled=flag,
-                            ):
-                                await session.rollback()
-                                continue
-                            result = await connectors.enqueue_github_hint(
-                                session, binding=binding,
-                                delivery_receipt_id=delivery_snapshot["id"],
-                                target=target,
-                                expected_binding_cursor=fanout_page.cursor_before,
-                                scope=binding_scope, multi_workspace_enabled=flag,
-                            )
-                        if result.disposition in {"capacity_exhausted", "stale_progress"}:
-                            failed = True
-                            break
-                    except HTTPException as exc:
-                        if exc.status_code in _DENIED:
-                            continue  # this binding's owner is not admissible now; other bindings still proceed
-                        failed = True
-                        break
-                    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
-                        failed = True
-                        break
-                if failed:
-                    break
-
-        async with factory() as session:
-            current = await session.scalar(select(GithubWebhookOutbox).where(
-                GithubWebhookOutbox.id == outbox_id,
-            ).with_for_update())
-            if current is None:
-                await session.rollback()
-                continue
-            if fanout_page is not None:
-                try:
-                    current_page = _validated_github_fanout_page(current.fanout_page)
-                except ValueError:
-                    current_page = None
-                if (
-                    current.state not in {"pending", "dispatched", "needs_attention"}
-                    or current.binding_cursor != fanout_page.cursor_before
-                    or current_page is None
-                    or current_page.cursor_before != fanout_page.cursor_before
-                    or current_page.cursor_after != fanout_page.cursor_after
-                    or current_page.bindings != fanout_page.bindings
-                ):
-                    await session.rollback()
-                    continue
-            elif (
-                current.state not in {"pending", "dispatched", "needs_attention"}
-                or current.binding_cursor != cursor or current.fanout_page != stored_page
+            if not await module_is_enabled(
+                session, "connectors", scope=binding_scope, multi_workspace_enabled=flag,
             ):
                 await session.rollback()
+                return False
+            result = await connectors.enqueue_github_hint(
+                session, binding=binding,
+                delivery_receipt_id=delivery_id,
+                target=target,
+                expected_binding_cursor=fanout_page.cursor_before,
+                scope=binding_scope, multi_workspace_enabled=flag,
+            )
+        return bool(result.disposition in {"capacity_exhausted", "stale_progress"})
+    except (DomainError, HTTPException) as exc:
+        return exc.status_code not in _DENIED  # a denied binding owner is skipped, not a failure
+    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
+        return True
+
+
+async def _fan_out_page(
+    factory: async_sessionmaker[AsyncSession], fanout_page: Any, delivery: dict[str, Any], *, flag: bool,
+) -> bool:
+    """Admit every applicable (binding, target) pair of a frozen page; return True on any failure.
+
+    Bindings of another app/installation/repository are skipped. The first malformed target or
+    failed admission stops the page so the outbox attempt is retried as a whole (admissions
+    already stored on the page are replayed idempotently by ``enqueue_github_hint``).
+    """
+    from modules.connectors.github.webhooks import GitHubTargetHint
+
+    for binding in fanout_page.bindings:
+        if binding.app_id != delivery["app_id"] or binding.installation_id != delivery["installation_id"]:
+            continue
+        if delivery["repository_id"] and binding.repository_id != delivery["repository_id"]:
+            continue
+        for raw_target in delivery["targets"]:
+            try:
+                target = GitHubTargetHint.model_validate(raw_target)
+            except (TypeError, ValueError):
+                return True
+            if not _target_applies_to_binding(binding, target, delivery["repository_id"]):
                 continue
-            capacity = await session.scalar(select(GithubWebhookCapacity).where(
-                GithubWebhookCapacity.id == 1,
-            ).with_for_update())
-            if failed:
-                current.attempts = min(5, current.attempts + 1)
-                current.state = "needs_attention" if current.attempts >= 5 else "pending"
-                current.next_attempt_at = now + timedelta(
-                    seconds=3600 if current.state == "needs_attention" else _webhook_retry_delay(current.attempts)
-                )
-            elif fanout_page is not None and fanout_page.cursor_after is not None:
-                current.binding_cursor = fanout_page.cursor_after
-                current.fanout_page = None
-                current.state = "pending"
-                current.next_attempt_at = now
-            else:
-                current.state = "complete"
-                current.binding_cursor = None
-                current.fanout_page = None
-                if current.capacity_reserved and capacity is not None and capacity.pending_count > 0:
-                    capacity.pending_count -= 1
-                if current.capacity_reserved:
-                    current.capacity_reserved = False
-            await session.commit()
-            progressed += 1
+            if await _admit_binding_target(factory, fanout_page, binding, target, delivery["id"], flag=flag):
+                return True
+    return False
+
+
+async def _settle_outbox(
+    factory: async_sessionmaker[AsyncSession], outbox_id: UUID, cursor: Any, stored_page: Any,
+    fanout_page: Any, failed: bool, now: datetime,
+) -> bool:
+    """Persist the fanout outcome on the outbox if the same cursor/page still owns it.
+
+    Failure bumps attempts (``needs_attention`` and a one-hour delay from the fifth), a page with a
+    next cursor advances the cursor and clears the ledger, and a final page completes the outbox
+    and releases its capacity slot. Returns False (rolled back) when the outbox changed.
+    """
+    from modules.connectors.public import _validated_github_fanout_page
 
     async with factory() as session:
-        deferred_source_id = await session.scalar(select(GithubSourceHint.source_id).where(
-            GithubSourceHint.state == "capacity_deferred",
-            GithubSourceHint.capacity_reserved.is_(False),
-            GithubSourceHint.next_attempt_at <= now,
-        ).order_by(GithubSourceHint.next_attempt_at, GithubSourceHint.updated_at).limit(1))
-        if deferred_source_id is not None:
-            admitted = await _admit_source_job(session, deferred_source_id, multi_workspace_enabled=flag)
-            if admitted is not None:
-                deferred_scope, deferred_fence = admitted
-                try:
-                    locked = await sources.lock_source(
-                        session, deferred_source_id, scope=deferred_scope, multi_workspace_enabled=flag,
-                        expected_access_fence=deferred_fence,
-                    )
-                    source = await sources.get_connector_source(
-                        session, deferred_source_id, scope=deferred_scope, multi_workspace_enabled=flag,
-                    ) if locked is not None else None
-                    if source is not None and source.status == "active" and await module_is_enabled(
-                        session, "connectors", scope=deferred_scope, multi_workspace_enabled=flag,
-                    ):
-                        await connectors.reconcile_github_source_hints_lifecycle(
-                            session, source_id=deferred_source_id,
-                            source_generation=source.generation, active=True,
-                            scope=deferred_scope, multi_workspace_enabled=flag,
-                        )
-                except HTTPException as exc:
-                    await session.rollback()
-                    if exc.status_code not in _DENIED:
-                        raise
-            # Pushing the Source's deferred hints later also rotates a denied/disabled Source out of the head.
-            retry_base = datetime.now(UTC)
-            retry_at = retry_base + timedelta(seconds=60)
-            remaining = list((await session.scalars(select(GithubSourceHint).where(
-                GithubSourceHint.source_id == deferred_source_id,
-                GithubSourceHint.state == "capacity_deferred",
-                GithubSourceHint.capacity_reserved.is_(False),
-                GithubSourceHint.next_attempt_at <= retry_base,
-            ).order_by(GithubSourceHint.next_attempt_at, GithubSourceHint.id).limit(100).with_for_update(skip_locked=True))).all())
-            for deferred_hint in remaining:
-                deferred_hint.next_attempt_at = max(deferred_hint.next_attempt_at, retry_at)
-            await session.commit()
-
-        hint = await session.scalar(select(GithubSourceHint).where(
-            GithubSourceHint.state.in_(("pending", "dispatched", "needs_attention")),
-            GithubSourceHint.capacity_reserved.is_(True),
-            GithubSourceHint.reconcile_page <= 100,
-            GithubSourceHint.next_attempt_at <= now,
-        ).order_by(GithubSourceHint.next_attempt_at, GithubSourceHint.updated_at).limit(1).with_for_update(skip_locked=True))
-        if hint is None:
+        current = await session.scalar(select(GithubWebhookOutbox).where(
+            GithubWebhookOutbox.id == outbox_id,
+        ).with_for_update())
+        if current is None:
             await session.rollback()
-            return progressed
-        snapshot = (hint.id, hint.source_id, hint.source_generation, hint.connector_revision, hint.dirty_revision)
-        needs_attention = hint.state == "needs_attention" or hint.attempts >= 4
-        hint.attempts = min(5, hint.attempts + 1)
-        attempt = hint.attempts
-        needs_attention = needs_attention or attempt >= 5
-        hint.state = "needs_attention" if needs_attention else "dispatched"
-        hint.next_attempt_at = now + timedelta(
-            seconds=3600 if needs_attention else _webhook_retry_delay(attempt)
-        )
+            return False
+        if fanout_page is not None:
+            try:
+                current_page = _validated_github_fanout_page(current.fanout_page)
+            except ValueError:
+                current_page = None
+            if (
+                current.state not in _OUTBOX_OPEN_STATES
+                or current.binding_cursor != fanout_page.cursor_before
+                or current_page is None
+                or current_page.cursor_before != fanout_page.cursor_before
+                or current_page.cursor_after != fanout_page.cursor_after
+                or current_page.bindings != fanout_page.bindings
+            ):
+                await session.rollback()
+                return False
+        elif (
+            current.state not in _OUTBOX_OPEN_STATES
+            or current.binding_cursor != cursor or current.fanout_page != stored_page
+        ):
+            await session.rollback()
+            return False
+        capacity = await session.scalar(select(GithubWebhookCapacity).where(
+            GithubWebhookCapacity.id == 1,
+        ).with_for_update())
+        if failed:
+            current.attempts = min(5, current.attempts + 1)
+            current.state = "needs_attention" if current.attempts >= 5 else "pending"
+            current.next_attempt_at = now + timedelta(
+                seconds=3600 if current.state == "needs_attention" else _webhook_retry_delay(current.attempts)
+            )
+        elif fanout_page is not None and fanout_page.cursor_after is not None:
+            current.binding_cursor = fanout_page.cursor_after
+            current.fanout_page = None
+            current.state = "pending"
+            current.next_attempt_at = now
+        else:
+            current.state = "complete"
+            current.binding_cursor = None
+            current.fanout_page = None
+            if current.capacity_reserved and capacity is not None and capacity.pending_count > 0:
+                capacity.pending_count -= 1
+            if current.capacity_reserved:
+                current.capacity_reserved = False
         await session.commit()
+    return True
+
+
+async def _recover_deferred_hints(session: AsyncSession, now: datetime, *, flag: bool) -> None:
+    """Retry capacity-deferred hints of the oldest due Source, then push that Source's hints later.
+
+    Runs inside the caller's session and commits once when a deferred Source exists. The Source
+    is admitted as a worker subject, locked and reconciled only while active with the connectors
+    module enabled; a denied admission (401/403/404/409) is rolled back and swallowed, any other
+    HTTP-shaped error propagates. Rescheduling every remaining deferred hint rotates a
+    denied/disabled Source out of the queue head.
+    """
+    from modules.connectors import public as connectors
+    from modules.settings.public import module_is_enabled
+
+    deferred_source_id = await session.scalar(select(GithubSourceHint.source_id).where(
+        GithubSourceHint.state == "capacity_deferred",
+        GithubSourceHint.capacity_reserved.is_(False),
+        GithubSourceHint.next_attempt_at <= now,
+    ).order_by(GithubSourceHint.next_attempt_at, GithubSourceHint.updated_at).limit(1))
+    if deferred_source_id is None:
+        return
+    admitted = await _admit_source_job(session, deferred_source_id, multi_workspace_enabled=flag)
+    if admitted is not None:
+        deferred_scope, deferred_fence = admitted
+        try:
+            locked = await sources.lock_source(
+                session, deferred_source_id, scope=deferred_scope, multi_workspace_enabled=flag,
+                expected_access_fence=deferred_fence,
+            )
+            source = await sources.get_connector_source(
+                session, deferred_source_id, scope=deferred_scope, multi_workspace_enabled=flag,
+            ) if locked is not None else None
+            if source is not None and source.status == "active" and await module_is_enabled(
+                session, "connectors", scope=deferred_scope, multi_workspace_enabled=flag,
+            ):
+                await connectors.reconcile_github_source_hints_lifecycle(
+                    session, source_id=deferred_source_id,
+                    source_generation=source.generation, active=True,
+                    scope=deferred_scope, multi_workspace_enabled=flag,
+                )
+        except (DomainError, HTTPException) as exc:
+            await session.rollback()
+            if exc.status_code not in _DENIED:
+                raise
+    # Pushing the Source's deferred hints later also rotates a denied/disabled Source out of the head.
+    retry_base = datetime.now(UTC)
+    retry_at = retry_base + timedelta(seconds=60)
+    remaining = list((await session.scalars(select(GithubSourceHint).where(
+        GithubSourceHint.source_id == deferred_source_id,
+        GithubSourceHint.state == "capacity_deferred",
+        GithubSourceHint.capacity_reserved.is_(False),
+        GithubSourceHint.next_attempt_at <= retry_base,
+    ).order_by(GithubSourceHint.next_attempt_at, GithubSourceHint.id).limit(100).with_for_update(skip_locked=True))).all())
+    for deferred_hint in remaining:
+        deferred_hint.next_attempt_at = max(deferred_hint.next_attempt_at, retry_at)
+    await session.commit()
+
+
+async def _claim_due_hint(session: AsyncSession, now: datetime) -> tuple[Any, ...] | None:
+    """Claim the oldest due reserved hint for one wake attempt and commit the claim.
+
+    Locks one hint (``skip_locked``), bumps its attempts and marks it ``dispatched`` (or
+    ``needs_attention`` with a one-hour delay from the fifth attempt) before any network call.
+    Returns ``(id, source_id, source_generation, connector_revision, dirty_revision)``, or
+    ``None`` after a rollback when nothing is due.
+    """
+    hint = await session.scalar(select(GithubSourceHint).where(
+        GithubSourceHint.state.in_(("pending", "dispatched", "needs_attention")),
+        GithubSourceHint.capacity_reserved.is_(True),
+        GithubSourceHint.reconcile_page <= 100,
+        GithubSourceHint.next_attempt_at <= now,
+    ).order_by(GithubSourceHint.next_attempt_at, GithubSourceHint.updated_at).limit(1).with_for_update(skip_locked=True))
+    if hint is None:
+        await session.rollback()
+        return None
+    snapshot = (hint.id, hint.source_id, hint.source_generation, hint.connector_revision, hint.dirty_revision)
+    needs_attention = hint.state == "needs_attention" or hint.attempts >= 4
+    hint.attempts = min(5, hint.attempts + 1)
+    attempt = hint.attempts
+    needs_attention = needs_attention or attempt >= 5
+    hint.state = "needs_attention" if needs_attention else "dispatched"
+    hint.next_attempt_at = now + timedelta(
+        seconds=3600 if needs_attention else _webhook_retry_delay(attempt)
+    )
+    await session.commit()
+    return snapshot
+
+
+async def _wake_hint_source(
+    factory: async_sessionmaker[AsyncSession], snapshot: tuple[Any, ...], settings: Settings, *, flag: bool,
+) -> Any:
+    """Wake the packaged collection for a claimed hint's Source under a fresh worker admission.
+
+    Returns the wake result, or ``None`` when no subject is admissible or the connectors module is
+    disabled. A denied admission (401/403/404/409) is rolled back and treated as no wake; other
+    HTTP-shaped errors propagate.
+    """
+    from modules.connectors import public as connectors
+    from modules.settings.public import module_is_enabled
+
     async with factory() as session:
         wake: Any = None
         admitted = await _admit_source_job(session, snapshot[1], multi_workspace_enabled=flag)
@@ -1224,10 +1400,23 @@ async def dispatch_github_webhooks(ctx: dict[str, object]) -> int:
                         connector_revision=snapshot[3], settings=settings, timeout_seconds=15,
                         scope=wake_scope, multi_workspace_enabled=flag,
                     )
-            except HTTPException as exc:
+            except (DomainError, HTTPException) as exc:
                 await session.rollback()
                 if exc.status_code not in _DENIED:
                     raise
+    return wake
+
+
+async def _settle_hint_after_wake(
+    factory: async_sessionmaker[AsyncSession], snapshot: tuple[Any, ...], wake: Any, now: datetime,
+) -> None:
+    """Record the wake outcome on the claimed hint unless its dirty revision or state moved.
+
+    No wake or a failed wake retries with backoff, an acknowledged wake stays ``dispatched``
+    until ingestion acknowledges it, and a deferred wake waits for the provider's eligibility
+    time. From the fifth attempt the hint becomes ``needs_attention`` with a one-hour delay.
+    A hint changed since the claim is left untouched (rolled back).
+    """
     async with factory() as session:
         hint = await session.scalar(select(GithubSourceHint).where(
             GithubSourceHint.id == snapshot[0],
@@ -1259,6 +1448,68 @@ async def dispatch_github_webhooks(ctx: dict[str, object]) -> int:
             await session.commit()
         else:
             await session.rollback()
+
+
+async def dispatch_github_webhooks(ctx: dict[str, object]) -> int:
+    """Fan out bounded frozen binding pages with durable target admissions and fair hint recovery.
+
+    Binding snapshots are fetched without Source/outbox locks, then frozen under an exact outbox
+    cursor check. Each public binding DTO is explicitly dumped and validated into the stricter
+    private persisted DTO, preserving its field, identity, and bounds checks. Per-target admission
+    and hint/capacity effects commit together; page advancement clears that ledger only after the
+    same cursor/page still owns the result. Deferred hints that cannot revalidate current authority
+    get a durable retry deadline and never reserve or wake.
+
+    The receiver ledger (deliveries, outboxes, capacity) is a deliberate instance global, so binding
+    discovery runs under explicit operator admission (``instance_operator=True``). Each binding is then
+    a separate subject: its real workspace, actor, membership revision, Source and generation come
+    from the frozen page entry, ``enqueue_github_hint`` admits that original identity itself, and a
+    denied, disabled or vanished binding is skipped (webhook content is only a hint; polling and
+    reauthorization remain authoritative) instead of failing the whole delivery for every workspace.
+    Deferred-hint recovery and the wake use Recipe S per Source, with the connectors module checked
+    per workspace after admission.
+
+    Phases per pass: housekeeping, then per due outbox (snapshot, freeze page, fan out, settle),
+    then at most one deferred-Source recovery and one hint wake. Returns the progress count.
+    """
+    settings = cast(Settings, ctx["settings"])
+    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    flag = settings.multi_workspace_enabled
+    now = datetime.now(UTC)
+    progressed = await expire_github_webhook_details(factory, now=now)
+    progressed += await reclaim_github_webhook_digests(factory, now=now)
+    progressed += await revoke_deleted_source_github_grants(factory, settings, cursor_ctx=_cursor_ctx(ctx))
+    async with factory() as session:
+        outbox_ids = list((await session.scalars(select(GithubWebhookOutbox.id).where(
+            GithubWebhookOutbox.state.in_(("pending", "dispatched", "needs_attention")),
+            GithubWebhookOutbox.next_attempt_at <= now,
+        ).order_by(GithubWebhookOutbox.next_attempt_at, GithubWebhookOutbox.id).limit(50))).all())
+
+    for outbox_id in outbox_ids:
+        snapshot_rows = await _snapshot_outbox(factory, outbox_id)
+        if snapshot_rows is None:
+            continue
+        cursor, stored_page, delivery = snapshot_rows
+        if not delivery["installation_id"]:
+            if await _complete_outbox_without_installation(factory, outbox_id, cursor, stored_page):
+                progressed += 1
+            continue
+        resolved = await _resolve_fanout_page(factory, outbox_id, cursor, stored_page, delivery, flag=flag)
+        if resolved is None:
+            continue
+        fanout_page, failed = resolved
+        if fanout_page is not None and not failed:
+            failed = await _fan_out_page(factory, fanout_page, delivery, flag=flag)
+        if await _settle_outbox(factory, outbox_id, cursor, stored_page, fanout_page, failed, now):
+            progressed += 1
+
+    async with factory() as session:
+        await _recover_deferred_hints(session, now, flag=flag)
+        claimed = await _claim_due_hint(session, now)
+    if claimed is None:
+        return progressed
+    wake = await _wake_hint_source(factory, claimed, settings, flag=flag)
+    await _settle_hint_after_wake(factory, claimed, wake, now)
     return progressed + 1
 
 

@@ -83,6 +83,7 @@ def _factory(session: Any) -> Any:
 
 async def test_agent_browser_scope_reads_local_only_from_source_fence(monkeypatch: pytest.MonkeyPatch) -> None:
     from modules.connectors import public as connectors
+    from modules.connectors.service import scope as scope_service
     from modules.sources import public as sources
 
     source_id = uuid4()
@@ -90,7 +91,7 @@ async def test_agent_browser_scope_reads_local_only_from_source_fence(monkeypatc
     scope_hash = connectors._scope_hash(source_id, 3, 7, origin, prefix)
     monkeypatch.setattr(sources, "get_connector_source", AsyncMock(
         return_value=SimpleNamespace(status="active", type="web", generation=3, workspace_id=OWNER.workspace_id)))
-    monkeypatch.setattr(connectors, "get_connector_configuration", AsyncMock(
+    monkeypatch.setattr(scope_service, "get_connector_configuration", AsyncMock(
         return_value=SimpleNamespace(expected_revision=7, configuration={"url": "https://example.com/docs"})))
     row = SimpleNamespace(owner_id=1, source_generation=3, connector_revision=7, scope_hash=scope_hash,
                           origin=origin, path_prefix=prefix, grant_revision=2, enabled=True)
