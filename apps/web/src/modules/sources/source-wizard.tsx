@@ -127,6 +127,11 @@ export function WizardShell({ title, mode, steps, stepIndex, onStepChange, busy,
   </>;
 }
 
+/** Editor snapshot before the editor reports anything: the existing source's identity (edit) or empty (add). */
+function initialSnapshot(source: Source | null): EditorSnapshot {
+  return { sourceId: source?.id ?? '', provider: source?.provider ?? '', busy: false, providerOk: false, connectOk: true, chooseOk: true, verify: { phase: 'idle' } };
+}
+
 type ConnectorWizardProps = {
   source: Source | null;
   onClose: () => void;
@@ -149,11 +154,10 @@ function ConnectorWizard({ source, onClose, onChanged, registerTransitionGuard, 
   const queryClient = useQueryClient();
   const edit = source !== null;
   const actionsRef = useRef<EditorActions | null>(null);
-  const [snapshot, setSnapshot] = useState<EditorSnapshot>({ sourceId: source?.id ?? '', provider: source?.provider ?? '', busy: false, providerOk: false, connectOk: true, chooseOk: true, verify: { phase: 'idle' } });
+  const [snapshot, setSnapshot] = useState<EditorSnapshot>(() => initialSnapshot(source));
   const [index, setIndex] = useState(0);
   const mcp = snapshot.provider === 'mcp';
-  const google = ['google_mail', 'google_calendar', 'google_drive'].includes(snapshot.provider);
-  const ids: EditorStep[] = mcp ? ['connect', 'verify'] : google ? ['connect', 'choose', 'collect', 'verify'] : ['connect', 'choose', 'collect', 'verify'];
+  const ids: EditorStep[] = mcp ? ['connect', 'verify'] : ['connect', 'choose', 'collect', 'verify']; // Google providers share the generic step list.
   if (!edit) ids.unshift('provider');
   const titles: Record<EditorStep, string> = { provider: t('stepProviderName'), connect: mcp ? t('stepMcpConfigure') : t('wizConnect'), choose: t('wizChooseData'), collect: t('stepSchedule'), verify: t('stepVerify') };
   const valid: Record<EditorStep, boolean> = { provider: snapshot.providerOk || Boolean(snapshot.sourceId), connect: snapshot.connectOk, choose: snapshot.chooseOk, collect: true, verify: true };

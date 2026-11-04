@@ -105,6 +105,96 @@ function KeywordField({ id, label, terms, onTerms }: { id: string; label: string
     <small id={`${id}-help`} className="text-muted-foreground">{t('optKeywordsHelp')}</small></div>;
 }
 
+/** Props shared by every BuiltinOptions field section; each section renders nothing when its option is not applicable. */
+interface OptionSectionProps {
+  applicable: ReadonlySet<string>;
+  values: BuiltinOptionValues;
+  onChange: <K extends BuiltinOptionKey>(key: K, value: BuiltinOptionValues[K]) => void;
+  disabled: boolean;
+}
+
+/** Create-only display-name field; hidden unless `show` and the server lists `name` as applicable. */
+function NameOption({ applicable, values, onChange, disabled, builtin, show }: OptionSectionProps & { builtin: BuiltinSource; show: boolean }) {
+  const t = useTranslations('sources');
+  if (!(show && applicable.has('name'))) return null;
+  return <div className="field"><Label htmlFor="builtin-option-name">{t('optName')}</Label>
+    <Input id="builtin-option-name" maxLength={200} disabled={disabled} value={values.name ?? builtin.label} onChange={(event) => onChange('name', event.target.value)} /></div>;
+}
+
+/** Schedule interval Select limited to intervals at or above the built-in's minimum floor, with a floor hint. */
+function ScheduleOption({ applicable, values, onChange, disabled, builtin, show }: OptionSectionProps & { builtin: BuiltinSource; show: boolean }) {
+  const t = useTranslations('sources');
+  if (!(show && applicable.has('schedule_interval_minutes'))) return null;
+  const floor = minIntervalMinutes(builtin);
+  const intervals = INTERVALS.filter((value) => value >= floor);
+  return <div className="field"><Label htmlFor="builtin-option-schedule">{t('optSchedule')}</Label>
+    <Select disabled={disabled} value={values.schedule_interval_minutes ? String(values.schedule_interval_minutes) : undefined} onValueChange={(value) => onChange('schedule_interval_minutes', Number(value) as ConnectorConfig['schedule_interval_minutes'])}>
+      <SelectTrigger id="builtin-option-schedule"><SelectValue placeholder={t('optScheduleDefault')} /></SelectTrigger>
+      <SelectContent>{intervals.map((value) => <SelectItem key={value} value={String(value)}>{t('everyMinutes', { minutes: value })}</SelectItem>)}</SelectContent>
+    </Select>
+    {floor > 15 && <small className="text-muted-foreground">{floor >= 60 ? t('minIntervalHours', { hours: floor / 60 }) : t('minIntervalMinutes', { minutes: floor })}</small>}</div>;
+}
+
+/**
+ * RSS section checkbox group. Toggling refuses to drop the last section or exceed MAX_SECTIONS; the status line
+ * estimates requests per day from the selection count and the effective schedule.
+ */
+function SectionsOption({ applicable, values, onChange, disabled, builtin }: OptionSectionProps & { builtin: BuiltinSource }) {
+  const t = useTranslations('sources');
+  const locale = useLocale();
+  const sections = builtin.sections ?? [];
+  if (!(applicable.has('feed_sections') && sections.length > 0)) return null;
+  const selected = values.feed_sections ?? (builtin.default_section ? [builtin.default_section] : []);
+  const minutes = values.schedule_interval_minutes ?? Math.max(30, minIntervalMinutes(builtin));
+  const requestsPerDay = selected.length * Math.ceil(1440 / minutes);
+  /** Toggles one section, refusing to drop the last one or exceed the cap. */
+  const toggle = (slug: string, on: boolean) => {
+    const next = on ? [...selected, slug] : selected.filter((item) => item !== slug);
+    if (next.length < 1 || next.length > MAX_SECTIONS) return;
+    onChange('feed_sections', next);
+  };
+  return <fieldset className="field m-0 border-0 p-0" disabled={disabled}><legend className="mb-1 text-sm font-medium">{t('optSections')}</legend>
+    <div className="grid gap-2 sm:grid-cols-2">{sections.map((section) => {
+      const label = locale.toLowerCase().startsWith('vi') ? section.label_vi : section.label_en;
+      const on = selected.includes(section.slug);
+      return <label key={section.slug} className="flex items-center gap-2 text-sm">
+        <Checkbox checked={on} disabled={disabled || (!on && selected.length >= MAX_SECTIONS)} onCheckedChange={(next) => toggle(section.slug, next === true)} />
+        <span>{label}</span></label>;
+    })}</div>
+    <small className="text-muted-foreground">{t('optSectionsHelp')}</small>
+    <small className="text-muted-foreground" role="status">{t('optSectionsCost', { count: selected.length, minutes, requests: requestsPerDay })}</small></fieldset>;
+}
+
+/** Bounded integer field (max items / max age) with help text; emptied input reports `undefined`. */
+function BoundedNumberOption({ id, label, help, max, value, disabled, onNumber }: { id: string; label: string; help: string; max: number; value: number | null | undefined; disabled: boolean; onNumber: (value: number | undefined) => void }) {
+  return <div className="field"><Label htmlFor={id}>{label}</Label>
+    <Input id={id} type="number" min={1} max={max} disabled={disabled} aria-describedby={`${id}-help`} value={value ?? ''} onChange={(event) => onNumber(event.target.value === '' ? undefined : Number(event.target.value))} />
+    <small id={`${id}-help`} className="text-muted-foreground">{help}</small></div>;
+}
+
+/** Max-items, include/exclude keyword and max-age fields, each rendered only when applicable, in that fixed order. */
+function FilterOptions({ applicable, values, onChange, disabled }: OptionSectionProps) {
+  const t = useTranslations('sources');
+  return <>
+    {applicable.has('max_items') && <BoundedNumberOption id="builtin-option-max-items" label={t('optMaxItems')} help={t('optMaxItemsHelp')} max={100} value={values.max_items} disabled={disabled} onNumber={(next) => onChange('max_items', next)} />}
+    {applicable.has('include_keywords') && <KeywordField id="builtin-option-include" label={t('optInclude')} terms={values.include_keywords ?? []} onTerms={(terms) => onChange('include_keywords', terms)} />}
+    {applicable.has('exclude_keywords') && <KeywordField id="builtin-option-exclude" label={t('optExclude')} terms={values.exclude_keywords ?? []} onTerms={(terms) => onChange('exclude_keywords', terms)} />}
+    {applicable.has('max_age_days') && <BoundedNumberOption id="builtin-option-max-age" label={t('optMaxAge')} help={t('optMaxAgeHelp')} max={365} value={values.max_age_days} disabled={disabled} onNumber={(next) => onChange('max_age_days', next)} />}
+  </>;
+}
+
+/**
+ * True when at least one option group would render (typed options, name on create, schedule when shown, RSS sections or
+ * any filter field); otherwise BuiltinOptions renders nothing at all, not even the footnote.
+ */
+function hasVisibleOptions(applicable: ReadonlySet<string>, builtin: BuiltinSource, typedCount: number, showName: boolean, showSchedule: boolean): boolean {
+  const showSections = applicable.has('feed_sections') && (builtin.sections ?? []).length > 0;
+  const showFilters = ['max_items', 'include_keywords', 'exclude_keywords', 'max_age_days'].some((key) => applicable.has(key));
+  const showNameField = showName && applicable.has('name');
+  const showScheduleField = showSchedule && applicable.has('schedule_interval_minutes');
+  return typedCount > 0 || showNameField || showScheduleField || showSections || showFilters;
+}
+
 /**
  * Renders only the owner options the server lists in `builtin.applicable_options`: name, schedule, RSS sections,
  * max items, include/exclude keywords, max age and every per-type option in `OPTION_SPECS` (enum, capped multi-select, bounded number/text, switch). Controlled: every edit is reported through `onChange(key, value)`
@@ -122,59 +212,18 @@ export function BuiltinOptions({ builtin, values, onChange, showName = false, sh
   disabled?: boolean;
 }) {
   const t = useTranslations('sources');
-  const locale = useLocale();
   const applicable = new Set(builtin.applicable_options ?? []);
-  const sections = builtin.sections ?? [];
-  const selected = values.feed_sections ?? (builtin.default_section ? [builtin.default_section] : []);
-  const floor = minIntervalMinutes(builtin);
-  const intervals = INTERVALS.filter((value) => value >= floor);
-  const minutes = values.schedule_interval_minutes ?? Math.max(30, floor);
-  const requestsPerDay = selected.length * Math.ceil(1440 / minutes);
-  const showSections = applicable.has('feed_sections') && sections.length > 0;
-  const showFilters = applicable.has('max_items') || applicable.has('include_keywords') || applicable.has('exclude_keywords') || applicable.has('max_age_days');
   const typed = OPTION_SPECS.filter((spec) => applicable.has(spec.key));
-  const showNativeHint = typed.some((spec) => spec.native);
-  if (typed.length === 0 && !(showName && applicable.has('name')) && !(showSchedule && applicable.has('schedule_interval_minutes')) && !showSections && !showFilters) return null;
-
-  /** Toggles one section, refusing to drop the last one or exceed the cap. */
-  const toggle = (slug: string, on: boolean) => {
-    const next = on ? [...selected, slug] : selected.filter((item) => item !== slug);
-    if (next.length < 1 || next.length > MAX_SECTIONS) return;
-    onChange('feed_sections', next);
-  };
-  /** Reports a bounded integer field, or undefined when emptied. */
-  const numeric = (key: 'max_items' | 'max_age_days') => (event: React.ChangeEvent<HTMLInputElement>) => onChange(key, event.target.value === '' ? undefined : Number(event.target.value));
-
+  if (!hasVisibleOptions(applicable, builtin, typed.length, showName, showSchedule)) return null;
+  const common = { applicable, values, onChange, disabled };
   return <div className="grid gap-3" data-testid="builtin-options">
-    {showName && applicable.has('name') && <div className="field"><Label htmlFor="builtin-option-name">{t('optName')}</Label>
-      <Input id="builtin-option-name" maxLength={200} disabled={disabled} value={values.name ?? builtin.label} onChange={(event) => onChange('name', event.target.value)} /></div>}
-    {showSchedule && applicable.has('schedule_interval_minutes') && <div className="field"><Label htmlFor="builtin-option-schedule">{t('optSchedule')}</Label>
-      <Select disabled={disabled} value={values.schedule_interval_minutes ? String(values.schedule_interval_minutes) : undefined} onValueChange={(value) => onChange('schedule_interval_minutes', Number(value) as ConnectorConfig['schedule_interval_minutes'])}>
-        <SelectTrigger id="builtin-option-schedule"><SelectValue placeholder={t('optScheduleDefault')} /></SelectTrigger>
-        <SelectContent>{intervals.map((value) => <SelectItem key={value} value={String(value)}>{t('everyMinutes', { minutes: value })}</SelectItem>)}</SelectContent>
-      </Select>
-      {floor > 15 && <small className="text-muted-foreground">{floor >= 60 ? t('minIntervalHours', { hours: floor / 60 }) : t('minIntervalMinutes', { minutes: floor })}</small>}</div>}
-    {showSections && <fieldset className="field m-0 border-0 p-0" disabled={disabled}><legend className="mb-1 text-sm font-medium">{t('optSections')}</legend>
-      <div className="grid gap-2 sm:grid-cols-2">{sections.map((section) => {
-        const label = locale.toLowerCase().startsWith('vi') ? section.label_vi : section.label_en;
-        const on = selected.includes(section.slug);
-        return <label key={section.slug} className="flex items-center gap-2 text-sm">
-          <Checkbox checked={on} disabled={disabled || (!on && selected.length >= MAX_SECTIONS)} onCheckedChange={(next) => toggle(section.slug, next === true)} />
-          <span>{label}</span></label>;
-      })}</div>
-      <small className="text-muted-foreground">{t('optSectionsHelp')}</small>
-      <small className="text-muted-foreground" role="status">{t('optSectionsCost', { count: selected.length, minutes, requests: requestsPerDay })}</small></fieldset>}
-    {applicable.has('max_items') && <div className="field"><Label htmlFor="builtin-option-max-items">{t('optMaxItems')}</Label>
-      <Input id="builtin-option-max-items" type="number" min={1} max={100} disabled={disabled} aria-describedby="builtin-option-max-items-help" value={values.max_items ?? ''} onChange={numeric('max_items')} />
-      <small id="builtin-option-max-items-help" className="text-muted-foreground">{t('optMaxItemsHelp')}</small></div>}
-    {applicable.has('include_keywords') && <KeywordField id="builtin-option-include" label={t('optInclude')} terms={values.include_keywords ?? []} onTerms={(terms) => onChange('include_keywords', terms)} />}
-    {applicable.has('exclude_keywords') && <KeywordField id="builtin-option-exclude" label={t('optExclude')} terms={values.exclude_keywords ?? []} onTerms={(terms) => onChange('exclude_keywords', terms)} />}
-    {applicable.has('max_age_days') && <div className="field"><Label htmlFor="builtin-option-max-age">{t('optMaxAge')}</Label>
-      <Input id="builtin-option-max-age" type="number" min={1} max={365} disabled={disabled} aria-describedby="builtin-option-max-age-help" value={values.max_age_days ?? ''} onChange={numeric('max_age_days')} />
-      <small id="builtin-option-max-age-help" className="text-muted-foreground">{t('optMaxAgeHelp')}</small></div>}
+    <NameOption {...common} builtin={builtin} show={showName} />
+    <ScheduleOption {...common} builtin={builtin} show={showSchedule} />
+    <SectionsOption {...common} builtin={builtin} />
+    <FilterOptions {...common} />
     {typed.map((spec) => <TypedOption key={spec.key} spec={spec} disabled={disabled} value={(values as Record<string, unknown>)[spec.key]}
       onValue={(next) => onChange(spec.key as BuiltinOptionKey, next as never)} />)}
-    {showNativeHint && <p className="m-0 text-sm text-muted-foreground" role="note">{t('optNativeHint')}</p>}
+    {typed.some((spec) => spec.native) && <p className="m-0 text-sm text-muted-foreground" role="note">{t('optNativeHint')}</p>}
     <p className="m-0 text-sm text-muted-foreground">{t('optAppliesNew')}</p>
   </div>;
 }

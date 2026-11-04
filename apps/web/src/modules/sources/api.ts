@@ -1,6 +1,7 @@
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import type { SourceAiOptions } from './source-ai-toggles';
 import type { DataShape } from '@/core/data-shapes';
+import type { ApiResponse } from '@/core/api-contract';
 
 export type RealtimeMode = 'realtime' | 'near_realtime';
 
@@ -165,15 +166,8 @@ export type ConnectorSettings = {
   auth_header_name?: string;
 };
 export type DraftValidationRequest = ConnectorSettings & { expected_source_generation: number; secret_action?: 'keep' | 'replace'; secret?: string };
-export type ConnectorActivation = {
-  source_id: string;
-  desired_revision: number;
-  applied_revision: number;
-  state: string;
-  error_code: string | null;
-  credential_recovery: string;
-  execution_backend?: ExecutionBackend;
-};
+/** Activation state of a connector; derived from the backend OpenAPI schema (generated types). */
+export type ConnectorActivation = ApiResponse<'/api/v1/connectors/{source_id}/activation'>;
 export type ExecutionBackend = 'native' | 'n8n';
 export type CollectionStatus = 'queued' | 'running' | 'succeeded' | 'no_changes' | 'failed' | 'cancelled';
 export type CollectionRequest = { request_id: string; source_id: string; status: CollectionStatus; ingestion_run_id: string | null; error_code: string | null };

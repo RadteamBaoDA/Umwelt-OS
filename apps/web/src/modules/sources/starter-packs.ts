@@ -75,10 +75,18 @@ function keywords(text: string): string[] {
   return [...seen.values()];
 }
 
-/** Initial editable text for an item, derived from its default options or scope (empty when it has no editable value). */
-export function defaultEditText(item: PackItem): string {
-  if (item.kind === 'builtin' && item.edit === 'job_keywords') return item.options?.job_keywords?.join(', ') ?? '';
-  if (item.kind === 'builtin') return (item.edit === 'vn_symbols' ? item.options?.vn_symbols : item.edit === 'crypto_symbols' ? item.options?.crypto_symbols : undefined)?.join(', ') ?? '';
+/** Initial editable text for a built-in item: the option list its `edit` kind refers to, comma-joined, else empty. */
+function builtinEditText(item: BuiltinPackItem): string {
+  const lists: Partial<Record<ItemEdit, string[] | undefined>> = {
+    job_keywords: item.options?.job_keywords,
+    vn_symbols: item.options?.vn_symbols,
+    crypto_symbols: item.options?.crypto_symbols,
+  };
+  return (item.edit ? lists[item.edit] : undefined)?.join(', ') ?? '';
+}
+
+/** Initial editable text for a scoped item from its default configuration (empty for edit kinds that are built-in only). */
+function scopedEditText(item: ScopedPackItem): string {
   const c = item.configuration;
   if (item.edit === 'github_repo') return `${c.github_owner}/${c.github_repository}`;
   if (item.edit === 'arxiv_category') return c.arxiv_category ?? '';
@@ -86,17 +94,36 @@ export function defaultEditText(item: PackItem): string {
   return '';
 }
 
+/** Initial editable text for an item, derived from its default options or scope (empty when it has no editable value). */
+export function defaultEditText(item: PackItem): string {
+  return item.kind === 'builtin' ? builtinEditText(item) : scopedEditText(item);
+}
+
+/** True when `text` parses into 1..max unique codes that each match `pattern`. */
+function codeListValid(text: string, max: number, pattern: RegExp): boolean {
+  const list = codes(text);
+  return list.length >= 1 && list.length <= max && list.every((code) => pattern.test(code));
+}
+
+/** True when `text` is exactly "lat, lon" within the valid coordinate ranges. */
+function weatherValid(text: string): boolean {
+  const [lat, lon] = text.split(',').map((part) => Number(part.trim()));
+  return Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180 && text.split(',').length === 2;
+}
+
+/** Validators per edit kind; the map is exhaustive over `ItemEdit`, so every kind with an edit control has an entry (items with no `edit` accept any text, see `editTextValid`). */
+const EDIT_VALIDATORS: Record<ItemEdit, (text: string) => boolean> = {
+  vn_symbols: (text) => codeListValid(text, 20, /^[A-Z0-9]{2,10}$/),
+  job_keywords: (text) => { const list = keywords(text); return list.length >= 1 && list.length <= 5 && list.every((term) => term.length <= 60); },
+  crypto_symbols: (text) => codeListValid(text, 10, /^[A-Z0-9]{3,20}$/),
+  github_repo: (text) => /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(text.trim()),
+  arxiv_category: (text) => /^[a-z-]+(\.[A-Za-z-]+)?$/.test(text.trim()),
+  weather: weatherValid,
+};
+
 /** Whether the edited text is acceptable for the item; the server stays the final validator. */
 export function editTextValid(item: PackItem, text: string): boolean {
-  switch (item.edit) {
-    case 'vn_symbols': { const list = codes(text); return list.length >= 1 && list.length <= 20 && list.every((code) => /^[A-Z0-9]{2,10}$/.test(code)); }
-    case 'job_keywords': { const list = keywords(text); return list.length >= 1 && list.length <= 5 && list.every((term) => term.length <= 60); }
-    case 'crypto_symbols': { const list = codes(text); return list.length >= 1 && list.length <= 10 && list.every((code) => /^[A-Z0-9]{3,20}$/.test(code)); }
-    case 'github_repo': return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(text.trim());
-    case 'arxiv_category': return /^[a-z-]+(\.[A-Za-z-]+)?$/.test(text.trim());
-    case 'weather': { const [lat, lon] = text.split(',').map((part) => Number(part.trim())); return Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180 && text.split(',').length === 2; }
-    default: return true;
-  }
+  return item.edit ? EDIT_VALIDATORS[item.edit](text) : true;
 }
 
 /** Built-in enable options for an item after applying its edited text. */

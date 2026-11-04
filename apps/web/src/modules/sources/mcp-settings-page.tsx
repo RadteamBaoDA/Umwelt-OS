@@ -2,7 +2,7 @@
 
 import { useTranslations } from 'next-intl';
 import { SettingsPageHeader } from '@/components/settings-layout';
-import { McpSettings } from '@/modules/sources/mcp-editor';
+import { McpSettings } from './mcp-editor';
 
 /** Data sources > MCP tab body: one page heading (title and one-line description) above the connections section. */
 export function McpSettingsPage() {
