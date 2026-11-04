@@ -16,6 +16,7 @@ from core.body_limit import BodyLimitMiddleware
 from core.config import Settings
 from core.database import make_session_factory
 from core.errors import install_error_handling
+from core.events.registry import validate_event_contracts
 from core.modules import ModuleRegistry, ordered_router_specs, register_modules
 from core.publication import PublicationGateMiddleware
 from core.realtime.routes import MAX_STREAMS_PER_API_PROCESS
@@ -245,6 +246,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app = _new_app(app_settings, csrf_secret, session_factory, redis, _make_lifespan(redis, engine))
     app.state.modules = register_modules()
+    validate_event_contracts()  # fail fast on undeclared outbox event types / handlers
     _include_descriptor_routers(app, app.state.modules)
     tool_registry = ToolRegistry(module_registry=app.state.modules)
     declared_tools = frozenset(name for item in app.state.modules.values() if item.enabled for name in item.tools)

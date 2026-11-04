@@ -11,8 +11,10 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
+from core.events import dispatch as core_dispatch
 from core.workspaces.schemas import InternalJobScope
 from modules.ingestion import dispatcher
+from modules.ingestion.public import OUTBOX_RUNTIME
 
 NOW = datetime.now(UTC)
 SCOPE = InternalJobScope(
@@ -68,9 +70,9 @@ def patch_loop(monkeypatch, identities, claim_script):
     async def back(factory, identifier, rec, *, enabled):
         returned.append((identifier, rec.claimed_at))
 
-    monkeypatch.setattr(dispatcher, "_reserve_dispatch_page", reserve)
-    monkeypatch.setattr(dispatcher, "_claim_for_dispatch", claim)
-    monkeypatch.setattr(dispatcher, "_return_claim_to_pending", back)
+    monkeypatch.setattr(core_dispatch, "_reserve_dispatch_page", reserve)
+    monkeypatch.setattr(core_dispatch, "_claim_for_dispatch", claim)
+    monkeypatch.setattr(core_dispatch, "_return_claim_to_pending", back)
     return returned
 
 
@@ -178,10 +180,10 @@ def claim_env(monkeypatch, session: Session, *, scope: Any = SCOPE, valid: bool 
     async def quarantine(sess, identifier, status, dispatched):
         quarantined.append(identifier)
 
-    monkeypatch.setattr(dispatcher.public, "resolve_ingestion_event_scope", resolve)
-    monkeypatch.setattr(dispatcher, "read_access_fence", fence)
-    monkeypatch.setattr(dispatcher, "_quarantine_event_identity", quarantine)
-    monkeypatch.setattr(dispatcher, "valid_event_envelope", lambda event, scope: valid)
+    monkeypatch.setattr(OUTBOX_RUNTIME, "resolve_scope", resolve)
+    monkeypatch.setattr(core_dispatch, "read_access_fence", fence)
+    monkeypatch.setattr(core_dispatch, "_quarantine_event_identity", quarantine)
+    monkeypatch.setattr(core_dispatch, "valid_event_envelope", lambda event, scope: valid)
     return factory, quarantined
 
 
@@ -199,8 +201,8 @@ async def test_claim_commits_the_queued_timestamp_before_redis(monkeypatch):
     event = outbox()
     session = Session(event, stage=SimpleNamespace(status="pending", lease_expires_at=None))
     factory, _ = claim_env(monkeypatch, session)
-    record = dispatcher._DispatchClaim()
-    assert await dispatcher._claim_for_dispatch(factory, record, uuid4(), "pending", None, now=NOW, enabled=False)
+    record = core_dispatch._DispatchClaim()
+    assert await core_dispatch._claim_for_dispatch(factory, record, uuid4(), "pending", None, now=NOW, enabled=False)
     assert event.status == "queued" and event.dispatched_at == record.claimed_at and session.commits == 1
     assert record.job_name == "process_ingestion_event" and record.scope is SCOPE and record.access_fence == "fence"
 
@@ -209,25 +211,25 @@ async def test_claim_commits_the_queued_timestamp_before_redis(monkeypatch):
 async def test_claim_skips_and_fails_per_rule(monkeypatch):
     """Quarantine unresolvable identities, skip missing/running events, fail invalid or stage-less ones."""
     factory, quarantined = claim_env(monkeypatch, Session(None), scope=None)
-    record = dispatcher._DispatchClaim()
-    assert not await dispatcher._claim_for_dispatch(factory, record, uuid4(), "pending", None, now=NOW, enabled=False)
+    record = core_dispatch._DispatchClaim()
+    assert not await core_dispatch._claim_for_dispatch(factory, record, uuid4(), "pending", None, now=NOW, enabled=False)
     assert len(quarantined) == 1 and record.claimed_at is None
 
     factory, _ = claim_env(monkeypatch, Session(None))
-    assert not await dispatcher._claim_for_dispatch(factory, dispatcher._DispatchClaim(), uuid4(), "pending", None,
+    assert not await core_dispatch._claim_for_dispatch(factory, core_dispatch._DispatchClaim(), uuid4(), "pending", None,
                                                     now=NOW, enabled=False)
 
     event = outbox()
     session = Session(event)
     factory, _ = claim_env(monkeypatch, session, valid=False)
-    assert not await dispatcher._claim_for_dispatch(factory, dispatcher._DispatchClaim(), uuid4(), "pending", None,
+    assert not await core_dispatch._claim_for_dispatch(factory, core_dispatch._DispatchClaim(), uuid4(), "pending", None,
                                                     now=NOW, enabled=False)
     assert event.status == "failed" and session.commits == 1
 
     event = outbox()
     session = Session(event, stage=None)  # the stage row vanished
     factory, _ = claim_env(monkeypatch, session)
-    assert not await dispatcher._claim_for_dispatch(factory, dispatcher._DispatchClaim(), uuid4(), "pending", None,
+    assert not await core_dispatch._claim_for_dispatch(factory, core_dispatch._DispatchClaim(), uuid4(), "pending", None,
                                                     now=NOW, enabled=False)
     assert event.status == "failed"
 
@@ -235,7 +237,7 @@ async def test_claim_skips_and_fails_per_rule(monkeypatch):
     live = SimpleNamespace(status="running", lease_expires_at=NOW + timedelta(minutes=1))
     session = Session(event, stage=live)  # an in-flight worker keeps its original timestamp
     factory, _ = claim_env(monkeypatch, session)
-    assert not await dispatcher._claim_for_dispatch(factory, dispatcher._DispatchClaim(), uuid4(), "pending", None,
+    assert not await core_dispatch._claim_for_dispatch(factory, core_dispatch._DispatchClaim(), uuid4(), "pending", None,
                                                     now=NOW, enabled=False)
     assert event.status == "pending" and session.commits == 0
 
@@ -256,14 +258,14 @@ async def test_cleanup_and_purge_events_need_a_matching_retained_identity(monkey
 
     receipt.value = None
     monkeypatch.setattr(documents, "read_document_cleanup_job_identity", receipt)
-    assert not await dispatcher._claim_for_dispatch(factory, dispatcher._DispatchClaim(), uuid4(), "pending", None,
+    assert not await core_dispatch._claim_for_dispatch(factory, core_dispatch._DispatchClaim(), uuid4(), "pending", None,
                                                     now=NOW, enabled=False)
     assert event.status == "failed"
     event = outbox(dict(operation), "document.cleanup.requested")
     session = Session(event)
     factory, _ = claim_env(monkeypatch, session)
     receipt.value = SimpleNamespace(source_id=SCOPE.source_id, source_generation=1)
-    assert await dispatcher._claim_for_dispatch(factory, dispatcher._DispatchClaim(), uuid4(), "pending", None,
+    assert await core_dispatch._claim_for_dispatch(factory, core_dispatch._DispatchClaim(), uuid4(), "pending", None,
                                                 now=NOW, enabled=False)
 
     async def retained(sess, op, **kw):
@@ -274,6 +276,6 @@ async def test_cleanup_and_purge_events_need_a_matching_retained_identity(monkey
     event = outbox(dict(operation), "source.purge.requested")
     session = Session(event)
     factory, _ = claim_env(monkeypatch, session)
-    assert not await dispatcher._claim_for_dispatch(factory, dispatcher._DispatchClaim(), uuid4(), "pending", None,
+    assert not await core_dispatch._claim_for_dispatch(factory, core_dispatch._DispatchClaim(), uuid4(), "pending", None,
                                                     now=NOW, enabled=False)
     assert event.status == "failed"

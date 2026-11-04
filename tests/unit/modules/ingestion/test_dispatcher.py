@@ -10,6 +10,7 @@ import httpx
 import pytest
 
 from core.errors import ConflictError, DomainError
+from core.events import dispatch as core_dispatch
 from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.ingestion import dispatcher, public
 from modules.ingestion.models import (
@@ -18,6 +19,7 @@ from modules.ingestion.models import (
     IngestionStage,
     SourceIngestionState,
 )
+from modules.ingestion.public import OUTBOX_RUNTIME
 from modules.ingestion.worker import (
     ConnectorRetryError,
     _retry_after_seconds,
@@ -91,9 +93,9 @@ class TestDispatcherWork:
         scope = MagicMock(workspace_id=uuid4(), actor_user_id=7, membership_revision=3, source_id=None)
 
         with (
-            patch.object(dispatcher.public, "resolve_ingestion_event_scope", AsyncMock(return_value=scope)),
-            patch.object(dispatcher, "read_access_fence", AsyncMock()),
-            patch.object(dispatcher, "valid_event_envelope", return_value=True),
+            patch.object(OUTBOX_RUNTIME, "resolve_scope", AsyncMock(return_value=scope)),
+            patch.object(core_dispatch, "read_access_fence", AsyncMock()),
+            patch.object(core_dispatch, "valid_event_envelope", return_value=True),
         ):
             count = await dispatcher.dispatch_pending_work(ctx)
 

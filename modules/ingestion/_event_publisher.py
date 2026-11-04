@@ -1,7 +1,8 @@
-"""Domain-event outbox publication seam (internal; import through ``public``).
+"""Ingestion-side proofs for outbox publication (internal; import through ``public``).
 
-``publish_event`` is the single stable entry point for writing ``EventOutbox`` rows and is
-deliberately isolated here so a later wave can relocate it to ``core`` without touching callers."""
+``publish_event`` itself now lives in ``core.events.publisher`` and is re-exported here (and from
+``modules.ingestion.public``) for backward compatibility. This module keeps the Ingestion/Documents/Sources
+lineage proofs that the event handlers in ``_event_handlers`` invoke."""
 
 import json
 from copy import deepcopy
@@ -13,11 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.errors import NotFoundError
 from core.events import DomainEvent
+from core.events.publisher import (
+    publish_event as publish_event,  # noqa: PLC0414  (explicit re-export; moved to core)
+)
 from core.workspaces.schemas import InternalJobScope, Scope
 from modules.ingestion._scope import (
-    _SOURCE_PURGE_PRODUCERS,
     _actor_id,
-    _admit_ingestion_scope,
     _document_cleanup_operation_id,
     _materialization_scope,
     _run_scope,
@@ -170,51 +172,6 @@ async def _verify_ready_event(
         ).limit(1))
         if normalized is None:
             raise NotFoundError(detail="Ready normalization lineage not found")
-
-
-async def publish_event(session: AsyncSession, event: DomainEvent, *, scope: Scope, multi_workspace_enabled: bool,
-) -> None:
-    """Add scoped durable identity to the caller's already-admitted transaction outbox.
-
-    Caller holds admission and all required domain locks; only nonlocking owner reads
-    occur here. Exact retained purge identity survives canonical deletion. Existing
-    claimed scope fields must match, never be silently overwritten. No commit/I/O.
-    Purge event types have exact Source/Documents producer contracts; normalized Ingestion
-    version-ready publication additionally proves its scoped journal/run/batch lineage.
-
-    This is the single stable outbox-publication seam of the module: its signature and behaviour are the
-    contract a later wave can relocate to ``core`` without touching callers (66 transitive dependents).
-    """
-    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    payload = deepcopy(event.payload)
-    identity = {"workspace_id": str(scope.workspace_id), "actor_user_id": _actor_id(scope),
-                "membership_revision": scope.membership_revision}
-    for key, value in identity.items():
-        if key in payload and (type(payload[key]) is not type(value) or payload[key] != value):
-            raise NotFoundError(detail="Event identity not found")
-    if event.type == "document.cleanup.requested":
-        await _verify_cleanup_event(
-            session, event, payload, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    elif event.type in _SOURCE_PURGE_PRODUCERS:
-        await _verify_purge_event(
-            session, event, payload, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    else:
-        await _scope_run_event(session, payload, identity, scope=scope)
-    outbox = EventOutbox(
-        workspace_id=scope.workspace_id, actor_user_id=_actor_id(scope),
-        membership_revision=scope.membership_revision,
-        id=event.id,
-        type=event.type,
-        version=event.version,
-        occurred_at=event.occurred_at,
-        producer=event.producer,
-        payload=payload,
-        status="pending",
-    )
-    if event.type in {"document.version.ready", "news.document.ready"}:
-        await _verify_ready_event(
-            session, event, outbox, payload, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    session.add(outbox)
 
 
 NORMALIZATION_VERSION = 1

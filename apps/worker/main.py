@@ -22,6 +22,7 @@ from core.auth.deletion_worker import recover_account_deletions
 from core.auth.models import AuthSession
 from core.config import Settings
 from core.database import make_session_factory
+from core.events.registry import get_event_registry, validate_event_contracts
 from core.heavy_work import HEAVY_JOB_MAX_TRIES
 from core.ids import uuid7
 from core.modules import effective_modules, register_modules, scheduled_job_owners
@@ -45,7 +46,7 @@ from modules.chat.worker import (
 from modules.connectors.scheduler import dispatch_due_collections
 from modules.connectors.worker import process_collection_request, reconcile_connectors
 from modules.dashboard.worker import run_scheduled_brief, run_scheduled_highlights
-from modules.ingestion.dispatcher import WORKER_BY_EVENT, dispatch_pending_work
+from modules.ingestion.dispatcher import dispatch_pending_work
 from modules.ingestion.worker import (
     cleanup_storage_orphans,
     process_ingestion_event,
@@ -123,7 +124,7 @@ def _arq_options(name: str) -> dict[str, Any]:
     options: dict[str, Any] = {}
     if name == "translate_content":
         options["keep_result"] = 0  # fixed `translation:{id}` job ids must be re-enqueueable by recovery
-    if name in set(WORKER_BY_EVENT.values()):
+    if name in set(get_event_registry().job_names.values()):
         options["keep_result"] = 0
     if name in HEAVY_SLOT_JOBS:
         options["max_tries"] = HEAVY_JOB_MAX_TRIES
@@ -144,6 +145,7 @@ async def startup(ctx: dict[str, object]) -> None:
     _silence_cron_logs()
     configure_default_executor()  # explicit default thread-pool size; see core.async_runtime
     settings = Settings()
+    validate_event_contracts()  # fail fast on undeclared outbox event types / handlers
     ctx["settings"] = settings
     ctx["ingestion_dispatch_scan_state"] = {"cursor": None, "lock": asyncio.Lock()}
     ctx["w2_cursor_state"] = {}  # dict[str,str] shared across ARQ ctx copies; see core/worker_cursors.py for key namespaces (_gen:/_unsynced:)
