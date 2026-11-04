@@ -176,6 +176,269 @@ function scatterPoints(rows: ChartDataPoint[], dataKey: string): Array<{ x: numb
   });
 }
 
+/** Values every chart variant needs to format axes, tooltips and series. */
+interface CartesianContext {
+  data: ChartDataPoint[];
+  series: ChartSeries[];
+  height: number;
+  currency?: string;
+  unit?: string;
+  locale: AppLocaleId;
+  categoryKey?: string;
+}
+
+const CHART_MARGIN = { top: 10, right: 16, left: 4, bottom: 8 } as const;
+
+/** Tooltip element with the themed surface and locale-aware value formatting. Plain element factory: Recharts must see its children directly. */
+function themedTooltip({ currency, unit, locale }: CartesianContext) {
+  return (
+    <Tooltip
+      key="tooltip"
+      formatter={(val: unknown) => formatChartValue(Number(val), { currency, unit, locale })}
+      contentStyle={{
+        backgroundColor: GENERATIVE_CHART_TOKENS.tooltipBackground,
+        borderColor: GENERATIVE_CHART_TOKENS.tooltipBorder,
+        color: GENERATIVE_CHART_TOKENS.tooltipText,
+        borderRadius: '8px',
+        fontSize: '12px',
+      }}
+    />
+  );
+}
+
+/**
+ * Grid, category X axis, formatted Y axis, tooltip and legend shared by the line and bar plots.
+ * Returned as plain elements (not wrapper components): Recharts discovers its children by type.
+ */
+function categoricalFurniture(ctx: CartesianContext) {
+  const { currency, unit, locale } = ctx;
+  return [
+    <CartesianGrid key="grid" strokeDasharray="3 3" stroke={GENERATIVE_CHART_TOKENS.gridStroke} vertical={false} />,
+    <XAxis key="x" dataKey="timestamp" stroke={GENERATIVE_CHART_TOKENS.axisStroke} fontSize={11} tickLine={false} />,
+    <YAxis
+      key="y"
+      stroke={GENERATIVE_CHART_TOKENS.axisStroke}
+      fontSize={11}
+      tickLine={false}
+      axisLine={false}
+      tickFormatter={(val: number) => formatChartValue(Number(val), { currency, unit, locale, precision: 0 })}
+    />,
+    themedTooltip(ctx),
+    <Legend key="legend" wrapperStyle={{ fontSize: '12px' }} />,
+  ];
+}
+
+/** Line plot: one monotone line per series. */
+function renderLinePlot(ctx: CartesianContext) {
+  return (
+    <LineChart width={560} height={ctx.height} data={ctx.data} margin={CHART_MARGIN}>
+      {categoricalFurniture(ctx)}
+      {ctx.series.map((s, idx) => {
+        const stroke = resolveSeriesColor(idx, s.color);
+        return (
+          <Line
+            key={s.dataKey}
+            type="monotone"
+            dataKey={s.dataKey}
+            name={s.name}
+            stroke={stroke}
+            strokeWidth={2}
+            dot={{ r: 3, fill: stroke }}
+          />
+        );
+      })}
+    </LineChart>
+  );
+}
+
+/** Scatter plot: numeric X (category label when numeric, else row index) against each series value. */
+function renderScatterPlot(ctx: CartesianContext) {
+  return (
+    <ScatterChart width={560} height={ctx.height} margin={CHART_MARGIN}>
+      <CartesianGrid strokeDasharray="3 3" stroke={GENERATIVE_CHART_TOKENS.gridStroke} />
+      <XAxis
+        type="number"
+        dataKey="x"
+        name={ctx.categoryKey ?? 'x'}
+        stroke={GENERATIVE_CHART_TOKENS.axisStroke}
+        fontSize={11}
+        tickLine={false}
+      />
+      <YAxis
+        type="number"
+        dataKey="y"
+        stroke={GENERATIVE_CHART_TOKENS.axisStroke}
+        fontSize={11}
+        tickLine={false}
+        axisLine={false}
+      />
+      {themedTooltip(ctx)}
+      <Legend wrapperStyle={{ fontSize: '12px' }} />
+      {ctx.series.map((s, idx) => (
+        <Scatter
+          key={s.dataKey}
+          name={s.name}
+          data={scatterPoints(ctx.data, s.dataKey)}
+          fill={resolveSeriesColor(idx, s.color)}
+        />
+      ))}
+    </ScatterChart>
+  );
+}
+
+/** Grouped bars (default) or gapless histogram bars (`distribution`). */
+function renderBarPlot(ctx: CartesianContext, chartType: 'bar' | 'distribution') {
+  const distribution = chartType === 'distribution';
+  return (
+    <BarChart
+      width={560}
+      height={ctx.height}
+      data={ctx.data}
+      // Histogram bins touch each other; grouped bars keep the default category gap.
+      barCategoryGap={distribution ? 0 : undefined}
+      margin={CHART_MARGIN}
+    >
+      {categoricalFurniture(ctx)}
+      {ctx.series.map((s, idx) => {
+        const fill = resolveSeriesColor(idx, s.color);
+        return (
+          <Bar
+            key={s.dataKey}
+            dataKey={s.dataKey}
+            name={s.name}
+            fill={fill}
+            stroke={distribution ? GENERATIVE_CHART_TOKENS.tooltipBackground : undefined}
+            radius={distribution ? 0 : [4, 4, 0, 0]}
+          />
+        );
+      })}
+    </BarChart>
+  );
+}
+
+/** Picks the plot for the persisted chart type. */
+function renderPlot(ctx: CartesianContext, chartType: GenerativeCartesianChartType) {
+  if (chartType === 'line') return renderLinePlot(ctx);
+  if (chartType === 'scatter') return renderScatterPlot(ctx);
+  return renderBarPlot(ctx, chartType);
+}
+
+/** Visible formatted summary chips for non-color-only readability. */
+function SummaryChips({ title, ctx }: { title: string; ctx: CartesianContext }) {
+  const { data, series, currency, unit, locale } = ctx;
+  return (
+    <ul
+      aria-label={`${title} summary`}
+      className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3 text-xs"
+    >
+      {data.map((row, idx) => {
+        const primarySeries = series[0];
+        const rawVal = Number(row[primarySeries.dataKey] ?? row.value ?? 0);
+        const color = resolveSeriesColor(idx, primarySeries.color);
+        return (
+          <li
+            key={`${String(row.timestamp)}-${idx}`}
+            data-testid={`bar-summary-item-${idx}`}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1"
+          >
+            <span
+              className="size-2 rounded-full shrink-0"
+              style={{ backgroundColor: color }}
+              data-color={color}
+              aria-hidden="true"
+            />
+            <span className="text-muted-foreground">{String(row.timestamp)}:</span>
+            <span className="tabular-nums font-semibold text-foreground">
+              {formatChartValue(rawVal, {
+                currency: primarySeries.currency ?? currency,
+                unit: primarySeries.unit ?? unit,
+                locale,
+              })}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** Card header: icon, title, description and the sample / currency badges. */
+function BarChartHeader({ title, description, isSample, currency, unit, locale }: {
+  title: string;
+  description?: string;
+  isSample?: boolean;
+  currency?: string;
+  unit?: string;
+  locale: AppLocaleId;
+}) {
+  return (
+    <CardHeader className="gap-1.5 border-b border-border pb-4">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <BarChart3Icon className="size-4" aria-hidden="true" />
+          </span>
+          <div>
+            <CardTitle className="text-base font-semibold text-foreground">{title}</CardTitle>
+            {description && (
+              <CardDescription className="mt-0.5 text-xs text-muted-foreground">
+                {description}
+              </CardDescription>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5">
+          {isSample && <SampleDataBadge locale={locale} />}
+          {(currency || unit) && (
+            <Badge variant="outline" className="tabular-nums text-xs">
+              {currency ?? unit}
+            </Badge>
+          )}
+        </div>
+      </div>
+    </CardHeader>
+  );
+}
+
+/**
+ * Standalone export (inline SVG + data table, no remote origins) for copy/download.
+ *
+ * @returns Memoized HTML document string for the current data and series.
+ */
+function useBarExportHtml(args: {
+  title: string;
+  description?: string;
+  source?: string;
+  sourceLabel: string;
+  locale: AppLocaleId;
+  chartType: GenerativeCartesianChartType;
+  ctx: CartesianContext;
+}): string {
+  const { title, description, source, sourceLabel, locale, chartType, ctx } = args;
+  const { series, data, currency, unit } = ctx;
+  return React.useMemo(
+    () =>
+      chartToStandaloneHtml({
+        title,
+        description,
+        source,
+        sourceLabel,
+        lang: locale === 'vi-vi' ? 'vi' : 'en',
+        kind: chartType === 'bar' ? 'bar' : chartType,
+        series: series.map((s) => ({ name: s.name, color: s.color ?? '' })),
+        rows: data.map((row) => ({
+          label: String(row.timestamp),
+          values: series.map((s) => {
+            const v = Number(row[s.dataKey] ?? row.value ?? 0);
+            return Number.isFinite(v) ? v : 0;
+          }),
+        })),
+        format: (v) => formatChartValue(v, { currency, unit, locale }),
+      }),
+    [title, description, source, sourceLabel, locale, chartType, series, data, currency, unit],
+  );
+}
+
 /**
  * Native structured GenerativeBarChart widget using Recharts primitives (`BarChart`, `Bar`,
  * `XAxis`, `YAxis`, `CartesianGrid`, `Tooltip`, `Legend`), semantic `--chart-1..5` tokens,
@@ -202,10 +465,7 @@ export function GenerativeBarChart({
 }: GenerativeBarChartProps) {
   const resolvedLocale = resolveWidgetLocale(locale);
   const canonicalLocale = normalizeFormattingLocale(resolvedLocale);
-  const copy = {
-    emptyText: genUiCopy(resolvedLocale).genUiBarEmpty,
-    sourceLabel: genUiCopy(resolvedLocale).genUiTableSource,
-  };
+  const catalog = genUiCopy(resolvedLocale);
   const resolvedDescription = description ?? subtitle;
   const resolvedCategoryKey = categoryKey ?? x_key;
 
@@ -217,29 +477,12 @@ export function GenerativeBarChart({
     () => normalizeBarSeries(series, title, currency, unit),
     [currency, series, title, unit],
   );
-
-  /** Standalone export (inline SVG + data table, no remote origins) for copy/download. */
-  const exportHtml = React.useMemo(
-    () =>
-      chartToStandaloneHtml({
-        title,
-        description: resolvedDescription,
-        source,
-        sourceLabel: copy.sourceLabel,
-        lang: resolvedLocale === 'vi-vi' ? 'vi' : 'en',
-        kind: chartType === 'bar' ? 'bar' : chartType,
-        series: resolvedSeries.map((s) => ({ name: s.name, color: s.color ?? '' })),
-        rows: normalizedData.map((row) => ({
-          label: String(row.timestamp),
-          values: resolvedSeries.map((s) => {
-            const v = Number(row[s.dataKey] ?? row.value ?? 0);
-            return Number.isFinite(v) ? v : 0;
-          }),
-        })),
-        format: (v) => formatChartValue(v, { currency, unit, locale: resolvedLocale }),
-      }),
-    [title, resolvedDescription, source, copy.sourceLabel, resolvedLocale, chartType, resolvedSeries, normalizedData, currency, unit],
-  );
+  const ctx: CartesianContext = {
+    data: normalizedData, series: resolvedSeries, height, currency, unit, locale: resolvedLocale, categoryKey: resolvedCategoryKey,
+  };
+  const exportHtml = useBarExportHtml({
+    title, description: resolvedDescription, source, sourceLabel: catalog.genUiTableSource, locale: resolvedLocale, chartType, ctx,
+  });
 
   return (
     <ExportOverlay title={title} html={exportHtml} ready={normalizedData.length > 0}>
@@ -247,31 +490,7 @@ export function GenerativeBarChart({
       data-testid="generative-bar-chart"
       className="my-2 w-full max-w-2xl border-border bg-surface text-foreground"
     >
-      <CardHeader className="gap-1.5 border-b border-border pb-4">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <span className="inline-flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <BarChart3Icon className="size-4" aria-hidden="true" />
-            </span>
-            <div>
-              <CardTitle className="text-base font-semibold text-foreground">{title}</CardTitle>
-              {resolvedDescription && (
-                <CardDescription className="mt-0.5 text-xs text-muted-foreground">
-                  {resolvedDescription}
-                </CardDescription>
-              )}
-            </div>
-          </div>
-          <div className="flex items-center gap-1.5">
-            {isSample && <SampleDataBadge locale={resolvedLocale} />}
-            {(currency || unit) && (
-              <Badge variant="outline" className="tabular-nums text-xs">
-                {currency ?? unit}
-              </Badge>
-            )}
-          </div>
-        </div>
-      </CardHeader>
+      <BarChartHeader title={title} description={resolvedDescription} isSample={isSample} currency={currency} unit={unit} locale={resolvedLocale} />
 
       <CardContent className="pt-4">
         {normalizedData.length === 0 ? (
@@ -280,7 +499,7 @@ export function GenerativeBarChart({
             data-testid="bar-chart-empty"
             className="py-8 text-center text-xs text-muted-foreground"
           >
-            {copy.emptyText}
+            {catalog.genUiBarEmpty}
           </p>
         ) : (
           <NextIntlClientProvider
@@ -294,225 +513,17 @@ export function GenerativeBarChart({
             />
             <div className="w-full overflow-x-auto" data-testid="bar-chart-canvas"
               data-chart-type={chartType}>
-              {chartType === 'line' && (
-                <LineChart
-                  width={560}
-                  height={height}
-                  data={normalizedData}
-                  margin={{ top: 10, right: 16, left: 4, bottom: 8 }}
-                >
-                <CartesianGrid
-                  strokeDasharray="3 3"
-                  stroke={GENERATIVE_CHART_TOKENS.gridStroke}
-                  vertical={false}
-                />
-                <XAxis
-                  dataKey="timestamp"
-                  stroke={GENERATIVE_CHART_TOKENS.axisStroke}
-                  fontSize={11}
-                  tickLine={false}
-                />
-                <YAxis
-                  stroke={GENERATIVE_CHART_TOKENS.axisStroke}
-                  fontSize={11}
-                  tickLine={false}
-                  axisLine={false}
-                  tickFormatter={(val: number) =>
-                    formatChartValue(Number(val), {
-                      currency,
-                      unit,
-                      locale: resolvedLocale,
-                      precision: 0,
-                    })
-                  }
-                />
-                <Tooltip
-                  formatter={(val: unknown) =>
-                    formatChartValue(Number(val), {
-                      currency,
-                      unit,
-                      locale: resolvedLocale,
-                    })
-                  }
-                  contentStyle={{
-                    backgroundColor: GENERATIVE_CHART_TOKENS.tooltipBackground,
-                    borderColor: GENERATIVE_CHART_TOKENS.tooltipBorder,
-                    color: GENERATIVE_CHART_TOKENS.tooltipText,
-                    borderRadius: '8px',
-                    fontSize: '12px',
-                  }}
-                />
-                <Legend wrapperStyle={{ fontSize: '12px' }} />
-                  {resolvedSeries.map((s, idx) => {
-                    const stroke = resolveSeriesColor(idx, s.color);
-                    return (
-                      <Line
-                        key={s.dataKey}
-                        type="monotone"
-                        dataKey={s.dataKey}
-                        name={s.name}
-                        stroke={stroke}
-                        strokeWidth={2}
-                        dot={{ r: 3, fill: stroke }}
-                      />
-                    );
-                  })}
-                </LineChart>
-              )}
-              {chartType === 'scatter' && (
-                <ScatterChart width={560} height={height} margin={{ top: 10, right: 16, left: 4, bottom: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={GENERATIVE_CHART_TOKENS.gridStroke} />
-                  <XAxis
-                    type="number"
-                    dataKey="x"
-                    name={resolvedCategoryKey ?? 'x'}
-                    stroke={GENERATIVE_CHART_TOKENS.axisStroke}
-                    fontSize={11}
-                    tickLine={false}
-                  />
-                  <YAxis
-                    type="number"
-                    dataKey="y"
-                    stroke={GENERATIVE_CHART_TOKENS.axisStroke}
-                    fontSize={11}
-                    tickLine={false}
-                    axisLine={false}
-                  />
-                <Tooltip
-                  formatter={(val: unknown) =>
-                    formatChartValue(Number(val), {
-                      currency,
-                      unit,
-                      locale: resolvedLocale,
-                    })
-                  }
-                  contentStyle={{
-                    backgroundColor: GENERATIVE_CHART_TOKENS.tooltipBackground,
-                    borderColor: GENERATIVE_CHART_TOKENS.tooltipBorder,
-                    color: GENERATIVE_CHART_TOKENS.tooltipText,
-                    borderRadius: '8px',
-                    fontSize: '12px',
-                  }}
-                />
-                <Legend wrapperStyle={{ fontSize: '12px' }} />
-                  {resolvedSeries.map((s, idx) => (
-                    <Scatter
-                      key={s.dataKey}
-                      name={s.name}
-                      data={scatterPoints(normalizedData, s.dataKey)}
-                      fill={resolveSeriesColor(idx, s.color)}
-                    />
-                  ))}
-                </ScatterChart>
-              )}
-              {(chartType === 'bar' || chartType === 'distribution') && (
-                <BarChart
-                  width={560}
-                  height={height}
-                  data={normalizedData}
-                  // Histogram bins touch each other; grouped bars keep the default category gap.
-                  barCategoryGap={chartType === 'distribution' ? 0 : undefined}
-                  margin={{ top: 10, right: 16, left: 4, bottom: 8 }}
-                >
-                <CartesianGrid
-                  strokeDasharray="3 3"
-                  stroke={GENERATIVE_CHART_TOKENS.gridStroke}
-                  vertical={false}
-                />
-                <XAxis
-                  dataKey="timestamp"
-                  stroke={GENERATIVE_CHART_TOKENS.axisStroke}
-                  fontSize={11}
-                  tickLine={false}
-                />
-                <YAxis
-                  stroke={GENERATIVE_CHART_TOKENS.axisStroke}
-                  fontSize={11}
-                  tickLine={false}
-                  axisLine={false}
-                  tickFormatter={(val: number) =>
-                    formatChartValue(Number(val), {
-                      currency,
-                      unit,
-                      locale: resolvedLocale,
-                      precision: 0,
-                    })
-                  }
-                />
-                <Tooltip
-                  formatter={(val: unknown) =>
-                    formatChartValue(Number(val), {
-                      currency,
-                      unit,
-                      locale: resolvedLocale,
-                    })
-                  }
-                  contentStyle={{
-                    backgroundColor: GENERATIVE_CHART_TOKENS.tooltipBackground,
-                    borderColor: GENERATIVE_CHART_TOKENS.tooltipBorder,
-                    color: GENERATIVE_CHART_TOKENS.tooltipText,
-                    borderRadius: '8px',
-                    fontSize: '12px',
-                  }}
-                />
-                <Legend wrapperStyle={{ fontSize: '12px' }} />
-                  {resolvedSeries.map((s, idx) => {
-                    const fill = resolveSeriesColor(idx, s.color);
-                    return (
-                      <Bar
-                        key={s.dataKey}
-                        dataKey={s.dataKey}
-                        name={s.name}
-                        fill={fill}
-                        stroke={chartType === 'distribution' ? GENERATIVE_CHART_TOKENS.tooltipBackground : undefined}
-                        radius={chartType === 'distribution' ? 0 : [4, 4, 0, 0]}
-                      />
-                    );
-                  })}
-                </BarChart>
-              )}
+              {renderPlot(ctx, chartType)}
             </div>
 
-            {/* Visible formatted summary chips for non-color-only readability */}
-            <ul
-              aria-label={`${title} summary`}
-              className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3 text-xs"
-            >
-              {normalizedData.map((row, idx) => {
-                const primarySeries = resolvedSeries[0];
-                const rawVal = Number(row[primarySeries.dataKey] ?? row.value ?? 0);
-                const color = resolveSeriesColor(idx, primarySeries.color);
-                return (
-                  <li
-                    key={`${String(row.timestamp)}-${idx}`}
-                    data-testid={`bar-summary-item-${idx}`}
-                    className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1"
-                  >
-                    <span
-                      className="size-2 rounded-full shrink-0"
-                      style={{ backgroundColor: color }}
-                      data-color={color}
-                      aria-hidden="true"
-                    />
-                    <span className="text-muted-foreground">{String(row.timestamp)}:</span>
-                    <span className="tabular-nums font-semibold text-foreground">
-                      {formatChartValue(rawVal, {
-                        currency: primarySeries.currency ?? currency,
-                        unit: primarySeries.unit ?? unit,
-                        locale: resolvedLocale,
-                      })}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
+            <SummaryChips title={title} ctx={ctx} />
           </NextIntlClientProvider>
         )}
       </CardContent>
       {source && (
         <CardFooter className="border-t border-border py-2.5 text-[11px] text-muted-foreground">
           <span data-testid="bar-chart-source">
-            <strong className="font-medium text-foreground">{copy.sourceLabel}:</strong> {source}
+            <strong className="font-medium text-foreground">{catalog.genUiTableSource}:</strong> {source}
           </span>
         </CardFooter>
       )}

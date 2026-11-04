@@ -47,6 +47,230 @@ export interface ExportOverlayProps {
   children?: React.ReactNode;
 }
 
+/** Resolved (localized) labels of the overlay. */
+type OverlayLabels = Record<'expand' | 'exportHtml' | 'copyHtml' | 'copiedHtml' | 'close' | 'previewDescription', string>;
+
+/**
+ * Resolves overlay labels: explicit props win, fallbacks come from the shared catalog (document lang) so no English
+ * literals live here.
+ */
+function resolveOverlayLabels(labels: ExportOverlayProps['labels']): OverlayLabels {
+  const fallback = genUiCopy();
+  return {
+    expand: labels?.expand ?? fallback.genUiFullscreenPreview,
+    exportHtml: labels?.exportHtml ?? fallback.genUiExportHtml,
+    copyHtml: labels?.copyHtml ?? fallback.genUiCopyHtml,
+    copiedHtml: labels?.copiedHtml ?? fallback.genUiCopied,
+    close: labels?.close ?? fallback.genUiClose,
+    previewDescription: labels?.previewDescription ?? fallback.genUiPreviewDescription,
+  };
+}
+
+/**
+ * Dialog open state that works controlled (`open` given) or uncontrolled; the change callback fires in both modes.
+ *
+ * @returns `[isOpen, setOpen]`.
+ */
+function useDialogOpen(controlledOpen: boolean | undefined, onOpenChange: ((open: boolean) => void) | undefined): [boolean, (open: boolean) => void] {
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
+  const setDialogOpen = React.useCallback(
+    (nextOpen: boolean) => {
+      if (controlledOpen === undefined) {
+        setUncontrolledOpen(nextOpen);
+      }
+      onOpenChange?.(nextOpen);
+    },
+    [controlledOpen, onOpenChange],
+  );
+  return [controlledOpen ?? uncontrolledOpen, setDialogOpen];
+}
+
+/**
+ * Download and clipboard actions for the standalone HTML.
+ *
+ * @returns The transient copy state (`copied` for 1.8s) and the two handlers. Clipboard permission errors are ignored in
+ * restricted contexts.
+ */
+function useExportActions(html: string | undefined, title: string) {
+  const [copyState, setCopyState] = React.useState<'idle' | 'copied'>('idle');
+  /** Downloads the standalone HTML as a slugified `.html` file; no-op without HTML. */
+  const handleDownload = React.useCallback(() => {
+    if (!html) return;
+    const filename = `${slugify(title) || 'generated-widget'}.html`;
+    downloadHtmlDocument(html, filename);
+  }, [html, title]);
+
+  /** Copies the HTML to the clipboard and flashes `copied` for 1.8s; permission errors are ignored. */
+  const handleCopy = React.useCallback(() => {
+    if (!html || typeof navigator === 'undefined' || !navigator.clipboard) return;
+    navigator.clipboard.writeText(html).then(
+      () => {
+        setCopyState('copied');
+        setTimeout(() => setCopyState('idle'), 1800);
+      },
+      () => {
+        // Ignore clipboard permission errors in restricted contexts.
+      },
+    );
+  }, [html]);
+  return { copyState, handleDownload, handleCopy };
+}
+
+/**
+ * Registers the fullscreen frame's window (a new document per load) with the prompt bridge under its nonce so its
+ * prompts/resizes validate; unregisters when the dialog closes (iframe unmounts) or the overlay unmounts.
+ *
+ * @returns The iframe `onLoad` handler.
+ */
+function usePreviewFrameRegistration(frameNonce: string | undefined, isDialogOpen: boolean) {
+  const bridge = usePromptBridge();
+  const unregisterPreviewRef = React.useRef<(() => void) | null>(null);
+  /** Re-registers the freshly loaded preview document's window with the bridge (a new window per load). */
+  const handlePreviewLoad = React.useCallback(
+    (event: React.SyntheticEvent<HTMLIFrameElement>) => {
+      unregisterPreviewRef.current?.();
+      unregisterPreviewRef.current = frameNonce
+        ? bridge.registerFrame(event.currentTarget.contentWindow, frameNonce)
+        : null;
+    },
+    [bridge, frameNonce],
+  );
+  React.useEffect(() => {
+    if (isDialogOpen) return;
+    unregisterPreviewRef.current?.();
+    unregisterPreviewRef.current = null;
+  }, [isDialogOpen]);
+  React.useEffect(() => () => unregisterPreviewRef.current?.(), []);
+  return handlePreviewLoad;
+}
+
+/** Copy icon that flips to a check while the copied state is active. */
+function CopyStateIcon({ copied }: { copied: boolean }) {
+  return copied ? <CheckIcon className="size-3.5 text-primary" /> : <CopyIcon className="size-3.5" />;
+}
+
+/** Hover/focus toolbar over the widget: fullscreen, copy HTML and download. */
+function ExportToolbar({ labels, copied, onExpand, onCopy, onDownload }: {
+  labels: OverlayLabels;
+  copied: boolean;
+  onExpand: () => void;
+  onCopy: () => void;
+  onDownload: () => void;
+}) {
+  const copyText = copied ? labels.copiedHtml : labels.copyHtml;
+  return (
+    <div
+      className=" absolute top-2 right-2 z-10 flex items-center gap-1.5 rounded-md border border-border bg-surface/95 p-1 opacity-90 backdrop-blur-xs transition-opacity group-hover:opacity-100 focus-within:opacity-100"
+      data-testid="generative-ui-toolbar"
+    >
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="min-h-9 px-2.5 py-1 text-xs"
+        onClick={onExpand}
+        aria-label={labels.expand}
+        title={labels.expand}
+        data-testid="generative-ui-fullscreen-btn"
+      >
+        <Maximize2Icon className="size-3.5" />
+        <span className="sr-only sm:not-sr-only">{labels.expand}</span>
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="min-h-9 px-2.5 py-1 text-xs"
+        onClick={onCopy}
+        aria-label={copyText}
+        title={copyText}
+        data-testid="generative-ui-copy-btn"
+      >
+        {copied ? <CheckIcon className="size-3.5 text-primary" /> : <CopyIcon className="size-3.5" />}
+        <span className="sr-only">{copyText}</span>
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="min-h-9 px-2.5 py-1 text-xs"
+        onClick={onDownload}
+        aria-label={labels.exportHtml}
+        title={labels.exportHtml}
+        data-testid="generative-ui-export-btn"
+      >
+        <DownloadIcon className="size-3.5" />
+        <span className="sr-only sm:not-sr-only">{labels.exportHtml}</span>
+      </Button>
+    </div>
+  );
+}
+
+/** Props of {@link FullscreenDialog}. */
+interface FullscreenDialogProps {
+  title: string;
+  labels: OverlayLabels;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  exportable: boolean;
+  copied: boolean;
+  onCopy: () => void;
+  onDownload: () => void;
+  previewHtml: string;
+  frameNonce?: string;
+  onPreviewLoad: (event: React.SyntheticEvent<HTMLIFrameElement>) => void;
+}
+
+/** Fullscreen preview dialog hosting a strictly sandboxed `<iframe sandbox="allow-scripts">`. */
+function FullscreenDialog(props: FullscreenDialogProps) {
+  const { title, labels, open, onOpenChange, exportable, copied, onCopy, onDownload, previewHtml, frameNonce, onPreviewLoad } = props;
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        closeLabel={labels.close}
+        className="flex h-[85dvh] max-w-[min(96vw,1120px)] flex-col gap-3 p-4 sm:max-w-[min(94vw,1120px)]"
+        data-testid="generative-ui-fullscreen-dialog"
+      >
+        <DialogHeader className="flex flex-row items-center justify-between gap-3 border-b border-border pr-8 pb-3">
+          <div className="min-w-0 flex-1 text-left">
+            <DialogTitle className="truncate text-base font-semibold text-foreground">
+              {title}
+            </DialogTitle>
+            <DialogDescription className="sr-only">
+              {labels.previewDescription}
+            </DialogDescription>
+          </div>
+          {exportable && (
+            <div className="flex items-center gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={onCopy} data-testid="generative-ui-modal-copy-btn">
+                <CopyStateIcon copied={copied} />
+                <span>{copied ? labels.copiedHtml : labels.copyHtml}</span>
+              </Button>
+              <Button type="button" variant="default" size="sm" onClick={onDownload} data-testid="generative-ui-modal-export-btn">
+                <DownloadIcon className="size-3.5" />
+                <span>{labels.exportHtml}</span>
+              </Button>
+            </div>
+          )}
+        </DialogHeader>
+        <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-background">
+          {open && previewHtml && (
+            <iframe
+              title={`${title} fullscreen preview`}
+              sandbox="allow-scripts"
+              srcDoc={previewHtml}
+              onLoad={onPreviewLoad}
+              data-umwelt-nonce={frameNonce}
+              className="h-full w-full border-0 bg-transparent"
+              data-testid="generative-ui-fullscreen-iframe"
+            />
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /**
  * Wraps a generative UI widget with hover/focus action controls for fullscreen preview
  * and standalone `.html` file export. Fullscreen preview renders inside a strictly
@@ -66,187 +290,34 @@ export function ExportOverlay({
   labels,
   children,
 }: ExportOverlayProps) {
-  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
-  const [copyState, setCopyState] = React.useState<'idle' | 'copied'>('idle');
-
-  const isDialogOpen = controlledOpen ?? uncontrolledOpen;
-  const setDialogOpen = React.useCallback(
-    (nextOpen: boolean) => {
-      if (controlledOpen === undefined) {
-        setUncontrolledOpen(nextOpen);
-      }
-      onOpenChange?.(nextOpen);
-    },
-    [controlledOpen, onOpenChange],
-  );
-
-  // Fallbacks come from the shared catalog (document lang) so no English literals live here.
-  const fallback = genUiCopy();
-  const expandLabel = labels?.expand ?? fallback.genUiFullscreenPreview;
-  const exportLabel = labels?.exportHtml ?? fallback.genUiExportHtml;
-  const copyLabel = labels?.copyHtml ?? fallback.genUiCopyHtml;
-  const copiedLabel = labels?.copiedHtml ?? fallback.genUiCopied;
-  const closeLabel = labels?.close ?? fallback.genUiClose;
-  const previewDescription = labels?.previewDescription ?? fallback.genUiPreviewDescription;
-
+  const [isDialogOpen, setDialogOpen] = useDialogOpen(controlledOpen, onOpenChange);
+  const resolvedLabels = resolveOverlayLabels(labels);
   const exportable = ready && Boolean(html);
-  const effectivePreviewHtml = previewHtml ?? html ?? '';
-
-  const bridge = usePromptBridge();
-  const unregisterPreviewRef = React.useRef<(() => void) | null>(null);
-
-  /** Registers the fullscreen frame's window (new document per load) so its prompts/resizes validate. */
-  const handlePreviewLoad = React.useCallback(
-    (event: React.SyntheticEvent<HTMLIFrameElement>) => {
-      unregisterPreviewRef.current?.();
-      unregisterPreviewRef.current = frameNonce
-        ? bridge.registerFrame(event.currentTarget.contentWindow, frameNonce)
-        : null;
-    },
-    [bridge, frameNonce],
-  );
-
-  // Unregister when the dialog closes (iframe unmounts) or the overlay unmounts.
-  React.useEffect(() => {
-    if (isDialogOpen) return;
-    unregisterPreviewRef.current?.();
-    unregisterPreviewRef.current = null;
-  }, [isDialogOpen]);
-  React.useEffect(() => () => unregisterPreviewRef.current?.(), []);
-
-  const handleDownload = React.useCallback(() => {
-    if (!html) return;
-    const filename = `${slugify(title) || 'generated-widget'}.html`;
-    downloadHtmlDocument(html, filename);
-  }, [html, title]);
-
-  const handleCopy = React.useCallback(() => {
-    if (!html || typeof navigator === 'undefined' || !navigator.clipboard) return;
-    navigator.clipboard.writeText(html).then(
-      () => {
-        setCopyState('copied');
-        setTimeout(() => setCopyState('idle'), 1800);
-      },
-      () => {
-        // Ignore clipboard permission errors in restricted contexts.
-      },
-    );
-  }, [html]);
+  const { copyState, handleDownload, handleCopy } = useExportActions(html, title);
+  const handlePreviewLoad = usePreviewFrameRegistration(frameNonce, isDialogOpen);
+  const copied = copyState === 'copied';
 
   return (
     <div className="group relative w-full" data-testid="generative-ui-export-overlay">
       {exportable && (
-        <div
-          className=" absolute top-2 right-2 z-10 flex items-center gap-1.5 rounded-md border border-border bg-surface/95 p-1 opacity-90 backdrop-blur-xs transition-opacity group-hover:opacity-100 focus-within:opacity-100"
-          data-testid="generative-ui-toolbar"
-        >
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="min-h-9 px-2.5 py-1 text-xs"
-            onClick={() => setDialogOpen(true)}
-            aria-label={expandLabel}
-            title={expandLabel}
-            data-testid="generative-ui-fullscreen-btn"
-          >
-            <Maximize2Icon className="size-3.5" />
-            <span className="sr-only sm:not-sr-only">{expandLabel}</span>
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="min-h-9 px-2.5 py-1 text-xs"
-            onClick={handleCopy}
-            aria-label={copyState === 'copied' ? copiedLabel : copyLabel}
-            title={copyState === 'copied' ? copiedLabel : copyLabel}
-            data-testid="generative-ui-copy-btn"
-          >
-            {copyState === 'copied' ? (
-              <CheckIcon className="size-3.5 text-primary" />
-            ) : (
-              <CopyIcon className="size-3.5" />
-            )}
-            <span className="sr-only">{copyState === 'copied' ? copiedLabel : copyLabel}</span>
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="min-h-9 px-2.5 py-1 text-xs"
-            onClick={handleDownload}
-            aria-label={exportLabel}
-            title={exportLabel}
-            data-testid="generative-ui-export-btn"
-          >
-            <DownloadIcon className="size-3.5" />
-            <span className="sr-only sm:not-sr-only">{exportLabel}</span>
-          </Button>
-        </div>
+        <ExportToolbar labels={resolvedLabels} copied={copied} onExpand={() => setDialogOpen(true)} onCopy={handleCopy} onDownload={handleDownload} />
       )}
 
       {children}
 
-      <Dialog open={isDialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent
-          closeLabel={closeLabel}
-          className="flex h-[85dvh] max-w-[min(96vw,1120px)] flex-col gap-3 p-4 sm:max-w-[min(94vw,1120px)]"
-          data-testid="generative-ui-fullscreen-dialog"
-        >
-          <DialogHeader className="flex flex-row items-center justify-between gap-3 border-b border-border pr-8 pb-3">
-            <div className="min-w-0 flex-1 text-left">
-              <DialogTitle className="truncate text-base font-semibold text-foreground">
-                {title}
-              </DialogTitle>
-              <DialogDescription className="sr-only">
-                {previewDescription}
-              </DialogDescription>
-            </div>
-            {exportable && (
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleCopy}
-                  data-testid="generative-ui-modal-copy-btn"
-                >
-                  {copyState === 'copied' ? (
-                    <CheckIcon className="size-3.5 text-primary" />
-                  ) : (
-                    <CopyIcon className="size-3.5" />
-                  )}
-                  <span>{copyState === 'copied' ? copiedLabel : copyLabel}</span>
-                </Button>
-                <Button
-                  type="button"
-                  variant="default"
-                  size="sm"
-                  onClick={handleDownload}
-                  data-testid="generative-ui-modal-export-btn"
-                >
-                  <DownloadIcon className="size-3.5" />
-                  <span>{exportLabel}</span>
-                </Button>
-              </div>
-            )}
-          </DialogHeader>
-          <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-background">
-            {isDialogOpen && effectivePreviewHtml && (
-              <iframe
-                title={`${title} fullscreen preview`}
-                sandbox="allow-scripts"
-                srcDoc={effectivePreviewHtml}
-                onLoad={handlePreviewLoad}
-                data-umwelt-nonce={frameNonce}
-                className="h-full w-full border-0 bg-transparent"
-                data-testid="generative-ui-fullscreen-iframe"
-              />
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+      <FullscreenDialog
+        title={title}
+        labels={resolvedLabels}
+        open={isDialogOpen}
+        onOpenChange={setDialogOpen}
+        exportable={exportable}
+        copied={copied}
+        onCopy={handleCopy}
+        onDownload={handleDownload}
+        previewHtml={previewHtml ?? html ?? ''}
+        frameNonce={frameNonce}
+        onPreviewLoad={handlePreviewLoad}
+      />
     </div>
   );
 }

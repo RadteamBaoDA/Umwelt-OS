@@ -9,8 +9,8 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import type { ChatContext } from '@/modules/chat/api';
-import { searchDocuments, type SearchHit } from '@/modules/search/public-api';
+import type { ChatContext } from './api';
+import { searchDocuments, type SearchHit } from '@/modules/search';
 import { ChatDocumentPreview } from './chat-document-preview';
 
 /** Builds the human-readable label for the grounding context attached to the active chat. */
@@ -100,25 +100,15 @@ function focusChip(bar: HTMLElement | null, idx: number) {
 }
 
 /**
- * Removable context badge row shared by quick chat and the full Chat page; selected document badges open a read-only
- * text preview, while `onChange` enables the add-context picker. In the `badges` variant the composer's + menu owns
- * the picker trigger, so its open state is controlled via `pickerOpen`/`onPickerOpenChange`.
+ * Removable context badge; with a document id the label opens a read-only text preview without changing the submitted
+ * context. The remove button has a 44px hit area (the negative margin keeps the badge's visual height).
+ *
+ * @param props - Visible text, remove callback and the optional document (and version) to preview.
  */
-export function ChatContextBar({ context, onRemove, onChange, variant = 'bar', pickerOpen, onPickerOpenChange }: { context: ChatContext | null; onRemove: () => void; onChange?: (context: ChatContext | null) => void; variant?: 'bar' | 'badges'; pickerOpen?: boolean; onPickerOpenChange?: (open: boolean) => void }) {
+function ContextChip({ text, remove, documentId, versionId }: { text: string; remove: () => void; documentId?: string; versionId?: string }) {
   const t = useTranslations('chat');
-  const label = useContextLabel(context);
-  const [ownOpen, setOwnOpen] = React.useState(false);
-  const controlled = pickerOpen !== undefined && !!onPickerOpenChange;
-  const open = controlled ? pickerOpen : ownOpen;
-  const setOpen = controlled ? onPickerOpenChange : setOwnOpen;
-  const barId = React.useId();
-  const [announce, setAnnounce] = React.useState('');
-  const canPick = !!onChange && (!context || context.kind === 'selection');
-  if (!canPick && !label) return null;
-  const items = context?.kind === 'selection' ? context.items ?? [] : [];
-  /** Renders a removable context badge and opens selected document text without changing the submitted context. */
-  const chip = (key: string, text: string, remove: () => void, documentId?: string, versionId?: string) => (
-    <Badge key={key} variant="outline" className="min-h-6 max-w-full gap-1 bg-surface py-0.5 pl-2 pr-0 text-foreground">
+  return (
+    <Badge variant="outline" className="min-h-6 max-w-full gap-1 bg-surface py-0.5 pl-2 pr-0 text-foreground">
       {documentId ? (
         <ChatDocumentPreview documentId={documentId} versionId={versionId} title={text}>
           <Button type="button" variant="ghost" className="h-7 min-w-0 gap-1 px-1 text-xs font-normal" aria-label={t('previewDocument', { title: text })}>
@@ -135,6 +125,19 @@ export function ChatContextBar({ context, onRemove, onChange, variant = 'bar', p
       </Button>
     </Badge>
   );
+}
+
+/**
+ * Editing commands (plain closures, not a hook) for the selected-document list: de-duplicated, capped additions and removals that announce the change
+ * to assistive tech and return focus to a neighbouring chip.
+ *
+ * @param items - Current selection items.
+ * @param onChange - Receives the next context (null when the selection becomes empty).
+ * @param barId - DOM id of the chip row (used to restore focus).
+ * @param setAnnounce - Writes the polite live-region message.
+ * @param t - `chat` translator.
+ */
+function makeContextItemEditor(items: Item[], onChange: ((context: ChatContext | null) => void) | undefined, barId: string, setAnnounce: (message: string) => void, t: ReturnType<typeof useTranslations>) {
   const setItems = (next: Item[]) => {
     const unique = next.filter((i, k, a) => a.findIndex((x) => x.documentId === i.documentId) === k).slice(0, MAX_ITEMS);
     onChange?.(unique.length ? { kind: 'selection', items: unique } : null);
@@ -147,12 +150,54 @@ export function ChatContextBar({ context, onRemove, onChange, variant = 'bar', p
     setItems(items.filter((_, k) => k !== idx));
     focusChip(document.getElementById(barId), idx);
   };
+  return { setItems, nameOf, removeAt };
+}
+
+/** Container classes of the chip row per variant (the badges variant collapses to `contents` when empty). */
+function barClass(variant: 'bar' | 'badges', hasContent: boolean): string {
+  if (variant !== 'badges') return 'flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-secondary px-4 py-2 text-xs text-foreground';
+  return hasContent ? 'flex flex-wrap items-center gap-1.5 text-xs text-foreground' : 'contents';
+}
+
+/** Props of {@link ChatContextBar}. */
+interface ChatContextBarProps {
+  context: ChatContext | null;
+  onRemove: () => void;
+  onChange?: (context: ChatContext | null) => void;
+  variant?: 'bar' | 'badges';
+  pickerOpen?: boolean;
+  onPickerOpenChange?: (open: boolean) => void;
+}
+
+/** Picker open state: controlled by the composer's + menu when both props are given, otherwise local. */
+function usePickerOpen(pickerOpen: boolean | undefined, onPickerOpenChange: ((open: boolean) => void) | undefined) {
+  const [ownOpen, setOwnOpen] = React.useState(false);
+  const controlled = pickerOpen !== undefined && !!onPickerOpenChange;
+  return { open: controlled ? pickerOpen : ownOpen, setOpen: controlled ? onPickerOpenChange : setOwnOpen };
+}
+
+/** Chip row (selected documents or the single context chip) plus the add-context button and picker. */
+function ContextRow({ context, label, onRemove, onChange, variant, open, setOpen, canPick }: {
+  context: ChatContext | null;
+  label: string | null;
+  onRemove: () => void;
+  onChange?: (context: ChatContext | null) => void;
+  variant: 'bar' | 'badges';
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  canPick: boolean;
+}) {
+  const t = useTranslations('chat');
+  const barId = React.useId();
+  const [announce, setAnnounce] = React.useState('');
+  const items = context?.kind === 'selection' ? context.items ?? [] : [];
+  const { setItems, nameOf, removeAt } = makeContextItemEditor(items, onChange, barId, setAnnounce, t);
   return (
-    <div id={barId} className={variant === 'badges' ? (items.length > 0 || label ? 'flex flex-wrap items-center gap-1.5 text-xs text-foreground' : 'contents') : 'flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-secondary px-4 py-2 text-xs text-foreground'}>
+    <div id={barId} className={barClass(variant, items.length > 0 || !!label)}>
       {label && <span className="sr-only">{t('contextLabel')}</span>}
       {canPick && items.length > 0
-        ? items.map((i, idx) => chip(i.documentId, nameOf(i, idx), () => removeAt(idx), i.documentId, i.documentVersionId))
-        : label && chip('ctx', label, onRemove, context?.kind === 'document' ? context.resource_id : undefined)}
+        ? items.map((i, idx) => <ContextChip key={i.documentId} text={nameOf(i, idx)} remove={() => removeAt(idx)} documentId={i.documentId} versionId={i.documentVersionId} />)
+        : label && <ContextChip key="ctx" text={label} remove={onRemove} documentId={context?.kind === 'document' ? context.resource_id : undefined} />}
       <span role="status" className="sr-only">{announce}</span>
       {canPick && variant !== 'badges' && (
         <Button type="button" variant="outline" size="sm" data-add-context disabled={items.length >= MAX_ITEMS} onClick={() => setOpen(true)}>
@@ -166,4 +211,20 @@ export function ChatContextBar({ context, onRemove, onChange, variant = 'bar', p
       )}
     </div>
   );
+}
+
+/**
+ * Removable context badge row shared by quick chat and the full Chat page; selected document badges open a read-only
+ * text preview, while `onChange` enables the add-context picker. In the `badges` variant the composer's + menu owns
+ * the picker trigger, so its open state is controlled via `pickerOpen`/`onPickerOpenChange`.
+ *
+ * @param props - See {@link ChatContextBarProps}.
+ * @returns The chip row, or null when there is nothing to show and nothing to pick.
+ */
+export function ChatContextBar({ context, onRemove, onChange, variant = 'bar', pickerOpen, onPickerOpenChange }: ChatContextBarProps) {
+  const label = useContextLabel(context);
+  const { open, setOpen } = usePickerOpen(pickerOpen, onPickerOpenChange);
+  const canPick = !!onChange && (!context || context.kind === 'selection');
+  if (!canPick && !label) return null;
+  return <ContextRow context={context} label={label} onRemove={onRemove} onChange={onChange} variant={variant} open={open} setOpen={setOpen} canPick={canPick} />;
 }

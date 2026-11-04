@@ -4,7 +4,7 @@ import * as React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { getDocument, getVersion } from '@/modules/knowledge/public-api';
+import { getDocument, getVersion } from '@/modules/knowledge';
 
 export interface ChatDocumentPreviewProps {
   /** Document id admitted by the existing search or chat-attachment flow. */
@@ -17,6 +17,31 @@ export interface ChatDocumentPreviewProps {
   children: React.ReactElement;
   /** Status to show when upload or ingestion has not produced a readable version. */
   unavailableMessage?: string;
+}
+
+/**
+ * Dialog body for the document preview: unavailable, loading, error, version-changed or the plaintext content.
+ *
+ * @param props - Document id (absent means unavailable), the preview query state and an optional custom unavailable text.
+ */
+function PreviewBody({ documentId, preview, unavailableMessage }: {
+  documentId?: string;
+  preview: { isFetching: boolean; isError: boolean; isSuccess: boolean; data?: { content: string; matches: boolean } | null };
+  unavailableMessage?: string;
+}) {
+  const t = useTranslations('chat');
+  const settled = Boolean(documentId) && preview.isSuccess && !preview.isFetching;
+  return (
+    <>
+      {!documentId && <p className="text-sm text-muted-foreground">{unavailableMessage ?? t('previewUnavailable')}</p>}
+      {documentId && preview.isFetching && <p role="status" className="text-sm text-muted-foreground">{t('previewLoading')}</p>}
+      {documentId && preview.isError && <p role="alert" className="text-sm text-destructive">{t('previewUnavailable')}</p>}
+      {settled && !preview.data?.matches && <p className="text-sm text-muted-foreground">{t('previewVersionChanged')}</p>}
+      {settled && preview.data?.matches && (
+        <pre className="max-h-[60dvh] overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-3 text-sm text-foreground">{preview.data.content}</pre>
+      )}
+    </>
+  );
 }
 
 /**
@@ -50,13 +75,7 @@ export function ChatDocumentPreview({ documentId, versionId, title, children, un
           <DialogTitle className="break-words">{title}</DialogTitle>
           <DialogDescription>{t('previewTextOnly')}</DialogDescription>
         </DialogHeader>
-        {!documentId && <p className="text-sm text-muted-foreground">{unavailableMessage ?? t('previewUnavailable')}</p>}
-        {documentId && preview.isFetching && <p role="status" className="text-sm text-muted-foreground">{t('previewLoading')}</p>}
-        {documentId && preview.isError && <p role="alert" className="text-sm text-destructive">{t('previewUnavailable')}</p>}
-        {documentId && preview.isSuccess && !preview.isFetching && !preview.data?.matches && <p className="text-sm text-muted-foreground">{t('previewVersionChanged')}</p>}
-        {documentId && preview.isSuccess && !preview.isFetching && preview.data?.matches && (
-          <pre className="max-h-[60dvh] overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-3 text-sm text-foreground">{preview.data.content}</pre>
-        )}
+        <PreviewBody documentId={documentId ?? undefined} preview={preview} unavailableMessage={unavailableMessage} />
       </DialogContent>
     </Dialog>
   );

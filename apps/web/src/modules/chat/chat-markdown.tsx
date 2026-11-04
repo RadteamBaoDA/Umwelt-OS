@@ -3,7 +3,7 @@
 import * as React from 'react';
 import MarkdownIt, { type MarkdownIt as MarkdownItInstance } from 'markdown-it';
 import DOMPurify from 'dompurify';
-import type { Citation } from '@/modules/chat/api';
+import type { Citation } from './api';
 import { safeHttpUrl } from '@/core/safe-url';
 import type { AppLocaleId } from '@/core/i18n';
 import { genUiCopy } from './generative-ui/copy';

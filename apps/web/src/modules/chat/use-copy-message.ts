@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { useResetOnChange } from '@/modules/shared/use-reset-on-change';
+import { useResetOnChange } from '@/modules/shared';
 
 // Copied-state feedback adapts AnythingLLM's frontend/src/hooks/useCopyText.js;
 // this port writes plain text only and has no model-thought or rich-HTML contract.

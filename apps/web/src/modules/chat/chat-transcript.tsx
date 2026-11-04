@@ -5,7 +5,7 @@ import * as React from 'react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { AlertCircleIcon, ArrowDownIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, RefreshCwIcon } from 'lucide-react';
-import type { ChatMessage, Citation, ToolStatus, WebSearchOutcome } from '@/modules/chat/api';
+import type { ChatMessage, Citation, ToolStatus, WebSearchOutcome } from './api';
 import { Button } from '@/components/ui/button';
 import { CitationPanel, webHost } from './citation-panel';
 import { safeHttpUrl } from '@/core/safe-url';
@@ -60,6 +60,12 @@ function WebSearchNotice({ outcome }: { outcome?: WebSearchOutcome | null }) {
     return <p data-testid="web-search-notice" className="mt-1 text-xs text-muted-foreground">{t('webNoResults')}</p>;
   }
   if (!outcome || (outcome.status !== 'unavailable' && outcome.status !== 'skipped')) return null;
+  return <WebSearchSkippedNotice outcome={outcome} />;
+}
+
+/** Notice for a search that was skipped or unavailable, with a localized reason (unknown codes use generic copy). */
+function WebSearchSkippedNotice({ outcome }: { outcome: WebSearchOutcome }) {
+  const t = useTranslations('chat');
   const reason = outcome.reason && KNOWN_REASONS.includes(outcome.reason) ? t(`webReason_${outcome.reason}`) : t('webReason_unknown');
   const title = outcome.status === 'skipped' ? t('webSkipped') : t('webUnavailable');
   return (
@@ -205,6 +211,394 @@ export interface ChatTranscriptProps {
   onWidgetSendPrompt?: (prompt: string) => void | Promise<unknown>;
 }
 
+/** Props shared by the per-message pieces. */
+interface MessageViewProps {
+  msg: ChatMessage;
+  mode: 'drawer' | 'full';
+  locale: AppLocaleId;
+}
+
+/**
+ * Localized label describing how a message relates to the one it revises (regenerated / edited), or null.
+ *
+ * @param msg - Message being rendered.
+ * @param revised - The message it revises, when loaded.
+ * @param t - `chat` translator.
+ */
+function relationshipLabelFor(msg: ChatMessage, revised: ChatMessage | undefined, t: ReturnType<typeof useTranslations>): string | null {
+  const isUser = msg.role === 'user';
+  if (revised?.role === 'assistant') return t(isUser ? 'regeneratedPrompt' : 'regeneratedAnswer');
+  if (revised?.role === 'user') return t(isUser ? 'editedPrompt' : 'editedPromptAnswer');
+  return null;
+}
+
+/**
+ * Text part of a message: speaker label, revision relationship, web search notice, reasoning and the markdown body.
+ *
+ * @param props - Message, host mode, locale and the optional relationship label.
+ */
+function MessageBody({ msg, mode, locale, relationshipLabel }: MessageViewProps & { relationshipLabel: string | null }) {
+  const t = useTranslations('chat');
+  const isUser = msg.role === 'user';
+  return (
+    <div
+      className={isUser ? 'rounded-lg bg-raised px-4 py-3 text-sm text-foreground' : 'text-sm text-foreground'}
+    >
+      <span className="sr-only">{isUser ? t('userSpeaker') : msg.model_identity || t('assistantFallback')}</span>
+
+      {relationshipLabel && (
+        <p className="text-xs text-muted-foreground" aria-label={relationshipLabel}>
+          {relationshipLabel}
+        </p>
+      )}
+
+      {/* Search info precedes reasoning and the answer so the answer sits right above the action row. */}
+      {mode === 'full' && !isUser && <WebSearchNotice outcome={msg.web_search} />}
+
+      {!isUser && msg.reasoning ? <ChatReasoning text={msg.reasoning} /> : null}
+
+      {isUser
+        ? <ChatMarkdown content={msg.content} locale={locale} />
+        : <RevealMarkdown content={msg.content} citations={msg.citations} locale={locale} />}
+    </div>
+  );
+}
+
+/**
+ * One generative-UI widget part (committed or streaming) and, in full Chat, the save-as-template action for sandboxed UI.
+ *
+ * @param props - The raw part, test id, prompt handler, host mode, locale and CSRF token.
+ */
+function WidgetPart({ part, testId, onSendPrompt, mode, locale, csrfToken, allowSave }: {
+  part: UiPart;
+  testId: string;
+  onSendPrompt?: (prompt: string) => void | Promise<unknown>;
+  mode: 'drawer' | 'full';
+  locale: AppLocaleId;
+  csrfToken?: string;
+  allowSave: boolean;
+}) {
+  const sandbox = (part as { sandbox?: Record<string, unknown> }).sandbox;
+  const canSave = allowSave && mode === 'full' && (part as { kind?: string }).kind === 'sandboxed_ui' && sandbox;
+  return (
+    <div className="w-full" data-testid={testId}>
+      <ToolRendering
+        payload={part as unknown as GenerativeUIPayload}
+        onSendPrompt={onSendPrompt}
+        locale={locale}
+      />
+      {canSave && (
+        <SaveTemplateButton
+          sandbox={sandbox}
+          title={(part as { title?: string }).title}
+          locale={locale}
+          csrfToken={csrfToken}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Copy, edit and regenerate buttons under a message. */
+function MessageActions({ msg, mode, locale, timezone, canEdit, canRegenerate, copy, onEditMessage, onRegenerateMessage }: MessageViewProps & {
+  timezone: string;
+  canEdit: boolean;
+  canRegenerate: boolean;
+  copy: ReturnType<typeof useCopyMessage>;
+  onEditMessage?: (message: ChatMessage) => void;
+  onRegenerateMessage?: (message: ChatMessage) => void;
+}) {
+  const t = useTranslations('chat');
+  const isUser = msg.role === 'user';
+  const { copyMessage, copiedMessageId, failedMessageId } = copy;
+  const formattedDate = msg.created_at ? formatDateTime(msg.created_at, locale, timezone) : null;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {formattedDate && <span className="text-xs text-muted-foreground">{formattedDate}</span>}
+      {/* Expose one-click copy for all full-page messages and completed assistant messages in the drawer. */}
+      {(mode === 'full' || (!isUser && Boolean(msg.content))) && <Button
+        type="button"
+        variant="ghost"
+        onClick={() => void copyMessage(msg.id, msg.content)}
+        className="min-h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label={t('copyMessage')}
+      >
+        {copiedMessageId === msg.id ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
+        <span>{copiedMessageId === msg.id ? t('copiedMessage') : t('copyMessage')}</span>
+      </Button>}
+      {(mode === 'full' || !isUser) && failedMessageId === msg.id && (
+        <span role="status" className="text-xs text-destructive">{t('copyFailed')}</span>
+      )}
+      {canEdit && (
+        <Button
+          type="button"
+          className="secondary inline-flex min-h-8 items-center gap-1 px-2 text-xs"
+          onClick={() => onEditMessage?.(msg)}
+          aria-label={t('editPrompt')}
+        >
+          <PencilIcon className="size-3.5" />
+          <span>{t('editPrompt')}</span>
+        </Button>
+      )}
+      {canRegenerate && (
+        <Button
+          type="button"
+          className="secondary inline-flex min-h-8 items-center gap-1 px-2 text-xs"
+          onClick={() => onRegenerateMessage?.(msg)}
+          aria-label={t('regenerateAnswer')}
+        >
+          <RefreshCwIcon className="size-3.5" />
+          <span>{t('regenerateAnswer')}</span>
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Citations under a message or streaming bubble: the inline panel in full Chat, compact chips in the drawer.
+ *
+ * @param props - Citations (may be empty/undefined, which renders nothing) and host mode.
+ */
+function CitationsFooter({ citations, mode }: { citations?: Citation[] | null; mode: 'drawer' | 'full' }) {
+  if (!citations || citations.length === 0) return null;
+  return mode === 'full' ? <CitationPanel citations={citations} variant="inline" /> : <CitationChips citations={citations} />;
+}
+
+/** Model line (drawer only) under an assistant message. */
+function DrawerModelLine({ msg }: { msg: ChatMessage }) {
+  const t = useTranslations('chat');
+  if (!msg.model_identity) return null;
+  return (
+    <span className="text-xs text-muted-foreground">
+      {t('modelLine', { model: msg.model_identity })}{msg.citations?.length ? ` · ${t('sourcesCount', { count: msg.citations.length })}` : ''}
+    </span>
+  );
+}
+
+/** Props of {@link TranscriptMessage}. */
+interface TranscriptMessageProps extends MessageViewProps {
+  timezone: string;
+  csrfToken?: string;
+  revised?: ChatMessage;
+  isRevised: boolean;
+  copy: ReturnType<typeof useCopyMessage>;
+  widgetPromptHandler: (part: unknown) => ((prompt: string) => void | Promise<unknown>) | undefined;
+  onEditMessage?: (message: ChatMessage) => void;
+  onRegenerateMessage?: (message: ChatMessage) => void;
+}
+
+/**
+ * One committed message: body, widgets, actions and citations/model line. Edit and regenerate are offered only in full
+ * Chat for messages that have a response id and have not already been revised.
+ *
+ * @param props - See {@link TranscriptMessageProps}.
+ */
+function TranscriptMessage(props: TranscriptMessageProps) {
+  const { msg, mode, locale, csrfToken, revised, isRevised, widgetPromptHandler, onEditMessage, onRegenerateMessage } = props;
+  const t = useTranslations('chat');
+  const isUser = msg.role === 'user';
+  const canEdit = mode === 'full' && isUser && Boolean(msg.response_id) && !isRevised && Boolean(onEditMessage);
+  const canRegenerate = mode === 'full' && !isUser && msg.role === 'assistant'
+    && Boolean(msg.response_id) && !isRevised && Boolean(onRegenerateMessage);
+  return (
+    <div
+      data-role={msg.role}
+      data-message-id={msg.id}
+      className={`flex flex-col gap-2.5 ${isUser ? 'ml-auto max-w-[80%] items-end' : 'mr-auto w-full'}`}
+    >
+      <MessageBody msg={msg} mode={mode} locale={locale} relationshipLabel={relationshipLabelFor(msg, revised, t)} />
+
+      {/* Widget parts render in order after the text; older rows carry only `generative_ui`. */}
+      {!isUser && messageUiParts(msg).map((part, index) => (
+        <WidgetPart
+          key={uiPartKey(part, index)}
+          part={part}
+          testId="generative-ui-widget"
+          onSendPrompt={widgetPromptHandler(part)}
+          mode={mode}
+          locale={locale}
+          csrfToken={csrfToken}
+          allowSave
+        />
+      ))}
+
+      <MessageActions {...props} canEdit={canEdit} canRegenerate={canRegenerate} />
+
+      {mode === 'drawer' && !isUser && <DrawerModelLine msg={msg} />}
+      {!isUser && <CitationsFooter citations={msg.citations} mode={mode} />}
+    </div>
+  );
+}
+
+/** Props of {@link StreamingBubble}. */
+interface StreamingBubbleProps {
+  mode: 'drawer' | 'full';
+  locale: AppLocaleId;
+  csrfToken?: string;
+  streamingText?: string;
+  streamingReasoning: string;
+  streamingCitations?: Citation[];
+  streamingWebSearch?: WebSearchOutcome | null;
+  activeTool: ToolStatus['tool'] | null;
+  streamingUi: UiPart[];
+  isStreaming: boolean;
+  widgetPromptHandler: (part: unknown) => ((prompt: string) => void | Promise<unknown>) | undefined;
+}
+
+/** Status line of the streaming bubble: spinner plus tool / streaming / thinking copy. */
+function StreamingStatus({ activeTool, label }: { activeTool: ToolStatus['tool'] | null; label: string }) {
+  return (
+    <div role="status" aria-live="polite" className="mb-1">
+      <div data-testid={activeTool ? 'tool-status' : undefined} className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Loader2Icon className="size-4 animate-spin text-muted-foreground" />
+        <span>{label}</span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Active streaming assistant bubble: one spinner status row on top (send -> first token, and while tools run), then the
+ * live reasoning, markdown, widgets and citations.
+ *
+ * @param props - See {@link StreamingBubbleProps}.
+ */
+function StreamingBubble(props: StreamingBubbleProps & { isPending: boolean }) {
+  const { mode, locale, csrfToken, streamingText, streamingReasoning, streamingCitations, streamingWebSearch, activeTool, streamingUi, isStreaming, widgetPromptHandler } = props;
+  const t = useTranslations('chat');
+  const label = activeTool
+    ? t(activeTool === 'web_search' ? 'toolSearchingWeb' : 'toolQueryingData')
+    : (isStreaming || streamingText || streamingReasoning ? t('streaming') : t('thinking'));
+  return (
+    <div className="mr-auto flex w-full flex-col gap-2.5">
+      <div className="text-sm text-foreground">
+        {/* Live region stays mounted so tool-status changes are announced politely. */}
+        <StreamingStatus activeTool={activeTool} label={label} />
+
+        {mode === 'full' && <WebSearchNotice outcome={streamingWebSearch} />}
+
+        <ChatReasoning text={streamingReasoning} streaming answerStarted={Boolean(streamingText) || streamingUi.length > 0} />
+
+        <ChatMarkdown content={streamingText || ''} citations={streamingCitations} locale={locale} />
+      </div>
+      {streamingUi.map((part, index) => (
+        <WidgetPart
+          key={uiPartKey(part, index)}
+          part={part}
+          testId="streaming-generative-ui-widget"
+          onSendPrompt={widgetPromptHandler(part)}
+          mode={mode}
+          locale={locale}
+          csrfToken={csrfToken}
+          allowSave={false}
+        />
+      ))}
+      <CitationsFooter citations={streamingCitations} mode={mode} />
+    </div>
+  );
+}
+
+/** Error banner with an optional Retry. */
+function TranscriptError({ error, onRetry }: { error: string; onRetry?: () => void }) {
+  const t = useTranslations('chat');
+  return (
+    <div role="alert" className="flex items-center justify-between gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+      <div className="flex items-center gap-2">
+        <AlertCircleIcon className="size-4 shrink-0" />
+        <span>{error}</span>
+      </div>
+      {onRetry && (
+        <Button type="button" variant="destructive" size="sm" onClick={onRetry} className="min-h-8 px-2 py-1 text-xs font-medium">
+          {t('retry')}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/** Starter gallery (or plain empty copy) for a brand-new view. */
+function EmptyState({ onSendPrompt, locale }: { onSendPrompt?: (prompt: string) => void; locale: AppLocaleId }) {
+  const t = useTranslations('chat');
+  if (onSendPrompt) return <EmptyIntro onSendPrompt={onSendPrompt} locale={locale} />;
+  return (
+    <div className="my-auto flex flex-col gap-1 py-8">
+      <h2 className="text-base font-semibold text-foreground">{t('emptyStateTitle')}</h2>
+      <p className="text-sm text-muted-foreground">{t('emptyStateDescription')}</p>
+    </div>
+  );
+}
+
+/**
+ * Applies the transcript's optional-prop defaults in one place (keeps the component's branching low).
+ *
+ * @param props - Raw component props.
+ * @returns The props with drawer mode, empty streaming fields and no error as defaults.
+ */
+function withTranscriptDefaults(props: ChatTranscriptProps) {
+  return {
+    mode: props.mode ?? 'drawer',
+    streamingReasoning: props.streamingReasoning ?? '',
+    cancelled: props.cancelled ?? false,
+    activeTool: props.activeTool ?? null,
+    streamingUi: props.streamingUi ?? [],
+    isStreaming: props.isStreaming ?? false,
+    isPending: props.isPending ?? false,
+    error: props.error ?? null,
+  };
+}
+
+/**
+ * Which optional regions render: the starter gallery only for a brand-new view (once a conversation exists it never
+ * reappears between turns), and the streaming bubble while anything is in flight.
+ *
+ * @param props - Raw transcript props.
+ * @param d - Defaulted props.
+ */
+function transcriptVisibility(props: ChatTranscriptProps, d: ReturnType<typeof withTranscriptDefaults>) {
+  const { conversationId, messages, streamingText } = props;
+  return {
+    showStarter: !conversationId && messages.length === 0 && !streamingText && d.streamingUi.length === 0 && !d.isPending,
+    showStreaming: Boolean(streamingText || d.streamingReasoning || d.streamingUi.length > 0 || d.isStreaming || d.isPending || d.activeTool),
+  };
+}
+
+/**
+ * View model of the transcript: display preferences, scroll behaviour, copy state and revision lookups.
+ *
+ * @param props - Transcript props.
+ * @param mode - Resolved host mode (reader mode on the full page).
+ * @param busy - True while pending or streaming (drives scroll following).
+ */
+function useTranscriptModel(props: ChatTranscriptProps, mode: 'drawer' | 'full', busy: boolean) {
+  const { conversationId, messages, onSendPrompt, onWidgetSendPrompt } = props;
+  const display = useDisplayPreferences();
+  const timezone = display.confirmedPreferences?.timezone || 'UTC';
+  const locale = display.confirmedPreferences?.locale || 'en-us';
+  const last = messages[messages.length - 1];
+  const scroll = useChatScroll({
+    conversationId,
+    messageCount: messages.length,
+    lastMessageId: last?.id,
+    lastMessageRole: last?.role,
+    isStreaming: busy,
+    // Reader mode on the full page: the new question is parked at the top, never chased while streaming.
+    reader: mode === 'full',
+  });
+  const copy = useCopyMessage(conversationId);
+  const messageById = React.useMemo(() => new Map(messages.map((message) => [message.id, message])), [messages]);
+  const revisedMessageIds = React.useMemo(
+    () => new Set(messages.flatMap((message) => message.revision_of_message_id ? [message.revision_of_message_id] : [])),
+    [messages],
+  );
+  /** The message that `msg` revises, when loaded. */
+  const revisedOf = (msg: ChatMessage) => (msg.revision_of_message_id ? messageById.get(msg.revision_of_message_id) : undefined);
+  /** Form widgets get the rejecting handler (retryable errors); every other widget keeps the plain one. */
+  const widgetPromptHandler = (part: unknown) =>
+    (part as { kind?: string }).kind === 'form' && onWidgetSendPrompt ? onWidgetSendPrompt : onSendPrompt;
+  return { locale, timezone, copy, revisedOf, revisedMessageIds, widgetPromptHandler, ...scroll };
+}
+
 /**
  * Conversation transcript rendering ordered messages, append-only revision relationships,
  * full-page copy/edit/regenerate actions, full-page grounded citations, streaming deltas,
@@ -213,49 +607,13 @@ export interface ChatTranscriptProps {
  * @param props - ChatTranscriptProps interface; mutation actions are rendered only for full Chat.
  * @returns Accessible conversation transcript viewport.
  */
-export function ChatTranscript({
-  conversationId,
-  csrfToken,
-  mode = 'drawer',
-  messages,
-  streamingText,
-  streamingReasoning = '',
-  cancelled = false,
-  streamingCitations,
-  streamingWebSearch,
-  activeTool = null,
-  streamingUi = [],
-  isStreaming = false,
-  isPending = false,
-  error = null,
-  onRetry,
-  onEditMessage,
-  onRegenerateMessage,
-  onSendPrompt,
-  onWidgetSendPrompt,
-}: ChatTranscriptProps) {
+export function ChatTranscript(props: ChatTranscriptProps) {
+  const { csrfToken, messages, streamingText, streamingCitations, streamingWebSearch, onRetry, onEditMessage, onRegenerateMessage, onSendPrompt } = props;
+  const { mode, streamingReasoning, cancelled, activeTool, streamingUi, isStreaming, isPending, error } = withTranscriptDefaults(props);
   const t = useTranslations('chat');
-  /** Form widgets get the rejecting handler (retryable errors); every other widget keeps the plain one. */
-  const widgetPromptHandler = (part: unknown) =>
-    (part as { kind?: string }).kind === 'form' && onWidgetSendPrompt ? onWidgetSendPrompt : onSendPrompt;
-  const display = useDisplayPreferences();
-  const timezone = display.confirmedPreferences?.timezone || 'UTC';
-  const locale = display.confirmedPreferences?.locale || 'en-us';
-  const { containerRef, scrollHandlers, isAtBottom, jumpToLatest } = useChatScroll({
-    conversationId,
-    messageCount: messages.length,
-    lastMessageId: messages[messages.length - 1]?.id,
-    lastMessageRole: messages[messages.length - 1]?.role,
-    isStreaming: isStreaming || isPending,
-    // Reader mode on the full page: the new question is parked at the top, never chased while streaming.
-    reader: mode === 'full',
-  });
-  const { copyMessage, copiedMessageId, failedMessageId } = useCopyMessage(conversationId);
-  const messageById = React.useMemo(() => new Map(messages.map((message) => [message.id, message])), [messages]);
-  const revisedMessageIds = React.useMemo(
-    () => new Set(messages.flatMap((message) => message.revision_of_message_id ? [message.revision_of_message_id] : [])),
-    [messages],
-  );
+  const m = useTranscriptModel(props, mode, isStreaming || isPending);
+  const { locale, timezone, copy, containerRef, scrollHandlers, isAtBottom, jumpToLatest, widgetPromptHandler } = m;
+  const { showStarter, showStreaming } = transcriptVisibility(props, withTranscriptDefaults(props));
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
@@ -273,174 +631,40 @@ export function ChatTranscript({
       <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col gap-4">
 
       {/* Starter gallery is only for a brand-new view: once a conversation exists it never reappears between turns. */}
-      {!conversationId && messages.length === 0 && !streamingText && streamingUi.length === 0 && !isPending && (
-        onSendPrompt ? <EmptyIntro onSendPrompt={onSendPrompt} locale={locale} /> : (
-          <div className="my-auto flex flex-col gap-1 py-8">
-            <h2 className="text-base font-semibold text-foreground">{t('emptyStateTitle')}</h2>
-            <p className="text-sm text-muted-foreground">{t('emptyStateDescription')}</p>
-          </div>
-        )
-      )}
+      {showStarter && <EmptyState onSendPrompt={onSendPrompt} locale={locale} />}
 
-      {messages.map((msg) => {
-        const isUser = msg.role === 'user';
-        const revisedMessage = msg.revision_of_message_id
-          ? messageById.get(msg.revision_of_message_id)
-          : undefined;
-        const relationshipLabel = revisedMessage?.role === 'assistant'
-          ? t(isUser ? 'regeneratedPrompt' : 'regeneratedAnswer')
-          : revisedMessage?.role === 'user'
-            ? t(isUser ? 'editedPrompt' : 'editedPromptAnswer')
-            : null;
-        const canEdit = mode === 'full' && isUser && Boolean(msg.response_id)
-          && !revisedMessageIds.has(msg.id) && Boolean(onEditMessage);
-        const canRegenerate = mode === 'full' && !isUser && msg.role === 'assistant'
-          && Boolean(msg.response_id) && !revisedMessageIds.has(msg.id) && Boolean(onRegenerateMessage);
-        const formattedDate = msg.created_at
-          ? formatDateTime(msg.created_at, locale, timezone)
-          : null;
+      {messages.map((msg) => (
+        <TranscriptMessage
+          key={msg.id}
+          msg={msg}
+          mode={mode}
+          locale={locale}
+          timezone={timezone}
+          csrfToken={csrfToken}
+          revised={m.revisedOf(msg)}
+          isRevised={m.revisedMessageIds.has(msg.id)}
+          copy={copy}
+          widgetPromptHandler={widgetPromptHandler}
+          onEditMessage={onEditMessage}
+          onRegenerateMessage={onRegenerateMessage}
+        />
+      ))}
 
-        return (
-          <div
-            key={msg.id}
-            data-role={msg.role}
-            data-message-id={msg.id}
-            className={`flex flex-col gap-2.5 ${isUser ? 'ml-auto max-w-[80%] items-end' : 'mr-auto w-full'}`}
-          >
-            <div
-              className={isUser ? 'rounded-lg bg-raised px-4 py-3 text-sm text-foreground' : 'text-sm text-foreground'}
-            >
-              <span className="sr-only">{isUser ? t('userSpeaker') : msg.model_identity || t('assistantFallback')}</span>
-
-              {relationshipLabel && (
-                <p className="text-xs text-muted-foreground" aria-label={relationshipLabel}>
-                  {relationshipLabel}
-                </p>
-              )}
-
-              {/* Search info precedes reasoning and the answer so the answer sits right above the action row. */}
-              {mode === 'full' && !isUser && <WebSearchNotice outcome={msg.web_search} />}
-
-              {!isUser && msg.reasoning ? <ChatReasoning text={msg.reasoning} /> : null}
-
-              {isUser
-                ? <ChatMarkdown content={msg.content} locale={locale} />
-                : <RevealMarkdown content={msg.content} citations={msg.citations} locale={locale} />}
-            </div>
-
-            {/* Widget parts render in order after the text; older rows carry only `generative_ui`. */}
-            {!isUser && messageUiParts(msg).map((part, index) => (
-              <div className="w-full" data-testid="generative-ui-widget" key={uiPartKey(part, index)}>
-                <ToolRendering
-                  payload={part as unknown as GenerativeUIPayload}
-                  onSendPrompt={widgetPromptHandler(part)}
-                  locale={locale}
-                />
-                {mode === 'full' && (part as { kind?: string }).kind === 'sandboxed_ui'
-                  && (part as { sandbox?: Record<string, unknown> }).sandbox && (
-                  <SaveTemplateButton
-                    sandbox={(part as { sandbox: Record<string, unknown> }).sandbox}
-                    title={(part as { title?: string }).title}
-                    locale={locale}
-                    csrfToken={csrfToken}
-                  />
-                )}
-              </div>
-            ))}
-
-            <div className="flex flex-wrap items-center gap-2">
-              {formattedDate && <span className="text-xs text-muted-foreground">{formattedDate}</span>}
-              {/* Expose one-click copy for all full-page messages and completed assistant messages in the drawer. */}
-              {(mode === 'full' || (!isUser && Boolean(msg.content))) && <Button
-                type="button"
-                variant="ghost"
-                onClick={() => void copyMessage(msg.id, msg.content)}
-                className="min-h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                aria-label={t('copyMessage')}
-              >
-                {copiedMessageId === msg.id ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
-                <span>{copiedMessageId === msg.id ? t('copiedMessage') : t('copyMessage')}</span>
-              </Button>}
-              {(mode === 'full' || !isUser) && failedMessageId === msg.id && (
-                <span role="status" className="text-xs text-destructive">{t('copyFailed')}</span>
-              )}
-              {canEdit && (
-                <Button
-                  type="button"
-                  className="secondary inline-flex min-h-8 items-center gap-1 px-2 text-xs"
-                  onClick={() => onEditMessage?.(msg)}
-                  aria-label={t('editPrompt')}
-                >
-                  <PencilIcon className="size-3.5" />
-                  <span>{t('editPrompt')}</span>
-                </Button>
-              )}
-              {canRegenerate && (
-                <Button
-                  type="button"
-                  className="secondary inline-flex min-h-8 items-center gap-1 px-2 text-xs"
-                  onClick={() => onRegenerateMessage?.(msg)}
-                  aria-label={t('regenerateAnswer')}
-                >
-                  <RefreshCwIcon className="size-3.5" />
-                  <span>{t('regenerateAnswer')}</span>
-                </Button>
-              )}
-            </div>
-
-            {mode === 'drawer' && !isUser && msg.model_identity && (
-              <span className="text-xs text-muted-foreground">
-                {t('modelLine', { model: msg.model_identity })}{msg.citations?.length ? ` · ${t('sourcesCount', { count: msg.citations.length })}` : ''}
-              </span>
-            )}
-            {mode === 'full' && !isUser && msg.citations && msg.citations.length > 0 && (
-              <CitationPanel citations={msg.citations} variant="inline" />
-            )}
-            {mode === 'drawer' && !isUser && msg.citations && msg.citations.length > 0 && (
-              <CitationChips citations={msg.citations} />
-            )}
-          </div>
-        );
-      })}
-
-      {/* Active streaming assistant bubble: one spinner status row on top (send -> first token, and while tools run). */}
-      {(streamingText || streamingReasoning || streamingUi.length > 0 || isStreaming || isPending || activeTool) && (
-        <div className="mr-auto flex w-full flex-col gap-2.5">
-          <div className="text-sm text-foreground">
-            {/* Live region stays mounted so tool-status changes are announced politely. */}
-            <div role="status" aria-live="polite" className="mb-1">
-              <div data-testid={activeTool ? 'tool-status' : undefined} className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Loader2Icon className="size-4 animate-spin text-muted-foreground" />
-                <span>
-                  {activeTool
-                    ? t(activeTool === 'web_search' ? 'toolSearchingWeb' : 'toolQueryingData')
-                    : (isStreaming || streamingText || streamingReasoning ? t('streaming') : t('thinking'))}
-                </span>
-              </div>
-            </div>
-
-            {mode === 'full' && <WebSearchNotice outcome={streamingWebSearch} />}
-
-            <ChatReasoning text={streamingReasoning} streaming answerStarted={Boolean(streamingText) || streamingUi.length > 0} />
-
-            <ChatMarkdown content={streamingText || ''} citations={streamingCitations} locale={locale} />
-          </div>
-          {streamingUi.map((part, index) => (
-            <div className="w-full" data-testid="streaming-generative-ui-widget" key={uiPartKey(part, index)}>
-              <ToolRendering
-                payload={part as unknown as GenerativeUIPayload}
-                onSendPrompt={widgetPromptHandler(part)}
-                locale={locale}
-              />
-            </div>
-          ))}
-          {mode === 'full' && streamingCitations && streamingCitations.length > 0 && (
-            <CitationPanel citations={streamingCitations} variant="inline" />
-          )}
-          {mode === 'drawer' && streamingCitations && streamingCitations.length > 0 && (
-            <CitationChips citations={streamingCitations} />
-          )}
-        </div>
+      {showStreaming && (
+        <StreamingBubble
+          mode={mode}
+          locale={locale}
+          csrfToken={csrfToken}
+          streamingText={streamingText}
+          streamingReasoning={streamingReasoning}
+          streamingCitations={streamingCitations}
+          streamingWebSearch={streamingWebSearch}
+          activeTool={activeTool}
+          streamingUi={streamingUi}
+          isStreaming={isStreaming}
+          isPending={isPending}
+          widgetPromptHandler={widgetPromptHandler}
+        />
       )}
 
       {/* Cancellation is a neutral outcome chosen by the user (or the server), not a failure: no alert, no Retry. */}
@@ -448,20 +672,7 @@ export function ChatTranscript({
         <p role="status" data-testid="chat-cancelled" className="text-xs text-muted-foreground">{t('cancelled')}</p>
       )}
 
-      {/* Error banner */}
-      {error && (
-        <div role="alert" className="flex items-center justify-between gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
-          <div className="flex items-center gap-2">
-            <AlertCircleIcon className="size-4 shrink-0" />
-            <span>{error}</span>
-          </div>
-          {onRetry && (
-            <Button type="button" variant="destructive" size="sm" onClick={onRetry} className="min-h-8 px-2 py-1 text-xs font-medium">
-              {t('retry')}
-            </Button>
-          )}
-        </div>
-      )}
+      {error && <TranscriptError error={error} onRetry={onRetry} />}
       </div>
     </div>
       {!isAtBottom && (

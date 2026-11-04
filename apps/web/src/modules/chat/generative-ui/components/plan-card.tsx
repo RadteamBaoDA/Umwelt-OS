@@ -128,6 +128,198 @@ function normalizePlanSteps(
   });
 }
 
+/** Resolved plan copy bundle. */
+type PlanCopy = (typeof PLAN_COPY)[keyof typeof PLAN_COPY];
+type NormalizedStep = ReturnType<typeof normalizePlanSteps>[number];
+
+/** Border/background classes of a step row by status. */
+function stepRowClass(status: PlanStepStatus): string {
+  if (status === 'completed') return 'border-border bg-muted/40';
+  if (status === 'in_progress') return 'border-primary/40 bg-primary/5';
+  return 'border-border bg-background';
+}
+
+/** Status glyph of a step: done check, pulsing in-progress dot or pending clock. */
+function StepStatusIcon({ status }: { status: PlanStepStatus }) {
+  if (status === 'completed') return <CheckCircle2Icon className="size-4 text-data" aria-hidden="true" />;
+  if (status === 'in_progress') return <CircleDotIcon className="size-4 text-data animate-pulse" aria-hidden="true" />;
+  return <ClockIcon className="size-4 text-muted-foreground" aria-hidden="true" />;
+}
+
+/** One plan step row: checkbox + label/description on the left, status icon and badge on the right. */
+function PlanStepItem({ step, locale, onToggle }: { step: NormalizedStep; locale: AppLocaleId; onToggle: (id: string) => void }) {
+  const isCompleted = step.status === 'completed';
+  const badgeMeta = getStepBadgeMeta(step.status, locale);
+  return (
+    <li
+      data-testid={`plan-step-${step.id}`}
+      data-status={step.status}
+      className={`flex items-start justify-between gap-3 rounded-lg border p-3 transition-colors ${stepRowClass(step.status)}`}
+    >
+      <div className="flex min-w-0 flex-1 items-start gap-3">
+        <Checkbox
+          id={`plan-step-checkbox-${step.id}`}
+          checked={isCompleted}
+          onCheckedChange={() => onToggle(step.id)}
+          aria-label={step.label}
+          className="mt-0.5"
+        />
+        <div className="min-w-0 flex-1">
+          <label
+            htmlFor={`plan-step-checkbox-${step.id}`}
+            className={`block cursor-pointer text-sm font-medium leading-snug ${
+              isCompleted ? 'line-through text-muted-foreground' : 'text-foreground'
+            }`}
+          >
+            {step.emoji && (
+              <span className="mr-1.5" aria-hidden="true">
+                {step.emoji}
+              </span>
+            )}
+            {step.label}
+          </label>
+          {step.description && (
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              {step.description}
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-1.5">
+        <StepStatusIcon status={step.status} />
+        <Badge variant={badgeMeta.variant} className="text-[11px]">
+          {badgeMeta.label}
+        </Badge>
+      </div>
+    </li>
+  );
+}
+
+/** Card header: title, progress counter, description, approach/technology/key elements and the progress bar. */
+function PlanHeader({ title, description, approach, technology, keyElements, copy, completedCount, totalCount }: {
+  title: string;
+  description?: string;
+  approach?: string;
+  technology?: string;
+  keyElements?: string[];
+  copy: PlanCopy;
+  completedCount: number;
+  totalCount: number;
+}) {
+  const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+  const hasMeta = Boolean(approach || technology || (keyElements && keyElements.length > 0));
+  return (
+    <CardHeader className="gap-2 border-b border-border pb-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <ListChecksIcon className="size-4" aria-hidden="true" />
+          </span>
+          <CardTitle className="text-base font-semibold text-foreground">{title}</CardTitle>
+        </div>
+        <Badge
+          variant="secondary"
+          data-testid="plan-progress-counter"
+          className="tabular-nums text-xs"
+        >
+          {copy.progressLabel(completedCount, totalCount)}
+        </Badge>
+      </div>
+
+      {description && (
+        <CardDescription className="text-xs leading-relaxed text-muted-foreground">
+          {description}
+        </CardDescription>
+      )}
+
+      {hasMeta && (
+        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          {approach && (
+            <span>
+              <strong className="font-medium text-foreground">{copy.approachLabel}:</strong>{' '}
+              {approach}
+            </span>
+          )}
+          {technology && (
+            <span>
+              <strong className="font-medium text-foreground">{copy.technologyLabel}:</strong>{' '}
+              {technology}
+            </span>
+          )}
+          {keyElements?.map((element) => (
+            <Badge key={element} variant="outline" className="text-[11px]">
+              {element}
+            </Badge>
+          ))}
+        </div>
+      )}
+
+      {/* Semantic progress bar */}
+      <div
+        role="progressbar"
+        aria-valuenow={completedCount}
+        aria-valuemin={0}
+        aria-valuemax={totalCount}
+        aria-label={copy.progressLabel(completedCount, totalCount)}
+        className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-muted"
+      >
+        <div
+          className="h-full bg-primary transition-all duration-200"
+          style={{ width: `${progressPercent}%` }}
+        />
+      </div>
+    </CardHeader>
+  );
+}
+
+/**
+ * Plan state: local status overrides layered over the server steps, progress counts and the approve / refine / toggle
+ * handlers (approve dispatches the execution prompt with the current step labels).
+ */
+function usePlanState({ steps, todos, title, copy, onSendPrompt, onStepToggle }: Pick<PlanCardProps, 'steps' | 'todos' | 'title' | 'onSendPrompt' | 'onStepToggle'> & { copy: PlanCopy }) {
+  const [statusOverrides, setStatusOverrides] = React.useState<Record<string, PlanStepStatus>>({});
+  const [isApproved, setIsApproved] = React.useState(false);
+
+  const stepItems = React.useMemo(
+    () => normalizePlanSteps(steps, todos, statusOverrides),
+    [steps, todos, statusOverrides],
+  );
+
+  const totalCount = stepItems.length;
+  const completedCount = React.useMemo(
+    () => stepItems.filter((step) => step.status === 'completed').length,
+    [stepItems],
+  );
+
+  /** Toggles a single step between 'completed' and 'pending' when interacted with by the user. */
+  const handleToggleStep = React.useCallback(
+    (stepId: string) => {
+      const target = stepItems.find((step) => step.id === stepId);
+      if (!target) return;
+      const nextStatus: PlanStepStatus =
+        target.status === 'completed' ? 'pending' : 'completed';
+      onStepToggle?.(stepId, nextStatus);
+      setStatusOverrides((prev) => ({ ...prev, [stepId]: nextStatus }));
+    },
+    [onStepToggle, stepItems],
+  );
+
+  /** Approves the current plan state and dispatches a structured execution prompt to the chat session. */
+  const handleApprove = React.useCallback(() => {
+    setIsApproved(true);
+    const activeLabels = stepItems.map((step) => step.label);
+    onSendPrompt?.(copy.approvePrompt(title, activeLabels));
+  }, [copy, onSendPrompt, stepItems, title]);
+
+  /** Requests plan refinement by sending a follow-up prompt to the assistant. */
+  const handleRefine = React.useCallback(() => {
+    onSendPrompt?.(copy.refinePrompt(title));
+  }, [copy, onSendPrompt, title]);
+
+  return { stepItems, totalCount, completedCount, isApproved, handleToggleStep, handleApprove, handleRefine };
+}
+
 /**
  * Native structured PlanCard widget ported from OpenIntelligentUI and adapted to Umwelt-OS
  * shadcn primitives and semantic tokens. Supports interactive step toggling, progress tracking,
@@ -154,183 +346,29 @@ export function PlanCard({
   const catalog = genUiCopy(resolvedLocale);
   const resolvedKeyElements = keyElements ?? key_elements;
 
-  const [statusOverrides, setStatusOverrides] = React.useState<Record<string, PlanStepStatus>>({});
-  const [isApproved, setIsApproved] = React.useState(false);
-
-  const stepItems = React.useMemo(
-    () => normalizePlanSteps(steps, todos, statusOverrides),
-    [steps, todos, statusOverrides],
-  );
-
-  const totalCount = stepItems.length;
-  const completedCount = React.useMemo(
-    () => stepItems.filter((step) => step.status === 'completed').length,
-    [stepItems],
-  );
-  const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
-
-  /**
-   * Toggles a single step between 'completed' and 'pending' when interacted with by the user.
-   */
-  const handleToggleStep = React.useCallback(
-    (stepId: string) => {
-      const target = stepItems.find((step) => step.id === stepId);
-      if (!target) return;
-      const nextStatus: PlanStepStatus =
-        target.status === 'completed' ? 'pending' : 'completed';
-      onStepToggle?.(stepId, nextStatus);
-      setStatusOverrides((prev) => ({ ...prev, [stepId]: nextStatus }));
-    },
-    [onStepToggle, stepItems],
-  );
-
-  /**
-   * Approves the current plan state and dispatches a structured execution prompt to the chat session.
-   */
-  const handleApprove = React.useCallback(() => {
-    setIsApproved(true);
-    const activeLabels = stepItems.map((step) => step.label);
-    onSendPrompt?.(copy.approvePrompt(title, activeLabels));
-  }, [copy, onSendPrompt, stepItems, title]);
-
-  /**
-   * Requests plan refinement by sending a follow-up prompt to the assistant.
-   */
-  const handleRefine = React.useCallback(() => {
-    onSendPrompt?.(copy.refinePrompt(title));
-  }, [copy, onSendPrompt, title]);
+  const { stepItems, totalCount, completedCount, isApproved, handleToggleStep, handleApprove, handleRefine } = usePlanState({ steps, todos, title, copy, onSendPrompt, onStepToggle });
 
   return (
     <Card
       data-testid="generative-plan-card"
       className="my-2 w-full max-w-2xl border-border bg-surface text-foreground"
     >
-      <CardHeader className="gap-2 border-b border-border pb-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <span className="inline-flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <ListChecksIcon className="size-4" aria-hidden="true" />
-            </span>
-            <CardTitle className="text-base font-semibold text-foreground">{title}</CardTitle>
-          </div>
-          <Badge
-            variant="secondary"
-            data-testid="plan-progress-counter"
-            className="tabular-nums text-xs"
-          >
-            {copy.progressLabel(completedCount, totalCount)}
-          </Badge>
-        </div>
-
-        {description && (
-          <CardDescription className="text-xs leading-relaxed text-muted-foreground">
-            {description}
-          </CardDescription>
-        )}
-
-        {(approach || technology || (resolvedKeyElements && resolvedKeyElements.length > 0)) && (
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            {approach && (
-              <span>
-                <strong className="font-medium text-foreground">{copy.approachLabel}:</strong>{' '}
-                {approach}
-              </span>
-            )}
-            {technology && (
-              <span>
-                <strong className="font-medium text-foreground">{copy.technologyLabel}:</strong>{' '}
-                {technology}
-              </span>
-            )}
-            {resolvedKeyElements?.map((element) => (
-              <Badge key={element} variant="outline" className="text-[11px]">
-                {element}
-              </Badge>
-            ))}
-          </div>
-        )}
-
-        {/* Semantic progress bar */}
-        <div
-          role="progressbar"
-          aria-valuenow={completedCount}
-          aria-valuemin={0}
-          aria-valuemax={totalCount}
-          aria-label={copy.progressLabel(completedCount, totalCount)}
-          className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-muted"
-        >
-          <div
-            className="h-full bg-primary transition-all duration-200"
-            style={{ width: `${progressPercent}%` }}
-          />
-        </div>
-      </CardHeader>
+      <PlanHeader
+        title={title}
+        description={description}
+        approach={approach}
+        technology={technology}
+        keyElements={resolvedKeyElements}
+        copy={copy}
+        completedCount={completedCount}
+        totalCount={totalCount}
+      />
 
       <CardContent className="pt-4">
         <ol className="space-y-2.5" aria-label={title}>
-          {stepItems.map((step) => {
-            const isCompleted = step.status === 'completed';
-            const isInProgress = step.status === 'in_progress';
-            const badgeMeta = getStepBadgeMeta(step.status, resolvedLocale);
-
-            return (
-              <li
-                key={step.id}
-                data-testid={`plan-step-${step.id}`}
-                data-status={step.status}
-                className={`flex items-start justify-between gap-3 rounded-lg border p-3 transition-colors ${
-                  isCompleted
-                    ? 'border-border bg-muted/40'
-                    : isInProgress
-                      ? 'border-primary/40 bg-primary/5'
-                      : 'border-border bg-background'
-                }`}
-              >
-                <div className="flex min-w-0 flex-1 items-start gap-3">
-                  <Checkbox
-                    id={`plan-step-checkbox-${step.id}`}
-                    checked={isCompleted}
-                    onCheckedChange={() => handleToggleStep(step.id)}
-                    aria-label={step.label}
-                    className="mt-0.5"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <label
-                      htmlFor={`plan-step-checkbox-${step.id}`}
-                      className={`block cursor-pointer text-sm font-medium leading-snug ${
-                        isCompleted ? 'line-through text-muted-foreground' : 'text-foreground'
-                      }`}
-                    >
-                      {step.emoji && (
-                        <span className="mr-1.5" aria-hidden="true">
-                          {step.emoji}
-                        </span>
-                      )}
-                      {step.label}
-                    </label>
-                    {step.description && (
-                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                        {step.description}
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex shrink-0 items-center gap-1.5">
-                  {isCompleted ? (
-                    <CheckCircle2Icon className="size-4 text-data" aria-hidden="true" />
-                  ) : isInProgress ? (
-                    <CircleDotIcon className="size-4 text-data animate-pulse" aria-hidden="true" />
-                  ) : (
-                    <ClockIcon className="size-4 text-muted-foreground" aria-hidden="true" />
-                  )}
-                  <Badge variant={badgeMeta.variant} className="text-[11px]">
-                    {badgeMeta.label}
-                  </Badge>
-                </div>
-              </li>
-            );
-          })}
+          {stepItems.map((step) => (
+            <PlanStepItem key={step.id} step={step} locale={resolvedLocale} onToggle={handleToggleStep} />
+          ))}
         </ol>
 
         {isApproved && (

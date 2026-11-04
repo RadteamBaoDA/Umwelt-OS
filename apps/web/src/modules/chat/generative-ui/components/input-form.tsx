@@ -65,28 +65,39 @@ export function validateFormValues(
 ): Record<string, string> {
   const errors: Record<string, string> = {};
   for (const f of fields) {
-    const v = values[f.id];
-    const text = typeof v === 'string' ? v.trim() : '';
-    if (f.type === 'checkbox') {
-      if (f.required && v !== true) errors[f.id] = copy.required(f.label);
-      continue;
-    }
-    if (!text) {
-      if (f.required) errors[f.id] = copy.required(f.label);
-      continue;
-    }
-    if (f.type === 'number') {
-      const n = Number(text);
-      if (!Number.isFinite(n)) errors[f.id] = copy.numberInvalid(f.label);
-      else if (f.min != null && n < f.min) errors[f.id] = copy.min(f.label, f.min);
-      else if (f.max != null && n > f.max) errors[f.id] = copy.max(f.label, f.max);
-    } else if (f.type === 'select') {
-      if (!f.options.includes(text)) errors[f.id] = copy.required(f.label);
-    } else if ((f.type === 'text' || f.type === 'textarea') && text.length > textLimit(f)) {
-      errors[f.id] = copy.maxLength(f.label, textLimit(f));
-    }
+    const message = validateField(f, values[f.id], copy);
+    if (message) errors[f.id] = message;
   }
   return errors;
+}
+
+/**
+ * Validates one field value.
+ *
+ * @param f - Field definition.
+ * @param v - Raw value (string, or boolean for checkboxes).
+ * @param copy - Localized messages.
+ * @returns The error message, or null when valid. Blank optional fields are valid.
+ */
+function validateField(f: InputFormField, v: string | boolean | undefined, copy: FormCopy): string | null {
+  const text = typeof v === 'string' ? v.trim() : '';
+  if (f.type === 'checkbox') return f.required && v !== true ? copy.required(f.label) : null;
+  if (!text) return f.required ? copy.required(f.label) : null;
+  if (f.type === 'number') return validateNumberField(f, text, copy);
+  if (f.type === 'select') return f.options.includes(text) ? null : copy.required(f.label);
+  if ((f.type === 'text' || f.type === 'textarea') && text.length > textLimit(f)) {
+    return copy.maxLength(f.label, textLimit(f));
+  }
+  return null;
+}
+
+/** Number field: finite, then within the optional min/max bounds. */
+function validateNumberField(f: InputFormField, text: string, copy: FormCopy): string | null {
+  const n = Number(text);
+  if (!Number.isFinite(n)) return copy.numberInvalid(f.label);
+  if (f.min != null && n < f.min) return copy.min(f.label, f.min);
+  if (f.max != null && n > f.max) return copy.max(f.label, f.max);
+  return null;
 }
 
 /**
@@ -112,16 +123,101 @@ export function composeFormPrompt(
   return [copy.promptHeader(title), ...lines].join('\n');
 }
 
+/** Props of {@link FormFieldControl}. */
+interface FormFieldControlProps {
+  field: InputFormField;
+  uid: string;
+  value: string | boolean | undefined;
+  error: string | undefined;
+  locked: boolean;
+  copy: FormCopy;
+  onValueChange: (id: string, value: string | boolean) => void;
+}
+
+/** The input control for one non-checkbox field (textarea, select or text/number/etc. input). */
+function FieldControl({ field: f, common, value, locked, copy, onValueChange }: {
+  field: InputFormField;
+  common: Record<string, unknown>;
+  value: string | boolean | undefined;
+  locked: boolean;
+  copy: FormCopy;
+  onValueChange: (id: string, value: string | boolean) => void;
+}) {
+  if (f.type === 'textarea') {
+    return <Textarea {...common} value={String(value)} placeholder={f.placeholder} maxLength={textLimit(f)} onChange={(e) => onValueChange(f.id, e.target.value)} />;
+  }
+  if (f.type === 'select') {
+    return (
+      <Select value={String(value)} onValueChange={(v) => onValueChange(f.id, v)} disabled={locked}>
+        <SelectTrigger {...common}><SelectValue placeholder={f.placeholder || copy.selectPlaceholder} /></SelectTrigger>
+        <SelectContent>{f.options.map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}</SelectContent>
+      </Select>
+    );
+  }
+  return (
+    <Input
+      {...common}
+      type={f.type}
+      value={String(value)}
+      placeholder={f.placeholder}
+      maxLength={f.type === 'text' ? textLimit(f) : undefined}
+      min={f.type === 'number' ? (f.min ?? undefined) : undefined}
+      max={f.type === 'number' ? (f.max ?? undefined) : undefined}
+      onChange={(e) => onValueChange(f.id, e.target.value)}
+    />
+  );
+}
+
 /**
- * Functional generic form widget: client-side validation, one-shot submit through the prompt
- * bridge, locked once accepted, retryable when the bridge rejects.
+ * One labelled field with its error: a checkbox renders inline with its label, other controls stack under it. Required
+ * state, invalid state and the error id are exposed through aria attributes.
  *
- * @param props - `InputFormProps`.
- * @returns Accessible form card.
+ * @param props - See {@link FormFieldControlProps}.
  */
-export function InputForm({ title, description, fields, submitLabel, disabled, locale, onSendPrompt }: InputFormProps) {
-  const copy = FORM_COPY[resolveWidgetLocale(locale)];
-  const uid = React.useId();
+function FormFieldControl({ field: f, uid, value, error: err, locked, copy, onValueChange }: FormFieldControlProps) {
+  const id = `${uid}-${f.id}`;
+  const errId = `${id}-err`;
+  const common = {
+    id,
+    disabled: locked,
+    'aria-invalid': err ? true : undefined,
+    'aria-describedby': err ? errId : undefined,
+    'aria-required': f.required || undefined,
+  } as const;
+  const label = (
+    <Label htmlFor={id}>
+      {f.label}
+      {f.required ? null : <span className="ml-1 text-xs font-normal text-muted-foreground">({copy.optional})</span>}
+    </Label>
+  );
+  const error = err ? <p id={errId} role="alert" className="text-xs text-destructive">{err}</p> : null;
+  if (f.type === 'checkbox') {
+    return (
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <Checkbox {...common} checked={value === true} onCheckedChange={(c) => onValueChange(f.id, c === true)} />
+          {label}
+        </div>
+        {error}
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-1.5">
+      {label}
+      <FieldControl field={f} common={common} value={value} locked={locked} copy={copy} onValueChange={onValueChange} />
+      {error}
+    </div>
+  );
+}
+
+/**
+ * Form state and submission: values, per-field errors, and the idle/sending/sent phase.
+ *
+ * `handleSubmit` validates, sends the composed prompt and awaits the bridge; a rejection unlocks the form with a
+ * retryable error, success locks it in the submitted state.
+ */
+function useFormSubmission({ title, fields, disabled, copy, onSendPrompt }: Pick<InputFormProps, 'title' | 'fields' | 'disabled' | 'onSendPrompt'> & { copy: FormCopy }) {
   const [values, setValues] = React.useState<FormValues>(() =>
     Object.fromEntries(fields.map((f) => [f.id, f.type === 'checkbox' ? false : ''])),
   );
@@ -136,10 +232,6 @@ export function InputForm({ title, description, fields, submitLabel, disabled, l
     setErrors((prev) => (prev[id] ? { ...prev, [id]: '' } : prev));
   };
 
-  /**
-   * Validates, sends the composed prompt and awaits the bridge; a rejection unlocks the form
-   * with a retryable error, success locks it in the submitted state.
-   */
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (locked) return;
@@ -161,6 +253,21 @@ export function InputForm({ title, description, fields, submitLabel, disabled, l
       setSendError(copy.sendFailed);
     }
   };
+  return { values, errors, phase, sendError, locked, setValue, handleSubmit };
+}
+
+/**
+ * Functional generic form widget: client-side validation, one-shot submit through the prompt
+ * bridge, locked once accepted, retryable when the bridge rejects.
+ *
+ * @param props - `InputFormProps`.
+ * @returns Accessible form card.
+ */
+export function InputForm({ title, description, fields, submitLabel, disabled, locale, onSendPrompt }: InputFormProps) {
+  const copy = FORM_COPY[resolveWidgetLocale(locale)];
+  const uid = React.useId();
+  const form = useFormSubmission({ title, fields, disabled, copy, onSendPrompt });
+  const { values, errors, phase, sendError, locked, setValue, handleSubmit } = form;
 
   return (
     <Card data-testid="generative-input-form" className="my-2 w-full max-w-md border-border bg-surface text-foreground">
@@ -177,67 +284,9 @@ export function InputForm({ title, description, fields, submitLabel, disabled, l
           </div>
         </CardHeader>
         <CardContent className="space-y-4 pt-4">
-          {fields.map((f) => {
-            const id = `${uid}-${f.id}`;
-            const errId = `${id}-err`;
-            const err = errors[f.id];
-            const common = {
-              id,
-              disabled: locked,
-              'aria-invalid': err ? true : undefined,
-              'aria-describedby': err ? errId : undefined,
-              'aria-required': f.required || undefined,
-            } as const;
-            const label = (
-              <Label htmlFor={id}>
-                {f.label}
-                {f.required ? null : <span className="ml-1 text-xs font-normal text-muted-foreground">({copy.optional})</span>}
-              </Label>
-            );
-            const error = err ? <p id={errId} role="alert" className="text-xs text-destructive">{err}</p> : null;
-            if (f.type === 'checkbox') {
-              return (
-                <div key={f.id} className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <Checkbox {...common} checked={values[f.id] === true} onCheckedChange={(c) => setValue(f.id, c === true)} />
-                    {label}
-                  </div>
-                  {error}
-                </div>
-              );
-            }
-            let control: React.ReactNode;
-            if (f.type === 'textarea') {
-              control = <Textarea {...common} value={String(values[f.id])} placeholder={f.placeholder} maxLength={textLimit(f)} onChange={(e) => setValue(f.id, e.target.value)} />;
-            } else if (f.type === 'select') {
-              control = (
-                <Select value={String(values[f.id])} onValueChange={(v) => setValue(f.id, v)} disabled={locked}>
-                  <SelectTrigger {...common}><SelectValue placeholder={f.placeholder || copy.selectPlaceholder} /></SelectTrigger>
-                  <SelectContent>{f.options.map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}</SelectContent>
-                </Select>
-              );
-            } else {
-              control = (
-                <Input
-                  {...common}
-                  type={f.type}
-                  value={String(values[f.id])}
-                  placeholder={f.placeholder}
-                  maxLength={f.type === 'text' ? textLimit(f) : undefined}
-                  min={f.type === 'number' ? (f.min ?? undefined) : undefined}
-                  max={f.type === 'number' ? (f.max ?? undefined) : undefined}
-                  onChange={(e) => setValue(f.id, e.target.value)}
-                />
-              );
-            }
-            return (
-              <div key={f.id} className="space-y-1.5">
-                {label}
-                {control}
-                {error}
-              </div>
-            );
-          })}
+          {fields.map((f) => (
+            <FormFieldControl key={f.id} field={f} uid={uid} value={values[f.id]} error={errors[f.id]} locked={locked} copy={copy} onValueChange={setValue} />
+          ))}
           {phase === 'sent' ? (
             <p role="status" data-testid="form-submitted-banner" className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs font-medium text-primary">
               <CheckCircle2Icon className="size-4 shrink-0" aria-hidden="true" />

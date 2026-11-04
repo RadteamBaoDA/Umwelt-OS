@@ -9,14 +9,20 @@
  */
 
 import * as React from 'react';
-import { apiRequest } from '@/core/api';
 import {
   DEFAULT_LINK_CONFIRM_LABELS,
   WidgetLinkConfirmDialog,
   useWidgetLinkConfirm,
   type LinkConfirmLabels,
 } from './link-confirm';
-import { blobToDataUrl, fetchImageBlob, resolveMediaUrl } from './image-loader';
+import {
+  useBridgeMessageListener,
+  useFrameRegistry,
+  useHostPromptDispatch,
+  useLatest,
+  useSandboxPromptDraft,
+  useWidgetImageLoader,
+} from './prompt-bridge-hooks';
 import {
   DEFAULT_PROMPT_COOLDOWN_MS,
   MAX_PROMPT_LENGTH,
@@ -28,29 +34,16 @@ import {
   type ValidateBridgeMessageOptions,
 } from './sandbox-functions';
 
-/** Message type posted back to a widget iframe when the host rejects its `sendPrompt` (retryable). */
-export const SEND_PROMPT_ERROR_TYPE = 'umwelt:send-prompt-error';
-
-/** Message type posted immediately once the host accepted a `sendPrompt` for processing (stops the in-frame ack timeout). */
-export const SEND_PROMPT_ACK_TYPE = 'umwelt:send-prompt-ack';
-
-/** Message type posted back to a widget iframe when the host accepted and handled its `sendPrompt`. */
-export const SEND_PROMPT_RESULT_TYPE = 'umwelt:send-prompt-result';
-
-/** Message type posted to a widget with the loaded image's `blob:` URL. */
-export const LOAD_IMAGE_RESULT_TYPE = 'umwelt:load-image-result';
-
-/** Message type posted to a widget when an image request is refused or fails. */
-export const LOAD_IMAGE_ERROR_TYPE = 'umwelt:load-image-error';
-
-/** Sliding window length for per-frame image request limiting. */
-export const IMAGE_RATE_WINDOW_MS = 10_000;
-
-/** Maximum image requests per frame inside `IMAGE_RATE_WINDOW_MS`. */
-export const IMAGE_RATE_MAX = 60;
-
-/** How long the owner's remote-media privacy flag is reused before re-reading settings. */
-export const PRIVACY_CACHE_MS = 30_000;
+export {
+  SEND_PROMPT_ERROR_TYPE,
+  SEND_PROMPT_ACK_TYPE,
+  SEND_PROMPT_RESULT_TYPE,
+  LOAD_IMAGE_RESULT_TYPE,
+  LOAD_IMAGE_ERROR_TYPE,
+  IMAGE_RATE_WINDOW_MS,
+  IMAGE_RATE_MAX,
+  PRIVACY_CACHE_MS,
+} from './bridge-constants';
 
 export {
   DEFAULT_PROMPT_COOLDOWN_MS,
@@ -135,221 +128,20 @@ export function PromptBridgeProvider({
   disabled = false,
   children,
 }: PromptBridgeProviderProps) {
-  const onSendPromptRef = React.useRef(onSendPrompt);
-  const onDraftPromptRef = React.useRef(onDraftPrompt);
-  const onResizeRef = React.useRef(onResize);
+  const onSendPromptRef = useLatest(onSendPrompt);
+  const onDraftPromptRef = useLatest(onDraftPrompt);
+  const onResizeRef = useLatest(onResize);
+  const disabledRef = useLatest(disabled);
   // Widget-requested link awaiting the owner's explicit confirmation (one at a time; extra requests are dropped).
   const linkConfirm = useWidgetLinkConfirm();
   const requestLink = linkConfirm.requestLink;
-  const disabledRef = React.useRef(disabled);
-  const lastAcceptedAtRef = React.useRef<number | null>(null);
-  const registeredFramesRef = React.useRef<Map<unknown, string>>(new Map());
-  // Per-frame request timestamps (rate limit) and a short-lived cache of the privacy flag.
-  const privacyCacheRef = React.useRef<{ allowed: Promise<boolean>; at: number } | null>(null);
-  const frameRequestsRef = React.useRef<Map<unknown, number[]>>(new Map());
+  const frames = useFrameRegistry();
+  const dispatchValidatedPrompt = useHostPromptDispatch({ frames, onSendPromptRef, disabledRef, cooldownMs });
+  const draftSandboxPrompt = useSandboxPromptDraft({ frames, onDraftPromptRef, disabledRef, cooldownMs });
+  const handleLoadImage = useWidgetImageLoader(frames);
+  const { registerFrame } = frames;
 
-  React.useEffect(() => {
-    onSendPromptRef.current = onSendPrompt;
-  }, [onSendPrompt]);
-
-  React.useEffect(() => {
-    onDraftPromptRef.current = onDraftPrompt;
-  }, [onDraftPrompt]);
-
-  React.useEffect(() => {
-    onResizeRef.current = onResize;
-  }, [onResize]);
-
-  React.useEffect(() => {
-    disabledRef.current = disabled;
-  }, [disabled]);
-
-  const registerFrame = React.useCallback((frameWindow: unknown, nonce: string) => {
-    if (!frameWindow || !nonce) {
-      return () => undefined;
-    }
-    registeredFramesRef.current.set(frameWindow, nonce);
-    return () => {
-      registeredFramesRef.current.delete(frameWindow);
-      frameRequestsRef.current.delete(frameWindow);
-    };
-  }, []);
-
-  /**
-   * Posts a host-to-frame reply carrying the frame's nonce so the in-frame listener accepts it.
-   * Failures (detached frame) are swallowed: there is nobody left to notify.
-   */
-  const replyToFrame = React.useCallback((target: unknown, message: Record<string, unknown>) => {
-    const frame = target as { postMessage?: (data: unknown, origin: string) => void } | null | undefined;
-    try {
-      frame?.postMessage?.({ ...message, nonce: registeredFramesRef.current.get(target) }, '*');
-    } catch {
-      // Frame already detached; nothing left to notify.
-    }
-  }, []);
-
-  const dispatchValidatedPrompt = React.useCallback(
-    (rawPrompt: string, replyTo?: unknown, requestId?: string): boolean => {
-      // Every outcome is reported to the originating iframe (when any) so `window.sendPrompt`
-      // settles: result on success, retryable error on rejection (busy, cooldown, invalid).
-      const reportFailure = (err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        replyToFrame(replyTo, { type: SEND_PROMPT_ERROR_TYPE, id: requestId, retryable: true, message });
-      };
-      if (disabledRef.current) {
-        reportFailure('Prompt bridge is disabled');
-        return false;
-      }
-      const parsed = sendPromptParameters.safeParse({ text: rawPrompt });
-      if (!parsed.success) {
-        reportFailure('Invalid prompt');
-        return false;
-      }
-      const now = Date.now();
-      if (
-        cooldownMs > 0 &&
-        lastAcceptedAtRef.current !== null &&
-        now - lastAcceptedAtRef.current < cooldownMs
-      ) {
-        reportFailure('Prompt rate limited');
-        return false;
-      }
-      lastAcceptedAtRef.current = now;
-      // Ack before the (possibly long) handler runs: the frame's timeout covers delivery only.
-      replyToFrame(replyTo, { type: SEND_PROMPT_ACK_TYPE, id: requestId });
-      // A rejected/throwing handler must not be silently dropped nor leak an unhandled rejection.
-      try {
-        Promise.resolve(onSendPromptRef.current(parsed.data.text)).then(
-          () => replyToFrame(replyTo, { type: SEND_PROMPT_RESULT_TYPE, id: requestId, ok: true }),
-          reportFailure,
-        );
-      } catch (err) {
-        reportFailure(err);
-      }
-      return true;
-    },
-    [cooldownMs, replyToFrame],
-  );
-
-  /**
-   * Handles a prompt posted by a sandboxed widget: validates and rate-limits it like any prompt, then ONLY fills the
-   * chat composer through `onDraftPrompt`. It is never submitted: a widget can run script without any user gesture, so
-   * the owner must read the text and press send themselves. Replies to the frame with ack + result (or a retryable error).
-   */
-  const draftSandboxPrompt = React.useCallback(
-    (rawPrompt: string, replyTo: unknown, requestId?: string): void => {
-      const fail = (message: string) =>
-        replyToFrame(replyTo, { type: SEND_PROMPT_ERROR_TYPE, id: requestId, retryable: true, message });
-      const draft = onDraftPromptRef.current;
-      if (disabledRef.current || !draft) {
-        fail('Prompt bridge is disabled');
-        return;
-      }
-      const parsed = sendPromptParameters.safeParse({ text: rawPrompt });
-      if (!parsed.success) {
-        fail('Invalid prompt');
-        return;
-      }
-      const now = Date.now();
-      if (cooldownMs > 0 && lastAcceptedAtRef.current !== null && now - lastAcceptedAtRef.current < cooldownMs) {
-        fail('Prompt rate limited');
-        return;
-      }
-      lastAcceptedAtRef.current = now;
-      replyToFrame(replyTo, { type: SEND_PROMPT_ACK_TYPE, id: requestId });
-      try {
-        draft(parsed.data.text);
-        replyToFrame(replyTo, { type: SEND_PROMPT_RESULT_TYPE, id: requestId, ok: true, drafted: true });
-      } catch (err) {
-        fail(err instanceof Error ? err.message : String(err));
-      }
-    },
-    [cooldownMs, replyToFrame],
-  );
-
-  /**
-   * Serves a widget `loadImage` request: URL-allowlisted, rate limited, gated by the owner's
-   * `allow_widget_remote_media` privacy flag, fetched with credentials and size/type capped, then answered
-   * with a `data:` URL (opaque-origin frames cannot reliably load host-origin `blob:` URLs; no blob lifetime to manage). All failures reply with an error message and never throw.
-   */
-  const handleLoadImage = React.useCallback(
-    async (source: unknown, id: string, rawUrl: string) => {
-      const fail = (message: string) =>
-        replyToFrame(source, { type: LOAD_IMAGE_ERROR_TYPE, id, message });
-      const url = resolveMediaUrl(rawUrl, window.location.origin);
-      if (!url) {
-        fail('Image URL not allowed');
-        return;
-      }
-      const now = Date.now();
-      const recent = (frameRequestsRef.current.get(source) ?? []).filter(
-        (at) => now - at < IMAGE_RATE_WINDOW_MS,
-      );
-      if (recent.length >= IMAGE_RATE_MAX) {
-        frameRequestsRef.current.set(source, recent);
-        fail('Image requests rate limited');
-        return;
-      }
-      recent.push(now);
-      frameRequestsRef.current.set(source, recent);
-      try {
-        // Tile-heavy maps fire bursts of concurrent requests; share one in-flight/recent settings read
-        // for PRIVACY_CACHE_MS. A failed read is evicted so the next request retries.
-        let cached = privacyCacheRef.current;
-        if (!cached || Date.now() - cached.at > PRIVACY_CACHE_MS) {
-          const allowed = apiRequest<{ privacy?: { allow_widget_remote_media?: boolean } }>(
-            '/api/v1/settings/ai',
-          ).then((settings) => settings.privacy?.allow_widget_remote_media === true);
-          cached = { allowed, at: Date.now() };
-          privacyCacheRef.current = cached;
-          allowed.catch(() => {
-            if (privacyCacheRef.current === cached) privacyCacheRef.current = null;
-          });
-        }
-        if (!(await cached.allowed)) {
-          fail('Remote widget media is disabled');
-          return;
-        }
-        const dataUrl = await blobToDataUrl(await fetchImageBlob(url));
-        // Frame unregistered while fetching: nobody is left to receive the reply.
-        if (!registeredFramesRef.current.has(source)) {
-          fail('Image not available');
-          return;
-        }
-        replyToFrame(source, { type: LOAD_IMAGE_RESULT_TYPE, id, dataUrl });
-      } catch (err) {
-        fail(err instanceof Error ? err.message : 'Image request failed');
-      }
-    },
-    [replyToFrame],
-  );
-
-  React.useEffect(() => {
-    /** Single owner of frame -> host messages (send-prompt, resize, open-link). */
-    const handleWindowMessage = (event: MessageEvent) => {
-      const validated = validateBridgeMessage(event, { frames: registeredFramesRef.current });
-
-      if (!validated) {
-        return;
-      }
-
-      if (validated.type === 'send-prompt') {
-        draftSandboxPrompt(validated.prompt, event.source, validated.id);
-      } else if (validated.type === 'resize') {
-        onResizeRef.current?.(validated.height, event.source);
-      } else if (validated.type === 'load-image') {
-        void handleLoadImage(event.source, validated.id, validated.url);
-      } else if (validated.type === 'open-link') {
-        // Never open directly: a widget can fire this without any user gesture. Ask the owner first.
-        requestLink(validated.url, event.source);
-      }
-    };
-
-    window.addEventListener('message', handleWindowMessage);
-    return () => {
-      window.removeEventListener('message', handleWindowMessage);
-    };
-  }, [draftSandboxPrompt, handleLoadImage, requestLink]);
+  useBridgeMessageListener({ frames, onResizeRef, draftSandboxPrompt, handleLoadImage, requestLink });
 
   const contextValue = React.useMemo<PromptBridgeContextValue>(
     () => ({
