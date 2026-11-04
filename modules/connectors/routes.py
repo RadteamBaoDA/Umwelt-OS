@@ -8,7 +8,7 @@ from uuid import UUID
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import is_instance_operator, require_owner, require_owner_write
@@ -39,11 +39,18 @@ from modules.connectors.github.adapter import collect_github_segment
 from modules.connectors.github.schemas import GitHubHintClaimProof, project_github_source_config
 from modules.connectors.github.sync import validate_github_segment
 from modules.connectors.models import (
+    ConnectorCollectionRequest,
     ConnectorProvisioning,
     ConnectorWorldCredential,
     GithubOAuthGrant,
 )
-from modules.connectors.provider_specs import TERMS_INELIGIBLE, get_provider_spec
+from modules.connectors.provider_specs import (
+    COLLECT_COOLDOWN_FLOOR_MINUTES,
+    TERMS_INELIGIBLE,
+    collection_cooldown_seconds,
+    get_provider_spec,
+    min_interval_minutes,
+)
 from modules.connectors.public import (
     AgentBrowserGrantPatch,
     CollectionFence,
@@ -1463,6 +1470,19 @@ async def trigger_collection(
     if not await provisioning.require_collection_fence(session, source, source.generation, revision, lock=True, multi_workspace_enabled=multi_workspace_enabled, scope=scope):
         raise HTTPException(status_code=409, detail="Connector collection fence is stale")
     if provisioned.execution_backend == "native":
+        # Slow/unofficial providers (floor >= 6 h) get a manual-collection cooldown equal to their schedule floor.
+        # The lookup is skipped for fast providers, whose cooldown is always zero.
+        last_started = None
+        if min_interval_minutes(source.provider) >= COLLECT_COOLDOWN_FLOOR_MINUTES:
+            last_started = await session.scalar(select(func.max(ConnectorCollectionRequest.attempt_started_at)).where(
+                ConnectorCollectionRequest.workspace_id == scope.workspace_id,
+                ConnectorCollectionRequest.source_id == source_id,
+                ConnectorCollectionRequest.status.in_(("running", "succeeded", "no_changes"))))
+        wait = collection_cooldown_seconds(source.provider, last_started, datetime.now(UTC))
+        if wait:
+            raise HTTPException(
+                status_code=429, detail={"code": "collection_too_soon", "retry_after": wait},
+                headers={"Retry-After": str(wait)})
         await session.rollback()
         await _owner_access(session, request, scope, expected=access_fence)
         try:

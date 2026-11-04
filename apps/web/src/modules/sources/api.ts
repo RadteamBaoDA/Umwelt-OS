@@ -1,4 +1,4 @@
-import { apiRequest, csrfHeaders } from '@/core/api';
+import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import type { SourceAiOptions } from './source-ai-toggles';
 import type { DataShape } from '@/core/data-shapes';
 
@@ -146,6 +146,13 @@ export type BuiltinTypeOptions = {
   fx_quotes?: string[];
   oecd_countries?: string[];
   crypto_symbols?: string[];
+  /** Vietnam stock/index tickers (`vn_stock`), 1-20 upper-case codes. */
+  vn_symbols?: string[];
+  /** Job-board filters (`vietnamworks_jobs`): 1-5 search keywords, city / level subsets and a USD salary floor. */
+  job_keywords?: string[];
+  job_cities?: ('ho_chi_minh' | 'ha_noi' | 'da_nang')[];
+  job_levels?: ('intern' | 'fresher' | 'experienced' | 'manager' | 'director')[];
+  job_min_salary_usd?: number;
   coin_ids?: string[];
   kp_min?: number;
   advisory_min_level?: 1 | 2 | 3 | 4;
@@ -229,6 +236,8 @@ export type ConnectorCatalogEntry = {
   endpoints?: string[];
   execution?: 'supported' | 'experimental' | 'research_only' | null;
   default_interval_minutes?: number | null;
+  /** Hard server floor for the collection interval; missing means the global 15-minute floor. */
+  min_interval_minutes?: number | null;
   realtime_tier?: RealtimeMode;
   key_fields?: string[];
   runtime_verified?: boolean;
@@ -293,6 +302,11 @@ export function purgeSource(id: string, csrfToken: string) {
 /** Sets a source to active or paused, forwarding the abort signal and CSRF token. */
 export function updateSourceStatus(id: string, status: 'active' | 'paused', csrfToken: string, signal?: AbortSignal) {
   return apiRequest<Source>(`/api/v1/sources/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ status }), signal });
+}
+
+/** Renames a source through PATCH `name` only; connector configuration and its revision are untouched. The server enforces 1-200 characters. */
+export function renameSource(id: string, name: string, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<Source>(`/api/v1/sources/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ name }), signal });
 }
 
 /** Patches the owner's graph/RAG switches on an existing source; both are optional and only sent keys change. */
@@ -578,6 +592,8 @@ export type BuiltinSource = {
   id: string; label: string; category: BuiltinCategory; eligibility: 'open' | 'personal' | 'noncommercial' | 'review';
   terms_url: string; terms_checked_on: string; attribution: string; execution: 'supported' | 'experimental' | 'research_only';
   realtime_tier?: RealtimeMode;
+  /** Hard server floor for the collection interval; missing means the global 15-minute floor. */
+  min_interval_minutes?: number | null;
   source_id: string | null; enabled: boolean;
   data_shapes: DataShape[];
   /** Owner options this built-in accepts; the UI renders only these. */
@@ -608,4 +624,78 @@ export function enableBuiltinSource(
 /** Turns a built-in off by pausing its source; the source, terms and history are kept. */
 export function disableBuiltinSource(provider: string, csrfToken: string, signal?: AbortSignal) {
   return apiRequest<BuiltinSource>(`/api/v1/connectors/builtins/${encodeURIComponent(provider)}/disable`, { method: 'POST', headers: csrfHeaders(csrfToken), signal });
+}
+
+/** Smallest collection interval (minutes) the server accepts; a missing value means the global 15-minute floor. */
+export function minIntervalMinutes(entry: { min_interval_minutes?: number | null } | null | undefined): number {
+  return entry?.min_interval_minutes ?? 15;
+}
+
+/** Interval choices at or above the provider floor, in ascending order. */
+export function allowedIntervals<T extends number>(all: readonly T[], entry: { min_interval_minutes?: number | null } | null | undefined): T[] {
+  const floor = minIntervalMinutes(entry);
+  return all.filter((minutes) => minutes >= floor);
+}
+
+/**
+ * Smallest allowed interval that is at least the preferred one and the provider floor
+ * (catalog `min_interval_minutes`, default 15), so the server never answers 422 `schedule_interval_below_minimum`.
+ */
+export function clampInterval(preferred: number, entry: { min_interval_minutes?: number | null } | null | undefined): ConnectorConfig['schedule_interval_minutes'] {
+  const floor = Math.max(preferred, minIntervalMinutes(entry));
+  return ([15, 30, 60, 360, 1440] as const).find((value) => value >= floor) ?? 1440;
+}
+
+/**
+ * Reads a 429 `collection_too_soon` error from a manual collection request.
+ * Returns the next allowed time (or null when the server gave no usable `retry_after`, which may be ISO text or seconds), or undefined for any other error.
+ */
+export function collectionTooSoonRetryAt(cause: unknown, now: Date = new Date()): Date | null | undefined {
+  if (!(cause instanceof ApiError) || cause.status !== 429 || (cause.code ?? cause.message) !== 'collection_too_soon') return undefined;
+  const raw = cause.payload.retry_after ?? (cause.details as { retry_after?: unknown } | undefined)?.retry_after;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return new Date(now.getTime() + raw * 1000);
+  if (typeof raw === 'string') { const parsed = new Date(raw); if (!Number.isNaN(parsed.getTime())) return parsed; }
+  return null;
+}
+
+/**
+ * Reads the `minimum` (minutes) from a 422 `schedule_interval_below_minimum` error, or undefined for any other error.
+ * The server sends `detail` as a string ("...: schedule_interval_below_minimum: minimum 360 minutes"), so the code is
+ * matched with `includes` on the code or message and the minimum is parsed from the text; an object payload still wins.
+ */
+export function intervalBelowMinimum(cause: unknown): { minimum: number | null } | undefined {
+  if (!(cause instanceof ApiError) || cause.status !== 422) return undefined;
+  if (!`${cause.code ?? ''} ${cause.message}`.includes('schedule_interval_below_minimum')) return undefined;
+  const raw = cause.payload.minimum ?? (cause.details as { minimum?: unknown } | undefined)?.minimum;
+  if (typeof raw === 'number') return { minimum: raw };
+  const parsed = /minimum (\d+)/.exec(cause.message);
+  return { minimum: parsed ? Number(parsed[1]) : null };
+}
+
+/** One scoped (non built-in) starter item: provider scope written through the normal connector configuration route. */
+export type ScopedSourceSpec = {
+  provider: string;
+  type: Exclude<ConnectorCatalogEntry['source_type'], 'manual' | null | undefined>;
+  name: string;
+  configuration: ConnectorConfig;
+  /** Terms version to acknowledge as personal use; only for providers whose catalog entry requires terms. */
+  termsVersion?: string;
+};
+
+/**
+ * Creates, configures and activates one scoped source in the same order as the connector editor
+ * (create, save configuration, optional terms acknowledgement, activate at the returned revision).
+ * If any step after creation fails the half-made source is archived, so no orphan remains, and the original error is rethrown.
+ */
+export async function createScopedSource(spec: ScopedSourceSpec, csrfToken: string, signal?: AbortSignal): Promise<Source> {
+  const created = await createConnectorSource(spec.type, spec.name, csrfToken, signal, spec.provider);
+  try {
+    const saved = await saveConnectorConfiguration(created.id, { expected_revision: 0, configuration: spec.configuration, auth_method: 'none' }, csrfToken, signal);
+    if (spec.termsVersion) await acknowledgeProviderTerms(created.id, 'personal', spec.termsVersion, csrfToken, signal);
+    await activateConnector(created.id, saved.desired_revision, 'keep', undefined, csrfToken, signal);
+    return created;
+  } catch (cause) {
+    await archiveSource(created.id, csrfToken).catch(() => undefined);
+    throw cause;
+  }
 }

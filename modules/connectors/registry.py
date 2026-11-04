@@ -9,7 +9,11 @@ from modules.connectors.backends import (
     is_native_provider,
 )
 from modules.connectors.provider_options import ALL_OPTION_NAMES, option_fields, validate_options
-from modules.connectors.provider_specs import COLLECTION_FILTER_FIELDS, INCREMENTAL_PROVIDERS
+from modules.connectors.provider_specs import (
+    COLLECTION_FILTER_FIELDS,
+    INCREMENTAL_PROVIDERS,
+    min_interval_minutes,
+)
 from modules.connectors.public import DEFAULT_TIMEZONE, OPTIONAL_SCOPE_FIELDS, ConnectorConfig
 from modules.connectors.sections import SECTION_CATALOG, validate_sections
 from modules.sources.schemas import ConnectorSource
@@ -24,8 +28,11 @@ def configuration(source: ConnectorSource) -> ConnectorConfig:
     sources with an omitted stored timeout use the provider's 30-second bound.
     """
     raw_configuration = dict(source.configuration or {})
-    if source.provider == "alpha_vantage":
-        raw_configuration.setdefault("schedule_interval_minutes", 1440)
+    if source.provider is not None:
+        # An omitted interval means "slowest allowed" for providers whose floor exceeds the generic default.
+        floor = min_interval_minutes(source.provider)
+        if floor > 30:
+            raw_configuration.setdefault("schedule_interval_minutes", floor)
     config = ConnectorConfig.model_validate(raw_configuration)
     if is_native_provider(source.provider) and "timeout_seconds" not in (source.configuration or {}):
         config = config.model_copy(update={"timeout_seconds": 30})
@@ -85,6 +92,9 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
         validate_options(source.provider, config.model_dump(exclude_none=True))
         if config.timeout_seconds > 30:
             raise ValueError("Native provider request timeout cannot exceed 30 seconds")
+        floor = min_interval_minutes(source.provider)
+        if config.schedule_interval_minutes is not None and config.schedule_interval_minutes < floor:
+            raise ValueError(f"schedule_interval_below_minimum: minimum {floor} minutes")
         if source.provider == "github_releases" and (not config.github_owner or not config.github_repository):
             raise ValueError("GitHub owner and repository are required")
         if source.provider == "bluesky" and not config.bluesky_actor:

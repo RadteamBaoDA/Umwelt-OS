@@ -22,8 +22,10 @@ import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
-from typing import Any, Literal, get_args
+from typing import Annotated, Any, Literal, get_args
 from urllib.parse import quote, urlencode
+
+from pydantic import StringConstraints
 
 from modules.ingestion.schemas import IngestionRecord
 
@@ -71,6 +73,18 @@ CryptoPair = Literal[
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "TRXUSDT", "LINKUSDT", "DOTUSDT",
     "LTCUSDT", "AVAXUSDT",
 ]
+# VNDirect finfo ticker/index code: uppercase alphanumerics only, so it can never carry URL syntax into a request.
+VnSymbol = Annotated[str, StringConstraints(pattern=r"^[A-Z0-9]{2,10}$")]
+# Codes served by the finfo ``vnmarket_prices`` endpoint (verified live 2026-11-04); every other code is a stock.
+VN_INDEX_CODES = ("VNINDEX", "VN30", "VN100", "HNX", "HNX30", "UPCOM")
+DEFAULT_VN_SYMBOLS = ("VNINDEX", "VN30", "FPT", "VCB", "HPG", "VNM", "MWG")
+MAX_VN_SYMBOLS = 20
+# Job-board filters shared by ``vietnamworks_jobs`` (and ``itviec_jobs`` if it ships): bounded enums and strings.
+JobCity = Literal["ho_chi_minh", "ha_noi", "da_nang"]
+JobLevel = Literal["intern", "fresher", "experienced", "manager", "director"]
+JobKeyword = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=60)]
+MAX_JOB_KEYWORDS = 5
+DEFAULT_JOB_KEYWORDS = ("developer",)
 CoinId = Literal[
     "btc-bitcoin", "eth-ethereum", "bnb-binance-coin", "sol-solana", "xrp-xrp", "ada-cardano", "doge-dogecoin",
     "ltc-litecoin", "dot-polkadot", "trx-tron",
@@ -126,6 +140,8 @@ OPTION_FIELDS: dict[str, tuple[str, ...]] = {
     "open_er_api": ("fx_base", "fx_quotes"),
     "oecd_cli": ("oecd_countries",),
     "binance": ("crypto_symbols",),
+    "vn_stock": ("vn_symbols",),
+    "vietnamworks_jobs": ("job_keywords", "job_cities", "job_levels", "job_min_salary_usd"),
     "coinpaprika": ("coin_ids",),
     "noaa_kp": ("kp_min",),
     "us_travel_advisories": ("advisory_min_level",),
@@ -203,11 +219,15 @@ def validate_options(provider: str, cfg: Mapping[str, Any]) -> None:
         raise ValueError("NVD returns at most 20 CVEs per sync")
     for name in (
         "eonet_categories", "gdacs_event_types", "gdacs_alert_levels", "nws_severity", "nvd_severity", "fx_quotes",
-        "oecd_countries", "crypto_symbols", "coin_ids",
+        "oecd_countries", "crypto_symbols", "coin_ids", "vn_symbols",
+        "job_cities", "job_levels",
     ):
         values = cfg.get(name)
         if values is not None and len(set(values)) != len(values):
             raise ValueError("Selections must be unique")
+    keywords = [k.casefold() for k in cfg.get("job_keywords") or ()]
+    if len(set(keywords)) != len(keywords):
+        raise ValueError("Selections must be unique")
     if len(cfg.get("coin_ids") or ()) > MAX_COINS:
         raise ValueError(f"At most {MAX_COINS} coins per source")
     listed = {"ecb": ECB_CURRENCIES, "frankfurter": FRANKFURTER_CURRENCIES, "open_er_api": OER_CURRENCIES}.get(provider)
@@ -354,6 +374,23 @@ def coin_urls(cfg: Mapping[str, Any]) -> list[str]:
     return [f"https://api.coinpaprika.com/v1/tickers/{coin}" for coin in coins]
 
 
+def selected_vn_symbols(cfg: Mapping[str, Any]) -> tuple[str, ...]:
+    """Owner VN tickers/indices de-duplicated in first-seen order (default ``DEFAULT_VN_SYMBOLS``).
+
+    Order is the owner's order, not a curated one: the symbol set is open (any listed ticker), so there is no
+    Literal to sort by. Equal selections therefore still send equal requests.
+    """
+    return tuple(dict.fromkeys(cfg.get("vn_symbols") or DEFAULT_VN_SYMBOLS))
+
+
+def selected_job_keywords(cfg: Mapping[str, Any]) -> tuple[str, ...]:
+    """Owner job keywords de-duplicated case-insensitively in first-seen order (default ``developer``)."""
+    seen: dict[str, str] = {}
+    for keyword in cfg.get("job_keywords") or DEFAULT_JOB_KEYWORDS:
+        seen.setdefault(keyword.casefold(), keyword)
+    return tuple(seen.values())[:MAX_JOB_KEYWORDS]
+
+
 def selected_coins(cfg: Mapping[str, Any]) -> list[str]:
     """CoinPaprika coin ids in the same curated order as ``coin_urls`` (default ``btc-bitcoin``)."""
     return _ordered(CoinId, cfg.get("coin_ids") or ("btc-bitcoin",))
@@ -369,6 +406,8 @@ def map_options(provider: str, cfg: Mapping[str, Any]) -> dict[str, Any]:
         return {"indicators": ((cfg.get("wb_country") or "VN", indicator, metric),)}
     if provider == "binance" and cfg.get("crypto_symbols"):
         return {"pairs": tuple((s, s.removesuffix("USDT"), "USDT") for s in _ordered(CryptoPair, cfg["crypto_symbols"]))}
+    if provider == "vn_stock":
+        return {"symbols": selected_vn_symbols(cfg)}
     if provider == "frankfurter" and (cfg.get("fx_base") or cfg.get("fx_quotes")):
         base, quotes = _fx_pair(cfg)
         return {"base": base, "quotes": tuple(quotes)}

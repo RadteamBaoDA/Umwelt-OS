@@ -14,6 +14,7 @@ from modules.connectors.provider_specs import (
     FREE_PROVIDER_SPECS,
     FreeProviderSpec,
     QuotaWindowPolicy,
+    min_interval_minutes,
 )
 
 
@@ -72,6 +73,12 @@ class CatalogEntry(BaseModel):
     def data_shapes(self) -> list[DataShape]:
         """Report the data shapes this provider emits (sorted, never empty) for renderer compatibility."""
         return sorted(source_data_shapes(self.provider_id, "api"))
+
+    @computed_field(return_type=int)  # type: ignore[prop-decorator]  # pydantic computed_field over property
+    @property
+    def min_interval_minutes(self) -> int:
+        """Report the provider's hard minimum schedule interval; shorter choices are rejected by the API."""
+        return min_interval_minutes(self.provider_id)
 
     @computed_field(return_type=bool)  # type: ignore[prop-decorator]  # pydantic computed_field over property
     @property
@@ -373,7 +380,7 @@ SAMPLE_OUTPUTS: dict[str, dict[str, Any]] = {
     "bbc_world": _NEWS, "vnexpress_business": _NEWS, "tuoitre_news": _NEWS, "thanhnien_news": _NEWS, "dantri_news": _NEWS,
     "gdelt_economy": _NEWS,
     **dict.fromkeys((
-        "aljazeera_world", "npr_news", "fed_press", "gdacs_rss", "lobsters", "us_travel_advisories",
+        "aljazeera_world", "npr_news", "fed_press", "gdacs_rss", "lobsters", "github_trending", "wwr_jobs", "us_travel_advisories",
         "noaa_tsunami", "jma_eqvol",
     ), _NEWS),
     **dict.fromkeys((
@@ -384,6 +391,9 @@ SAMPLE_OUTPUTS: dict[str, dict[str, Any]] = {
     "world_bank": {"indicator": "NY.GDP.MKTP.CD", "country": "VN", "period": "2024", "value": 1.0e11},
     "frankfurter": {"base": "EUR", "quote": "USD", "rate": 1.0, "reference_date": "2026-01-01"},
     "ecb": {"base": "EUR", "quote": "USD", "rate": 1.0, "reference_date": "2026-01-01"},
+    "vietnamworks_jobs": {"title": "Example job", "url": "https://www.vietnamworks.com/example-1-jv",
+                          "publisher": "VietnamWorks", "published_at": "2026-01-01T08:00:00Z"},
+    "vn_stock": {"symbol": "FPT", "close": "52.7", "unit": "thousand VND", "observed_at": "2026-01-01T08:00:00Z"},
     "binance": {"symbol": "BTCUSDT", "price": "100000.00", "observed_at": "2026-01-01T08:00:00Z"},
     "alternative_me": {"index": "fear_and_greed", "value": 50, "classification": "Neutral", "reference_date": "2026-01-01"},
     "usgs": {"magnitude": 4.5, "place": "Example region", "event_time": "2026-01-01T08:00:00Z"},

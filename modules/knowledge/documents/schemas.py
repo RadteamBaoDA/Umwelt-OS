@@ -17,7 +17,7 @@ MAX_CONTENT_BYTES = 1_048_576
 MAX_METADATA_BYTES = 65_536
 # Built-in feed-class presets (RSS/Atom and JSON event/list feeds): news-shaped records, no typed measurement.
 BUILTIN_FEED_PROVIDER_IDS = (
-    "aljazeera_world", "npr_news", "fed_press", "gdacs_rss", "lobsters", "us_travel_advisories",
+    "aljazeera_world", "npr_news", "fed_press", "gdacs_rss", "lobsters", "github_trending", "wwr_jobs", "vietnamworks_jobs", "us_travel_advisories",
     "noaa_tsunami", "jma_eqvol",
     "gdacs_events", "nws_alerts", "emsc_quakes", "launch_library", "wikipedia_mostread", "wikipedia_top_views", "bmkg_quakes", "satnogs_observations",
 )
@@ -25,7 +25,7 @@ BUILTIN_FEED_PROVIDER_IDS = (
 KEYED_FEED_PROVIDER_IDS = ("finnhub_news", "newsapi")
 NEWS_PROVIDER_IDS = (*BUILTIN_FEED_PROVIDER_IDS, *KEYED_FEED_PROVIDER_IDS, "bbc_world", "vnexpress_business", "dantri_news", "thanhnien_news", "tuoitre_news", "hn_top", "gdelt_economy", "google_news", "openalex", "sec_edgar")
 MEASUREMENT_PROVIDER_IDS = (
-    "alpha_vantage", "open_meteo", "world_bank", "frankfurter", "ecb", "binance",
+    "alpha_vantage", "open_meteo", "world_bank", "frankfurter", "ecb", "binance", "vn_stock",
     "alternative_me", "usgs", "coinpaprika", "coingecko", "cisa_kev", "nasa_eonet",
     "fred", "openweathermap", "openaq", "nasa_firms",
     "noaa_kp", "open_er_api", "oecd_cli", "iss_position", "disease_sh", "ioda", "nvd",
@@ -44,6 +44,7 @@ MEASUREMENT_PROVIDER_FIELDS = {
     "frankfurter": {"date", "base", "quote", "decimal_value", "providers"},
     "ecb": {"date", "base", "quote", "decimal_value"},
     "binance": {"symbol", "base", "quote", "decimal_value"},
+    "vn_stock": {"symbol", "date", "kind", "open", "high", "low", "close", "volume", "decimal_value"},
     "alternative_me": {"timestamp", "value_classification", "decimal_value"},
     "usgs": {"place", "type", "status", "magType", "depth_km", "latitude", "longitude", "decimal_mag", "event_time", "updated"},
     "cisa_kev": {"cveID", "vendorProject", "product", "dateAdded", "dueDate", "knownRansomwareCampaignUse"},

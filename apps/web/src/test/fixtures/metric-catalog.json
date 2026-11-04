@@ -405,6 +405,27 @@
     "suggested_symbols": [],
     "symbol_keyed": false
   },
+  "vn_stock": {
+    "cadence_days": 1,
+    "charts_as_series": true,
+    "default_lookback_days": null,
+    "metrics": [
+      {
+        "id": "close",
+        "unit": null
+      }
+    ],
+    "metrics_open": false,
+    "region_keyed": false,
+    "seed_symbol": false,
+    "suggested_regions": [],
+    "suggested_symbols": [
+      "VNINDEX",
+      "VN30",
+      "FPT"
+    ],
+    "symbol_keyed": true
+  },
   "world_bank": {
     "cadence_days": 365,
     "charts_as_series": true,
