@@ -44,3 +44,12 @@ def test_append_requires_target_and_revision_without_confirmation() -> None:
     with pytest.raises(ValidationError):
         PresetApplyRequest(preview_fingerprint=FINGERPRINT, mode="append", target_dashboard_id=target,
                            expected_revision=1, replace_confirmed=True)
+
+
+def test_monitor_map_slot_is_live_and_rejects_sources() -> None:
+    """The situation map is a live slot, so explicit sources on it are rejected."""
+    slot = next(s for s in gadgets.dashboard_preset("monitor").slots if s.slot_id == "situation_map")
+    assert gadgets.preset_slot_is_live(slot)
+    assert "usgs" in gadgets.LIVE_MAP_DEFAULT_PROVIDERS
+    with pytest.raises(ValueError, match="live map"):
+        gadgets.validate_preset_slot_sources("monitor", {"situation_map": [UUID(int=1)]})

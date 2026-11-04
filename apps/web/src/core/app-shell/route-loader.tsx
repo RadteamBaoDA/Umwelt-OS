@@ -49,7 +49,9 @@ export function RouteLoader() {
   // Adjust state during render (not in an effect) so the overlay covers the very first frame of the new route.
   if (pathname !== seenPath) {
     setSeenPath(pathname);
-    if (from === null) setFrom(seenPath);
+    // /chat <-> /chat/<id> is a conversation switch inside one mounted page (history.replaceState), not a route
+    // change: the conversation list shows its own inline spinner, so the blocking overlay must stay closed.
+    if (from === null && !(isChatPath(seenPath) && isChatPath(pathname))) setFrom(seenPath);
   }
 
   useEffect(() => {
@@ -93,6 +95,11 @@ export function RouteLoader() {
   }, [arrived, isDashboardRoute, fetching, pathname]);
 
   return from === null ? null : <RouteSpinner />;
+}
+
+/** True for the Chat page's own paths (`/chat` and `/chat/<conversationId>`), which share one mounted page. */
+function isChatPath(path: string) {
+  return path === '/chat' || path.startsWith('/chat/');
 }
 
 /** Opaque full-viewport spinner; shared by the route-change overlay and the root Suspense fallback so both look identical. */

@@ -1938,7 +1938,9 @@ async def preview_preset(
 
     Slots without explicit sources get deterministic proposals (``gadgets.propose_slot_sources``) from the
     owner's active in-scope sources; the proposal is part of ``slots`` and thus of the fingerprint, and
-    ``apply_preset`` recomputes it, so a changed source set yields ``preview_changed``.
+    ``apply_preset`` recomputes it, so a changed source set yields ``preview_changed``. Live map slots
+    (``gadgets.preset_slot_is_live``) bind no sources and are seeded with default live providers and
+    ``map_mode="live"`` filters instead.
     """
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     preset = gadgets.dashboard_preset(preset_id)
@@ -1947,12 +1949,13 @@ async def preview_preset(
     # Explicit payload choices stay authoritative; slots left without any get the best active sources proposed.
     active_kinds: tuple[tuple[UUID, str | None, str], ...] = ()
     if any(not payload.slot_sources.get(slot.slot_id) and gadgets.renderer_descriptor(slot.renderer).source_mode != "none"
-           for slot in preset.slots):
+           and not gadgets.preset_slot_is_live(slot) for slot in preset.slots):
         active_kinds = await sources.list_active_source_kinds(
             session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     slot_source_ids: dict[str, list[UUID]] = {
-        slot.slot_id: list(payload.slot_sources.get(slot.slot_id)
-                           or gadgets.propose_slot_sources(slot.renderer, active_kinds, providers=slot.providers))
+        slot.slot_id: [] if gadgets.preset_slot_is_live(slot) else list(
+            payload.slot_sources.get(slot.slot_id)
+            or gadgets.propose_slot_sources(slot.renderer, active_kinds, providers=slot.providers))
         for slot in preset.slots
     }
     selected = sorted({source_id for values in slot_source_ids.values() for source_id in values}, key=str)
@@ -1971,6 +1974,7 @@ async def preview_preset(
         target_revision = target.revision
     slots: list[dict[str, Any]] = []
     for slot in preset.slots:
+        live = gadgets.preset_slot_is_live(slot)
         source_ids = slot_source_ids[slot.slot_id]
         descriptor = gadgets.renderer_descriptor(slot.renderer)
         warnings = _renderer_warnings(slot.renderer)
@@ -1986,7 +1990,7 @@ async def preview_preset(
                 gadgets.validate_renderer_sources(slot.renderer, [(row.provider, row.type) for row in known])
             except gadgets.GadgetConfigError:
                 warnings.append({"code": "source_incompatible", "setup_group": "data_sources"})
-        elif not source_ids and descriptor.source_mode != "none":
+        elif not source_ids and descriptor.source_mode != "none" and not live:
             # Nothing was chosen and nothing compatible could be proposed: the owner must add a source.
             warnings.append({"code": "missing_source", "setup_group": "data_sources"})
         # A single bound measurement source seeds the chart scope; otherwise the gadget shows its setup message.
@@ -1999,8 +2003,12 @@ async def preview_preset(
                 and not any(w["code"] == "source_incompatible" for w in warnings)):
             # Seeding found no suggested symbol/region: the chart cannot draw until one is chosen after apply.
             warnings.append({"code": "scope_required", "setup_group": "data_sources"})
+        slot_filters: dict[str, Any] = {"keywords": [], "exclude_keywords": [], "limit": 25}
+        if live:  # live maps are provider-seeded, never source-bound
+            slot_scope = {"live_map_providers": list(gadgets.LIVE_MAP_DEFAULT_PROVIDERS)}
+            slot_filters["map_mode"] = "live"
         slots.append({"slot_id": slot.slot_id, "renderer": slot.renderer, "source_ids": source_ids,
-                      "scope": slot_scope, "filters": {"keywords": [], "exclude_keywords": [], "limit": 25},
+                      "scope": slot_scope, "filters": slot_filters,
                       "highlight_rules": [], "sources": resolved, "warnings": warnings})
     minimums = {
         uuid5(NAMESPACE_URL, f"bbd-os-dashboard-preset:{preset_id}:{slot['slot_id']}"):
@@ -2122,7 +2130,7 @@ async def apply_preset(
         descriptor = gadgets.renderer_descriptor(slot["renderer"])
         definition = GadgetDefinition(workspace_id=scope.workspace_id, owner_id=owner_id,
             name=preset_slot.label or preset_definition_name(slot["renderer"]), renderer=slot["renderer"],
-            source_ids=[str(item) for item in slot["source_ids"]], scope=slot["scope"], filters={"keywords": [], "exclude_keywords": [], "limit": 25}, highlight_rules=[])
+            source_ids=[str(item) for item in slot["source_ids"]], scope=slot["scope"], filters=slot["filters"], highlight_rules=[])
         session.add(definition)
         await session.flush()
         assert dashboard is not None

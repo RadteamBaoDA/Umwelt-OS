@@ -75,6 +75,19 @@ describe('PresetPicker', () => {
     expect(screen.queryByText('finance_chart')).toBeNull();
   });
 
+  it('live map slot shows no datasource picker', async () => {
+    api.listDashboardPresets.mockResolvedValue([{ id: 'monitor', label: 'Monitor', family: 'purpose', slots: [{ slot_id: 'situation_map', renderer: 'map' }] }]);
+    api.listGadgetRenderers.mockResolvedValue([renderer('map')]);
+    api.previewDashboardPreset.mockResolvedValue({
+      template_version: 1, preset_id: 'monitor', name: 'Monitor', preview_fingerprint: FINGERPRINT, target_dashboard_id: null, target_revision: null,
+      slots: [{ slot_id: 'situation_map', renderer: 'map', source_ids: [], scope: { live_map_providers: ['usgs'] }, filters: { map_mode: 'live' }, highlight_rules: [], sources: [], warnings: [] }],
+    });
+    wrap();
+    await userEvent.click(await screen.findByRole('button', { name: /Monitor/ }));
+    await screen.findByText('Ready');
+    expect(screen.queryByText(/Data sources|datasource/i)).toBeNull();
+  });
+
   it('no fingerprint text', async () => {
     wrap();
     await userEvent.click(await screen.findByRole('button', { name: /Finance/ }));

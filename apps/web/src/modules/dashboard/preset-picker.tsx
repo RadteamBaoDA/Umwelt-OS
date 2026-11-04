@@ -232,7 +232,8 @@ export function PresetPicker({
       for (const slot of preset.slots) {
         if (slot.slot_id in existing) continue;
         const descriptor = renderersById.get(slot.renderer);
-        if (!descriptor || descriptor.source_mode === 'none') continue;
+        // Preset maps are live (provider-seeded), so there is nothing to preselect.
+        if (!descriptor || descriptor.source_mode === 'none' || slot.renderer === 'map') continue;
         const compatible = sourceRows.filter((row) => row.status === 'active' && isAccepted(row.data_shapes, descriptor.accepted_shapes));
         if (compatible.length === 1) initial[slot.slot_id] = [compatible[0].id];
       }
@@ -464,7 +465,9 @@ export function PresetPicker({
                   <ul className="divide-y divide-border rounded-md border border-border">
                     {previewMutation.data.slots.map((slot) => {
                       const descriptor = renderersById.get(slot.renderer);
-                      const bindsSources = descriptor?.source_mode === 'single' || descriptor?.source_mode === 'multi';
+                      // Live map slots take no datasource: the backend seeds providers, so no picker is shown.
+                      const isLiveMap = slot.filters?.map_mode === 'live';
+                      const bindsSources = !isLiveMap && (descriptor?.source_mode === 'single' || descriptor?.source_mode === 'multi');
                       // An unbound slot is fixed by the selector below and a missing scope is set in the gadget editor after applying;
                       // only the remaining warnings need the Sources page.
                       const needsSourcesPage = slot.warnings.some((warning) => warning.code !== 'source_unbound' && warning.code !== 'scope_required');

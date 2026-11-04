@@ -75,6 +75,6 @@ describe('ChatTranscript tool status', () => {
       isStreaming: true,
       streamingWebSearch: { status: 'used', reason: null, result_count: 2, query: 'vinfast stock price' },
     });
-    expect(screen.getByTestId('web-search-query').textContent).toBe('Searched: vinfast stock price');
+    expect(screen.getByTestId('web-search-query').textContent).toBe('Searched “vinfast stock price” · 2 results');
   });
 });

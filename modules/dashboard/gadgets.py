@@ -67,6 +67,18 @@ class DashboardPreset:
     slots: tuple[PresetSlot, ...]
 
 
+# Maps in presets are live (provider-driven, no bound sources): new maps default to live mode, and the
+# scope must be seeded explicitly because an empty ``live_map_providers`` renders nothing.
+LIVE_MAP_DEFAULT_PROVIDERS: tuple[str, ...] = (
+    "usgs", "eonet", "hackernews", "lobsters", "cisa_kev", "nvd", "business", "fed",
+)
+
+
+def preset_slot_is_live(slot: PresetSlot) -> bool:
+    """Return whether a preset slot is a live map, which takes seeded providers and never bound sources."""
+    return slot.renderer == "map"
+
+
 # Measurement renderers that may bind several same-kind datasources (one scope, union semantics).
 MEASUREMENT_RENDERERS = frozenset({"finance_chart", "provider_observation", "weather"})
 MAX_MEASUREMENT_SOURCES = 5
@@ -161,7 +173,8 @@ TEMPLATES: tuple[GadgetTemplate, ...] = (
     GadgetTemplate("jobs", "job_list"),
     GadgetTemplate("video", "video_panel"),
     GadgetTemplate("chart", "finance_chart"),
-    GadgetTemplate("map", "map"),
+    GadgetTemplate("map", "map", scope={"live_map_providers": list(LIVE_MAP_DEFAULT_PROVIDERS)},
+                   filters={"map_mode": "live"}),
     GadgetTemplate("related_signals", "intelligence_panel"),
     GadgetTemplate("highlights", "highlights"),
     GadgetTemplate("watchlist", "watch_rules"),
@@ -373,11 +386,13 @@ def dashboard_preset(preset_id: str) -> DashboardPreset:
 def validate_preset_slot_sources(
     preset_id: str, slot_sources: Mapping[str, Sequence[UUID]]
 ) -> None:
-    """Reject unknown preset slots and source mappings above the per-slot selector ceiling."""
-    known_slots = {slot.slot_id for slot in dashboard_preset(preset_id).slots}
-    if not set(slot_sources).issubset(known_slots):
+    """Reject unknown preset slots, sources on live map slots, and mappings above the per-slot ceiling."""
+    slots = {slot.slot_id: slot for slot in dashboard_preset(preset_id).slots}
+    if not set(slot_sources).issubset(slots):
         raise ValueError("slot_sources contains an unknown preset slot")
     for slot_id, source_ids in slot_sources.items():
+        if source_ids and preset_slot_is_live(slots[slot_id]):
+            raise ValueError(f"slot {slot_id} is a live map and does not accept sources")
         if len(source_ids) > 32 or len(source_ids) != len(set(source_ids)):
             raise ValueError(f"slot {slot_id} must contain at most 32 distinct source IDs")
 

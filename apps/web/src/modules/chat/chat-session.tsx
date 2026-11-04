@@ -158,7 +158,11 @@ export function ChatSession({
   const [dbQueryOn, setDbQueryOn] = React.useState(false);
   const dbQueryEffective = dbQueryOn || chatCtrl.context?.kind === 'gadget';
   const [isStreaming, setIsStreaming] = React.useState<boolean>(false);
+  const isPendingRef = React.useRef(false);
   const [isPending, setIsPending] = React.useState<boolean>(false);
+  // Render-time mirror for effects that must not re-run when pending flips (see the reattach effect).
+  // eslint-disable-next-line react-hooks/refs
+  isPendingRef.current = isPending;
   const [activeResponseId, setActiveResponseId] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const providerReady = useChatProviderReady();
@@ -555,6 +559,9 @@ export function ChatSession({
   React.useEffect(() => {
     const responseId = conversationDetail?.active_response_id;
     if (!conversationId || !responseId || selectionRef.current.conversationId !== conversationId) return;
+    // A local send owns this view until its stream registers: a detail fetch that races the send (new
+    // conversation) must not bump sendGenerationRef, which would orphan the send and reset its live state.
+    if (isPendingRef.current) return;
     const attached = attachedResponseStreamRef.current;
     if (
       attached?.responseId === responseId

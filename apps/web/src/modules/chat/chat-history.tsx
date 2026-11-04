@@ -3,12 +3,13 @@
 import * as React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { PanelLeftClose, PencilIcon, PlusIcon, SearchIcon, Trash2Icon } from 'lucide-react';
+import { Loader2Icon, PanelLeftClose, PencilIcon, PlusIcon, SearchIcon, Trash2Icon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { ConversationActions } from '@/modules/chat/conversation-actions';
 import {
   chatKeys,
+  getConversation,
   listConversations,
   type Conversation,
 } from '@/modules/chat/api';
@@ -53,6 +54,15 @@ export function ChatHistory({
     queryKey: chatKeys.conversations(),
     queryFn: () => listConversations(),
   });
+
+  // Passive observer of the active transcript query (ChatSession owns fetching): the first load after a conversation
+  // switch shows an inline spinner on that row instead of a page-level loader; background refetches do not.
+  const activeDetail = useQuery({
+    queryKey: chatKeys.conversation(activeConversationId ?? ''),
+    queryFn: () => getConversation(activeConversationId!),
+    enabled: false,
+  });
+  const activeLoading = Boolean(activeConversationId) && activeDetail.isFetching && activeDetail.data === undefined;
 
   // Filter sessions case-insensitively by title (including untitled fallback) or context kind.
   const filteredConversations = React.useMemo(() => {
@@ -163,12 +173,16 @@ export function ChatHistory({
                     variant="ghost"
                     onClick={() => onSelectConversation(conv.id)}
                     aria-current={isActive ? 'true' : undefined}
+                    aria-busy={isActive && activeLoading ? 'true' : undefined}
                     className="h-auto min-w-0 flex-1 justify-start whitespace-normal rounded-lg p-2 text-left font-[inherit] hover:bg-transparent"
                   >
                     <span className="min-w-0 flex-1">
                       <span className="block truncate">{conv.title || t('untitledConversation')}</span>
                       <span className="block text-[11px] font-normal text-muted-foreground">{formatDateTime(conv.updated_at, locale, timezone)}</span>
                     </span>
+                    {isActive && activeLoading && (
+                      <Loader2Icon data-testid="conversation-loading" className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-label={t('loading')} />
+                    )}
                   </Button>
                   <Button
                     type="button"

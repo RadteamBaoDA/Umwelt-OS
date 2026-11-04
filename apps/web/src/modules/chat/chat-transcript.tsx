@@ -37,11 +37,24 @@ function RevealMarkdown(props: React.ComponentProps<typeof ChatMarkdown>) {
   return <div ref={ref}><ChatMarkdown {...props} /></div>;
 }
 
-/** Announced notice for a requested web search that was skipped or unavailable; renders nothing otherwise. */
+/**
+ * Announced notice for a requested web search: the searched query with its result count when used (older rows
+ * without a count fall back to the query alone), or why it was skipped/unavailable. Never shows URLs.
+ *
+ * @param props - Persisted or streaming outcome; null/undefined or unrelated statuses render nothing.
+ * @returns Muted status line, or null.
+ */
 function WebSearchNotice({ outcome }: { outcome?: WebSearchOutcome | null }) {
   const t = useTranslations('chat');
   if (outcome?.status === 'used' && outcome.reason !== 'no_results' && outcome.query) {
-    return <p data-testid="web-search-query" className="mt-1 text-xs text-muted-foreground">{t('webSearchedQuery', { query: outcome.query })}</p>;
+    const count = outcome.result_count ?? 0;
+    return (
+      <p data-testid="web-search-query" className="mt-1 text-xs text-muted-foreground">
+        {count > 0
+          ? t('webSearchedQueryCount', { query: outcome.query, count })
+          : t('webSearchedQuery', { query: outcome.query })}
+      </p>
+    );
   }
   if (outcome?.status === 'used' && outcome.reason === 'no_results') {
     return <p data-testid="web-search-notice" className="mt-1 text-xs text-muted-foreground">{t('webNoResults')}</p>;
@@ -305,6 +318,9 @@ export function ChatTranscript({
                 </p>
               )}
 
+              {/* Search info precedes reasoning and the answer so the answer sits right above the action row. */}
+              {mode === 'full' && !isUser && <WebSearchNotice outcome={msg.web_search} />}
+
               {!isUser && msg.reasoning ? <ChatReasoning text={msg.reasoning} /> : null}
 
               {isUser
@@ -383,62 +399,47 @@ export function ChatTranscript({
             {mode === 'drawer' && !isUser && msg.citations && msg.citations.length > 0 && (
               <CitationChips citations={msg.citations} />
             )}
-            {mode === 'full' && !isUser && <WebSearchNotice outcome={msg.web_search} />}
           </div>
         );
       })}
 
-      {/* Pending status indicator */}
-      {isPending && !streamingText && !streamingReasoning && streamingUi.length === 0 && (
-        <div className="mr-auto flex w-full items-center gap-2 text-xs text-muted-foreground">
-          <Loader2Icon className="size-4 animate-spin text-muted-foreground" />
-          <span>{t('thinking')}</span>
-        </div>
-      )}
-
-      {/* Tool progress (tool.status): polite live region, cleared by the server's done/web_search event */}
-      <div role="status" aria-live="polite">
-        {activeTool && (
-          <div data-testid="tool-status" className="mr-auto flex w-full items-center gap-2 text-xs text-muted-foreground">
-            <Loader2Icon className="size-4 animate-spin text-muted-foreground" />
-            <span>{t(activeTool === 'web_search' ? 'toolSearchingWeb' : 'toolQueryingData')}</span>
-          </div>
-        )}
-      </div>
-
-      {/* Active streaming assistant bubble */}
-      {(streamingText || streamingReasoning || streamingUi.length > 0 || isStreaming) && (
+      {/* Active streaming assistant bubble: one spinner status row on top (send -> first token, and while tools run). */}
+      {(streamingText || streamingReasoning || streamingUi.length > 0 || isStreaming || isPending || activeTool) && (
         <div className="mr-auto flex w-full flex-col gap-2.5">
           <div className="text-sm text-foreground">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground mb-0.5">
-              <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-                <span className="size-2 rounded-full bg-data animate-pulse" />
-                {t('streaming')}
-              </span>
+            {/* Live region stays mounted so tool-status changes are announced politely. */}
+            <div role="status" aria-live="polite" className="mb-1">
+              <div data-testid={activeTool ? 'tool-status' : undefined} className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2Icon className="size-4 animate-spin text-muted-foreground" />
+                <span>
+                  {activeTool
+                    ? t(activeTool === 'web_search' ? 'toolSearchingWeb' : 'toolQueryingData')
+                    : (isStreaming || streamingText || streamingReasoning ? t('streaming') : t('thinking'))}
+                </span>
+              </div>
             </div>
+
+            {mode === 'full' && <WebSearchNotice outcome={streamingWebSearch} />}
 
             <ChatReasoning text={streamingReasoning} streaming answerStarted={Boolean(streamingText) || streamingUi.length > 0} />
 
             <ChatMarkdown content={streamingText || ''} citations={streamingCitations} locale={locale} />
-
-            {/* Always-mounted live region so the notice text change is announced. */}
-            <div role="status">{mode === 'full' && <WebSearchNotice outcome={streamingWebSearch} />}</div>
           </div>
-            {streamingUi.map((part, index) => (
-              <div className="w-full" data-testid="streaming-generative-ui-widget" key={uiPartKey(part, index)}>
-                <ToolRendering
-                  payload={part as unknown as GenerativeUIPayload}
-                  onSendPrompt={widgetPromptHandler(part)}
-                  locale={locale}
-                />
-              </div>
-            ))}
-            {mode === 'full' && streamingCitations && streamingCitations.length > 0 && (
-              <CitationPanel citations={streamingCitations} variant="inline" />
-            )}
-            {mode === 'drawer' && streamingCitations && streamingCitations.length > 0 && (
-              <CitationChips citations={streamingCitations} />
-            )}
+          {streamingUi.map((part, index) => (
+            <div className="w-full" data-testid="streaming-generative-ui-widget" key={uiPartKey(part, index)}>
+              <ToolRendering
+                payload={part as unknown as GenerativeUIPayload}
+                onSendPrompt={widgetPromptHandler(part)}
+                locale={locale}
+              />
+            </div>
+          ))}
+          {mode === 'full' && streamingCitations && streamingCitations.length > 0 && (
+            <CitationPanel citations={streamingCitations} variant="inline" />
+          )}
+          {mode === 'drawer' && streamingCitations && streamingCitations.length > 0 && (
+            <CitationChips citations={streamingCitations} />
+          )}
         </div>
       )}
 
