@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError } from '@/core/api';
 import { useTranslations } from 'next-intl';
@@ -11,6 +11,7 @@ import { GoalForm } from './goal-form';
 import type { Goal } from './types';
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Checkbox } from '@/components/ui/checkbox';
+import { useResetOnChange } from '@/modules/shared/use-reset-on-change';
 
 /** Displays goal data with retained refetch drafts; administrator viewers can read but cannot change milestones or goals. */
 export function GoalDetail({ goal, csrfToken, onClose, onEditLinkedTask }: {
@@ -54,8 +55,7 @@ export function GoalDetail({ goal, csrfToken, onClose, onEditLinkedTask }: {
   });
   const milestoneConflict = milestoneMutation.error instanceof ApiError && milestoneMutation.error.status === 409;
   /** Tracks fresh revisions only outside an active owner conflict or frozen delete confirmation. */
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
-  useEffect(() => { if (ownerVerified && current && !conflict && !milestoneConflict && !confirmDelete) setExpectedRevision(current.revision); }, [ownerVerified, current, conflict, milestoneConflict, confirmDelete]);
+  useResetOnChange([ownerVerified, current, conflict, milestoneConflict, confirmDelete], () => { if (ownerVerified && current && !conflict && !milestoneConflict && !confirmDelete) setExpectedRevision(current.revision); });
   const writesPending = remove.isPending || milestoneMutation.isPending || formPending;
   const writeReviewRequired = conflict || milestoneConflict;
   /** Fetches the current goal projection for review without advancing a pending deletion revision. */

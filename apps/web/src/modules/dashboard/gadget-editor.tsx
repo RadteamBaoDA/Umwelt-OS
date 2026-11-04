@@ -25,11 +25,12 @@ import {
   type GadgetDefinition, type GadgetRenderer, type HighlightRule, type ProviderMetrics,
 } from './api';
 import { TEMPLATE_KIND_BY_RENDERER, templateName } from '@/core/renderer-labels';
-import { getConnectorConfiguration, type CoinGeckoCoin } from '@/modules/sources/api';
+import { getConnectorConfiguration, type CoinGeckoCoin } from '@/modules/sources/public-api';
 import { GadgetTemplateSample } from './gadget-template-sample';
 import { CHART_FALLBACK_LOOKBACK_DAYS, METRIC_FALLBACK_LOOKBACK_DAYS } from './gadgets/use-effective-lookback';
 import { sourcesLinkFor } from './sources-link';
 import { LiveMapConfig } from './live-map-config';
+import { BareButton } from '@/components/bare-button';
 
 const MAX_SOURCES = 32;
 const LIVE_PROVIDERS = ['usgs', 'eonet', 'firms', 'hackernews', 'lobsters', 'cisa_kev', 'nvd', 'business', 'fed', 'github_releases', 'sec'] as const;
@@ -302,7 +303,7 @@ function SymbolPicker({ suggested, value, onChange, labelId }: { suggested: stri
   return <div className="space-y-2">
     {value.length > 0 && <ul className="flex flex-wrap gap-1.5">{value.map((symbol) => <li key={symbol}>
       <Badge variant="outline" className="gap-1 font-mono">{symbol}
-        <button type="button" aria-label={`${t('remove')} ${symbol}`} onClick={() => onChange(value.filter((item) => item !== symbol))}><Trash2 className="size-3" aria-hidden="true" /></button>
+        <BareButton type="button" aria-label={`${t('remove')} ${symbol}`} onClick={() => onChange(value.filter((item) => item !== symbol))}><Trash2 className="size-3" aria-hidden="true" /></BareButton>
       </Badge></li>)}</ul>}
     <SearchableSelect value="" options={suggested.filter((item) => !value.includes(item))} allowCustom aria-labelledby={labelId} placeholder={t('symbolPlaceholder')}
       searchLabel={t('symbolSearch')} emptyLabel={t('symbolEmpty')}
@@ -664,7 +665,7 @@ export function GadgetEditor({ definition = null, onSaved, onCancel, footerExtra
           // A zero count means choosing this tile could never be saved, so it routes to the filtered Sources page instead.
           return [<li key={item.id}>{count === 0
             ? <Link href={sourcesLinkFor(info)} className={tileClass}>{body}</Link>
-            : <button type="button" onClick={() => choose(item.renderer)} className={tileClass}>{body}</button>}</li>];
+            : <BareButton type="button" onClick={() => choose(item.renderer)} className={tileClass}>{body}</BareButton>}</li>];
         })}
       </ul>}
       {onCancel && <div className="flex justify-end"><Button type="button" variant="outline" onClick={onCancel}>{t('cancel')}</Button></div>}

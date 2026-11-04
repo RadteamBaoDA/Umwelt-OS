@@ -18,6 +18,7 @@ import type { DataShape } from '@/core/data-shapes';
 import { WizardShell } from './source-wizard';
 import type { SourceAiOptions } from './source-ai-toggles';
 import { collectAndWait, waitForActivation } from './use-source-actions';
+import { BareButton } from '@/components/bare-button';
 
 const CATEGORY_ORDER: BuiltinCategory[] = ['news', 'economy', 'hazards', 'space', 'security', 'tech'];
 const CATEGORY_KEY = {
@@ -265,7 +266,7 @@ export function BuiltinWizard({ onClose, onChanged, shapeFilter, onClearFilter, 
         {rows.map((row) => {
           const added = row.source_id !== null;
           const tier = row.realtime_tier ?? 'near_realtime';
-          return <button key={row.id} type="button" disabled={added} aria-pressed={selected?.id === row.id} onClick={() => { setSelected(row); setUse('personal'); setRealtimeModeOverride(null); setOptionValues({ feed_sections: row.default_section ? [row.default_section] : undefined }); setError(null); }}
+          return <BareButton key={row.id} type="button" disabled={added} aria-pressed={selected?.id === row.id} onClick={() => { setSelected(row); setUse('personal'); setRealtimeModeOverride(null); setOptionValues({ feed_sections: row.default_section ? [row.default_section] : undefined }); setError(null); }}
             className={`flex w-full items-start justify-between gap-3 rounded-md border bg-transparent p-3 text-left disabled:cursor-not-allowed disabled:opacity-60 ${selected?.id === row.id ? 'border-primary' : 'border-border'}`}>
             <span className="min-w-0">
               <span className="m-0 flex flex-wrap items-center gap-2 font-medium">{row.label}
@@ -276,7 +277,7 @@ export function BuiltinWizard({ onClose, onChanged, shapeFilter, onClearFilter, 
               </span>
               <span className="block text-sm text-muted-foreground">{row.attribution}</span>
             </span>
-          </button>;
+          </BareButton>;
         })}
       </div>)}
     </section>}

@@ -15,10 +15,13 @@ import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useWorkspace } from '@/core/workspace-context';
 import { DocumentShareButton } from './document-sharing';
-import { getSource } from '@/modules/sources/api';
+import { getSource } from '@/modules/sources/public-api';
 import { deleteDocument, documentDeletionKeys, downloadRawDocument, documentKeys, getCitationTarget, getDocument, getVersion, listVersions, updateContent, updateDocument } from './api';
 import { useTranslations } from 'next-intl';
 import { DocumentDeletionReceiptPanel } from './document-deletion-receipt';
+import { BareButton } from '@/components/bare-button';
+import { Textarea } from '@/components/ui/textarea';
+import { useResetOnChange } from '@/modules/shared/use-reset-on-change';
 
 /**
  * Loads and edits a document or renders its independent deletion receipt. Citation IDs select
@@ -45,12 +48,8 @@ export function DocumentDetail({ id, citedVersion, citationVersionId, citationCh
     enabled: !visibleDeletionOperationId && Boolean(citationVersionId && citationChunkId),
   });
   const [selectedVersion, setSelectedVersion] = useState<number | null>(citedVersion);
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
-  useEffect(() => { setSelectedVersion(citedVersion); }, [citedVersion]);
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
-    if (citationTarget.data) setSelectedVersion(citationTarget.data.version_number);
-  }, [citationTarget.data]);
+  useResetOnChange([citedVersion], () => { setSelectedVersion(citedVersion); });
+  useResetOnChange([citationTarget.data], () => { if (citationTarget.data) setSelectedVersion(citationTarget.data.version_number); });
   useEffect(() => {
     if (citationTarget.data) window.document.getElementById('cited-chunk')?.scrollIntoView({ block: 'center' });
   }, [citationTarget.data]);
@@ -61,14 +60,13 @@ export function DocumentDetail({ id, citedVersion, citationVersionId, citationCh
   const [expectedVersion, setExpectedVersion] = useState<number | null>(null);
   const [metadataError, setMetadataError] = useState<'metadataNotObject' | 'enterTitle' | 'invalidMetadata' | ''>('');
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
+  // Seed the editable drafts once the first server copy arrives (null means "not yet seeded").
+  useResetOnChange([document.data, title, visibleDeletionOperationId], () => {
     if (!visibleDeletionOperationId && document.data && title === null) { setTitle(document.data.title); setMetadata(JSON.stringify(document.data.metadata ?? {}, null, 2)); }
-  }, [document.data, title, visibleDeletionOperationId]);
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
+  });
+  useResetOnChange([current.data, expectedVersion, visibleDeletionOperationId], () => {
     if (!visibleDeletionOperationId && current.data && expectedVersion === null) { setContent(current.data.content); setExpectedVersion(current.data.version_number); }
-  }, [current.data, expectedVersion, visibleDeletionOperationId]);
+  });
 
   const saveMetadata = useMutation({
     mutationFn: (value: { title: string; metadata: Record<string, unknown> }) => updateDocument(id, value, csrfToken),
@@ -126,15 +124,15 @@ export function DocumentDetail({ id, citedVersion, citationVersionId, citationCh
     <div className="detail-grid"><div>
       <section className="sub-panel"><h2>{t('content')}</h2>{current.isPending && <p className="text-muted-foreground">{t('loadingContent')}</p>}{current.isError && <p className="error" role="alert">{t('contentLoadFailed')} <Button variant="outline" onClick={() => current.refetch()}>{t('retry')}</Button></p>}
         {current.data && <div className="saved-content"><h3>{t('savedVersion', { version: current.data.version_number })}</h3><pre>{current.data.content}</pre></div>}
-        {isOwner && content !== null && expectedVersion !== null && <form className="form" onSubmit={(event) => { event.preventDefault(); saveContent.mutate(); }}><div className="field"><Label htmlFor="content">{t('content')}</Label><textarea id="content" className="input text-area" value={content} onChange={(event) => setContent(event.target.value)} /></div>
+        {isOwner && content !== null && expectedVersion !== null && <form className="form" onSubmit={(event) => { event.preventDefault(); saveContent.mutate(); }}><div className="field"><Label htmlFor="content">{t('content')}</Label><Textarea id="content" className="input text-area min-h-[220px] field-sizing-fixed resize-y rounded-[6px] border-[color:var(--control)] bg-surface px-3 py-[7px] text-[length:inherit] md:text-[length:inherit] dark:bg-surface focus-visible:border-[color:var(--control)] focus-visible:ring-0 focus-visible:outline-3 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--accent)_40%,transparent)]" value={content} onChange={(event) => setContent(event.target.value)} /></div>
           {saveContent.error && <p className="error" role="alert">{saveContent.error instanceof ApiError && saveContent.error.status === 409 ? t('newerVersion') : t(apiFailureKey(saveContent.error) ?? 'saveContentFailed')}</p>}
           {saveContent.error instanceof ApiError && saveContent.error.status === 409 && <Button type="button" variant="outline" onClick={async () => { const latest = await document.refetch(); if (latest.data) setExpectedVersion(latest.data.current_version); }}>{t('useLatest')}</Button>}
           <Button type="submit" disabled={saveContent.isPending}>{t('saveContent')}</Button></form>}
       </section>
-      {isOwner && <section className="sub-panel"><h2>{t('details')}</h2><form className="form" onSubmit={submitMetadata}><div className="field"><Label htmlFor="title">{t('titleLabel')}</Label><Input id="title" maxLength={500} value={title ?? ''} onChange={(event) => setTitle(event.target.value)} /></div><div className="field"><Label htmlFor="metadata">{t('metadataLabel')}</Label><textarea id="metadata" className="input text-area compact" value={metadata ?? ''} onChange={(event) => setMetadata(event.target.value)} /></div>
+      {isOwner && <section className="sub-panel"><h2>{t('details')}</h2><form className="form" onSubmit={submitMetadata}><div className="field"><Label htmlFor="title">{t('titleLabel')}</Label><Input id="title" maxLength={500} value={title ?? ''} onChange={(event) => setTitle(event.target.value)} /></div><div className="field"><Label htmlFor="metadata">{t('metadataLabel')}</Label><Textarea id="metadata" className="input text-area compact min-h-[100px] field-sizing-fixed resize-y rounded-[6px] border-[color:var(--control)] bg-surface px-3 py-[7px] text-[length:inherit] md:text-[length:inherit] dark:bg-surface focus-visible:border-[color:var(--control)] focus-visible:ring-0 focus-visible:outline-3 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--accent)_40%,transparent)]" value={metadata ?? ''} onChange={(event) => setMetadata(event.target.value)} /></div>
         {metadataError && <p className="error" role="alert">{t(metadataError)}</p>}{saveMetadata.error && <p className="error" role="alert">{t(apiFailureKey(saveMetadata.error) ?? 'saveDetailsFailed')}</p>}<Button type="submit" disabled={saveMetadata.isPending}>{t('saveDetails')}</Button></form></section>}
     </div><aside className="sub-panel"><h2>{t('versionHistory')}</h2>{versions.isPending && <p className="text-muted-foreground">{t('loadingVersions')}</p>}{versions.isError && <p className="error" role="alert">{t('versionsLoadFailed')} <Button variant="outline" onClick={() => versions.refetch()}>{t('retry')}</Button></p>}
-      {versions.data && <ul className="version-list">{versions.data.pages.flatMap((page) => page.items).map((version) => <li key={version.id}><button type="button" className="text-button" onClick={() => setSelectedVersion(version.version_number)}>{t('version', { version: version.version_number })}</button><span className="text-muted-foreground">{formatDateTime(version.created_at, display.locale, display.timezone)}</span></li>)}</ul>}
+      {versions.data && <ul className="version-list">{versions.data.pages.flatMap((page) => page.items).map((version) => <li key={version.id}><BareButton type="button" className="text-button" onClick={() => setSelectedVersion(version.version_number)}>{t('version', { version: version.version_number })}</BareButton><span className="text-muted-foreground">{formatDateTime(version.created_at, display.locale, display.timezone)}</span></li>)}</ul>}
       {versions.hasNextPage && <Button variant="outline" disabled={versions.isFetchingNextPage} onClick={() => versions.fetchNextPage()}>{t('loadMoreVersions')}</Button>}
       {selectedVersion !== null && <div className="version-preview" id="cited-revision"><h3>{t('version', { version: selectedVersion })}</h3>{selected.isPending && <p className="text-muted-foreground">{t('loadingVersion')}</p>}{selected.isError && <p className="error" role="alert">{t('versionLoadFailed')}</p>}{selected.data && <pre>{selected.data.content}</pre>}</div>}
     </aside></div>

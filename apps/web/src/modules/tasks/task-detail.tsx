@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { formatDateTime } from '@/core/i18n';
@@ -12,6 +12,7 @@ import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescript
 import { deleteTask, getTask } from './api';
 import { TaskForm } from './task-form';
 import type { Task } from './types';
+import { useResetOnChange } from '@/modules/shared/use-reset-on-change';
 
 /** Shows task details with retained refetch drafts; administrator viewers can read but cannot edit or delete. */
 export function TaskDetail({ task, csrfToken, onClose, onTaskChanged }: {
@@ -49,8 +50,7 @@ export function TaskDetail({ task, csrfToken, onClose, onTaskChanged }: {
     onError: () => { setConfirmDelete(false); setDeleteIntent(null); },
   });
   const conflict = remove.error instanceof ApiError && remove.error.status === 409;
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
-  useEffect(() => { if (ownerVerified && current && !conflict && !confirmDelete) setExpectedRevision(current.revision); }, [ownerVerified, current, conflict, confirmDelete]);
+  useResetOnChange([ownerVerified, current, conflict, confirmDelete], () => { if (ownerVerified && current && !conflict && !confirmDelete) setExpectedRevision(current.revision); });
   /** Fetches the current owner projection for review without advancing a pending deletion revision. */
   const refreshCurrentTask = async () => {
     setRefreshing(true);

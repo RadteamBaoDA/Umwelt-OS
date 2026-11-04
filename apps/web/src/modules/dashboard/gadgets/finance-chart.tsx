@@ -6,7 +6,7 @@ import { useTranslations } from 'next-intl';
 import type { GadgetInstance } from '../api';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { listWorldObservationWindow } from '@/modules/observations/api';
+import { listWorldObservationWindow } from '@/modules/observations/public-api';
 import { CHART_FALLBACK_LOOKBACK_DAYS, useEffectiveLookback } from './use-effective-lookback';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 import { MetricsChart, type ChartSeriesData, type MetricsChartProps } from './metrics-chart';

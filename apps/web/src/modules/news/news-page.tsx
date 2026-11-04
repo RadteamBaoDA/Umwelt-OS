@@ -5,7 +5,7 @@ import { useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useWorkspace } from '@/core/workspace-context';
-import { listSources } from '@/modules/sources/api';
+import { listSources } from '@/modules/sources/public-api';
 import { StoryDetail } from './story-detail';
 import { StoryList } from './story-list';
 

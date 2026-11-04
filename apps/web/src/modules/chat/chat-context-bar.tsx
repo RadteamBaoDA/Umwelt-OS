@@ -10,7 +10,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import type { ChatContext } from '@/modules/chat/api';
-import { searchDocuments, type SearchHit } from '@/modules/search/api';
+import { searchDocuments, type SearchHit } from '@/modules/search/public-api';
 import { ChatDocumentPreview } from './chat-document-preview';
 
 /** Builds the human-readable label for the grounding context attached to the active chat. */

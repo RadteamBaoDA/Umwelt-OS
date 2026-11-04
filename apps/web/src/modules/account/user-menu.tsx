@@ -8,7 +8,9 @@ import { UserIcon } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { fetchOwnerPreferences, OWNER_PREFERENCES_KEY } from '@/core/preferences';
 import { useWorkspace } from '@/core/workspace-context';
-import { NotificationItems, useNotificationFeed } from '@/modules/notifications/notification-bell';
+import { useNotificationFeed } from '@/modules/notifications/public-api';
+import { NotificationItems } from '@/modules/notifications';
+import { BareButton } from '@/components/bare-button';
 
 /**
  * Avatar initials: first letter of the first and last words, upper-cased by code point (so "Đoàn Bảo" gives "ĐB").
@@ -51,7 +53,7 @@ export function UserMenu({ onOpenPreferences, onOpenAccount, onOpenChangePasswor
   const openDialog = (action: () => void) => () => { suppressFocusRef.current = true; action(); };
   return <DropdownMenu open={open} onOpenChange={setOpen}>
     <DropdownMenuTrigger asChild>
-      <button ref={triggerRef} type="button" className="avatar-button relative" aria-label={t('userMenu')}>{initials ? <span data-testid="avatar-initials" aria-hidden="true" className="text-xs font-semibold leading-none">{initials}</span> : <UserIcon className="size-4" aria-hidden="true" />}{unread > 0 && <span data-testid="avatar-unread-dot" aria-hidden="true" className="absolute right-0 top-0 size-2.5 rounded-full border-2 border-background bg-primary sm:hidden" />}</button>
+      <BareButton ref={triggerRef} type="button" className="avatar-button relative" aria-label={t('userMenu')}>{initials ? <span data-testid="avatar-initials" aria-hidden="true" className="text-xs font-semibold leading-none">{initials}</span> : <UserIcon className="size-4" aria-hidden="true" />}{unread > 0 && <span data-testid="avatar-unread-dot" aria-hidden="true" className="absolute right-0 top-0 size-2.5 rounded-full border-2 border-background bg-primary sm:hidden" />}</BareButton>
     </DropdownMenuTrigger>
     <DropdownMenuContent align="end" onCloseAutoFocus={(event) => {
       if (suppressFocusRef.current) {

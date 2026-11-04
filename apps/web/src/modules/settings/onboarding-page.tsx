@@ -8,11 +8,12 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { ApiError, apiRequest } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { listSources } from '@/modules/sources/api';
-import { getSearchIndexStatus } from '@/modules/search/api';
+import { listSources } from '@/modules/sources/public-api';
+import { getSearchIndexStatus } from '@/modules/search/public-api';
 import { AISettingsWorkspace } from './ai-settings';
 import { OnboardingTopics } from './onboarding-topics';
 import { getOnboardingState, saveOnboardingStep, type OnboardingStep } from './onboarding-api';
+import { BareButton } from '@/components/bare-button';
 
 type ReadinessAI = {
   providers: { base_url: string | null; credential_configured: boolean; local: boolean }[];
@@ -118,11 +119,11 @@ export function OnboardingPage() {
             const current = !done && step.id === currentStep.id;
             // On phones only completed and current steps are listed; "Step n of N" in the header covers the rest.
             return <li key={step.id} className={complete || current ? undefined : 'max-[720px]:hidden'}>
-              <button type="button" aria-current={current ? 'step' : undefined} disabled={save.isPending || done || position > currentIndex} onClick={() => move(step.id)}
+              <BareButton type="button" aria-current={current ? 'step' : undefined} disabled={save.isPending || done || position > currentIndex} onClick={() => move(step.id)}
                 className={`flex min-h-9 pointer-coarse:min-h-11 w-full items-start gap-3 rounded-md border px-3 py-2.5 text-left text-sm disabled:cursor-default ${current ? 'border-border bg-card' : 'border-transparent hover:bg-secondary'}`}>
                 <span aria-hidden="true" className={`w-5 shrink-0 text-sm tabular-nums ${complete ? 'text-primary' : current ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}>{complete ? <CheckIcon className="size-3.5" /> : position + 1}</span>
                 <span className="grid"><strong className={current ? 'font-semibold' : 'font-medium'}>{t(step.label)}</strong>{(complete || current) && <span className="text-muted-foreground text-xs">{t(complete ? 'stepDone' : 'stepCurrent')}</span>}</span>
-              </button>
+              </BareButton>
             </li>;
           })}
         </ol>

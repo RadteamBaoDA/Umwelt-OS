@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { fetchOwnerPreferences, OWNER_PREFERENCES_KEY } from '@/core/preferences';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { normalizeFormattingLocale } from '@/core/i18n';
-import { listWorldObservationWindow } from '@/modules/observations/api';
+import { listWorldObservationWindow } from '@/modules/observations/public-api';
 import { fetchTopics } from '@/modules/news/api';
 import { fetchStories } from '@/modules/news/story-api';
 import { LocalWeather } from './local-weather';

@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { documentDeletionKeys, getDocumentDeletionOperation, type DocumentDeletionReceipt } from './api';
+import { useResetOnChange } from '@/modules/shared/use-reset-on-change';
 
 type DocumentDeletionStageStatus =
   | DocumentDeletionReceipt['status']
@@ -25,10 +26,9 @@ export function DocumentDeletionReceiptPanel({ operationId }: { operationId: str
   const headingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => { headingRef.current?.focus(); }, []);
   const [automaticRefreshPaused, setAutomaticRefreshPaused] = useState(false);
+  useResetOnChange([operationId], () => { setAutomaticRefreshPaused(false); });
   useEffect(() => {
     pollUntil.current = Date.now() + 30_000;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
-    setAutomaticRefreshPaused(false);
     const timer = window.setTimeout(() => setAutomaticRefreshPaused(true), 30_000);
     return () => window.clearTimeout(timer);
   }, [operationId]);

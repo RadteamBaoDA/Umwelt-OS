@@ -39,6 +39,7 @@ import {
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { deleteGadgetDefinition, type DashboardGroup, type GadgetDefinition } from './api';
 import { GadgetEditor } from './gadget-editor';
+import { BareButton } from '@/components/bare-button';
 
 /** Props for the LayoutEditor toolbar and dirty confirmation workflow. */
 export interface LayoutEditorProps {
@@ -263,13 +264,13 @@ export function LayoutEditor({
             <span className="font-medium">{saveError}</span>
           </div>
           {onDismissSaveError && (
-            <button
+            <BareButton
               type="button"
               onClick={onDismissSaveError}
               className="p-1 hover:bg-destructive/20 rounded"
             >
               <X className="w-3.5 h-3.5" />
-            </button>
+            </BareButton>
           )}
         </div>
       )}

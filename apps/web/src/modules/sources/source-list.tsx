@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Download, History, Pause, Play, RefreshCw, Settings2, Trash2, Unplug } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { humanizeCode } from '@/modules/shared/humanize-code';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
@@ -59,12 +60,6 @@ function SourceAction({ label, icon, onClick, disabled = false, expanded }: {
     </TooltipTrigger>
     <TooltipContent>{label}</TooltipContent>
   </Tooltip>;
-}
-
-/** Turns a machine error code such as `invalid_credential` into sentence-case words ("Invalid credential") for display. */
-export function humanizeCode(code: string): string {
-  const words = code.replace(/[_-]+/g, ' ').trim().toLowerCase();
-  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 /** Formats an optional ISO timestamp with the supplied application locale and time zone, returning the supplied fallback when absent. */
@@ -449,3 +444,6 @@ export function SourceList() {
     {sources.hasNextPage && <Button variant="outline" disabled={sources.isFetchingNextPage} onClick={() => sources.fetchNextPage()}>{t('loadMore')}</Button>}
   </div>;
 }
+
+/** Re-exported for existing importers; the implementation lives in `modules/shared/humanize-code`. */
+export { humanizeCode };

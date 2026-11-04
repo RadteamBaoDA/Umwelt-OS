@@ -14,7 +14,7 @@ import { BaseLineChart, RechartsContainer, type ChartDataPoint } from '@/core/ch
 import { useErrorCodeLabel } from '@/core/error-codes';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { serviceLabelKeys, statusLabel } from '@/modules/settings/status-label';
-import { humanizeCode } from '@/modules/sources/source-list';
+import { humanizeCode } from '@/modules/shared/humanize-code';
 import { getHistorySettings, getQuality, getQueueSummary, getSystemHealth, getSystemHistory, listRuns, type HistoryBucket, type HistoryRange, type SystemHealth } from './api';
 import { DatabasePanel } from './database-panel';
 import { HistoryRetention } from './history-retention';
@@ -22,6 +22,7 @@ import { StatusRow } from './status-row';
 import {
   CORE_SERVICES, OPTIONAL_SERVICES, activityFinding, barTone, bucketRunsByHour, fillBuckets, isFailedRun, queueTotal, statusTone, summarizeHealth, uptimePercent, type Tone,
 } from './system-status-model';
+import { getDateTimeFormat, getNumberFormat } from '@/modules/shared/intl-cache';
 
 const RANGES: HistoryRange[] = ['1h', '24h', '7d', '30d', '90d'];
 const BAR: Record<Tone, string> = { success: 'bg-[var(--status-success)]', warning: 'bg-[var(--status-warning)]', danger: 'bg-[var(--danger)]', muted: 'bg-[var(--chart-4)]' };
@@ -41,7 +42,8 @@ function BlockError({ message, retry }: { message: string; retry: () => void }) 
 
 /** Skeleton at the final size of the content it stands in for. */
 function Skeleton({ height }: { height: number }) {
-  return <div className="w-full animate-pulse rounded-md bg-rule" style={{ height }} role="status" aria-label="loading" />;
+  const t = useTranslations('observability');
+  return <div className="w-full animate-pulse rounded-md bg-rule" style={{ height }} role="status" aria-label={t('loadingStatus')} />;
 }
 
 /** One uptime bar strip: a thin bar per bucket coloured by that bucket's up/total for the component. */
@@ -70,9 +72,9 @@ export function SystemStatusDashboard() {
   const buckets = useMemo(() => history.data?.buckets ?? [], [history.data]);
   const bucketSeconds = history.data?.bucket_seconds ?? 0;
   const noSamples = history.isSuccess && buckets.length === 0;
-  const num = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 });
-  const time = (iso: string) => new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short', timeZone: display.timezone }).format(new Date(iso));
-  const clock = (value: string | number) => new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit', timeZone: display.timezone }).format(new Date(value));
+  const num = getNumberFormat(locale, { maximumFractionDigits: 1 });
+  const time = (iso: string) => getDateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short', timeZone: display.timezone }).format(new Date(iso));
+  const clock = (value: string | number) => getDateTimeFormat(locale, { hour: '2-digit', minute: '2-digit', timeZone: display.timezone }).format(new Date(value));
   const checkedAt = health.dataUpdatedAt ? clock(health.dataUpdatedAt) : null;
 
   const summary = health.data ? summarizeHealth(health.data) : null;
@@ -218,7 +220,7 @@ function ServiceGroup({ title, keys, health, buckets }: { title: string; keys: r
       return <StatusRow key={key} tone={statusTone(component.status, component.connectivity)} name={ts(serviceLabelKeys[key] as never)}
         status={notTested ? `${statusLabel(tg, component.status)} · ${ts('connectivityNotTested')}` : statusLabel(tg, component.status)}>
         {buckets.length > 0 && <span className="ml-auto flex items-center gap-2"><UptimeStrip buckets={buckets} name={key} />
-          <span className="w-12 text-right text-xs tabular-nums text-muted-foreground">{pct === null ? DASH : `${new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(pct)}%`}</span></span>}
+          <span className="w-12 text-right text-xs tabular-nums text-muted-foreground">{pct === null ? DASH : `${getNumberFormat(locale, { maximumFractionDigits: 1 }).format(pct)}%`}</span></span>}
         {action && <Link href={action.href} className="text-sm underline underline-offset-4">{action.label}</Link>}
       </StatusRow>;
     })}</ul>

@@ -4,8 +4,8 @@ import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { normalizeFormattingLocale } from '@/core/i18n';
-import type { GoalStatus } from '@/modules/goals/types';
-import type { TaskStatus } from '@/modules/tasks/types';
+import type { GoalStatus } from '@/modules/goals';
+import type { TaskStatus } from '@/modules/tasks';
 import type { GoalSearchHit, SearchHit, TaskSearchHit } from './api';
 
 /** Formats date-only values in UTC while formatting instants in the owner's preferred time zone. */

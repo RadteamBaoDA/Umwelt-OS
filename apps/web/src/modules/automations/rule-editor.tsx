@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { formatDateTime } from '@/core/i18n';
@@ -16,6 +16,7 @@ import {
   type Action, type ActionType, type Automation, type Capabilities, type Condition, type Definition,
   type Operator, type PreviewResult, type Scalar, type Trigger, type TriggerType,
 } from './api';
+import { useResetOnChange } from '@/modules/shared/use-reset-on-change';
 
 const operators: Operator[] = ['eq', 'ne', 'in', 'gt', 'gte', 'lt', 'lte'];
 const agentProfiles = ['knowledge', 'research', 'personal', 'project', 'news', 'planning', 'automation'];
@@ -95,17 +96,14 @@ export function RuleEditor({ rule, csrfToken, onDone }: { rule?: Automation; csr
   const [cleared, setCleared] = useState(0);
 
   // Actions whose owning module is disabled are cleared, never silently kept in a saveable draft.
-  useEffect(() => {
+  useResetOnChange([caps.data], () => {
     if (!caps.data) return;
     const usable = new Set(caps.data.actions.filter((item) => item.available).map((item) => item.type));
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
-    setDraft((current) => {
-      const kept = current.actions.filter((item) => usable.has(item.type));
-      if (kept.length === current.actions.length) return current;
-      setCleared(current.actions.length - kept.length);
-      return { ...current, actions: kept };
-    });
-  }, [caps.data]);
+    const kept = draft.actions.filter((item) => usable.has(item.type));
+    if (kept.length === draft.actions.length) return;
+    setCleared(draft.actions.length - kept.length);
+    setDraft({ ...draft, actions: kept });
+  });
 
   const triggerCap = caps.data?.triggers.find((item) => item.type === draft.trigger.type);
   const fields = triggerCap?.fields ?? {};

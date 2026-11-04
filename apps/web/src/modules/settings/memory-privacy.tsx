@@ -1,6 +1,6 @@
 'use client';
 
-import { SettingsActions, SettingsPageHeader } from './settings-layout';
+import { SettingsActions, SettingsPageHeader } from '@/components/settings-layout';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'next-intl';

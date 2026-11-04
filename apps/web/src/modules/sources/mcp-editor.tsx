@@ -6,7 +6,7 @@ import { ChevronRight } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { CheckboxField, FieldGrid } from '@/modules/settings/settings-layout';
+import { CheckboxField, FieldGrid } from '@/components/settings-layout';
 import { Input } from '@/components/ui/input';
 import { PasswordInput } from '@/components/ui/password-input';
 import { Label } from '@/components/ui/label';
@@ -18,6 +18,7 @@ import { TablePagination, usePagination } from '@/components/ui/pagination';
 import { Table, TableBody, TableHead, TableHeader } from '@/components/ui/table';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useGuardedNavigation } from '@/core/guarded-navigation';
+import { useBrowserTimezone } from '@/modules/shared/use-browser-timezone';
 import { listSources, type Source } from './api';
 import {
   checkMcpConnection, createMcpConnection, createMcpInboundClient, discoverMcpConnection,
@@ -60,10 +61,6 @@ function useClock(stepMs: number): number {
     () => Math.floor(Date.now() / stepMs) * stepMs,
     () => 0,
   );
-}
-/** Reads the browser time zone without a post-mount state update; server render falls back to the configured zone. */
-function useBrowserTimezone(fallback: string): string {
-  return useSyncExternalStore(() => () => {}, () => Intl.DateTimeFormat().resolvedOptions().timeZone || fallback, () => fallback);
 }
 /** Formats server instants with the user locale and explicit configured timezone. */
 function dateLabel(value: string, locale: string, timezone: string): string {

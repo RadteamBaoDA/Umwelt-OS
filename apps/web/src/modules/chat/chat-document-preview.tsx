@@ -4,7 +4,7 @@ import * as React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { getDocument, getVersion } from '@/modules/knowledge/api';
+import { getDocument, getVersion } from '@/modules/knowledge/public-api';
 
 export interface ChatDocumentPreviewProps {
   /** Document id admitted by the existing search or chat-attachment flow. */

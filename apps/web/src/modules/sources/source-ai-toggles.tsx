@@ -3,7 +3,7 @@
 import { useTranslations } from 'next-intl';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
-import { CheckboxField } from '@/modules/settings/settings-layout';
+import { CheckboxField } from '@/components/settings-layout';
 
 /** The two owner switches a source carries; both default to on so existing behavior is unchanged. */
 export type SourceAiOptions = { graph_enabled: boolean; rag_index_enabled: boolean };

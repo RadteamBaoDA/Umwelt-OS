@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { apiRequest, csrfHeaders } from '@/core/api';
 import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { CheckboxField, FieldGrid, SecretField, SettingsActions, SettingsSection } from './settings-layout';
+import { CheckboxField, FieldGrid, SecretField, SettingsActions, SettingsSection } from '@/components/settings-layout';
 
 type Kind = 'internal' | 'llm' | 'typesafe' | 'openrouter' | 'cloudflare';
 type Mode = 'json_schema' | 'forced_tool';
@@ -21,7 +21,6 @@ type Provider = { id: string; label: string; local: boolean; models: { id: strin
 type DecisionModels = { ok: boolean; models: { id: string; input_modalities: string[] }[]; error: string | null };
 type TestResult = { ok: boolean; category: string | null; mode: Mode | null; error: string | null };
 type Draft = Partial<Pick<VizRouter, 'kind' | 'provider_id' | 'model' | 'mode' | 'api' | 'account_id' | 'gateway_url' | 'allow_remote_visualization_routing'>>;
-const OWN_ENDPOINT_KINDS: Kind[] = ['openrouter', 'cloudflare'];
 // OpenRouter Decisions API (alpha) presets; the chat presets below apply when the API selector is on chat completions.
 const DECISION_PRESETS = ['cloudflare/clef-flash', 'cloudflare/clef-omni'];
 const MODEL_PRESETS: Record<'openrouter' | 'cloudflare', string[]> = {

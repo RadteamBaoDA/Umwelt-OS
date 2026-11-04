@@ -8,6 +8,7 @@ import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { getHistorySettings, saveHistorySettings, type HistorySettings, type HistorySettingsPatch } from './api';
 import { isStaleRevision } from './system-status-model';
+import { getDateTimeFormat } from '@/modules/shared/intl-cache';
 
 const CHOICES = [1, 7, 30, 90];
 const INTERVALS = [0, 1, 5, 15, 30, 60];
@@ -51,6 +52,6 @@ export function HistoryRetention({ oldestSampleAt }: { oldestSampleAt: string | 
       {save.isPending ? t('retentionSaving') : save.isSuccess && saved ? t('retentionSaved') : ''}
     </span>
     {save.isError && <p role="alert" className="m-0 text-sm text-destructive">{isStaleRevision(save.error) ? t('retentionStale') : t('retentionFailed')}</p>}
-    <p className="m-0 text-sm text-muted-foreground sm:ml-auto">{t('oldestSample', { time: oldestSampleAt ? new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short', timeZone: display.timezone }).format(new Date(oldestSampleAt)) : '—' })}</p>
+    <p className="m-0 text-sm text-muted-foreground sm:ml-auto">{t('oldestSample', { time: oldestSampleAt ? getDateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short', timeZone: display.timezone }).format(new Date(oldestSampleAt)) : '—' })}</p>
   </section>;
 }

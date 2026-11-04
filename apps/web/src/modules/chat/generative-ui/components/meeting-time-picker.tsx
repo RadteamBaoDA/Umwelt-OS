@@ -15,6 +15,7 @@ import {
 import type { AppLocaleId } from '@/core/i18n';
 import { INPUT_DECLINE } from '../../api';
 import { genUiCopy, INPUT_COPY, MEETING_COPY, resolveWidgetLocale } from '../copy';
+import { BareButton } from '@/components/bare-button';
 
 /** Candidate meeting time slot descriptor. */
 export interface MeetingTimeSlot {
@@ -272,7 +273,7 @@ export function MeetingTimePicker({
               slot.recommended === true || (Boolean(selected_slot_id) && slot.id === selected_slot_id);
 
             return (
-              <button
+              <BareButton
                 key={slot.id}
                 type="button"
                 disabled={!isAvailable || locked}
@@ -313,7 +314,7 @@ export function MeetingTimePicker({
                     {isAvailable ? copy.availableBadge : copy.unavailableBadge}
                   </Badge>
                 </div>
-              </button>
+              </BareButton>
             );
           })}
         </div>

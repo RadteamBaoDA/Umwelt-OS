@@ -19,6 +19,8 @@ export const buttonVariants = cva(
         secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
         ghost: 'bg-transparent text-foreground hover:bg-secondary hover:text-secondary-foreground',
         link: 'bg-transparent text-primary underline underline-offset-4',
+        // Unstyled: `Button` skips the base classes for this variant (see below), so callers keep a plain native button.
+        bare: '',
       },
       size: {
         default: 'px-4 py-2',
@@ -57,7 +59,9 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         data-slot="button"
         data-variant={effectiveVariant}
         data-size={size ?? 'default'}
-        className={cn(buttonVariants({ variant: effectiveVariant, size, className }))}
+        // The `bare` variant emits no base utilities so component-layer CSS classes (e.g. `.avatar-button`) and the
+        // native inline-block display are not overridden by utility-layer rules.
+        className={effectiveVariant === 'bare' ? className : cn(buttonVariants({ variant: effectiveVariant, size, className }))}
       />
     );
   },

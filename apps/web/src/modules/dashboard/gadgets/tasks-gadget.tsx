@@ -9,11 +9,11 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { useWorkspace } from '@/core/workspace-context';
 import { unsupportedListFilters, type GadgetInstance } from '../api';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
-import { TaskForm } from '@/modules/tasks/task-form';
-import { TaskList } from '@/modules/tasks/task-list';
-import { TaskDetail } from '@/modules/tasks/task-detail';
-import { fetchTasks } from '@/modules/tasks/api';
-import type { Task } from '@/modules/tasks/types';
+import { TaskForm } from '@/modules/tasks';
+import { TaskList } from '@/modules/tasks';
+import { TaskDetail } from '@/modules/tasks';
+import { fetchTasks } from '@/modules/tasks/public-api';
+import type { Task } from '@/modules/tasks';
 
 /** Props required to render the persisted task gadget instance against owner task APIs. */
 export interface TasksGadgetProps { instance: GadgetInstance }

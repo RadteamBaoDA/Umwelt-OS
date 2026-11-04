@@ -2,7 +2,8 @@
 
 import { useTranslations } from 'next-intl';
 import { useEffect, useMemo, useState } from 'react';
-import type { Source } from '@/modules/sources/api';
+import type { Source } from '@/modules/sources';
+import { BareButton } from '@/components/bare-button';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** Active-id sentinel for the single folded marker of sources older than 24 h. */
@@ -165,7 +166,7 @@ export function FreshnessStrip({ sources, locale }: { sources: readonly TickSour
       {/* 1px baseline at y=16px; ticks sit above it and labels in their own row below so they never overlap. */}
       <div className="absolute inset-x-0 top-4 h-px" style={{ background: 'var(--control)' }} aria-hidden="true" />
       {inWindow.map((tick, index) => (
-        <button
+        <BareButton
           key={tick.id}
           type="button"
           aria-label={`${tick.name} · ${ago(tick)}`}
@@ -177,7 +178,7 @@ export function FreshnessStrip({ sources, locale }: { sources: readonly TickSour
           style={{ left: `calc(0.5rem + (100% - 1rem) * ${tick.position / 100} + ${jitterPx(inWindow, index)}px)` }}
         >
           <span aria-hidden="true" className="block" style={{ width: 3, height: 12, borderRadius: 1, background: STATUS_COLOR[tick.status] }} />
-        </button>
+        </BareButton>
       ))}
       <span aria-hidden="true" className="absolute bottom-0 left-0">{t('freshnessAxisHours', { hours: 24 })}</span>
       <span aria-hidden="true" className="absolute bottom-0 left-1/2 hidden -translate-x-1/2 sm:block">{t('freshnessAxisHours', { hours: 12 })}</span>
@@ -194,7 +195,7 @@ export function FreshnessStrip({ sources, locale }: { sources: readonly TickSour
     </div>
     <p data-testid="freshness-legend" className="m-0 flex shrink-0 flex-wrap items-center justify-start gap-x-2.5 max-[720px]:order-first min-[721px]:justify-end gap-y-0.5 pt-0.5 text-xs tabular-nums">
       {overdue.length > 0 && (
-        <button
+        <BareButton
           type="button"
           aria-label={`${t('freshnessOverdue', { count: overdue.length })}: ${overdue.map((tick) => tick.name).join(', ')}`}
           onMouseEnter={() => setActiveId(OVERDUE_ID)}
@@ -205,7 +206,7 @@ export function FreshnessStrip({ sources, locale }: { sources: readonly TickSour
         >
           <span aria-hidden="true" className="block" style={{ width: 8, height: 8, borderRadius: '50%', border: `1.5px solid ${STATUS_COLOR.stale}`, background: 'transparent' }} />
           <span aria-hidden="true" className="text-xs tabular-nums leading-none text-muted-foreground">{t('freshnessOverdue', { count: overdue.length })}</span>
-        </button>
+        </BareButton>
       )}
       {legend.map((entry) => (
         <span key={entry.status} className="inline-flex items-center gap-1 whitespace-nowrap">

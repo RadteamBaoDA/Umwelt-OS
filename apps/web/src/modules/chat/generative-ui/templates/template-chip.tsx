@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import type { AppLocaleId } from '@/core/i18n';
 import { genUiCopy, resolveWidgetLocale } from '../copy';
 import { getLocalizedTemplate, type SeedTemplate } from './seed-templates';
+import { BareButton } from '@/components/bare-button';
 
 /** Props accepted by the quick-action TemplateChip component. */
 export interface TemplateChipProps {
@@ -72,7 +73,7 @@ export function TemplateChip({
       </Button>
 
       {onClear && (
-        <button
+        <BareButton
           type="button"
           onClick={onClear}
           aria-label={copy.clearLabel}
@@ -80,7 +81,7 @@ export function TemplateChip({
           className="inline-flex size-6 items-center justify-center rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <XIcon className="size-3" aria-hidden="true" />
-        </button>
+        </BareButton>
       )}
     </div>
   );

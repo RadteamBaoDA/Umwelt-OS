@@ -14,6 +14,7 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { entityKeys, getEntity, getEntityNeighbors, getEntityTimeline, getRelationshipEvidence, listEntityEvidence } from '@/modules/knowledge/api';
 import { FollowEntityButton } from './follow-entity';
 import { EventDetail } from '@/modules/timeline/event-detail';
+import { BareButton } from '@/components/bare-button';
 
 const badgeClass = 'inline-flex h-6 items-center rounded-full border border-border bg-background px-2 text-xs font-semibold text-muted-foreground';
 
@@ -81,7 +82,7 @@ export function EntityDialogBody({ entityId, canGoBack, onBack, onOpenEntity }: 
             <TableCaption className="sr-only">{t('relationships')}</TableCaption>
             <TableHeader className="sr-only"><TableRow><TableHead scope="col">{d('colTo')}</TableHead><TableHead scope="col">{d('colBasis')}</TableHead><TableHead scope="col">{d('colValid')}</TableHead><TableHead scope="col">{d('colEvidence')}</TableHead></TableRow></TableHeader>
             <TableBody>{relationsPager.pageItems.map(({ entity: other, relationship }) => <tr key={relationship.id} className="border-t border-border align-top">
-              <td className="px-2 py-2"><button type="button" className="min-h-9 pointer-coarse:min-h-11 text-left font-semibold text-primary underline-offset-4 hover:underline" onClick={() => onOpenEntity(other.id)}>{nameOf(other.name)}</button><span className="block text-xs text-muted-foreground">{relationship.type}</span></td>
+              <td className="px-2 py-2"><BareButton type="button" className="min-h-9 pointer-coarse:min-h-11 text-left font-semibold text-primary underline-offset-4 hover:underline" onClick={() => onOpenEntity(other.id)}>{nameOf(other.name)}</BareButton><span className="block text-xs text-muted-foreground">{relationship.type}</span></td>
               <td className="px-2 py-2"><span className={`${badgeClass} ${relationship.origin === 'derived' ? 'border-dashed' : ''}`}>{relationship.origin === 'derived' ? d('basisInferred') : d('basisConfirmed')}</span></td>
               <td className="px-2 py-2 text-xs text-muted-foreground">{relationship.validity_precision === 'bounded' && (relationship.valid_from || relationship.valid_to) ? `${relationship.valid_from ? formatDateTime(relationship.valid_from, display.locale, display.timezone) : d('openStart')} – ${relationship.valid_to ? formatDateTime(relationship.valid_to, display.locale, display.timezone) : d('openEnd')}` : d('validityUnknown')}</td>
               <td className="px-2 py-2"><Button type="button" variant="ghost" size="sm" aria-pressed={selectedRelationshipId === relationship.id} onClick={() => setRelationshipId({ entityId, id: relationship.id })}>{d('showEvidence')}</Button></td>

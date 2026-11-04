@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { apiRequest, csrfHeaders } from '@/core/api';
 import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { CheckboxField, FieldGrid, SecretField, SettingsActions, SettingsPageHeader, SettingsSection } from './settings-layout';
+import { CheckboxField, FieldGrid, SecretField, SettingsActions, SettingsPageHeader, SettingsSection } from '@/components/settings-layout';
 
 type Provider = 'tavily' | 'brave' | 'searxng' | 'omniroute';
 type Entry = { provider: Provider; endpoint: string | null; credential_configured: boolean; destination_id: string | null };

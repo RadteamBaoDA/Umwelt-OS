@@ -16,6 +16,7 @@ import {
 import { useDisplayPreferences } from '@/core/query-provider';
 import type { GadgetInstance } from '../api';
 import { DeltaPill } from './gadget-kpi';
+import { BareButton } from '@/components/bare-button';
 
 /** Time range options supported by the financial chart filter. */
 export type ChartTimeRange = '24h' | '7d' | '30d' | '90d' | '1y' | 'all';
@@ -182,7 +183,7 @@ export function MetricsChart({
   const rangeTabs = (
     <div className="flex items-center gap-1" role="group" aria-label={ts('chartRangeAria')}>
       {(['24h', '7d', '30d', '90d', '1y', 'all'] as ChartTimeRange[]).map((range) => (
-        <button
+        <BareButton
           key={range}
           type="button"
           onClick={() => setTimeRange(range)}
@@ -190,7 +191,7 @@ export function MetricsChart({
           className={`rounded px-1.5 py-0.5 text-[11px] tabular-nums transition-colors ${timeRange === range ? 'font-semibold text-foreground underline underline-offset-4' : 'text-muted-foreground hover:text-foreground'}`}
         >
           {range.toUpperCase()}
-        </button>
+        </BareButton>
       ))}
     </div>
   );
@@ -290,7 +291,7 @@ export function MetricsChart({
             ['line', LineChartIcon, ts('chartLine'), ts('chartLineAria')],
             ['bar', BarChart2, ts('chartBar'), ts('chartBarAria')],
           ] as const).map(([kind, Icon, title, aria]) => (
-            <button
+            <BareButton
               key={kind}
               type="button"
               onClick={() => setChartKind(kind)}
@@ -299,7 +300,7 @@ export function MetricsChart({
               aria-label={aria}
             >
               <Icon className="size-3.5" />
-            </button>
+            </BareButton>
           ))}
         </div>
       </div>

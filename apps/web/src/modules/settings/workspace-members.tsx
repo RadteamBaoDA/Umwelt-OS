@@ -15,7 +15,7 @@ import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { workspaceKeys } from '@/core/query-keys';
 import { useWorkspace } from '@/core/workspace-context';
-import { SettingsPageHeader, SettingsSection } from './settings-layout';
+import { SettingsPageHeader, SettingsSection } from '@/components/settings-layout';
 
 export type InvitationRead = {
   id: string; email: string; created_at: string; expires_at: string;

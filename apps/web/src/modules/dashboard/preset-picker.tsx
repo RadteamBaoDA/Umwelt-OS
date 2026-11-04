@@ -35,6 +35,7 @@ import {
 import { DatasourcePicker, useSourceRows } from './gadget-editor';
 import { templateName } from '@/core/renderer-labels';
 import { sourcesLinkFor } from './sources-link';
+import { BareButton } from '@/components/bare-button';
 
 /** Where an applied preset lands: a new dashboard, appended below the current one's gadgets, or replacing them. */
 type ApplyMode = 'create' | 'append' | 'replace';
@@ -251,7 +252,7 @@ export function PresetPicker({
     if (Object.keys(extra).length === 0) return;
     const next = { ...slotSources, ...extra };
     // One-shot (guarded by the ref): the late preselection is a reaction to the source query finishing, not derivable during render.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- guarded one-shot sync to the late-arriving source query result.
     setSlotSources(next);
     previewMutate({ preset: selectedPreset, sources: next });
   }, [hasNextPage, preselect, previewMutate, rendererCatalogLoaded, selectedPreset, slotSources, sourcesLoaded]);
@@ -342,7 +343,7 @@ export function PresetPicker({
               {presets.map((preset) => {
                 const isSelected = preset.id === selectedPresetId;
                 return (
-                  <button
+                  <BareButton
                     key={preset.id}
                     type="button"
                     aria-pressed={isSelected}
@@ -358,7 +359,7 @@ export function PresetPicker({
                       </span>
                     </span>
                     <ChevronRight className={`mt-0.5 size-4 shrink-0 ${isSelected ? 'text-primary' : 'text-muted-foreground'}`} aria-hidden />
-                  </button>
+                  </BareButton>
                 );
               })}
             </div>
@@ -426,7 +427,7 @@ export function PresetPicker({
                   <legend className="mb-2 text-sm font-semibold text-foreground">{t('applyMode')}</legend>
                   <div className="grid grid-cols-1 gap-1 rounded-md bg-muted p-1">
                     {modes.map(({ mode, label, needsTarget }) => (
-                      <button
+                      <BareButton
                         key={mode}
                         type="button"
                         aria-pressed={applyMode === mode}
@@ -439,7 +440,7 @@ export function PresetPicker({
                         }`}
                       >
                         {label}
-                      </button>
+                      </BareButton>
                     ))}
                   </div>
                   {applyMode === 'create' && (
@@ -512,9 +513,9 @@ export function PresetPicker({
               <AlertCircle className="size-4 shrink-0" aria-hidden />
               <span>{applyError}</span>
             </div>
-            <button type="button" aria-label={t('cancel')} onClick={() => setApplyError(null)} className="rounded p-1 hover:bg-destructive/10">
+            <BareButton type="button" aria-label={t('cancel')} onClick={() => setApplyError(null)} className="rounded p-1 hover:bg-destructive/10">
               <X className="size-3.5" aria-hidden />
-            </button>
+            </BareButton>
           </div>
         )}
 

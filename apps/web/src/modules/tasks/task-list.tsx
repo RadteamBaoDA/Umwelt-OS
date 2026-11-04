@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { ApiError, apiRequest } from '@/core/api';
+import { ApiError } from '@/core/api';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -11,10 +11,10 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
 import { useWorkspace } from '@/core/workspace-context';
 import { fetchTasks, fetchTasksByIds, getTask, updateTask } from './api';
-import type { Task, TaskFilter, TaskPage, TaskStatus, TaskView } from './types';
+import type { Task, TaskPage, TaskStatus, TaskView } from './types';
+import { BareButton } from '@/components/bare-button';
 
 const VIEWS: TaskView[] = ['inbox', 'today', 'upcoming', 'blocked', 'completed', 'all'];
-const STATUSES: TaskStatus[] = ['inbox', 'todo', 'in_progress', 'blocked', 'done', 'cancelled'];
 
 /** Displays bounded task pages or configured IDs; completion remains conflict-safe and disabled for administrator viewers. */
 export function TaskList({
@@ -117,7 +117,7 @@ export function TaskList({
     {!isLoading && !isError && tasks.length === 0 && <p className="py-5 text-sm text-muted-foreground">{canAdvance ? t('noTasksThisPage') : view === 'all' && !ids && !normalizedFilters.keywords.length && !normalizedFilters.exclude.length ? t('noTasksYet') : t('noTasks')}</p>}
     <ul className="flex flex-col gap-2">{tasks.map((task) => <li key={task.id} className="flex items-start gap-3 rounded-lg border border-border p-3">
       <Checkbox checked={task.status === 'done'} disabled={isAdminViewer || toggleMutation.isPending} onCheckedChange={(checked) => toggleMutation.mutate({ task, done: checked === true })} aria-label={t('toggleTask', { title: task.title, state: task.status === 'done' ? t('incomplete') : t('complete') })} />
-      <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onSelectTask?.(task)}><span className="block truncate text-sm font-medium">{task.title}</span><span className="text-xs text-muted-foreground">{statusLabels[task.status]} · {task.due_at ? formatDateTime(task.due_at, display.locale, display.timezone) : task.due_date ?? t('noDueDate')}</span></button>
+      <BareButton type="button" className="min-w-0 flex-1 text-left" onClick={() => onSelectTask?.(task)}><span className="block truncate text-sm font-medium">{task.title}</span><span className="text-xs text-muted-foreground">{statusLabels[task.status]} · {task.due_at ? formatDateTime(task.due_at, display.locale, display.timezone) : task.due_date ?? t('noDueDate')}</span></BareButton>
     </li>)}</ul>
     {toggleMutation.error && <div role="alert" className="text-sm text-destructive"><p>{t('taskUpdateFailed')}</p>{conflictLoadError && <p>{t('currentTaskLoadFailed')}: {conflictLoadError}</p>}{conflictedTask && <div className="rounded border border-border p-2"><p>{t('currentTaskRevision', { title: conflictedTask.title, status: statusLabels[conflictedTask.status], revision: conflictedTask.revision })}</p><Button type="button" variant="outline" size="sm" onClick={() => onSelectTask?.(conflictedTask)}>{t('reviewCurrentTask')}</Button></div>}</div>}
     {!boundedIds.length && (pageIndex > 0 || canAdvance) && <p className="text-xs text-muted-foreground">{t('ownerPageNumber', { page: pageIndex + 1 })} · {t('pageResultBound', { count: Math.min(100, Math.max(1, limit)) })}</p>}

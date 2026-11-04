@@ -2,12 +2,12 @@
 
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 import { useErrorCodeLabel } from '@/core/error-codes';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
-import { FiltersDisclosure } from '@/modules/search/filters-disclosure';
+import { FiltersDisclosure } from '@/modules/search';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -15,9 +15,10 @@ import { apiFailureKey } from '@/core/api-failure-key';
 import { formatTimeZoneLabel } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { entityKeys, getGraphStatuses, listEntities } from '@/modules/knowledge/api';
-import { listSources, sourceKeys } from '@/modules/sources/api';
+import { listSources, sourceKeys } from '@/modules/sources/public-api';
 import { EventDetail } from './event-detail';
 import { getEvent, listTimeline, type TimelineQuery } from './api';
+import { useResetOnChange } from '@/modules/shared/use-reset-on-change';
 
 type Precision = TimelineQuery['precision'];
 
@@ -49,11 +50,11 @@ export function TimelinePage() {
   const typeTooLong = [...draftEventType.trim()].length > 64;
   const appliedTypeTooLong = [...eventType].length > 64;
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
+  // Drafts follow the applied (URL) filters whenever those change.
+  useResetOnChange([dateFrom, dateTo, sourceId, entityId, precision, eventType], () => {
     setDraftDateFrom(dateFrom); setDraftDateTo(dateTo); setDraftSourceId(sourceId);
     setDraftEntityId(entityId); setDraftPrecision(precision); setDraftEventType(eventType);
-  }, [dateFrom, dateTo, sourceId, entityId, precision, eventType]);
+  });
 
   const query: TimelineQuery = {
     date_from: dateFrom, date_to: dateTo, timezone: display.timezone,

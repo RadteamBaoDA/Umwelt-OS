@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { createGoal, getGoal, updateGoal } from './api';
-import type { Goal, GoalCreate, GoalStatus, Milestone } from './types';
+import type { Goal, GoalStatus, Milestone } from './types';
 import { uuid7 } from '@/core/uuid7';
 
 const GOAL_STATUSES: GoalStatus[] = ['active', 'completed', 'paused', 'cancelled'];

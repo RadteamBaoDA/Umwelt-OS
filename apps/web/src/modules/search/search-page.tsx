@@ -15,7 +15,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ApiError } from '@/core/api';
 import { apiFailureKey, type ApiFailureKey } from '@/core/api-failure-key';
-import { listSources, sourceKeys } from '@/modules/sources/api';
+import { listSources, sourceKeys } from '@/modules/sources/public-api';
 import { getSearchIndexStatus, searchDocuments, searchEntities, searchGoals, searchTasks } from './api';
 import { GoalSearchResults, SearchResults, TaskSearchResults } from './search-results';
 

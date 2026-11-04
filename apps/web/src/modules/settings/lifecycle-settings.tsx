@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { apiRequest } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
+import { Input } from '@/components/ui/input';
 
 type Retention = { configuration_revision: number; agent_trace_days: number; raw_source_retention: 'retain'; document_history_retention: 'retain' };
 type Module = { id: string; name: string; enabled: boolean; explicitly_disabled: boolean; blocked_by: string[] };
@@ -38,7 +39,7 @@ export function LifecycleSettings() {
       <h3 className="font-medium">{t('retentionTitle')}</h3>
       <p className="text-muted-foreground text-sm">{t('retentionDescription')}</p>
       {retention.data && <div className="flex flex-wrap items-end gap-3">
-        <label className="label">{t('agentTraceDays')}<input className="input mt-1 w-32" type="number" min={1} max={3650} value={days ?? retention.data.agent_trace_days} onChange={(event) => setDays(Number(event.target.value))} /></label>
+        <label className="label">{t('agentTraceDays')}<Input className="mt-1 w-32" type="number" min={1} max={3650} value={days ?? retention.data.agent_trace_days} onChange={(event) => setDays(Number(event.target.value))} /></label>
         <Button variant="outline" disabled={saveRetention.isPending || days === null || days < 1 || days > 3650} onClick={() => saveRetention.mutate(retention.data!)}>{t('saveRetention')}</Button>
       </div>}
       {retention.isError && <p role="alert" className="text-destructive">{t('lifecycleLoadFailed')}</p>}

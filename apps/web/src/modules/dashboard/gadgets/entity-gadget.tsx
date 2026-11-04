@@ -18,6 +18,7 @@ import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { entityKeys, listEntities, type Entity } from '@/modules/knowledge/api';
 import type { GadgetInstance } from '../api';
+import { BareButton } from '@/components/bare-button';
 
 /** Props for the EntityGadget component. */
 export interface EntityGadgetProps {
@@ -100,7 +101,7 @@ export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
             className="h-7 text-xs pl-7 bg-muted/20"
           />
         </div>
-        <button
+        <BareButton
           type="button"
           onClick={() => entitiesQuery.refetch()}
           disabled={entitiesQuery.isFetching}
@@ -109,7 +110,7 @@ export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
           aria-label={ts('entRefresh')}
         >
           <RotateCw className={`w-3.5 h-3.5 ${entitiesQuery.isFetching ? 'animate-spin' : ''}`} />
-        </button>
+        </BareButton>
         <Link
           href="/knowledge/entities"
           className="p-1 text-muted-foreground hover:text-foreground"

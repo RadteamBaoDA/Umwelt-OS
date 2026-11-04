@@ -8,7 +8,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { DocumentForm } from './document-form';
 import { documentKeys, listDocuments } from './api';
-import { Upload } from '@/modules/ingestion/upload';
+import { Upload } from '@/modules/ingestion';
 import { useRealtime } from '@/core/realtime-provider';
 import { useTranslations } from 'next-intl';
 import { formatDateTime } from '@/core/i18n';

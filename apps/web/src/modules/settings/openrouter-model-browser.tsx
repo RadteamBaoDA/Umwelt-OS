@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ApiError } from '@/core/api';
 import { modelTypeForModality, type ModelType } from './provider-editor';
+import { BareButton } from '@/components/bare-button';
 
 type Translate = (key: string, values?: Record<string, string | number>) => string;
 
@@ -176,11 +177,11 @@ export function OpenRouterModelBrowser({ providerId, browse, excluded, disabled,
     {data?.ok && data.models.length > 0 && <ul className="m-0 flex max-h-96 list-none flex-col gap-1 overflow-y-auto p-0" aria-busy={result.isFetching}>
       {data.models.map((model) => {
         const taken = excluded.has(model.id);
-        return <li key={model.id}><button type="button" disabled={disabled || taken} className="flex w-full flex-col gap-0.5 rounded-md border border-border px-3 py-2 text-left hover:bg-muted focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-50" onClick={() => onPick(model, output === 'all' ? typeForModel(model) : modelTypeForModality(output))}>
+        return <li key={model.id}><BareButton type="button" disabled={disabled || taken} className="flex w-full flex-col gap-0.5 rounded-md border border-border px-3 py-2 text-left hover:bg-muted focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-50" onClick={() => onPick(model, output === 'all' ? typeForModel(model) : modelTypeForModality(output))}>
           <span className="text-sm font-semibold">{model.name || model.id}{taken && <span className="text-muted-foreground font-normal"> · {t('orbAdded')}</span>}</span>
           <span className="text-muted-foreground break-all text-xs">{model.id}</span>
           <span className="text-muted-foreground text-xs">{model.context_length ? t('orbContextTokens', { count: model.context_length.toLocaleString(locale) }) : '–'} · {model.input_modalities.join(', ')} → {model.output_modalities.join(', ')} · {t('orbPriceIn')} {perMillion(model.pricing_prompt, money)} · {t('orbPriceOut')} {perMillion(model.pricing_completion, money)}</span>
-        </button></li>;
+        </BareButton></li>;
       })}
     </ul>}
     <div className="flex gap-2">

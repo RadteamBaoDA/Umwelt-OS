@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { SettingsPageHeader } from './settings-layout';
+import { SettingsPageHeader } from '@/components/settings-layout';
 
 /**
  * Data sources > Personal data permissions tab body.

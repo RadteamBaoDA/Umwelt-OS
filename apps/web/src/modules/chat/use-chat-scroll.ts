@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { useResetOnChange } from '@/modules/shared/use-reset-on-change';
 
 // Follow/scroll-direction behavior adapts AnythingLLM's frontend/src/hooks/useAutoScroll.js;
 // app preferences and its imperative ref are omitted because this transcript has no such owner.
@@ -74,14 +75,12 @@ export function useChatScroll({
   }, []);
 
   // Resetting follow state when the conversation changes must happen before paint.
-  /* eslint-disable react-hooks/set-state-in-effect */
+  useResetOnChange([conversationId], () => { setIsAtBottom(true); });
   React.useLayoutEffect(() => {
     loadedRef.current = false;
     followRef.current = true;
     lastScrollTopRef.current = 0;
-    setIsAtBottom(true);
   }, [conversationId]);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   React.useLayoutEffect(() => {
     if (messageCount === 0) {

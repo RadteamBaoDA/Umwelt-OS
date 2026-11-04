@@ -26,14 +26,14 @@ import {
 import { ChatComposer } from './chat-composer';
 import { useChatModelPicker } from './model-picker';
 import { ProviderGateAlert, useChatProviderReady } from './provider-gate';
-import { PickQrButton } from '@/modules/pick/pick-qr-modal';
+import { PickQrButton } from '@/modules/pick';
 import { removeUiPart, upsertUiPart, type UiPart } from './generative-ui-parts';
 import { AssistantThemeBanner } from './assistant-theme-banner';
 import { ChatTranscript } from './chat-transcript';
 import { TodosPanel } from './todos/todos-panel';
 import { ChatContextBar, MAX_ITEMS, stripItemTitles } from './chat-context-bar';
 import { ATTACHMENT_STATUS_ID, ChatAttachmentBar, useChatAttachments, withAttachments } from './chat-attachments';
-import { ConversationAgentActivity } from '@/modules/agents/conversation-agent-activity';
+import { ConversationAgentActivity } from '@/modules/agents';
 import {
   PendingMessageMutationConflictError,
   useChatController,
@@ -43,8 +43,8 @@ import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { cancelAgentRun, getAgentProfiles, getAgentRun, listAgentRuns, startAgentRun } from '@/modules/agents/api';
-import { AgentRunDetail } from '@/modules/agents/run-detail';
+import { cancelAgentRun, getAgentProfiles, getAgentRun, listAgentRuns, startAgentRun } from '@/modules/agents/public-api';
+import { AgentRunDetail } from '@/modules/agents';
 import { PromptBridgeProvider } from './generative-ui/bridge';
 import { UserInputRequest, type InputRequestState } from './generative-ui/components/user-input-request';
 import { settleWidgetPrompt } from './generative-ui/bridge/widget-prompt';
@@ -283,7 +283,7 @@ export function ChatSession({
     },
   });
   // Selection change must reset local stream state synchronously with the new conversation.
-  /* eslint-disable react-hooks/set-state-in-effect */
+  /* eslint-disable react-hooks/set-state-in-effect -- this effect must also abort the previous stream and consume promotedSelectionRef (mutable refs that cannot be touched during render), and its state resets are conditional on that ref; splitting them would reorder the abort relative to the resets */
   React.useEffect(() => {
     // Detach the previous view's local stream; this does not send a server cancellation request.
     abortControllerRef.current?.abort();

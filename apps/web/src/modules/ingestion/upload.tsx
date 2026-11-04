@@ -8,7 +8,8 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { listSources, sourceKeys, getRun } from '@/modules/sources/api';
+import { listSources, sourceKeys, getRun } from '@/modules/sources/public-api';
+import { Input } from '@/components/ui/input';
 
 /** Sentinel Select value for "no explicit source": the server files the upload under its default Uploads source. */
 const DEFAULT_SOURCE = 'default';
@@ -51,7 +52,7 @@ export function Upload() {
     <form className="form" onSubmit={upload}>
       <div className="field"><Label htmlFor="upload-mode">{ts('uploadMode')}</Label><Select value={mode} onValueChange={(value) => { setMode(value as typeof mode); setSourceId(DEFAULT_SOURCE); setRunId(''); setError(''); }}><SelectTrigger id="upload-mode"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="document">{ts('uploadModeDocument')}</SelectItem><SelectItem value="notes">{ts('uploadModeNotes')}</SelectItem><SelectItem value="finance">{ts('uploadModeFinance')}</SelectItem></SelectContent></Select></div>
       <div className="field"><Label htmlFor="upload-source">{ts('uploadSource')}</Label><Select value={sourceId} onValueChange={setSourceId}><SelectTrigger id="upload-source"><SelectValue /></SelectTrigger><SelectContent><SelectItem value={DEFAULT_SOURCE}>{ts('uploadDefaultSource')}</SelectItem>{available.map((source) => <SelectItem value={source.id} key={source.id}>{source.name}</SelectItem>)}</SelectContent></Select></div>
-      <div className="field"><Label htmlFor="upload-file">{ts('uploadFile')}</Label><input id="upload-file" className="input" name="file" type="file" accept={mode === 'finance' ? '.csv,.ofx' : mode === 'notes' ? '.md,.markdown' : '.txt,.md,.json,.csv,.pdf,.docx'} required /><span className="muted">{mode === 'finance' ? ts('uploadFinanceHint') : mode === 'notes' ? ts('uploadNotesHint') : ts('uploadHint')}</span></div>
+      <div className="field"><Label htmlFor="upload-file">{ts('uploadFile')}</Label><Input id="upload-file" name="file" type="file" accept={mode === 'finance' ? '.csv,.ofx' : mode === 'notes' ? '.md,.markdown' : '.txt,.md,.json,.csv,.pdf,.docx'} required /><span className="muted">{mode === 'finance' ? ts('uploadFinanceHint') : mode === 'notes' ? ts('uploadNotesHint') : ts('uploadHint')}</span></div>
       {error && <p className="error" role="alert">{error}</p>}
       <Button type="submit">{ts('uploadButton')}</Button>
     </form>

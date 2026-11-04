@@ -192,7 +192,7 @@ export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, 
       canvas.addEventListener('webglcontextlost', handleContextLost);
       canvas.addEventListener('webglcontextrestored', handleContextRestored);
       // Renderer creation is an external-system sync; clearing the failure flag belongs here.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- the WebGL renderer was just (re)created by this effect, so the earlier context-lost flag is stale external state.
       setUnavailable(false);
       // The renderer can be built while the lazy chunk/layout is still settling and then never paint (stale size, paused loop,
       // or a context that died silently). Re-apply size and resume on the next frame, then verify the context one frame later

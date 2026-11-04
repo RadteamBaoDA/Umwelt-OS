@@ -38,7 +38,7 @@ export function AssistantThemeBanner({ mode, csrfToken, onResolved }: AssistantT
   React.useEffect(() => {
     setPreview({ theme: mode, locale, timezone }, authGeneration);
     // locale/timezone are intentionally not dependencies: a later locale change must not re-apply the theme.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see the comment above: the omitted values are intentionally not triggers
   }, [mode, authGeneration, setPreview]);
 
   /** Persists the previewed theme with the owner's other preferences unchanged. */

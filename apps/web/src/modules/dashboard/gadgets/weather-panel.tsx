@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl';
 import { Bar, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, XAxis, YAxis } from 'recharts';
 import { normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { listWorldObservationWindow, type WorldObservation } from '@/modules/observations/api';
+import { listWorldObservationWindow, type WorldObservation } from '@/modules/observations/public-api';
 import type { GadgetInstance } from '../api';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';

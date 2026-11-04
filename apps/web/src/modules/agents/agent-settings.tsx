@@ -6,11 +6,12 @@ import { useFormatter, useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
-import { apiRequest, csrfHeaders } from '@/core/api';
+import { apiRequest } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { AgentList } from './agent-list';
 import { cancelAgentRun, getAgentProfiles, getAgentRun, listAgentRuns, updateAgentProfile, type AgentProfile, type AgentRun } from './api';
 import { AgentRunDetail } from './run-detail';
+import { useResetOnChange } from '@/modules/shared/use-reset-on-change';
 
 interface SourceItem { id: string; name: string; status: string }
 interface SourcePage { items: SourceItem[]; next_cursor: string | null }
@@ -57,11 +58,10 @@ export function AgentSettingsWorkspace() {
     enabled: Boolean(selectedRunId),
     refetchInterval: (query) => query.state.data && ['queued', 'running', 'waiting_approval'].includes(query.state.data.status) ? 3000 : false,
   });
-  React.useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
+  useResetOnChange([selected], () => {
     setDraft(selected ? { ...selected, allowed_tools: [...selected.allowed_tools], source_ids: [...selected.source_ids] } : null);
     setSelectedRunId(null);
-  }, [selected]);
+  });
   const save = useMutation({
     mutationFn: (value: AgentProfile) => updateAgentProfile(value, csrfToken),
     onSuccess: async (value) => {

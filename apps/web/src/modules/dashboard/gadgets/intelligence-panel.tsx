@@ -9,6 +9,7 @@ import { getCorrelations } from '../intelligence-api';
 import type { GadgetInstance } from '../api';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { formatReasonLabel } from './metric-label';
+import { BareButton } from '@/components/bare-button';
 
 /**
  * Display bounded, evidence-backed co-occurrence, strongest groups (most signals) first, with coverage and uncertainty in a collapsed details block.
@@ -71,7 +72,7 @@ export function IntelligencePanel({ instance }: { instance: GadgetInstance }) {
             {(group.omitted_document_ids + group.omitted_document_version_ids + group.omitted_event_evidence_ids) > 0 && <p role="status" className="mt-1 text-muted-foreground">{t('correlationSupportOmitted', { documents: group.omitted_document_ids, versions: group.omitted_document_version_ids, evidence: group.omitted_event_evidence_ids })}</p>}
           </li>)}
         </ul>}
-        {visibleGroups < correlation.data.groups.length && <button type="button" onClick={() => setVisibleGroups((count) => Math.min(correlation.data?.groups.length ?? count, count + 20))} className="text-xs text-primary underline">{t('correlationMoreGroups', { count: correlation.data.groups.length - visibleGroups })}</button>}
+        {visibleGroups < correlation.data.groups.length && <BareButton type="button" onClick={() => setVisibleGroups((count) => Math.min(correlation.data?.groups.length ?? count, count + 20))} className="text-xs text-primary underline">{t('correlationMoreGroups', { count: correlation.data.groups.length - visibleGroups })}</BareButton>}
       </>}
     </section>
   </section>;

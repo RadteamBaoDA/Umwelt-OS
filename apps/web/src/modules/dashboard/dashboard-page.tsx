@@ -74,10 +74,11 @@ import { TopicSettings } from '@/modules/news/topic-settings';
 import { HighlightRuleEditor } from '@/modules/settings/highlight-rule-editor';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime, formatTimeZoneLabel } from '@/core/i18n';
-import { listSources, sourceKeys } from '@/modules/sources/api';
+import { listSources, sourceKeys } from '@/modules/sources/public-api';
 import { FreshnessStrip } from './freshness-strip';
 import { FirstRunSetup } from './first-run-setup';
 import { TodayHeader } from './today-header';
+import { BareButton } from '@/components/bare-button';
 
 /**
  * Finds the first free non-overlapping integer rectangle on the 20-column grid.
@@ -533,7 +534,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
       && sameLayout(editOrigin.savedSnapshot, savedPlacements);
     if (originMatches) return;
     // Re-baselines the draft when its owner or saved layout changes; derived state cannot hold undo history.
-    /* eslint-disable react-hooks/set-state-in-effect */
+    /* eslint-disable react-hooks/set-state-in-effect -- undo history is a multi-field draft that must rebaseline atomically with the saved layout; it cannot be derived during render. */
     setDraftPlacements(savedPlacements);
     setHistory([savedPlacements.map((placement) => ({ ...placement }))]);
     setHistoryIndex(0);
@@ -1140,7 +1141,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
           
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button
+              <BareButton
                 type="button"
                 disabled={layoutOperationPending}
                 aria-label={t('switchDashboard')}
@@ -1148,7 +1149,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
               >
                 <span className="truncate">{activeDashboard?.name ?? t('title')}</span>
                 <ChevronDown className="size-5 text-muted-foreground" aria-hidden="true" />
-              </button>
+              </BareButton>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-56">
               {dashboards.map((dash) => (
@@ -1285,9 +1286,9 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
       {activeDashboard && currentBreakpoint === 'mobile' && !editMode && !mobileProjectionUnavailable && readablePlacements && !mobileNoticeDismissed && (
         <p role="status" className="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
           <span className="min-w-0 flex-1">{t('mobileReadingProjection')}</span>
-          <button type="button" aria-label={t('dismissNotice')} onClick={dismissMobileNotice} className="shrink-0 rounded p-0.5 hover:bg-primary/10">
+          <BareButton type="button" aria-label={t('dismissNotice')} onClick={dismissMobileNotice} className="shrink-0 rounded p-0.5 hover:bg-primary/10">
             <X className="size-4" aria-hidden="true" />
-          </button>
+          </BareButton>
         </p>
       )}
 

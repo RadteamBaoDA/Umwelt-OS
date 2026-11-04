@@ -8,13 +8,13 @@ import { apiRequest } from '@/core/api';
 import { useWorkspace } from '@/core/workspace-context';
 import { unsupportedListFilters, type GadgetInstance } from '../api';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
-import { GoalForm } from '@/modules/goals/goal-form';
-import { GoalList } from '@/modules/goals/goal-list';
-import { GoalDetail } from '@/modules/goals/goal-detail';
-import { ProposalReview } from '@/modules/goals/proposal-review';
-import { getTask } from '@/modules/tasks/api';
-import { TaskDetail } from '@/modules/tasks/task-detail';
-import type { Goal, PlanProposal } from '@/modules/goals/types';
+import { GoalForm } from '@/modules/goals';
+import { GoalList } from '@/modules/goals';
+import { GoalDetail } from '@/modules/goals';
+import { ProposalReview } from '@/modules/goals';
+import { getTask } from '@/modules/tasks/public-api';
+import { TaskDetail } from '@/modules/tasks';
+import type { Goal, PlanProposal } from '@/modules/goals';
 
 /** Optional owner-prepared proposal input; proposal display alone never writes tasks. */
 export type GoalProposalInput = { goalId: string; proposal: PlanProposal };

@@ -1,6 +1,6 @@
 'use client';
 
-import { CheckboxField, FieldGrid, SettingsActions, SettingsPageHeader } from './settings-layout';
+import { CheckboxField, FieldGrid, SettingsActions, SettingsPageHeader } from '@/components/settings-layout';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'next-intl';
@@ -10,8 +10,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ApiError } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useWorkspace } from '@/core/workspace-context';
-import { fetchTranslationSettings, saveTranslationSettings } from '@/modules/translations/api';
-import type { TranslationLanguage } from '@/modules/translations/types';
+import { fetchTranslationSettings, saveTranslationSettings } from '@/modules/translations/public-api';
+import type { TranslationLanguage } from '@/modules/translations';
 
 /** Workspace translation toggle and target language. Owners save with expected_revision; members see it read only. */
 export function TranslationSettings() {

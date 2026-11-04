@@ -41,7 +41,7 @@ export function SelectedDayProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get('date');
     // Read after mount so server and client markup match.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- window.location is only readable after mount; reading it during render would break hydration parity.
     if (requested && ISO_DATE.test(requested)) setOverride(requested);
   }, []);
 

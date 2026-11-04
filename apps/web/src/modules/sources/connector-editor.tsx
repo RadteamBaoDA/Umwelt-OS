@@ -1,6 +1,6 @@
 'use client';
 
-import { CheckboxField, FieldGrid, SettingsActions, SettingsSection } from '@/modules/settings/settings-layout';
+import { CheckboxField, FieldGrid, SettingsActions, SettingsSection } from '@/components/settings-layout';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
@@ -13,6 +13,7 @@ import { PasswordInput } from '@/components/ui/password-input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ApiError } from '@/core/api';
+import { useResetOnChange } from '@/modules/shared/use-reset-on-change';
 import { assignAuthorizationUrl } from '@/core/safe-url';
 import { DisconnectDialog } from './disconnect-dialog';
 import { RenameSource } from './source-rename';
@@ -435,15 +436,13 @@ export function ConnectorEditor({
   const [googleResourceParent, setGoogleResourceParent] = useState<string | undefined>();
   const [googleResourcePath, setGoogleResourcePath] = useState<GoogleResourceChoice[]>([]);
   const [googleResourcesTruncated, setGoogleResourcesTruncated] = useState(false);
-  useEffect(() => {
-    // Reset discovered Google resources whenever the edited source or provider changes (state is keyed to them).
-    /* eslint-disable react-hooks/set-state-in-effect */
+  // Reset discovered Google resources whenever the edited source or provider changes (state is keyed to them).
+  useResetOnChange([sourceId, provider], () => {
     setGoogleResources([]);
     setGoogleResourceParent(undefined);
     setGoogleResourcePath([]);
     setGoogleResourcesTruncated(false);
-    /* eslint-enable react-hooks/set-state-in-effect */
-  }, [sourceId, provider]);
+  });
   const [googleDiscoveryError, setGoogleDiscoveryError] = useState<'failed' | 'limit' | null>(null);
   const githubReviewRef = useRef<{ sourceId: string; sourceGeneration: number; revision: number; peers: GitHubPeer[] } | null>(null);
   const loadedFor = useRef('');

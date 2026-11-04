@@ -17,7 +17,7 @@ import {
   type GadgetDefinition, type HighlightRule,
 } from '@/modules/dashboard/api';
 import { fetchAllTopics } from '@/modules/news/api';
-import { CheckboxField, FieldGrid } from './settings-layout';
+import { CheckboxField, FieldGrid } from '@/components/settings-layout';
 import { uuid7 } from '@/core/uuid7';
 
 type Severity = HighlightRule['severity'];

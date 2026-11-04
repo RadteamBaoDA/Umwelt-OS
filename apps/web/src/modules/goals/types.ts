@@ -1,6 +1,6 @@
 /** Types and contracts for strategic goal management and plan proposal acceptance. */
 
-import type { Task, TaskStatus } from '@/modules/tasks/types';
+import type { Task, TaskStatus } from '@/modules/tasks';
 
 /** Lifecycle state supported by owner goal reads and writes. */
 export type GoalStatus = 'active' | 'completed' | 'paused' | 'cancelled';

@@ -11,9 +11,9 @@ import { formatDateTime } from '@/core/i18n';
 import { safeHttpUrl } from '@/core/safe-url';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { fetchStory } from './story-api';
-import { TranslatedBadge } from '@/modules/translations/translated-badge';
-import { TranslationNote } from '@/modules/translations/translation-note';
-import { useContentTranslation } from '@/modules/translations/use-content-translation';
+import { TranslatedBadge } from '@/modules/translations';
+import { TranslationNote } from '@/modules/translations';
+import { useContentTranslation } from '@/modules/translations/public-api';
 import { useNewsIncompleteLabel } from './use-news-incomplete-label';
 
 /** Props for the detail renderer shown when a story is opened from its gadget. */

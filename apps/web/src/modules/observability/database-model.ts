@@ -1,5 +1,6 @@
 import type { HistoryBucket, PgStats, PgTable } from './api';
 import type { Tone } from './system-status-model';
+import { getNumberFormat } from '@/modules/shared/intl-cache';
 
 /** Formats a byte count with binary units (B..TiB) in the locale; null stays null so callers render a dash. */
 export function formatBytes(bytes: number | null | undefined, locale: string): string | null {
@@ -8,19 +9,19 @@ export function formatBytes(bytes: number | null | undefined, locale: string): s
   let value = Math.max(0, bytes);
   let i = 0;
   while (value >= 1024 && i < units.length - 1) { value /= 1024; i += 1; }
-  return `${new Intl.NumberFormat(locale, { maximumFractionDigits: i === 0 ? 0 : 1 }).format(value)} ${units[i]}`;
+  return `${getNumberFormat(locale, { maximumFractionDigits: i === 0 ? 0 : 1 }).format(value)} ${units[i]}`;
 }
 
 /** Formats a 0..1 ratio as a percentage with at most one decimal; null stays null. */
 export function formatRatio(ratio: number | null | undefined, locale: string): string | null {
   if (ratio == null || !Number.isFinite(ratio)) return null;
-  return new Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: 1 }).format(ratio);
+  return getNumberFormat(locale, { style: 'percent', maximumFractionDigits: 1 }).format(ratio);
 }
 
 /** Humanizes a duration in seconds as its two largest units (e.g. "3d 4h"), locale-aware; null stays null. */
 export function formatUptime(seconds: number | null | undefined, locale: string): string | null {
   if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return null;
-  const unit = (value: number, name: string) => new Intl.NumberFormat(locale, { style: 'unit', unit: name, unitDisplay: 'narrow', maximumFractionDigits: 0 }).format(value);
+  const unit = (value: number, name: string) => getNumberFormat(locale, { style: 'unit', unit: name, unitDisplay: 'narrow', maximumFractionDigits: 0 }).format(value);
   const s = Math.floor(seconds);
   const d = Math.floor(s / 86400);
   const h = Math.floor((s % 86400) / 3600);

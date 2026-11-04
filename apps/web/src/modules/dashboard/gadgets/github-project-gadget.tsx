@@ -8,7 +8,7 @@ import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { getGitHubSummary } from '@/modules/sources/api';
+import { getGitHubSummary } from '@/modules/sources/public-api';
 import { listTimeline } from '@/modules/timeline/api';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 import type { GadgetInstance } from '../api';

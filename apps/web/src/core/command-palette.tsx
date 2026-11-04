@@ -239,7 +239,7 @@ export function CommandPalette() {
           <span><kbd className="palette-kbd">↑</kbd> <kbd className="palette-kbd">↓</kbd> {tc('paletteHintMove')}</span>
           <span><kbd className="palette-kbd">Enter</kbd> {tc('paletteHintOpen')}</span>
           <span><kbd className="palette-kbd">Esc</kbd> {tc('paletteHintClose')}</span>
-          <span><kbd className="palette-kbd">Ctrl K</kbd> {tc('paletteHintCommands')}</span>
+          <span><kbd className="palette-kbd">{tc('paletteShortcutKeys')}</kbd> {tc('paletteHintCommands')}</span>
           <span><kbd className="palette-kbd">/</kbd> {tc('paletteHintSearch')}</span>
         </div>
       </DialogContent>

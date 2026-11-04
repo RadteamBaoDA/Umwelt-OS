@@ -17,8 +17,8 @@ import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { StatusDot } from '@/modules/observability/status-row';
 import type { Tone } from '@/modules/observability/system-status-model';
-import { deactivateConnector, triggerCollection } from '@/modules/sources/api';
-import { SecretField, SettingsActions, SettingsPageHeader, SettingsSection } from './settings-layout';
+import { deactivateConnector, triggerCollection } from '@/modules/sources/public-api';
+import { SecretField, SettingsActions, SettingsPageHeader, SettingsSection } from '@/components/settings-layout';
 
 type Source = 'database' | 'environment' | 'none';
 type N8n = { enabled: boolean; callback_base_url: string; configuration_revision: number; service_url: string | null; api_key_configured: boolean; webhook_token_configured: boolean; service_url_source: Source; api_key_source: Source; webhook_token_source: Source };

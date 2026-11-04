@@ -9,6 +9,7 @@ import { normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { getLocalWeather, type LocalWeather as LocalWeatherReading } from './api';
 import { toUnit, useWeatherUnit, weatherCondition, WeatherCard } from './weather-card';
+import { BareButton } from '@/components/bare-button';
 
 type Coords = { lat: number; lon: number };
 type Phase = 'checking' | 'ask' | 'granted' | 'hidden';
@@ -71,10 +72,10 @@ export function LocalWeather({ fallback = null }: { fallback?: ReactNode }) {
       {phase === 'ask' && (
         <>
           {' · '}
-          <button type="button" onClick={locate} title={t('localWeatherPrivacy')} aria-describedby="local-weather-privacy"
+          <BareButton type="button" onClick={locate} title={t('localWeatherPrivacy')} aria-describedby="local-weather-privacy"
             className="cursor-pointer border-0 bg-transparent p-0 text-sm font-normal text-muted-foreground underline underline-offset-2 hover:text-foreground">
             {t('showLocalWeather')}
-          </button>
+          </BareButton>
           <span id="local-weather-privacy" className="sr-only">{t('localWeatherPrivacy')}</span>
         </>
       )}
@@ -118,10 +119,10 @@ function WeatherSummary({ data }: { data: LocalWeatherReading }) {
       <span className="tabular-nums text-foreground">{degrees}°{unit === 'f' ? 'F' : 'C'}</span> {t(key)}
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
-          <button type="button" aria-label={t('weatherDetails')} onPointerEnter={hoverOpen} onPointerLeave={hoverClose}
+          <BareButton type="button" aria-label={t('weatherDetails')} onPointerEnter={hoverOpen} onPointerLeave={hoverClose}
             className="ml-1 inline-flex size-6 cursor-pointer items-center justify-center rounded-full border-0 bg-transparent p-0 align-middle text-muted-foreground hover:bg-raised hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
             <Info className="size-4" aria-hidden="true" />
-          </button>
+          </BareButton>
         </PopoverTrigger>
         <PopoverContent align="end" className="w-auto p-0" onPointerEnter={keepOpen} onPointerLeave={hoverClose}>
           <WeatherCard data={data} />

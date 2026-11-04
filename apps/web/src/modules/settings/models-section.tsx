@@ -12,7 +12,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { OpenRouterModelBrowser, type BrowseOpenRouter } from './openrouter-model-browser';
 import { guessModelType, mappingProviderId, modelTestKey, ModelTestChip, openRouterOnlyModelTypes, selectableModelTypes, testRoleByType, type ModelTestState, type ModelType, type ProviderModel, type ProviderRead } from './provider-editor';
-import { FieldGrid } from './settings-layout';
+import { FieldGrid } from '@/components/settings-layout';
+import { BareButton } from '@/components/bare-button';
 
 type Translate = (key: string, values?: Record<string, string | number>) => string;
 /** Stored mapping: which provider model serves one role. */
@@ -98,7 +99,7 @@ export function ModelsPanel({ providers, discovered, modelTests, checkedAt = {},
             <ModelTestChip state={state} t={t} />
             {state && state !== 'pending' && checkedAt[modelTestKey(owner.id, model.id)] && <span className="text-muted-foreground text-sm">{t('modelCheckedAt', { time: new Date(checkedAt[modelTestKey(owner.id, model.id)]).toLocaleString() })}</span>}
             {state && state !== 'pending' && state !== 'supported' && details[modelTestKey(owner.id, model.id)] && <Tooltip>
-              <TooltipTrigger asChild><button type="button" className="text-destructive inline-flex" aria-label={details[modelTestKey(owner.id, model.id)]}><Info className="size-4" aria-hidden="true" /></button></TooltipTrigger>
+              <TooltipTrigger asChild><BareButton type="button" className="text-destructive inline-flex" aria-label={details[modelTestKey(owner.id, model.id)]}><Info className="size-4" aria-hidden="true" /></BareButton></TooltipTrigger>
               <TooltipContent className="max-w-sm break-words">{details[modelTestKey(owner.id, model.id)]}</TooltipContent>
             </Tooltip>}
           </div></TableCell>

@@ -33,6 +33,7 @@ import {
 import { formatChartValue } from '@/core/charts/recharts-wrapper';
 import { normalizeFormattingLocale, type AppLocaleId } from '@/core/i18n';
 import { genUiCopy, resolveWidgetLocale, TABLE_COPY } from '../copy';
+import { BareButton } from '@/components/bare-button';
 
 /** Supported cell formatting modes in TableCatalog. */
 export type TableColumnFormat = 'text' | 'number' | 'currency' | 'percent' | 'badge';
@@ -413,7 +414,7 @@ export function TableCatalog({
                 return (
                   <TableHead key={col.key} aria-sort={ariaSort} className="px-3 py-2 text-xs">
                     {col.sortable !== false ? (
-                      <button
+                      <BareButton
                         type="button"
                         onClick={() => { handleSortColumn(col.key); pager.setPage(1); }}
                         aria-label={copy.sortByLabel(col.label)}
@@ -433,7 +434,7 @@ export function TableCatalog({
                             aria-hidden="true"
                           />
                         )}
-                      </button>
+                      </BareButton>
                     ) : (
                       <span className="font-semibold text-foreground">{col.label}</span>
                     )}

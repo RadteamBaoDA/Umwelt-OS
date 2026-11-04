@@ -1,7 +1,7 @@
 import { apiRequest } from '@/core/api';
-import type { Goal } from '@/modules/goals/types';
-import type { Milestone } from '@/modules/goals/types';
-import type { Task, TaskPage } from '@/modules/tasks/types';
+import type { Goal } from '@/modules/goals';
+import type { Milestone } from '@/modules/goals';
+import type { Task, TaskPage } from '@/modules/tasks';
 
 /** Carries backend-scored document provenance, excerpt, entity references, and the cited source revision. */
 export type SearchHit = {

@@ -15,7 +15,7 @@ import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { safeHttpUrl } from '@/core/safe-url';
-import { connectorKeys, getConnectorCatalog } from '@/modules/sources/api';
+import { connectorKeys, getConnectorCatalog } from '@/modules/sources/public-api';
 
 export type PendingReview = {
   workspace_id: string;

@@ -8,6 +8,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import type { LocalWeather } from './api';
+import { BareButton } from '@/components/bare-button';
 
 type ConditionKey = 'weatherClear' | 'weatherMainlyClear' | 'weatherPartlyCloudy' | 'weatherCloudy' | 'weatherFog'
   | 'weatherDrizzle' | 'weatherRain' | 'weatherSnow' | 'weatherShowers' | 'weatherThunder';
@@ -117,10 +118,10 @@ export function WeatherCard({ data }: { data: LocalWeather }) {
             {(['c', 'f'] as const).map((option, index) => (
               <span key={option} className="flex items-center">
                 {index > 0 && <span className="px-0.5 text-muted-foreground" aria-hidden="true">|</span>}
-                <button type="button" aria-pressed={unit === option} onClick={() => chooseUnit(option)}
+                <BareButton type="button" aria-pressed={unit === option} onClick={() => chooseUnit(option)}
                   className="cursor-pointer rounded-sm border-0 bg-transparent p-0.5 text-muted-foreground hover:text-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
                   {option === 'c' ? '°C' : '°F'}
-                </button>
+                </BareButton>
               </span>
             ))}
           </div>

@@ -120,13 +120,13 @@ export function FlatMap({ features, selectedFeatureId, onSelectFeature, width, h
   const zoom = fitZoom(width, height);
   const [viewState, setViewState] = useState({ target: [0, 0, 0] as [number, number, number], zoom });
   // Resize changes the fitted external map view while preserving its current target.
-  // eslint-disable-next-line react-hooks/set-state-in-effect
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs React state to the Deck-controlled view when the fitted zoom changes; the user's pan target must survive, so it cannot be derived or keyed.
   useEffect(() => { setViewState((current) => ({ ...current, zoom })); }, [zoom]);
   const focused = focusSelected ? features.find((item) => item.feature_id === selectedFeatureId) : undefined;
   const focusedLat = focused?.latitude, focusedLon = focused?.longitude;
   useEffect(() => {
     // Selection from the accessible event list must update Deck's controlled view.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- re-centres the Deck-controlled view only when the selected feature changes, so later user panning is not overwritten.
     if (focusedLat !== undefined && focusedLon !== undefined) setViewState((current) => ({ ...current, target: [focusedLon, focusedLat, 0] }));
   }, [selectedFeatureId, focusedLat, focusedLon]);
   const layers = useMemo(() => [

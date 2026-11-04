@@ -2,7 +2,8 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { useEffect, useId, useState } from 'react';
+import { useId, useState } from 'react';
+import { useResetOnChange } from '@/modules/shared/use-reset-on-change';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -35,8 +36,7 @@ export function LiveMapConfig() {
   const [email, setEmail] = useState('');
   const [emailChanged, setEmailChanged] = useState(false);
   // Clear unsaved secrets immediately when workspace authority changes.
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { setWeatherKey(''); setFirmsKey(''); setEmail(''); setEmailChanged(false); setRemoveWeather(false); setRemoveFirms(false); setTermsSelected([]); setTermsReview(false); setTermsEvidence(''); }, [workspace.selection?.id]);
+  useResetOnChange([workspace.selection?.id], () => { setWeatherKey(''); setFirmsKey(''); setEmail(''); setEmailChanged(false); setRemoveWeather(false); setRemoveFirms(false); setTermsSelected([]); setTermsReview(false); setTermsEvidence(''); });
   const save = useMutation({
     mutationFn: () => apiRequest<Config>('/api/v1/live-map/config', { method: 'PUT', headers: { 'Content-Type': 'application/json', ...csrfHeaders(session.csrfToken) }, body: JSON.stringify({ expected_revision: config.data?.revision, ...(removeWeather ? { openweather_key: null } : weatherKey ? { openweather_key: weatherKey } : {}), ...(removeFirms ? { firms_key: null } : firmsKey ? { firms_key: firmsKey } : {}), ...(emailChanged ? { sec_contact_email: email.trim() || null } : {}) }) }),
     onSuccess: (saved) => { client.setQueryData(key, saved); void client.resetQueries({ queryKey: ['live-map'] }); setWeatherKey(''); setFirmsKey(''); setRemoveWeather(false); setRemoveFirms(false); setEmailChanged(false); },

@@ -7,7 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { formatDateTime } from '@/core/i18n';
-import { listWorldObservationWindow, type WorldObservation } from '@/modules/observations/api';
+import { listWorldObservationWindow, type WorldObservation } from '@/modules/observations/public-api';
 import { useDisplayPreferences } from '@/core/query-provider';
 import type { GadgetInstance, HighlightRule } from '../api';
 import { evaluateGadgetHighlights } from '../api';

@@ -54,7 +54,7 @@ export function useWeatherRaster({ weatherLayer, weatherWorkspaceId, weatherRevi
     }
     const abort = new AbortController();
     // Clear the old raster before a refresh so a failed fetch cannot leave stale imagery visible.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- starts an abortable tile fetch (external sync); the previous raster must be dropped synchronously with its start.
     setResult(null);
     callback.current?.('loading');
     /** Fetch and reproject four bounded tiles, discarding results when authority or visibility changes. */

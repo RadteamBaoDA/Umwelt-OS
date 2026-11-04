@@ -7,12 +7,13 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useS
 import { Button } from '@/components/ui/button';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { listGeospatialObservations } from '@/modules/observations/api';
+import { listGeospatialObservations } from '@/modules/observations/public-api';
 import type { GadgetInstance } from '../api';
 import { buildMapLayers, projectMapFeatures } from '../map-layers';
 import { GadgetNotice } from './gadget-notice';
 import { LiveMapGadget } from './live-map-gadget';
 import { formatMetricLabel, formatProviderName } from './metric-label';
+import { BareButton } from '@/components/bare-button';
 
 const FlatMap = lazy(() => import('./flat-map').then((module) => ({ default: module.FlatMap })));
 const GlobeMap = lazy(() => import('./globe-map').then((module) => ({ default: module.GlobeMap })));
@@ -134,13 +135,13 @@ function SelectedSourcesMapGadget({ instance, isEditMode = false }: { instance: 
       {features.length > 0 && <h3 className="line-clamp-2 break-words text-xs font-semibold">{t('mapEvidenceList', { count: features.length })}</h3>}
       <ul className="min-h-0 flex-1 divide-y divide-border overflow-y-auto" aria-label={t('mapEvidenceListLabel')}>
         {features.map((feature) => <li key={feature.feature_id}>
-          <button type="button" onClick={() => setSelectedFeatureId(feature.feature_id)} aria-pressed={feature.feature_id === selectedFeatureId} className="flex w-full items-start justify-between gap-2 py-1.5 text-left text-xs hover:bg-muted/30">
+          <BareButton type="button" onClick={() => setSelectedFeatureId(feature.feature_id)} aria-pressed={feature.feature_id === selectedFeatureId} className="flex w-full items-start justify-between gap-2 py-1.5 text-left text-xs hover:bg-muted/30">
             <span className="min-w-0 truncate">{formatMetricLabel(feature.metric, t)} · {feature.region ?? formatProviderName(feature.provider)}<time className="block text-xs text-muted-foreground" dateTime={feature.observed_at}>{formatDateTime(feature.observed_at, display.locale, display.timezone)}</time></span>
             <span className="shrink-0 tabular-nums">{feature.value ?? '—'} {feature.unit}</span>
-          </button>
+          </BareButton>
         </li>)}
       </ul>
-      {observations.hasNextPage && <button type="button" disabled={observations.isFetchingNextPage} onClick={() => void observations.fetchNextPage()} className="line-clamp-2 max-w-full self-start break-words py-1 text-xs text-primary underline disabled:opacity-50">{observations.isFetchingNextPage ? t('observationLoading') : t('mapLoadMore')}</button>}
+      {observations.hasNextPage && <BareButton type="button" disabled={observations.isFetchingNextPage} onClick={() => void observations.fetchNextPage()} className="line-clamp-2 max-w-full self-start break-words py-1 text-xs text-primary underline disabled:opacity-50">{observations.isFetchingNextPage ? t('observationLoading') : t('mapLoadMore')}</BareButton>}
       {(observations.data?.pages.some((page) => page.truncated) || ((observations.data?.pages.length ?? 0) >= 5 && Boolean(observations.data?.pages.at(-1)?.next_cursor))) && <p role="status" className="line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('observationTruncated')}</p>}
     </div>
     {/* The data and basemap credit describes a drawn map, so it shows only when the plot is rendered. */}

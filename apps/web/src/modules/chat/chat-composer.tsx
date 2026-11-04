@@ -8,6 +8,7 @@ import { useTranslations } from 'next-intl';
 import { ArrowUpIcon, CloudIcon, DatabaseIcon, FileTextIcon, GlobeIcon, PaperclipIcon, PlusIcon, SquareIcon } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { COMPOSER_MENU_ID } from '@/modules/chat/chat-attachments';
 import { ModelPicker, type ChatModelPicker } from '@/modules/chat/model-picker';
@@ -159,7 +160,7 @@ export function ChatComposer({
 
   const isFull = mode === 'full';
   const textarea = (
-    <textarea
+    <Textarea
       ref={textareaRef}
       value={value}
       onChange={handleChange}
@@ -171,7 +172,7 @@ export function ChatComposer({
       aria-disabled={disabled || undefined}
       rows={2}
       // The surrounding box owns the border and focus ring in both layouts, so the field itself is borderless.
-      className="block max-h-[200px] min-h-14 w-full resize-none overflow-y-auto bg-transparent px-1 py-1 text-base text-foreground outline-none placeholder:text-muted-foreground aria-disabled:opacity-50 sm:text-[15px]"
+      className="block field-sizing-fixed max-h-[200px] min-h-14 w-full resize-none overflow-y-auto rounded-none border-0 bg-transparent px-1 py-1 text-base text-foreground shadow-none outline-none placeholder:text-muted-foreground focus-visible:ring-0 aria-disabled:opacity-50 sm:text-[15px] md:text-[15px] dark:bg-transparent"
       aria-label={t('composerPlaceholder')}
     />
   );

@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { listTimeline, type TimelineEvent, type TimelineQuery } from '@/modules/timeline/api';
 import type { GadgetInstance } from '../api';
+import { BareButton } from '@/components/bare-button';
 
 /** Props for the TimelineGadget component. */
 export interface TimelineGadgetProps {
@@ -92,7 +93,7 @@ export function TimelineGadget({ instance, initialEvents }: TimelineGadgetProps)
           {t('timelineEventCount', { count: events.length })}
         </span>
         <div className="flex items-center gap-1.5">
-          <button
+          <BareButton
             type="button"
             onClick={() => timelineQuery.refetch()}
             disabled={timelineQuery.isFetching}
@@ -103,7 +104,7 @@ export function TimelineGadget({ instance, initialEvents }: TimelineGadgetProps)
             <RotateCw
               className={`w-3.5 h-3.5 ${timelineQuery.isFetching ? 'animate-spin' : ''}`}
             />
-          </button>
+          </BareButton>
           <Link
             href="/timeline"
             className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline"

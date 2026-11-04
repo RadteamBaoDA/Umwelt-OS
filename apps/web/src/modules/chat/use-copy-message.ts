@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { useResetOnChange } from '@/modules/shared/use-reset-on-change';
 
 // Copied-state feedback adapts AnythingLLM's frontend/src/hooks/useCopyText.js;
 // this port writes plain text only and has no model-thought or rich-HTML contract.
@@ -37,17 +38,18 @@ export function useCopyMessage(conversationId: string | null | undefined) {
   }, []);
 
   // Clear copy feedback when the conversation changes so it cannot leak across threads.
-  /* eslint-disable react-hooks/set-state-in-effect */
-  React.useEffect(() => {
+  useResetOnChange([conversationId], () => {
     setCopiedMessageId(null);
     setFailedMessageId(null);
+  });
+  // The effect only invalidates in-flight copies and timers on conversation change/unmount (no state writes).
+  React.useEffect(() => {
     return () => {
       generationRef.current += 1;
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = null;
     };
   }, [conversationId]);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   return { copyMessage, copiedMessageId, failedMessageId };
 }
