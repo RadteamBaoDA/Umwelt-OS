@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.auth.dependencies import require_account, require_account_write
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
-from core.model_gateway.client import ModelGateway, ModelGatewayError
+from core.model_gateway.client import ModelGateway, ModelGatewayError, hosted_endpoint_equivalent
 from core.model_gateway.schemas import (
     MODEL_ROLES,
     AISettingsRead,
@@ -27,6 +27,7 @@ from core.workspaces.schemas import WorkspaceContext
 from modules.chat import web_search as web
 from modules.chat.generative_ui import external_router as viz
 from modules.settings import lifecycle, models, public
+from modules.settings.openrouter_models import parse_openrouter_models, to_query_params
 from modules.settings.schemas import (
     ConnectionTestResult,
     ModuleLifecycleRead,
@@ -34,6 +35,9 @@ from modules.settings.schemas import (
     N8nRead,
     N8nTest,
     N8nUpdate,
+    OpenRouterBrowseRequest,
+    OpenRouterBrowseResult,
+    OpenRouterModelRead,
     OwnerPreferencesRead,
     OwnerPreferencesUpdate,
     RetentionSettingsRead,
@@ -488,3 +492,54 @@ async def discover_viz_decision_models(
         return VizDecisionModelsResult(ok=False, error=error)
     return VizDecisionModelsResult(
         ok=True, models=[VizDecisionModel(**item) for item in viz.parse_decision_models(payload)])
+
+
+@router.post("/ai/openrouter/models", response_model=OpenRouterBrowseResult,
+             dependencies=[Depends(require_budget("model_probe", 10, 60))])
+async def browse_openrouter_models(
+    body: OpenRouterBrowseRequest, session: Session, request: Request, _owner: OwnerWrite,
+) -> OpenRouterBrowseResult:
+    """Browse the OpenRouter model catalog with allowlisted filters, a transient or the saved key.
+
+    The key goes only to the fixed openrouter.ai endpoint through the policy-checked gateway client. A saved key
+    is reused only from a provider of kind ``openrouter`` still on that endpoint. Filters are validated before any
+    I/O (422); the response is a bounded validated projection and failures return a short code, never URL/body/key.
+    """
+    settings = request.app.state.settings
+    redis = request.app.state.redis
+    base = await public.get_ai_execution_config(session, settings, redis, scope=_owner)
+    key = body.api_key
+    if not key and body.provider_id:
+        saved = base.providers.get(body.provider_id)
+        # A stored key may only be sent to its own provider's endpoint, never reused for another kind.
+        if saved is not None and saved.kind == "openrouter" and hosted_endpoint_equivalent("openrouter", saved.base_url):
+            key = saved.api_key
+    if not key:
+        return OpenRouterBrowseResult(ok=False, error="credential_required")
+    config = public.viz_decision_discovery_config(base, key, settings)
+    if config.gateway_base_url is None:
+        return OpenRouterBrowseResult(ok=False, error="network_denied")
+    session_ref = authenticated_session_ref(request)
+
+    async def recheck_send() -> None:
+        """Recheck session, workspace and settings identity before egress; roll back before provider network."""
+        try:
+            await public.check_ai_execution_config(session, settings, redis, scope=_owner, expected=base,
+                                                   auth_sessions=(session_ref,))
+        finally:
+            await session.rollback()
+
+    await session.rollback()
+    gateway = ModelGateway(redis, config.gateway_base_url, config.gateway_api_key, config.endpoint_destination_id or "remote",
+                           timeout_seconds=15, scope=_owner, configuration_revision=config.configuration_revision,
+                           gateway_identity=config.gateway_identity, model_identity=config.model_identity, before_send=recheck_send,
+                           approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
+                           allow_public_endpoints=config.allow_public_providers, kind="openrouter")
+    try:
+        payload = await gateway.list_openrouter_models(to_query_params(body.filters, body.offset, body.limit))
+    except ModelGatewayError as exc:
+        return OpenRouterBrowseResult(ok=False, error=viz.error_from_gateway(exc).code)
+    models, total, has_next = parse_openrouter_models(payload, body.limit)
+    return OpenRouterBrowseResult(
+        ok=True, models=[OpenRouterModelRead(**m) for m in models], total_count=total,
+        next_offset=body.offset + len(models) if has_next else None)

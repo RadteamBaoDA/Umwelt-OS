@@ -4,8 +4,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator
 
-from core.model_gateway.schemas import ModelMapping, PrivacySettings
+from core.model_gateway.schemas import ModelMapping, PrivacySettings, ProviderId
 from modules.settings.display_name import normalize_display_name
+from modules.settings.openrouter_models import OpenRouterModelFilters
 
 
 class OwnerPreferencesRead(BaseModel):
@@ -301,6 +302,39 @@ class VizDecisionModelsResult(BaseModel):
     error: str | None = None
 
 
+class OpenRouterBrowseRequest(BaseModel):
+    """Browse input: allowlisted filters plus paging; a blank key falls back to a saved OpenRouter provider's key."""
+    model_config = ConfigDict(extra="forbid")
+
+    provider_id: ProviderId | None = None
+    api_key: str = Field("", max_length=4096, repr=False)
+    filters: OpenRouterModelFilters = Field(default_factory=OpenRouterModelFilters)
+    offset: int = Field(0, ge=0, le=100_000)
+    limit: int = Field(50, ge=1, le=200)
+
+
+class OpenRouterModelRead(BaseModel):
+    """One validated, bounded OpenRouter catalog entry."""
+    id: str = Field(max_length=200)
+    name: str = Field(max_length=200)
+    created: int | None = None
+    context_length: int | None = None
+    input_modalities: list[str] = Field(default_factory=list, max_length=8)
+    output_modalities: list[str] = Field(default_factory=list, max_length=8)
+    pricing_prompt: str | None = Field(None, max_length=32)
+    pricing_completion: str | None = Field(None, max_length=32)
+    supported_parameters: list[str] = Field(default_factory=list, max_length=64)
+
+
+class OpenRouterBrowseResult(BaseModel):
+    """Browse outcome: ``models`` on success, a short ``error`` code (never URL/body/key) otherwise."""
+    ok: bool
+    error: str | None = None
+    models: list[OpenRouterModelRead] = Field(default_factory=list, max_length=200)
+    total_count: int = 0
+    next_offset: int | None = None
+
+
 __all__ = [
     "ConnectionTestResult",
     "MaintenanceSummaryRead",
@@ -311,6 +345,9 @@ __all__ = [
     "N8nRead",
     "N8nTest",
     "N8nUpdate",
+    "OpenRouterBrowseRequest",
+    "OpenRouterBrowseResult",
+    "OpenRouterModelRead",
     "OwnerPreferencesRead",
     "OwnerPreferencesUpdate",
     "PrivacySettings",

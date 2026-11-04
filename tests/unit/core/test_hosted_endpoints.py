@@ -1,5 +1,10 @@
 from core.model_gateway.client import effective_provider_kind, hosted_endpoint_equivalent
-from core.model_gateway.schemas import HOSTED_PROVIDER_ENDPOINTS, ConnectionDraft, DraftProbeRequest, ProviderModel
+from core.model_gateway.schemas import (
+    HOSTED_PROVIDER_ENDPOINTS,
+    ConnectionDraft,
+    DraftProbeRequest,
+    ProviderModel,
+)
 from modules.settings.public import role_accepts
 
 

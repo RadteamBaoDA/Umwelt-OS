@@ -727,10 +727,11 @@ class ModelGateway:
         await self._breaker_ok()
         return models
 
-    async def discover_decision_models(self) -> dict[str, Any]:
-        """Fetch the raw OpenRouter ``/models?output_modalities=decisions`` listing under capacity and endpoint policy.
+    async def list_openrouter_models(self, params: dict[str, str]) -> dict[str, Any]:
+        """Fetch the raw OpenRouter ``/models`` listing for ``params`` under capacity and endpoint policy.
 
-        The caller validates and bounds the payload (``parse_decision_models``). Errors carry a static reason only.
+        ``params`` are pre-validated, allowlisted query parameters. The caller validates and bounds the payload.
+        Errors carry a static reason only, never a URL, body or key.
         """
         if self.base_url is None or not self.api_key:
             raise ModelGatewayError("Model gateway is not configured")
@@ -743,7 +744,7 @@ class ModelGateway:
                                    http_client=self._http_client(base_url)) as client:
                 try:
                     page = await client.get("/models", cast_to=dict[str, Any],
-                                            options={"params": {"output_modalities": "decisions"}})
+                                            options={"params": params})
                 except (APIConnectionError, APITimeoutError, APIStatusError) as exc:
                     _raise_if_policy_denied(exc)
                     if isinstance(exc, APIStatusError):
@@ -756,6 +757,10 @@ class ModelGateway:
                 return page if isinstance(page, dict) else {}
 
         return await self._with_slot(send)
+
+    async def discover_decision_models(self) -> dict[str, Any]:
+        """Fetch the raw OpenRouter ``/models?output_modalities=decisions`` listing (see ``list_openrouter_models``)."""
+        return await self.list_openrouter_models({"output_modalities": "decisions"})
 
     async def decisions(
         self, role: str, mapping: ModelMapping | None, policy: RequestPolicy,
