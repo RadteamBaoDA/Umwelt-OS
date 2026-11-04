@@ -11,7 +11,7 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { AppLocaleId, normalizeFormattingLocale } from '@/core/i18n';
 import { isStale } from './freshness';
 import { useErrorCodeLabel } from '@/core/error-codes';
-import { connectorKeys, getSourceIngestion, IngestionRun, IngestionRunStatus, retryRun, Source, sourceKeys } from './api';
+import { CollectionStats, connectorKeys, getSourceIngestion, IngestionRun, IngestionRunStatus, retryRun, Source, sourceKeys } from './api';
 
 /** Formats an ISO timestamp with the supplied application locale and time zone. */
 function formatDate(value: string, locale: AppLocaleId, timezone: string): string {
@@ -140,8 +140,28 @@ function RunRow({ run, source, t, locale, timezone, retryPending, onRetry }: {
           {stage.stage_key === 'normalize' && <span>{t('normalizedCount')}: {stage.normalized_count} · {t('selectedCurrentCount')}: {stage.selected_current_count} · {t('duplicateCount')}: {stage.duplicate_count} · {t('skippedCount')}: {stage.skipped_count} · {t('failedCount')}: {stage.failed_count} · {t('pendingCount')}: {stage.pending_count}</span>}
           {stage.status === 'failed' && run.status === 'failed' && source.status === 'active' && !hasActiveStage && <Button type="button" size="sm" variant="outline" disabled={retryPending} onClick={() => onRetry(stage.stage_key)}>{t('runRetryStage', { stage: stage.stage_key })}</Button>}
         </div>
-      </details>)}</div>
+      </details>)}
+      {run.collection_stats && <CollectionStatsLines stats={run.collection_stats} t={t} locale={locale} timezone={timezone} />}</div>
     </TableCell>
     <TableCell className="whitespace-normal">{run.error_code ? `${t('runError')}: ${errorLabel(run.error_code)}` : '—'}</TableCell>
   </TableRow>;
+}
+
+/**
+ * Per-run collection telemetry from the acceptance receipt: new vs waiting-for-next-sync counts, a gap warning when the
+ * feed no longer returned items since the last cursor, skipped duplicates, sections that failed to fetch, a page-cut (`truncated`) warning, failed MCP calls and a
+ * "catching up" note while a social source has not reached its older posts yet (`caught_up === false`).
+ * Every line is omitted when its field is absent or zero, so runs without stats render nothing.
+ */
+function CollectionStatsLines({ stats, t, locale, timezone }: { stats: CollectionStats; t: ReturnType<typeof useTranslations<'sources'>>; locale: AppLocaleId; timezone: string }) {
+  const failed = stats.failed_sections ?? [];
+  return <div className="grid gap-1 text-xs text-muted-foreground">
+    {stats.new != null && <span>{t('runCollectionNew', { new: stats.new, backlog: stats.backlog ?? 0 })}</span>}
+    {stats.gap && <span className="text-destructive" role="status">{t('runCollectionGap', { gap: `${formatDate(stats.gap[0], locale, timezone)} – ${formatDate(stats.gap[1], locale, timezone)}` })}</span>}
+    {Boolean(stats.duplicates) && <span>{t('runCollectionDuplicates', { count: stats.duplicates ?? 0 })}</span>}
+    {stats.truncated === true && <span className="text-destructive" role="status">{t('runCollectionTruncated')}</span>}
+    {Boolean(stats.failed_calls) && <span className="text-destructive" role="alert">{t('runCollectionFailedCalls', { count: stats.failed_calls ?? 0 })}</span>}
+    {stats.caught_up === false && <span role="status">{t('runCollectionCatchingUp')}</span>}
+    {failed.length > 0 && <span className="text-destructive" role="alert">{t('runCollectionFailedSections', { sections: failed.join(', ') })}</span>}
+  </div>;
 }

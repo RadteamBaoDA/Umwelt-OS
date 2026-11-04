@@ -27,7 +27,7 @@ export function formatReasonLabel(code: string, t: LabelTranslator): string {
 }
 
 const PROVIDER_NAMES: Record<string, string> = {
-  binance: 'Binance', coingecko: 'CoinGecko', alpha_vantage: 'Alpha Vantage', frankfurter: 'Frankfurter', yahoo: 'Yahoo Finance',
+  binance: 'Binance', coingecko: 'CoinGecko', alpha_vantage: 'Alpha Vantage', frankfurter: 'Frankfurter', yahoo: 'Yahoo Finance', open_meteo: 'Open-Meteo',
 };
 
 /**

@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dashboardMessages } from '@/core/messages/dashboard';
 import { ProviderObservationGadget, latestPerSeries } from './provider-observation-gadget';
 
+const freshness = vi.hoisted(() => ({ report: vi.fn() }));
+vi.mock('../gadget-freshness', () => ({ useReportGadgetFreshness: freshness.report }));
 const api = vi.hoisted(() => ({ listWorldObservationWindow: vi.fn(), getConnectorConfiguration: vi.fn(), getMetricCatalog: vi.fn(), listGadgetSources: vi.fn() }));
 vi.mock('../api', async (original) => ({ ...(await original<typeof import('../api')>()), getMetricCatalog: api.getMetricCatalog, listGadgetSources: api.listGadgetSources }));
 vi.mock('@/modules/observations/api', () => ({ listWorldObservationWindow: api.listWorldObservationWindow }));
@@ -50,11 +52,12 @@ describe('ProviderObservationGadget', () => {
     expect(Math.round((to.getTime() - from.getTime()) / 86_400_000)).toBe(31);
   });
 
-  it('reads one page only: latest-per-series needs the newest rows, not the whole window', async () => {
+  it('reads revision history over at most two pages so each series has points for delta and sparkline', async () => {
     api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: [] });
     view();
     await waitFor(() => expect(api.listWorldObservationWindow).toHaveBeenCalled());
-    expect(api.listWorldObservationWindow.mock.calls[0][0].maxPages).toBe(1);
+    expect(api.listWorldObservationWindow.mock.calls[0][0].maxPages).toBe(2);
+    expect(api.listWorldObservationWindow.mock.calls[0][0].history).toBe(true);
   });
 
   it('pages the source list to find the bound provider beyond the first page', async () => {
@@ -68,13 +71,52 @@ describe('ProviderObservationGadget', () => {
     expect(Math.round((to.getTime() - from.getTime()) / 86_400_000)).toBe(3651);
   });
 
-  it('shows Fear & Greed with Alternative.me attribution and separate times', async () => {
+  it('shows Fear & Greed with Alternative.me attribution in the frame footer and times in the value tooltip', async () => {
     api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: [{ ...base, id: 'o1', provider: 'alternative_me', metric: 'fear_greed_index', value: 42, unit: 'index', observed_at: '2026-10-09T00:00:00Z', published_at: '2026-10-09T00:05:00Z' }] });
     view();
-    expect(await screen.findByText(/Alternative\.me/)).toBeTruthy();
-    expect(screen.getByText(/Observed/)).toBeTruthy();
-    expect(screen.getByText(/Published/)).toBeTruthy();
-    expect(screen.getByText(/Collected/)).toBeTruthy();
+    const row = await screen.findByTestId('observation-row');
+    expect(row.title).toMatch(/Observed/);
+    expect(row.title).toMatch(/Published/);
+    expect(row.title).toMatch(/Collected/);
+    expect(freshness.report).toHaveBeenLastCalledWith(expect.any(String), 'Data: Alternative.me');
+  });
+
+  it('single series with history renders figure, delta vs previous observation and a sparkline', async () => {
+    const at = (day: number, value: number, id: string) => ({ ...base, id, provider: 'binance', metric: 'btc_price', value, unit: 'USD', observed_at: `2026-10-0${day}T00:00:00Z` });
+    api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: [at(3, 110, 'c'), at(2, 100, 'b'), at(1, 90, 'a')] });
+    view();
+    const pill = await screen.findByTestId('delta-pill');
+    expect(pill.textContent).toContain('+10.0%');
+    expect(screen.getByTestId('sparkline')).toBeTruthy();
+  });
+
+  it('multiple series render one SeriesRow each with its own delta', async () => {
+    const row = (id: string, symbol: string, day: number, value: number) => ({ ...base, id, provider: 'binance', metric: 'price', symbol, value, unit: 'USD', observed_at: `2026-10-0${day}T00:00:00Z` });
+    api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: [row('a2', 'AAA', 2, 50), row('a1', 'AAA', 1, 100), row('b2', 'BBB', 2, 10), row('b1', 'BBB', 1, 10)] });
+    view();
+    await screen.findAllByTestId('observation-row');
+    const pills = screen.getAllByTestId('delta-pill').map((p) => p.textContent);
+    expect(pills.some((text) => text?.includes('50.0%'))).toBe(true);
+    expect(pills.some((text) => text?.includes('0.0%') && !text.includes('50'))).toBe(true);
+  });
+
+  it('keeps precision for small values and compacts large ones in the KPI figure', async () => {
+    api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: [{ ...base, id: 'o1', provider: 'binance', metric: 'price', value: 0.0067, unit: 'u', observed_at: '2026-10-09T00:00:00Z' }] });
+    const first = view();
+    expect((await screen.findByTestId('observation-row')).textContent).toContain('0.0067');
+    first.unmount();
+    api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: [{ ...base, id: 'o2', provider: 'world_bank', metric: 'gdp_current_usd', value: 2.5e13, unit: 'u', observed_at: '2026-10-09T00:00:00Z' }] });
+    view({ id: 'g9', title: '', definition: { source_ids: ['s1'], scope: { metrics: [] } } } as never);
+    expect((await screen.findByTestId('observation-row')).textContent).toMatch(/25T/);
+  });
+
+  it('formats multi-series rows with the same small-value precision', async () => {
+    const row = (id: string, symbol: string, value: number) => ({ ...base, id, provider: 'binance', metric: 'price', symbol, value, unit: 'u', observed_at: '2026-10-09T00:00:00Z' });
+    api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: [row('a', 'AAA', 0.0067), row('b', 'BBB', 2.5e13)] });
+    view();
+    const rows = await screen.findAllByTestId('observation-row');
+    expect(rows[0].textContent).toContain('0.0067');
+    expect(rows[1].textContent).toMatch(/25T/);
   });
 
   it('shows FX reference date and GDP period', async () => {
@@ -117,12 +159,11 @@ describe('latestPerSeries', () => {
     expect(latestPerSeries(rows).map((r: { id: string }) => r.id)).toEqual(['b']);
   });
 
-  it('lets the observation row wrap so a long value and attribution do not overlap the symbol', async () => {
+  it('keeps the exact provider value in the accessible label', async () => {
     api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: [{ ...base, id: 'o1', provider: 'frankfurter', metric: 'fx_reference_rate', symbol: 'USD/VND', value: 25831.15, unit: 'VND per USD', observed_at: '2026-10-08T00:00:00Z' }] });
     view();
     expect(await screen.findByText('USD/VND')).toBeTruthy();
     // The visible text is locale-formatted (compact); the exact provider value stays in the accessible label.
     expect(screen.getByLabelText('25831.15 VND per USD')).toBeTruthy();
-    expect(screen.getByTestId('observation-row').className).toContain('flex-wrap');
   });
 });

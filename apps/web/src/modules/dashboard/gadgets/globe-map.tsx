@@ -68,6 +68,25 @@ function isMapFeature(value: object): value is MapFeature {
     && 'observed_at' in value && typeof value.observed_at === 'string';
 }
 
+/**
+ * Centroid of the evidence points as a globe point of view; averaging unit vectors keeps the result correct across the antimeridian.
+ *
+ * @param points Map features with WGS84 coordinates.
+ * @returns lat/lng in degrees, or null when there are no points (callers keep the default view).
+ */
+export function centroidView(points: Array<{ latitude: number; longitude: number }>): { lat: number; lng: number } | null {
+  if (!points.length) return null;
+  const rad = Math.PI / 180;
+  let x = 0, y = 0, z = 0;
+  for (const p of points) {
+    x += Math.cos(p.latitude * rad) * Math.cos(p.longitude * rad);
+    y += Math.cos(p.latitude * rad) * Math.sin(p.longitude * rad);
+    z += Math.sin(p.latitude * rad);
+  }
+  if (Math.hypot(x, y, z) < 1e-6) return null;
+  return { lat: Math.atan2(z, Math.hypot(x, y)) / rad, lng: Math.atan2(y, x) / rad };
+}
+
 /** Convert the bundled Natural Earth countries once; the globe never fetches remote imagery. */
 const countryTopology = worldTopology as unknown as Topology<{ countries: GeometryCollection }>;
 const countries = feature(countryTopology, countryTopology.objects.countries).features;
@@ -119,8 +138,14 @@ export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, 
         .polygonCapColor(() => readGlobeColors().land)
         .polygonSideColor(() => readGlobeColors().land)
         .polygonStrokeColor(() => readGlobeColors().stroke)
-        .pointRadius(0.48)
-        .pointAltitude(0.008)
+        // Radius is in degrees of arc: 0.48 was under one pixel on a ~190px sphere. 1.6 reads as a ~3px dot, and the
+        // altitude lifts it clear of the land cap (0.004) so the dot is never z-fought into the polygon fill.
+        // globe.gl reads `lat`/`lng` by default; MapFeature uses latitude/longitude, so without these accessors every
+        // point resolved to NaN and nothing was drawn.
+        .pointLat((feature) => isMapFeature(feature) ? feature.latitude : 0)
+        .pointLng((feature) => isMapFeature(feature) ? feature.longitude : 0)
+        .pointRadius(1.6)
+        .pointAltitude(0.015)
         .pointColor((feature) => isMapFeature(feature) && feature.feature_id === selectedFeatureRef.current
           ? readMapToken('--accent', '#176a4a')
           : readMapToken('--chart-1', '#176a4a'))
@@ -130,7 +155,7 @@ export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, 
       rendererRef.current = activeRenderer;
       materialRef.current = activeMaterial;
       activeRenderer.pointsData(features).width(width).height(height);
-      activeRenderer.pointOfView({ altitude: fitAltitude(width, height) });
+      activeRenderer.pointOfView({ ...centroidView(features), altitude: fitAltitude(width, height) });
       activeRenderer.controls().enabled = visible && interactive;
       // A context created while the browser's context budget is exhausted is lost before any listener can attach; detect it now.
       if (activeRenderer.renderer().getContext().isContextLost()) throw new Error('WebGL context lost on creation');
@@ -202,6 +227,12 @@ export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, 
     if (visible) renderer.resumeAnimation();
     else renderer.pauseAnimation();
   }, [features, height, interactive, selectedFeatureId, visible, width]);
+
+  /** Re-center on the evidence centroid when the point set changes (data arrives after the globe is created). */
+  useEffect(() => {
+    const view = centroidView(features);
+    if (view) rendererRef.current?.pointOfView(view);
+  }, [features]);
 
   useEffect(() => {
     const renderer = rendererRef.current;

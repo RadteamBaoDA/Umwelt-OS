@@ -22,7 +22,7 @@ export const onboardingMessages = {
       eyebrow: 'Setup',
       stepDone: 'Done',
       stepCurrent: 'Current step',
-      stepUpcoming: 'Upcoming',
+      stepUpcoming: 'Upcoming', addProviderHere: 'Add an AI provider here', hideProviderForm: 'Hide provider form', skipLocalOnly: 'Skip: use local only',
       personalSourcesNote: 'Personal sources (mail, calendar, drive) are optional and connected one at a time in Data sources.',
   },
   'vi-vi': {
@@ -47,7 +47,7 @@ export const onboardingMessages = {
       eyebrow: 'Thiết lập',
       stepDone: 'Đã xong',
       stepCurrent: 'Bước hiện tại',
-      stepUpcoming: 'Sắp tới',
+      stepUpcoming: 'Sắp tới', addProviderHere: 'Thêm nhà cung cấp AI tại đây', hideProviderForm: 'Ẩn biểu mẫu nhà cung cấp', skipLocalOnly: 'Bỏ qua: chỉ dùng cục bộ',
       personalSourcesNote: 'Nguồn cá nhân (thư, lịch, ổ đĩa) là tùy chọn và được kết nối từng nguồn trong Nguồn dữ liệu.',
   },
 } as const;

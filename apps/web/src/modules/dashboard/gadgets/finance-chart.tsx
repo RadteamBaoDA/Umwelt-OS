@@ -8,6 +8,7 @@ import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { listWorldObservationWindow } from '@/modules/observations/api';
 import { CHART_FALLBACK_LOOKBACK_DAYS, useEffectiveLookback } from './use-effective-lookback';
+import { useReportGadgetFreshness } from '../gadget-freshness';
 import { MetricsChart, type MetricsChartProps } from './metrics-chart';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { formatProviderName } from './metric-label';
@@ -55,6 +56,8 @@ export function FinanceChart(props: FinanceChartProps) {
     .filter((item) => item.source_id === sourceId && (!symbol || item.symbol === symbol) && (!region || item.region === region) && item.metric === metric && item.value !== null)
     .sort((left, right) => left.observed_at.localeCompare(right.observed_at));
   const selected = rows.at(-1);
+  // Provider delay and name go to the frame footer instead of the chart header.
+  useReportGadgetFreshness(selected?.collected_at, selected ? [selected.provider ? formatProviderName(selected.provider) : null, selected.provider_delay_seconds == null ? null : `${selected.provider_delay_seconds}s`].filter(Boolean).join(' · ') || null : null);
   const comparable = rows.every((item) => item.unit === selected?.unit && item.currency === selected?.currency);
   const points = comparable ? rows.flatMap((item) => item.value === null ? [] : [{ timestamp: item.observed_at, value: item.value }]) : [];
   /**

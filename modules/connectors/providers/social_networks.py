@@ -17,13 +17,14 @@ from html.parser import HTMLParser
 from typing import Any, Literal
 from urllib.parse import quote, urlencode
 
-from modules.connectors.providers import rest
+from modules.connectors.providers import rest, social_walk
 from modules.ingestion.schemas import IngestionRecord
 from modules.knowledge.documents.schemas import ProviderRecordMetadata
 
 MAX_RECORDS = 100
 MAX_TEXT = 20_000
 MAX_CURSOR_BYTES = 1024
+MASTODON_PAGE = 40  # statuses per request; a full page means more may follow
 _X_ORIGIN = "https://api.x.com"
 _REDDIT_ORIGIN = "https://oauth.reddit.com"
 
@@ -68,33 +69,9 @@ def _plain_text(value: str, limit: int = MAX_TEXT) -> str:
     return " ".join(" ".join(parser.parts).split())[:limit]
 
 
-def _cursor(provider: str, value: str | None) -> str | None:
-    """Encode one bounded provider continuation token for receipt-atomic persistence."""
-    if value is None:
-        return None
-    if not value or len(value.encode("utf-8")) > MAX_CURSOR_BYTES:
-        raise rest.CollectionIncomplete
-    encoded = json.dumps({"v": 1, "provider": provider, "page": value}, separators=(",", ":"))
-    if len(encoded.encode("utf-8")) > MAX_CURSOR_BYTES:
-        raise rest.CollectionIncomplete
-    return encoded
-
-
-def _read_cursor(raw: str | None, provider: str) -> str | None:
-    """Validate a persisted provider cursor before sending it back to its original API."""
-    if raw is None:
-        return None
-    if len(raw.encode("utf-8")) > MAX_CURSOR_BYTES:
-        raise ValueError("social_cursor_invalid")
-    try:
-        value = json.loads(raw)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("social_cursor_invalid") from exc
-    page = value.get("page") if isinstance(value, dict) else None
-    if (not isinstance(value, dict) or value.get("v") != 1 or value.get("provider") != provider
-            or not isinstance(page, str) or not page):
-        raise ValueError("social_cursor_invalid")
-    return page
+def _walk(raw: str | None, provider: str) -> social_walk.Walk:
+    """Decode the persisted catch-up walk; v1 or malformed cursors restart from the top (never raises)."""
+    return social_walk.decode(raw, {"provider": provider}, MAX_CURSOR_BYTES)
 
 
 def _record(
@@ -119,10 +96,16 @@ def _record(
 
 
 def _finish(
-    provider: str, records: list[IngestionRecord], page: str | None,
+    provider: str, records: list[IngestionRecord], page: str | None, prior: social_walk.Walk,
 ) -> SocialCollectionResult:
-    """Align record and page coverage before exposing a continuation cursor."""
-    coverage: Literal["returned_snapshot", "truncated"] = "truncated" if page else "returned_snapshot"
+    """Apply the catch-up walk to one page and align record coverage with the new cursor.
+
+    Posts older than the prior high-water mark are dropped; coverage is ``truncated`` only while a
+    backlog walk still has a page to continue with. The v2 cursor is always returned so a finished
+    walk records its high-water mark instead of leaving the last page token behind.
+    """
+    records, walk = social_walk.step(prior, records, page)
+    coverage: Literal["returned_snapshot", "truncated"] = "truncated" if walk.page else "returned_snapshot"
     if coverage == "truncated":
         for index, record in enumerate(records):
             raw = record.metadata["provider_record"]
@@ -130,7 +113,11 @@ def _finish(
             records[index] = record.model_copy(update={
                 "metadata": {**record.metadata, "provider_record": envelope.model_dump(mode="json", exclude_none=True)},
             })
-    return SocialCollectionResult(tuple(records), _cursor(provider, page), coverage)
+    try:
+        cursor = social_walk.encode(walk, {"provider": provider}, MAX_CURSOR_BYTES)
+    except ValueError:
+        raise rest.CollectionIncomplete from None
+    return SocialCollectionResult(tuple(records), cursor, coverage)
 
 
 async def collect_reddit_subreddit(
@@ -146,7 +133,8 @@ async def collect_reddit_subreddit(
         raise ValueError("reddit_scope_invalid")
     if collected_at.tzinfo is None or collected_at.utcoffset() is None:
         raise ValueError("collection_time_invalid")
-    after = _read_cursor(cursor, "reddit")
+    prior = _walk(cursor, "reddit")
+    after = prior.page
     params: dict[str, str] = {"limit": str(MAX_RECORDS), "raw_json": "1"}
     if after:
         params["after"] = after
@@ -196,7 +184,7 @@ async def collect_reddit_subreddit(
     next_after = listing.get("after")
     if next_after is not None and (not isinstance(next_after, str) or len(next_after) > MAX_CURSOR_BYTES):
         raise ValueError("reddit_cursor_invalid")
-    return _finish("reddit", records, next_after,)
+    return _finish("reddit", records, next_after, prior)
 
 
 def _json(response: rest.Fetched, provider: str) -> object:
@@ -239,14 +227,15 @@ async def collect_mastodon_scope(
         raise ValueError("mastodon_scope_invalid")
     if collected_at.tzinfo is None or collected_at.utcoffset() is None:
         raise ValueError("collection_time_invalid")
-    page = _read_cursor(cursor, "mastodon")
+    prior = _walk(cursor, "mastodon")
+    page = prior.page
     headers = {"Accept": "application/json"}
     if access_token:
         headers["Authorization"] = f"Bearer {access_token}"
     if hashtag:
         if not re.fullmatch(r"[A-Za-z0-9_]{1,100}", hashtag):
             raise ValueError("mastodon_hashtag_invalid")
-        params = {"limit": "40"}
+        params = {"limit": str(MASTODON_PAGE)}
         if page:
             params["max_id"] = page
         response = await fetch_bytes(
@@ -268,7 +257,7 @@ async def collect_mastodon_scope(
             account_id = account_payload.get("id") if isinstance(account_payload, dict) else None
             if not isinstance(account_id, str) or not account_id.isdigit():
                 raise ValueError("mastodon_account_invalid")
-        params = {"limit": "40"}
+        params = {"limit": str(MASTODON_PAGE)}
         if page:
             params["max_id"] = page
         response = await fetch_bytes(
@@ -279,7 +268,7 @@ async def collect_mastodon_scope(
     if not isinstance(payload, list):
         raise ValueError("mastodon_response_invalid")
     records: list[IngestionRecord] = []
-    for status in payload[:40]:
+    for status in payload[:MASTODON_PAGE]:
         if not isinstance(status, dict) or status.get("visibility") != "public":
             continue
         identifier, url, created = status.get("id"), status.get("url"), _timestamp(status.get("created_at"))
@@ -302,7 +291,7 @@ async def collect_mastodon_scope(
     # Never trust provider pagination URLs; continue only with the validated status ID.
     next_id = payload[-1].get("id") if payload and isinstance(payload[-1], dict) else None
     next_cursor = f"account:{account_id}|{next_id}" if account and isinstance(next_id, str) else next_id
-    return _finish("mastodon", records, next_cursor if len(payload) >= 40 else None)
+    return _finish("mastodon", records, next_cursor if len(payload) >= MASTODON_PAGE else None, prior)
 
 
 async def collect_x_scope(
@@ -314,7 +303,8 @@ async def collect_x_scope(
         raise ValueError("x_scope_invalid")
     if collected_at.tzinfo is None or collected_at.utcoffset() is None:
         raise ValueError("collection_time_invalid")
-    token = _read_cursor(cursor, "x")
+    prior = _walk(cursor, "x")
+    token = prior.page
     headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
     common = {"max_results": "100", "tweet.fields": "author_id,created_at,lang,edit_history_tweet_ids"}
     account_id: str | None = None
@@ -380,7 +370,7 @@ async def collect_x_scope(
     if next_token is not None and (not isinstance(next_token, str) or len(next_token) > MAX_CURSOR_BYTES):
         raise ValueError("x_cursor_invalid")
     next_cursor = f"user:{account_id}|{next_token}" if account and isinstance(next_token, str) else next_token
-    return _finish("x", records, next_cursor)
+    return _finish("x", records, next_cursor, prior)
 
 
 def _validated_instance(value: str) -> str:

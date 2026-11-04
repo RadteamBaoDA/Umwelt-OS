@@ -32,10 +32,8 @@ from modules.connectors.providers.macro import (
 from modules.connectors.providers.news import (
     _MAX_SUMMARY,
     _MAX_TITLE,
-    MAX_FEED_ITEMS,
     _record,
     _stable_id,
-    _with_coverage,
     https_link,
     parse_when,
     plain_text,
@@ -124,11 +122,11 @@ def _item_time(feed: JsonFeed, item: Any, collected_at: datetime) -> datetime | 
 
 
 def map_json_feed(feed: JsonFeed, body: bytes, collected_at: datetime) -> list[IngestionRecord]:
-    """Map one fetched JSON body to <= ``MAX_FEED_ITEMS`` news-shaped records, newest first.
+    """Map one fetched JSON body to deduped news-shaped records (<= ``MAX_ROWS_SCANNED``), newest first.
 
     Raises ``ProviderPayloadError``: oversize or non-JSON body, item path missing or not a list, or no
-    usable item (kind ``incomplete``). Malformed individual items are skipped; a list longer than the cap
-    is flagged ``truncated`` coverage. Pure; identity is the declared id parts, not list position.
+    usable item (kind ``incomplete``). Malformed individual items are skipped; coverage is always
+    ``returned_snapshot`` and the cap is applied by the caller. Pure; identity is the declared id parts, not list position.
     """
     rows = _get(decode_json(body), feed.items)  # decode_json enforces the 2 MiB body bound
     if not isinstance(rows, list) or len(rows) > MAX_ROWS_SCANNED:
@@ -173,10 +171,8 @@ def map_json_feed(feed: JsonFeed, body: bytes, collected_at: datetime) -> list[I
     if not by_id:
         raise ProviderPayloadError(f"{feed.provider}_no_items", "incomplete")
     ranked = sorted(by_id.items(), key=lambda kv: (kv[1][0], kv[0]), reverse=True)
-    records = [pair[1][1] for pair in ranked[:MAX_FEED_ITEMS]]
-    if len(ranked) > MAX_FEED_ITEMS:
-        records = [rec.model_copy(update={"metadata": _with_coverage(rec.metadata)}) for rec in records]
-    return records
+    # Uncapped on purpose (see news.map_feed): the runner's selection step applies the cap.
+    return [pair[1][1] for pair in ranked]
 
 
 def _wiki_day(template: str, days_back: int = 1) -> Callable[[datetime], str]:
@@ -190,6 +186,40 @@ def _wiki_day(template: str, days_back: int = 1) -> Callable[[datetime], str]:
         day = now - timedelta(days=days_back)
         return template.format(y=f"{day.year:04d}", m=f"{day.month:02d}", d=f"{day.day:02d}")
     return build
+
+
+WIKI_TEMPLATES = {
+    "wikipedia_mostread": ("https://api.wikimedia.org/feed/v1/wikipedia/{lang}/featured/{y}/{m}/{d}", 0),
+    "wikipedia_top_views": (
+        "https://wikimedia.org/api/rest_v1/metrics/pageviews/top/{lang}.wikipedia/all-access/{y}/{m}/{d}", 1),
+}
+# Main pages and special namespaces that top-view lists include, per language (English ones stay in _WIKI_SKIP).
+_WIKI_LOCAL_SKIP = {
+    # Checked against live top-views 2026-11-02: main pages sit under the project namespace
+    # (e.g. ko ``위키백과:대문``, de ``Wikipedia:Hauptseite``); only vi/ja use a bare main-page title.
+    "vi": ("Trang_Chính", "Đặc_biệt:", "Wikipedia:", "Tập_tin:", "Thể_loại:", "Thành_viên:", "Thảo_luận_Thành_viên:"),
+    "ja": ("メインページ", "特別:", "ファイル:"),
+    "zh": ("Wikipedia:", "Special:", "Portal:", "Category:", "特殊:"),
+    "fr": ("Spécial:", "Wikipédia:", "Fichier:"),
+    "de": ("Spezial:", "Wikipedia:", "Datei:"),
+    "es": ("Especial:", "Wikipedia:", "Archivo:", "Ayuda:"),
+    "ko": ("위키백과:", "특수:", "파일:", "분류:", "사용자:"),
+}
+
+
+def wiki_url(provider: str, language: str, now: datetime) -> str:
+    """Date-addressed Wikimedia URL for ``provider`` in ``language`` (``language`` is a validated enum value)."""
+    template, days_back = WIKI_TEMPLATES[provider]
+    return _wiki_day(template.replace("{lang}", language), days_back)(now)
+
+
+def localized_feed(feed: JsonFeed, language: str) -> JsonFeed:
+    """Return ``feed`` re-pointed at ``language``'s Wikipedia: its link host and language-specific non-article pages."""
+    from dataclasses import replace
+
+    skips = feed.skip_id_prefixes + _WIKI_LOCAL_SKIP.get(language, ())
+    link = feed.link_template.replace("https://en.wikipedia.org", f"https://{language}.wikipedia.org")
+    return replace(feed, link_template=link, skip_id_prefixes=skips)
 
 
 _WIKI_SKIP = ("Main_Page", "Special:", "Wikipedia:", "Portal:", "Help:", "File:", "Category:", "Talk:", "Template:")
@@ -267,8 +297,12 @@ JSON_FEEDS: dict[str, JsonFeed] = {f.provider: f for f in (
 def json_feed_adapters() -> dict[str, PureAdapter]:
     """``PureAdapter`` per row so the shared ``_run_pure`` path (gate, quota, terms) collects them."""
     def adapter(feed: JsonFeed) -> PureAdapter:
-        """Bind one row into a request builder and a bytes mapper."""
-        return PureAdapter(lambda: feed_request(feed), lambda body, at: map_json_feed(feed, body, at), binary=True)
+        """Bind one row into a request builder and a bytes mapper (``wiki_language`` re-targets Wikipedia rows)."""
+        def mapper(body: bytes, at: datetime, wiki_language: str | None = None) -> list[IngestionRecord]:
+            """Map ``body`` with the row, localized to ``wiki_language`` when one is given."""
+            return map_json_feed(localized_feed(feed, wiki_language) if wiki_language else feed, body, at)
+
+        return PureAdapter(lambda: feed_request(feed), mapper, binary=True)
 
     return {provider: adapter(feed) for provider, feed in JSON_FEEDS.items()}
 

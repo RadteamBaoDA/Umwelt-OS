@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import { NextIntlClientProvider } from 'next-intl';
 import type { ReactNode } from 'react';
+import { ACCENT_INIT_SCRIPT } from '@/core/accent';
 import { messages } from '@/core/messages';
 import { QueryProvider } from '@/core/query-provider';
 import { SHARE_TAGLINE, SHARE_TITLE } from '@/core/share-card';
@@ -23,6 +24,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
     <html lang="en-US" className={inter.variable} suppressHydrationWarning>
+      <head><script dangerouslySetInnerHTML={{ __html: ACCENT_INIT_SCRIPT }} /></head>
       <body>
         <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
           <QueryProvider>{children}</QueryProvider>

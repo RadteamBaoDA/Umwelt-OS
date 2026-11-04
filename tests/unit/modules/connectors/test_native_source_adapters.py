@@ -342,7 +342,7 @@ async def test_bluesky_and_mastodon_keep_public_post_provenance_and_skip_private
         "alice.bsky.social", fetch_bytes=bluesky_fetch, collected_at=collected, cursor=bluesky.cursor_after)
     assert bluesky_queries[1]["cursor"] == ["cursor-page-2"]
     assert next_page.records[0].provider_id.endswith("/p2")
-    assert next_page.coverage == "returned_snapshot" and next_page.cursor_after is None
+    assert next_page.coverage == "returned_snapshot" and "page" not in json.loads(next_page.cursor_after)
 
     async def mastodon_fetch(url: str, **_kwargs: object) -> rest.Fetched:
         assert "timelines/tag/osint" in url

@@ -225,6 +225,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     let currentAttempt: SnapshotAttempt | null = null;
     let eventSource: EventSource | null = null;
     let authCheckController: AbortController | null = null;
+    let streamOpenTimer: ReturnType<typeof setTimeout> | null = null;
     let retryDelay = 1000;
     let lastAuthExpiredAt = 0;
     setBarrierGeneration(null);
@@ -254,6 +255,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     const closeStream = () => {
       eventSource?.close();
       eventSource = null;
+      if (streamOpenTimer) clearTimeout(streamOpenTimer);
+      streamOpenTimer = null;
       authCheckController?.abort();
       authCheckController = null;
     };
@@ -341,13 +344,26 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       eventSource = stream;
       /** Checks that the event stream and snapshot attempt still match the active connection. */
       const ownsStream = () => eventSource === stream && ownsAttempt(attempt);
+      // UX rule: realtime never sits silently in 'connecting'. If the stream does not open (e.g. a proxy holds
+      // headers), surface 'unavailable' and retry via a fresh snapshot instead.
+      streamOpenTimer = setTimeout(() => {
+        streamOpenTimer = null;
+        if (!ownsStream()) return;
+        closeStream();
+        setStatus('unavailable');
+        scheduleSnapshotRetry();
+      }, 20_000);
       stream.onopen = () => {
+        if (streamOpenTimer) clearTimeout(streamOpenTimer);
+        streamOpenTimer = null;
         if (!ownsStream()) return;
         retryDelay = 1000;
         clearSnapshotRetry();
         setStatus('connected');
       };
       stream.onerror = () => {
+        if (streamOpenTimer) clearTimeout(streamOpenTimer);
+        streamOpenTimer = null;
         if (!ownsStream()) return;
         setStatus('reconnecting');
         authCheckController?.abort();

@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Literal
 from urllib.parse import quote, urlencode
 
+from modules.connectors.providers import social_walk
 from modules.connectors.providers.rest import Fetched
 from modules.ingestion.schemas import IngestionRecord
 from modules.knowledge.documents.schemas import ProviderRecordMetadata
@@ -75,11 +76,17 @@ def _text_record(
 
 
 def _page(
-    rows: list[IngestionRecord], *, cursor_after: str | None,
+    rows: list[IngestionRecord], *, next_page: object, actor: str, prior: social_walk.Walk,
 ) -> BlueskyCollectionPage:
-    """Return one bounded page and align per-record provenance with page coverage."""
-    bounded = rows[:_MAX_RECORDS]
-    coverage: Literal["returned_snapshot", "truncated"] = "truncated" if cursor_after else "returned_snapshot"
+    """Apply the catch-up walk to one page and align per-record provenance with its coverage.
+
+    Posts older than the prior high-water mark are dropped. The v2 cursor is always returned so a
+    finished walk keeps its high-water mark; coverage is truncated only while a backlog remains.
+    """
+    if next_page is not None and (not isinstance(next_page, str) or not next_page or len(next_page) > _MAX_CURSOR_BYTES):
+        raise ValueError("bluesky_cursor_invalid")
+    bounded, walk = social_walk.step(prior, rows[:_MAX_RECORDS], next_page)
+    coverage: Literal["returned_snapshot", "truncated"] = "truncated" if walk.page else "returned_snapshot"
     if coverage == "truncated":
         for index, record in enumerate(bounded):
             raw = record.metadata.get("provider_record")
@@ -88,37 +95,8 @@ def _page(
             provider_record = ProviderRecordMetadata.model_validate(raw).model_copy(update={"coverage": "truncated"})
             metadata = {**record.metadata, "provider_record": provider_record.model_dump(mode="json", exclude_none=True)}
             bounded[index] = record.model_copy(update={"metadata": metadata})
-    return BlueskyCollectionPage(tuple(bounded), cursor_after, coverage)
-
-
-def _read_cursor(raw: str | None, actor: str) -> str | None:
-    """Validate an opaque AppView cursor against the exact profile whose feed created it."""
-    if raw is None:
-        return None
-    if len(raw.encode("utf-8")) > _MAX_CURSOR_BYTES:
-        raise ValueError("bluesky_cursor_invalid")
-    try:
-        value = json.loads(raw)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("bluesky_cursor_invalid") from exc
-    page = value.get("page") if isinstance(value, dict) else None
-    if (not isinstance(value, dict) or value.get("v") != 1 or value.get("actor") != actor
-            or not isinstance(page, str) or not page or len(page) > _MAX_CURSOR_BYTES):
-        raise ValueError("bluesky_cursor_scope_changed" if isinstance(value, dict) and value.get("actor") != actor
-                         else "bluesky_cursor_invalid")
-    return page
-
-
-def _write_cursor(actor: str, page: object) -> str | None:
-    """Encode a bounded AppView cursor with its actor scope for atomic receipt storage."""
-    if page is None:
-        return None
-    if not isinstance(page, str) or not page or len(page) > _MAX_CURSOR_BYTES:
-        raise ValueError("bluesky_cursor_invalid")
-    encoded = json.dumps({"v": 1, "actor": actor, "page": page}, separators=(",", ":"))
-    if len(encoded.encode("utf-8")) > _MAX_CURSOR_BYTES:
-        raise ValueError("bluesky_cursor_invalid")
-    return encoded
+    cursor = social_walk.encode(walk, {"actor": actor}, _MAX_CURSOR_BYTES)
+    return BlueskyCollectionPage(tuple(bounded), cursor, coverage)
 
 
 def map_bluesky_profile_payload(
@@ -126,8 +104,9 @@ def map_bluesky_profile_payload(
     actor: str,
     *,
     collected_at: datetime,
+    cursor: str | None = None,
 ) -> BlueskyCollectionPage:
-    """Map one public author-feed response, preserving its bounded pagination cursor."""
+    """Map one public author-feed response into a page and its v2 catch-up cursor."""
     if collected_at.tzinfo is None or collected_at.utcoffset() is None:
         raise ValueError("collected_at must be timezone-aware")
     if not isinstance(payload, Mapping) or not isinstance(payload.get("feed"), list):
@@ -154,7 +133,8 @@ def map_bluesky_profile_payload(
         )
         rows.append(_text_record(uri, text, created, collected_at, canonical_url=post_url,
                                  author=author if isinstance(author, str) else None, version=cid))
-    return _page(rows, cursor_after=_write_cursor(actor, payload.get("cursor")))
+    prior = social_walk.decode(cursor, {"actor": actor}, _MAX_CURSOR_BYTES)
+    return _page(rows, next_page=payload.get("cursor"), actor=actor, prior=prior)
 
 
 async def collect_bluesky_profile(
@@ -169,7 +149,7 @@ async def collect_bluesky_profile(
     if collected_at.tzinfo is None or collected_at.utcoffset() is None or not 1 <= len(actor) <= 253:
         raise ValueError("provider_scope_invalid")
     params = {"actor": actor, "limit": "100", "filter": "posts_no_replies"}
-    page_cursor = _read_cursor(cursor, actor)
+    page_cursor = social_walk.decode(cursor, {"actor": actor}, _MAX_CURSOR_BYTES).page
     if page_cursor:
         params["cursor"] = page_cursor
     url = "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed?" + urlencode(params)
@@ -180,4 +160,4 @@ async def collect_bluesky_profile(
         payload = json.loads(response.body)
     except (json.JSONDecodeError, UnicodeDecodeError):
         raise ValueError("bluesky_response_invalid") from None
-    return map_bluesky_profile_payload(payload, actor, collected_at=collected_at)
+    return map_bluesky_profile_payload(payload, actor, collected_at=collected_at, cursor=cursor)

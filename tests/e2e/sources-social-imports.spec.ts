@@ -12,7 +12,7 @@ import { connectWizardSource, deleteSources, escapeRe, findSources, writeHeaders
 const PREFIX = 'e2e-soc';
 const DASHBOARD = `${PREFIX} datasources`;
 const FIXTURES = path.resolve(__dirname, '../fixtures/e2e');
-const ROW_SELECTOR = 'tbody tr';
+const ROW_SELECTOR = 'li';
 /** Visible copy that means "no data" or "failed"; none may appear in a gadget that claims to render data. */
 const NO_DATA = /No provider observations|No current records|Could not load|Feed stream empty|No current stories match/i;
 
@@ -21,7 +21,7 @@ const selected = (id: string) => !only || only.includes(id);
 
 const SOCIAL: WizardCase[] = [
   { id: 'bluesky', card: 'Bluesky', expect: 'fetch', fields: { 'source-scope-bluesky_actor': 'bsky.app' } },
-  { id: 'mastodon', card: 'Mastodon', expect: 'fetch', fields: { 'source-scope-mastodon_instance_url': 'https://mastodon.social', 'source-scope-mastodon_account': 'Mastodon' } },
+  { id: 'mastodon', card: 'Mastodon', expect: 'fetch', fields: { 'source-scope-mastodon_instance_url': 'https://mastodon.social', 'source-scope-mastodon_hashtag': '', 'source-scope-mastodon_account': 'Mastodon' } },
 ];
 const IDS = ['bluesky', 'mastodon'] as const;
 const sourceName = (id: string) => `${PREFIX} ${id}`;
@@ -53,9 +53,7 @@ async function addGadget(page: Page, id: string) {
   await page.getByRole('button', { name: 'Edit layout' }).click();
   await page.getByRole('button', { name: 'Add gadget', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Add gadget to dashboard' });
-  await dialog.getByRole('button', { name: /^Custom/ }).click();
-  await dialog.getByRole('combobox', { name: 'Display type' }).click();
-  await page.getByRole('option', { name: 'Table panel', exact: true }).click();
+  await dialog.getByRole('button', { name: /^Table\b/ }).click();
   const name = new RegExp(`^${escapeRe(sourceName(id))}`);
   await dialog.getByRole('radio', { name }).or(dialog.getByRole('checkbox', { name })).first().click();
   await dialog.getByLabel('Name', { exact: true }).fill(sourceName(id));
@@ -127,6 +125,7 @@ test.describe('social and import datasources', () => {
 test.describe('dashboard', () => {
   test('create the dashboard', async ({ page }) => {
     await page.goto('/dashboard');
+    await expect(page).toHaveURL(/\/dashboard\/[0-9a-f-]{36}/);
     await page.getByRole('button', { name: 'Switch dashboard' }).click();
     await page.getByRole('menuitem', { name: 'New dashboard' }).click();
     await page.getByLabel('Dashboard name').fill(DASHBOARD);

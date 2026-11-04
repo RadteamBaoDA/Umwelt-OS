@@ -101,9 +101,7 @@ async function addGadget(page: Page, id: string) {
   await page.getByRole('button', { name: 'Edit layout' }).click();
   await page.getByRole('button', { name: 'Add gadget', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Add gadget to dashboard' });
-  await dialog.getByRole('button', { name: /^Custom/ }).click();
-  await dialog.getByRole('combobox', { name: 'Display type' }).click();
-  await page.getByRole('option', { name: 'Table panel', exact: true }).click();
+  await dialog.getByRole('button', { name: /^Table\b/ }).click();
   const label = new RegExp(`^${escapeRe(name(id))}`);
   await dialog.getByRole('radio', { name: label }).or(dialog.getByRole('checkbox', { name: label })).first().click();
   await dialog.getByLabel('Name', { exact: true }).fill(name(id));
@@ -122,7 +120,7 @@ async function expectRendersData(page: Page, id: string, attempts = 6) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const region = regionOf(page, id);
     try {
-      await expect(region.locator('tbody tr').first(), 'a data row is rendered').toBeVisible({ timeout: 15_000 });
+      await expect(region.locator('li').first(), 'a data row is rendered').toBeVisible({ timeout: 15_000 });
       await expect(region.getByRole('alert'), 'no error state').toHaveCount(0);
       await expect(region).not.toContainText(NO_DATA);
       return;

@@ -136,3 +136,21 @@ def test_polling_response_lets_inflight_db_call_finish_and_returns_connection_on
         warnings.simplefilter("error")
         checked_out, finished, _ = asyncio.run(run())
     assert checked_out == 0 and finished
+
+
+def test_stream_yields_retry_preamble_immediately_without_replay(monkeypatch) -> None:
+    """The proxy only flushes headers on the first body byte, so the first chunk must not wait for a heartbeat."""
+    head = SimpleNamespace(epoch=uuid4(), sequence=7, floor_sequence=1)
+
+    async def fake_prepare(_session, _request, _workspace_id, _workspace_header):
+        return SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), head
+
+    monkeypatch.setattr(realtime_routes, "_prepare_realtime", fake_prepare)
+    monkeypatch.setattr(realtime_routes, "HEARTBEAT_INTERVAL_SECONDS", 10_000)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(realtime_connections=asyncio.Semaphore(1))))
+
+    async def run() -> str:
+        response = await realtime_routes.stream_events(None, request, None, cursor=None, last_event_id=None)
+        return await asyncio.wait_for(anext(response.response.body_iterator), timeout=1)
+
+    assert asyncio.run(run()) == "retry: 3000\n\n"

@@ -11,6 +11,8 @@ import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { ApiError } from '@/core/api';
 import { safeHttpUrl } from '@/core/safe-url';
 import { archiveSource, connectorKeys, disableBuiltinSource, enableBuiltinSource, listBuiltinSources, sourceKeys, type BuiltinCategory, type BuiltinSource, type DeclaredUse, type RealtimeMode } from './api';
+import { BuiltinOptions, type BuiltinOptionValues } from './builtin-options';
+import { OPTION_SPECS } from './builtin-option-specs';
 import { matchesShapes } from './shape-filter';
 import type { DataShape } from '@/core/data-shapes';
 import { WizardShell } from './source-wizard';
@@ -101,6 +103,7 @@ export function BuiltinTermsFields({ builtin, use, onUseChange, realtimeMode, on
   const defaultMode: RealtimeMode = builtin.realtime_tier ?? 'near_realtime';
   const [localRealtimeMode, setLocalRealtimeMode] = useState<RealtimeMode>(defaultMode);
   const effectiveRealtimeMode = realtimeMode ?? localRealtimeMode;
+  /** Records the chosen realtime tier locally (uncontrolled use) and reports it to the parent when controlled. */
   const handleRealtimeModeChange = (next: RealtimeMode) => {
     setLocalRealtimeMode(next);
     onRealtimeModeChange?.(next);
@@ -129,6 +132,30 @@ export function BuiltinTermsFields({ builtin, use, onUseChange, realtimeMode, on
   </section>;
 }
 
+/**
+ * Builds the enable-body fields for the options this built-in accepts (`applicable_options`); anything the owner left
+ * empty is omitted so the server default applies. Returns nothing for servers that predate the option list.
+ */
+function applicableOptionPayload(builtin: BuiltinSource, values: BuiltinOptionValues): Record<string, unknown> {
+  const allowed = new Set(builtin.applicable_options ?? []);
+  const payload: Record<string, unknown> = {};
+  const name = (values.name ?? builtin.label).trim();
+  if (allowed.has('name') && name) payload.name = name;
+  for (const key of ['schedule_interval_minutes', 'max_items', 'max_age_days', 'feed_sections'] as const) {
+    if (allowed.has(key) && values[key] != null) payload[key] = values[key];
+  }
+  for (const key of ['include_keywords', 'exclude_keywords'] as const) {
+    if (allowed.has(key) && values[key]?.length) payload[key] = values[key];
+  }
+  // Per-type options: undefined, empty text and empty multi-selects are omitted so the server default applies.
+  for (const spec of OPTION_SPECS) {
+    const value = (values as Record<string, unknown>)[spec.key];
+    if (!allowed.has(spec.key) || value == null || value === '' || (Array.isArray(value) && value.length === 0)) continue;
+    payload[spec.key] = value;
+  }
+  return payload;
+}
+
 type TestState = { phase: 'idle' | 'activating' | 'collecting' | 'succeeded' | 'no_changes' | 'failed'; code?: string | null; runId?: string | null };
 
 /**
@@ -148,6 +175,7 @@ export function BuiltinWizard({ onClose, onChanged, shapeFilter, onClearFilter, 
   const [selected, setSelected] = useState<BuiltinSource | null>(null);
   const [use, setUse] = useState<DeclaredUse>('personal');
   const [realtimeModeOverride, setRealtimeModeOverride] = useState<RealtimeMode | null>(null);
+  const [optionValues, setOptionValues] = useState<BuiltinOptionValues>({});
   const [aiOptions, setAiOptions] = useState<SourceAiOptions>({ graph_enabled: false, rag_index_enabled: false });
   const [error, setError] = useState<string | null>(null);
   const [createdId, setCreatedId] = useState('');
@@ -171,6 +199,7 @@ export function BuiltinWizard({ onClose, onChanged, shapeFilter, onClearFilter, 
     controller.current?.abort();
     const ctl = new AbortController();
     controller.current = ctl;
+    /** True while this test run is still the active one (not superseded by a newer run and not aborted). */
     const current = () => controller.current === ctl && !ctl.signal.aborted;
     setTest({ phase: 'activating' });
     try {
@@ -194,7 +223,7 @@ export function BuiltinWizard({ onClose, onChanged, shapeFilter, onClearFilter, 
     if (createdId) { void runTest(createdId); return true; }
     setError(null);
     try {
-      const options = realtimeModeOverride ? { ...aiOptions, realtime_mode: realtimeModeOverride } : aiOptions;
+      const options = { ...aiOptions, ...(realtimeModeOverride ? { realtime_mode: realtimeModeOverride } : {}), ...applicableOptionPayload(selected, optionValues) };
       const result = await enableBuiltinSource(selected.id, use, csrfToken, undefined, options);
       if (!result.source_id) { setError(t('builtinErrorGeneric')); return false; }
       setCreatedId(result.source_id);
@@ -236,7 +265,7 @@ export function BuiltinWizard({ onClose, onChanged, shapeFilter, onClearFilter, 
         {rows.map((row) => {
           const added = row.source_id !== null;
           const tier = row.realtime_tier ?? 'near_realtime';
-          return <button key={row.id} type="button" disabled={added} aria-pressed={selected?.id === row.id} onClick={() => { setSelected(row); setUse('personal'); setRealtimeModeOverride(null); setError(null); }}
+          return <button key={row.id} type="button" disabled={added} aria-pressed={selected?.id === row.id} onClick={() => { setSelected(row); setUse('personal'); setRealtimeModeOverride(null); setOptionValues({ feed_sections: row.default_section ? [row.default_section] : undefined }); setError(null); }}
             className={`flex w-full items-start justify-between gap-3 rounded-md border bg-transparent p-3 text-left disabled:cursor-not-allowed disabled:opacity-60 ${selected?.id === row.id ? 'border-primary' : 'border-border'}`}>
             <span className="min-w-0">
               <span className="m-0 flex flex-wrap items-center gap-2 font-medium">{row.label}
@@ -252,6 +281,7 @@ export function BuiltinWizard({ onClose, onChanged, shapeFilter, onClearFilter, 
       </div>)}
     </section>}
     {index === 1 && selected && <BuiltinTermsFields builtin={selected} use={use} onUseChange={setUse} realtimeMode={realtimeModeOverride ?? selected.realtime_tier ?? 'near_realtime'} onRealtimeModeChange={setRealtimeModeOverride} aiOptions={aiOptions} onAiOptionsChange={setAiOptions} error={error} />}
+    {index === 1 && selected && <BuiltinOptions builtin={selected} values={optionValues} showName showSchedule onChange={(key, value) => setOptionValues((current) => ({ ...current, [key]: value }))} />}
     {index === 2 && <section className="flex flex-col gap-3" aria-live="polite" aria-label={t('verifyTitle')}>
       <h3 className="m-0 text-base font-semibold">{t('verifyTitle')}</h3>
       {test.phase === 'activating' && <p role="status">{t('verifyWaitingActivation')}</p>}

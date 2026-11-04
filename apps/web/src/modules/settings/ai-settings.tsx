@@ -280,11 +280,14 @@ export function AISettingsWorkspace() {
         <ProviderEditor providers={saved.providers} savedIds={savedIds} secrets={secrets} disabled={save.isPending} discoveringId={discoveringId} discoverError={discoverError} discovered={discovered} t={t as never}
           onChange={(providers) => set({ providers })} onSecret={(id, secret) => setSecrets({ ...secrets, [id]: secret })} onDiscover={(provider) => discover.mutate(provider)} />
       </SettingsSection>
-      <SettingsSection title={t('modelsSection')} description={t('modelsHelp')}>
-        <ModelsPanel providers={saved.providers} discovered={discovered} modelTests={shownTests} checkedAt={checkedAt} details={testDetails} disabled={save.isPending} onChange={changeModels} onTestModel={(provider, model) => testModel.mutate({ provider, model })} t={t as never} />
-        <ModelDefaults providers={saved.providers} defaults={defaults} disabled={save.isPending} embeddingStatus={embeddingStatus} onPick={pickDefault} onEffort={pickEffort} t={t as never} />
-        {embeddingDimsChanged && <p className="error m-0 text-sm" role="status">{t('dimensionsChangedWarning')}</p>}
-      </SettingsSection>
+      {/* Models need a provider; with none, only the Providers block (and its empty state) is shown. */}
+      {saved.providers.length > 0 && (
+        <SettingsSection title={t('modelsSection')} description={t('modelsHelp')}>
+          <ModelsPanel providers={saved.providers} discovered={discovered} modelTests={shownTests} checkedAt={checkedAt} details={testDetails} disabled={save.isPending} onChange={changeModels} onTestModel={(provider, model) => testModel.mutate({ provider, model })} t={t as never} />
+          <ModelDefaults providers={saved.providers} defaults={defaults} disabled={save.isPending} embeddingStatus={embeddingStatus} onPick={pickDefault} onEffort={pickEffort} t={t as never} />
+          {embeddingDimsChanged && <p className="error m-0 text-sm" role="status">{t('dimensionsChangedWarning')}</p>}
+        </SettingsSection>
+      )}
       <details className={advancedClass}><summary className={summaryClass}>{t('embeddingsTitle')}</summary>
         <div className="flex flex-col gap-3 pb-5">
           <p className="text-muted-foreground m-0">{t('embeddingsPurpose')}</p>

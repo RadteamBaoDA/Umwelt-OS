@@ -286,8 +286,9 @@ def _records_from_feed(
 ) -> ProviderCollectionPage:
     """Map actual scoped YouTube/arXiv Atom entries, limiting output and preserving source clocks."""
     config = ConnectorConfig.model_validate(source.configuration)
-    # DOCTYPE/ENTITY refused (billion-laughs / XXE class); size bound is the shared feed limit.
-    root = safe_xml_root(body)
+    # DOCTYPE/ENTITY refused (billion-laughs / XXE class); size bound matches the page fetch cap
+    # (live arXiv category Atom feeds exceed the 1 MiB default feed limit).
+    root = safe_xml_root(body, max_bytes=_MAX_PAGE_BYTES)
     records: list[IngestionRecord] = []
     mapped_bytes = 0
     entries = root.findall(f"{{{_ATOM}}}entry")

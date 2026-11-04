@@ -70,10 +70,40 @@ from modules.connectors.models import (
     GithubWebhookDelivery,
     GithubWebhookOutbox,
 )
+from modules.connectors.provider_options import (
+    ISO_COUNTRY_PATTERN,
+    MAX_COINS,
+    CoinId,
+    CryptoPair,
+    EonetCategory,
+    EonetStatus,
+    FxCurrency,
+    GdacsAlert,
+    GdacsType,
+    GdeltCountry,
+    GdeltLang,
+    GdeltTimespan,
+    HnList,
+    IsoCountry,
+    NvdSeverity,
+    NwsArea,
+    NwsSeverity,
+    OecdArea,
+    Region,
+    SatnogsStatus,
+    UsgsMagnitude,
+    UsgsPeriod,
+    WbIndicator,
+    WikiLanguage,
+    clean_query,
+    option_fields,
+)
 from modules.connectors.provider_specs import (
     BUILTIN_PROVIDERS as BUILTIN_PROVIDERS,  # noqa: PLC0414 - public re-export
 )
+from modules.connectors.provider_specs import COLLECTION_FILTER_FIELDS, INCREMENTAL_PROVIDERS
 from modules.connectors.providers.cii import CiiProjection
+from modules.connectors.sections import MAX_SECTIONS, SECTION_CATALOG
 from modules.ingestion.schemas import IngestionRecord, TelegramRawDelivery
 from modules.sources.schemas import ConnectorSource, SourceFence
 
@@ -361,6 +391,73 @@ class ConnectorConfig(BaseModel):
     realtime_mode: Literal["realtime", "near_realtime"] | None = None
     retention_days: StrictInt | None = Field(default=None, ge=1, le=3650)
     skip_embedding: StrictBool | None = None
+    # Per-sync selection options (INCREMENTAL_PROVIDERS only; registry rejects them elsewhere); None = today's behaviour.
+    max_items: StrictInt | None = Field(default=None, ge=1, le=100)
+    include_keywords: tuple[str, ...] | None = Field(default=None, max_length=20)
+    exclude_keywords: tuple[str, ...] | None = Field(default=None, max_length=20)
+    max_age_days: StrictInt | None = Field(default=None, ge=1, le=365)
+    # RSS section slugs (providers with a catalog only; the registry checks membership per provider).
+    feed_sections: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=MAX_SECTIONS)
+    # Wave D per-type options (enums/bounded values; the registry allows each only on its own provider).
+    hn_list: HnList | None = None
+    gdelt_query: str | None = Field(default=None, min_length=1, max_length=100)
+    gdelt_timespan: GdeltTimespan | None = None
+    gdelt_source_lang: GdeltLang | None = None
+    gdelt_source_country: GdeltCountry | None = None
+    usgs_min_magnitude: UsgsMagnitude | None = None
+    usgs_period: UsgsPeriod | None = None
+    min_magnitude: float | None = Field(default=None, ge=2.0, le=8.0)
+    eonet_categories: tuple[EonetCategory, ...] | None = Field(default=None, min_length=1, max_length=13)
+    eonet_status: EonetStatus | None = None
+    eonet_days: StrictInt | None = Field(default=None, ge=1, le=30)
+    gdacs_event_types: tuple[GdacsType, ...] | None = Field(default=None, min_length=1, max_length=6)
+    gdacs_alert_levels: tuple[GdacsAlert, ...] | None = Field(default=None, min_length=1, max_length=3)
+    nws_severity: tuple[NwsSeverity, ...] | None = Field(default=None, min_length=1, max_length=4)
+    nws_area: NwsArea | None = None
+    nvd_severity: tuple[NvdSeverity, ...] | None = Field(default=None, min_length=1, max_length=4)
+    nvd_window_days: StrictInt | None = Field(default=None, ge=1, le=7)
+    nvd_keyword: str | None = Field(default=None, min_length=1, max_length=100)
+    kev_ransomware_only: StrictBool | None = None
+    ioda_country: str | None = Field(default=None, pattern=ISO_COUNTRY_PATTERN)
+    region: Region | None = None
+    # Wave F per-type options (curated enums/bounded numbers; the registry allows each only on its own provider).
+    wiki_language: WikiLanguage | None = None
+    satnogs_status: SatnogsStatus | None = None
+    disease_country: IsoCountry | None = None
+    wb_country: IsoCountry | None = None
+    wb_indicator: WbIndicator | None = None
+    fx_base: FxCurrency | None = None
+    fx_quotes: tuple[FxCurrency, ...] | None = Field(default=None, min_length=1, max_length=10)
+    oecd_countries: tuple[OecdArea, ...] | None = Field(default=None, min_length=1, max_length=10)
+    crypto_symbols: tuple[CryptoPair, ...] | None = Field(default=None, min_length=1, max_length=10)
+    coin_ids: tuple[CoinId, ...] | None = Field(default=None, min_length=1, max_length=MAX_COINS)
+    kp_min: float | None = Field(default=None, ge=0, le=9)
+    advisory_min_level: StrictInt | None = Field(default=None, ge=1, le=4)
+
+    @field_validator("gdelt_query", "nvd_keyword", mode="before")
+    @classmethod
+    def clean_native_query(cls, value: object) -> object:
+        """Sanitize free query text like ``news_query``; operators that bypass the enum selectors are refused."""
+        return clean_query(value) if isinstance(value, str) else value
+
+    @field_validator("feed_sections")
+    @classmethod
+    def unique_sections(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        """Reject duplicate section slugs so one GET per section is the quota contract."""
+        if value is not None and len(set(value)) != len(value):
+            raise ValueError("Sections must be unique")
+        return value
+
+    @field_validator("include_keywords", "exclude_keywords", mode="before")
+    @classmethod
+    def clean_keywords(cls, value: object) -> object:
+        """Strip each term, require 1..64 characters, and normalise an empty list to ``None`` (no filter)."""
+        if not isinstance(value, (list, tuple)):
+            return value
+        terms = tuple(t.strip() if isinstance(t, str) else t for t in value)
+        if any(isinstance(t, str) and not 1 <= len(t) <= 64 for t in terms):
+            raise ValueError("Keywords must be 1 to 64 characters")
+        return terms or None
 
     @field_validator("news_query", mode="before")
     @classmethod
@@ -616,16 +713,31 @@ _ALTERNATIVE_SCOPE_FIELDS: dict[str, frozenset[str]] = {
 }
 
 
+# Single source of truth for catalog scope fields that may be absent from a stored configuration. Lives here (not in
+# registry.py, which imports this module) to avoid an import cycle; registry.validate imports it too.
+OPTIONAL_SCOPE_FIELDS: dict[str, frozenset[str]] = {
+    "github": frozenset({"github_history_days"}),
+    "mastodon": frozenset({"mastodon_account", "mastodon_hashtag"}),
+    "x": frozenset({"x_account", "x_query"}),
+    "coingecko": frozenset({"coingecko_assets"}),  # absent on legacy BTC/USD sources (collection falls back to BTC)
+}
+
+
 def _scope_values(provider_id: str, scope_fields: Sequence[str], configuration: dict[str, Any]) -> dict[str, Any] | None:
     """Collect the configured scope fields, or None when a required one is missing.
+
+    Fields in OPTIONAL_SCOPE_FIELDS (the same map registry.validate uses) may be absent and are simply left out of
+    the values, so the scope hash stays deterministic; otherwise legacy CoinGecko sources without coin selections had
+    no verifiable scope and every observations read failed closed.
 
     Alternative fields (Mastodon account or hashtag, X account or query) are optional individually but at least
     one must be present; requiring all of them made every such source's accepted scope unverifiable, which hid its
     ingested records from dashboard projections.
     """
     alternatives = _ALTERNATIVE_SCOPE_FIELDS.get(provider_id, frozenset())
+    optional = OPTIONAL_SCOPE_FIELDS.get(provider_id, frozenset())
     values = {name: configuration[name] for name in scope_fields if name in configuration}
-    if any(name not in values and name not in alternatives for name in scope_fields):
+    if any(name not in values and name not in optional for name in scope_fields):
         return None
     if alternatives and not alternatives & values.keys():
         return None
@@ -1003,7 +1115,9 @@ async def get_connector_configuration(
         }
         configuration = {
             key: value for key, value in configuration.items()
-            if key in scope_fields | common
+            if key in scope_fields | common | (COLLECTION_FILTER_FIELDS if source.provider in INCREMENTAL_PROVIDERS else set())
+            | option_fields(source.provider)
+            | ({"feed_sections"} if source.provider in SECTION_CATALOG else set())
         }
         configuration.setdefault("history_mode", "pending_updates" if source.provider == "telegram" else "returned_snapshot")
         configuration.setdefault("timezone", DEFAULT_TIMEZONE)
@@ -1118,6 +1232,11 @@ def serialize_source_configuration(source: ConnectorSource, config: ConnectorCon
         "timezone", "schedule_interval_minutes", "timeout_seconds", "history_mode",
         "realtime_mode", "retention_days", "skip_embedding",
     }
+    if source.provider in INCREMENTAL_PROVIDERS:
+        common |= COLLECTION_FILTER_FIELDS  # selection options are legal only for news/event built-ins
+    if source.provider in SECTION_CATALOG:
+        common |= {"feed_sections"}  # RSS sections are legal only where a server catalog exists
+    common |= option_fields(source.provider)  # wave D per-type options, legal only on their own provider
     supplied = config.model_fields_set
     if supplied - scope_fields - common:
         raise ValueError("Native provider configuration contains unsupported fields")
@@ -3111,8 +3230,8 @@ async def validate_public_url(value: str) -> str:
     return value
 
 
-def overlap_floor(cursor: str | None) -> datetime | None:
-    """Return a one-day UTC overlap start for a valid aware cursor, otherwise None."""
+def overlap_floor(cursor: str | None, overlap: timedelta = DEFAULT_OVERLAP) -> datetime | None:
+    """Return the UTC overlap start (``cursor - overlap``, one day by default) for a valid aware cursor, else None."""
     if not cursor:
         return None
     try:
@@ -3121,7 +3240,7 @@ def overlap_floor(cursor: str | None) -> datetime | None:
         return None
     if value.tzinfo is None:
         return None
-    return value.astimezone(UTC) - DEFAULT_OVERLAP
+    return value.astimezone(UTC) - overlap
 
 
 async def map_github_version(session: AsyncSession, ready: object, *, scope: Scope, multi_workspace_enabled: bool) -> bool:

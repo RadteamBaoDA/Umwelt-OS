@@ -107,10 +107,26 @@ def test_malformed_or_non_feed_rejected(body):
         map_feed("bbc_world", body, NOW)
 
 
-def test_item_flood_rejected_and_cap_truncates():
-    many = "<rss><channel>" + "".join(f"<item><title>t{i}</title><guid>g{i}</guid></item>" for i in range(150)) + "</channel></rss>"
-    recs = map_feed("bbc_world", many.encode(), NOW)
-    assert len(recs) == 100 and all(pr(r)["coverage"] == "truncated" for r in recs)
+def _rss(items: int) -> bytes:
+    """Build an RSS body of ``items`` dated items; item 0 is the newest."""
+    rows = "".join(
+        f"<item><title>t{i}</title><guid>g{i}</guid><pubDate>{(NOW - timedelta(hours=i + 1)).strftime('%a, %d %b %Y %H:%M:%S GMT')}</pubDate></item>"
+        for i in range(items))
+    return f"<rss><channel>{rows}</channel></rss>".encode()
+
+
+def test_same_item_hashes_identically_below_and_above_100_items():
+    a = by_id(map_feed("bbc_world", _rss(50), NOW))["g0"]
+    b = by_id(map_feed("bbc_world", _rss(150), NOW))["g0"]
+    assert a.metadata == b.metadata and a.version == b.version
+
+
+def test_map_feed_keeps_all_scanned_items_for_selection():
+    recs = map_feed("bbc_world", _rss(150), NOW)
+    assert len(recs) == 150 and all(pr(r)["coverage"] == "returned_snapshot" for r in recs)
+
+
+def test_item_flood_rejected():
     flood = "<rss><channel>" + "<item><title>t</title><guid>g</guid></item>" * 501 + "</channel></rss>"
     with pytest.raises(ProviderPayloadError, match="too_many_items"):
         map_feed("bbc_world", flood.encode(), NOW)

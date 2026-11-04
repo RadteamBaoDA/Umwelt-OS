@@ -77,6 +77,18 @@ describe('ConnectorEditor wizard gating', () => {
   });
   afterEach(cleanup);
 
+  it('searches providers and shows the no-key group first', async () => {
+    mount();
+    expect((await screen.findAllByRole('group'))[0].getAttribute('aria-label')).toBe('No key needed');
+    const search = screen.getByLabelText('Search providers');
+    await userEvent.type(search, 'coingeck');
+    expect(screen.getByRole('button', { name: /^CoinGecko/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^REST API/ })).toBeNull();
+    await userEvent.clear(search);
+    await userEvent.type(search, 'qqqq');
+    expect(screen.getByText('No providers match your search.')).toBeTruthy();
+  });
+
   it('puts Validate in the Choose step only', async () => {
     const h = mount();
     await pick(h, 'RSS / Atom', 'rss');

@@ -11,7 +11,7 @@ import { listGeospatialObservations } from '@/modules/observations/api';
 import type { GadgetInstance } from '../api';
 import { buildMapLayers, projectMapFeatures } from '../map-layers';
 import { GadgetNotice } from './gadget-notice';
-import { formatMetricLabel } from './metric-label';
+import { formatMetricLabel, formatProviderName } from './metric-label';
 
 const FlatMap = lazy(() => import('./flat-map').then((module) => ({ default: module.FlatMap })));
 const GlobeMap = lazy(() => import('./globe-map').then((module) => ({ default: module.GlobeMap })));
@@ -24,14 +24,15 @@ function subscribePhone(onChange: () => void): () => void {
   return () => media.removeEventListener('change', onChange);
 }
 
-/** Shared owner-scoped map controller; fixed controls and a nonshrinking plot precede scrollable evidence. */
+/** Shared owner-scoped map controller; the range line and any empty/location-sharing notice precede a nonshrinking plot and scrollable evidence. */
 export function MapGadget({ instance, isEditMode = false }: { instance: GadgetInstance; isEditMode?: boolean }) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
   const definition = instance.definition;
-  const sourceIds = definition.source_ids ?? [];
+  // Memoized so the empty-array fallbacks keep a stable identity for hook dependency lists.
+  const sourceIds = useMemo(() => definition.source_ids ?? [], [definition.source_ids]);
   const regions = definition.scope?.regions ?? [];
-  const layerIds = definition.scope?.map_layer_ids ?? [];
+  const layerIds = useMemo(() => definition.scope?.map_layer_ids ?? [], [definition.scope?.map_layer_ids]);
   const precise = definition.filters?.show_precise_locations === true;
   const engine = definition.filters?.map_engine ?? 'globe';
   const days = Math.max(1, Math.min(definition.scope?.lookback_days ?? 30, 30));
@@ -86,6 +87,7 @@ export function MapGadget({ instance, isEditMode = false }: { instance: GadgetIn
   const activeLayer = layers.find((layer) => layer.id === 'world_observations');
   const points = activeLayer?.enabled && activeLayer.availability === 'available' ? activeLayer.features : [];
   const selectedFeatureId = pickedFeatureId && features.some((feature) => feature.feature_id === pickedFeatureId) ? pickedFeatureId : null;
+  /** Stable handler passed to the map renderers: records the picked feature id (validated against loaded features before use). */
   const selectFeature = useCallback((featureId: string) => setSelectedFeatureId(featureId), []);
   const selected = features.find((feature) => feature.feature_id === selectedFeatureId) ?? null;
   // On phones the WebGL map is opt-in; the evidence list below always carries the same events.
@@ -99,11 +101,10 @@ export function MapGadget({ instance, isEditMode = false }: { instance: GadgetIn
   const showPlot = !(mapOnDemand && mapEmpty);
   const emptyMessage = !precise || activeLayer?.reason === 'privacy_opt_in_required' ? t('mapPreciseDisabled') : activeLayer?.reason === 'no_source_selected' ? t('mapSourceRequired') : activeLayer?.enabled === false ? t('mapObservationLayerDisabled') : t('mapEmpty');
   return <section className="flex h-full min-h-0 flex-col gap-2 overflow-hidden bg-card p-3 text-card-foreground">
-    <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border pb-2">
-      {/* The gadget frame already shows the title; keep only the range line. */}
-      <div className="min-w-0 flex-1"><p className="line-clamp-2 break-words text-xs text-muted-foreground">{t('mapRange', { days })}</p></div>
-      <span aria-label={engine === 'globe' ? t('mapGlobeEngine') : t('mapFlatEngine')} title={engine === 'globe' ? t('mapGlobeEngine') : t('mapFlatEngine')} className="line-clamp-2 max-w-[40%] min-w-0 shrink text-right text-xs text-muted-foreground break-words">{engine === 'globe' ? t('mapGlobeEngine') : t('mapFlatEngine')}</span>
-    </header>
+    {/* The gadget frame already shows the title; keep only the range line (the engine label is configuration noise). */}
+    <p className="m-0 line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('mapRange', { days })}</p>
+    {/* Location-sharing / empty notice sits above the map in flow so it never covers the basemap. */}
+    {showPlot && mapEmpty && <GadgetNotice kind="empty" message={emptyMessage} action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }} className="shrink-0 px-0 py-1 text-xs" />}
     {precise && sourceIds.length === 0 && <GadgetNotice kind="setup" message={t('mapSourceRequired')} className="shrink-0 px-0 py-1 text-xs" />}
     {observations.isError && <GadgetNotice kind="error" message={t('observationLoadFailed')} className="shrink-0 px-0 py-1 text-xs" />}
     {/* On-demand phone state with no points: the notice renders in normal flow (an absolute notice in a collapsed plot is clipped). */}
@@ -119,15 +120,14 @@ export function MapGadget({ instance, isEditMode = false }: { instance: GadgetIn
         : <Suspense fallback={<p role="status" className="p-2 text-xs text-muted-foreground">{t('mapRendererLoading')}</p>}><FlatMap features={points} selectedFeatureId={selectedFeatureId} onSelectFeature={selectFeature} width={size.width} height={size.height} visible={visible} interactive={!isEditMode} /></Suspense>}
       </div>}
       {isPhone && mapRequested && <Button type="button" variant="outline" className="absolute right-2 top-2 z-10" onClick={() => setMapRequested(false)}>{t('mapHide')}</Button>}
-      {mapEmpty && <GadgetNotice kind="empty" message={emptyMessage} action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }} className="absolute left-2 top-2 z-10 max-w-[90%] rounded bg-card/90 px-2 py-1 text-xs" />}
-      {selected && <p className="absolute bottom-2 left-2 max-w-[90%] rounded bg-card/90 px-2 py-1 text-xs">{formatMetricLabel(selected.metric, t)} · {selected.value ?? t('weatherMissingValue')} {selected.unit} · {selected.region ?? selected.provider}<span className="block">{t('mapSourceIdentity')}: {selected.source_id} · {t('mapQuality')}: {selected.quality}</span>{selected.document_version_number ? <Link className="underline" href={`/knowledge/documents/${selected.document_id}?version=${selected.document_version_number}#cited-revision`}>{t('mapOpenRevision', { version: selected.document_version_number })}</Link> : <span>{t('mapRevisionUnavailable')}</span>}</p>}
+      {selected && <p className="absolute bottom-2 left-2 max-w-[90%] rounded bg-card/90 px-2 py-1 text-xs">{formatMetricLabel(selected.metric, t)} · {selected.value ?? t('weatherMissingValue')} {selected.unit} · {selected.region ?? formatProviderName(selected.provider)}<span className="block">{t('mapSourceIdentity')}: {selected.source_id} · {t('mapQuality')}: {selected.quality}</span>{selected.document_version_number ? <Link className="underline" href={`/knowledge/documents/${selected.document_id}?version=${selected.document_version_number}#cited-revision`}>{t('mapOpenRevision', { version: selected.document_version_number })}</Link> : <span>{t('mapRevisionUnavailable')}</span>}</p>}
     </div>}
     <div className={`flex min-h-0 flex-col ${features.length > 0 ? 'flex-1' : 'shrink-0'}`}>
       {features.length > 0 && <h3 className="line-clamp-2 break-words text-xs font-semibold">{t('mapEvidenceList', { count: features.length })}</h3>}
       <ul className="min-h-0 flex-1 divide-y divide-border overflow-y-auto" aria-label={t('mapEvidenceListLabel')}>
         {features.map((feature) => <li key={feature.feature_id}>
           <button type="button" onClick={() => setSelectedFeatureId(feature.feature_id)} aria-pressed={feature.feature_id === selectedFeatureId} className="flex w-full items-start justify-between gap-2 py-1.5 text-left text-xs hover:bg-muted/30">
-            <span className="min-w-0 truncate">{formatMetricLabel(feature.metric, t)} · {feature.region ?? feature.provider}<time className="block text-xs text-muted-foreground" dateTime={feature.observed_at}>{formatDateTime(feature.observed_at, display.locale, display.timezone)}</time></span>
+            <span className="min-w-0 truncate">{formatMetricLabel(feature.metric, t)} · {feature.region ?? formatProviderName(feature.provider)}<time className="block text-xs text-muted-foreground" dateTime={feature.observed_at}>{formatDateTime(feature.observed_at, display.locale, display.timezone)}</time></span>
             <span className="shrink-0 tabular-nums">{feature.value ?? '—'} {feature.unit}</span>
           </button>
         </li>)}

@@ -27,7 +27,7 @@ export function NewsPage() {
   return (
     <section className="rounded-lg border bg-card p-6 space-y-3" aria-labelledby="news-page-title">
       <div className="flex items-center justify-between gap-2"><h1 id="news-page-title">{t('news')}</h1><div ref={setActionsHost} className="flex items-center gap-1" /></div>
-      {ready && <StoryList sourceIds={sourceIds} showTrends={isOwner} actionsHost={actionsHost} onSelectStory={(id, el) => { trigger.current = el; setStoryId(id); }} />}
+      {ready && <StoryList sourceIds={sourceIds} showTrends={isOwner} noSources={isOwner && sourceIds.length === 0} actionsHost={actionsHost} onSelectStory={(id, el) => { trigger.current = el; setStoryId(id); }} />}
       <Dialog open={storyId !== null} onOpenChange={(open) => { if (!open) setStoryId(null); }}>
         <DialogContent closeLabel={d('close')} onCloseAutoFocus={(e) => { e.preventDefault(); if (trigger.current?.isConnected) trigger.current.focus(); }}
           className="h-[85dvh] max-w-4xl overflow-hidden">

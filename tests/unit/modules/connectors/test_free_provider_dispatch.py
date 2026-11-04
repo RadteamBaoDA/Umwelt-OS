@@ -37,8 +37,15 @@ def make_run(provider, gate, monkeypatch, state=None, connector_revision=2, conf
     async def lease(_run):
         return SimpleNamespace(token=uuid4(), cursor_before=None)
 
-    async def accept(_run, _lease, records, coverage, collected_at, state_update=None):
+    async def accept(_run, _lease, records, coverage, collected_at, state_update=None, **_kw):
         accepted.append((tuple(records), coverage, state_update))
+
+    async def no_seen(_session, **_kw):
+        return set()  # incremental runners look up already-seen keys before the cap
+
+    @asynccontextmanager
+    async def session_factory():
+        yield SimpleNamespace(rollback=AsyncMock())
 
     async def get_state(_run):
         return state or SimpleNamespace(etag=None, last_modified=None, validators_revision=None)
@@ -46,9 +53,11 @@ def make_run(provider, gate, monkeypatch, state=None, connector_revision=2, conf
     monkeypatch.setattr(collection, "_lease", lease)
     monkeypatch.setattr(collection, "_accept_native", accept)
     monkeypatch.setattr(collection, "_state", get_state)
-    source = SimpleNamespace(provider=provider, configuration=configuration or {})
+    monkeypatch.setattr(collection.ingestion, "seen_record_keys", no_seen)
+    source = SimpleNamespace(id=uuid4(), generation=1, provider=provider, configuration=configuration or {})
     run = SimpleNamespace(
-        attempt=SimpleNamespace(source=source, connector_revision=connector_revision), gate=gate, extras={})
+        attempt=SimpleNamespace(source=source, connector_revision=connector_revision), gate=gate, extras={},
+        factory=session_factory)
     return run, accepted
 
 
@@ -208,6 +217,7 @@ def test_registration_agrees_across_registry_sources_and_scope_validators(provid
         "openweathermap": {"owm_latitude": 21.0, "owm_longitude": 105.8},
         "openaq": {"openaq_location_id": 8118},
         "nasa_firms": {"firms_country": "VNM"},
+        "coingecko": {"coingecko_assets": [{"id": "bitcoin", "symbol": "BTC", "name": "Bitcoin"}]},
     }.get(provider, {})
     assert native_dispatch_supported(source_type, provider) and PROVIDER_SCOPE_FIELDS[provider] == frozenset(scope)
     source = SimpleNamespace(

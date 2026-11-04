@@ -13,6 +13,7 @@ import { ChatMarkdown } from './chat-markdown';
 import { useChatScroll } from './use-chat-scroll';
 import { ChatReasoning } from './chat-reasoning';
 import { useCopyMessage } from './use-copy-message';
+import { useTopicNames } from './use-topic-names';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
 import { ToolRendering } from './generative-ui/components/tool-rendering';
@@ -60,8 +61,8 @@ const STARTER_PROMPTS = [
 ] as const;
 
 /**
- * Composer-first empty state: one sentence about what Chat can do with this workspace plus three starter prompts
- * as plain outline buttons. Prompts are workspace-relevant message keys; selecting one sends it like a typed message.
+ * Composer-first empty state: one sentence about what Chat can do with this workspace plus starter prompts
+ * (the owner's top topics, else three fixed ones) as plain outline buttons. Prompts are workspace-relevant message keys; selecting one sends it like a typed message.
  *
  * @param props - Send callback and active locale.
  * @returns Left-aligned intro block with a labelled prompt group.
@@ -69,6 +70,8 @@ const STARTER_PROMPTS = [
 function EmptyIntro({ onSendPrompt, locale }: { onSendPrompt: (prompt: string) => void; locale?: AppLocaleId }) {
   const t = useTranslations('chat');
   const copy = genUiCopy(resolveWidgetLocale(locale));
+  // Real topics replace the fixed chips; empty/failed load keeps the fixed ones.
+  const topics = useTopicNames();
   return (
     <div className="my-auto flex flex-col gap-4 py-8">
       <div className="flex flex-col gap-1">
@@ -76,11 +79,17 @@ function EmptyIntro({ onSendPrompt, locale }: { onSendPrompt: (prompt: string) =
         <p className="max-w-prose text-sm text-muted-foreground">{t('emptyStateDescription')}</p>
       </div>
       <div data-testid="starter-suggestions" role="group" aria-label={copy.shellSuggestionsLabel} className="flex flex-wrap gap-2">
-        {STARTER_PROMPTS.map(({ title, prompt }) => (
-          <Button key={title} type="button" variant="outline" className="h-auto whitespace-normal text-left" onClick={() => onSendPrompt(t(prompt))}>
-            {t(title)}
-          </Button>
-        ))}
+        {topics.length > 0
+          ? topics.map((topic) => (
+            <Button key={topic} type="button" variant="outline" className="h-auto whitespace-normal text-left" onClick={() => onSendPrompt(t('starterTopicPrompt', { topic }))}>
+              {t('starterTopicTitle', { topic })}
+            </Button>
+          ))
+          : STARTER_PROMPTS.map(({ title, prompt }) => (
+            <Button key={title} type="button" variant="outline" className="h-auto whitespace-normal text-left" onClick={() => onSendPrompt(t(prompt))}>
+              {t(title)}
+            </Button>
+          ))}
       </div>
     </div>
   );

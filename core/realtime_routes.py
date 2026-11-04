@@ -466,11 +466,17 @@ async def stream_events(
 
 
     async def body() -> AsyncIterator[str]:
-        """Yield detached same-stream events/resync or15s heartbeat; no SQL transaction survives a yield."""
+        """Yield an immediate retry preamble, then detached same-stream events/resync or 15s heartbeat.
+
+        The preamble carries no `id:` so it never moves the replay cursor; no SQL transaction survives a yield.
+        """
         position = initial
         if initial_reason:
             yield _resync(initial_reason, ReplayCursor(epoch=head.epoch, sequence=head.sequence).encode())
             return
+        # The Next /api rewrite proxy holds response headers until the first body byte, so without an
+        # immediate chunk EventSource.onopen would not fire until the first heartbeat (UI stuck "Connecting").
+        yield "retry: 3000\n\n"
         last_heartbeat = asyncio.get_running_loop().time()
         while not await request.is_disconnected():
             try:

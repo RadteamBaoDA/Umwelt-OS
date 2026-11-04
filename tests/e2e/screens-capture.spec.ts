@@ -1,13 +1,17 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
-import { openWizard, writeHeaders } from './sources-helpers';
+import { BUILTINS, WIZARD_CASES, collectedRecordCount, connectWizardSource, enableBuiltinViaSettings, openWizard, writeHeaders } from './sources-helpers';
 
 /**
  * Design-review capture, not a behavioural test: screenshots every owner screen at three widths in both themes,
  * plus the main overlays and the signed-out pages, into SCREENS_DIR (default .taste-skill/before).
  */
-const OUT = process.env.SCREENS_DIR ?? '.taste-skill/before';
+// Resolved from the repo root so output lands in <repo>/.taste-skill/<dir> whatever the cwd; an absolute SCREENS_DIR is kept as is.
+const OUT = path.resolve(__dirname, '../..', process.env.SCREENS_DIR ?? '.taste-skill/before');
+/** CAPTURE_WITH_DATA=1 seeds keyless sources before the gadget dashboard is built so the close-ups show real data. */
+const WITH_DATA = process.env.CAPTURE_WITH_DATA === '1';
 const VIEWPORTS = [
   { name: '1440', width: 1440, height: 900 },
   { name: '768', width: 768, height: 1024 },
@@ -92,6 +96,46 @@ test('prepare: a preset dashboard so the dashboard is not only its empty state',
   }
 });
 
+/** Providers seeded for the data capture: built-ins by id, wizard cases by id. Order = binding preference. */
+const SEED_BUILTINS = ['thanhnien_news', 'nvd', 'ioda', 'emsc_quakes'];
+const SEED_WIZARD = ['coingecko', 'open_meteo', 'google_news'];
+const SEED_PREFIX = 'capture';
+
+test('prepare: seed keyless sources with data (CAPTURE_WITH_DATA=1)', async ({ page }) => {
+  test.skip(!WITH_DATA, 'CAPTURE_WITH_DATA not set');
+  test.setTimeout(15 * 60_000);
+  const seeded: string[] = [];
+  const existing = await (await page.request.get('/api/v1/connectors/builtins', { timeout: 120_000 })).json() as { id: string; enabled: boolean; source_id: string | null }[];
+  // Each provider is isolated: one that fails or yields no records is logged and skipped, never aborting the sweep.
+  for (const id of SEED_BUILTINS) {
+    try {
+      const label = BUILTINS.find(([key]) => key === id)![1];
+      let sourceId = existing.find((b) => b.id === id)?.source_id ?? null;
+      if (!sourceId) {
+        const out = await enableBuiltinViaSettings(page, id, label, 90_000);
+        sourceId = out.sourceId;
+        if (!out.ok) { console.log(`SEED ${id}: ${out.text}`); continue; }
+      }
+      const count = sourceId ? await collectedRecordCount(page, sourceId, 60_000) : 0;
+      console.log(`SEED ${id}: ${count} records`);
+      if (count > 0) seeded.push(id);
+    } catch (error) { console.log(`SEED ${id} skipped: ${String(error).split(String.fromCharCode(10))[0]}`); }
+  }
+  for (const id of SEED_WIZARD) {
+    try {
+      const c = WIZARD_CASES.find((x) => x.id === id)!;
+      const name = `${SEED_PREFIX} ${id}`;
+      const out = await connectWizardSource(page, c, name, 90_000);
+      if (!out.ok) { console.log(`SEED ${id}: ${out.text}`); continue; }
+      const src = (await (await page.request.get('/api/v1/sources?limit=100')).json() as { items: { id: string; name: string }[] }).items.find((s) => s.name === name);
+      const count = src ? await collectedRecordCount(page, src.id, 60_000) : 0;
+      console.log(`SEED ${id}: ${count} records`);
+      if (count > 0) seeded.push(id);
+    } catch (error) { console.log(`SEED ${id} skipped: ${String(error).split(String.fromCharCode(10))[0]}`); }
+  }
+  console.log(`SEEDED :: ${seeded.join(', ') || 'none'}`);
+});
+
 type Template = { id: string; renderer: string; source_mode: 'none' | 'single' | 'multi'; accepted_shapes: string[] | null };
 type SourceOption = { id: string; provider: string | null; status: string; data_shapes: string[] };
 type Catalog = { metrics: { id: string }[]; symbol_keyed: boolean; suggested_symbols: string[]; region_keyed: boolean; suggested_regions: string[] };
@@ -102,6 +146,15 @@ const PREFERRED: Record<string, string[]> = {
   weather: ['open_meteo'], news_feed: ['bbc_world', 'npr_news', 'hn_top'], table_panel: ['usgs', 'launch_library', 'nvd'],
   video_panel: ['youtube'], text_panel: ['bbc_world'],
 };
+
+/** With seeded data, bind each renderer to the sources just seeded (they hold records) before the generic preferences. */
+if (WITH_DATA) {
+  Object.assign(PREFERRED, {
+    provider_observation: ['coingecko', ...PREFERRED.provider_observation], finance_chart: ['coingecko', ...PREFERRED.finance_chart],
+    weather: ['open_meteo'], news_feed: ['thanhnien_news', 'google_news', ...PREFERRED.news_feed],
+    table_panel: ['nvd', 'ioda', ...PREFERRED.table_panel], map: ['emsc_quakes', ...PREFERRED.map],
+  });
+}
 
 /** Higher is better: a preferred provider by its order, then any active source. */
 function rank(renderer: string, source: SourceOption): number {
@@ -141,7 +194,9 @@ test('prepare: a dashboard with every gadget type', async ({ page }) => {
     for (const bound of attempts) {
       const meta = bound.length === 1 && bound[0].provider ? catalog[bound[0].provider] : undefined;
       const scope = {
-        ...(meta?.metrics.length && ['provider_observation', 'weather', 'finance_chart'].includes(template.renderer) ? { metrics: [meta.metrics[0].id] } : {}),
+        // Seeded CoinGecko charts use the spot_price series; otherwise the provider's first metric.
+        ...(meta?.metrics.length && ['provider_observation', 'weather', 'finance_chart'].includes(template.renderer)
+          ? { metrics: [(WITH_DATA && template.renderer === 'finance_chart' ? meta.metrics.find((m) => m.id === 'spot_price') : undefined)?.id ?? meta.metrics[0].id] } : {}),
         ...(meta?.symbol_keyed && meta.suggested_symbols.length ? { symbols: meta.suggested_symbols.slice(0, 1) } : {}),
         ...(meta?.region_keyed && meta.suggested_regions.length ? { regions: meta.suggested_regions.slice(0, 1) } : {}),
       };

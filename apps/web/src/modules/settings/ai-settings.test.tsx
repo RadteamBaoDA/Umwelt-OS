@@ -31,6 +31,16 @@ describe('AI settings models', () => {
     await waitFor(() => expect((screen.getByRole('button', { name: 'Save AI settings' }) as HTMLButtonElement).disabled).toBe(false));
   });
 
+  it('shows only the Providers block until a provider exists', async () => {
+    fetchMock.mockImplementation(() => json({ ...read, providers: [], defaults: {} }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><QueryClientProvider client={client}><AISettingsWorkspace /></QueryClientProvider></NextIntlClientProvider>);
+    await screen.findByText('No providers yet. Add one to start.');
+    expect(screen.getByRole('button', { name: 'Add provider' })).toBeTruthy();
+    expect(screen.queryByRole('table', { name: 'Models' })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: 'Chat model' })).toBeNull();
+  });
+
   it('tests a saved chat model through the role endpoint (streaming then tools) so chat evidence is stored', async () => {
     fetchMock.mockImplementation((url: string) => json(String(url).includes('/models/chat/test') ? { role: 'chat', capability: 'streaming', result: 'supported' } : read));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

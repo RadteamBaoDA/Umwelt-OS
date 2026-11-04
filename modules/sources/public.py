@@ -96,6 +96,21 @@ async def list_connector_status(
     return {row.id: ConnectorStatusRead(*row) for row in rows}
 
 
+async def _select_provider_sources(
+    session: AsyncSession, providers: frozenset[str], *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[Source]:
+    """Admit the scope once, then select non-archived workspace Sources for ``providers``, oldest first.
+
+    Shared by the ORM and DTO listings so both keep the same bound (500 rows), filters and order.
+    """
+    await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    return list((await session.scalars(
+        select(Source).where(
+            Source.provider.in_(sorted(providers)), Source.status != "archived", *_source_scope(scope),
+        ).order_by(Source.created_at, Source.id).limit(500).execution_options(populate_existing=True)
+    )).all())
+
+
 async def list_provider_sources(
     session: AsyncSession, providers: frozenset[str], *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[Source]:
@@ -104,12 +119,38 @@ async def list_provider_sources(
     Read only, no locks. Bounded by one row per (provider, re-created source) in a single workspace;
     callers pick the oldest per provider so a toggled preset keeps reusing its original Source.
     """
+    return await _select_provider_sources(
+        session, providers, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+
+
+async def list_provider_connector_sources(
+    session: AsyncSession, providers: frozenset[str], *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[ConnectorSource]:
+    """Public connector DTOs for the non-archived workspace Sources of ``providers``, oldest first.
+
+    Same filters, order and 500-row bound as ``list_provider_sources`` but with one access fence and
+    one select for the whole provider set; read only, no locks. Rows are fresh (populate_existing).
+    """
+    return [_connector_source(row) for row in await _select_provider_sources(
+        session, providers, scope=scope, multi_workspace_enabled=multi_workspace_enabled)]
+
+
+async def get_connector_sources(
+    session: AsyncSession, source_ids: frozenset[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+) -> dict[UUID, ConnectorSource]:
+    """Batch ``get_connector_source``: DTOs keyed by id for the ids visible in ``scope`` (missing ids absent).
+
+    One access fence and one ``IN`` select, read only, no locks; bounded to 200 ids.
+    """
+    if len(source_ids) > 200:
+        raise ValueError("Connector source batch is limited to 200 sources")
     await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    return list((await session.scalars(
-        select(Source).where(
-            Source.provider.in_(sorted(providers)), Source.status != "archived", *_source_scope(scope),
-        ).order_by(Source.created_at, Source.id).limit(500).execution_options(populate_existing=True)
-    )).all())
+    if not source_ids:
+        return {}
+    rows = await session.scalars(
+        select(Source).where(Source.id.in_(list(source_ids)), *_source_scope(scope))
+        .execution_options(populate_existing=True))
+    return {row.id: _connector_source(row) for row in rows}
 
 
 def _require_source_owner(scope: Scope) -> None:

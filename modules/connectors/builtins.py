@@ -14,7 +14,7 @@ from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import is_instance_operator
@@ -24,11 +24,39 @@ from core.workspaces.dependencies import require_workspace_read, require_workspa
 from core.workspaces.schemas import WorkspaceContext
 from modules.connectors import provider_terms, provisioning, registry, scheduler
 from modules.connectors.backends import PROVIDER_SOURCE_TYPES
+from modules.connectors.provider_options import (
+    ALL_OPTION_NAMES,
+    ISO_COUNTRY_PATTERN,
+    MAX_COINS,
+    CoinId,
+    CryptoPair,
+    EonetCategory,
+    EonetStatus,
+    FxCurrency,
+    GdacsAlert,
+    GdacsType,
+    GdeltCountry,
+    GdeltLang,
+    GdeltTimespan,
+    HnList,
+    IsoCountry,
+    NvdSeverity,
+    NwsArea,
+    NwsSeverity,
+    OecdArea,
+    Region,
+    SatnogsStatus,
+    UsgsMagnitude,
+    UsgsPeriod,
+    WbIndicator,
+    WikiLanguage,
+)
 from modules.connectors.provider_specs import (
     BUILTIN_PROVIDERS,
     FREE_PROVIDER_SPECS,
     TERMS_INELIGIBLE,
     FreeProviderSpec,
+    applicable_options,
     deployment_use_matches,
     get_provider_spec,
     get_realtime_tier,
@@ -41,6 +69,7 @@ from modules.connectors.public import (
     serialize_source_configuration,
     source_data_shapes,
 )
+from modules.connectors.sections import MAX_SECTIONS, SECTION_CATALOG
 from modules.settings.public import module_dependency
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource, SourceCreate, SourcePatch
@@ -52,6 +81,13 @@ OwnerRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 OwnerWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 _USES_WITH_REVIEW = ("personal", "noncommercial", "commercial")
+
+
+class SectionRead(BaseModel):
+    """One selectable RSS section as the UI renders it (slug is the only value the owner sends back)."""
+    slug: str
+    label_en: str
+    label_vi: str
 
 
 class BuiltinSourceRead(BaseModel):
@@ -68,6 +104,10 @@ class BuiltinSourceRead(BaseModel):
     data_shapes: list[DataShape] = []
     source_id: UUID | None
     enabled: bool
+    # Owner options this built-in accepts (UI renders only these) and, for RSS presets, the server section catalog.
+    applicable_options: list[str] = []
+    sections: list[SectionRead] | None = None
+    default_section: str | None = None
 
 
 class BuiltinEnableRequest(BaseModel):
@@ -78,6 +118,51 @@ class BuiltinEnableRequest(BaseModel):
     graph_enabled: bool | None = None
     rag_index_enabled: bool | None = None
     realtime_mode: Literal["realtime", "near_realtime"] | None = None
+    # Wave A options: None keeps the saved value, else the spec default (see ``enable_builtin``).
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    schedule_interval_minutes: Literal[15, 30, 60, 360, 1440] | None = None
+    max_items: StrictInt | None = Field(default=None, ge=1, le=100)
+    include_keywords: tuple[str, ...] | None = Field(default=None, max_length=20)
+    exclude_keywords: tuple[str, ...] | None = Field(default=None, max_length=20)
+    max_age_days: StrictInt | None = Field(default=None, ge=1, le=365)
+    # Wave B: RSS section slugs (catalog providers only; membership is checked against the server catalog).
+    feed_sections: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=MAX_SECTIONS)
+    # Wave D per-type options; the same bounded types as ``ConnectorConfig`` (422 on any other value), allowed
+    # per provider by the registry (422 on the wrong provider).
+    hn_list: HnList | None = None
+    gdelt_query: str | None = Field(default=None, min_length=1, max_length=100)
+    gdelt_timespan: GdeltTimespan | None = None
+    gdelt_source_lang: GdeltLang | None = None
+    gdelt_source_country: GdeltCountry | None = None
+    usgs_min_magnitude: UsgsMagnitude | None = None
+    usgs_period: UsgsPeriod | None = None
+    min_magnitude: float | None = Field(default=None, ge=2.0, le=8.0)
+    eonet_categories: tuple[EonetCategory, ...] | None = Field(default=None, min_length=1, max_length=13)
+    eonet_status: EonetStatus | None = None
+    eonet_days: StrictInt | None = Field(default=None, ge=1, le=30)
+    gdacs_event_types: tuple[GdacsType, ...] | None = Field(default=None, min_length=1, max_length=6)
+    gdacs_alert_levels: tuple[GdacsAlert, ...] | None = Field(default=None, min_length=1, max_length=3)
+    nws_severity: tuple[NwsSeverity, ...] | None = Field(default=None, min_length=1, max_length=4)
+    nws_area: NwsArea | None = None
+    nvd_severity: tuple[NvdSeverity, ...] | None = Field(default=None, min_length=1, max_length=4)
+    nvd_window_days: StrictInt | None = Field(default=None, ge=1, le=7)
+    nvd_keyword: str | None = Field(default=None, min_length=1, max_length=100)
+    kev_ransomware_only: StrictBool | None = None
+    ioda_country: str | None = Field(default=None, pattern=ISO_COUNTRY_PATTERN)
+    region: Region | None = None
+    # Wave F per-type options (curated enums/bounded numbers; the registry allows each only on its own provider).
+    wiki_language: WikiLanguage | None = None
+    satnogs_status: SatnogsStatus | None = None
+    disease_country: IsoCountry | None = None
+    wb_country: IsoCountry | None = None
+    wb_indicator: WbIndicator | None = None
+    fx_base: FxCurrency | None = None
+    fx_quotes: tuple[FxCurrency, ...] | None = Field(default=None, min_length=1, max_length=10)
+    oecd_countries: tuple[OecdArea, ...] | None = Field(default=None, min_length=1, max_length=10)
+    crypto_symbols: tuple[CryptoPair, ...] | None = Field(default=None, min_length=1, max_length=10)
+    coin_ids: tuple[CoinId, ...] | None = Field(default=None, min_length=1, max_length=MAX_COINS)
+    kp_min: float | None = Field(default=None, ge=0, le=9)
+    advisory_min_level: StrictInt | None = Field(default=None, ge=1, le=4)
 
 
 _DEFAULT_ENABLE = BuiltinEnableRequest()  # body is optional; the model is never mutated
@@ -92,7 +177,12 @@ def _spec(provider: str) -> FreeProviderSpec:
 
 
 def _read(spec: FreeProviderSpec, source: ConnectorSource | None, active: bool) -> BuiltinSourceRead:
-    """Project a spec plus its (optional) Source and activation flag into the owner-facing row."""
+    """Project a spec plus its (optional) Source and activation flag into the owner-facing row.
+
+    Adds the applicable option names and, for section-catalog presets, the catalog and its default slug so the
+    UI never duplicates slug lists.
+    """
+    catalog = SECTION_CATALOG.get(spec.id)
     return BuiltinSourceRead(
         id=spec.id, label=spec.label, category=spec.category, eligibility=spec.eligibility,
         terms_url=spec.terms_url, terms_checked_on=spec.checked_on, attribution=spec.attribution,
@@ -100,6 +190,10 @@ def _read(spec: FreeProviderSpec, source: ConnectorSource | None, active: bool) 
         realtime_tier=get_realtime_tier(spec.id, getattr(source, "configuration", None)),
         data_shapes=sorted(source_data_shapes(spec.id, PROVIDER_SOURCE_TYPES.get(spec.id, "api"))),
         source_id=source.id if source is not None else None, enabled=active,
+        applicable_options=applicable_options(spec.id),
+        sections=[SectionRead(slug=x.slug, label_en=x.label_en, label_vi=x.label_vi) for x in catalog.sections]
+        if catalog else None,
+        default_section=catalog.default if catalog else None,
     )
 
 
@@ -160,13 +254,25 @@ async def _state(session: AsyncSession, spec: FreeProviderSpec, *, scope: Worksp
 async def list_builtins(session: Session, request: Request, _owner: OwnerRead) -> list[BuiltinSourceRead]:
     """List every built-in preset with its toggle state for the owner workspace.
 
-    Owner-only (members have no Source access). Read only: no locks, no Source creation.
+    Owner-only (members have no Source access). Creates no Source and takes no row locks; the
+    access-fence reads use FOR SHARE locks that the route's read transaction releases. State is computed
+    in two batched reads (all provider Sources, then their provisioning rows) instead of per built-in;
+    per provider the oldest Source wins and ``enabled`` follows ``_state`` exactly.
     """
     gate = request.app.state.settings.multi_workspace_enabled
     await _owner_access(session, request, _owner)
+    specs = [spec for spec in FREE_PROVIDER_SPECS if spec.id in BUILTIN_PROVIDERS]
+    oldest: dict[str, ConnectorSource] = {}
+    for source in await sources.list_provider_connector_sources(
+            session, frozenset(spec.id for spec in specs), scope=_owner, multi_workspace_enabled=gate):
+        if source.provider is not None:
+            oldest.setdefault(source.provider, source)  # rows arrive oldest first
+    rows = await provisioning.activation_statuses(
+        session, frozenset(source.id for source in oldest.values()), scope=_owner, multi_workspace_enabled=gate)
     return [
-        await _state(session, spec, scope=_owner, gate=gate)
-        for spec in FREE_PROVIDER_SPECS if spec.id in BUILTIN_PROVIDERS
+        _read(spec, oldest[spec.id], _is_enabled(oldest[spec.id], rows.get(oldest[spec.id].id)))
+        if spec.id in oldest else _read(spec, None, False)
+        for spec in specs
     ]
 
 
@@ -183,6 +289,19 @@ async def enable_builtin(
     provider unless the caller is the bootstrap instance operator (single-user: the owner). Owner-write,
     CSRF and access-fence admission apply; the terms acknowledgement and operator evidence are written
     only here, from this explicit owner action.
+
+    Wave D per-type options (``hn_list``, ``gdelt_*``, ``usgs_*``, ``eonet_*``, ``gdacs_*``, ``nws_*``, ``nvd_*``,
+    ``min_magnitude``, ``kev_ransomware_only``, ``ioda_country``, ``region``) and wave F options (``wiki_language``,
+    ``satnogs_status``, ``disease_country``, ``wb_*``, ``fx_*``, ``oecd_countries``, ``crypto_symbols``, ``coin_ids``,
+    ``kp_min``, ``advisory_min_level``) follow the same precedence and are accepted only by their own provider
+    (422 otherwise; an enum value outside a field's curated list is rejected at request parsing, also 422).
+
+    Settings precedence per field (interval, ``realtime_mode``, ``max_items``, keywords, ``max_age_days``,
+    ``feed_sections``):
+    request value, else the Source's saved configuration, else the spec default (interval) or unset.
+    Filter fields for a provider outside ``INCREMENTAL_PROVIDERS`` and ``feed_sections`` for a provider without a
+    section catalog (or with a slug outside it) fail validation (422). ``name`` only
+    names a newly created Source; it is ignored when an existing Source is reused.
     """
     spec = _spec(provider)
     scope, gate = _owner, request.app.state.settings.multi_workspace_enabled
@@ -209,7 +328,7 @@ async def enable_builtin(
     if found is None:
         found = await sources.create_source(
             session, SourceCreate(
-                type=PROVIDER_SOURCE_TYPES[provider], name=spec.label, provider=provider,
+                type=PROVIDER_SOURCE_TYPES[provider], name=payload.name or spec.label, provider=provider,
                 graph_enabled=bool(payload.graph_enabled),
                 rag_index_enabled=(
                     payload.rag_index_enabled
@@ -234,11 +353,28 @@ async def enable_builtin(
 
     # 3. Desired settings: only rewritten when different, because every save bumps the revision and
     # demotes an active connector. A paused->active Source has a new generation, so it must be re-saved.
-    config = ConnectorConfig(
-        timeout_seconds=30, history_mode="returned_snapshot",
-        schedule_interval_minutes=spec.default_interval_minutes,
-        realtime_mode=payload.realtime_mode)
+    saved_config = source.configuration
+
+    def pick(field: str, default: object = None) -> object:
+        """Request value, else the owner's saved value, else ``default`` (so Resume keeps settings)."""
+        value = getattr(payload, field)
+        if value is None and field in payload.model_fields_set:
+            return default  # explicit null clears the saved value (back to default); an absent field keeps it
+        return value if value is not None else saved_config.get(field, default)
+
+    # Only non-None filter values are passed so default sources serialise exactly as before.
+    options = {
+        field: value for field in (
+            "max_items", "include_keywords", "exclude_keywords", "max_age_days", "feed_sections",
+            *sorted(ALL_OPTION_NAMES - {"max_items"}),
+        )
+        if (value := pick(field)) is not None
+    }
     try:
+        config = ConnectorConfig(
+            timeout_seconds=30, history_mode="returned_snapshot",
+            schedule_interval_minutes=pick("schedule_interval_minutes", spec.default_interval_minutes),
+            realtime_mode=pick("realtime_mode"), **options)
         source_configuration = serialize_source_configuration(source, config)
         registry.validate(source.model_copy(update={"configuration": source_configuration}))
     except ValueError as exc:

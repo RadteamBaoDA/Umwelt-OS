@@ -1,16 +1,8 @@
 'use client';
 
-import {
-  AlertCircle,
-  AlertTriangle,
-  Bell,
-  Eye,
-  Plus,
-  RotateCw,
-  Search,
-} from 'lucide-react';
+import { Plus, Search } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -18,7 +10,13 @@ import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import type { GadgetInstance, HighlightRule } from '../api';
 import { evaluateGadgetHighlights } from '../api';
+import { useReportGadgetFreshness } from '../gadget-freshness';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
+import { formatRelativeTime } from './relative-time';
+
+/** Sort rank per status/severity (lower sorts first). */
+const STATUS_RANK: Record<WatchlistItem['status'], number> = { alert: 0, matched: 1, monitoring: 2 };
+const SEVERITY_RANK: Record<WatchlistItem['severity'], number> = { critical: 0, warning: 1, info: 2 };
 
 /** Single monitored rule or target symbol entry on the watchlist table. */
 export interface WatchlistItem {
@@ -45,9 +43,9 @@ export interface WatchlistGadgetProps {
 
 /**
  * Standard Watchlist and Rules table gadget template.
- * Renders tracked symbols, keywords, condition matches, and explainable highlight rules
- * with visible text-based severity badges (Info, Warning, Critical), client-side search filtering,
- * and notification states.
+ * Renders an alerting-count summary and rule rows sorted alerting first, with a 2px severity edge
+ * (screen-reader text carries the severity), relative last-match time, tabular match count and
+ * client-side search filtering.
  * The bounded root scrolls its controls and watchlist instead of clipping them in compact cards.
  *
  * @param props Gadget instance configuration and watchlist items.
@@ -94,38 +92,31 @@ export function WatchlistGadget({
       item.matchReason?.toLowerCase().includes(q)
     );
   });
+  // Alerting first, then by severity, then most recently matched, so the rows that need attention lead.
+  const sortedItems = [...filteredItems].sort((a, b) =>
+    STATUS_RANK[a.status] - STATUS_RANK[b.status]
+    || SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]
+    || (b.lastMatchedAt ?? '').localeCompare(a.lastMatchedAt ?? ''));
+  const alertingCount = items.filter((item) => item.status === 'alert').length;
+  // The latest match time is the newest real data timestamp this gadget knows about.
+  useReportGadgetFreshness(items.reduce<string | null>((max, i) => (i.lastMatchedAt && (!max || i.lastMatchedAt > max) ? i.lastMatchedAt : max), null));
 
   return (
-    <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-y-auto overflow-x-hidden">
-      {/* Header bar */}
-      <div className="flex items-center justify-between border-b border-border pb-2 text-xs">
-        <div className="flex items-center gap-1.5 font-medium text-muted-foreground">
-          <Eye className="w-3.5 h-3.5 text-muted-foreground" />
-          <span>
-            {daily('monitoredRules', { count: items.length })}
-          </span>
-        </div>
-
-        <div className="flex items-center gap-1">
-          {highlightRules.length > 0 && (
-            <span
-              className="px-1.5 py-0.2 rounded text-xs font-semibold bg-muted/30 text-muted-foreground"
-              title={daily('highlightRulesApplied', { count: highlightRules.length })}
-            >
-              {daily('ruleCount', { count: highlightRules.length })}
-            </span>
-          )}
-          {onAddRule && (
-            <Button
-              type="button"
-              onClick={onAddRule}
-              className="h-6 px-2 text-[11px] font-semibold gap-1"
-            >
-              <Plus className="w-3 h-3" />
-              <span>{daily('addRule')}</span>
-            </Button>
-          )}
-        </div>
+    <div className="flex h-full flex-col gap-3 overflow-y-auto overflow-x-hidden bg-card p-3 text-card-foreground">
+      {/* Current summary: alerting count is the one figure; add-rule stays a quiet action. */}
+      <div className="flex items-center justify-between gap-2">
+        <p
+          className="text-figure-sm"
+          title={highlightRules.length > 0 ? daily('highlightRulesApplied', { count: highlightRules.length }) : undefined}
+        >
+          {t('watchlistSummary', { alerting: alertingCount, total: items.length })}
+        </p>
+        {onAddRule && (
+          <Button type="button" variant="ghost" size="sm" onClick={onAddRule} className="h-7 shrink-0 gap-1 px-2 text-xs">
+            <Plus className="w-3 h-3" aria-hidden="true" />
+            <span>{daily('addRule')}</span>
+          </Button>
+        )}
       </div>
 
       {/* Search Filter Input */}
@@ -151,97 +142,36 @@ export function WatchlistGadget({
         <GadgetNotice kind="empty" className="p-0" message={definition.renderer === 'highlights' ? daily('highlightsEmpty') : `${daily('watchlistEmpty')}. ${daily('watchlistEmptyDetail')}`} action={onAddRule ? { label: daily('addRule'), onClick: onAddRule } : { href: '/settings/sources', label: t('gadgetConfigureAction') }} />
       )}
 
-      {/* Watchlist Table */}
-      {filteredItems.length > 0 && (
-        <div className="flex-1 overflow-y-auto space-y-2 min-h-0 pr-0.5">
-          <table className="w-full text-left border-collapse text-xs">
-            <thead>
-              <tr className="border-b border-border text-[11px] text-muted-foreground font-medium">
-                <th scope="col" className="pb-1.5 pl-1 font-semibold">
-                  Target
-                </th>
-                <th scope="col" className="pb-1.5 font-semibold">
-                  Condition / Trigger
-                </th>
-                <th scope="col" className="pb-1.5 text-right pr-1 font-semibold">
-                  Status & Severity
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/50">
-              {filteredItems.map((item) => {
-                const lastMatched = item.lastMatchedAt
-                  ? formatDateTime(item.lastMatchedAt, display.locale, display.timezone)
-                  : 'Never';
-
-                return (
-                  <tr key={item.id} className="hover:bg-muted/15 transition-colors group">
-                    {/* Target column */}
-                    <td className="py-2 pl-1 align-top">
-                      <div className="font-semibold text-foreground">{item.target}</div>
-                      <div className="text-xs text-muted-foreground tabular-nums">
-                        {item.targetType}
-                      </div>
-                    </td>
-
-                    {/* Condition & match reason column */}
-                    <td className="py-2 pr-2 align-top">
-                      <div className="text-foreground/90 font-medium leading-tight">
-                        {item.condition}
-                      </div>
-                      {item.matchReason && (
-                        <div className="text-[11px] text-muted-foreground line-clamp-1 mt-0.5">
-                          {item.matchReason}
-                        </div>
-                      )}
-                      <div className="text-xs text-muted-foreground/70 tabular-nums mt-0.5">
-                        Matched: {lastMatched} ({item.matchCount}x)
-                      </div>
-                    </td>
-
-                    {/* Status & severity column */}
-                    <td className="py-2 pr-1 align-top text-right space-y-1">
-                      {/* Visible text severity badge */}
-                      <div>
-                        <span
-                          className={`inline-flex items-center px-1.5 py-0.2 rounded text-xs font-semibold ${
-                            item.severity === 'critical'
-                              ? 'bg-destructive/15 text-destructive border border-destructive/30'
-                              : item.severity === 'warning'
-                              ? 'bg-background text-foreground border border-border'
-                              : 'bg-background text-muted-foreground border border-border'
-                          }`}
-                        >
-                          {item.severity === 'critical' ? (
-                            <AlertCircle className="w-2.5 h-2.5 mr-0.5" />
-                          ) : item.severity === 'warning' ? (
-                            <AlertTriangle className="w-2.5 h-2.5 mr-0.5" />
-                          ) : null}
-                          {item.severity}
-                        </span>
-                      </div>
-
-                      {/* State badge */}
-                      <div>
-                        <span
-                          className={`inline-flex items-center px-1.5 py-0.2 rounded text-xs font-medium tabular-nums ${
-                            item.status === 'alert'
-                              ? 'text-destructive font-semibold'
-                              : item.status === 'matched'
-                              ? 'text-foreground font-semibold'
-                              : 'text-muted-foreground'
-                          }`}
-                        >
-                          {item.status.toUpperCase()}
-                        </span>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+      {/* Rule rows: severity is a 2px left edge (plus screen-reader text), time and count sit right, tabular. */}
+      {sortedItems.length > 0 && (
+        <ul className="min-h-0 flex-1 divide-y divide-border/50">
+          {sortedItems.map((item) => (
+            <li
+              key={item.id}
+              className={`flex items-start justify-between gap-3 border-l-2 py-2 pl-3 ${
+                item.severity === 'critical' ? 'border-destructive' : item.severity === 'warning' ? 'border-foreground/50' : 'border-transparent'
+              }`}
+            >
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-foreground">{item.target}</p>
+                <p className="truncate text-xs text-muted-foreground">{item.condition}</p>
+                {item.matchReason && <p className="line-clamp-1 text-xs text-muted-foreground">{item.matchReason}</p>}
+                <span className="sr-only">{t(`watchlistSeverity_${item.severity}`)} · {t(`watchlistStatus_${item.status}`)}</span>
+              </div>
+              <div className="shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                <p className={item.status === 'alert' ? 'font-semibold text-destructive' : undefined}>
+                  {item.lastMatchedAt ? (
+                    <time
+                      dateTime={item.lastMatchedAt}
+                      title={t('watchlistMatchedTitle', { time: formatDateTime(item.lastMatchedAt, display.locale, display.timezone) })}
+                    >{formatRelativeTime(item.lastMatchedAt, display.locale)}</time>
+                  ) : t('watchlistNever')}
+                </p>
+                <p>{t('watchlistMatchCount', { count: item.matchCount })}</p>
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

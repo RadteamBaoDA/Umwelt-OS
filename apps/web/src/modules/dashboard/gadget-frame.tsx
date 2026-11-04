@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { useDisplayPreferences } from '@/core/query-provider';
+import { templateName } from '@/core/renderer-labels';
 import { formatDateTime } from '@/core/i18n';
 import { GadgetFreshnessProvider } from './gadget-freshness';
 import {
@@ -80,6 +81,12 @@ export interface GadgetFrameProps {
 }
 
 /**
+ * Quiet-chrome classes for gadget header actions: hidden until the gadget is hovered or holds focus,
+ * always visible on coarse pointers where hover does not exist. Focus-within keeps keyboard users unblocked.
+ */
+const REVEAL_ON_HOVER = 'opacity-0 transition-opacity group-hover/gadget:opacity-100 group-focus-within/gadget:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100';
+
+/**
  * Formats an elapsed time as a localized relative phrase (minutes, hours or days).
  *
  * @param ms Epoch milliseconds of the event.
@@ -121,9 +128,11 @@ export function GadgetFrame({
 }: GadgetFrameProps) {
   const t = useTranslations('dashboard');
   const ts = useTranslations('uiSweep');
+  const tg = useTranslations('gadgetSettings');
   const { openDrawer } = useChatController();
   const display = useDisplayPreferences();
   const [collectedAt, setCollectedAt] = useState<string | null>(null);
+  const [attribution, setAttribution] = useState<string | null>(null);
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
   const [rendererHost, setRendererHost] = useState<HTMLDivElement | null>(null);
   const rendererHostRef = useRef<HTMLDivElement | null>(null);
@@ -185,11 +194,15 @@ export function GadgetFrame({
   }, [isExpanded, moveRendererHost]);
 
   const definition = instance.definition;
+  /** Receives renderer-reported freshness and optional attribution for the footer line. */
+  const reportFreshness = useCallback((at: string | null, attr?: string | null) => { setCollectedAt(at); setAttribution(attr ?? null); }, []);
   // Freshness comes only from data the renderer actually loaded; absent means no badge.
   const collectedMs = collectedAt ? Date.parse(collectedAt) : NaN;
   const freshnessLabel = Number.isFinite(collectedMs) ? t('freshnessUpdated', { time: formatAgo(collectedMs, display.locale) }) : null;
   const freshnessTitle = collectedAt ? formatDateTime(collectedAt, display.locale, display.timezone) : undefined;
-  const displayTitle = instance.title || definition.name || definition.renderer;
+  // Fallback is the localized template name, never the raw renderer id.
+  const footerText = [attribution, freshnessLabel].filter(Boolean).join(' · ');
+  const displayTitle = instance.title || definition.name || templateName(definition.renderer, tg);
 
   // Derive most severe highlight rule or rule match
   const effectiveSeverity = ruleMatch?.severity || definition.highlight_rules?.[0]?.severity;
@@ -270,7 +283,7 @@ export function GadgetFrame({
         tabIndex={0}
         aria-label={t('gadgetScrollRegionLabel', { title: displayTitle })}
         onClick={isEditMode ? onSelect : undefined}
-        className={`dashboard-gadget group relative h-full w-full gap-0 rounded-lg py-0 overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+        className={`dashboard-gadget group group/gadget relative h-full w-full gap-0 rounded-lg py-0 overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
           isSelected ? 'ring-2 ring-primary border-primary' : 'border-border'
         } ${isDragging ? 'opacity-40 shadow-[var(--shadow-popover)] scale-[0.99]' : ''} ${
           isResizing ? 'ring-1 ring-primary/60' : ''
@@ -306,11 +319,10 @@ export function GadgetFrame({
                 title={t('askWithUmwelt')}
                 data-testid="gadget-ask-with-umwelt"
                 variant="ghost"
-                size="sm"
-                className="h-8 gap-1.5 rounded-md px-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
+                size="icon"
+                className={`${REVEAL_ON_HOVER} size-7 min-h-7 min-w-7 rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground`}
               >
                 <Sparkles className="size-3.5 text-muted-foreground" aria-hidden="true" />
-                <span className="hidden @[26rem]:inline">{t('askWithUmwelt')}</span>
               </Button>
             )}
             {/* Expand / Maximize modal trigger */}
@@ -321,7 +333,7 @@ export function GadgetFrame({
               aria-label={t('expand')}
               variant="ghost"
               size="icon"
-              className="size-9 min-h-9 min-w-9 rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground"
+              className={`${isEditMode ? '' : REVEAL_ON_HOVER} size-7 min-h-7 min-w-7 rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground`}
             >
               <Maximize2 className="size-4" aria-hidden="true" />
             </Button>
@@ -365,7 +377,7 @@ export function GadgetFrame({
           </div>
         </header>
 
-        <div ref={inlineScrollRef} className="dashboard-gadget-body min-h-0 flex-1 overflow-auto overscroll-contain">
+        <div ref={inlineScrollRef} className="dashboard-gadget-body @container/gadget min-h-0 flex-1 overflow-auto overscroll-contain">
         {/* Queue controls scroll inside this fixed-floor body and never change the grid geometry. */}
         {readingQueueCount > 0 && onApplyReadingQueue && (
           <div className="px-3 py-1.5 bg-raised border-b border-rule text-foreground text-xs flex items-center justify-between">
@@ -382,11 +394,12 @@ export function GadgetFrame({
         )}
 
         {/* The reading floor sits on the host, not the body: a card shorter than the floor scrolls its body instead of clipping the bottom (footers, last rows) under the card edge. */}
-        <div ref={inlineHostRef} className="h-full min-h-full min-w-0" style={{ minHeight: bodyFloor }} />
+        {/* Floor is a CSS variable so a renderer whose root IS a GadgetNotice (empty/setup/error; a direct child of this host) drops it via :has(>...) and the body shrinks to the notice. The grid item's height stays fixed by the layout; only the body area gives way. Notices nested deeper (inline banners) deliberately keep the floor. */}
+        <div ref={inlineHostRef} className="h-full min-h-[var(--gadget-floor)] min-w-0 has-[>[data-gadget-notice]]:h-auto has-[>[data-gadget-notice]]:min-h-0" style={{ '--gadget-floor': `${bodyFloor}px` } as React.CSSProperties} />
         </div>
         {/* Provenance footer: a fixed one-line row inside the flex column; hidden when freshness is unknown. */}
-        {freshnessLabel && (
-          <p className="m-0 shrink-0 truncate border-t border-rule px-3.5 py-1 text-[11px] leading-4 text-muted-foreground" title={freshnessTitle} data-testid="gadget-provenance">{freshnessLabel}</p>
+        {footerText && (
+          <p className="m-0 shrink-0 truncate border-t border-rule px-3.5 py-1 text-[11px] leading-4 text-muted-foreground" title={freshnessTitle} data-testid="gadget-provenance">{footerText}</p>
         )}
       </Card>
 
@@ -396,13 +409,13 @@ export function GadgetFrame({
           <DialogHeader className="shrink-0 gap-0 border-b border-border py-4 pl-6 pr-16 text-left">
             <DialogTitle className="text-lg font-semibold leading-snug">{displayTitle}</DialogTitle>
             <DialogDescription className="text-xs text-muted-foreground">
-              {definition.renderer} {'·'} {t('gadgetExpandedDescription', { title: displayTitle })}
+              {t('gadgetExpandedDescription', { title: displayTitle })}
             </DialogDescription>
           </DialogHeader>
           <div ref={attachExpandedHost} className="min-h-0 flex-1 overflow-auto overscroll-contain p-6" />
         </DialogContent>
       </Dialog>
-      {rendererHost && createPortal(<GadgetFreshnessProvider report={setCollectedAt}>{renderGadgetContent()}</GadgetFreshnessProvider>, rendererHost)}
+      {rendererHost && createPortal(<GadgetFreshnessProvider report={reportFreshness}>{renderGadgetContent()}</GadgetFreshnessProvider>, rendererHost)}
     </>
   );
 }

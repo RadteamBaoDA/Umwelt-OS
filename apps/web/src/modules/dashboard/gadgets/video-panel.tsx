@@ -1,8 +1,8 @@
 'use client';
 
-import { ExternalLink } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import React from 'react';
+import { useReportGadgetFreshness } from '../gadget-freshness';
 import type { GadgetInstance } from '../api';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { useQuery } from '@tanstack/react-query';
@@ -51,13 +51,11 @@ export function VideoPanel({ instance }: VideoPanelProps) {
     },
   });
   const items = query.data ?? [];
+  // The record count belongs in the frame footer, not an inner header row.
+  useReportGadgetFreshness(null, items.length > 0 ? daily('streamCount', { count: items.length }) : null);
 
   return (
     <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-y-auto">
-      {!query.isPending && !query.isError && items.length > 0 && <div className="flex items-center justify-end text-xs text-muted-foreground border-b border-border pb-2">
-        <span className="tabular-nums">{daily('streamCount', { count: items.length })}</span>
-      </div>}
-
       {sourceIds.length === 0 && <GadgetNotice kind="setup" className="p-0" message={dashboard('videoSourcesRequired')} />}
       {sourceIds.length > 0 && query.isPending && <GadgetSkeleton variant="list" className="p-0" label={dashboard('gadgetDataLoading')} />}
       {query.isError && <GadgetNotice kind="error" className="p-0" message={dashboard('gadgetDataLoadFailed')} />}
@@ -65,11 +63,11 @@ export function VideoPanel({ instance }: VideoPanelProps) {
       <ul className="divide-y divide-border">
         {items.map((video) => (
           <li key={video.id} className="py-2">
-            <a href={video.videoUrl} target="_blank" rel="noopener noreferrer" className="flex items-start gap-2 text-xs font-semibold text-primary underline underline-offset-4">
-              <ExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              <span className="line-clamp-2">{video.title}</span>
+            {/* Ink title, underline only on hover; the link still opens YouTube in a new tab. */}
+            <a href={video.videoUrl} target="_blank" rel="noopener noreferrer" title={dashboard('videoOpen')} className="line-clamp-2 text-sm font-semibold text-foreground hover:underline underline-offset-4">
+              {video.title}
             </a>
-            {video.channel && <p className="mt-0.5 pl-5 text-xs text-muted-foreground">{video.channel}</p>}
+            {video.channel && <p className="mt-0.5 text-xs text-muted-foreground">{video.channel}</p>}
           </li>
         ))}
       </ul>

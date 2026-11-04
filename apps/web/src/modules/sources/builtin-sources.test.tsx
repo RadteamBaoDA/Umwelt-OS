@@ -137,4 +137,42 @@ describe('builtinEnableErrorKey', () => {
     expect(builtinEnableErrorKey(new ApiError(409, 'conflict', { code: 'builtin_already_added' }))).toBe('builtinAlreadyAdded');
     expect(builtinEnableErrorKey(new Error('boom'))).toBe('builtinErrorGeneric');
   });
+  it('sends name, schedule and section options to enable when the built-in accepts them', async () => {
+    api.listBuiltinSources.mockResolvedValue([row({
+      id: 'tuoitre_news', label: 'Tuoi Tre', category: 'news', data_shapes: ['news'],
+      applicable_options: ['name', 'schedule_interval_minutes', 'max_items', 'include_keywords', 'exclude_keywords', 'max_age_days', 'feed_sections'],
+      sections: [{ slug: 'home', label_en: 'Home', label_vi: 'Trang chu' }, { slug: 'world', label_en: 'World', label_vi: 'The gioi' }], default_section: 'home',
+    })]);
+    api.enableBuiltinSource.mockResolvedValue(row({ enabled: true, source_id: 's' }));
+    actions.collectAndWait.mockResolvedValue({ request_id: 'r', source_id: 's', status: 'succeeded', ingestion_run_id: 'run-1', error_code: null });
+    wrap();
+    await pickAndContinue('Tuoi Tre');
+    const name = screen.getByLabelText('Source name') as HTMLInputElement;
+    expect(name.value).toBe('Tuoi Tre');
+    await userEvent.clear(name);
+    await userEvent.type(name, 'My news');
+    await userEvent.click(screen.getByRole('checkbox', { name: 'World' }));
+    await userEvent.type(screen.getByLabelText('Max new items per sync'), '20');
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(api.enableBuiltinSource).toHaveBeenCalled());
+    expect(api.enableBuiltinSource.mock.calls[0][4]).toMatchObject({ name: 'My news', feed_sections: ['home', 'world'], max_items: 20 });
+  });
+  it('sends chosen per-type values and omits empty ones', async () => {
+    api.listBuiltinSources.mockResolvedValue([row({
+      id: 'nvd', label: 'NVD CVEs', category: 'security', data_shapes: ['measurement'],
+      applicable_options: ['name', 'nvd_severity', 'nvd_keyword', 'kev_ransomware_only', 'nvd_window_days'],
+    })]);
+    api.enableBuiltinSource.mockResolvedValue(row({ enabled: true, source_id: 's' }));
+    actions.collectAndWait.mockResolvedValue({ request_id: 'r', source_id: 's', status: 'succeeded', ingestion_run_id: 'run-1', error_code: null });
+    wrap();
+    await pickAndContinue('NVD CVEs');
+    await userEvent.click(screen.getByRole('checkbox', { name: 'CRITICAL' }));
+    await userEvent.type(screen.getByLabelText('Keyword'), 'openssl');
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(api.enableBuiltinSource).toHaveBeenCalled());
+    const body = api.enableBuiltinSource.mock.calls[0][4];
+    expect(body).toMatchObject({ nvd_severity: ['CRITICAL'], nvd_keyword: 'openssl' });
+    expect(body).not.toHaveProperty('nvd_window_days');
+    expect(body).not.toHaveProperty('kev_ransomware_only');
+  });
 });

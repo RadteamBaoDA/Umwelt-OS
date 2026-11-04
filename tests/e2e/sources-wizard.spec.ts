@@ -81,7 +81,7 @@ test('wizard github: first steps accept a repository scope', async ({ page }) =>
   const name = `e2e github ${Date.now()}`;
   try {
     const dialog = await openWizard(page);
-    await dialog.getByRole('button', { name: /^GitHub Credentials required/ }).click();
+    await dialog.getByRole('button', { name: /^GitHub Needs credentials/ }).click();
     await dialog.getByLabel('Source name').fill(name);
     const next = dialog.getByRole('button', { name: 'Next', exact: true });
     await next.click();

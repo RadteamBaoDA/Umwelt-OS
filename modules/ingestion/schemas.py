@@ -164,6 +164,8 @@ class RunRead(BaseModel):
     error_code: str | None
     created_at: datetime
     updated_at: datetime
+    # Per-run collection telemetry from the acceptance receipt (None for runs without one).
+    collection_stats: dict[str, Any] | None = None
 
 
 class SourceIngestionRead(BaseModel):
@@ -472,7 +474,9 @@ class CollectionStateUpdate:
 
     ``continuation_state`` replaces the checkpoint (None clears it). Validators are written only
     when ``update_validators`` is set, i.e. when the walk finished. ``cursor_after`` is honoured
-    solely by the no-change path, which has no batch to carry a cursor.
+    solely by the no-change path, which has no batch to carry a cursor. ``stats`` is run telemetry (new /
+    backlog / gap / duplicates / failed sections) stored only on the acceptance receipt; it is bounded to
+    about 1 KB there and must never be copied into record metadata, which is hashed.
     """
 
     continuation_state: str | None = None
@@ -481,3 +485,4 @@ class CollectionStateUpdate:
     last_modified: str | None = None
     cursor_after: str | None = None
     coverage: Literal["complete", "partial"] = "complete"
+    stats: dict[str, Any] | None = None

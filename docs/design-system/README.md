@@ -24,11 +24,13 @@ A private personal-intelligence workspace: calm, dense, honest about what it kno
 - shadcn primitives read the Tailwind aliases (`color-background`, `color-border`, `color-ring`, …). Note the trap: Tailwind's `bg-accent` is `color-accent` → `bg` (a quiet hover fill), not the data green (use `text-data`).
 - Feature code never passes literal colors; add a semantic token instead. `chart-1…5` are accent, ink, two greys and a dashed accent: one hue per chart.
 - `muted` holds at least 4.5:1 on `bg` and `surface` in both themes (5.4:1 on `bg` in light).
+- **Owner accent.** The data green is the default (`ink`); the owner can pick `moss` (#0f766e / #5eead4), `sea` (#1d5fbf / #7aa7ff), `earth` (#8a4b1f / #d9965f) or `plum` (#8a1f4b / #e07aa5), light / dark. Each is set by `html[data-accent=…]` and overrides only `--accent`, `--chart-1` and `--chart-5`; everything else stays achromatic. All meet 4.5:1 (white on light accents, `#0e110f` on dark accents). The choice lives in User preferences, is stored per device in `localStorage` key `umwelt-accent`, and is applied before paint by an inline script in `app/layout.tsx`. Feature code still uses the `accent` token (or `text-data`), never an accent hex.
 
 ### Type
 - One family, `sans` (Inter → system UI stack). Inter is self-hosted through `next/font/google` (downloaded at build, served from this origin). Don't introduce a second family. Figures use tabular numerals (`.tabular`, and every `table`).
 - Page: `page-title` → body in `muted` (no eyebrow kicker above titles). Sub-panels use `section-title`. Overlays use `dialog-title`.
 - Body is 14px / 1.5; page titles 24/600. Labels are `label` (13px / 600). Status and timestamps `meta` or `caption`, in `muted`.
+- Gadget hero values use the figure scale: `text-figure` (40px / 1, 600, −0.02em) and `text-figure-sm` (24px / 1.1, 600, −0.01em) for small tiles. Both are tabular so digits don't jitter on refresh.
 - The wordmark is the text "Umwelt-OS" in `brand-name` (800, −0.03em). There is no logo file.
 
 ### Space, size, layout
@@ -67,6 +69,13 @@ All UI composes the repository's own shadcn/ui (new-york, Radix) primitives in `
 | Destructive confirm | AlertDialog, naming the consequence and affected items |
 | Account actions | DropdownMenu from the header user icon |
 | Settings sub-views | Tabs |
+
+### Gadget patterns
+
+- **Frame:** `@container/gadget`. Actions are `size-7` buttons revealed on hover or focus (always visible on touch). Attribution and freshness share a one-line footer; an empty notice shrinks the body instead of filling it.
+- **KPI** (`gadget-kpi.tsx`): 12px `muted` label → `text-figure` value → delta pill → `sparkline.tsx` in `--chart-1`, `aria-hidden`. The pill is neutral when the delta is 0 or null; otherwise its colour follows the outcome via the metric's better-direction (up can be bad), never the sign alone.
+- **Lead + list** (feed, news, table): one lead item, then compact rows (`series-row.tsx`) with relative time.
+- **Current + strip** (weather, watchlist, tasks): the current value or item first, then a compact strip of the rest.
 
 Previews here are static renditions of the source CSS — the React library is not bundled into this system.
 

@@ -212,6 +212,13 @@ _WB_ISO2_META: dict[str, tuple[str, str]] = {
 }
 
 
+# Units per curated World Bank indicator; anything else (the original GDP row included) is "current US$".
+WB_INDICATOR_UNITS = {
+    "NY.GDP.MKTP.KD.ZG": "annual %", "FP.CPI.TOTL.ZG": "annual %", "SL.UEM.TOTL.ZS": "% of labor force",
+    "SP.POP.TOTL": "persons", "BX.KLT.DINV.WD.GD.ZS": "% of GDP",
+}
+
+
 def world_bank_request(
     country: str = "VN",
     indicator: str = "NY.GDP.MKTP.CD",
@@ -303,14 +310,17 @@ def map_world_bank(
         except ValueError as exc:
             raise ProviderPayloadError("world_bank_value_invalid") from exc
         text = "null" if value is None else decimal_text(value)
+        unit = WB_INDICATOR_UNITS.get(indicator_id, "current US$")
+        usd = unit == "current US$"
+        shown = f"{text} USD" if usd else f"{text} {unit}"
         # Preserve exact canonical title and content for the default Viet Nam GDP indicator.
         if country_id == "VN" and indicator_id == "NY.GDP.MKTP.CD":
             content = f"Viet Nam GDP (current US$) {period}: {'not reported' if value is None else text + ' USD'}"
             title = f"Viet Nam GDP {period}"
         else:
             content = (
-                f"{region_name} {indicator_id} (current US$) {period}: "
-                f"{'not reported' if value is None else text + ' USD'}"
+                f"{region_name} {indicator_id} ({unit}) {period}: "
+                f"{'not reported' if value is None else shown}"
             )
             title = f"{region_name} {indicator_id} {period}"
         records.append(build_record(
@@ -318,9 +328,9 @@ def map_world_bank(
             content=content,
             title=title, observed_at=observed_at, collected_at=collected_at,
             version=content_version("world_bank", country_id, indicator_id, period, text),
-            metric=metric_name, value=value, unit="current US$", currency="USD", region=region_name,
+            metric=metric_name, value=value, unit=unit, currency="USD" if usd else None, region=region_name,
             quality="provider_reported", coverage=coverage,
-            provider_fields={"country": country_id, "indicator": indicator_id, "period": period, "unit": "current US$"},
+            provider_fields={"country": country_id, "indicator": indicator_id, "period": period, "unit": unit},
         ))
     return records
 
@@ -413,14 +423,33 @@ def frankfurter_request() -> ProviderRequest:
     return ProviderRequest("GET", FRANKFURTER_URL)
 
 
-def map_frankfurter(payload: object, collected_at: datetime) -> list[IngestionRecord]:
-    """Map the USD/VND blended reference rate; the date is the rate period, not a release instant."""
-    if not isinstance(payload, dict):
+def map_frankfurter(
+    payload: object, collected_at: datetime, *, base: str = "USD", quotes: tuple[str, ...] = ("VND",),
+) -> list[IngestionRecord]:
+    """Map blended reference rates for ``base`` against each of ``quotes`` (default USD/VND).
+
+    A single-pair body is one object; a ``/v2/rates`` body is a list of the same row objects (verified live
+    2026-11-02; an unrequested pair fails closed as a scope mismatch). The date is
+    the rate period, not a release instant. Every requested quote must be present exactly once.
+    """
+    rows: list[Any] = payload if isinstance(payload, list) else [payload]
+    if not rows or len(rows) > len(quotes) or not all(isinstance(r, dict) for r in rows):
         raise ProviderPayloadError("frankfurter_response_invalid")
+    records = [_map_frankfurter_row(row, collected_at, base, quotes) for row in rows]
+    if sorted(r.metadata["provider_record"]["world_data"]["symbol"] for r in records) != sorted(f"{base}/{q}" for q in quotes):
+        raise ProviderPayloadError("frankfurter_scope_mismatch")
+    return records
+
+
+def _map_frankfurter_row(
+    payload: dict[str, Any], collected_at: datetime, base: str, quotes: tuple[str, ...],
+) -> IngestionRecord:
+    """Map one Frankfurter pair object; the base and quote must be in the requested scope."""
     if "message" in payload or "error" in payload:
         raise ProviderPayloadError("frankfurter_error_payload")
     day = parse_iso_date(payload.get("date"))
-    if payload.get("base") != "USD" or payload.get("quote") != "VND":
+    quote = payload.get("quote")
+    if payload.get("base") != base or quote not in quotes:
         raise ProviderPayloadError("frankfurter_scope_mismatch")
     try:
         rate = positive_decimal(payload.get("rate"))
@@ -431,18 +460,18 @@ def map_frankfurter(payload: object, collected_at: datetime) -> list[IngestionRe
     if isinstance(providers, list) and all(isinstance(p, str) and re.fullmatch(r"[A-Za-z0-9 ._-]{1,40}", p) for p in providers):
         providers_text = ",".join(providers)[:200] or None
     iso = day.isoformat()
-    fields: dict[str, str | float | int | None] = {"date": iso, "base": "USD", "quote": "VND"}
+    fields: dict[str, str | float | int | None] = {"date": iso, "base": base, "quote": quote}
     if providers_text:
         fields["providers"] = providers_text
     text = decimal_text(rate)
-    return [build_record(
-        provider="frankfurter", identity=f"frankfurter:USD:VND:{iso}:blended",
-        content=f"USD/VND blended reference rate {iso}: {text} VND per USD",
-        title="USD/VND reference rate", observed_at=day_start(day), collected_at=collected_at,
-        version=content_version("frankfurter", "USD", "VND", iso, text), metric="fx_reference_rate",
-        value=rate, unit="VND per USD", currency="VND", symbol="USD/VND", quality="reference",
+    return build_record(
+        provider="frankfurter", identity=f"frankfurter:{base}:{quote}:{iso}:blended",
+        content=f"{base}/{quote} blended reference rate {iso}: {text} {quote} per {base}",
+        title=f"{base}/{quote} reference rate", observed_at=day_start(day), collected_at=collected_at,
+        version=content_version("frankfurter", base, quote, iso, text), metric="fx_reference_rate",
+        value=rate, unit=f"{quote} per {base}", currency=quote, symbol=f"{base}/{quote}", quality="reference",
         provider_fields=fields,
-    )]
+    )
 
 
 # --------------------------------------------------------------------------- ECB
@@ -522,8 +551,11 @@ def open_er_api_request() -> ProviderRequest:
     return ProviderRequest("GET", OPEN_ER_API_URL)
 
 
-def map_open_er_api(payload: object, collected_at: datetime) -> list[IngestionRecord]:
-    """Map USD-base daily rates for ``OPEN_ER_QUOTES``; one record per quote and provider update day.
+def map_open_er_api(payload: object, collected_at: datetime, *, base: str = "USD") -> list[IngestionRecord]:
+    """Map ``base`` daily rates; one record per quote and provider update day.
+
+    Quotes are ``OPEN_ER_QUOTES`` for the USD base; another base gets the same set with USD added in place of
+    itself, so the default request still maps exactly the five original records.
 
     The provider updates once a day and names that instant (``time_last_update_unix``). A non-success
     result, a quota error or a missing quote raises ``ProviderPayloadError`` rather than a partial series.
@@ -534,25 +566,26 @@ def map_open_er_api(payload: object, collected_at: datetime) -> list[IngestionRe
         kind = "rate_limited" if payload.get("error-type") == "quota-reached" else "invalid"
         raise ProviderPayloadError("open_er_api_error_payload", kind)  # type: ignore[arg-type]
     rates = payload.get("rates")
-    if payload.get("base_code") != "USD" or not isinstance(rates, dict):
+    if payload.get("base_code") != base or not isinstance(rates, dict):
         raise ProviderPayloadError("open_er_api_scope_mismatch")
     updated = provider_instant(payload.get("time_last_update_unix"), collected_at, unit="s")
     iso = updated.date().isoformat()
     records = []
-    for quote in OPEN_ER_QUOTES:
+    quote_set = OPEN_ER_QUOTES if base == "USD" else tuple(q for q in ("USD", *OPEN_ER_QUOTES) if q != base)
+    for quote in quote_set:
         try:
             rate = positive_decimal(rates.get(quote))
         except ValueError as exc:
             raise ProviderPayloadError("open_er_api_rate_invalid") from exc
         text = decimal_text(rate)
         records.append(build_record(
-            provider="open_er_api", identity=f"open_er_api:USD:{quote}:{iso}",
-            content=f"Open ER API daily rate {iso}: 1 USD = {text} {quote}",
-            title=f"USD/{quote} daily rate", observed_at=updated, collected_at=collected_at,
+            provider="open_er_api", identity=f"open_er_api:{base}:{quote}:{iso}",
+            content=f"Open ER API daily rate {iso}: 1 {base} = {text} {quote}",
+            title=f"{base}/{quote} daily rate", observed_at=updated, collected_at=collected_at,
             version=content_version("open_er_api", quote, iso, text), metric="fx_reference_rate",
-            value=rate, unit=f"{quote} per USD", currency=quote, symbol=f"USD/{quote}", quality="reference",
+            value=rate, unit=f"{quote} per {base}", currency=quote, symbol=f"{base}/{quote}", quality="reference",
             timestamp_basis="provider_modified", modified_at=updated,
-            provider_fields={"date": iso, "base": "USD", "quote": quote},
+            provider_fields={"date": iso, "base": base, "quote": quote},
         ))
     return records
 
@@ -563,7 +596,7 @@ OECD_CLI_URL = (
     "https://sdmx.oecd.org/public/rest/data/OECD.SDD.STES,DSD_STES@DF_CLI/USA+CHN+JPN+DEU+GBR.M.LI...AA...H"
     "?lastNObservations=24&dimensionAtObservation=AllDimensions"
 )
-_SDMX_MAX_OBSERVATIONS = 200
+_SDMX_MAX_OBSERVATIONS = 240  # up to 10 selectable areas x 24 observations
 _PERIOD_RE = re.compile(r"^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$")
 
 
@@ -634,7 +667,7 @@ def map_oecd_cli(payload: object, collected_at: datetime) -> list[IngestionRecor
 class PureAdapter:
     """Request builder plus body mapper; ``binary`` bodies (XML) bypass JSON decoding."""
     request: Callable[..., ProviderRequest]
-    mapper: Callable[[Any, datetime], list[IngestionRecord]]
+    mapper: Callable[..., list[IngestionRecord]]  # (payload, collected_at, **scope options from provider_options.map_options)
     binary: bool = False
 
 

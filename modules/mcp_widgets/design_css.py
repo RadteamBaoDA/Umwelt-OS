@@ -3,86 +3,112 @@
 THEME_CSS = """
 :root, html[data-theme="light"] {
   color-scheme: light;
-  --bg: #f4f5f2;
+  --bg: #f2f5f2;
   --surface: #ffffff;
   --text: #17211c;
-  --muted: #69756e;
-  --line: #dfe4df;
+  --muted: #5c6660;
+  --line: #e3e7e3;
   --accent: #176a4a;
   --on-accent: #ffffff;
   --primary-foreground: #ffffff;
-  --danger: #a82e35;
-  --status-success: #176a4a;
+  --danger: #c4242a;
+  --status-success: #247b50;
   --status-warning: #a65b00;
   --destructive-foreground: #ffffff;
   --chart-1: #176a4a;
-  --chart-2: #2563eb;
-  --chart-3: #d97706;
-  --chart-4: #7c3aed;
-  --chart-5: #0d9488;
+  --chart-2: #17211c;
+  --chart-3: #8a948e;
+  --chart-4: #b8c0ba;
+  --chart-5: #176a4a;
   --color-background-primary: #ffffff;
-  --color-background-secondary: #f4f5f2;
+  --color-background-secondary: #f2f5f2;
   --color-background-tertiary: #e8ece8;
   --color-background-info: #e8f0fe;
   --color-background-danger: #fcebeb;
   --color-background-success: #e6f4ed;
   --color-background-warning: #faeeda;
   --color-text-primary: #17211c;
-  --color-text-secondary: #69756e;
+  --color-text-secondary: #5c6660;
   --color-text-tertiary: #87928b;
-  --color-text-info: #2563eb;
-  --color-text-danger: #a82e35;
-  --color-text-success: #176a4a;
+  --color-text-info: #17211c;
+  --color-text-danger: #c4242a;
+  --color-text-success: #247b50;
   --color-text-warning: #a65b00;
   --color-border-primary: #b8c2b9;
   --color-border-secondary: #cdd5cd;
-  --color-border-tertiary: #dfe4df;
-  --color-border-info: #2563eb;
-  --color-border-danger: #a82e35;
-  --color-border-success: #176a4a;
+  --color-border-tertiary: #e3e7e3;
+  --color-border-info: #17211c;
+  --color-border-danger: #c4242a;
+  --color-border-success: #247b50;
   --color-border-warning: #a65b00;
   --color-accent-primary: #176a4a;
   --color-on-accent: #ffffff;
-  --bg: #141a17;
-  --surface: #1d2621;
+  --raised: #f7f9f7;
+  --active: #e8ece8;
+  --rule: #eef1ee;
+  --control: #cfd5d0;
+  --primary: #17211c;
+  --positive: #247b50;
+  --negative: #c4242a;
+  --pill-positive-bg: #dcfae5;
+  --pill-positive-fg: #04250e;
+  --pill-negative-bg: #ffedea;
+  --pill-negative-fg: #831c1e;
+  --pill-warning-bg: #fffbeb;
+  --pill-warning-fg: #92400e;
+  --bg: #0e110f;
+  --surface: #161a17;
   --text: #edf3ee;
-  --muted: #a1afa6;
-  --line: #35433a;
+  --muted: #a7b1aa;
+  --line: #252b27;
   --accent: #77c69c;
-  --on-accent: #102117;
-  --primary-foreground: #102117;
-  --danger: #ff9b9f;
-  --status-success: #77c69c;
+  --on-accent: #0e110f;
+  --primary-foreground: #0e110f;
+  --danger: #e5566f;
+  --status-success: #3fc07a;
   --status-warning: #fbbf24;
-  --destructive-foreground: #141a17;
+  --destructive-foreground: #0e110f;
   --chart-1: #77c69c;
-  --chart-2: #60a5fa;
-  --chart-3: #f59e0b;
-  --chart-4: #a78bfa;
-  --chart-5: #2dd4bf;
-  --color-background-primary: #1d2621;
-  --color-background-secondary: #141a17;
-  --color-background-tertiary: #253029;
+  --chart-2: #edf3ee;
+  --chart-3: #8a948e;
+  --chart-4: #4a534d;
+  --chart-5: #77c69c;
+  --color-background-primary: #161a17;
+  --color-background-secondary: #0e110f;
+  --color-background-tertiary: #252b27;
   --color-background-info: #172b46;
   --color-background-danger: #421c20;
   --color-background-success: #153324;
   --color-background-warning: #3d2a0d;
   --color-text-primary: #edf3ee;
-  --color-text-secondary: #a1afa6;
+  --color-text-secondary: #a7b1aa;
   --color-text-tertiary: #76857c;
-  --color-text-info: #60a5fa;
-  --color-text-danger: #ff9b9f;
-  --color-text-success: #77c69c;
+  --color-text-info: #edf3ee;
+  --color-text-danger: #e5566f;
+  --color-text-success: #3fc07a;
   --color-text-warning: #fbbf24;
-  --color-border-primary: #526659;
-  --color-border-secondary: #435449;
-  --color-border-tertiary: #35433a;
-  --color-border-info: #60a5fa;
-  --color-border-danger: #ff9b9f;
-  --color-border-success: #77c69c;
+  --color-border-primary: #4a534d;
+  --color-border-secondary: #3a423c;
+  --color-border-tertiary: #252b27;
+  --color-border-info: #edf3ee;
+  --color-border-danger: #e5566f;
+  --color-border-success: #3fc07a;
   --color-border-warning: #fbbf24;
   --color-accent-primary: #77c69c;
-  --color-on-accent: #102117;
+  --color-on-accent: #0e110f;
+  --raised: #1d221e;
+  --active: #252b27;
+  --rule: #1d221e;
+  --control: #3a423c;
+  --primary: #edf3ee;
+  --positive: #3fc07a;
+  --negative: #e5566f;
+  --pill-positive-bg: #12301f;
+  --pill-positive-fg: #8fe0b0;
+  --pill-negative-bg: #3a1519;
+  --pill-negative-fg: #ffb3b9;
+  --pill-warning-bg: #3a2a0c;
+  --pill-warning-fg: #fcd34d;
   --color-background-primary: var(--surface);
   --color-background-secondary: var(--bg);
   --color-background-tertiary: color-mix(in srgb, var(--bg) 70%, var(--line));
@@ -131,18 +157,17 @@ THEME_CSS = """
   --color-chart-5: var(--chart-5);
 
   --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-serif: Georgia, "Times New Roman", serif;
   --font-mono: "SF Mono", "Fira Code", "Fira Mono", ui-monospace, monospace;
 
-  --radius-sm: 6px;
-  --radius-md: 9px;
-  --radius-lg: 12px;
-  --radius-card: 10px;
-  --radius-dialog: 16px;
-  --radius-panel: 18px;
-  --border-radius-md: 9px;
-  --border-radius-lg: 12px;
-  --border-radius-xl: 18px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-card: 8px;
+  --radius-dialog: 12px;
+  --radius-panel: 8px;
+  --border-radius-md: 6px;
+  --border-radius-lg: 8px;
+  --border-radius-xl: 8px;
 
   --p: var(--color-text-primary);
   --s: var(--color-text-secondary);
@@ -154,46 +179,59 @@ THEME_CSS = """
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-  --bg: #141a17;
-  --surface: #1d2621;
+  --bg: #0e110f;
+  --surface: #161a17;
   --text: #edf3ee;
-  --muted: #a1afa6;
-  --line: #35433a;
+  --muted: #a7b1aa;
+  --line: #252b27;
   --accent: #77c69c;
-  --on-accent: #102117;
-  --primary-foreground: #102117;
-  --danger: #ff9b9f;
-  --status-success: #77c69c;
+  --on-accent: #0e110f;
+  --primary-foreground: #0e110f;
+  --danger: #e5566f;
+  --status-success: #3fc07a;
   --status-warning: #fbbf24;
-  --destructive-foreground: #141a17;
+  --destructive-foreground: #0e110f;
   --chart-1: #77c69c;
-  --chart-2: #60a5fa;
-  --chart-3: #f59e0b;
-  --chart-4: #a78bfa;
-  --chart-5: #2dd4bf;
-  --color-background-primary: #1d2621;
-  --color-background-secondary: #141a17;
-  --color-background-tertiary: #253029;
+  --chart-2: #edf3ee;
+  --chart-3: #8a948e;
+  --chart-4: #4a534d;
+  --chart-5: #77c69c;
+  --color-background-primary: #161a17;
+  --color-background-secondary: #0e110f;
+  --color-background-tertiary: #252b27;
   --color-background-info: #172b46;
   --color-background-danger: #421c20;
   --color-background-success: #153324;
   --color-background-warning: #3d2a0d;
   --color-text-primary: #edf3ee;
-  --color-text-secondary: #a1afa6;
+  --color-text-secondary: #a7b1aa;
   --color-text-tertiary: #76857c;
-  --color-text-info: #60a5fa;
-  --color-text-danger: #ff9b9f;
-  --color-text-success: #77c69c;
+  --color-text-info: #edf3ee;
+  --color-text-danger: #e5566f;
+  --color-text-success: #3fc07a;
   --color-text-warning: #fbbf24;
-  --color-border-primary: #526659;
-  --color-border-secondary: #435449;
-  --color-border-tertiary: #35433a;
-  --color-border-info: #60a5fa;
-  --color-border-danger: #ff9b9f;
-  --color-border-success: #77c69c;
+  --color-border-primary: #4a534d;
+  --color-border-secondary: #3a423c;
+  --color-border-tertiary: #252b27;
+  --color-border-info: #edf3ee;
+  --color-border-danger: #e5566f;
+  --color-border-success: #3fc07a;
   --color-border-warning: #fbbf24;
   --color-accent-primary: #77c69c;
-  --color-on-accent: #102117;
+  --color-on-accent: #0e110f;
+  --raised: #1d221e;
+  --active: #252b27;
+  --rule: #1d221e;
+  --control: #3a423c;
+  --primary: #edf3ee;
+  --positive: #3fc07a;
+  --negative: #e5566f;
+  --pill-positive-bg: #12301f;
+  --pill-positive-fg: #8fe0b0;
+  --pill-negative-bg: #3a1519;
+  --pill-negative-fg: #ffb3b9;
+  --pill-warning-bg: #3a2a0c;
+  --pill-warning-fg: #fcd34d;
   --color-background-primary: var(--surface);
   --color-background-secondary: var(--bg);
   --color-background-tertiary: color-mix(in srgb, var(--bg) 70%, var(--line));
@@ -222,46 +260,59 @@ THEME_CSS = """
 
 html.dark, html[data-theme="dark"], body.dark {
   color-scheme: dark;
-  --bg: #141a17;
-  --surface: #1d2621;
+  --bg: #0e110f;
+  --surface: #161a17;
   --text: #edf3ee;
-  --muted: #a1afa6;
-  --line: #35433a;
+  --muted: #a7b1aa;
+  --line: #252b27;
   --accent: #77c69c;
-  --on-accent: #102117;
-  --primary-foreground: #102117;
-  --danger: #ff9b9f;
-  --status-success: #77c69c;
+  --on-accent: #0e110f;
+  --primary-foreground: #0e110f;
+  --danger: #e5566f;
+  --status-success: #3fc07a;
   --status-warning: #fbbf24;
-  --destructive-foreground: #141a17;
+  --destructive-foreground: #0e110f;
   --chart-1: #77c69c;
-  --chart-2: #60a5fa;
-  --chart-3: #f59e0b;
-  --chart-4: #a78bfa;
-  --chart-5: #2dd4bf;
-  --color-background-primary: #1d2621;
-  --color-background-secondary: #141a17;
-  --color-background-tertiary: #253029;
+  --chart-2: #edf3ee;
+  --chart-3: #8a948e;
+  --chart-4: #4a534d;
+  --chart-5: #77c69c;
+  --color-background-primary: #161a17;
+  --color-background-secondary: #0e110f;
+  --color-background-tertiary: #252b27;
   --color-background-info: #172b46;
   --color-background-danger: #421c20;
   --color-background-success: #153324;
   --color-background-warning: #3d2a0d;
   --color-text-primary: #edf3ee;
-  --color-text-secondary: #a1afa6;
+  --color-text-secondary: #a7b1aa;
   --color-text-tertiary: #76857c;
-  --color-text-info: #60a5fa;
-  --color-text-danger: #ff9b9f;
-  --color-text-success: #77c69c;
+  --color-text-info: #edf3ee;
+  --color-text-danger: #e5566f;
+  --color-text-success: #3fc07a;
   --color-text-warning: #fbbf24;
-  --color-border-primary: #526659;
-  --color-border-secondary: #435449;
-  --color-border-tertiary: #35433a;
-  --color-border-info: #60a5fa;
-  --color-border-danger: #ff9b9f;
-  --color-border-success: #77c69c;
+  --color-border-primary: #4a534d;
+  --color-border-secondary: #3a423c;
+  --color-border-tertiary: #252b27;
+  --color-border-info: #edf3ee;
+  --color-border-danger: #e5566f;
+  --color-border-success: #3fc07a;
   --color-border-warning: #fbbf24;
   --color-accent-primary: #77c69c;
-  --color-on-accent: #102117;
+  --color-on-accent: #0e110f;
+  --raised: #1d221e;
+  --active: #252b27;
+  --rule: #1d221e;
+  --control: #3a423c;
+  --primary: #edf3ee;
+  --positive: #3fc07a;
+  --negative: #e5566f;
+  --pill-positive-bg: #12301f;
+  --pill-positive-fg: #8fe0b0;
+  --pill-negative-bg: #3a1519;
+  --pill-negative-fg: #ffb3b9;
+  --pill-warning-bg: #3a2a0c;
+  --pill-warning-fg: #fcd34d;
   --color-background-primary: var(--surface);
   --color-background-secondary: var(--bg);
   --color-background-tertiary: color-mix(in srgb, var(--bg) 70%, var(--line));
@@ -299,11 +350,11 @@ svg .node:hover { opacity: 0.85; }
 svg .arr { stroke: var(--s); stroke-width: 1.5; fill: none; }
 svg .leader { stroke: var(--t); stroke-width: 0.5; stroke-dasharray: 4 4; fill: none; }
 
-/* Purple */
+/* Purple (ledger: ink) */
 svg .c-purple > rect, svg .c-purple > circle, svg .c-purple > ellipse,
-svg rect.c-purple, svg circle.c-purple, svg ellipse.c-purple { fill: #EEEDFE; stroke: #534AB7; }
-svg .c-purple text.th, svg .c-purple text.t { fill: #3C3489; }
-svg .c-purple text.ts { fill: #534AB7; }
+svg rect.c-purple, svg circle.c-purple, svg ellipse.c-purple { fill: #f4f5f2; stroke: #17211c; }
+svg .c-purple text.th, svg .c-purple text.t { fill: #17211c; }
+svg .c-purple text.ts { fill: #17211c; }
 
 /* Teal (Umwelt accent family) */
 svg .c-teal > rect, svg .c-teal > circle, svg .c-teal > ellipse,
@@ -311,17 +362,17 @@ svg rect.c-teal, svg circle.c-teal, svg ellipse.c-teal { fill: #E1F5EE; stroke: 
 svg .c-teal text.th, svg .c-teal text.t { fill: #085041; }
 svg .c-teal text.ts { fill: #176a4a; }
 
-/* Coral */
+/* Coral (ledger: grey) */
 svg .c-coral > rect, svg .c-coral > circle, svg .c-coral > ellipse,
-svg rect.c-coral, svg circle.c-coral, svg ellipse.c-coral { fill: #FAECE7; stroke: #993C1D; }
-svg .c-coral text.th, svg .c-coral text.t { fill: #712B13; }
-svg .c-coral text.ts { fill: #993C1D; }
+svg rect.c-coral, svg circle.c-coral, svg ellipse.c-coral { fill: #f4f5f2; stroke: #69756e; }
+svg .c-coral text.th, svg .c-coral text.t { fill: #17211c; }
+svg .c-coral text.ts { fill: #69756e; }
 
-/* Pink */
+/* Pink (ledger: grey) */
 svg .c-pink > rect, svg .c-pink > circle, svg .c-pink > ellipse,
-svg rect.c-pink, svg circle.c-pink, svg ellipse.c-pink { fill: #FBEAF0; stroke: #993556; }
-svg .c-pink text.th, svg .c-pink text.t { fill: #72243E; }
-svg .c-pink text.ts { fill: #993556; }
+svg rect.c-pink, svg circle.c-pink, svg ellipse.c-pink { fill: #f4f5f2; stroke: #69756e; }
+svg .c-pink text.th, svg .c-pink text.t { fill: #17211c; }
+svg .c-pink text.ts { fill: #69756e; }
 
 /* Gray */
 svg .c-gray > rect, svg .c-gray > circle, svg .c-gray > ellipse,
@@ -329,11 +380,11 @@ svg rect.c-gray, svg circle.c-gray, svg ellipse.c-gray { fill: #f4f5f2; stroke: 
 svg .c-gray text.th, svg .c-gray text.t { fill: #17211c; }
 svg .c-gray text.ts { fill: #69756e; }
 
-/* Blue */
+/* Blue (ledger: ink) */
 svg .c-blue > rect, svg .c-blue > circle, svg .c-blue > ellipse,
-svg rect.c-blue, svg circle.c-blue, svg ellipse.c-blue { fill: #E6F1FB; stroke: #2563eb; }
-svg .c-blue text.th, svg .c-blue text.t { fill: #0C447C; }
-svg .c-blue text.ts { fill: #2563eb; }
+svg rect.c-blue, svg circle.c-blue, svg ellipse.c-blue { fill: #f4f5f2; stroke: #17211c; }
+svg .c-blue text.th, svg .c-blue text.t { fill: #17211c; }
+svg .c-blue text.ts { fill: #17211c; }
 
 /* Green */
 svg .c-green > rect, svg .c-green > circle, svg .c-green > ellipse,
@@ -354,9 +405,9 @@ svg .c-red text.th, svg .c-red text.t { fill: #791F1F; }
 svg .c-red text.ts { fill: #a82e35; }
 
 html.dark svg .c-purple > rect, html.dark svg .c-purple > circle, html.dark svg .c-purple > ellipse,
-html.dark svg rect.c-purple, html.dark svg circle.c-purple, html.dark svg ellipse.c-purple { fill: #26215C; stroke: #a78bfa; }
-html.dark svg .c-purple text.th, html.dark svg .c-purple text.t { fill: #CECBF6; }
-html.dark svg .c-purple text.ts { fill: #a78bfa; }
+html.dark svg rect.c-purple, html.dark svg circle.c-purple, html.dark svg ellipse.c-purple { fill: #1d2621; stroke: #edf3ee; }
+html.dark svg .c-purple text.th, html.dark svg .c-purple text.t { fill: #edf3ee; }
+html.dark svg .c-purple text.ts { fill: #edf3ee; }
 
 html.dark svg .c-teal > rect, html.dark svg .c-teal > circle, html.dark svg .c-teal > ellipse,
 html.dark svg rect.c-teal, html.dark svg circle.c-teal, html.dark svg ellipse.c-teal { fill: #153324; stroke: #77c69c; }
@@ -369,9 +420,9 @@ html.dark svg .c-gray text.th, html.dark svg .c-gray text.t { fill: #edf3ee; }
 html.dark svg .c-gray text.ts { fill: #a1afa6; }
 
 html.dark svg .c-blue > rect, html.dark svg .c-blue > circle, html.dark svg .c-blue > ellipse,
-html.dark svg rect.c-blue, html.dark svg circle.c-blue, html.dark svg ellipse.c-blue { fill: #172b46; stroke: #60a5fa; }
-html.dark svg .c-blue text.th, html.dark svg .c-blue text.t { fill: #B5D4F4; }
-html.dark svg .c-blue text.ts { fill: #60a5fa; }
+html.dark svg rect.c-blue, html.dark svg circle.c-blue, html.dark svg ellipse.c-blue { fill: #1d2621; stroke: #edf3ee; }
+html.dark svg .c-blue text.th, html.dark svg .c-blue text.t { fill: #edf3ee; }
+html.dark svg .c-blue text.ts { fill: #edf3ee; }
 
 html.dark svg .c-green > rect, html.dark svg .c-green > circle, html.dark svg .c-green > ellipse,
 html.dark svg rect.c-green, html.dark svg circle.c-green, html.dark svg ellipse.c-green { fill: #153324; stroke: #77c69c; }
@@ -414,7 +465,7 @@ button {
   background: var(--color-background-primary);
   color: var(--color-text-primary);
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+  transition: background 0.15s, border-color 0.15s;
 }
 button:hover {
   background: var(--color-background-secondary);
@@ -424,7 +475,6 @@ button:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--accent) 40%, transparent);
   outline-offset: 2px;
 }
-button:active { transform: scale(0.98); }
 
 input[type="text"],
 input[type="number"],

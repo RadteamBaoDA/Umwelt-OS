@@ -10,6 +10,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Literal
 
+from modules.connectors.provider_options import option_fields
+from modules.connectors.sections import MAX_SECTIONS, SECTION_CATALOG
+
 CHECKED_ON = "2026-10-07"
 QUOTA_POLICY_REVISION = 1
 
@@ -19,6 +22,10 @@ Eligibility = Literal["open", "personal", "noncommercial", "review"]
 _USE_RANK = {"personal": 0, "noncommercial": 1, "commercial": 2}
 
 TERMS_INELIGIBLE = "provider_terms_ineligible"
+
+# Self-imposed pilot cap for section-catalog RSS presets: one GET per selected section per sync, so six sections
+# at the 15-minute floor would still fit; every send is debited against it. Not an upstream limit.
+SECTION_DAILY_CAP = 96 * MAX_SECTIONS
 
 
 @dataclass(frozen=True)
@@ -121,23 +128,23 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
     _spec("bbc_world", "BBC World News", "news", ("feeds.bbci.co.uk",), "news", 30,
           "https://www.bbc.co.uk/usingthebbc/terms/", "review",
           "Display BBC as publisher with a link to the original article; feed-only title, summary and link.",
-          ("/news/world/rss.xml",), (_day(96), _unknown())),
+          ("/news/world/rss.xml",), (_day(SECTION_DAILY_CAP), _unknown())),
     _spec("vnexpress_business", "VnExpress Business", "news", ("vnexpress.net",), "news", 30,
           "https://vnexpress.net/rss", "noncommercial",
           "Identify VnExpress clearly and link the original article; feed-only scope.",
-          ("/rss/kinh-doanh.rss",), (_day(96), _unknown())),
+          ("/rss/kinh-doanh.rss",), (_day(SECTION_DAILY_CAP), _unknown())),
     _spec("tuoitre_news", "Tuổi Trẻ News", "news", ("tuoitre.vn",), "news", 30,
           "https://tuoitre.vn/rss.htm", "noncommercial",
           "Display Tuổi Trẻ clearly as source and link the original article",
-          ("/home.rss",), (_day(96), _unknown())),
+          ("/home.rss",), (_day(SECTION_DAILY_CAP), _unknown())),
     _spec("thanhnien_news", "Báo Thanh Niên", "news", ("thanhnien.vn",), "news", 30,
           "https://thanhnien.vn/rss.html", "noncommercial",
           'Credit "Báo Thanh Niên" or "Theo Báo Thanh Niên" and link the original article',
-          ("/rss/home.rss",), (_day(96), _unknown())),
+          ("/rss/home.rss",), (_day(SECTION_DAILY_CAP), _unknown())),
     _spec("dantri_news", "Dân trí News", "news", ("dantri.com.vn",), "news", 30,
           "https://dantri.com.vn/rss.htm", "noncommercial",
           "Credit Dân trí as the source and link the original article; feed-only title, summary and link.",
-          ("/rss/home.rss",), (_day(96), _unknown())),
+          ("/rss/home.rss",), (_day(SECTION_DAILY_CAP), _unknown())),
     # Unofficial RSS search endpoint: Google publishes no API contract for it. Interval and pilot cap
     # mirror the other 30-minute news feeds (docs/free-data-provider-policy.md quota table); no official quota is claimed.
     _spec("google_news", "Google News RSS", "news", ("news.google.com",), "news", 30,
@@ -164,7 +171,10 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
           "https://github.com/HackerNews/API", "review",
           "Attribute Hacker News plus the item and publisher URL; the API license does not license linked articles.",
           ("/v0/topstories.json", "/v0/item/{id}.json"),
-          (_day(528), QuotaWindowPolicy("pilot_calls_utc_minute", "provider", "minute", "http_calls", 12))),
+          # Self-imposed politeness (HN's Firebase API publishes no limit). One run = 1 listing + up to 30 item
+          # sends (hn_limit hard cap) every 15 min at the fastest schedule: 96 runs x 31 sends/day, and all 31
+          # must fit one minute window, else a quota deferral restarts the run and the source starves.
+          (_day(96 * 31), QuotaWindowPolicy("pilot_calls_utc_minute", "provider", "minute", "http_calls", 32))),
     _spec("gdelt_economy", "GDELT economy articles", "news", ("api.gdeltproject.org",), "news", 60,
           "https://gdeltproject.org/about.html", "review",
           "Cite the GDELT Project and the publisher URL; article metadata is not republication permission.",
@@ -211,7 +221,8 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
           "https://docs.coinpaprika.com/api-plans", "personal",
           "Credit CoinPaprika; free use is personal with no redistribution.",
           ("/v1/tickers/btc-bitcoin",),
-          (_day(192), QuotaWindowPolicy("pilot_calls_utc_second", "provider", "second", "http_calls", 1),
+          # 96 runs/day at 15 min x up to 5 coins (one call each); the 1 call/second cap is honoured by pacing.
+          (_day(96 * 5), QuotaWindowPolicy("pilot_calls_utc_second", "provider", "second", "http_calls", 1),
            QuotaWindowPolicy("official_calls_per_second", "ip", "second", "http_calls", 10, 1, "official_documented"),
            QuotaWindowPolicy("official_calls_per_month", "ip", "month", "http_calls", 20_000, 1, "official_documented"))),
     _spec("coingecko", "CoinGecko crypto prices (Demo)", "economy", ("api.coingecko.com",), "measurement", 15,
@@ -245,11 +256,11 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
     _spec("npr_news", "NPR News", "news", ("feeds.npr.org",), "news", 30,
           "https://www.npr.org/about-npr/179876898/terms-of-use", "noncommercial",
           "Credit NPR and link the original story; RSS is licensed for personal, noncommercial use.",
-          ("/1001/rss.xml",), (_day(96), _unknown())),
+          ("/1001/rss.xml",), (_day(SECTION_DAILY_CAP), _unknown())),
     _spec("fed_press", "Federal Reserve press releases", "economy", ("www.federalreserve.gov",), "news", 60,
           "https://www.federalreserve.gov/disclaimer.htm", "open",
           "Credit the Board of Governors of the Federal Reserve System; link the original release.",
-          ("/feeds/press_all.xml",), (_day(48), _unknown())),
+          ("/feeds/press_all.xml",), (_day(SECTION_DAILY_CAP), _unknown())),
     _spec("gdacs_rss", "GDACS disaster alerts (RSS)", "hazards", ("www.gdacs.org",), "event", 60,
           "https://www.gdacs.org/About/overview.aspx", "open",
           "Credit GDACS (UN OCHA / European Commission JRC) and link the event page.",
@@ -257,7 +268,7 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
     _spec("lobsters", "Lobsters", "tech", ("lobste.rs",), "news", 60,
           "https://lobste.rs/about", "review",
           "Credit Lobsters and link the story; the feed carries submitter links and titles only.",
-          ("/rss",), (_day(48), _unknown())),
+          ("/rss",), (_day(SECTION_DAILY_CAP), _unknown())),
     _spec("us_travel_advisories", "U.S. travel advisories", "hazards", ("travel.state.gov",), "event", 360,
           "https://www.state.gov/copyright-information/", "open",
           "Credit the U.S. Department of State; advisories are a point-in-time statement, check the original.",
@@ -609,3 +620,36 @@ BUILTIN_PROVIDERS: frozenset[str] = frozenset(
     spec.id for spec in FREE_PROVIDER_SPECS
     if spec.id in FIXED_SCOPE_PROVIDERS and not spec.key_required and spec.code_implemented
 )
+
+
+# Built-ins whose runners resume from the stored cursor and honour cap/keyword/age options: news and event
+# presets (measurement snapshots are always fresh) plus the owner-scoped Google News query source.
+# Measurement providers (cisa_kev, usgs, ...) are excluded even when tagged "event": their documents are
+# snapshots that never dedup by seen key, so a cursor would only regress or stall.
+from modules.knowledge.documents.schemas import MEASUREMENT_PROVIDER_IDS
+
+INCREMENTAL_PROVIDERS: frozenset[str] = frozenset(
+    spec.id for spec in FREE_PROVIDER_SPECS
+    if spec.id in BUILTIN_PROVIDERS and spec.data_kind in ("news", "event")
+    and spec.id not in MEASUREMENT_PROVIDER_IDS
+) | {"google_news"}
+
+# Optional per-sync selection options accepted only by INCREMENTAL_PROVIDERS (see modules.connectors.selection).
+COLLECTION_FILTER_FIELDS = frozenset({"max_items", "include_keywords", "exclude_keywords", "max_age_days"})
+
+
+def applicable_options(provider: str) -> list[str]:
+    """List the owner options a built-in accepts, in display order.
+
+    ``name`` and the schedule apply to every built-in; the selection filters only to ``INCREMENTAL_PROVIDERS``
+    (measurement snapshots are tuned elsewhere); ``feed_sections`` only to providers with a section catalog.
+    The registry and ``serialize_source_configuration`` enforce the same allowlists, so the UI can render
+    exactly these fields.
+    """
+    options = ["name", "schedule_interval_minutes"]
+    if provider in INCREMENTAL_PROVIDERS:
+        options += ["max_items", "include_keywords", "exclude_keywords", "max_age_days"]
+    if provider in SECTION_CATALOG:
+        options.append("feed_sections")
+    options += [name for name in option_fields(provider) if name not in options]
+    return options

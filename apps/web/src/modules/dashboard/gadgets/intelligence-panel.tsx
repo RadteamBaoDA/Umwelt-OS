@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
@@ -11,7 +11,8 @@ import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { formatReasonLabel } from './metric-label';
 
 /**
- * Display bounded, evidence-backed co-occurrence. The CII score section is intentionally not rendered while its
+ * Display bounded, evidence-backed co-occurrence, strongest groups (most signals) first, with coverage and uncertainty in a collapsed details block.
+ * The CII score section is intentionally not rendered while its
  * method is unavailable: an unavailable method is hidden rather than explained to the user.
  */
 export function IntelligencePanel({ instance }: { instance: GadgetInstance }) {
@@ -37,9 +38,7 @@ export function IntelligencePanel({ instance }: { instance: GadgetInstance }) {
   });
 
   return <section className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto bg-card p-3 text-card-foreground">
-    <header className="border-b border-border pb-2">
-      <p className="text-xs text-muted-foreground">{t('intelligenceRange', { days })}</p>
-    </header>
+    <p className="m-0 text-xs text-muted-foreground">{t('intelligenceRange', { days })}</p>
     <section aria-labelledby={`correlation-${instance.id}`} className="flex flex-1 flex-col gap-2">
       <h3 id={`correlation-${instance.id}`} className="text-xs font-semibold">{t('correlationTitle')}</h3>
       {regions.length === 0 && <GadgetNotice kind="setup" message={t('correlationRegionRequired')} action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }} className="px-0 py-1 text-xs" />}
@@ -48,14 +47,18 @@ export function IntelligencePanel({ instance }: { instance: GadgetInstance }) {
       {correlation.data && <>
         <p className="text-xs text-muted-foreground">{t('correlationInterpretation')}</p>
         {correlation.data.missing_domains.length > 0 && <p role="status" className="text-xs text-muted-foreground">{t('correlationMissingDomains', { domains: correlation.data.missing_domains.join(', ') })}</p>}
-        <ul aria-label={t('correlationCoverageLabel')} className="space-y-1 text-xs text-muted-foreground">
-          {Object.entries(correlation.data.coverage).map(([domain, coverage]) => <li key={domain}>
-            {t('correlationCoverageLine', { domain, count: coverage.signal_count, truncated: coverage.truncated ? t('correlationYes') : t('correlationNo'), omitted: coverage.omitted_source_count })}
-          </li>)}
-        </ul>
-        {correlation.data.uncertainty_reasons.length > 0 && <p role="status" className="text-xs text-muted-foreground">{t('correlationUncertainty', { reasons: correlation.data.uncertainty_reasons.map((reason) => formatReasonLabel(reason, t)).join(' ') })}</p>}
+        {/* Coverage and uncertainty are method detail: one click away, groups lead. */}
+        <details className="text-xs text-muted-foreground">
+          <summary className="cursor-pointer">{t('correlationDetails')}</summary>
+          <ul aria-label={t('correlationCoverageLabel')} className="mt-1 space-y-1">
+            {Object.entries(correlation.data.coverage).map(([domain, coverage]) => <li key={domain}>
+              {t('correlationCoverageLine', { domain, count: coverage.signal_count, truncated: coverage.truncated ? t('correlationYes') : t('correlationNo'), omitted: coverage.omitted_source_count })}
+            </li>)}
+          </ul>
+          {correlation.data.uncertainty_reasons.length > 0 && <p role="status" className="mt-1">{t('correlationUncertainty', { reasons: correlation.data.uncertainty_reasons.map((reason) => formatReasonLabel(reason, t)).join(' ') })}</p>}
+        </details>
         {correlation.data.groups.length === 0 ? <GadgetNotice kind="empty" message={t('correlationEmpty')} action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }} className="my-auto px-0 py-1 text-xs" /> : <ul className="divide-y divide-border">
-          {correlation.data.groups.slice(0, visibleGroups).map((group) => <li key={`${group.region}:${group.window_start}`} className="py-2 text-xs">
+          {[...correlation.data.groups].sort((a, b) => b.signal_count - a.signal_count).slice(0, visibleGroups).map((group) => <li key={`${group.region}:${group.window_start}`} className="py-2 text-xs">
             <div className="flex items-center justify-between gap-2"><span className="font-medium">{group.region}</span><time dateTime={group.window_start} className="text-muted-foreground">{formatDateTime(group.window_start, display.locale, display.timezone)}</time></div>
             <p className="mt-1 text-muted-foreground">{t('correlationSignals', { count: group.signal_count, domains: group.domains_present.join(', ') })}</p>
             {(() => {

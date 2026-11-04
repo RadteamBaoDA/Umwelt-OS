@@ -35,12 +35,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from core.config import Settings
 from core.workspaces.public import lock_access_fence, read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope
-from modules.connectors import provider_terms, provisioning, quota, scheduler
+from modules.connectors import provider_options, provider_terms, provisioning, quota, scheduler
 from modules.connectors import public as connectors
 from modules.connectors.catalog import get_catalog_entry
 from modules.connectors.collection_schemas import CollectionAdmissionRead, CollectionRequestRef
 from modules.connectors.models import ConnectorCollectionRequest, ConnectorProvisioning
 from modules.connectors.provider_specs import (
+    INCREMENTAL_PROVIDERS,
     get_provider_spec,
     get_quota_policies,
     get_realtime_tier,
@@ -49,6 +50,7 @@ from modules.connectors.providers import news as _news
 from modules.connectors.providers import rest
 from modules.connectors.providers.json_feed import JSON_FEEDS
 from modules.connectors.providers.keyed import KEYED, KEYED_MAX_BYTES
+from modules.connectors.selection import select_incremental, selection_filters
 from modules.ingestion import public as ingestion
 from modules.ingestion.schemas import (
     CollectionState,
@@ -417,7 +419,7 @@ async def _publish_realtime_snapshot(
                 "observed_at": rec.observed_at.isoformat(),
                 "title": str((rec.metadata or {}).get("title") or "")[:240],
             }
-            for rec in records[:25]
+            for rec in sorted(run.extras.get("preview") or records, key=lambda r: r.observed_at, reverse=True)[:25]
         ]
         payload = json.dumps(
             {
@@ -462,7 +464,7 @@ async def _accept_generic(
             await ingestion.accept_collection_no_changes(
                 session, source_id=a.source.id, source_generation=a.source.generation,
                 connector_revision=a.connector_revision, request_ref=a.ref, scope=a.scope,
-                multi_workspace_enabled=a.multi, state_update=update)
+                multi_workspace_enabled=a.multi, state_update=update, expected_cursor=cursor_before)
             return
         batch = ReceiveBatch(
             source_id=a.source.id, source_generation=a.source.generation, connector_revision=a.connector_revision,
@@ -472,6 +474,23 @@ async def _accept_generic(
             session, batch, None, scope=a.scope, multi_workspace_enabled=a.multi, request_ref=a.ref,
             state_update=update)
     await _publish_realtime_snapshot(run, parsed, datetime.now(UTC))
+
+
+def _generic_update(
+    update: CollectionStateUpdate | None, selection: dict[str, Any] | None, taken: int,
+) -> CollectionStateUpdate | None:
+    """Attach a generic path's run stats to its state update; no-op when the path recorded none.
+
+    ``selection`` carries ``backlog`` (records left unread/unaccepted), ``failed_calls`` and ``truncated``. The
+    stats ride the receipt only, never the records, so record hashes and coverage are unchanged. ``new`` is the
+    count handed to ingestion before its seen-key drop.
+    """
+    if not selection:
+        return update
+    stats = {"new": taken, "backlog": selection.get("backlog", 0), "failed_calls": selection.get("failed_calls", 0)}
+    if selection.get("truncated"):
+        stats["truncated"] = True
+    return replace(update or CollectionStateUpdate(), stats=stats)
 
 
 async def _state(run: Run) -> CollectionState:
@@ -522,7 +541,7 @@ async def _accept_walk(run: Run, state: CollectionState, walk: Walk, resume: res
         update = CollectionStateUpdate(
             continuation_state=None, update_validators=True, etag=walk.etag, last_modified=walk.last_modified,
             cursor_after=cursor_after if cursor_after != cursor else None)
-        await _accept_generic(run, walk.records, cursor, cursor_after, update)
+        await _accept_generic(run, walk.records, cursor, cursor_after, _generic_update(update, getattr(run, "extras", {}).get("selection"), len(walk.records)))
         return
     checkpoint = rest.Checkpoint(
         url=walk.next_url, revision=run.attempt.connector_revision, cursor=cursor, max_time=walk.max_time,
@@ -530,7 +549,9 @@ async def _accept_walk(run: Run, state: CollectionState, walk: Walk, resume: res
         ids=[rest.id_hash(str(r["provider_id"])) for r in walk.records] or (resume.ids if resume else []))
     await _accept_generic(
         run, walk.records, cursor, cursor,
-        CollectionStateUpdate(continuation_state=checkpoint.encode(), coverage="partial"))
+        _generic_update(
+            CollectionStateUpdate(continuation_state=checkpoint.encode(), coverage="partial"),
+            getattr(run, "extras", {}).get("selection"), len(walk.records)))
 
 
 async def _rest_secret(run: Run) -> tuple[str, str]:
@@ -619,6 +640,10 @@ class _NotModified(Exception):  # control-flow signal for HTTP 304
 
 
 async def _run_rss(run: Run) -> None:
+    """Generic RSS/Atom collection: bounded walk, checkpoint resume, then a walk commit.
+
+    A page with more than the 500-record cap degrades (cap taken, run stats flag ``truncated``) rather than failing.
+    """
     from modules.connectors.n8n import read_rss
     from modules.connectors.registry import configuration
 
@@ -649,7 +674,10 @@ async def _run_rss(run: Run) -> None:
         await _accept_walk(run, state, Walk([], None, None, None, None, not_modified=True), resume)
         return
     if stats.get("truncated"):
-        raise rest.CollectionIncomplete  # unread items remain inside a page: no exact continuation exists
+        # Unread items remain inside a page and no exact continuation exists. Failing here would repeat forever on
+        # the same oversized page, so take the 500 read and advance the cursor only to the newest taken (max_time
+        # below); the rest is reported and drains on later syncs when it is newer than that cursor.
+        run.extras["selection"] = {"backlog": 0, "truncated": True}
     skip = set(resume.ids) if resume else set()
     seen: set[str] = set()
     records = []
@@ -784,8 +812,11 @@ async def _run_mcp(run: Run) -> None:
             failed += 1
     if failed == len(config.calls):
         raise mcp_collection.McpCollectionError("mcp_collection_failed")
+    kept = records[:mcp_collection.MAX_RECORDS]
+    # The generic accept path carries no coverage, so the dropped tail and failed calls are reported in receipt stats.
+    selection = {"backlog": len(records) - len(kept), "failed_calls": failed}
     await _accept_generic(
-        run, records[:mcp_collection.MAX_RECORDS], state.cursor, "mcp:" + collected_at.isoformat())
+        run, kept, state.cursor, "mcp:" + collected_at.isoformat(), _generic_update(None, selection, len(kept)))
 
 
 # ---------------------------------------------------------------- simple native providers
@@ -1040,9 +1071,19 @@ async def _accept_native(
     """Hand a leased native page and any required provider-credential proof to ingestion.
 
     Reddit's OAuth operation and token revision travel with the page so ingestion can reject
-    a grant replacement before committing its receipt or continuation cursor.
+    a grant replacement before committing its receipt or continuation cursor. When ``_select`` ran for this
+    attempt, its run stats ride the state update to the acceptance receipt (never the records).
     """
     a, gate = run.attempt, run.gate
+    if a.source.provider in SOCIAL_WALK_PROVIDERS and "selection" not in run.extras:
+        # Social adapters mark the page ``truncated`` exactly while a backlog walk still has a page to continue.
+        run.extras["selection"] = {"backlog": None, "caught_up": coverage != "truncated"}
+    stats = _run_stats(run, records)
+    if stats is not None:
+        state_update = replace(state_update or CollectionStateUpdate(), stats=stats)
+    if (fingerprint := run.extras.get("native_fp")) is not None:
+        # Same transaction as the cursor: the fingerprint of the native query params the cursor belongs to.
+        state_update = replace(state_update or CollectionStateUpdate(), continuation_state=fingerprint)
     batch = NativeCollectionBatch(
         source_id=a.source.id, source_generation=a.source.generation, connector_revision=a.connector_revision,
         lease_token=lease.token, cursor_before=lease.cursor_before,
@@ -1105,16 +1146,135 @@ def _require_body(fetched: rest.Fetched) -> bytes:
     return fetched.body
 
 
+SOCIAL_WALK_PROVIDERS = frozenset({"bluesky", "reddit", "mastodon", "x"})  # catch-up walk (providers/social_walk.py)
+DEDUP_ONLY_PROVIDERS = frozenset({"hn_top", "google_news"})  # late-surfacing feeds: a cursor floor would drop items
+
+
+def _run_stats(run: Run, taken: Sequence[IngestionRecord]) -> dict[str, Any] | None:
+    """Receipt telemetry for this attempt, or ``None`` when no incremental selection ran.
+
+    Built from ``run.extras["selection"]`` (set by ``_select``): ``new`` is the accepted count, ``backlog`` the
+    records left for the next sync, ``gap`` the missed window ``[from, to]`` and ``duplicates`` the already-seen
+    count; ``failed_sections`` lists section slugs whose fetch failed. Small by construction (<= 6 slugs).
+    """
+    selection = run.extras.get("selection")
+    if not selection:
+        return None
+    gap = selection.get("gap")
+    stats: dict[str, Any] = {
+        "new": len(taken), "backlog": selection.get("backlog", 0), "gap": list(gap) if gap else None,
+        "duplicates": selection.get("duplicates", 0), "failed_sections": list(selection.get("failed_sections", ())),
+    }
+    if "caught_up" in selection:  # social catch-up walks: backlog size is unknown (None), only the walk state is
+        stats["caught_up"] = selection["caught_up"]
+    return stats
+
+
+async def _resume_cursor(run: Run, lease: Any) -> str | None:
+    """Return the cursor this run starts from, resetting it when the native query parameters changed.
+
+    Only providers with native query options (see ``provider_options.native_fingerprint``) are touched. The
+    fingerprint of the parameters in force is stored beside the cursor (``continuation_state``, written with the
+    accepted batch). A stored fingerprint that differs from the current one (``None`` counts as the default
+    parameters, which is what sources saved before these options used) means the cursor belongs to another
+    query, so the run restarts from "now minus the provider's default window" instead; older items matching
+    only the new query are intentionally not backfilled. The reset is applied through this run's own accepted
+    cursor (``run.extras["resume_cursor"]``), never by touching a live lease, so the CAS on ``cursor_before``
+    still guards it. Providers without native options return the stored cursor without any state read.
+    """
+    source = run.attempt.source
+    provider, cfg = str(source.provider), source.configuration or {}
+    fingerprint = provider_options.native_fingerprint(provider, cfg)
+    cursor: str | None = lease.cursor_before
+    if fingerprint is None:
+        return cursor
+    run.extras["native_fp"] = fingerprint
+    if cursor is None:
+        return None
+    stored = getattr(await _state(run), "continuation_state", None)
+    if (stored or provider_options.native_fingerprint(provider, {})) == fingerprint:
+        return cursor
+    reset = (datetime.now(UTC) - provider_options.default_window(provider, cfg)).isoformat()
+    run.extras["resume_cursor"] = reset
+    return reset
+
+
+async def _select(
+    run: Run, lease: Any, records: Sequence[IngestionRecord], collected_at: datetime,
+) -> tuple[list[IngestionRecord], str | None]:
+    """Choose which mapped records to accept and the cursor to commit with them.
+
+    Providers outside ``INCREMENTAL_PROVIDERS`` pass through as ``(records, None)``. Otherwise the stored
+    cursor, the source's selection options and a read-only ``seen_record_keys`` lookup (done BEFORE the cap,
+    so a run of already-seen items cannot stall the cap) feed ``select_incremental``. Backlog, gap and
+    duplicate counts go to ``run.extras["selection"]`` only - never into record metadata, which is hashed.
+    ``hn_top`` and ``google_news`` are ranking/aggregator feeds that surface late items, so they are
+    dedup-only: no cursor floor and the stored cursor is left unchanged (``None``). The full mapped list is
+    kept in ``run.extras["preview"]`` so the realtime preview shows the newest items, not the capped batch.
+    The lookup session is rolled back; it writes nothing.
+    """
+    source = run.attempt.source
+    if source.provider not in INCREMENTAL_PROVIDERS:
+        return list(records), None
+    run.extras["preview"] = list(records)
+    dedup_only = source.provider in DEDUP_ONLY_PROVIDERS
+    async with run.factory() as session:
+        seen_keys = await ingestion.seen_record_keys(
+            session, source_id=source.id, source_generation=source.generation, provider=source.provider,
+            keys=[ingestion.native_record_key(r) for r in records])
+        await session.rollback()
+    chosen = select_incremental(
+        records, cursor=None if dedup_only else run.extras.get("resume_cursor", lease.cursor_before), seen=lambda r: ingestion.native_record_key(r) in seen_keys,
+        filters=selection_filters(source.configuration or {}), now=collected_at)
+    run.extras["selection"] = {"backlog": chosen.backlog, "gap": chosen.gap, "duplicates": chosen.duplicates}
+    return list(chosen.taken), None if dedup_only else chosen.cursor_after
+
+
 async def _run_pure(run: Run) -> None:
     """P3 measurement providers: one fixed request, mapped by ``map_pure_provider_body`` (no world_data for news)."""
     from modules.connectors.providers.macro import MAX_BODY_BYTES
     from modules.connectors.providers.world_data import PURE_ADAPTERS, map_pure_provider_body
 
     provider = str(run.attempt.source.provider)
+    cfg = run.attempt.source.configuration or {}
     collected_at = datetime.now(UTC)
     lease = await _lease(run)
-    fetched = await _get_body(run, PURE_ADAPTERS[provider].request(), max_bytes=PURE_MAX_BYTES.get(provider, MAX_BODY_BYTES))
-    records = _payload(map_pure_provider_body, provider, _require_body(fetched), collected_at)
+    cursor = await _resume_cursor(run, lease)
+    request = PURE_ADAPTERS[provider].request()
+    if (url := provider_options.build_url(provider, cfg, cursor=cursor, now=collected_at)) is not None:
+        request = replace(request, url=url)  # owner options / native resume; headers stay the adapter's
+    fetched = await _get_body(run, request, max_bytes=PURE_MAX_BYTES.get(provider, MAX_BODY_BYTES))
+    records = _payload(
+        lambda *a: map_pure_provider_body(*a, **provider_options.map_options(provider, cfg)),
+        provider, _require_body(fetched), collected_at)  # mapper scope follows the requested scope
+    records = provider_options.filter_records(provider, cfg, records)  # region / KEV / NVD / FX / Kp (client)
+    records, cursor_after = await _select(run, lease, records, collected_at)
+    await _accept_native(run, lease, records, _coverage(records), collected_at, cursor_after=cursor_after)
+
+
+async def _run_coinpaprika(run: Run) -> None:
+    """CoinPaprika tickers: one gated, debited GET per selected coin (<= 5), spaced past the 1 call/second pilot cap.
+
+    The pacing matters: a quota deferral restarts the whole run, so back-to-back calls inside one second would
+    defer forever. Any call failing fails the run (a partial coin set would silently drop a series). The
+    ``coin_ids`` order is the curated order, so equal selections send equal request sequences.
+    """
+    from modules.connectors.providers.crypto import map_coinpaprika
+    from modules.connectors.providers.macro import MAX_BODY_BYTES, decode_json
+    from modules.connectors.providers.world_data import PURE_ADAPTERS
+
+    cfg = run.attempt.source.configuration or {}
+    collected_at = datetime.now(UTC)
+    lease = await _lease(run)
+    records: list[IngestionRecord] = []
+    for index, (coin, url) in enumerate(zip(
+            provider_options.selected_coins(cfg), provider_options.coin_urls(cfg), strict=True)):
+        if index:
+            await asyncio.sleep(provider_options.COINPAPRIKA_GAP_SECONDS)
+        fetched = await _get_body(run, replace(PURE_ADAPTERS["coinpaprika"].request(), url=url),
+                                  max_bytes=MAX_BODY_BYTES)
+        records += _payload(lambda body, coin=coin: map_coinpaprika(decode_json(body), collected_at, coin_id=coin),
+                            _require_body(fetched))
     await _accept_native(run, lease, records, _coverage(records), collected_at)
 
 
@@ -1162,40 +1322,90 @@ async def _run_coingecko(run: Run) -> None:
     await _run_keyed(run)
 
 
+async def _fetch_sections(
+    run: Run, provider: str, sections: list[tuple[str, str]], revision: str, collected_at: datetime,
+) -> tuple[list[IngestionRecord], list[str]]:
+    """GET every selected section unconditionally, merge by stable item id, and report failed slugs.
+
+    Each GET is debited by the gate. Records of the same ``provider_id`` seen in several sections collapse to one
+    (lowest ``version``, as ``map_feed`` does for in-feed duplicates); the section slug is never written to a
+    record, so the hashed metadata equals a single-section fetch of the same article. A section failing with an
+    HTTP/parse/scope error is skipped and reported; fence loss, timeouts and rate limits propagate. When every
+    section fails the first error is re-raised, so the run fails exactly as a single feed would.
+    """
+    merged: dict[str, IngestionRecord] = {}
+    failed: list[str] = []
+    first_error: Exception | None = None
+    for slug, url in sections:
+        try:
+            fetched = await _get_body(run, _news.feed_request(provider, None, revision, url), max_bytes=_news.MAX_FEED_BYTES)
+            result = await asyncio.to_thread(
+                _payload, _news.map_feed_response, provider, 200, _require_body(fetched), collected_at)
+        except (rest.ProviderHttpError, rest.CollectionIncomplete, ValueError) as exc:
+            failed.append(slug)
+            first_error = first_error or exc
+            continue
+        for record in result.records:
+            old = merged.get(record.provider_id)
+            if old is None or (record.version or "") < (old.version or ""):
+                merged[record.provider_id] = record
+    if not merged and first_error is not None:
+        raise first_error
+    return list(merged.values()), failed
+
+
 async def _run_feed(run: Run) -> None:
-    """P2 RSS/Atom presets: replay stored validators (same URL + revision), 304 keeps the last good records."""
+    """P2 RSS/Atom presets: replay stored validators (same URL + revision), 304 keeps the last good records.
+
+    A catalog preset with several selected sections fetches each one unconditionally (validators are single-URL),
+    merges and dedups them, then runs the usual selection; failed section slugs are reported in the run stats.
+    """
     from modules.connectors.providers import news
 
     a, provider = run.attempt, str(run.attempt.source.provider)
     collected_at, revision = datetime.now(UTC), str(a.connector_revision)
     state = await _state(run)
-    url = _payload(news.preset_url, provider, a.source.configuration)
+    sections = _payload(news.section_urls, provider, a.source.configuration)
+    url = sections[0][1] if sections else _payload(news.preset_url, provider, a.source.configuration)
     stored = news.FeedValidators(
         url, revision, state.etag, state.last_modified,
     ) if state.validators_revision == a.connector_revision else None
     lease = await _lease(run)
-    fetched = await _get_body(run, news.feed_request(provider, stored, revision, url), max_bytes=news.MAX_FEED_BYTES)
-    # feedparser-style XML parse of up to MAX_FEED_BYTES is CPU-bound: keep it off the event loop.
-    result = await asyncio.to_thread(_payload, news.map_feed_response, provider, 200 if fetched.body is not None else 304, fetched.body or b"", collected_at)
-    if result.not_modified:
-        await _accept_native(run, lease, (), "returned_snapshot", collected_at)
-        return
-    captured = news.capture_validators(
-        provider, {"etag": fetched.etag or "", "last-modified": fetched.last_modified or ""}, revision, url)
-    update = CollectionStateUpdate(
-        update_validators=True, etag=captured.etag if captured else None,
-        last_modified=captured.last_modified if captured else None)
-    await _accept_native(run, lease, result.records, _coverage(result.records), collected_at, update)
+    if len(sections) > 1:
+        found, failed = await _fetch_sections(run, provider, sections, revision, collected_at)
+        update = None
+    else:
+        failed = []
+        fetched = await _get_body(run, news.feed_request(provider, stored, revision, url), max_bytes=news.MAX_FEED_BYTES)
+        # feedparser-style XML parse of up to MAX_FEED_BYTES is CPU-bound: keep it off the event loop.
+        result = await asyncio.to_thread(_payload, news.map_feed_response, provider, 200 if fetched.body is not None else 304, fetched.body or b"", collected_at)
+        if result.not_modified:
+            await _accept_native(run, lease, (), "returned_snapshot", collected_at)
+            return
+        captured = news.capture_validators(
+            provider, {"etag": fetched.etag or "", "last-modified": fetched.last_modified or ""}, revision, url)
+        update = CollectionStateUpdate(
+            update_validators=True, etag=captured.etag if captured else None,
+            last_modified=captured.last_modified if captured else None)
+        found = list(result.records)
+    found = provider_options.filter_records(provider, a.source.configuration or {}, found)  # e.g. advisory level
+    records, cursor_after = await _select(run, lease, found, collected_at)
+    if "selection" in run.extras:
+        run.extras["selection"]["failed_sections"] = failed
+    await _accept_native(run, lease, records, _coverage(records), collected_at, update, cursor_after=cursor_after)
 
 
 async def _run_hn(run: Run) -> None:
-    """Hacker News: one id-list send plus at most ``HN_MAX_ITEMS`` sequential item sends, each debited."""
+    """Hacker News: one id-list send plus ``max_items`` (default 10, hard cap 30) sequential item sends, each debited."""
     from modules.connectors.providers import news
 
+    cfg = run.attempt.source.configuration or {}
     collected_at = datetime.now(UTC)
     lease = await _lease(run)
-    top = _require_body(await _get_body(run, news.hn_top_request(), max_bytes=64 * 1024))
-    ids = _payload(news.parse_hn_top_ids, top)
+    listing = provider_options.build_url("hn_top", cfg, cursor=None, now=collected_at)
+    top = _require_body(await _get_body(
+        run, news.hn_top_request(listing) if listing else news.hn_top_request(), max_bytes=64 * 1024))
+    ids = _payload(news.parse_hn_top_ids, top, provider_options.hn_limit(cfg))
     bodies: dict[int, bytes | None] = {}
     for item_id in ids:
         try:
@@ -1204,9 +1414,10 @@ async def _run_hn(run: Run) -> None:
             if exc.status_code != 404:
                 raise
             bodies[item_id] = None  # removed item: skipped and counted by the mapper
-    result = _payload(news.map_hn_stories, ids, bodies, collected_at)
+    result = _payload(news.map_hn_stories, ids, bodies, collected_at, provider_options.hn_limit(cfg))
     run.extras["skipped"] = result.skipped
-    await _accept_native(run, lease, result.records, "returned_snapshot", collected_at)
+    records, cursor_after = await _select(run, lease, result.records, collected_at)
+    await _accept_native(run, lease, records, "returned_snapshot", collected_at, cursor_after=cursor_after)
 
 
 async def _run_gdelt(run: Run) -> None:
@@ -1215,11 +1426,17 @@ async def _run_gdelt(run: Run) -> None:
     from modules.connectors.providers.macro import MAX_BODY_BYTES
     from modules.connectors.providers.news import map_news_body
 
+    cfg = run.attempt.source.configuration or {}
     collected_at = datetime.now(UTC)
     lease = await _lease(run)
-    fetched = await _get_body(run, gdelt_request(), max_bytes=MAX_BODY_BYTES, timeout=GDELT_TIMEOUT_SECONDS)
+    cursor = await _resume_cursor(run, lease)
+    request = gdelt_request()
+    if (url := provider_options.build_url("gdelt_economy", cfg, cursor=cursor, now=collected_at)) is not None:
+        request = replace(request, url=url)
+    fetched = await _get_body(run, request, max_bytes=MAX_BODY_BYTES, timeout=GDELT_TIMEOUT_SECONDS)
     records = _payload(map_news_body, "gdelt_economy", _require_body(fetched), collected_at)
-    await _accept_native(run, lease, records, _coverage(records), collected_at)
+    records, cursor_after = await _select(run, lease, records, collected_at)
+    await _accept_native(run, lease, records, _coverage(records), collected_at, cursor_after=cursor_after)
 
 
 async def _run_sec_edgar(run: Run) -> None:
@@ -1254,6 +1471,7 @@ ADAPTERS.update({
     **dict.fromkeys(KEYED, _run_keyed),
     "coingecko": _run_coingecko,
     **dict.fromkeys(_news.FEED_URLS, _run_feed),  # every fixed-URL feed preset shares one adapter
+    "coinpaprika": _run_coinpaprika,  # one call per selected coin
     "google_news": _run_feed, "openalex": _run_openalex, "sec_edgar": _run_sec_edgar, "hn_top": _run_hn, "gdelt_economy": _run_gdelt,
 })
 

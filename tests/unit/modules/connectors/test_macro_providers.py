@@ -162,3 +162,16 @@ def test_html_200_is_not_json_and_unknown_provider():
 def test_naive_collected_at_rejected():
     with pytest.raises(ValueError, match="timezone-aware"):
         map_frankfurter(jfixture("frankfurter_usd_vnd.json"), datetime(2026, 10, 8))  # noqa: DTZ001
+
+
+def test_frankfurter_multi_quote_live_shape():
+    """Real ``/v2/rates?base=EUR&quotes=USD,VND,JPY`` body (2026-11-02): a list of pair rows, API-sorted."""
+    body = [
+        {"date": "2026-11-02", "base": "EUR", "quote": "JPY", "rate": 176.2},
+        {"date": "2026-11-02", "base": "EUR", "quote": "USD", "rate": 1.1179},
+        {"date": "2026-11-02", "base": "EUR", "quote": "VND", "rate": 28806},
+    ]
+    records = map_frankfurter(body, NOW, base="EUR", quotes=("USD", "VND", "JPY"))
+    assert sorted(r.provider_id for r in records) == [
+        f"frankfurter:EUR:{q}:2026-11-02:blended" for q in ("JPY", "USD", "VND")
+    ]

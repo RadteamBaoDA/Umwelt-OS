@@ -44,10 +44,11 @@ const LAG_CODES = ['provider_rejected', 'provider_response_invalid'];
 
 /** Where a gadget's data shows up once rendered, per renderer id. */
 const ROW_SELECTOR: Record<string, string> = {
-  news_feed: 'li',
-  table_panel: 'tbody tr',
-  provider_observation: 'li',
-  weather: 'li, tbody tr, dl',
+  // Feed: lead article (feed-lead) plus li rows. Metric: a KPI group (single series) or li rows (several), both observation-row.
+  news_feed: '[data-testid="feed-lead"], li',
+  table_panel: 'li',
+  provider_observation: '[data-testid="observation-row"]',
+  weather: '[data-testid="weather-hero"], [data-testid="weather-day"], li, tbody tr, dl',
   finance_chart: 'svg',
   video_panel: 'a[href]',
 };
@@ -419,6 +420,8 @@ test.describe('dashboard', () => {
   });
 
   test('cleanup', async ({ page }) => {
+    // Built-in listing can be slow after many collections; a timeout here leaves built-ins enabled and cascades into later specs.
+    test.setTimeout(120_000);
     // E2E_KEEP_DATA leaves the built dashboard for a following spec (screens-capture) in the same disposable run.
     test.skip(!!process.env.E2E_KEEP_DATA, 'E2E_KEEP_DATA set: keep sources and dashboard');
     // Owner writes need a same-origin Origin header, which writeHeaders derives from the current page URL.
@@ -434,9 +437,12 @@ test.describe('dashboard', () => {
     }
     await deleteSources(page, PREFIX);
     // Built-ins keep their catalog names, so they are removed by id. Headers are re-read per delete because the CSRF token rotates.
+    // One listing for the whole loop: the builtins route is expensive and deletes do not change other built-ins' source ids.
+    const builtinList = await (await page.request.get('/api/v1/connectors/builtins')).json() as { id: string; source_id: string | null }[];
+    const builtinSourceIds = new Map(builtinList.map((b) => [b.id, b.source_id]));
     for (const g of GADGETS) {
       if (wizardCase(g.id)) continue;
-      const id = await sourceIdOf(page, g.id);
+      const id = builtinSourceIds.get(g.id);
       if (!id) continue;
       // A 409 is an access/Source fence race with an in-flight collection; retry it, then assert the final status with its body.
       let res = await page.request.delete(`/api/v1/sources/${id}`, { headers: await writeHeaders(page) });

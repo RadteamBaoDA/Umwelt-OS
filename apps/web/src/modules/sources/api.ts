@@ -38,7 +38,10 @@ export type IngestionRun = {
   error_code: string | null;
   created_at: string;
   updated_at: string;
+  /** Per-run collection telemetry; absent for runs without an acceptance receipt. `gap` is [from, to] ISO times. */
+  collection_stats?: CollectionStats | null;
 };
+export type CollectionStats = { new?: number; backlog?: number | null; caught_up?: boolean; gap?: [string, string] | null; duplicates?: number; failed_sections?: string[]; truncated?: boolean; failed_calls?: number };
 export type IngestionRunStatus = IngestionRun['status'];
 export type ConnectorConfig = {
   url?: string;
@@ -102,8 +105,50 @@ export type ConnectorConfig = {
   sec_contact_email?: string;
   history_mode?: 'returned_snapshot' | 'pending_updates';
   realtime_mode?: RealtimeMode;
+  max_items?: number | null;
+  include_keywords?: string[] | null;
+  exclude_keywords?: string[] | null;
+  max_age_days?: number | null;
+  feed_sections?: string[] | null;
   connection_id?: string;
   calls?: { grant_id: string; arguments: Record<string, unknown> }[];
+} & BuiltinTypeOptions;
+/** Wave D per-type built-in options (server-validated enums/bounds; each is accepted only by its own provider, see `applicable_options`). */
+export type BuiltinTypeOptions = {
+  hn_list?: 'top' | 'new' | 'best' | 'ask' | 'show';
+  gdelt_query?: string;
+  gdelt_timespan?: '1h' | '6h' | '24h' | '3d' | '7d';
+  gdelt_source_lang?: 'english' | 'vietnamese' | 'chinese' | 'japanese' | 'korean' | 'french' | 'german' | 'spanish';
+  gdelt_source_country?: 'US' | 'VN' | 'CN' | 'JP' | 'GB' | 'DE' | 'FR' | 'IN' | 'KR' | 'SG' | 'AU' | 'RU' | 'BR' | 'CA';
+  usgs_min_magnitude?: 'significant' | '4.5' | '2.5' | '1.0' | 'all';
+  usgs_period?: 'hour' | 'day' | 'week';
+  min_magnitude?: number;
+  eonet_categories?: ('drought' | 'dustHaze' | 'earthquakes' | 'floods' | 'landslides' | 'manmade' | 'seaLakeIce' | 'severeStorms' | 'snow' | 'tempExtremes' | 'volcanoes' | 'waterColor' | 'wildfires')[];
+  eonet_status?: 'open' | 'all';
+  eonet_days?: number;
+  gdacs_event_types?: ('EQ' | 'TC' | 'FL' | 'VO' | 'WF' | 'DR')[];
+  gdacs_alert_levels?: ('Green' | 'Orange' | 'Red')[];
+  nws_severity?: ('Extreme' | 'Severe' | 'Moderate' | 'Minor')[];
+  nws_area?: string;
+  nvd_severity?: ('LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL')[];
+  nvd_window_days?: number;
+  nvd_keyword?: string;
+  kev_ransomware_only?: boolean;
+  ioda_country?: string;
+  region?: 'world' | 'southeast_asia' | 'vietnam' | 'east_asia' | 'south_asia' | 'europe' | 'north_america' | 'south_america' | 'africa' | 'oceania' | 'middle_east';
+  // Wave F per-type options (curated server-side lists; the server rejects anything else with 422).
+  wiki_language?: 'en' | 'vi' | 'ja' | 'zh' | 'fr' | 'de' | 'es' | 'ko';
+  satnogs_status?: 'good' | 'bad' | 'unknown';
+  disease_country?: string;
+  wb_country?: string;
+  wb_indicator?: 'gdp' | 'gdp_growth' | 'inflation_cpi' | 'unemployment' | 'population' | 'fdi';
+  fx_base?: string;
+  fx_quotes?: string[];
+  oecd_countries?: string[];
+  crypto_symbols?: string[];
+  coin_ids?: string[];
+  kp_min?: number;
+  advisory_min_level?: 1 | 2 | 3 | 4;
 };
 export type CoinGeckoCoin = { id: string; symbol: string; name: string; series_symbol?: string };
 export type ConnectorSettings = {
@@ -535,6 +580,10 @@ export type BuiltinSource = {
   realtime_tier?: RealtimeMode;
   source_id: string | null; enabled: boolean;
   data_shapes: DataShape[];
+  /** Owner options this built-in accepts; the UI renders only these. */
+  applicable_options?: string[];
+  sections?: { slug: string; label_en: string; label_vi: string }[] | null;
+  default_section?: string | null;
 };
 
 /** Lists every built-in data source with its on/off state. */
@@ -542,13 +591,16 @@ export function listBuiltinSources(signal?: AbortSignal) {
   return apiRequest<BuiltinSource[]>('/api/v1/connectors/builtins', { signal });
 }
 
-/** Turns a built-in on; the server creates the source, records the terms acknowledgement (and operator review where required) and activates it. */
+/** Turns a built-in on; the server creates the source, records the terms acknowledgement (and operator review where required) and activates it. Optional `name`, interval and news filters (`max_items`, keywords, `max_age_days`) are saved with the source; omitted fields keep the saved value. */
 export function enableBuiltinSource(
   provider: string,
   declaredUse: DeclaredUse,
   csrfToken: string,
   signal?: AbortSignal,
-  options?: SourceAiOptions & { realtime_mode?: RealtimeMode },
+  options?: SourceAiOptions & {
+    realtime_mode?: RealtimeMode; name?: string; schedule_interval_minutes?: 15 | 30 | 60 | 360 | 1440;
+    max_items?: number; include_keywords?: string[]; exclude_keywords?: string[]; max_age_days?: number; feed_sections?: string[];
+  } & BuiltinTypeOptions,
 ) {
   return apiRequest<BuiltinSource>(`/api/v1/connectors/builtins/${encodeURIComponent(provider)}/enable`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ declared_use: declaredUse, ...options }), signal });
 }

@@ -7,15 +7,12 @@ import {
   FolderGit2,
   RotateCw,
   Search,
-  Sparkles,
-  Tag,
   User,
   Users,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import React, { useMemo, useState } from 'react';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
@@ -92,7 +89,7 @@ export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
   return (
     <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-y-auto overflow-x-hidden">
       {/* Header with search filter and quick link to all entities */}
-      <div className="flex items-center gap-2 border-b border-border pb-2">
+      <div className="flex items-center gap-2">
         <div className="relative flex-1">
           <Search className="w-3.5 h-3.5 absolute left-2 top-2 text-muted-foreground" />
           <Input
@@ -141,60 +138,40 @@ export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
         </div>
       )}
 
-      {/* Entities List / Cards */}
+      {/* Compact rows: name (14px) left, last-seen right and tabular; type and aliases stay muted. */}
       {entities.length > 0 && (
-        <div className="flex-1 overflow-y-auto space-y-2 min-h-0 pr-0.5">
+        <ul className="min-h-0 flex-1 divide-y divide-border/60 overflow-y-auto pr-0.5">
           {entities.map((entity) => {
             const lastSeen = entity.last_seen_at
               ? formatDateTime(entity.last_seen_at, display.locale, display.timezone)
               : null;
 
             return (
-              <article
-                key={entity.id}
-                className="p-2.5 rounded-lg border border-border/80 bg-card hover:bg-muted/15 transition-colors space-y-1.5"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <span className="p-1 rounded bg-muted/30 text-primary">
-                      {getEntityIcon(entity.type)}
-                    </span>
-                    <Link
-                      href={`/knowledge/entities/${entity.id}`}
-                      className="font-semibold text-xs text-foreground hover:underline truncate"
-                    >
-                      {entity.name || entity.canonical_name || 'Unnamed Entity'}
-                    </Link>
-                  </div>
-
-                  <span className="px-1.5 py-0.2 rounded text-xs font-semibold bg-muted/40 text-muted-foreground shrink-0">
-                    {entity.type}
-                  </span>
-                </div>
-
-                {entity.description && (
-                  <p className="text-[11px] text-muted-foreground line-clamp-2 leading-relaxed">
-                    {entity.description}
+              <li key={entity.id} className="flex items-baseline justify-between gap-3 py-2">
+                <div className="min-w-0">
+                  <Link
+                    href={`/knowledge/entities/${entity.id}`}
+                    className="block truncate text-sm font-semibold text-foreground hover:underline"
+                  >
+                    {entity.name || entity.canonical_name || t('entityUnnamed')}
+                  </Link>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {[
+                      entity.type,
+                      entity.aliases && entity.aliases.length > 0
+                        ? t('entityAliases', { aliases: entity.aliases.map((a) => a.alias).join(', ') })
+                        : t('entityRevision', { revision: entity.revision }),
+                    ].join(' · ')}
                   </p>
-                )}
-
-                {/* Aliases & Metadata bar */}
-                <div className="flex items-center justify-between text-xs text-muted-foreground pt-1 border-t border-border/50">
-                  <div className="flex items-center gap-1 overflow-hidden">
-                    {entity.aliases && entity.aliases.length > 0 ? (
-                      <span className="truncate">
-                        Aliases: {entity.aliases.map((a) => a.alias).join(', ')}
-                      </span>
-                    ) : (
-                      <span>Revision {entity.revision}</span>
-                    )}
-                  </div>
-                  {lastSeen && <span className="tabular-nums shrink-0">Seen {lastSeen}</span>}
+                  {entity.description && (
+                    <p className="line-clamp-1 text-xs text-muted-foreground">{entity.description}</p>
+                  )}
                 </div>
-              </article>
+                {lastSeen && <span className="shrink-0 text-xs tabular-nums text-muted-foreground" title={t('entitySeen', { time: lastSeen })}>{lastSeen}</span>}
+              </li>
             );
           })}
-        </div>
+        </ul>
       )}
     </div>
   );

@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
-import { BUILTINS, collectedRecordCount, deleteSources, enableBuiltinViaSettings, findSources } from './sources-helpers';
+import { BUILTINS, collectedRecordCount, deleteSources, enableBuiltinViaSettings, findSources, removeBuiltinSource } from './sources-helpers';
 
 /**
  * Adds every keyless fixed-scope built-in through "Add datasource" > "Built-in feed" (pick, terms, enable, test fetch) and asserts that the
@@ -15,6 +15,10 @@ import { BUILTINS, collectedRecordCount, deleteSources, enableBuiltinViaSettings
  * official mirror raw.githubusercontent.com/cisagov/kev-data answers 200. The app must then fail with the readable code
  * below; on a network where the endpoint is reachable the normal records assertion applies instead.
  */
+/** Wikimedia publishes a UTC day's data some hours after midnight UTC; same tolerance as dashboard-datasources.spec.ts. */
+const DAILY_LAG = new Set(['wikipedia_mostread', 'wikipedia_top_views']);
+const LAG_CODES = ['provider_rejected', 'provider_response_invalid'];
+
 const EXTERNAL_BLOCK: Record<string, string> = { cisa_kev: 'provider_rejected' };
 
 /**
@@ -39,6 +43,8 @@ const only = process.env.E2E_ONLY?.split(",");
 for (const [id, label] of BUILTINS.filter(([key]) => !only || only.includes(key))) {
   test(`built-in ${id}: enable and fetch records`, async ({ page }) => {
     test.setTimeout(240_000 + (SLOW_MS[id] ?? 0));
+    // A leftover enabled built-in (e.g. from an aborted earlier spec) disables its wizard tile; remove it first.
+    await removeBuiltinSource(page, id);
     const enabled = await enableBuiltinViaSettings(page, id, label, SLOW_MS[id] ?? 120_000).catch(async (error: unknown) => {
       if (!(await remoteThrottled(page, id))) throw error;
       return null;
@@ -59,6 +65,10 @@ for (const [id, label] of BUILTINS.filter(([key]) => !only || only.includes(key)
       if (!outcome.ok && EXTERNAL_BLOCK[id]) {
         test.info().annotations.push({ type: 'external-block', description: outcome.text });
         expect(outcome.text).toContain(`Test fetch failed: ${EXTERNAL_BLOCK[id]}.`);
+        return;
+      }
+      if (!outcome.ok && DAILY_LAG.has(id) && LAG_CODES.some((code) => outcome.text.includes(code))) {
+        test.info().annotations.push({ type: 'remote-daily-lag', description: outcome.text });
         return;
       }
       if (!outcome.ok && id === 'noaa_tsunami') {

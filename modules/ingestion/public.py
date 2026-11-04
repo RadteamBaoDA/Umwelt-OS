@@ -1429,6 +1429,24 @@ async def _authorize_collection(
         raise HTTPException(status_code=401, detail="Collector authentication required")
 
 
+COLLECTION_STATS_MAX_BYTES = 1024
+
+
+def _bounded_stats(stats: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return ``stats`` when its compact JSON fits ``COLLECTION_STATS_MAX_BYTES``, else ``None``.
+
+    Telemetry is advisory: an oversized or unserialisable value is dropped whole rather than truncated into
+    invalid JSON, and never fails the acceptance it rides on.
+    """
+    if not stats:
+        return None
+    try:
+        encoded = json.dumps(stats, separators=(",", ":"), ensure_ascii=False)
+    except (TypeError, ValueError):
+        return None
+    return stats if len(encoded.encode("utf-8")) <= COLLECTION_STATS_MAX_BYTES else None
+
+
 async def _settle_request(
     session: AsyncSession, request_ref: CollectionRequestRef | None, *,
     outcome: Literal["succeeded", "no_changes"], run_id: UUID | None,
@@ -1440,7 +1458,7 @@ async def _settle_request(
     """Insert the acceptance receipt, flush request outcome + slot release; the caller commits once.
 
     Receipt first (get-or-create by request UUID, so a replay never writes a second one), then the
-    request is pointed at it in the same flush.
+    request is pointed at it in the same flush. ``state_update.stats`` is stored bounded on the receipt only.
     """
     if request_ref is None:
         return
@@ -1459,6 +1477,7 @@ async def _settle_request(
             payload_digest=payload_digest, cursor_before=cursor_before, cursor_after=cursor_after,
             coverage=state_update.coverage, etag=state_update.etag if state_update.update_validators else None,
             last_modified=state_update.last_modified if state_update.update_validators else None,
+            collection_stats=_bounded_stats(state_update.stats),
             accepted_at=now, retain_until=now + RECEIPT_RETENTION))
         await session.flush()
     if not await connectors.settle_collection_in_uow(
@@ -1904,6 +1923,19 @@ def validate_telegram_record_delivery(
         raise ValueError("Telegram mapped record does not match its raw delivery")
 
 
+def native_record_key(record: IngestionRecord) -> tuple[str, str]:
+    """Return the ``(provider_id, record_hash)`` dedup key of a native record.
+
+    The hash covers version, content and metadata but not ``collected_at``. Both the connector runner's
+    read-only pre-cap dedup and the in-transaction accept path call this one function so the two keys
+    cannot diverge.
+    """
+    return record.provider_id, _digest({
+        "version": record.version, "content": record.content,
+        "metadata": record.model_dump(mode="json", exclude={"collected_at"})["metadata"],
+    })
+
+
 async def seen_record_keys(
     session: AsyncSession, *, source_id: UUID, source_generation: int, provider: str | None,
     keys: Iterable[tuple[str, str]],
@@ -2331,15 +2363,11 @@ async def accept_native_collection(
         # therefore takes the empty succeeded path below instead of queueing normalization.
         seen_keys = await seen_record_keys(
             session, source_id=source.id, source_generation=source.generation, provider=source.provider,
-            keys=[(rec.provider_id, _digest({
-                "version": rec.version, "content": rec.content, "metadata": data["metadata"],
-            })) for rec, data, _ in provider_records])
+            keys=[native_record_key(rec) for rec, _, _ in provider_records])
         if seen_keys:
             provider_records = [
                 item for item in provider_records
-                if (item[0].provider_id, _digest({
-                    "version": item[0].version, "content": item[0].content, "metadata": item[1]["metadata"],
-                })) not in seen_keys]
+                if native_record_key(item[0]) not in seen_keys]
     batch = IngestionBatch(
         source_id=source.id, batch_key=batch_key, payload_hash=payload_hash,
         source_generation=source.generation,
@@ -2360,10 +2388,7 @@ async def accept_native_collection(
     received_at = now
     seen: set[tuple[str, str, datetime]] = set()
     for record, record_data, telegram_envelope in provider_records:
-        record_hash = _digest({
-            "version": record.version, "content": record.content,
-            "metadata": record_data["metadata"],
-        })
+        record_hash = native_record_key(record)[1]
         identity = (record.provider_id, record_hash, record.observed_at)
         if identity in seen:
             continue
@@ -2656,12 +2681,20 @@ async def receive_connector_batch(
     return Receipt(workspace_id=scope.workspace_id, batch_id=batch.id, run_id=run.id, status=run.status)
 
 
+# Sentinel: distinguishes "no expectation" from an expected cursor of None.
+_NO_EXPECTED_CURSOR: object = object()
+
+
 async def accept_collection_no_changes(
     session: AsyncSession, *, source_id: UUID, source_generation: int, connector_revision: int,
     request_ref: CollectionRequestRef, scope: Scope, multi_workspace_enabled: bool,
-    state_update: CollectionStateUpdate | None = None,
+    state_update: CollectionStateUpdate | None = None, expected_cursor: str | None | object = _NO_EXPECTED_CURSOR,
 ) -> None:
     """Settle a generic request with no new data in one commit: health, receipt, request outcome and slot.
+
+    ``expected_cursor`` (when supplied) is the cursor the walk started from; if the locked state row
+    holds a different cursor the call raises 409 before any write, so a slow no-change settlement
+    cannot overwrite a cursor another run advanced meanwhile. Omitted keeps the unguarded behaviour.
 
     No batch or run is created and last-good observations stay untouched. ``state_update`` may clear a
     finished continuation, store validators and (only here, with the state row locked) advance the
@@ -2695,6 +2728,8 @@ async def accept_collection_no_changes(
         session.add(state)
         await session.flush()
     cursor_before = state.cursor
+    if expected_cursor is not _NO_EXPECTED_CURSOR and cursor_before != expected_cursor:
+        raise HTTPException(status_code=409, detail="Collection cursor changed")
     if state_update is not None and state_update.cursor_after is not None:
         state.cursor = state_update.cursor_after
     _apply_state_update(state, state_update, connector_revision)
@@ -3098,6 +3133,16 @@ async def list_source_runs(
         run_id: await _read_stages(session, stages, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         for run_id, stages in stages_by_run.items()
     }
+    # Receipt telemetry for these runs only (one bounded query); runs without a receipt report None.
+    stats_by_run: dict[UUID, dict[str, Any]] = {}
+    if run_rows:
+        for stats_run_id, stats in (await session.execute(
+            select(CollectionReceipt.run_id, CollectionReceipt.collection_stats).where(
+                CollectionReceipt.run_id.in_([run.id for run in run_rows]),
+                CollectionReceipt.source_id == source_id,
+                CollectionReceipt.collection_stats.is_not(None)))).tuples().all():
+            if stats_run_id is not None and stats is not None:
+                stats_by_run[stats_run_id] = stats
 
     def detach(run: IngestionRun) -> RunRead:
         """Project an ORM run and its stages into a detached response."""
@@ -3110,6 +3155,7 @@ async def list_source_runs(
             error_code=run.error_code,
             created_at=run.created_at,
             updated_at=run.updated_at,
+            collection_stats=stats_by_run.get(run.id),
         )
 
     return SourceIngestionRead(

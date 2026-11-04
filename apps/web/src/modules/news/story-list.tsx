@@ -3,10 +3,11 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import Link from 'next/link';
 import { ArrowUpRight, RefreshCw } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
-import { formatDateTime } from '@/core/i18n';
+import { formatDateTime, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { fetchNewsTrends, fetchStories } from './story-api';
 import { useNewsIncompleteLabel } from './use-news-incomplete-label';
@@ -15,6 +16,7 @@ import { TranslationNote } from '@/modules/translations/translation-note';
 import { useContentTranslation } from '@/modules/translations/use-content-translation';
 import { safeHttpUrl } from '@/core/safe-url';
 import { cleanExcerpt } from './excerpt';
+import { formatRelativeTime } from '@/modules/dashboard/gadgets/relative-time';
 import type { Story } from './story-types';
 
 /** Props for the source-scoped story gadget renderer. */
@@ -28,6 +30,8 @@ export type StoryListProps = {
   embedded?: boolean;
   /** Page mode: element (e.g. in the page title row) that receives the translated badge and refresh button instead of an own header. */
   actionsHost?: HTMLElement | null;
+  /** True when the owner has no active sources: the empty state then points to source setup instead of a refresh. */
+  noSources?: boolean;
   onSelectStory: (storyId: string, trigger: HTMLButtonElement) => void;
 };
 
@@ -43,7 +47,7 @@ export type StoryListProps = {
  * @returns A paged story list with optional matching-scope trends and detail selection.
  */
 export function StoryList({
-  sourceIds, topicId, query, limit = 25, showTrends = true, embedded = false, actionsHost, onSelectStory,
+  sourceIds, topicId, query, limit = 25, showTrends = true, embedded = false, actionsHost, noSources = false, onSelectStory,
 }: StoryListProps) {
   const t = useTranslations('news');
   const display = useDisplayPreferences();
@@ -72,6 +76,7 @@ export function StoryList({
   const targets = stories.filter((s) => s.translation_revision).map((s) => ({ id: s.id, revision: s.translation_revision as string }));
   const translation = useContentTranslation('news_story', targets);
   const [showOriginal, setShowOriginal] = useState(false);
+  /** Translated title/excerpt for a story, or undefined when showing the original or no translation exists. */
   const shown = (story: Story) => (showOriginal ? undefined : translation.results.get(story.id)?.translation ?? undefined);
 
   // Embedded gadgets show the partial-data notice in the slim top meta row.
@@ -85,6 +90,12 @@ export function StoryList({
   const scores = stories.flatMap((s) => (s.relevance == null ? [] : [Math.round(s.relevance * 100)]));
   const relevanceVaries = scores.length > 1 && Math.max(...scores) - Math.min(...scores) >= 10;
 
+  // Embedded lead: the story with the most sources (first on ties) gets the hero treatment.
+  const leadStory = embedded && stories.length > 0
+    ? stories.reduce((best, story) => (story.source_count > best.source_count ? story : best), stories[0])
+    : null;
+  const listStories = leadStory ? stories.filter((story) => story.id !== leadStory.id) : stories;
+
   const refreshButton = (
     <Button variant="ghost" size="icon" className={embedded ? 'size-6' : undefined} onClick={() => { void storiesQuery.refetch(); if (showTrends) void trendQuery.refetch(); }} aria-label={t('retry')}>
       <RefreshCw className={`${embedded ? 'size-3.5' : 'size-4'} ${storiesQuery.isFetching ? 'animate-spin' : ''}`} />
@@ -96,6 +107,40 @@ export function StoryList({
       {translation.results.size ? <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} /> : null}
       {refreshButton}
     </>
+  );
+
+  /** Relative time ("2 hr. ago") for list meta; the full datetime lives in the element title. */
+  const relativeTime = (iso: string) => formatRelativeTime(iso, normalizeFormattingLocale(display.locale)) || formatDateTime(iso, display.locale, display.timezone);
+
+  /** One compact story row: title, excerpt, count/time meta and publisher attribution. */
+  const renderStory = (story: Story) => (
+        <li key={story.id}>
+            <Button type="button" variant="ghost" onClick={(event) => onSelectStory(story.id, event.currentTarget)} className={`h-auto w-full flex-col items-stretch justify-start whitespace-normal text-left text-sm font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-none px-0 py-3`}>
+              <span className="flex items-start justify-between gap-2">
+                <span className="font-medium leading-snug">{shown(story)?.title ?? story.title}</span>
+                <ArrowUpRight aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+              </span>
+              {cleanExcerpt(shown(story)?.title ?? story.title, shown(story)?.excerpt ?? story.excerpt) ? (
+                <span className="mt-1 line-clamp-3 text-sm text-muted-foreground">{cleanExcerpt(shown(story)?.title ?? story.title, shown(story)?.excerpt ?? story.excerpt)}</span>
+              ) : null}
+              {!translation.results.has(story.id) && <TranslationNote issue={translation.issues.get(story.id)} />}
+              <span className="mt-2 block text-xs text-muted-foreground" title={formatDateTime(story.observed_at, display.locale, display.timezone)}>
+                {[
+                  // A lone source with a lone item carries no information, so only larger counts are shown.
+                  ...(story.source_count === 1 && story.evidence_count === 1 ? [] : [
+                    t('sources', { count: story.source_count }),
+                    t('evidence', { count: story.evidence_count }),
+                  ]),
+                  relativeTime(story.observed_at),
+                ].join(' · ')}
+                {story.relevance !== null && relevanceVaries ? ` · ${t('relevance')} ${Math.round(story.relevance * 100)}%` : null}
+              </span>
+              {story.incomplete_reasons.map((reason) => (
+                <span key={reason} className="mt-1 block text-xs text-muted-foreground">{incompleteLabel(reason)}</span>
+              ))}
+            </Button>
+            <Attribution story={story} />
+        </li>
   );
 
   return (
@@ -115,7 +160,18 @@ export function StoryList({
         <header className="flex items-center justify-end gap-1 border-b border-border pb-2">{pageActions}</header>
       )}
 
-      {showTrends && trendItems.length ? (
+      {showTrends && trendItems.length && embedded ? (
+        // Embedded trends are a one-line chip strip (title + ratio) so stories stay the focus.
+        <section aria-label={t('trends')} className="flex shrink-0 gap-2 overflow-x-auto pb-1">
+          <h3 className="sr-only">{t('trends')}</h3>
+          {trendItems.slice(0, 5).map((trend) => (
+            <Button key={trend.story_id} type="button" variant="outline" size="sm" title={`${t('current24h')}: ${trend.current_count}`} onClick={(event) => onSelectStory(trend.story_id, event.currentTarget)} className="h-7 max-w-56 shrink-0 gap-1.5 rounded-full px-3 text-xs font-normal">
+              <span className="truncate">{trend.title}</span>
+              <span className="tabular-nums text-muted-foreground">{trend.low_baseline ? t('lowBaseline') : `${trend.ratio?.toFixed(1)}×`}</span>
+            </Button>
+          ))}
+        </section>
+      ) : showTrends && trendItems.length ? (
         <section aria-label={t('trends')} className="space-y-2">
           <h3 className="text-xs font-medium text-muted-foreground">{t('trends')}</h3>
           {trendItems.slice(0, 5).map((trend) => (
@@ -138,41 +194,52 @@ export function StoryList({
           <Button variant="outline" size="sm" onClick={() => { void storiesQuery.refetch(); }}>{t('retry')}</Button>
         </div>
       ) : null}
-      {!storiesQuery.isPending && !storiesQuery.isError && stories.length === 0 ? <p className="text-sm text-muted-foreground">{t('empty')}</p> : null}
+      {!storiesQuery.isPending && !storiesQuery.isError && stories.length === 0 ? (
+        <div className="flex flex-col items-start gap-2 text-sm text-muted-foreground" data-testid="news-empty">
+          {noSources ? (
+            <>
+              <p className="m-0">{t('emptyNoSources')}</p>
+              <Button asChild variant="outline" size="sm"><Link href="/settings/sources">{t('addNewsSource')}</Link></Button>
+            </>
+          ) : (
+            <>
+              <p className="m-0">{t('emptyAwaitingCollection')}</p>
+              <Button variant="outline" size="sm" onClick={() => { void storiesQuery.refetch(); }}>{t('refresh')}</Button>
+            </>
+          )}
+        </div>
+      ) : null}
 
-      <ol className="divide-y divide-border">
-        {stories.map((story: Story) => (
-          <li key={story.id}>
-            <Button type="button" variant="ghost" onClick={(event) => onSelectStory(story.id, event.currentTarget)} className={`h-auto w-full flex-col items-stretch justify-start whitespace-normal text-left text-sm font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-none px-0 py-3`}>
-              <span className="flex items-start justify-between gap-2">
-                <span className="font-medium leading-snug">{shown(story)?.title ?? story.title}</span>
-                <ArrowUpRight aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-              </span>
-              {cleanExcerpt(shown(story)?.title ?? story.title, shown(story)?.excerpt ?? story.excerpt) ? (
-                <span className="mt-1 line-clamp-3 text-sm text-muted-foreground">{cleanExcerpt(shown(story)?.title ?? story.title, shown(story)?.excerpt ?? story.excerpt)}</span>
+      {leadStory ? (
+        // Wide gadgets put the lead left and the list right; narrow ones stack them.
+        <div className="grid shrink-0 gap-x-6 gap-y-2 @[40rem]/gadget:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+          <div data-testid="news-lead" className="min-w-0">
+            <Button type="button" variant="ghost" onClick={(event) => onSelectStory(leadStory.id, event.currentTarget)} className="h-auto w-full flex-col items-stretch justify-start whitespace-normal rounded-none px-0 py-2 text-left font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <span className="text-xl font-semibold leading-snug">{shown(leadStory)?.title ?? leadStory.title}</span>
+              {cleanExcerpt(shown(leadStory)?.title ?? leadStory.title, shown(leadStory)?.excerpt ?? leadStory.excerpt) ? (
+                <span className="mt-2 line-clamp-3 text-sm leading-relaxed text-muted-foreground">{cleanExcerpt(shown(leadStory)?.title ?? leadStory.title, shown(leadStory)?.excerpt ?? leadStory.excerpt)}</span>
               ) : null}
-              {!translation.results.has(story.id) && <TranslationNote issue={translation.issues.get(story.id)} />}
-              <span className="mt-2 block text-xs text-muted-foreground">
-                {[
-                  // A lone source with a lone item carries no information, so only larger counts are shown.
-                  ...(story.source_count === 1 && story.evidence_count === 1 ? [] : [
-                    t('sources', { count: story.source_count }),
-                    t('evidence', { count: story.evidence_count }),
-                  ]),
-                  formatDateTime(story.observed_at, display.locale, display.timezone),
-                ].join(' · ')}
-                {story.relevance !== null && relevanceVaries ? ` · ${t('relevance')} ${Math.round(story.relevance * 100)}%` : null}
+              <span className="mt-3 flex items-baseline gap-1.5 text-xs text-muted-foreground">
+                {/* A single source is not a headline figure: show it as plain meta text instead. */}
+                {leadStory.source_count >= 2 ? (
+                  <>
+                    <span className="text-figure-sm text-foreground">{leadStory.source_count}</span>
+                    <span>{t('sourcesLabel', { count: leadStory.source_count })}</span>
+                  </>
+                ) : <span>{t('sources', { count: leadStory.source_count })}</span>}
+                <span aria-hidden="true">·</span>
+                <span className="tabular-nums" title={formatDateTime(leadStory.observed_at, display.locale, display.timezone)}>{relativeTime(leadStory.observed_at)}</span>
               </span>
-              {story.incomplete_reasons.map((reason) => (
-                <span key={reason} className="mt-1 block text-xs text-muted-foreground">{incompleteLabel(reason)}</span>
-              ))}
             </Button>
-            <Attribution story={story} />
-          </li>
-        ))}
-      </ol>
+            <Attribution story={leadStory} />
+          </div>
+          <ol className="min-w-0 divide-y divide-border">{listStories.map(renderStory)}</ol>
+        </div>
+      ) : (
+        <ol className="shrink-0 divide-y divide-border">{listStories.map(renderStory)}</ol>
+      )}
       {!storiesQuery.isError && storiesQuery.hasNextPage ? (
-        <Button variant="outline" onClick={() => { void storiesQuery.fetchNextPage(); }} disabled={storiesQuery.isFetchingNextPage}>
+        <Button variant="outline" className="mt-1 shrink-0" onClick={() => { void storiesQuery.fetchNextPage(); }} disabled={storiesQuery.isFetchingNextPage}>
           {storiesQuery.isFetchingNextPage ? t('loading') : t('loadMore')}
         </Button>
       ) : null}

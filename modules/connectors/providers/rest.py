@@ -23,6 +23,7 @@ import httpx
 
 from modules.connectors.providers.feed_catalog import _retry_deadline
 from modules.connectors.public import ProviderRateLimited, overlap_floor
+from modules.connectors.selection import SKEW
 
 MAX_PAGES = 10
 MAX_RECORDS = 500
@@ -341,7 +342,7 @@ async def collect_rest(
     origin = _origin(str(config.url))
     if _origin(start) != origin:
         raise UnsafeDestination("cross_origin_pagination")
-    floor = overlap_floor(cursor)
+    floor = overlap_floor(cursor, SKEW)  # small skew margin; dedup drops already-stored rows
     skip = {h for h in (resume.ids if resume is not None else [])}
     seen: set[str] = set()
     seen_ids: set[str] = set()

@@ -55,14 +55,13 @@ export function useWorkspaceSession() {
 }
 
 /**
- * Button that toggles the quick-chat Sheet drawer and listens for Cmd+J / Ctrl+J.
+ * Registers the Cmd+J / Ctrl+J shortcut that toggles the quick-chat Sheet drawer. Renders nothing: the header
+ * button was removed (Quick chat stays reachable here and from the command palette).
  *
- * @returns Accessible button triggering chat drawer.
+ * @returns null.
  */
-function ChatTriggerButton() {
-  const t = useTranslations('chat');
-  const chatCtrl = useChatController();
-  const { toggleDrawer } = chatCtrl;
+function QuickChatShortcut() {
+  const { toggleDrawer } = useChatController();
   const pathname = usePathname();
 
   useEffect(() => {
@@ -79,19 +78,7 @@ function ChatTriggerButton() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [toggleDrawer, pathname]);
 
-  return (
-    <Button
-      type="button"
-      variant="outline"
-      onClick={toggleDrawer}
-      className="text-sm font-semibold"
-      title={t('quickChat')}
-      aria-label={t('quickChat')}
-    >
-      <MessageSquare className="size-4 text-muted-foreground" aria-hidden="true" />
-      <span className="chat-trigger-label hidden sm:inline">{t('quickChat')}</span>
-    </Button>
-  );
+  return null;
 }
 
 /**
@@ -292,6 +279,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
           </TooltipProvider>
           <div className="workspace-column">
           <header className="topbar">
+            <Link href="/dashboard" className="brand-name sm:hidden" aria-label="Umwelt-OS"><UmweltMark /></Link>
             <ConnectionFooter
               apiStatus={!online ? 'clientOffline' : apiHealth.isFetching && apiHealth.isError ? 'reconnecting' : apiHealth.isPending ? 'connecting' : apiHealth.isError ? 'unavailable' : 'connected'}
               realtimeStatus={realtime.status}
@@ -299,10 +287,11 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
               retrying={apiHealth.isFetching}
             />
             <div className="top-actions">
-              {pathname.startsWith('/dashboard/') && visibleMainNavigation.some((item) => item.id === 'chat') && <ChatTriggerButton />}
+              {pathname.startsWith('/dashboard/') && visibleMainNavigation.some((item) => item.id === 'chat') && <QuickChatShortcut />}
               <CommandPalette />
-              <NotificationBell />
-              <WorkspaceSwitcher />
+              {/* Phones (<640px) get these inside the avatar menu to keep the header to logo, search and avatar. */}
+              <div className="hidden sm:contents"><NotificationBell /></div>
+              <div className="hidden sm:contents"><WorkspaceSwitcher /></div>
               <UserMenu triggerRef={menuTriggerRef} onOpenPreferences={() => setPreferencesOpen(true)} onOpenAccount={() => setAccountOpen(true)} onOpenChangePassword={() => setPasswordOpen(true)} onSignOut={() => logout.mutate()} signOutPending={logout.isPending} />
             </div>
           </header>

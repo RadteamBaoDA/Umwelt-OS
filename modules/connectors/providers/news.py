@@ -33,6 +33,7 @@ from modules.connectors.providers.macro import (
     content_version,
     decode_json,
 )
+from modules.connectors.sections import SECTION_CATALOG
 from modules.ingestion.schemas import IngestionRecord
 
 MAX_FEED_BYTES = 1024 * 1024
@@ -99,9 +100,29 @@ def preset_url(provider: str, configuration: Mapping[str, Any] | None = None) ->
         raise ProviderPayloadError("provider_scope_invalid")
     return url
 
+
+def section_urls(provider: str, configuration: Mapping[str, Any] | None = None) -> list[tuple[str, str]]:
+    """Return ``(slug, url)`` for each feed to GET this sync, in the owner's order.
+
+    A catalog provider with no saved ``feed_sections`` yields only its default section, whose URL is the
+    legacy ``FEED_URLS`` entry, so an unconfigured source requests exactly what it always did. Slugs are
+    resolved through the server catalog only; an unknown slug (config edited out of band) is
+    ``provider_scope_invalid``. Providers without a catalog return an empty list.
+    """
+    catalog = SECTION_CATALOG.get(provider)
+    if catalog is None:
+        return []
+    chosen = (configuration or {}).get("feed_sections") or [catalog.default]
+    known = catalog.by_slug()
+    if any(slug not in known for slug in chosen):
+        raise ProviderPayloadError("provider_scope_invalid")
+    return [(slug, known[slug].url) for slug in chosen]
+
+
 HN_TOP_URL = "https://hacker-news.firebaseio.com/v0/topstories.json"
 HN_ITEM_URL = "https://hacker-news.firebaseio.com/v0/item/{id}.json"
-HN_MAX_ITEMS = 10  # items fetched per run; one extra call lists the ids (11 sends total)
+HN_MAX_ITEMS = 10  # items fetched per run by default; one extra call lists the ids (11 sends total)
+HN_HARD_MAX_ITEMS = 30  # owner ``max_items`` fan-out ceiling (quota-bound; parser and mapper refuse more)
 _HN_MAX_BODY = 64 * 1024
 
 
@@ -272,7 +293,10 @@ def _scan_items(root: ET.Element) -> list[ET.Element]:
 
 
 def map_feed(provider: str, body: bytes, collected_at: datetime) -> list[IngestionRecord]:
-    """Map one RSS 2.0 / Atom body for a fixed preset; order-independent, no fetch of linked articles."""
+    """Map one RSS 2.0 / Atom body for a fixed preset to up to ``MAX_FEED_ITEMS_SCANNED`` deduped records, newest first.
+
+    Order-independent, no fetch of linked articles, always ``returned_snapshot`` coverage; capping is the caller's job.
+    """
     if provider not in FEED_URLS and provider != "google_news":
         raise ProviderPayloadError("provider_scope_invalid")
     items = _scan_items(safe_xml_root(body))
@@ -323,19 +347,9 @@ def map_feed(provider: str, body: bytes, collected_at: datetime) -> list[Ingesti
     ranked = sorted(by_id.values(), key=lambda pair: (pair[0][0], pair[0][1]), reverse=True)
     if not ranked:
         raise ProviderPayloadError("news_feed_no_items", "incomplete")
-    truncated = len(ranked) > MAX_FEED_ITEMS
-    records = [rec for _, rec in ranked[:MAX_FEED_ITEMS]]
-    if truncated:
-        records = [rec.model_copy(update={"metadata": _with_coverage(rec.metadata)}) for rec in records]
-    return records
-
-
-def _with_coverage(metadata: dict[str, Any]) -> dict[str, Any]:
-    out = dict(metadata)
-    record = dict(out["provider_record"])
-    record["coverage"] = "truncated"
-    out["provider_record"] = record
-    return out
+    # Every scanned item is returned (newest first): the runner's selection step applies the cap, so a record's
+    # metadata - hashed into record_hash - never depends on how many items the feed held on a given poll.
+    return [rec for _, rec in ranked]
 
 
 # --------------------------------------------------------------------------- conditional GET
@@ -397,8 +411,9 @@ def map_feed_response(provider: str, status: int, body: bytes, collected_at: dat
 
 # --------------------------------------------------------------------------- Hacker News seam
 
-def hn_top_request() -> ProviderRequest:
-    return ProviderRequest("GET", HN_TOP_URL)
+def hn_top_request(url: str = HN_TOP_URL) -> ProviderRequest:
+    """Id-listing request; ``url`` is a server-built ``<list>stories.json`` URL (default: top stories)."""
+    return ProviderRequest("GET", url)
 
 
 def hn_item_request(item_id: int) -> ProviderRequest:
@@ -407,20 +422,21 @@ def hn_item_request(item_id: int) -> ProviderRequest:
     return ProviderRequest("GET", HN_ITEM_URL.format(id=item_id))
 
 
-def parse_hn_top_ids(body: bytes) -> tuple[int, ...]:
-    """First ``HN_MAX_ITEMS`` distinct positive ids, in provider rank order; anything else is an error."""
+def parse_hn_top_ids(body: bytes, limit: int = HN_MAX_ITEMS) -> tuple[int, ...]:
+    """First ``limit`` (<= ``HN_HARD_MAX_ITEMS``) distinct positive ids, in provider rank order; else an error."""
+    limit = min(limit, HN_HARD_MAX_ITEMS)
     if len(body) > _HN_MAX_BODY:
         raise ProviderPayloadError("provider_response_too_large")
     payload = decode_json(body)
     if not isinstance(payload, list) or not payload:
         raise ProviderPayloadError("hn_top_response_invalid")
     ids: list[int] = []
-    for raw in payload[: HN_MAX_ITEMS * 4]:
+    for raw in payload[: limit * 4]:
         if type(raw) is not int or raw <= 0:
             raise ProviderPayloadError("hn_top_response_invalid")
         if raw not in ids:
             ids.append(raw)
-        if len(ids) == HN_MAX_ITEMS:
+        if len(ids) == limit:
             break
     return tuple(ids)
 
@@ -443,13 +459,15 @@ def _hn_skip_reason(item: object) -> str | None:
     return None
 
 
-def map_hn_stories(ids: tuple[int, ...], bodies: Mapping[int, bytes | None], collected_at: datetime) -> HnResult:
+def map_hn_stories(
+    ids: tuple[int, ...], bodies: Mapping[int, bytes | None], collected_at: datetime, limit: int = HN_MAX_ITEMS,
+) -> HnResult:
     """Map fetched items (``None`` body = not fetched/404). Removed/dead/non-story items are skipped and counted.
 
     The article ``url`` is kept as a citation only; Ask-HN style stories without one keep their own text.
     Score/comment counts are volatile and excluded from the version.
     """
-    if len(ids) > HN_MAX_ITEMS:
+    if len(ids) > min(limit, HN_HARD_MAX_ITEMS):  # fan-out above the owner's (or default) count is refused
         raise ProviderPayloadError("hn_fanout_exceeded")
     skipped: dict[str, int] = {}
     records: list[IngestionRecord] = []

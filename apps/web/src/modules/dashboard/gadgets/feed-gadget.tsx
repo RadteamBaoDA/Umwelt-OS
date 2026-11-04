@@ -9,6 +9,7 @@ import {
   RotateCw,
   Rss,
   Send,
+  ListFilter,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useLocale, useTranslations } from 'next-intl';
@@ -17,6 +18,7 @@ import { useReportGadgetFreshness } from '../gadget-freshness';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { formatDateTime } from '@/core/i18n';
@@ -26,6 +28,8 @@ import { useChatController } from '@/core/app-shell/chat-controller';
 import { documentKeys, listGadgetDocumentProjections, setGadgetDocumentInteraction } from '@/modules/knowledge/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { NewsFeed } from './news-feed';
+import { Sparkline } from './sparkline';
+import { bucketByDay, formatRelativeTime } from './relative-time';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { dashboardKeys, listGadgetSources, type GadgetInstance } from '../api';
 
@@ -174,6 +178,8 @@ function FeedStream({
       : 'document';
 
   const [onlyUnread, setOnlyUnread] = useState<boolean>(false);
+  // Row checkboxes appear only in selection mode so the resting list stays quiet.
+  const [selectMode, setSelectMode] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [language, setLanguage] = useState('any');
@@ -295,7 +301,13 @@ function FeedStream({
   }, [initialItems, docsQuery.data, defaultSourceType, isTelegram]);
 
   const unreadCount = feedItems.filter((i) => !i.read).length;
-  useReportGadgetFreshness(feedItems.reduce<string | null>((max, i) => (i.collectedAt && (!max || i.collectedAt > max) ? i.collectedAt : max), null));
+  // Item count moves to the frame footer next to freshness.
+  useReportGadgetFreshness(
+    feedItems.reduce<string | null>((max, i) => (i.collectedAt && (!max || i.collectedAt > max) ? i.collectedAt : max), null),
+    feedItems.length > 0 ? t('gadgetItemCount', { count: feedItems.length }) : null,
+  );
+  // Client-side items-per-day series from the loaded items; the spark shows only with 2+ days.
+  const volume = useMemo(() => bucketByDay(feedItems.map((i) => i.timestamp)), [feedItems]);
   const selectedTelegramItems = Object.values(selectedTelegram);
   const currentTelegramItems = new Map(feedItems.map((item) => [item.id, item]));
   const staleTelegramSelections = selectedTelegramItems.filter((item) =>
@@ -309,6 +321,7 @@ function FeedStream({
     && (!needle || `${i.title} ${i.excerpt ?? ''}`.toLowerCase().includes(needle)),
   );
   const filtering = onlyUnread || sourceFilter !== 'all' || needle !== '';
+  const activeFilterCount = Number(needle !== '') + Number(sourceFilter !== 'all') + Number(language !== 'any') + Number(timeWindow !== 'any');
   const serverFiltered = language !== 'any' || timeWindow !== 'any';
   // Search/language/time controls are noise on a settled empty feed with nothing active to clear.
   const showFilters = docsQuery.isLoading || feedItems.length > 0 || filtering || serverFiltered;
@@ -325,32 +338,197 @@ function FeedStream({
     void docsQuery.fetchNextPage();
   }, [displayedItems.length, initialItems, docsQuery, serverScope, filtering]);
 
-  return (
-    <div ref={rootRef} tabIndex={-1} className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-y-auto overflow-x-hidden focus:outline-none">
-      {/* Top action bar */}
-      <div className="flex items-center justify-between border-b border-border pb-2 text-xs">
-        <div className="flex items-center gap-2">
+  /** Per-item actions (read, save, source, details, Ask AI) revealed on hover/focus so rows stay quiet at rest. */
+  const renderActions = (item: FeedStreamItem) => {
+    const isRead = !!item.read;
+    return (
+      <div className="absolute right-0 top-0 flex flex-wrap items-center gap-1 bg-card pl-2 text-xs pointer-coarse:static pointer-coarse:w-full pointer-coarse:bg-transparent pointer-coarse:pl-0 pointer-coarse:opacity-100 text-muted-foreground opacity-0 transition-opacity group-hover/item:opacity-100 group-focus-within/item:opacity-100">
+        {isTelegram && item.documentVersionId && item.sourceId && (
           <Button
             type="button"
-            variant={onlyUnread ? 'default' : 'outline'}
+            variant="ghost"
             size="sm"
-            aria-pressed={onlyUnread}
-            onClick={() => setOnlyUnread((prev) => !prev)}
+            className="h-6 px-2 text-xs"
+            onClick={() => openDrawer({ context: { kind: 'selection', items: [{
+              sourceId: item.sourceId!, documentId: item.id,
+              documentVersionId: item.documentVersionId!,
+            }] } })}
+          >{t('askAboutMessage')}</Button>
+        )}
+        {item.versionNumber !== undefined && <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-6 px-2 text-xs"
+          disabled={interactionMutation.isPending}
+          onClick={() => interactionMutation.mutate({ id: item.id, versionNumber: item.versionNumber!, read: !item.read })}
+        >{isRead ? t('markUnread') : t('markRead')}</Button>}
+        {item.versionNumber !== undefined && <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-6"
+          disabled={interactionMutation.isPending}
+          onClick={() => interactionMutation.mutate({ id: item.id, versionNumber: item.versionNumber!, bookmarked: !item.bookmarked })}
+          aria-pressed={!!item.bookmarked}
+          aria-label={item.bookmarked ? t('removeBookmark') : t('bookmark')}
+        ><Bookmark className="h-3.5 w-3.5" fill={item.bookmarked ? 'currentColor' : 'none'} aria-hidden="true" /></Button>}
+        {safeHttpUrl(item.url) && (
+          <a
+            href={safeHttpUrl(item.url)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-0.5 font-medium hover:text-foreground"
           >
-            {t('unreadOnly')} ({unreadCount})
-          </Button>
-          {unreadCount > 0 && (
-            <span className="px-2 rounded-full text-xs font-semibold bg-primary/20 text-primary">
-            {t('unreadCount', { count: unreadCount })}
-            </span>
-          )}
-        </div>
+            <span>{t('sourceLink')}</span>
+            <ExternalLink className="w-2.5 h-2.5" />
+          </a>
+        )}
+        <Link href={`/knowledge/documents/${item.id}`} className="font-medium hover:text-foreground">{t('detailLink')}</Link>
+      </div>
+    );
+  };
 
-        <div className="flex items-center gap-1">
+  /** Selection checkbox; rendered only while selection mode is on, capped at 32 identities. */
+  const renderCheckbox = (item: FeedStreamItem) => selectMode && item.documentVersionId && item.sourceId ? (
+    <Checkbox
+      aria-label={t('selectRecord', { title: item.title })}
+      checked={Boolean(selectedTelegram[item.id])}
+      onCheckedChange={(next) => setSelectedTelegram((current) => {
+        if (next !== true) {
+          const remaining = { ...current };
+          delete remaining[item.id];
+          return remaining;
+        }
+        if (Object.keys(current).length >= 32) return current;
+        return { ...current, [item.id]: {
+          sourceId: item.sourceId!,
+          documentId: item.id,
+          documentVersionId: item.documentVersionId!,
+          versionNumber: item.versionNumber!,
+        } };
+      })}
+    />
+  ) : null;
+
+  /** Single muted meta line: source/channel, then (for Telegram) message id. Time is rendered separately. */
+  const metaParts = (item: FeedStreamItem) => [
+    isTelegram ? item.channelLabel : item.author,
+    isTelegram && item.messageId ? t('telegramMessageId', { id: item.messageId }) : null,
+  ].filter(Boolean).join(' · ');
+
+  /** Full timestamps for a tooltip; Telegram folds published/collected/edited lines into one title. */
+  const timeTitle = (item: FeedStreamItem) => isTelegram
+    ? [
+      item.publishedAt && t('telegramPublishedAt', { time: formatDateTime(item.publishedAt, display.locale, display.timezone) }),
+      item.collectedAt && t('telegramCollectedAt', { time: formatDateTime(item.collectedAt, display.locale, display.timezone) }),
+      item.editedAt && t('telegramEditedAt', { time: formatDateTime(item.editedAt, display.locale, display.timezone) }),
+    ].filter(Boolean).join('\n')
+    : formatDateTime(item.timestamp, display.locale, display.timezone);
+
+  /** Unread marker: a 6px ink dot with screen-reader text, replacing the old per-item pill. */
+  const unreadDot = (item: FeedStreamItem) => item.read ? null : (
+    <span className="inline-block size-1.5 shrink-0 self-center rounded-full bg-foreground"><span className="sr-only">{t('unreadBadge', { count: 1 })}</span></span>
+  );
+
+  /** Telegram media placeholder list shared by lead and rows. */
+  const mediaList = (item: FeedStreamItem) => isTelegram && item.media && item.media.length > 0 ? (
+    <ul aria-label={t('telegramMedia')} className="space-y-0.5 text-xs text-muted-foreground">
+      {item.media.map((media, index) => (
+        <li key={`${media.kind}:${index}`}>
+          {t('telegramMediaPlaceholder', { kind: t(`telegramMediaKind_${media.kind}`), count: media.count })}
+          {media.caption ? ` · ${media.caption}` : ''}
+        </li>
+      ))}
+    </ul>
+  ) : null;
+
+  const [lead, ...rest] = displayedItems;
+
+  return (
+    <div ref={rootRef} tabIndex={-1} className="flex h-full flex-col gap-3 overflow-y-auto overflow-x-hidden bg-card px-3 pb-3 pt-2 text-card-foreground focus:outline-none">
+      {/* One quiet toolbar: unread toggle, volume spark, Filter popover, selection mode, refresh. */}
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <Button
+          type="button"
+          variant={onlyUnread ? 'default' : 'ghost'}
+          size="sm"
+          className="h-8 px-2 text-xs"
+          aria-pressed={onlyUnread}
+          onClick={() => setOnlyUnread((prev) => !prev)}
+        >
+          {t('unreadOnly')} ({unreadCount})
+        </Button>
+
+        <div className="flex min-w-0 items-center gap-1">
+          {volume.length >= 2 && (
+            <span className="w-20 shrink-0" title={t('feedVolume')}><Sparkline data={volume} height={24} width={80} line /></span>
+          )}
+          {showFilters && (
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button type="button" variant="ghost" size="sm" className="h-8 gap-1 px-2 text-xs">
+                  <ListFilter className="h-3.5 w-3.5" aria-hidden="true" />
+                  {activeFilterCount > 0 ? t('feedFilterActive', { count: activeFilterCount }) : t('feedFilter')}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-72 space-y-2 p-3">
+                <Input
+                  type="search"
+                  value={searchText}
+                  onChange={(event) => setSearchText(event.target.value)}
+                  aria-label={t('feedSearch')}
+                  placeholder={t('feedSearch')}
+                  className="h-9 text-xs"
+                />
+                {sourceIds.length > 1 && (
+                  <Select value={sourceFilter} onValueChange={setSourceFilter}>
+                    <SelectTrigger aria-label={t('feedSourceLabel')} className="h-9 w-full text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all" className="text-xs">{t('feedSourceAll')}</SelectItem>
+                      {sourceIds.map((id) => (
+                        <SelectItem key={id} value={id} className="text-xs">
+                          {sourcesQuery.data?.items.find((source) => source.id === id)?.name ?? t('feedSourceUnknown')}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                <Select value={language} onValueChange={setLanguage}>
+                  <SelectTrigger aria-label={t('feedLanguageLabel')} className="h-9 w-full text-xs"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="any" className="text-xs">{t('feedLanguageAny')}</SelectItem>
+                    {FEED_LANGUAGES.map((code) => <SelectItem key={code} value={code} className="text-xs">{languageLabel(locale, code)}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <Select value={timeWindow} onValueChange={setTimeWindow}>
+                  <SelectTrigger aria-label={t('feedWindowLabel')} className="h-9 w-full text-xs"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="any" className="text-xs">{t('feedWindowAny')}</SelectItem>
+                    <SelectItem value="24h" className="text-xs">{t('feedWindow24h')}</SelectItem>
+                    <SelectItem value="7d" className="text-xs">{t('feedWindow7d')}</SelectItem>
+                    <SelectItem value="30d" className="text-xs">{t('feedWindow30d')}</SelectItem>
+                  </SelectContent>
+                </Select>
+                {filtering && <p className="text-xs text-muted-foreground">{t('feedFiltersNote')}</p>}
+              </PopoverContent>
+            </Popover>
+          )}
+          {feedItems.some((item) => item.documentVersionId && item.sourceId) && (
+            <Button
+              type="button"
+              variant={selectMode ? 'default' : 'ghost'}
+              size="sm"
+              className="h-8 px-2 text-xs"
+              aria-pressed={selectMode}
+              onClick={() => { setSelectMode((prev) => !prev); setSelectedTelegram({}); }}
+            >{selectMode ? t('feedSelectDone') : t('feedSelectMode')}</Button>
+          )}
           <Button
             type="button"
             variant="ghost"
             size="icon"
+            className="size-8"
             onClick={() => docsQuery.refetch()}
             disabled={docsQuery.isFetching}
             aria-label={t('feedRefresh')}
@@ -359,56 +537,6 @@ function FeedStream({
           </Button>
         </div>
       </div>
-
-      {/* Search and source filters apply to the loaded items only */}
-      {showFilters && (
-      <div className="flex flex-wrap items-center gap-2">
-        <Input
-          type="search"
-          value={searchText}
-          onChange={(event) => setSearchText(event.target.value)}
-          aria-label={t('feedSearch')}
-          placeholder={t('feedSearch')}
-          className="h-11 min-w-0 flex-1 basis-40 text-xs"
-        />
-        {sourceIds.length > 1 && (
-          <Select value={sourceFilter} onValueChange={setSourceFilter}>
-            <SelectTrigger aria-label={t('feedSourceLabel')} className="h-11 w-auto min-w-36 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all" className="text-xs">{t('feedSourceAll')}</SelectItem>
-              {sourceIds.map((id) => (
-                <SelectItem key={id} value={id} className="text-xs">
-                  {sourcesQuery.data?.items.find((source) => source.id === id)?.name ?? t('feedSourceUnknown')}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-        <Select value={language} onValueChange={setLanguage}>
-          <SelectTrigger aria-label={t('feedLanguageLabel')} className="h-11 w-auto min-w-28 text-xs">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="any" className="text-xs">{t('feedLanguageAny')}</SelectItem>
-            {FEED_LANGUAGES.map((code) => <SelectItem key={code} value={code} className="text-xs">{languageLabel(locale, code)}</SelectItem>)}
-          </SelectContent>
-        </Select>
-        <Select value={timeWindow} onValueChange={setTimeWindow}>
-          <SelectTrigger aria-label={t('feedWindowLabel')} className="h-11 w-auto min-w-28 text-xs">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="any" className="text-xs">{t('feedWindowAny')}</SelectItem>
-            <SelectItem value="24h" className="text-xs">{t('feedWindow24h')}</SelectItem>
-            <SelectItem value="7d" className="text-xs">{t('feedWindow7d')}</SelectItem>
-            <SelectItem value="30d" className="text-xs">{t('feedWindow30d')}</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-      )}
-      {filtering && <p className="text-xs text-muted-foreground">{t('feedFiltersNote')}</p>}
 
       {selectedTelegramItems.length > 0 && (
         <div role="group" aria-label={t('feedBulkBar')} className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-background p-2 text-xs">
@@ -489,159 +617,47 @@ function FeedStream({
               : t('feedEmptyDetail')}`} action={needle || sourceFilter !== 'all' || serverFiltered || onlyUnread ? undefined : { href: '/settings/sources', label: t('gadgetConfigureAction') }} className="px-0" />
       )}
 
-      {/* Stream Items List */}
-      {displayedItems.length > 0 && (
-        <div className="flex-1 overflow-y-auto space-y-2 min-h-0 pr-0.5">
-          {displayedItems.map((item) => {
-            const isRead = !!item.read;
-            const formattedTime = formatDateTime(
-              item.timestamp,
-              display.locale,
-              display.timezone,
-            );
+      {/* Lead + list: one DOM per item; the container query turns the first item into a lead on wide gadgets. */}
+      {lead && (
+        <div className="grid min-h-0 gap-x-6 gap-y-1 @[40rem]/gadget:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+          <article
+            data-testid="feed-lead"
+            className="group/item relative flex min-w-0 items-baseline gap-2 py-1.5 @[40rem]/gadget:block @[40rem]/gadget:py-0 @[40rem]/gadget:pr-2"
+          >
+            {renderCheckbox(lead)}
+            <div className="flex min-w-0 flex-1 items-baseline gap-2 @[40rem]/gadget:block">
+              <h3 className={`flex min-w-0 flex-1 items-baseline gap-1.5 text-sm leading-snug @[40rem]/gadget:text-xl ${lead.read ? 'font-normal text-muted-foreground' : 'font-semibold text-foreground'}`}>
+                {unreadDot(lead)}
+                <Link href={`/knowledge/documents/${lead.id}`} className="min-w-0 truncate hover:underline @[40rem]/gadget:line-clamp-2 @[40rem]/gadget:whitespace-normal">{lead.title}</Link>
+              </h3>
+              {lead.excerpt && <p className="mt-2 hidden line-clamp-3 text-sm leading-relaxed text-muted-foreground @[40rem]/gadget:block">{lead.excerpt}</p>}
+              <p className="shrink-0 text-xs text-muted-foreground @[40rem]/gadget:mt-2">
+                {metaParts(lead) ? `${metaParts(lead)} · ` : ''}
+                <time className="tabular-nums" dateTime={lead.timestamp} title={timeTitle(lead)}>{formatRelativeTime(lead.timestamp, display.locale)}</time>
+              </p>
+              <div className="hidden @[40rem]/gadget:block">{mediaList(lead)}</div>
+            </div>
+            {renderActions(lead)}
+          </article>
 
-            return (
-              <article
-                key={item.id}
-                className={`p-2.5 rounded-lg border transition-all space-y-1.5 ${
-                  isRead
-                    ? 'border-border/60 bg-card/60 opacity-80'
-                    : 'border-border bg-card hover:bg-muted/15'
-                }`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="p-1 rounded bg-muted/30 text-primary shrink-0">
-                      {getFeedSourceIcon(item.sourceType)}
-                    </span>
-                    <h5
-                      className={`text-xs leading-snug line-clamp-1 ${
-                        isRead ? 'font-normal text-muted-foreground' : 'font-semibold text-foreground'
-                      }`}
-                    >
-                      {item.title}
-                    </h5>
-                  </div>
-
-                  {!isRead && (
-                    <span className="px-2 rounded text-xs font-semibold bg-primary/20 text-primary shrink-0">
-                      {t('unreadBadge')}
-                    </span>
-                  )}
+          <ul className="min-w-0 divide-y divide-border/50">
+            {rest.map((item) => (
+              <li key={item.id} className="group/item relative flex flex-wrap items-baseline gap-2 py-1.5">
+                {renderCheckbox(item)}
+                {unreadDot(item)}
+                <div className="min-w-0 flex-1">
+                  <Link
+                    href={`/knowledge/documents/${item.id}`}
+                    className={`block truncate text-sm leading-snug hover:underline ${item.read ? 'font-normal text-muted-foreground' : 'font-semibold text-foreground'}`}
+                  >{item.title}</Link>
+                  {isTelegram && metaParts(item) && <p className="truncate text-xs text-muted-foreground">{metaParts(item)}</p>}
+                  {mediaList(item)}
                 </div>
-
-                {isTelegram && (item.channelLabel || item.messageId) && (
-                  <p className="text-xs text-muted-foreground">
-                    {[item.channelLabel, item.messageId ? t('telegramMessageId', { id: item.messageId }) : null].filter(Boolean).join(' · ')}
-                  </p>
-                )}
-
-                {item.documentVersionId && item.sourceId && (
-                  <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-                    <Checkbox
-                      aria-label={t('selectRecord', { title: item.title })}
-                      checked={Boolean(selectedTelegram[item.id])}
-                      onCheckedChange={(next) => setSelectedTelegram((current) => {
-                        if (next !== true) {
-                          const next = { ...current };
-                          delete next[item.id];
-                          return next;
-                        }
-                        if (Object.keys(current).length >= 32) return current;
-                        return { ...current, [item.id]: {
-                          sourceId: item.sourceId!,
-                          documentId: item.id,
-                          documentVersionId: item.documentVersionId!,
-                          versionNumber: item.versionNumber!,
-                        } };
-                      })}
-                    />
-                    {t('selectRow')}
-                  </label>
-                )}
-
-                {item.excerpt && (
-                  <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
-                    {item.excerpt}
-                  </p>
-                )}
-
-                {isTelegram && item.media && item.media.length > 0 && (
-                  <ul aria-label={t('telegramMedia')} className="space-y-1 text-xs text-muted-foreground">
-                    {item.media.map((media, index) => (
-                      <li key={`${media.kind}:${index}`}>
-                        {t('telegramMediaPlaceholder', { kind: t(`telegramMediaKind_${media.kind}`), count: media.count })}
-                        {media.caption ? ` · ${media.caption}` : ''}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-
-                {/* Footer metadata & actions */}
-                <div className="flex items-center justify-between text-xs text-muted-foreground pt-1 border-t border-border/40">
-                  {isTelegram ? (
-                    <div className="space-y-0.5">
-                      {item.publishedAt && <p>{t('telegramPublishedAt', { time: formatDateTime(item.publishedAt, display.locale, display.timezone) })}</p>}
-                      {item.collectedAt && <p>{t('telegramCollectedAt', { time: formatDateTime(item.collectedAt, display.locale, display.timezone) })}</p>}
-                      {item.editedAt && <p>{t('telegramEditedAt', { time: formatDateTime(item.editedAt, display.locale, display.timezone) })}</p>}
-                    </div>
-                  ) : <span className="tabular-nums">{formattedTime}</span>}
-
-                  <div className="flex items-center gap-2">
-                    {isTelegram && item.documentVersionId && item.sourceId && (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 px-2 text-xs"
-                        onClick={() => openDrawer({ context: { kind: 'selection', items: [{
-                          sourceId: item.sourceId!, documentId: item.id,
-                          documentVersionId: item.documentVersionId!,
-                        }] } })}
-                      >{t('askAboutMessage')}</Button>
-                    )}
-                    {item.versionNumber !== undefined && <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      disabled={interactionMutation.isPending}
-                      onClick={() => interactionMutation.mutate({ id: item.id, versionNumber: item.versionNumber!, read: !item.read })}
-                    >
-                      {isRead ? t('markUnread') : t('markRead')}
-                    </Button>}
-                    {item.versionNumber !== undefined && <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      disabled={interactionMutation.isPending}
-                      onClick={() => interactionMutation.mutate({ id: item.id, versionNumber: item.versionNumber!, bookmarked: !item.bookmarked })}
-                      aria-pressed={!!item.bookmarked}
-                      aria-label={item.bookmarked ? t('removeBookmark') : t('bookmark')}
-                    ><Bookmark className="h-3.5 w-3.5" fill={item.bookmarked ? 'currentColor' : 'none'} aria-hidden="true" /></Button>}
-
-                    {safeHttpUrl(item.url) && (
-                      <a
-                        href={safeHttpUrl(item.url)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-0.5 hover:text-primary font-medium"
-                      >
-                        <span>{t('sourceLink')}</span>
-                        <ExternalLink className="w-2.5 h-2.5" />
-                      </a>
-                    )}
-
-                    <Link
-                      href={`/knowledge/documents/${item.id}`}
-                      className="hover:text-primary font-medium"
-                    >
-                      {t('detailLink')}
-                    </Link>
-                  </div>
-                </div>
-              </article>
-            );
-          })}
+                <time className="shrink-0 text-xs tabular-nums text-muted-foreground" dateTime={item.timestamp} title={timeTitle(item)}>{formatRelativeTime(item.timestamp, display.locale)}</time>
+                {renderActions(item)}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

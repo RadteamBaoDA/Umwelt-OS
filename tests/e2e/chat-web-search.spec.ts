@@ -40,12 +40,11 @@ test.describe('web search toggle', () => {
   test('is absent in the quick-chat drawer', async ({ page }) => {
     await mockChat(page, { configured: true });
     await page.goto('/');
-    // The header quick-chat button only renders on /dashboard/<id>; the command palette opens the drawer from anywhere.
+    // The quick-chat shortcut (QuickChatShortcut in workspace-shell) only renders on /dashboard/<id>; the command palette opens the drawer from anywhere.
     await page.getByRole('button', { name: 'Search or run a command' }).click();
     await page.getByText('Quick chat', { exact: true }).first().click();
     await expect(page.getByRole('dialog')).toBeVisible();
-    // The drawer has no + menu, so the web search item cannot exist.
-    await expect(page.getByRole('button', { name: 'Add context, files or options' })).toHaveCount(0);
+    // The drawer + menu holds no web search item.
     await expect(page.locator('#chat-web-search')).toHaveCount(0);
   });
 

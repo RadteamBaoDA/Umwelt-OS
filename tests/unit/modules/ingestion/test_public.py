@@ -457,3 +457,36 @@ class TestStatusVerificationAndRetry:
             with pytest.raises(HTTPException) as exc_info:
                 await retry_run(session, run_id, scope=SCOPE, multi_workspace_enabled=False)
             assert exc_info.value.status_code == 409
+
+
+class TestAcceptCollectionNoChangesCursorGuard:
+    """accept_collection_no_changes refuses a cursor write when the stored cursor moved since the walk began."""
+
+    @pytest.mark.asyncio
+    async def test_no_change_settlement_rejects_moved_cursor(self) -> None:
+        """expected_cursor mismatch -> 409 before any write; cursor stays at the concurrent value."""
+        from modules.ingestion.public import CollectionStateUpdate, accept_collection_no_changes
+
+        session = AsyncMock()
+        source_id = uuid4()
+        source = ConnectorSource(
+            workspace_id=WORKSPACE_ID, local_only=False, id=source_id, type="connector", status="active",
+            generation=1, configuration={}, provider="web",
+        )
+        state = SourceIngestionState(source_id=source_id, cursor="B")
+        session.scalar.return_value = state
+        settle = AsyncMock()
+        with patch("modules.ingestion.public._lock_source_projection", return_value=_projection(source)), \
+             patch("modules.connectors.public.is_native_provider", return_value=False), \
+             patch("modules.connectors.public.require_collection_fence", return_value=True), \
+             patch("modules.ingestion.public._authorize_collection", AsyncMock()), \
+             patch("modules.ingestion.public._settle_request", settle), \
+             patch("modules.ingestion.public.commit_with_replay", AsyncMock()) as commit,              pytest.raises(HTTPException) as exc_info:
+            await accept_collection_no_changes(
+                session, source_id=source_id, source_generation=1, connector_revision=1,
+                request_ref=MagicMock(), scope=SCOPE, multi_workspace_enabled=False,
+                state_update=CollectionStateUpdate(cursor_after="C"), expected_cursor="A")
+        assert exc_info.value.status_code == 409
+        assert state.cursor == "B"
+        settle.assert_not_awaited()
+        commit.assert_not_awaited()

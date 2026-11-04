@@ -28,6 +28,6 @@ apps/web/public/vendor/genui/
 .data/
 
 # Screenshot/design-review capture output (tests/e2e/screens-capture.spec.ts, taste-skill)
-.taste-skill/**/*.png
-.taste-skill/**/console.txt
-.taste-skill/**/map-diagnosis.json
+**/.taste-skill/**/*.png
+**/.taste-skill/**/console.txt
+**/.taste-skill/**/map-diagnosis.json

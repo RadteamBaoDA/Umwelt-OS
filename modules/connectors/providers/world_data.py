@@ -382,14 +382,16 @@ async def collect_world_data(
 PURE_ADAPTERS: dict[str, PureAdapter] = {**MACRO_ADAPTERS, **CRYPTO_ADAPTERS, **DISASTER_ADAPTERS, **HAZARD_ADAPTERS, **SECURITY_ADAPTERS, **SPACE_ADAPTERS, **json_feed_adapters()}
 
 
-def map_pure_provider_body(provider: str, body: bytes, collected_at: datetime) -> list[IngestionRecord]:
+def map_pure_provider_body(
+    provider: str, body: bytes, collected_at: datetime, **options: Any,
+) -> list[IngestionRecord]:
     """Decode (bounded, Decimal-aware) and map one fetched body for a P3 provider; no I/O.
 
     The execution controller owns fetch, quota debit, terms checks and settlement; incomplete or
     error bodies raise ``ProviderPayloadError`` (``kind`` says how to react) instead of returning
-    an empty series.
+    an empty series. ``options`` are the scope keywords from ``provider_options.map_options`` (empty at defaults).
     """
     adapter = PURE_ADAPTERS.get(provider)
     if adapter is None:
         raise ProviderPayloadError("provider_scope_invalid")
-    return adapter.mapper(body if adapter.binary else decode_json(body), collected_at)
+    return adapter.mapper(body if adapter.binary else decode_json(body), collected_at, **options)

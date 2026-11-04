@@ -21,6 +21,7 @@ from modules.connectors.public import (
     overlap_floor,
     validate_public_url,
 )
+from modules.connectors.selection import SKEW
 from modules.sources.schemas import ConnectorSource
 
 # Fixed in-network address packaged workflows call back to (every infrastructure/n8n/workflows/*.json URL).
@@ -373,7 +374,7 @@ async def read_rss(
 
     if fetch is None:
         await validate_public_url(url)
-    floor = overlap_floor(cursor)
+    floor = overlap_floor(cursor, SKEW)  # small skew margin; already-stored items are dropped by dedup
     visited: set[str] = set()
     records: list[dict[str, object]] = []
     cursor_times: list[str] = []
@@ -452,7 +453,8 @@ async def read_rss(
                 )
                 canonical_url = urljoin(current_url, link) if link else None
                 if floor is None or cursor_at >= floor:
-                    cursor_times.append(cursor_at.isoformat())
+                    if published_at or updated_at:  # undated items must not drag the cursor to "now"
+                        cursor_times.append(cursor_at.isoformat())
                     records.append(
                         normalize(
                             {

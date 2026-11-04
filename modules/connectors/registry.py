@@ -8,7 +8,10 @@ from modules.connectors.backends import (
     PROVIDER_SOURCE_TYPES,
     is_native_provider,
 )
-from modules.connectors.public import DEFAULT_TIMEZONE, ConnectorConfig
+from modules.connectors.provider_options import ALL_OPTION_NAMES, option_fields, validate_options
+from modules.connectors.provider_specs import COLLECTION_FILTER_FIELDS, INCREMENTAL_PROVIDERS
+from modules.connectors.public import DEFAULT_TIMEZONE, OPTIONAL_SCOPE_FIELDS, ConnectorConfig
+from modules.connectors.sections import SECTION_CATALOG, validate_sections
 from modules.sources.schemas import ConnectorSource
 
 SUPPORTED_TYPES = GENERIC_SOURCE_TYPES - {"mcp"} | set(PROVIDER_SOURCE_TYPES.values())
@@ -60,14 +63,15 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
         }
         expected_history = "pending_updates" if source.provider == "telegram" else "returned_snapshot"
         raw_keys = set(source.configuration or {})
-        if raw_keys - scope_fields - common - {"history_mode"}:
+        allowed = scope_fields | common | {"history_mode"}
+        if source.provider in INCREMENTAL_PROVIDERS:
+            allowed |= COLLECTION_FILTER_FIELDS
+        if source.provider in SECTION_CATALOG:
+            allowed |= {"feed_sections"}
+        allowed |= option_fields(source.provider)
+        if raw_keys - allowed:
             raise ValueError("Provider configuration contains unsupported fields")
-        optional_scope_fields = {
-            "github": {"github_history_days"},
-            "mastodon": {"mastodon_account", "mastodon_hashtag"},
-            "x": {"x_account", "x_query"},
-            "coingecko": {"coingecko_assets"},  # absent on legacy BTC/USD sources
-        }.get(source.provider, set())
+        optional_scope_fields = OPTIONAL_SCOPE_FIELDS.get(source.provider, frozenset())
         required_scope_fields = scope_fields - optional_scope_fields
         # Name the missing schema keys (never values) so the editor can point the owner at each empty field.
         missing = sorted(required_scope_fields - raw_keys)
@@ -76,6 +80,9 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
         if missing:
             raise ValueError(f"Missing required fields: {', '.join(missing)}")
         config = configuration(source)
+        if config.feed_sections is not None:
+            validate_sections(source.provider, config.feed_sections)
+        validate_options(source.provider, config.model_dump(exclude_none=True))
         if config.timeout_seconds > 30:
             raise ValueError("Native provider request timeout cannot exceed 30 seconds")
         if source.provider == "github_releases" and (not config.github_owner or not config.github_repository):
@@ -111,15 +118,15 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
             "timezone": config.timezone or DEFAULT_TIMEZONE,
             "configuration": config.model_dump(mode="json", exclude_none=True),
         }
-    if set(source.configuration or {}) & {
-        "youtube_channel_id", "arxiv_category", "huggingface_author", "bluesky_actor",
+    if set(source.configuration or {}) & (COLLECTION_FILTER_FIELDS | {
+        "feed_sections", *sorted(ALL_OPTION_NAMES - COLLECTION_FILTER_FIELDS), "youtube_channel_id", "arxiv_category", "huggingface_author", "bluesky_actor",
         "github_owner", "github_repository", "include_issues", "include_pulls", "include_commits", "include_releases", "telegram_chat_ids", "history_mode",
         "market_symbols", "market_currency", "market_exchange_timezone", "coingecko_assets", "weather_latitude", "weather_longitude", "weather_timezone", "weather_metrics",
         "news_query", "news_site", "news_locale", "sec_cik", "sec_contact_email", "scholarly_query",
         "fred_series_id", "owm_latitude", "owm_longitude", "openaq_location_id", "firms_country",
         "google_mail_label_ids", "google_mail_history_days", "google_calendar_ids", "google_drive_ids",
         "fhir_base_url", "fhir_patient_id", "ha_base_url", "ha_entity_ids",
-    }:
+    }):
         raise ValueError("Provider scope requires a registered source provider")
     config = configuration(source)
     required_url = config.feed_url if source.type == "rss" else config.url

@@ -82,6 +82,22 @@ export async function deleteSources(page: Page, prefix: string) {
   }
 }
 
+/**
+ * Deletes the existing source of a built-in (looked up by built-in id) so the wizard tile is enabled again; 409s from an
+ * in-flight collection are retried. No-op when the built-in is not enabled.
+ */
+export async function removeBuiltinSource(page: Page, id: string) {
+  const builtins = await (await page.request.get('/api/v1/connectors/builtins', { timeout: 120_000 })).json() as { id: string; source_id: string | null }[];
+  const sourceId = builtins.find((b) => b.id === id)?.source_id;
+  if (!sourceId) return;
+  await page.goto('/settings/sources'); // a page URL gives writeHeaders its Origin
+  let res = await page.request.delete(`/api/v1/sources/${sourceId}`, { headers: await writeHeaders(page) });
+  for (let retry = 0; retry < 4 && res.status() === 409; retry += 1) {
+    await page.waitForTimeout(3_000);
+    res = await page.request.delete(`/api/v1/sources/${sourceId}`, { headers: await writeHeaders(page) });
+  }
+}
+
 /** Acknowledges the provider terms panel (declares personal use) if it is shown in the open dialog. */
 export async function acknowledgeTerms(dialog: Locator) {
   const panel = dialog.getByRole('region', { name: 'Provider terms' });

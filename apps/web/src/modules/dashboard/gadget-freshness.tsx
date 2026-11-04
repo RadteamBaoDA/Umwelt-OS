@@ -3,7 +3,7 @@
 import { createContext, useContext, useEffect, type ReactNode } from 'react';
 
 /** Setter a gadget frame provides so its renderer can report the newest collected-at timestamp. */
-const GadgetFreshnessContext = createContext<((collectedAt: string | null) => void) | null>(null);
+const GadgetFreshnessContext = createContext<((collectedAt: string | null, attribution?: string | null) => void) | null>(null);
 
 /**
  * Provides the frame-level freshness reporter to a gadget renderer subtree.
@@ -11,7 +11,7 @@ const GadgetFreshnessContext = createContext<((collectedAt: string | null) => vo
  * @param props Reporter callback and the renderer subtree.
  * @returns The children wrapped in the freshness context.
  */
-export function GadgetFreshnessProvider({ report, children }: { report: (collectedAt: string | null) => void; children: ReactNode }) {
+export function GadgetFreshnessProvider({ report, children }: { report: (collectedAt: string | null, attribution?: string | null) => void; children: ReactNode }) {
   return <GadgetFreshnessContext.Provider value={report}>{children}</GadgetFreshnessContext.Provider>;
 }
 
@@ -20,12 +20,14 @@ export function GadgetFreshnessProvider({ report, children }: { report: (collect
  * Renderers without a known timestamp never call it, so no freshness badge is shown for them.
  *
  * @param collectedAt ISO timestamp of the newest loaded item, or null/undefined when unknown.
+ * @param attribution Optional provider/source text shown before the freshness label in the frame footer.
  */
-export function useReportGadgetFreshness(collectedAt: string | null | undefined): void {
+export function useReportGadgetFreshness(collectedAt: string | null | undefined, attribution?: string | null): void {
   const report = useContext(GadgetFreshnessContext);
   const value = collectedAt ?? null;
+  const attr = attribution ?? null;
   useEffect(() => {
-    report?.(value);
-    return () => report?.(null);
-  }, [report, value]);
+    report?.(value, attr);
+    return () => report?.(null, null);
+  }, [report, value, attr]);
 }

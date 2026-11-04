@@ -95,21 +95,19 @@ for (const c of OAUTH_CASES) {
   });
 }
 
-test('github: owner starts adding; blocked Connect step explains with a readable error', async ({ page }) => {
+test('github: owner starts adding; Next advances to Choose data without errors', async ({ page }) => {
   test.setTimeout(120_000);
   const name = `${PREFIX} github ${Date.now()}`;
   const { bad, statuses } = watch(page);
   try {
-    const { dialog, next } = await startAdding(page, /^GitHub Credentials required/, name);
+    const { dialog, next } = await startAdding(page, /^GitHub Needs credentials/, name);
     const connect = dialog.getByRole('button', { name: /Connect GitHub/i });
     await expect(connect).toBeVisible();
     console.log(`STATE github :: connect enabled=${await connect.isEnabled()}`);
-    await next.click(); // saves the draft revision, which needs a scope the wizard asks for only on the next step
-    const alert = dialog.getByRole('alert').first();
-    await expect(alert).toBeVisible({ timeout: 30_000 });
-    const text = (await alert.innerText()).trim();
-    console.log(`RESULT github :: ${text} :: ${statuses.join(', ')}`);
-    expect(text).toMatch(/configuration is invalid/i);
+    await next.click(); // github_history_days is optional, so the draft saves and the wizard advances
+    await expect(dialog.getByRole('spinbutton', { name: 'History horizon (days)' })).toBeVisible({ timeout: 30_000 });
+    await expect(dialog.getByRole('alert')).toHaveCount(0);
+    console.log(`RESULT github :: advanced to Choose data :: ${statuses.join(', ')}`);
     expect(bad, 'clean failure').toEqual([]);
     await discardDraft(page, dialog, name);
   } finally {
@@ -151,6 +149,7 @@ test('x: bearer token wizard reaches validation and fails with a readable error'
     await page.locator('#source-local-bearer-token').fill('dummy-e2e-bearer-token');
     await expect(next).toBeEnabled();
     await next.click(); // connect -> choose
+    await page.locator('#source-scope-x_query').fill('');
     await page.locator('#source-scope-x_account').fill('XDevelopers');
     await acknowledgeTerms(dialog);
     const validated = page.waitForResponse((r) => r.url().includes('/validate-draft') && r.request().method() === 'POST');

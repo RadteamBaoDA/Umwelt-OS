@@ -1188,6 +1188,30 @@ async def activation_status(
     )
 
 
+async def activation_statuses(
+    session: AsyncSession, source_ids: frozenset[UUID],
+    *, scope: Scope, multi_workspace_enabled: bool,
+) -> dict[UUID, ConnectorProvisioning | None]:
+    """Batch ``activation_status``: provisioning rows (or None when no row) keyed by source id.
+
+    One connector access check, one scoped Source batch read and one ``IN`` select, all without row
+    locks. Like the single form, an id not visible in ``scope`` raises 404 and rows stay bound to
+    ``session``; bounded to 200 ids.
+    """
+    await _connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    visible = await sources.get_connector_sources(
+        session, source_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if visible.keys() != source_ids:
+        raise HTTPException(status_code=404, detail="Source not found")
+    if not source_ids:
+        return {}
+    rows = await session.scalars(
+        select(ConnectorProvisioning).where(ConnectorProvisioning.source_id.in_(list(source_ids)))
+        .execution_options(populate_existing=True))
+    found = {row.source_id: row for row in rows}
+    return {source_id: found.get(source_id) for source_id in source_ids}
+
+
 def _step(
     kind: str,
     target: str | None,

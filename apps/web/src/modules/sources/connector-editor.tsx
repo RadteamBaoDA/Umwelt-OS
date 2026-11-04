@@ -23,6 +23,7 @@ import { AppLocaleId, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useGuardedNavigation } from '@/core/guarded-navigation';
 import { useWorkspace } from '@/core/workspace-context';
+import { BuiltinOptions } from './builtin-options';
 import { ProviderGuide, ProviderScope, ProviderTerms, ScopeHint, type NativeProvider } from './provider-scope';
 import { GitHubSummary } from './github-summary';
 import { McpCollectionEditor } from './mcp-collection-editor';
@@ -72,6 +73,7 @@ import {
 } from './api';
 import type { DataShape } from '@/core/data-shapes';
 import { matchesShapes } from './shape-filter';
+import { buildProviderGroups } from './provider-picker';
 
 const intervals = [15, 30, 60, 360, 1440] as const;
 const genericProviderIds = new Set(['rss', 'web', 'rest', 'mcp']);
@@ -143,13 +145,6 @@ const PROVIDER_GROUP_KEY = {
   news: 'builtinCategoryNews', economy: 'builtinCategoryEconomy', hazards: 'builtinCategoryHazards',
   space: 'builtinCategorySpace', security: 'builtinCategorySecurity', tech: 'builtinCategoryTech', other: 'providerGroupOther',
 } as const;
-
-/** Groups catalog entries into display panels by category in a fixed order; uncategorised connectors (RSS, web, REST, accounts) fall into "other". Empty groups are dropped. */
-function groupCatalog(entries: ConnectorCatalogEntry[]): [ProviderGroup, ConnectorCatalogEntry[]][] {
-  return PROVIDER_GROUP_ORDER
-    .map((group): [ProviderGroup, ConnectorCatalogEntry[]] => [group, entries.filter((entry) => (entry.category ?? 'other') === group)])
-    .filter(([, rows]) => rows.length > 0);
-}
 
 /** True when the schedule/activation gate asks the owner to (re)enter a provider key. */
 function keyNeeded(code: string | null | undefined): boolean {
@@ -390,6 +385,7 @@ export function ConnectorEditor({
   const initialProvider = source?.provider && isProvider(source.provider) ? source.provider : source?.type === 'mcp' ? 'mcp' : source?.type === 'rss' ? 'rss' : source?.type === 'web' ? 'web' : 'rest';
   const [provider, setProvider] = useState<Provider>(initialProvider);
   const [name, setName] = useState(source?.name ?? '');
+  const [providerQuery, setProviderQuery] = useState('');
   const [aiOptions] = useState<SourceAiOptions>({ graph_enabled: source?.graph_enabled ?? false, rag_index_enabled: source?.rag_index_enabled ?? false });
   const [sourceId, setSourceId] = useState(source?.id ?? '');
   const providerRef = useRef(provider);
@@ -567,6 +563,8 @@ export function ConnectorEditor({
   // Also loaded in edit mode: a built-in's review-class terms are settled by its Resume action, not this form.
   const builtinQuery = useQuery({ queryKey: connectorKeys.builtins, queryFn: ({ signal }) => listBuiltinSources(signal) });
   const builtinIds = useMemo(() => new Set((builtinQuery.data ?? []).map((item) => item.id)), [builtinQuery.data]);
+  // Built-in edit mode: the owner options the server lists for this preset (only once its source exists).
+  const builtinEntry = sourceId ? (builtinQuery.data ?? []).find((item) => item.id === provider) : undefined;
   const builtinReview = (builtinQuery.data ?? []).some((item) => item.id === provider && item.eligibility === 'review');
   // One source per built-in: a provider whose built-in already has a source cannot be created again from the catalog.
   const addedBuiltinIds = useMemo(() => new Set((builtinQuery.data ?? []).filter((item) => item.source_id !== null).map((item) => item.id)), [builtinQuery.data]);
@@ -1473,7 +1471,9 @@ export function ConnectorEditor({
     verifyController.current?.abort();
     const controller = new AbortController();
     verifyController.current = controller;
+    /** True while this verification run owns the controller and has not been aborted, so stale async results are dropped. */
     const stillCurrent = () => verifyController.current === controller && !controller.signal.aborted;
+    /** Records a failed verification with its error code, but only if this run is still current. */
     const fail = (code: string) => { if (stillCurrent()) setVerify({ phase: 'failed', code }); };
     saveFailCode.current = null;
     setErrorDetail(''); setIssues([]);
@@ -1557,6 +1557,10 @@ export function ConnectorEditor({
   useLayoutEffect(() => { if (actionsRef) actionsRef.current = { createSource, prepareNext, verify: runVerify }; });
   const verifyBusy = verify.phase === 'saving' || verify.phase === 'activating' || verify.phase === 'collecting';
 
+  /** Maps a picker group id to its message key; `nokey` is the leading group of providers needing no credentials. */
+  const providerGroupTitleKey = (group: string) => group === 'nokey' ? 'providerGroupNoKey' : PROVIDER_GROUP_KEY[group as ProviderGroup];
+  const providerGroups = buildProviderGroups(catalog.filter((entry) => entry.kind !== 'group'), PROVIDER_GROUP_ORDER, (category) => t(PROVIDER_GROUP_KEY[category as ProviderGroup] ?? 'providerGroupOther'), providerQuery);
+
   /** Formats provider availability and unsupported-operation information for the connector catalog. */
   const catalogStatus = (entry: ConnectorCatalogEntry) => entry.availability === 'available' || entry.availability === 'implemented'
     ? '' : entry.availability === 'requires_credentials' ? t('needsCredentials') : entry.availability === 'planned' ? t('planned') : t('unavailable');
@@ -1568,8 +1572,13 @@ export function ConnectorEditor({
       {catalogQuery.isError && <p className="error" role="alert">{t('loadFailed')} <Button variant="outline" onClick={() => catalogQuery.refetch()}>{t('retry')}</Button></p>}
       {Boolean(shapeFilter?.length) && catalogQuery.isSuccess && !sourceId && !(catalog.some((entry) => entry.kind !== 'group'))
         && <p role="status" className="text-muted-foreground">{t('shapeFilterNone')} {onClearFilter && <Button variant="outline" size="sm" onClick={onClearFilter}>{t('shapeFilterClear')}</Button>}</p>}
-      {catalog.length > 0 && groupCatalog(catalog.filter((entry) => entry.kind !== 'group')).map(([group, entries]) => <SettingsSection key={group} title={t(PROVIDER_GROUP_KEY[group])}>
-        <div className="source-provider-grid !m-0 !grid-cols-[repeat(auto-fill,minmax(14rem,1fr))]" role="group" aria-label={t(PROVIDER_GROUP_KEY[group])}>
+      {catalog.length > 0 && <div className="field">
+        <Label htmlFor="source-provider-search">{t('providerSearchLabel')}</Label>
+        <Input id="source-provider-search" type="search" autoFocus autoComplete="off" placeholder={t('providerSearchPlaceholder')} value={providerQuery} onChange={(event) => setProviderQuery(event.target.value)} />
+      </div>}
+      {catalog.length > 0 && providerGroups.length === 0 && <p role="status" className="text-muted-foreground">{t('providerSearchNone')}</p>}
+      {providerGroups.map(({ key: group, entries }) => <SettingsSection key={group} title={t(providerGroupTitleKey(group))}>
+        <div className="source-provider-grid !m-0 !grid-cols-[repeat(auto-fill,minmax(14rem,1fr))]" role="group" aria-label={t(providerGroupTitleKey(group))}>
         {entries.map((entry) => {
           const localProvider = entry.provider_id;
           const supported = Boolean(entry.source_type && entry.code_available) && ['available', 'implemented', 'requires_credentials'].includes(entry.availability) && isProvider(localProvider);
@@ -1728,6 +1737,9 @@ export function ConnectorEditor({
           <div className="field"><Label htmlFor="source-timezone">{t('timezone')}</Label><Input id="source-timezone" aria-describedby="source-hint-timezone" value={configuration.timezone} onChange={(event) => changeConfiguration('timezone', event.target.value)} /><ScopeHint field="timezone" /></div>
           <div className="field"><Label htmlFor="source-realtime-mode">{t('trackingModeLabel')}</Label><Select value={configuration.realtime_mode ?? currentEntry?.realtime_tier ?? 'near_realtime'} onValueChange={(value) => changeConfiguration('realtime_mode', value as RealtimeMode)}><SelectTrigger id="source-realtime-mode"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="realtime">{t('trackingModeRealtime')}</SelectItem><SelectItem value="near_realtime">{t('trackingModeNearRealtime')}</SelectItem></SelectContent></Select><small className="text-muted-foreground">{t('trackingModeHelp')}</small></div>
           </FieldGrid>
+          {builtinEntry && <BuiltinOptions builtin={builtinEntry} disabled={locked} values={configuration}
+            // An emptied field is saved as an explicit null (clears the stored value); omitted keys keep it.
+            onChange={(key, value) => changeConfiguration(key as keyof ConnectorConfig, ((Array.isArray(value) && value.length === 0) || value === undefined ? null : value) as never)} />}
             {isNativeEntry(currentEntry) && <>
             <div className="field"><Label htmlFor="source-history-mode">{t('historyMode')}</Label><Input id="source-history-mode" readOnly aria-readonly="true" value={t(provider === 'telegram' ? 'pendingUpdatesOnly' : 'returnedSnapshot')} /></div>
             </>}

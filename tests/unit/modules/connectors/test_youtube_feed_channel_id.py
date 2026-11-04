@@ -41,3 +41,11 @@ def test_channel_id_forms(feed_id: str, expected: int) -> None:
     assert len(records) == expected
     # Identity is scoped by the configured channel, never the feed's (possibly bare) channel id.
     assert [r.provider_id for r in records] == [f"youtube:{CONFIGURED}:vid1"] * expected
+
+
+def test_feed_over_default_feed_limit_maps() -> None:
+    """A valid Atom body above the 1 MiB default feed limit (but under the page cap) still maps."""
+    body = _feed(CONFIGURED).replace(b"<entry>", b"<!--" + b"x" * (1024 * 1024 + 1) + b"--><entry>")
+    source = SimpleNamespace(provider="youtube", configuration={"youtube_channel_id": CONFIGURED})
+    page = _records_from_feed(source, body, datetime.now(UTC))  # type: ignore[arg-type]
+    assert len(page.records) == 1

@@ -4,11 +4,13 @@ import { CheckIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { ApiError, apiRequest } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { listSources } from '@/modules/sources/api';
 import { getSearchIndexStatus } from '@/modules/search/api';
+import { AISettingsWorkspace } from './ai-settings';
 import { OnboardingTopics } from './onboarding-topics';
 import { getOnboardingState, saveOnboardingStep, type OnboardingStep } from './onboarding-api';
 
@@ -29,11 +31,16 @@ const steps: { id: OnboardingStep; label: 'stepAi' | 'stepCapability' | 'stepSou
   { id: 'complete', label: 'stepComplete' },
 ];
 
-/** Renders resumable setup steps and live readiness from the owning AI, Sources, and Search APIs. */
+/**
+ * Renders resumable setup steps and live readiness from the owning AI, Sources, and Search APIs.
+ * The AI step embeds the Settings › Models workspace on demand (same save flow and query cache) and offers a
+ * "skip, use local only" path that advances without a provider; the step rail omits the caption on upcoming steps.
+ */
 export function OnboardingPage() {
   const t = useTranslations('onboarding');
   const { csrfToken } = useWorkspaceSession();
   const client = useQueryClient();
+  const [providerOpen, setProviderOpen] = useState(false);
   const progress = useQuery({ queryKey: ['onboarding-progress'], queryFn: ({ signal }) => getOnboardingState(signal) });
   const ai = useQuery({ queryKey: ['ai-settings'], queryFn: () => apiRequest<ReadinessAI>('/api/v1/settings/ai') });
   const sources = useQuery({ queryKey: ['onboarding-sources'], queryFn: () => listSources() });
@@ -91,7 +98,7 @@ export function OnboardingPage() {
   /** Saves the selected next step before allowing the owner to continue. */
   const move = (step: OnboardingStep, dataChoice = progress.data.data_choice) => save.mutate({ step, dataChoice });
   const stepContent = currentStep.id === 'ai_privacy'
-    ? <><h2>{t('aiTitle')}</h2><p>{t('aiText')}</p><p role="status">{aiReady && !ai.isPending && !ai.isError ? `${status(aiReady, false)} · ` : ai.isPending || ai.isError ? `${status(aiReady, true)} · ` : ''}{ai.isError && networkUnavailable(ai.error) ? t('offline') : ai.isPending || ai.isError ? t('unknown') : t(aiReady ? 'aiReady' : 'aiNeedsSetup')}</p><Button asChild variant="outline"><Link href="/settings/models">{t('openAiSettings')}</Link></Button></>
+    ? <><h2>{t('aiTitle')}</h2><p>{t('aiText')}</p><p role="status">{aiReady && !ai.isPending && !ai.isError ? `${status(aiReady, false)} · ` : ai.isPending || ai.isError ? `${status(aiReady, true)} · ` : ''}{ai.isError && networkUnavailable(ai.error) ? t('offline') : ai.isPending || ai.isError ? t('unknown') : t(aiReady ? 'aiReady' : 'aiNeedsSetup')}</p><div className="form-actions"><Button type="button" variant="outline" aria-expanded={providerOpen} onClick={() => setProviderOpen((open) => !open)}>{t(providerOpen ? 'hideProviderForm' : 'addProviderHere')}</Button><Button type="button" variant="ghost" disabled={save.isPending} onClick={() => move('capability')}>{t('skipLocalOnly')}</Button></div>{providerOpen && <div className="w-full"><AISettingsWorkspace /></div>}</>
     : currentStep.id === 'capability'
       ? <><h2>{t('capabilityTitle')}</h2><p>{t('capabilityText')}</p><p role="status">{status(chatCapability && chatDefault?.destination === 'remote', aiUnresolved)} · {ai.isError && networkUnavailable(ai.error) ? t('offline') : aiUnresolved ? t('unknown') : chatCapability ? t('capabilityReady') : t('capabilityNeedsProbe')}</p><Button asChild variant="outline"><Link href="/settings/models">{t('openAiSettings')}</Link></Button></>
       : currentStep.id === 'sources'
@@ -114,7 +121,7 @@ export function OnboardingPage() {
               <button type="button" aria-current={current ? 'step' : undefined} disabled={save.isPending || done || position > currentIndex} onClick={() => move(step.id)}
                 className={`flex min-h-9 pointer-coarse:min-h-11 w-full items-start gap-3 rounded-md border px-3 py-2.5 text-left text-sm disabled:cursor-default ${current ? 'border-border bg-card' : 'border-transparent hover:bg-secondary'}`}>
                 <span aria-hidden="true" className={`w-5 shrink-0 text-sm tabular-nums ${complete ? 'text-primary' : current ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}>{complete ? <CheckIcon className="size-3.5" /> : position + 1}</span>
-                <span className="grid"><strong className={current ? 'font-semibold' : 'font-medium'}>{t(step.label)}</strong><span className="text-muted-foreground text-xs">{t(complete ? 'stepDone' : current ? 'stepCurrent' : 'stepUpcoming')}</span></span>
+                <span className="grid"><strong className={current ? 'font-semibold' : 'font-medium'}>{t(step.label)}</strong>{(complete || current) && <span className="text-muted-foreground text-xs">{t(complete ? 'stepDone' : 'stepCurrent')}</span>}</span>
               </button>
             </li>;
           })}

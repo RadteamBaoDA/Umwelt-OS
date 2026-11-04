@@ -128,6 +128,28 @@ html.dark {
   --chart-5: #77c69c;
 }
 
+/* Owner accent (Settings > Appearance, per device). ink = default = no attribute. Only the data accent changes; primary/buttons stay ink. */
+html[data-accent='moss'] { --accent: #0f766e; --chart-1: #0f766e; --chart-5: #0f766e; }
+html.dark[data-accent='moss'] { --accent: #5eead4; --chart-1: #5eead4; --chart-5: #5eead4; }
+html[data-accent='sea'] { --accent: #1d5fbf; --chart-1: #1d5fbf; --chart-5: #1d5fbf; }
+html.dark[data-accent='sea'] { --accent: #7aa7ff; --chart-1: #7aa7ff; --chart-5: #7aa7ff; }
+html[data-accent='earth'] { --accent: #8a4b1f; --chart-1: #8a4b1f; --chart-5: #8a4b1f; }
+html.dark[data-accent='earth'] { --accent: #d9965f; --chart-1: #d9965f; --chart-5: #d9965f; }
+html[data-accent='plum'] { --accent: #8a1f4b; --chart-1: #8a1f4b; --chart-5: #8a1f4b; }
+html.dark[data-accent='plum'] { --accent: #e07aa5; --chart-1: #e07aa5; --chart-5: #e07aa5; }
+
+/* Preferences swatches: each fills with its own accent for the active theme (class + literal values live here, not in feature code). */
+.accent-swatch-ink { background: #176a4a; }
+.accent-swatch-moss { background: #0f766e; }
+.accent-swatch-sea { background: #1d5fbf; }
+.accent-swatch-earth { background: #8a4b1f; }
+.accent-swatch-plum { background: #8a1f4b; }
+.dark .accent-swatch-ink { background: #77c69c; }
+.dark .accent-swatch-moss { background: #5eead4; }
+.dark .accent-swatch-sea { background: #7aa7ff; }
+.dark .accent-swatch-earth { background: #d9965f; }
+.dark .accent-swatch-plum { background: #e07aa5; }
+
 /* Legacy rules are layered so Tailwind utilities (unlayered-over-layers) win. */
 @layer base {
   /* Tailwind v4 bare `border` uses currentColor; default every border to the hairline token (utilities still win). */
@@ -264,6 +286,7 @@ html.dark {
   .theme-swatch[data-theme-preview='light'] { background: #f2f5f2; }
   .theme-swatch[data-theme-preview='dark'] { background: #0e110f; }
   .theme-swatch[data-theme-preview='system'] { background: linear-gradient(90deg, #f2f5f2 50%, #0e110f 50%); }
+  .accent-options { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
   .theme-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
   .radio-group-item { width: 20px; height: 20px; flex: 0 0 20px; display: inline-grid; place-items: center; border: 1px solid var(--muted); border-radius: 50%; background: var(--surface); color: var(--accent); }
   .radio-group-item[data-state='checked'] { border: 2px solid var(--accent); }
@@ -334,6 +357,22 @@ html.dark {
   @media (max-width: 1023px) { .settings-panel { flex-direction: column; } .settings-nav { display: none; } .settings-section-select { display: block; flex: 0 0 auto; padding: 16px; border-bottom: 1px solid var(--line); } }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; } }
+
+/* Gadget figure scale: hero value (text-figure) and compact value (text-figure-sm); tabular so digits do not jitter on refresh. */
+@utility text-figure {
+  font-size: 40px;
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+@utility text-figure-sm {
+  font-size: 24px;
+  line-height: 1.1;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
 
 /* Ledger: tabular numerals for figures; 44px touch targets on coarse pointers (36px otherwise). */
 @utility tabular {

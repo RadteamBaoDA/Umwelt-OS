@@ -76,6 +76,8 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime, formatTimeZoneLabel } from '@/core/i18n';
 import { listSources, sourceKeys } from '@/modules/sources/api';
 import { FreshnessStrip } from './freshness-strip';
+import { FirstRunSetup } from './first-run-setup';
+import { TodayHeader } from './today-header';
 
 /**
  * Finds the first free non-overlapping integer rectangle on the 20-column grid.
@@ -465,6 +467,10 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
   const staleSources = (sourcesQuery.data?.items ?? []).filter((s) =>
     dashboardSourceIds.has(s.id) && s.status === 'active' && s.last_error_at
     && (!s.last_success_at || Date.parse(s.last_error_at) > Date.parse(s.last_success_at)));
+  // Workspace-wide source list (shared ['sources','list'] cache) drives the first-run panel and Today counts.
+  const allSourcesQuery = useQuery({ queryKey: sourceKeys.list, queryFn: () => listSources(), enabled: isOwner });
+  // A dashboard that already has gadgets is never hidden behind first-run setup.
+  const showFirstRun = isOwner && allSourcesQuery.isSuccess && allSourcesQuery.data.items.length === 0 && (activeDashboard?.instances.length ?? 0) === 0;
   const requestedBreakpoint = isMobile ? 'mobile' : 'desktop';
   const currentBreakpoint = isDirty && editOrigin?.dashboardId === selectedDashboardId
     ? editOrigin.breakpoint : requestedBreakpoint;
@@ -886,8 +892,13 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
     mutationFn: async (name: string) => {
       return createDashboard(name, session.csrfToken);
     },
-    onSuccess: (newDash) => {
-      void queryClient.invalidateQueries({ queryKey: dashboardKeys.all });
+    /**
+     * Refreshes the dashboard list, then selects the newly created dashboard.
+     * Navigation must wait for the refetch: the URL-validity effect replaces
+     * any id missing from the stale list with the first dashboard (Overview).
+     */
+    onSuccess: async (newDash) => {
+      await queryClient.invalidateQueries({ queryKey: dashboardKeys.all });
       navigateToDashboard(newDash.id, true);
       setCreateDashboardOpen(false);
       setNewDashboardName('');
@@ -1228,6 +1239,9 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
           {t('manageTopicsAndHighlights')}
         </Button>}
       </div>
+      {isOwner && !showFirstRun && (
+        <TodayHeader sourceIds={(allSourcesQuery.data?.items ?? []).filter((s) => s.status === 'active').map((s) => s.id)} />
+      )}
       <FreshnessStrip sources={dashboardSources} locale={display.locale} />
       {/* Group tabs: rendered only when the dashboard has groups */}
       {activeDashboard && activeDashboard.groups.length > 1 && (
@@ -1313,7 +1327,13 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
       )}
 
       {/* Main Grid Canvas or Empty State */}
-      {!activeDashboard ? (
+      {showFirstRun && !editMode ? (
+        <FirstRunSetup
+          sourceCount={0}
+          csrfToken={session.csrfToken}
+          onPickTopics={() => { setManagementTab('topics'); setManagementDialogOpen(true); }}
+        />
+      ) : !activeDashboard ? (
         <section className="dashboard-empty flex flex-wrap items-center gap-6 rounded-lg border border-dashed border-border bg-card p-8">
           <div className="min-w-0 flex-[1_1_360px]">
             <h2 className="m-0 mb-1 text-xl font-semibold leading-snug text-foreground">{t('noDashboardsYet')}</h2>

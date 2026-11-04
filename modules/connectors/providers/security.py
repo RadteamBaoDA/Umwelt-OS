@@ -109,14 +109,24 @@ def disease_sh_request() -> ProviderRequest:
     return ProviderRequest("GET", DISEASE_SH_URL)
 
 
-def map_disease_sh(payload: object, collected_at: datetime) -> list[IngestionRecord]:
-    """Map global cumulative totals to one record per metric, keyed by metric so a refresh is a new revision of the same series (chart history comes from revisions).
+def map_disease_sh(payload: object, collected_at: datetime, *, country: str | None = None) -> list[IngestionRecord]:
+    """Map cumulative totals (global, or one ISO-2 ``country``) to one record per metric, keyed by metric so a refresh is a new revision of the same series (chart history comes from revisions).
+
+    A country body must name the requested ISO-2 code in ``countryInfo.iso2`` (scope mismatch otherwise) and
+    its display name comes from the bounded ``country`` string.
 
     ``updated`` is the provider's own instant and is kept as ``observed_at`` so staleness stays visible.
     Negative or non-numeric totals raise ``ProviderPayloadError``.
     """
     if not isinstance(payload, dict):
         raise ProviderPayloadError("disease_sh_response_invalid")
+    region, scope = "Global", "global"
+    if country is not None:
+        info, name = payload.get("countryInfo"), payload.get("country")
+        if not isinstance(info, dict) or info.get("iso2") != country or not isinstance(name, str) \
+                or not re.fullmatch(r"[\w .,'()-]{1,80}", name):
+            raise ProviderPayloadError("disease_sh_scope_mismatch")
+        region, scope = name, country
     updated = provider_instant(payload.get("updated"), collected_at, unit="ms")
     stamp = int(updated.timestamp() * 1000)
     records = []
@@ -129,11 +139,11 @@ def map_disease_sh(payload: object, collected_at: datetime) -> list[IngestionRec
             raise ProviderPayloadError("disease_sh_value_invalid")
         text = decimal_text(value)
         records.append(build_record(
-            provider="disease_sh", identity=f"disease_sh:global:{metric}",
-            content=f"Global COVID-19 {metric} (cumulative): {text}", title=f"Global COVID-19 {metric}",
+            provider="disease_sh", identity=f"disease_sh:{scope}:{metric}",
+            content=f"{region} COVID-19 {metric} (cumulative): {text}", title=f"{region} COVID-19 {metric}",
             observed_at=updated, collected_at=collected_at,
             version=content_version("disease_sh", metric, text, stamp),
-            metric=f"covid19_{metric}", value=value, unit="persons", region="Global", quality="provider_reported",
+            metric=f"covid19_{metric}", value=value, unit="persons", region=region, quality="provider_reported",
             timestamp_basis="provider_modified", modified_at=updated,
             provider_fields={"updated": stamp},
         ))

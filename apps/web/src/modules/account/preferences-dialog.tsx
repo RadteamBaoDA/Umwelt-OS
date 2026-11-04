@@ -4,6 +4,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { MonitorIcon, MoonIcon, SunIcon } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
+import { applyAccent, previewAccent, readAccent, type AccentId } from '@/core/accent';
+import { AccentPicker } from '@/modules/account/accent-picker';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
@@ -65,6 +67,9 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
   const client = useQueryClient();
   const { locale, timezone, setPreview, isCurrentGeneration } = useDisplayPreferences();
   const [draft, setDraft] = useState<OwnerPreferences | null>(null);
+  // Accent is per-device, not part of the saved owner preferences: draft + baseline are tracked beside the draft.
+  const [accentDraft, setAccentDraft] = useState<AccentId>('ink');
+  const [accentBaseline, setAccentBaseline] = useState<AccentId>('ink');
   const [reloadPending, setReloadPending] = useState(false);
   const [reloadError, setReloadError] = useState(false);
   const baseline = useRef<PreferenceValues>({ theme: 'system', locale, timezone });
@@ -94,6 +99,7 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
       if (!mounted.current || generationRef.current !== authGeneration || !isCurrentGeneration(authGeneration)) return;
       client.setQueryData(['owner-preferences'], value);
       setPreview(null, authGeneration);
+      applyAccent(accentDraft);
       setDraft(null);
       onOpenChange(false);
     },
@@ -142,6 +148,8 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
   useEffect(() => {
     if (!open) {
       setPreview(null, authGeneration);
+      // Any close path (not only Cancel) reverts an unsaved accent preview to the stored one.
+      previewAccent(readAccent());
       // eslint-disable-next-line react-hooks/set-state-in-effect -- draft resets when the dialog or auth generation changes; keeps the existing stale-result fences
       setDraft(null);
       return;
@@ -152,6 +160,8 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
     setBaselineValues(values);
     save.reset();
     setDraft({ ...preferences, ...values });
+    setAccentDraft(readAccent());
+    setAccentBaseline(readAccent());
     setPreview(values, authGeneration);
   }, [open, preferences, authGeneration, draft, setPreview, save.reset]);
 
@@ -164,6 +174,7 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
   const restore = () => {
     // Closing without Save clears the live theme or locale preview, restoring the committed values.
     setPreview(null, authGeneration);
+    previewAccent(readAccent());
     setDraft(null);
   };
 
@@ -188,7 +199,7 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
   };
 
   const dirty = Boolean(draft && (!draft.persisted ||
-    draft.theme !== baselineValues.theme || draft.locale !== baselineValues.locale || draft.timezone !== baselineValues.timezone
+    draft.theme !== baselineValues.theme || draft.locale !== baselineValues.locale || draft.timezone !== baselineValues.timezone || accentDraft !== accentBaseline
   ));
   const hasConflict = save.error instanceof ApiError && save.error.status === 409;
   /** Aborts the previous request and starts a reload attempt bound to this edit session and auth generation. */
@@ -280,6 +291,7 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
               </Label>)}
             </RadioGroup>
           </div>
+          <AccentPicker value={accentDraft} onChange={setAccentDraft} />
           <div className="field">
             <Label htmlFor="preference-locale">{t('language')}</Label>
             <Select value={draft.locale} onValueChange={(value) => {

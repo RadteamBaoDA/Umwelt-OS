@@ -97,3 +97,39 @@ def test_wikipedia_featured_feed_uses_today_and_pageviews_use_yesterday():
     assert callable(featured) and callable(pageviews)
     assert featured(now).endswith("/featured/2026/10/26")
     assert pageviews(now).endswith("/2026/10/25")
+
+
+def _bmkg_body(rows: int) -> bytes:
+    """Build a BMKG-shaped body of ``rows`` distinct quakes; row 0 is the newest."""
+    import json
+    quakes = [{"DateTime": f"2026-10-21T{(23 - i // 60):02d}:{(59 - i % 60):02d}:00+00:00", "Coordinates": f"{i}.0,1.0",
+               "Wilayah": f"place {i}", "Magnitude": "5.0", "Kedalaman": "10 km", "Potensi": "none"} for i in range(rows)]
+    return json.dumps({"Infogempa": {"gempa": quakes}}).encode()
+
+
+def test_json_feed_item_hashes_identically_below_and_above_100_rows():
+    feed = JSON_FEEDS["bmkg_quakes"]
+    small = {r.provider_id: r for r in map_json_feed(feed, _bmkg_body(50), NOW)}
+    big = {r.provider_id: r for r in map_json_feed(feed, _bmkg_body(150), NOW)}
+    pid = next(iter(small))
+    assert small[pid].metadata == big[pid].metadata
+
+
+def test_json_feed_keeps_all_rows_for_selection():
+    records = map_json_feed(JSON_FEEDS["bmkg_quakes"], _bmkg_body(150), NOW)
+    assert len(records) == 150
+    assert all(r.metadata["provider_record"]["coverage"] == "returned_snapshot" for r in records)
+
+
+def test_wiki_local_skip_covers_live_main_pages_and_namespaces():
+    """Live top-views (2026-11-02): ko/de/es/fr main pages live under the project namespace; file namespaces differ."""
+    from modules.connectors.providers.json_feed import _WIKI_SKIP, JSON_FEEDS, localized_feed
+
+    feed = JSON_FEEDS["wikipedia_top_views"]
+    live = {"ko": ["위키백과:대문", "파일:A.png"], "de": ["Datei:A.svg", "Wikipedia:Hauptseite"],
+            "fr": ["Fichier:A.png"], "es": ["Archivo:A.png"], "vi": ["Tập_tin:A.png"], "ja": ["ファイル:A.png"],
+            "zh": ["Portal:X"]}
+    for lang, ids in live.items():
+        skips = localized_feed(feed, lang).skip_id_prefixes
+        assert skips[: len(_WIKI_SKIP)] == _WIKI_SKIP
+        assert all(any(i.startswith(p) for p in skips) for i in ids), lang

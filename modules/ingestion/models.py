@@ -222,6 +222,8 @@ class CollectionReceipt(Base):
     coverage: Mapped[str] = mapped_column(String(16), nullable=False, server_default="complete")
     etag: Mapped[str | None] = mapped_column(String(512))
     last_modified: Mapped[str | None] = mapped_column(String(128))
+    # Bounded (~1 KB) run telemetry: new / backlog / gap / duplicates / failed sections. Never record metadata.
+    collection_stats: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     retain_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

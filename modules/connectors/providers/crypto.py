@@ -213,15 +213,25 @@ def _error_kind(text: str) -> str:
     return "invalid"
 
 
-def map_coinpaprika(payload: object, collected_at: datetime) -> list[IngestionRecord]:
-    """Map the BTC USD ticker (optional personal-use provider); an empty-string price is explicit missing."""
+def map_coinpaprika(
+    payload: object, collected_at: datetime, *, coin_id: str = "btc-bitcoin",
+) -> list[IngestionRecord]:
+    """Map one coin's USD ticker (default BTC; optional personal-use provider); an empty-string price is explicit missing.
+
+    ``coin_id`` must be one of the curated ids; the body's id and symbol must match it (scope mismatch otherwise).
+    """
+    from modules.connectors.provider_options import COIN_SYMBOLS
+
+    symbol = COIN_SYMBOLS.get(coin_id)
+    if symbol is None:
+        raise ProviderPayloadError("coinpaprika_scope_mismatch")
     if not isinstance(payload, dict):
         raise ProviderPayloadError("coinpaprika_response_invalid")
     if "error" in payload:
         message = payload["error"]
         kind = _error_kind(message if isinstance(message, str) else "")
         raise ProviderPayloadError(f"coinpaprika_{kind}_payload", kind)  # type: ignore[arg-type]
-    if payload.get("id") != "btc-bitcoin" or payload.get("symbol") != "BTC":
+    if payload.get("id") != coin_id or payload.get("symbol") != symbol:
         raise ProviderPayloadError("coinpaprika_scope_mismatch")
     updated = provider_instant(payload.get("last_updated"), collected_at, unit="iso")
     quotes = payload.get("quotes")
@@ -237,13 +247,13 @@ def map_coinpaprika(payload: object, collected_at: datetime) -> list[IngestionRe
     text = "null" if price is None else decimal_text(price)
     stamp = updated.isoformat()
     return [build_record(
-        provider="coinpaprika", identity=f"coinpaprika:btc-bitcoin:USD:{stamp}",
-        content=f"CoinPaprika BTC/USD at {stamp}: {'not reported' if price is None else text + ' USD'}",
-        title="BTC price (CoinPaprika)", observed_at=updated, collected_at=collected_at,
-        version=content_version("coinpaprika", "btc-bitcoin", "USD", stamp, text), metric="spot_price",
-        value=price, unit="USD", currency="USD", symbol="BTC", quality="provider_reported",
+        provider="coinpaprika", identity=f"coinpaprika:{coin_id}:USD:{stamp}",
+        content=f"CoinPaprika {symbol}/USD at {stamp}: {'not reported' if price is None else text + ' USD'}",
+        title=f"{symbol} price (CoinPaprika)", observed_at=updated, collected_at=collected_at,
+        version=content_version("coinpaprika", coin_id, "USD", stamp, text), metric="spot_price",
+        value=price, unit="USD", currency="USD", symbol=symbol, quality="provider_reported",
         timestamp_basis="provider_modified", modified_at=updated,
-        provider_fields={"id": "btc-bitcoin", "symbol": "BTC", "last_updated": stamp, "quote": "USD"},
+        provider_fields={"id": coin_id, "symbol": symbol, "last_updated": stamp, "quote": "USD"},
     )]
 
 

@@ -52,6 +52,11 @@ export function NewsFeed({ instance }: NewsFeedProps) {
   ];
   const showTrends = unsupportedNotices.length === 0;
 
+  // Returned bare (no wrapper) so the gadget frame's `has-[>[data-gadget-notice]]` rule can shrink the empty card.
+  if (sourceIds.length === 0) {
+    return <GadgetNotice kind="setup" message={t('sourceSelectionRequired')} action={{ href: '/settings/sources', label: t('configureSources') }} />;
+  }
+
   return (
     <div ref={listFallbackRef} tabIndex={-1} className="flex h-full min-h-0 flex-col gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
       {unsupportedNotices.length ? (
@@ -59,10 +64,7 @@ export function NewsFeed({ instance }: NewsFeedProps) {
           {unsupportedNotices.map((notice) => <p key={notice}>{notice}</p>)}
         </div>
       ) : null}
-      {sourceIds.length === 0 ? (
-        <GadgetNotice kind="setup" message={t('sourceSelectionRequired')} action={{ href: '/settings/sources', label: t('configureSources') }} />
-      ) : (
-        <StoryList
+      <StoryList
           sourceIds={sourceIds}
           query={query}
           limit={filters.limit ?? 25}
@@ -73,7 +75,6 @@ export function NewsFeed({ instance }: NewsFeedProps) {
             setSelected({ kind: 'story', id: storyId, sourceGadget: instance.id, sourceIds: [...sourceIds] });
           }}
         />
-      )}
       <DetailDialog
         target={selected}
         onClose={closeDetail}
