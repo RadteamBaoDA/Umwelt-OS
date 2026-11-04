@@ -435,3 +435,26 @@ def test_every_model_gateway_construction_passes_kind():
             if "kind=" not in call[:end]:
                 offenders.append(f"{path.relative_to(root)}:{text[:match.start()].count(chr(10)) + 1}")
     assert not offenders, f"ModelGateway built without kind=: {offenders}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("kind", "url", "stored"), [
+    ("custom", GW, 4096), ("openrouter", None, 4096), ("ollama", OLLAMA, 4096),
+    ("anthropic", None, None), ("openai", None, None), ("groq", None, None)])
+async def test_save_max_output_tokens_is_kept_only_for_non_hosted_kinds(kind: str, url: str | None, stored: int | None) -> None:
+    """The server is authoritative: a hosted kind's client-sent max_output_tokens is discarded, others persist."""
+    provider = _provider("a", kind, url, models=[{"id": "m1", "type": "llm"}])  # type: ignore[list-item]
+    update = _update(providers=[provider],
+                     defaults=ModelDefaults(chat=ModelMapping(model="m1", provider_id="a", max_output_tokens=4096)))
+    row = await _save(_row(), update, _settings(True))
+    assert row.defaults["chat"]["max_output_tokens"] == stored
+
+
+@pytest.mark.asyncio
+async def test_save_max_output_tokens_rejected_for_non_llm_roles() -> None:
+    """Embedding/reranker roles have no output limit to configure."""
+    update = _update(providers=[_typed("a", m1="embedding")],
+                     defaults=ModelDefaults(embedding=ModelMapping(model="m1", provider_id="a", dimensions=8, max_output_tokens=10)))
+    with pytest.raises(HTTPException) as exc:
+        await _save(_row(), update)
+    assert exc.value.status_code == 422

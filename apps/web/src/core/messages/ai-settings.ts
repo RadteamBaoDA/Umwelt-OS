@@ -21,6 +21,7 @@ export const aiSettingsMessages = {
      
       chatModel: 'Chat model',
       reasoningEffort: 'Reasoning effort', reasoningEffortHelp: 'Asks the chat model to think before answering. The thinking panel only appears for models that stream their reasoning; some providers ignore or reject this, in which case chat continues without it.',
+      maxOutputTokens: 'Max output tokens', maxOutputTokensHelp: 'Optional. Caps the length of each answer for this provider. Leave blank to use the provider default.',
       effortOff: 'Off', effortLow: 'Low', effortMedium: 'Medium', effortHigh: 'High',
       briefModel: 'Brief model',
      
@@ -79,6 +80,7 @@ export const aiSettingsMessages = {
      
       chatModel: 'Mô hình trò chuyện',
       reasoningEffort: 'Mức độ suy luận', reasoningEffortHelp: 'Yêu cầu mô hình trò chuyện suy nghĩ trước khi trả lời. Khung suy nghĩ chỉ hiện với mô hình truyền trực tiếp phần suy luận; một số nhà cung cấp bỏ qua hoặc từ chối tùy chọn này, khi đó trò chuyện vẫn tiếp tục mà không có nó.',
+      maxOutputTokens: 'Số token đầu ra tối đa', maxOutputTokensHelp: 'Tùy chọn. Giới hạn độ dài mỗi câu trả lời với nhà cung cấp này. Để trống để dùng mặc định của nhà cung cấp.',
       effortOff: 'Tắt', effortLow: 'Thấp', effortMedium: 'Vừa', effortHigh: 'Cao',
       briefModel: 'Mô hình bản tin',
      

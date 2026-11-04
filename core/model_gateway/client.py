@@ -27,6 +27,7 @@ from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import (
     HOSTED_PROVIDER_ENDPOINTS,
     HOSTED_PROVIDER_KINDS,
+    PROVIDER_KINDS_WITHOUT_MAX_TOKENS,
     ModelMapping,
     ProviderKind,
     RequestPolicy,
@@ -223,9 +224,70 @@ class CapabilityEvidenceStore(Protocol):
         ...
 
 
-# Words a provider uses when it rejects an optional request feature; an unrelated 400 (bad prompt, context
-# length) must not mark the model unsupported.
-_TOOL_REJECTION = re.compile(r"tool|function", re.IGNORECASE)
+# An explicit "this model/endpoint cannot do tools" statement. A bare mention of "tool"/"function" is not enough:
+# a 400 about a malformed tool schema, a bad tool_use_id pairing or a wrong argument must not mark the model
+# unsupported (the evidence has no other way back than the TTL).
+_TOOL_UNSUPPORTED_PHRASE = re.compile(
+    r"(?:does not|doesn't|do not|don't|cannot|can't) support\s+(?:the\s+)?"
+    r"(?:tools?\b|tool[ -]?(?:use|usage|calling|calls?)\b|function[ -]?(?:calling|calls?)\b|functions\b)"
+    r"|(?:tools?|tool[ -]?(?:use|usage|calling)|function[ -]?(?:calling|calls?))\s+(?:is|are)\s+(?:not\s+supported|unsupported|not\s+available)"
+    r"|support tool[ -]?use",
+    re.IGNORECASE,
+)
+# Messages that are about one specific tool turn or tool definition, never about the model's capability.
+_TOOL_MESSAGE_ERROR = re.compile(r"tool_use_id|tool_use_ids|tool_result|tool_call_id|tool_choice|input_schema|tools\.\d+|invalid[^.]{0,40}schema", re.IGNORECASE)
+_TOOL_UNSUPPORTED_STATUSES = frozenset({404, 405})
+# How long a recorded ``unsupported`` capability may short-circuit calls before the provider is asked again.
+UNSUPPORTED_EVIDENCE_TTL_SECONDS = 3600
+# Per-model memo that the provider rejected the large default ``max_tokens`` (see ModelGateway._remember_clamp).
+_CLAMP_PREFIX = "bbd:model-gateway:maxtok-clamp:"
+_CLAMP_TTL_SECONDS = 3600
+
+
+def _status_of(exc: BaseException) -> int | None:
+    """HTTP status of the upstream error behind a gateway error (cause chain, or the ``HTTP <n>:`` text)."""
+    cause: BaseException | None = exc
+    for _ in range(4):
+        if isinstance(cause, APIStatusError):
+            return cause.status_code
+        cause = cause.__cause__ if cause is not None else None
+    match = re.search(r"HTTP (\d{3})\b", str(exc))
+    return int(match[1]) if match else None
+
+
+def is_tool_capability_rejection(exc: BaseException) -> bool:
+    """True when a gateway error says the model/endpoint cannot do tool calling at all.
+
+    Only an explicit capability phrase (``does not support tools``, ``tool use is not supported``,
+    ``function calling is not supported`` ...) or a 404/405 from the endpoint qualifies. Messages about
+    ``tool_use_id``/``tool_result``/``tool_call_id`` pairing or a tool's schema never do.
+    """
+    text = str(exc)
+    if _TOOL_MESSAGE_ERROR.search(text):
+        return False
+    if _TOOL_UNSUPPORTED_PHRASE.search(text):
+        return True
+    return _status_of(exc) in _TOOL_UNSUPPORTED_STATUSES
+
+
+def _is_transient_failure(exc: BaseException) -> bool:
+    """True for timeouts, connection/Redis faults, 429 and 5xx: outcomes that say nothing about the model.
+
+    Walks the ``__cause__`` chain. Deterministic provider answers (400/401/403/404/422) are not transient.
+    """
+    cause: BaseException | None = exc
+    for _ in range(4):
+        if isinstance(cause, (APITimeoutError, APIConnectionError, TimeoutError, RedisError, _GatewayTimeout)):
+            return True
+        if isinstance(cause, APIStatusError):
+            return cause.status_code >= 500 or cause.status_code == 429
+        cause = cause.__cause__ if cause is not None else None
+    return False
+
+
+def _mentions_max_tokens(exc: APIStatusError) -> bool:
+    """True for a 400/422 whose provider message names ``max_tokens`` (output limit), not a capability."""
+    return exc.status_code in {400, 422} and "max_tokens" in str(exc.message or "").lower()
 
 
 # Obvious credential shapes that providers sometimes echo back in error text: "Bearer x", vendor
@@ -402,16 +464,76 @@ class ModelGateway:
 
     async def _record_failure(self, role: str, mapping: ModelMapping | None, capability: str, exc: BaseException,
                               *, rejected_tools: bool = False) -> None:
-        """Record a provider failure as ``failed``; ``unsupported`` only for a clear tool-calling rejection.
+        """Record a deterministic provider failure as ``failed``; ``unsupported`` only for a clear tool rejection.
 
         Privacy denials and breaker-open errors are not provider outcomes and record nothing. Transient errors
-        (timeouts, 5xx, auth) are ``failed``, which never blocks later calls.
+        (timeouts, connection faults, 429, 5xx) record nothing either, so one blip never overwrites a stored
+        ``supported``. Deterministic errors (400/401/403/404/422) are ``failed``; ``unsupported`` for ``tools``
+        needs an explicit capability phrase or a 404/405 (see ``is_tool_capability_rejection``).
         """
         if not isinstance(exc, ModelGatewayError) or isinstance(exc, (PrivacyPolicyDenied, ModelGatewayUnavailable)):
             return
+        if _is_transient_failure(exc):
+            return
         await self._record(role, mapping, capability, "failed")
-        if rejected_tools and isinstance(exc, CapabilityUnsupported) and _TOOL_REJECTION.search(str(exc)):
+        if rejected_tools and isinstance(exc, CapabilityUnsupported) and is_tool_capability_rejection(exc):
             await self._record(role, mapping, "tools", "unsupported")
+
+    def _configured_max_tokens(self, mapping: ModelMapping | None) -> int | None:
+        """Owner-configured output limit of the mapping, or None for hosted kinds (server-side re-check)."""
+        if mapping is None or self.kind in PROVIDER_KINDS_WITHOUT_MAX_TOKENS:
+            return None
+        return mapping.max_output_tokens
+
+    def _clamp_key(self, mapping: ModelMapping) -> str:
+        """Redis key of the "provider rejected the large default max_tokens" memo for this model identity."""
+        return f"{_CLAMP_PREFIX}{self.model_identity}:{mapping.model}"
+
+    async def _clamp_active(self, mapping: ModelMapping) -> bool:
+        """True while a recent Anthropic ``max_tokens`` 400 says the default must be lowered; Redis errors read as False."""
+        try:
+            exists = await self.redis.exists(self._clamp_key(mapping))
+        except RedisError:
+            return False
+        return isinstance(exists, int) and not isinstance(exists, bool) and exists > 0
+
+    async def _remember_clamp(self, mapping: ModelMapping) -> None:
+        """Remember for one hour that this model needs the lowered ``max_tokens``; best-effort, never raises."""
+        try:
+            await self.redis.set(self._clamp_key(mapping), "1", ex=_CLAMP_TTL_SECONDS)
+        except RedisError:
+            _LOG.debug("model gateway max_tokens clamp record failed", exc_info=True)
+
+    async def _initial_max_tokens(self, mapping: ModelMapping, explicit: int | None) -> int | None:
+        """Request ``max_tokens``: explicit caller value, else the configured limit, else (Anthropic, clamped) the low default.
+
+        None means "send nothing": OpenAI-compatible providers then use their own default and the Anthropic
+        translation uses its internal default.
+        """
+        if explicit is not None:
+            return explicit
+        configured = self._configured_max_tokens(mapping)
+        if configured is not None:
+            return configured
+        if self.kind == "anthropic" and await self._clamp_active(mapping):
+            return anthropic.DEFAULT_MAX_TOKENS
+        return None
+
+    async def _clamp_on_max_tokens_error(self, exc: APIStatusError, mapping: ModelMapping, current: int | None,
+                                         *, stream: bool) -> int | None:
+        """Lower value to retry once with after an Anthropic ``max_tokens`` 400, else None (no retry).
+
+        Applies only to the ``anthropic`` kind when the effective limit exceeds ``DEFAULT_MAX_TOKENS``; the clamp
+        is remembered per model identity for an hour. It is a parameter problem, never a capability verdict.
+        """
+        if self.kind != "anthropic" or not _mentions_max_tokens(exc):
+            return None
+        effective = current or (anthropic.DEFAULT_STREAM_MAX_TOKENS if stream else anthropic.DEFAULT_MAX_TOKENS)
+        if effective <= anthropic.DEFAULT_MAX_TOKENS:
+            return None
+        _LOG.warning("Provider rejected max_tokens (%s); retrying with %d", _upstream_reason(exc), anthropic.DEFAULT_MAX_TOKENS)
+        await self._remember_clamp(mapping)
+        return anthropic.DEFAULT_MAX_TOKENS
 
     def _http_client(self, base_url: str) -> httpx.AsyncClient:
         """Create a redirect-disabled HTTP client pinned to an endpoint approved by network policy."""
@@ -593,6 +715,10 @@ class ModelGateway:
             # Probes must be able to reach a tripped upstream, otherwise it could never be re-verified.
             await self._breaker_check()
         body = {**payload, "model": mapping.model}
+        if path == "chat/completions" and body.get("max_tokens") is None:
+            body.pop("max_tokens", None)
+            if (limit := await self._initial_max_tokens(mapping, None)) is not None:
+                body["max_tokens"] = limit
         base_url = _api_base(self.base_url)
 
         async def send() -> Any:
@@ -656,8 +782,14 @@ class ModelGateway:
                         await self._breaker_fail()
                         raise ModelGatewayError("Model gateway request failed") from exc
                     except APIStatusError as exc:
+                        if attempt == 0 and (lowered := await self._clamp_on_max_tokens_error(
+                                exc, mapping, body.get("max_tokens"), stream=False)) is not None:
+                            body["max_tokens"] = lowered
+                            continue
                         if _retryable_status(exc.status_code) and await self._on_retryable_status(exc, attempt):
                             continue
+                        if _mentions_max_tokens(exc):
+                            raise ModelGatewayError(f"Model gateway error ({_upstream_reason(exc)})") from exc
                         if exc.status_code in {400, 404, 405, 422}:
                             raise CapabilityUnsupported(f"Gateway rejected this capability ({_upstream_reason(exc)})") from exc
                         raise ModelGatewayError(f"Model gateway error ({_upstream_reason(exc)})") from exc
@@ -883,8 +1015,8 @@ class ModelGateway:
             extra["tools"] = tools
         if tool_choice is not None:
             extra["tool_choice"] = tool_choice
-        if max_tokens is not None:
-            extra["max_tokens"] = max_tokens
+        if (limit := await self._initial_max_tokens(mapping, max_tokens)) is not None:
+            extra["max_tokens"] = limit
         # Owner-chosen reasoning effort (chat role only): request-gated models stream reasoning only when asked.
         if role == "chat" and not probe and mapping.reasoning_effort != "off":
             extra["reasoning_effort"] = mapping.reasoning_effort
@@ -963,9 +1095,15 @@ class ModelGateway:
                             _LOG.warning("Provider rejected reasoning_effort (%s); retrying without it", _upstream_reason(exc))
                             del extra["reasoning_effort"]
                             continue
+                        if attempt == 0 and not emitted and (lowered := await self._clamp_on_max_tokens_error(
+                                exc, mapping, extra.get("max_tokens"), stream=True)) is not None:
+                            extra["max_tokens"] = lowered
+                            continue
                         # A status error after chunks were emitted is never retried or counted.
                         if not emitted and _retryable_status(exc.status_code) and await self._on_retryable_status(exc, attempt):
                             continue
+                        if _mentions_max_tokens(exc):
+                            raise ModelGatewayError(f"Model gateway error ({_upstream_reason(exc)})") from exc
                         if exc.status_code in {400, 404, 405, 422}:
                             raise CapabilityUnsupported(f"Gateway rejected streaming ({_upstream_reason(exc)})") from exc
                         raise ModelGatewayError(f"Model gateway error ({_upstream_reason(exc)})") from exc

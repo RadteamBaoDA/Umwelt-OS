@@ -1,10 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider, useTranslations } from 'next-intl';
 import { describe, expect, it, vi } from 'vitest';
 import { messages } from '@/core/messages';
-import { ModelDefaults, ModelsPanel, pruneDefaults, type Mapping } from './models-section';
+import { carryMaxTokens, ModelDefaults, ModelsPanel, pruneDefaults, type Mapping } from './models-section';
 import type { ProviderRead } from './provider-editor';
 
 const cloud: ProviderRead = { id: 'default', kind: 'openai', label: 'OpenAI', base_url: 'https://api.openai.com/v1', destination_id: 'remote:x', credential_configured: true, local: false, policy_denied: false, models: [{ id: 'gpt-4o', type: 'llm' }] };
@@ -125,5 +125,46 @@ describe('model defaults', () => {
     await userEvent.click(screen.getByRole('combobox', { name: 'Reasoning effort' }));
     await userEvent.click(screen.getByRole('option', { name: 'High' }));
     expect(onEffort).toHaveBeenCalledWith('high');
+  });
+  describe('max output tokens', () => {
+    const custom: ProviderRead = { ...cloud, id: 'cu', kind: 'custom', label: 'Custom', models: [{ id: 'llama', type: 'llm' }] };
+    const block = (providers: ProviderRead[], chat: Mapping | null, onMaxTokens = vi.fn()) => {
+      function Block() {
+        const t = useTranslations('aiSettings');
+        return <ModelDefaults providers={providers} defaults={{ chat }} disabled={false} embeddingStatus="idle" onPick={vi.fn()} onMaxTokens={onMaxTokens} t={t as never} />;
+      }
+      render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><Block /></NextIntlClientProvider>);
+      return onMaxTokens;
+    };
+
+    it.each(['openai', 'anthropic', 'groq'] as const)('hides the field for hosted kind %s', (kind) => {
+      block([{ ...cloud, kind }], m('gpt-4o'));
+      expect(screen.queryByLabelText(/Max output tokens/)).toBeNull();
+    });
+
+    it('hides the field until a model is chosen', () => {
+      block([custom], null);
+      expect(screen.queryByLabelText(/Max output tokens/)).toBeNull();
+    });
+
+    it.each(['custom', 'openrouter', 'gemini', 'ollama', 'lmstudio'] as const)('shows an optional number input for %s and reports edits', async (kind) => {
+      const onMaxTokens = block([{ ...custom, kind }], { ...m('llama', 'cu'), max_output_tokens: 2048 });
+      const input = screen.getByLabelText('Chat model · Max output tokens') as HTMLInputElement;
+      expect(input.type).toBe('number');
+      expect(input.value).toBe('2048');
+      fireEvent.change(input, { target: { value: '' } });
+      expect(onMaxTokens).toHaveBeenLastCalledWith('chat', null);
+      fireEvent.change(input, { target: { value: '512' } });
+      expect(onMaxTokens).toHaveBeenLastCalledWith('chat', 512);
+      fireEvent.change(input, { target: { value: '5000000' } });
+      expect(onMaxTokens).toHaveBeenLastCalledWith('chat', 1000000);
+    });
+
+    it('carries the value to another non-hosted provider and clears it for a hosted one', () => {
+      const previous: Mapping = { ...m('llama', 'cu'), max_output_tokens: 2048 };
+      expect(carryMaxTokens(m('x'), previous, custom).max_output_tokens).toBe(2048);
+      expect(carryMaxTokens(m('x'), previous, cloud).max_output_tokens).toBeUndefined();
+      expect(carryMaxTokens(m('x'), null, custom)).toEqual(m('x'));
+    });
   });
 });

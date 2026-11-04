@@ -110,7 +110,7 @@ function perMillion(price: string | null, format: Intl.NumberFormat): string {
 
 /**
  * Browse and filter OpenRouter's catalogue and pick one model to prefill the Models add row.
- * Requests go through `browse` (rate limited server-side to 10 per minute), so only tab/sort changes fire
+ * Requests go through `browse` (rate limited server-side to 30 requests per 60 seconds), so only tab/sort changes fire
  * immediately; typed filters are debounced to 600 ms and superseded requests are discarded by query key.
  * Paging resets whenever the committed filters change. Models in `excluded` are listed but not pickable.
  */

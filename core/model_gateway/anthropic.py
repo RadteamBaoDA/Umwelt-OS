@@ -95,6 +95,46 @@ def _user_blocks(content: Any) -> str | list[dict[str, Any]]:
     return blocks
 
 
+def _tool_result_content(content: Any) -> str:
+    """Text of a tool message: strings verbatim, OpenAI text-part lists flattened, anything else JSON-encoded."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list) and all(isinstance(p, dict) and p.get("type") == "text" for p in content):
+        return _text_of(content)
+    return json.dumps(content)
+
+
+def _tool_choice(body: dict[str, Any], *, thinking: bool) -> dict[str, Any] | None:
+    """Anthropic ``tool_choice`` for an OpenAI one: ``none`` -> none, ``required`` -> any, function -> tool.
+
+    ``auto``/absent returns None (Anthropic's default). Forcing a tool needs ``tools`` and cannot be combined
+    with extended thinking; both cases raise CapabilityUnsupported so the caller falls back visibly rather than
+    silently running unforced.
+    """
+    choice = body.get("tool_choice")
+    if choice == "none":
+        return {"type": "none"}
+    forced: dict[str, Any] | None = None
+    if choice == "required":
+        forced = {"type": "any"}
+    elif isinstance(choice, dict) and choice.get("type") == "function":
+        function = choice.get("function")
+        name = function.get("name") if isinstance(function, dict) else None
+        if isinstance(name, str) and name:
+            forced = {"type": "tool", "name": name}
+    if forced is None:
+        return None
+    from core.model_gateway.client import (
+        CapabilityUnsupported,  # client imports this module
+    )
+
+    if not body.get("tools"):
+        raise CapabilityUnsupported("Forced tool_choice needs tools")
+    if thinking:
+        raise CapabilityUnsupported("Forced tool_choice is not supported together with extended thinking")
+    return forced
+
+
 def _assistant_blocks(message: dict[str, Any]) -> list[dict[str, Any]]:
     """Assistant turn as ordered blocks: provider thinking blocks verbatim, then text, then ``tool_use``.
 
@@ -124,8 +164,9 @@ def to_messages_request(body: dict[str, Any], *, stream: bool) -> dict[str, Any]
     """Translate an OpenAI-shaped chat request into an Anthropic Messages request. Pure; never mutates ``body``.
 
     System messages become the top-level ``system``; tool results become ``tool_result`` user blocks; sampling
-    parameters, ``extra_body`` and ``stream_options`` are dropped (400 on the current API version). Forced
-    ``tool_choice`` is degraded to auto because Claude 5.x answers 400 to ``any``/``tool``.
+    parameters, ``extra_body`` and ``stream_options`` are dropped (400 on the current API version). ``tool_choice``
+    ``required`` maps to ``any`` and a named function to ``tool``; a forced choice that cannot be honoured
+    (no tools, or extended thinking is on) raises CapabilityUnsupported.
     """
     system: list[str] = []
     messages: list[dict[str, Any]] = []
@@ -135,7 +176,9 @@ def to_messages_request(body: dict[str, Any], *, stream: bool) -> dict[str, Any]
             if text := _text_of(message.get("content")):
                 system.append(text)
         elif role == "user":
-            messages.append({"role": "user", "content": _user_blocks(message.get("content"))})
+            # Anthropic rejects empty content (400): a user turn with no usable text/image part is dropped.
+            if user_content := _user_blocks(message.get("content")):
+                messages.append({"role": "user", "content": user_content})
         elif role == "assistant":
             if blocks := _assistant_blocks(message):
                 messages.append({"role": "assistant", "content": blocks})
@@ -143,7 +186,7 @@ def to_messages_request(body: dict[str, Any], *, stream: bool) -> dict[str, Any]
             content = message.get("content")
             messages.append({"role": "user", "content": [{
                 "type": "tool_result", "tool_use_id": _tool_id(message.get("tool_call_id")),
-                "content": content if isinstance(content, str) else json.dumps(content)}]})
+                "content": _tool_result_content(content)}]})
     out: dict[str, Any] = {
         "model": body.get("model"), "messages": messages,
         "max_tokens": body.get("max_tokens") or body.get("max_completion_tokens")
@@ -157,10 +200,6 @@ def to_messages_request(body: dict[str, Any], *, stream: bool) -> dict[str, Any]
             {"name": t["function"]["name"], **({"description": t["function"]["description"]} if t["function"].get("description") else {}),
              "input_schema": t["function"].get("parameters") or {"type": "object", "properties": {}}}
             for t in tools if isinstance(t, dict) and isinstance(t.get("function"), dict)]
-    # ponytail: forced tool_choice ("required"/function) is dropped because Claude 5.x returns 400; older models could
-    # honour it, so add a per-model allowlist if a caller needs forcing.
-    if body.get("tool_choice") == "none":
-        out["tool_choice"] = {"type": "none"}
     output_config: dict[str, Any] = {}
     response_format = body.get("response_format")
     if isinstance(response_format, dict) and response_format.get("type") == "json_schema":
@@ -168,6 +207,8 @@ def to_messages_request(body: dict[str, Any], *, stream: bool) -> dict[str, Any]
         if isinstance(schema, dict):
             output_config["format"] = {"type": "json_schema", "schema": schema}
     effort = body.get("reasoning_effort")
+    if (tool_choice := _tool_choice(body, thinking=effort in {"low", "medium", "high"})) is not None:
+        out["tool_choice"] = tool_choice
     if effort in {"low", "medium", "high"}:
         output_config["effort"] = effort
         # Summarized so streamed reasoning stays visible in the UI.

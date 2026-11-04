@@ -120,3 +120,23 @@ def test_browse_request_rejects_unknown_and_oversized():
         OpenRouterBrowseRequest(limit=201)
     with pytest.raises(ValidationError):
         OpenRouterBrowseRequest.model_validate({"x": 1})
+
+
+def test_parse_openrouter_page_reports_raw_entries_consumed():
+    """Filtered/duplicate entries still advance the upstream offset (consumed counts raw entries)."""
+    from modules.settings.openrouter_models import parse_openrouter_page
+
+    payload = {"links": {"next": "x"}, "data": [{"id": "v/a"}, {"id": "bad id"}, {"id": "v/a"}, "junk", {"id": "v/b"}]}
+    models, _total, has_next, consumed = parse_openrouter_page(payload, limit=50)
+    assert [m["id"] for m in models] == ["v/a", "v/b"] and has_next and consumed == 5
+    # Stopping at the limit consumes only what was examined, so the next page resumes right after it.
+    assert parse_openrouter_page(payload, limit=1)[3] == 1
+
+
+@pytest.mark.asyncio
+async def test_browse_route_next_offset_advances_by_raw_page_length():
+    saved = ProviderConfig(kind="openrouter", base_url=OR_URL, api_key="sk-or", destination_id="d")
+    payload = {"total_count": 9, "links": {"next": "x"}, "data": [{"id": "v/a"}, {"id": "bad id"}, {"id": "v/b"}]}
+    gateway = SimpleNamespace(list_openrouter_models=AsyncMock(return_value=payload))
+    result, _, _ = await _browse(OpenRouterBrowseRequest(provider_id="p1", offset=10, limit=3), _config({"p1": saved}), gateway)
+    assert len(result.models) == 2 and result.next_offset == 13

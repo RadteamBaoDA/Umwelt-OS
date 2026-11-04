@@ -5,6 +5,7 @@ import { Check, Info, Plus, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
 import { SearchableSelect } from '@/components/ui/searchable-select';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -15,9 +16,11 @@ import { FieldGrid } from './settings-layout';
 
 type Translate = (key: string, values?: Record<string, string | number>) => string;
 /** Stored mapping: which provider model serves one role. */
-export type Mapping = { model: string; version: string | null; destination: 'unknown' | 'remote'; provider_id?: string | null; dimensions?: number | null; reasoning_effort?: ReasoningEffort };
+export type Mapping = { model: string; version: string | null; destination: 'unknown' | 'remote'; provider_id?: string | null; dimensions?: number | null; reasoning_effort?: ReasoningEffort; max_output_tokens?: number | null };
 /** Chat-role reasoning effort; `off` sends nothing to the provider. */
 export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high';
+/** Hosted clouds that choose their own output limit; the Max output tokens field is hidden for them and the server discards any value. Mirrors `PROVIDER_KINDS_WITHOUT_MAX_TOKENS` in `core/model_gateway/schemas.py`. */
+export const kindsWithoutMaxTokens: readonly string[] = ['anthropic', 'openai', 'groq'];
 const efforts: readonly ReasoningEffort[] = ['off', 'low', 'medium', 'high'];
 /** Role the owner can pick a default model for. */
 export type DefaultSlot = 'chat' | 'brief' | 'background' | 'embedding' | 'reranker' | 'vision';
@@ -29,6 +32,11 @@ const same = '__same__';
 /** Mapping for one provider model; local providers stay "unknown" destination, remote ones "remote". */
 export function mappingFor(provider: ProviderRead, model: string): Mapping {
   return { model, version: null, destination: provider.local ? 'unknown' : 'remote', provider_id: provider.id };
+}
+
+/** Keeps the owner's output limit when a role switches to `provider`, and drops it for hosted kinds that must not carry one. */
+export function carryMaxTokens(picked: Mapping, previous: Mapping | null | undefined, provider: ProviderRead): Mapping {
+  return previous?.max_output_tokens != null && !kindsWithoutMaxTokens.includes(provider.kind) ? { ...picked, max_output_tokens: previous.max_output_tokens } : picked;
 }
 
 /** Clears every default still pointing at a model that was just removed, so no mapping dangles. */
@@ -101,10 +109,10 @@ export function ModelsPanel({ providers, discovered, modelTests, checkedAt = {},
   </div>;
 }
 
-type DefaultsProps = { providers: ProviderRead[]; defaults: Defaults; disabled: boolean; embeddingStatus: 'idle' | 'checking' | 'error'; onPick: (slot: DefaultSlot, provider: ProviderRead | null, model: string) => void; onEffort?: (effort: ReasoningEffort) => void; t: Translate };
+type DefaultsProps = { providers: ProviderRead[]; defaults: Defaults; disabled: boolean; embeddingStatus: 'idle' | 'checking' | 'error'; onPick: (slot: DefaultSlot, provider: ProviderRead | null, model: string) => void; onEffort?: (effort: ReasoningEffort) => void; onMaxTokens?: (slot: DefaultSlot, value: number | null) => void; t: Translate };
 
-/** Default-model selects, one per role; each lists only added models of the matching type. Optional roles offer a fallback entry that clears the default. The chat role also gets a reasoning-effort select when `onEffort` is given. */
-export function ModelDefaults({ providers, defaults, disabled, embeddingStatus, onPick, onEffort, t }: DefaultsProps) {
+/** Default-model selects, one per role; each lists only added models of the matching type. Optional roles offer a fallback entry that clears the default. The chat role also gets a reasoning-effort select when `onEffort` is given. When `onMaxTokens` is given, each LLM role whose model sits on a non-hosted provider (not anthropic/openai/groq) gets an optional Max output tokens number input; blank means the provider default. */
+export function ModelDefaults({ providers, defaults, disabled, embeddingStatus, onPick, onEffort, onMaxTokens, t }: DefaultsProps) {
   const all = providers.flatMap((p) => (p.models ?? []).map((m) => ({ provider: p, model: m })));
   const entries = (filter: (m: ProviderModel) => boolean) => all.filter((e) => filter(e.model));
   const refOf = (m: Mapping | null | undefined) => (m?.model ? modelTestKey(mappingProviderId(m.provider_id, providers), m.model) : '');
@@ -118,21 +126,35 @@ export function ModelDefaults({ providers, defaults, disabled, embeddingStatus, 
       {list.map((e) => <SelectItem key={modelTestKey(e.provider.id, e.model.id)} value={modelTestKey(e.provider.id, e.model.id)}>{`${e.provider.label || e.provider.id} · ${e.model.id}`}</SelectItem>)}
     </SelectContent></Select></label>;
   const chats = entries((m) => m.type === 'llm');
+  /** Optional output-token limit input for one LLM role; rendered only when the role's provider kind accepts one. */
+  const maxTokensField = (slot: DefaultSlot, label: string) => {
+    const mapping = defaults[slot];
+    const owner = mapping?.model ? providers.find((p) => p.id === mappingProviderId(mapping.provider_id, providers)) : undefined;
+    if (!onMaxTokens || !mapping?.model || !owner || kindsWithoutMaxTokens.includes(owner.kind)) return null;
+    return <label className="field" key={`max-${slot}`}><span className="label">{`${label} · ${t('maxOutputTokens')}`}</span>
+      <Input type="number" inputMode="numeric" min={1} max={1000000} step={1} disabled={disabled} aria-label={`${label} · ${t('maxOutputTokens')}`} value={mapping.max_output_tokens ?? ''}
+        onChange={(event) => { const raw = event.target.value.trim(); const n = Number(raw); onMaxTokens(slot, raw === '' || !Number.isFinite(n) || n < 1 ? null : Math.min(Math.trunc(n), 1000000)); }} />
+      <span className="text-muted-foreground text-sm">{t('maxOutputTokensHelp')}</span></label>;
+  };
   return <div className="flex flex-col gap-3">
     <h3 className="m-0 text-base font-semibold">{t('defaultsTitle')}</h3>
     <p className="text-muted-foreground m-0 text-sm">{t('defaultsHelp')}</p>
     <FieldGrid>
       {field('chat', t('chatModel'), chats)}
+      {maxTokensField('chat', t('chatModel'))}
       {onEffort && <label className="field"><span className="label">{t('reasoningEffort')}</span>
         <Select disabled={disabled || !defaults.chat?.model} value={defaults.chat?.reasoning_effort ?? 'off'} onValueChange={(next) => onEffort(next as ReasoningEffort)}><SelectTrigger aria-label={t('reasoningEffort')}><SelectValue /></SelectTrigger><SelectContent>
           {efforts.map((item) => <SelectItem key={item} value={item}>{t(`effort${item[0].toUpperCase()}${item.slice(1)}`)}</SelectItem>)}
         </SelectContent></Select>
         <span className="text-muted-foreground text-sm">{t('reasoningEffortHelp')}</span></label>}
       {field('brief', t('briefModel'), chats, { id: same, label: t('sameAsChat') })}
+      {maxTokensField('brief', t('briefModel'))}
       {field('background', t('backgroundModel'), entries((m) => m.type === 'background' || m.type === 'llm'), { id: same, label: t('sameAsBrief') })}
+      {maxTokensField('background', t('backgroundModel'))}
       {field('embedding', t('embeddingModel'), entries((m) => m.type === 'embedding'))}
       {field('reranker', t('rerankerModel'), entries((m) => m.type === 'reranker'), { id: none, label: t('noneOption') })}
       {field('vision', t('visionModel'), entries((m) => m.type === 'llm' && m.vision === true), { id: none, label: t('noneOption') })}
+      {maxTokensField('vision', t('visionModel'))}
     </FieldGrid>
     <div role="status" aria-live="polite">
       {embeddingStatus === 'checking' && <p className="text-muted-foreground m-0 text-sm">{t('embeddingChecking')}</p>}

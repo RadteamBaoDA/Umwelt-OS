@@ -139,12 +139,11 @@ async def test_tools_rejection_is_recorded_unsupported() -> None:
 
 @pytest.mark.asyncio
 async def test_transient_error_is_never_recorded_unsupported() -> None:
-    """A 500 carries the real status in the error and is recorded as failed, never unsupported."""
+    """A 500 carries the real status in the error and records nothing (a blip must not overwrite ``supported``)."""
     evidence = _Evidence()
     with patch.object(ModelGateway, "_on_retryable_status", AsyncMock(return_value=False)),          pytest.raises(ModelGatewayError, match="HTTP 500"):
         await _run(_gateway(evidence), tools=TOOLS, error=_status_error(500, "upstream exploded"))
-    assert ("streaming", "failed") in evidence.records
-    assert all(result != "unsupported" for _cap, result in evidence.records)
+    assert evidence.records == []
 
 
 @pytest.mark.asyncio

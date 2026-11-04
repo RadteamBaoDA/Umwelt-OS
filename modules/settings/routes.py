@@ -27,7 +27,7 @@ from core.workspaces.schemas import WorkspaceContext
 from modules.chat import web_search as web
 from modules.chat.generative_ui import external_router as viz
 from modules.settings import lifecycle, models, public
-from modules.settings.openrouter_models import parse_openrouter_models, to_query_params
+from modules.settings.openrouter_models import parse_openrouter_page, to_query_params
 from modules.settings.schemas import (
     ConnectionTestResult,
     ModuleLifecycleRead,
@@ -539,7 +539,7 @@ async def browse_openrouter_models(
         payload = await gateway.list_openrouter_models(to_query_params(body.filters, body.offset, body.limit))
     except ModelGatewayError as exc:
         return OpenRouterBrowseResult(ok=False, error=viz.error_from_gateway(exc).code)
-    models, total, has_next = parse_openrouter_models(payload, body.limit)
+    models, total, has_next, consumed = parse_openrouter_page(payload, body.limit)
     return OpenRouterBrowseResult(
         ok=True, models=[OpenRouterModelRead(**m) for m in models], total_count=total,
-        next_offset=body.offset + len(models) if has_next else None)
+        next_offset=body.offset + consumed if has_next else None)

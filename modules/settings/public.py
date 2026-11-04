@@ -30,6 +30,7 @@ from core.model_gateway.schemas import (
     LOCAL_PROVIDER_KINDS,
     MAX_PROVIDERS,
     MODEL_ROLES,
+    PROVIDER_KINDS_WITHOUT_MAX_TOKENS,
     AIExecutionConfig,
     AISettingsRead,
     AISettingsUpdate,
@@ -708,6 +709,12 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
             raise HTTPException(status_code=422, detail="Dimensions apply only to the embedding role")
         if mapping.reasoning_effort != "off" and role != "chat":
             raise HTTPException(status_code=422, detail="Reasoning effort applies only to the chat role")
+        if mapping.max_output_tokens is not None:
+            if role not in {"chat", "brief", "background", "vision"}:
+                raise HTTPException(status_code=422, detail="Max output tokens apply only to LLM roles")
+            if provider is not None and provider.get("kind") in PROVIDER_KINDS_WITHOUT_MAX_TOKENS:
+                # Server is authoritative: hosted clouds pick their own limit, so a client-sent value is discarded.
+                chosen_defaults[role] = mapping.model_copy(update={"max_output_tokens": None})
         if role == "embedding" and mapping.model and mapping.dimensions is None:
             raise HTTPException(status_code=422, detail="Embedding dimensions required; run the embeddings probe")
     next_web_endpoint = _endpoint(str(update.web_search_endpoint) if update.web_search_endpoint else None, settings)

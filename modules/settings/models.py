@@ -1,7 +1,7 @@
 import logging
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from uuid import UUID
 
@@ -27,6 +27,7 @@ from sqlalchemy.types import Uuid
 
 from core.database import Base
 from core.model_gateway.cache import validate_capability_scope
+from core.model_gateway.client import UNSUPPORTED_EVIDENCE_TTL_SECONDS
 from core.model_gateway.schemas import (
     MODEL_ROLES,
     AIExecutionConfig,
@@ -216,7 +217,8 @@ class ModelTestResultRecord(Base):
 
     Written by the Settings Test routes and by real gateway calls (chat/stream/tools/structured/embeddings outcomes);
     read by the Models table and, for ``unsupported`` tools/structured evidence only, by the gateway. There is no
-    expiry: ``model_identity`` (credential/endpoint/default fingerprint) invalidates evidence when it changes.
+    expiry on the row itself; ``model_identity`` (credential/endpoint/default fingerprint) invalidates evidence when it changes,
+    and a gateway lookup ignores an ``unsupported`` row older than one hour.
     Rows with a NULL identity (pre-existing UI test summaries) are display-only and never gate a request.
     """
 
@@ -280,14 +282,24 @@ class PostgresCapabilityEvidence:
         self._identity = model_identity
 
     async def lookup(self, role: str, mapping: ModelMapping, capability: str) -> str | None:
-        """Return the stored result for this model capability under the current identity, else None."""
+        """Return the stored result for this model capability under the current identity, else None.
+
+        An ``unsupported`` result older than ``UNSUPPORTED_EVIDENCE_TTL_SECONDS`` reads as None so a past
+        rejection (possibly a misclassified 400) only short-circuits for an hour; the Models table reads rows directly.
+        """
         async with self._factory() as session:
-            return await session.scalar(select(ModelTestResultRecord.result).where(
+            row = (await session.execute(select(ModelTestResultRecord.result, ModelTestResultRecord.checked_at).where(
                 ModelTestResultRecord.workspace_id == self._workspace_id,
                 ModelTestResultRecord.provider_id == (mapping.provider_id or _DEFAULT_PROVIDER),
                 ModelTestResultRecord.model_id == mapping.model,
                 ModelTestResultRecord.capability == capability,
-                ModelTestResultRecord.model_identity == self._identity))
+                ModelTestResultRecord.model_identity == self._identity))).first()
+        if row is None:
+            return None
+        result, checked_at = row
+        if result == "unsupported" and datetime.now(UTC) - checked_at > timedelta(seconds=UNSUPPORTED_EVIDENCE_TTL_SECONDS):
+            return None
+        return str(result)
 
     async def record(self, role: str, mapping: ModelMapping, capability: str,
                      result: Literal["supported", "unsupported", "failed"]) -> None:

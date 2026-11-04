@@ -14,7 +14,7 @@ import { AgentSettingsWorkspace } from '@/modules/agents/agent-settings';
 import { CheckboxField, SettingsActions, SettingsPageHeader, SettingsSection } from './settings-layout';
 import { AutomationSettings } from '@/modules/automations/rule-list';
 import type { BrowseOpenRouter, OpenRouterBrowseResult } from './openrouter-model-browser';
-import { mappingFor, ModelDefaults, ModelsPanel, pruneDefaults, type DefaultSlot, type Defaults, type Mapping, type ReasoningEffort } from './models-section';
+import { carryMaxTokens, mappingFor, ModelDefaults, ModelsPanel, pruneDefaults, type DefaultSlot, type Defaults, type Mapping, type ReasoningEffort } from './models-section';
 import { modelTestKey, parseDraftSnapshot, ProviderEditor, testRoleByType, type ModelTestState, type ProviderModel, type ProviderRead, type ProviderSecret } from './provider-editor';
 
 type Privacy = { allow_remote_reasoning: boolean; allow_remote_embeddings: boolean; allow_remote_web_search: boolean; allow_widget_remote_media: boolean; reasoning_destinations: string[]; embedding_destinations: string[]; web_search_destinations: string[] };
@@ -48,6 +48,8 @@ export function browseApiKey(typedKey: string | undefined, draftKind: string, sa
   return typedKey && draftKind === 'openrouter' && (savedKind === undefined || savedKind === 'openrouter') ? typedKey : '';
 }
 
+/** Roles that call an LLM and can therefore carry an output-token limit. */
+const llmRoles: readonly DefaultSlot[] = ['chat', 'brief', 'background', 'vision'];
 const draftStorageKey = 'bbd:settings:ai:draft:v2';
 const defaultPrivacy: Privacy = { allow_remote_reasoning: false, allow_remote_embeddings: false, allow_remote_web_search: false, allow_widget_remote_media: false, reasoning_destinations: [], embedding_destinations: [], web_search_destinations: [] };
 
@@ -273,15 +275,19 @@ export function AISettingsWorkspace() {
   const embeddingDimsChanged = embeddingMapping?.dimensions != null && savedDimensions != null && embeddingMapping.dimensions !== savedDimensions;
   /** Applies a models-list edit: fills empty defaults for new Chat models and clears defaults whose model was removed. */
   const changeModels = (providers: ProviderRead[]) => set({ providers, defaults: pruneDefaults(saved.providers, providers, autoFillDefaults(saved.providers, providers, defaults)) });
-  /** Writes one role default directly; an embedding pick also starts the dimensions probe and stays unsavable until it reports them. */
+  /** Writes one role default directly; a chat pick keeps the reasoning effort, and an LLM-role pick keeps the max output tokens only on non-hosted providers. An embedding pick also starts the dimensions probe and stays unsavable until it reports them. */
   const pickDefault = (role: DefaultSlot, provider: ProviderRead | null, model: string) => {
     const picked: Mapping | null = provider && model ? mappingFor(provider, model) : null;
     // Switching the chat model keeps the owner's reasoning-effort choice.
-    const mapping: Mapping | null = picked && role === 'chat' && defaults.chat?.reasoning_effort ? { ...picked, reasoning_effort: defaults.chat.reasoning_effort } : picked;
+    const withEffort: Mapping | null = picked && role === 'chat' && defaults.chat?.reasoning_effort ? { ...picked, reasoning_effort: defaults.chat.reasoning_effort } : picked;
+    // The output limit follows the role to another non-hosted provider but is cleared when the new one is a hosted cloud.
+    const mapping: Mapping | null = withEffort && provider && llmRoles.includes(role) ? carryMaxTokens(withEffort, defaults[role], provider) : withEffort;
     set({ defaults: { ...defaults, [role]: mapping && role === 'embedding' ? { ...mapping, dimensions: null } : mapping } });
     if (role === 'embedding' && mapping && provider) draftProbe.mutate({ role, mapping, capability: 'embeddings', provider });
   };
   /** Sets the chat role's reasoning effort on the current draft. */
+  /** Sets or clears (null) one LLM role's optional output-token limit on the current draft. */
+  const pickMaxTokens = (role: DefaultSlot, value: number | null) => { const current = defaults[role]; if (current) set({ defaults: { ...defaults, [role]: { ...current, max_output_tokens: value } } }); };
   const pickEffort = (effort: ReasoningEffort) => { if (defaults.chat) set({ defaults: { ...defaults, chat: { ...defaults.chat, reasoning_effort: effort } } }); };
   const advancedClass = 'border-t border-border';
   const summaryClass = 'flex min-h-9 pointer-coarse:min-h-11 cursor-pointer items-center font-semibold';
@@ -296,7 +302,7 @@ export function AISettingsWorkspace() {
       {saved.providers.length > 0 && (
         <SettingsSection title={t('modelsSection')} description={t('modelsHelp')}>
           <ModelsPanel providers={saved.providers} discovered={discovered} modelTests={shownTests} checkedAt={checkedAt} details={testDetails} disabled={save.isPending} onChange={changeModels} onTestModel={(provider, model) => testModel.mutate({ provider, model })} browseOpenRouter={browseOpenRouter} t={t as never} />
-          <ModelDefaults providers={saved.providers} defaults={defaults} disabled={save.isPending} embeddingStatus={embeddingStatus} onPick={pickDefault} onEffort={pickEffort} t={t as never} />
+          <ModelDefaults providers={saved.providers} defaults={defaults} disabled={save.isPending} embeddingStatus={embeddingStatus} onPick={pickDefault} onEffort={pickEffort} onMaxTokens={pickMaxTokens} t={t as never} />
           {embeddingDimsChanged && <p className="error m-0 text-sm" role="status">{t('dimensionsChangedWarning')}</p>}
         </SettingsSection>
       )}
