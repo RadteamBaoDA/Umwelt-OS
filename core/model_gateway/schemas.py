@@ -238,6 +238,7 @@ class AIExecutionConfig(BaseModel):
     allow_public_providers: bool = False
     gateway_base_url: str | None
     gateway_api_key: str = Field(repr=False, exclude=True)
+    gateway_kind: ProviderKind = "custom"  # transport selector for ModelGateway (anthropic uses the native Messages API)
     gateway_credential_configured: bool = False
     defaults: ModelDefaults
     privacy: PrivacySettings

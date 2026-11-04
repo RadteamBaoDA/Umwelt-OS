@@ -185,7 +185,7 @@ def gateway(
         scope=scope, gateway_identity=config.gateway_identity,
         model_identity=config.model_identity,
         configuration_revision=config.configuration_revision, before_send=before_send,
-        approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers)
+        approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers, kind=config.gateway_kind)
 
 
 async def configured_embedding(

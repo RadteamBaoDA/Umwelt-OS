@@ -652,7 +652,7 @@ async def _rewrite_web_query(
             scope=scope, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
             configuration_revision=config.configuration_revision, before_send=recheck_send,
             approved_endpoint_cidrs=tuple(settings.ai_allowed_endpoint_cidrs),
-            allow_public_endpoints=config.allow_public_providers,
+            allow_public_endpoints=config.allow_public_providers, kind=config.gateway_kind,
         )
         # User messages only: assistant output may carry private evidence that must not reach the search provider.
         window = [
@@ -1194,7 +1194,7 @@ async def run_response_generation(
                 configuration_revision=ai_config.configuration_revision,
                 before_send=before_send_attempt,
                 approved_endpoint_cidrs=tuple(settings.ai_allowed_endpoint_cidrs),
-                allow_public_endpoints=ai_config.allow_public_providers,
+                allow_public_endpoints=ai_config.allow_public_providers, kind=ai_config.gateway_kind,
             )
 
             # Stream request construction is lazy; this generator is consumed below. Its gateway
@@ -2100,7 +2100,7 @@ async def _external_route_decision(
         redis=redis, base_url=config.gateway_base_url, api_key=config.gateway_api_key, destination_id=destination,
         timeout_seconds=15.0, scope=scope, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
         configuration_revision=config.configuration_revision, before_send=recheck_send,
-        approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers,
+        approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers, kind=config.gateway_kind,
     )
     if resolved.api == "decisions":
         category = await viz.classify_decisions(gateway, mapping, policy, window, before_send=recheck_send)

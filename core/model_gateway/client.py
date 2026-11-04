@@ -23,7 +23,13 @@ from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from core.config import Settings
 from core.model_gateway.policy import may_send
-from core.model_gateway.schemas import HOSTED_PROVIDER_ENDPOINTS, HOSTED_PROVIDER_KINDS, ModelMapping, RequestPolicy
+from core.model_gateway.schemas import (
+    HOSTED_PROVIDER_ENDPOINTS,
+    HOSTED_PROVIDER_KINDS,
+    ModelMapping,
+    ProviderKind,
+    RequestPolicy,
+)
 from core.model_gateway.transport import EndpointNetworkPolicyError, approved_http_client, body_sent
 from core.telemetry import record_model_call
 from core.workspaces.schemas import InternalJobScope, Scope, WorkspaceContext
@@ -334,6 +340,8 @@ class ModelGateway:
     evidence: CapabilityEvidenceStore | None = field(default=None, kw_only=True, repr=False)
     approved_endpoint_cidrs: tuple[str, ...] = ()
     allow_public_endpoints: bool = False
+    # Provider kind selects the wire protocol: "anthropic" uses the native Messages API, everything else OpenAI-compatible.
+    kind: ProviderKind = field(default="custom", kw_only=True)
 
     def __post_init__(self) -> None:
         """Freeze resolved identity/credentials for one request; reject missing scope or fence.

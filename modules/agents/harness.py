@@ -999,7 +999,7 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
             scope=context.scope, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
             configuration_revision=config.configuration_revision, before_send=before_send,
             approved_endpoint_cidrs=tuple(context.settings.ai_allowed_endpoint_cidrs),
-            allow_public_endpoints=config.allow_public_providers,
+            allow_public_endpoints=config.allow_public_providers, kind=config.gateway_kind,
         )
         messages = [
             {"role": "system", "content": (

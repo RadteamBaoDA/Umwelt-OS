@@ -197,7 +197,7 @@ async def _apply_configured_reranking(
             configuration_revision=config.configuration_revision,
             before_send=before_rerank_send,
             approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
-            allow_public_endpoints=config.allow_public_providers,
+            allow_public_endpoints=config.allow_public_providers, kind=config.gateway_kind,
         )
 
         # Release the outer session's snapshot/locks before the network call; the egress hook

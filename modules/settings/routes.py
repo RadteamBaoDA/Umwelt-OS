@@ -182,7 +182,7 @@ async def discover_models(body: ConnectionDraft, request: Request, session: Sess
         scope=_owner, configuration_revision=0,
         gateway_identity=hashlib.sha256((config.gateway_identity + endpoint + hashlib.sha256(credential.encode()).hexdigest()).encode()).hexdigest(), before_send=recheck_send,
         approved_endpoint_cidrs=tuple(request.app.state.settings.ai_allowed_endpoint_cidrs),
-        allow_public_endpoints=request.app.state.settings.ai_allow_public_providers)
+        allow_public_endpoints=request.app.state.settings.ai_allow_public_providers, kind=kind)
     try:
         model_ids = await gateway.discover_models()
         await recheck_send()
@@ -405,7 +405,7 @@ async def test_viz_router(session: Session, request: Request, _owner: OwnerWrite
                            scope=_owner, configuration_revision=config.configuration_revision,
                            gateway_identity=config.gateway_identity, model_identity=config.model_identity, before_send=recheck_send,
                            approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
-                           allow_public_endpoints=config.allow_public_providers)
+                           allow_public_endpoints=config.allow_public_providers, kind=config.gateway_kind)
     # Decisions API: one adapter, no constraint modes (None); otherwise the configured mode then the other one.
     modes: list[str | None] = ([None] if resolved.api == "decisions"
                                else [resolved.mode, "forced_tool" if resolved.mode == "json_schema" else "json_schema"])
@@ -480,7 +480,7 @@ async def discover_viz_decision_models(
                            timeout_seconds=15, scope=_owner, configuration_revision=config.configuration_revision,
                            gateway_identity=config.gateway_identity, model_identity=config.model_identity, before_send=recheck_send,
                            approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
-                           allow_public_endpoints=config.allow_public_providers)
+                           allow_public_endpoints=config.allow_public_providers, kind=config.gateway_kind)
     try:
         payload = await gateway.discover_decision_models()
     except ModelGatewayError as exc:

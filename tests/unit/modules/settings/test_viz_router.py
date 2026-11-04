@@ -162,7 +162,7 @@ async def test_route_llm_falls_back_to_other_mode_and_records_capability() -> No
     resolved = public.VizRouterResolved(kind="llm", provider_id="default", model="gpt-x", allow_remote=True)
     config = SimpleNamespace(
         workspace_id=WS, actor_user_id=1, membership_revision=1, gateway_identity="a" * 64, model_identity="a" * 64, configuration_revision=1,
-        endpoint_destination_id="remote:abc", gateway_base_url=GW, gateway_api_key="k", endpoint_allowed_cidrs=(),
+        endpoint_destination_id="remote:abc", gateway_base_url=GW, gateway_api_key="k", gateway_kind="custom", endpoint_allowed_cidrs=(),
         allow_public_providers=True)
     mapping = SimpleNamespace(model="gpt-x")
     calls: list[str] = []
@@ -197,7 +197,7 @@ async def test_route_llm_hard_failure_does_not_try_other_mode() -> None:
     resolved = public.VizRouterResolved(kind="llm", provider_id="default", model="gpt-x", allow_remote=True)
     config = SimpleNamespace(
         workspace_id=WS, actor_user_id=1, membership_revision=1, gateway_identity="a" * 64, model_identity="a" * 64, configuration_revision=1,
-        endpoint_destination_id="remote:abc", gateway_base_url=GW, gateway_api_key="k", endpoint_allowed_cidrs=(),
+        endpoint_destination_id="remote:abc", gateway_base_url=GW, gateway_api_key="k", gateway_kind="custom", endpoint_allowed_cidrs=(),
         allow_public_providers=True)
     seen: list[str] = []
 
@@ -373,7 +373,7 @@ async def test_route_decisions_api_uses_decisions_adapter_and_records_structured
                                         base_url=public.VIZ_OPENROUTER_URL, api_key="k", allow_remote=True)
     config = SimpleNamespace(
         workspace_id=WS, actor_user_id=1, membership_revision=1, gateway_identity="a" * 64, model_identity="a" * 64, configuration_revision=1,
-        endpoint_destination_id="remote:abc", gateway_base_url=public.VIZ_OPENROUTER_URL, gateway_api_key="k",
+        endpoint_destination_id="remote:abc", gateway_base_url=public.VIZ_OPENROUTER_URL, gateway_api_key="k", gateway_kind="custom",
         endpoint_allowed_cidrs=(), allow_public_providers=True)
     chat = AsyncMock()
     decisions = AsyncMock(return_value="map")
@@ -397,7 +397,7 @@ async def test_route_decisions_api_uses_decisions_adapter_and_records_structured
 
 async def _discover(body: object, resolved: public.VizRouterResolved, gateway: object) -> object:
     config = SimpleNamespace(
-        gateway_base_url=public.VIZ_OPENROUTER_URL, gateway_api_key="", endpoint_destination_id="remote:abc",
+        gateway_base_url=public.VIZ_OPENROUTER_URL, gateway_api_key="", gateway_kind="custom", endpoint_destination_id="remote:abc",
         configuration_revision=1, gateway_identity="a" * 64, model_identity="a" * 64, endpoint_allowed_cidrs=(), allow_public_providers=True)
     with patch.object(public, "resolve_viz_router", AsyncMock(return_value=resolved)), \
          patch.object(public, "get_ai_execution_config", AsyncMock(return_value=config)), \

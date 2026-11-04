@@ -18,7 +18,7 @@ def _config(*, reasoning: bool = True) -> Any:
     return SimpleNamespace(
         workspace_id=uuid4(), actor_user_id=1, membership_revision=1, gateway_identity="a" * 64, model_identity="a" * 64, configuration_revision=1,
         privacy=SimpleNamespace(allow_remote_reasoning=reasoning, reasoning_destinations=("d",)),
-        endpoint_destination_id="d", gateway_base_url="https://x", gateway_api_key="k", allow_public_providers=True,
+        endpoint_destination_id="d", gateway_base_url="https://x", gateway_api_key="k", gateway_kind="custom", allow_public_providers=True,
         defaults=SimpleNamespace(resolve=lambda role: None),
     )
 

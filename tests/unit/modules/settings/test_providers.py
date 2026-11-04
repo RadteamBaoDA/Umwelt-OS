@@ -412,3 +412,26 @@ async def test_legacy_save_rejects_duplicate_fallback_and_clears_key_on_endpoint
     row.web_search_fallbacks = []
     await _save(row, _update(web_search_provider="searxng", web_search_endpoint=fallback))
     assert row.web_search_api_key_ciphertext is None
+
+
+def test_derive_carries_provider_kind():
+    config = _derived_config()
+    assert public.derive_for_role(config, "chat").gateway_kind == "ollama"     # chat -> local1 (ollama)
+    assert public.derive_for_role(config, "brief").gateway_kind == "custom"
+
+
+def test_every_model_gateway_construction_passes_kind():
+    root = Path(__file__).resolve().parents[4] / "modules"
+    offenders = []
+    for path in root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for match in re.finditer(r"(?<![A-Za-z_])ModelGateway\(", text):
+            call = text[match.end(): match.end() + 1200]
+            depth, end = 1, 0
+            for end, ch in enumerate(call):
+                depth += {"(": 1, ")": -1}.get(ch, 0)
+                if depth == 0:
+                    break
+            if "kind=" not in call[:end]:
+                offenders.append(f"{path.relative_to(root)}:{text[:match.start()].count(chr(10)) + 1}")
+    assert not offenders, f"ModelGateway built without kind=: {offenders}"

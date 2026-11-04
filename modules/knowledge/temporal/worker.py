@@ -944,7 +944,7 @@ async def _context(factory: async_sessionmaker[AsyncSession], adm: _Admission, s
                            config.endpoint_destination_id or "", timeout_seconds=min(config.request_timeout_seconds, 30),
                            scope=adm.scope, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
                            configuration_revision=config.configuration_revision, before_send=fence_check,
-                           approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers)
+                           approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers, kind=config.gateway_kind)
     return context, gateway, rows
 
 
@@ -1091,7 +1091,7 @@ async def _fresh_fact_action(factory: async_sessionmaker[AsyncSession], adm: _Ad
         config.endpoint_destination_id or "", timeout_seconds=min(config.request_timeout_seconds, 30),
         scope=adm.scope, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
         configuration_revision=config.configuration_revision, before_send=before_send,
-        approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers)
+        approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers, kind=config.gateway_kind)
 
     raw = await gateway.embed(model.role, model.mapping, model.policy, [value], before_send=before_send)
     data = raw.get("data") if isinstance(raw, dict) else None

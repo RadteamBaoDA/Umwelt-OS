@@ -377,7 +377,7 @@ def derive_for_mapping(config: AIExecutionConfig, mapping: ModelMapping | None) 
     if provider is None:
         provider = ProviderConfig(kind="custom", base_url=None, destination_id=None)
     return config.model_copy(update={
-        "gateway_base_url": provider.base_url, "gateway_api_key": provider.api_key,
+        "gateway_base_url": provider.base_url, "gateway_api_key": provider.api_key, "gateway_kind": provider.kind,
         "endpoint_destination_id": provider.destination_id, "gateway_credential_configured": provider.credential_configured,
         "endpoint_policy_denied": provider.policy_denied})
 
@@ -482,7 +482,7 @@ async def get_ai_execution_config(session: AsyncSession, settings: Settings, red
         configuration_revision=revision, gateway_identity=identity, model_identity=model_identity, endpoint_destination_id=default.destination_id,
         endpoint_policy_denied=default.policy_denied, gateway_credential_configured=default.credential_configured,
         endpoint_allowed_cidrs=tuple(settings.ai_allowed_endpoint_cidrs), allow_public_providers=settings.ai_allow_public_providers,
-        gateway_base_url=default.base_url, gateway_api_key=default.api_key, defaults=defaults, privacy=privacy,
+        gateway_base_url=default.base_url, gateway_api_key=default.api_key, gateway_kind=default.kind, defaults=defaults, privacy=privacy,
         request_timeout_seconds=timeout,
         web_search_provider=web_provider, web_search_endpoint=web_endpoint, web_search_api_key=web_credential,
         web_search_credential_configured=web_configured, web_search_fallbacks=web_fallbacks,
@@ -1095,7 +1095,7 @@ def viz_decision_discovery_config(config: AIExecutionConfig, api_key: str, setti
     """
     endpoint = _endpoint(VIZ_OPENROUTER_URL, settings)
     return config.model_copy(update={
-        "gateway_base_url": endpoint, "gateway_api_key": api_key,
+        "gateway_base_url": endpoint, "gateway_api_key": api_key, "gateway_kind": "openrouter",
         "endpoint_destination_id": _identity(endpoint, "")[1], "gateway_credential_configured": bool(api_key),
         "endpoint_policy_denied": endpoint is None})
 
@@ -1122,6 +1122,7 @@ def viz_router_gateway_config(config: AIExecutionConfig, resolved: VizRouterReso
         own = ModelMapping(model=resolved.model, destination="remote")
         return config.model_copy(update={
             "gateway_base_url": resolved.base_url, "gateway_api_key": resolved.api_key,
+            "gateway_kind": "openrouter" if resolved.kind == "openrouter" else "custom",
             "endpoint_destination_id": resolved.destination_id, "gateway_credential_configured": bool(resolved.api_key),
             "endpoint_policy_denied": resolved.base_url is None}), own
     provider = config.providers.get(resolved.provider_id or DEFAULT_PROVIDER_ID)

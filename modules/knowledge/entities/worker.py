@@ -654,7 +654,7 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                 scope=scope, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
                 configuration_revision=config.configuration_revision, before_send=before_send,
                 approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
-                allow_public_endpoints=config.allow_public_providers,
+                allow_public_endpoints=config.allow_public_providers, kind=config.gateway_kind,
             )
             # Release workspace, membership, Source, Document and raw-URI locks before provider I/O.
             await session.rollback()

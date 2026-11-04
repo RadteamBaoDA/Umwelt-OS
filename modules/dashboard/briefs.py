@@ -748,7 +748,7 @@ async def generate_brief(
         destination_id=destination or "", timeout_seconds=config.request_timeout_seconds,
         scope=scope, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
         configuration_revision=config.configuration_revision, before_send=send_fence,
-        approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers,
+        approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers, kind=config.gateway_kind,
     )
     try:
         response = await gateway.chat(

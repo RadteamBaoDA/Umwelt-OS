@@ -164,7 +164,7 @@ async def probe_draft(
     # Probe with the owner's configured request timeout: a fixed 15 s marked slow reasoning models as failed.
     client = ModelGateway(redis, endpoint, credential, destination or "remote",
         timeout_seconds=float(config.request_timeout_seconds), scope=_owner, configuration_revision=0, gateway_identity=identity, before_send=recheck_send,
-        approved_endpoint_cidrs=tuple(settings.ai_allowed_endpoint_cidrs), allow_public_endpoints=settings.ai_allow_public_providers)
+        approved_endpoint_cidrs=tuple(settings.ai_allowed_endpoint_cidrs), allow_public_endpoints=settings.ai_allow_public_providers, kind=kind)
     message = [{"role": "user", "content": "Reply with the word ready."}]
     detail = ""  # real failure reason for the owner; empty when supported
     try:
@@ -290,7 +290,7 @@ async def probe_model(
         destination or "remote", timeout_seconds=float(config.request_timeout_seconds), scope=_owner,
         configuration_revision=config.configuration_revision, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
         before_send=recheck_send, approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
-        allow_public_endpoints=config.allow_public_providers)
+        allow_public_endpoints=config.allow_public_providers, kind=config.gateway_kind)
     message = [{"role": "user", "content": "Reply with the word ready."}]
     detail = ""  # real failure reason for the owner; empty when supported
     try:

@@ -317,7 +317,7 @@ async def _translate(run: _Run, source: TranslationInput) -> dict[str, str]:
         destination_id=destination, timeout_seconds=min(config.request_timeout_seconds, ATTEMPT_TIMEOUT_SECONDS),
         scope=run.gateway_scope, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
         configuration_revision=config.configuration_revision, before_send=before_send,
-        approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers)
+        approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers, kind=config.gateway_kind)
     return await translate_input(
         gateway, config, policy, source, cast(Any, run.claim.target_language), before_send,
         deadline=time.monotonic() + DEADLINE_SECONDS)
