@@ -1087,3 +1087,74 @@ class TestPartitionIsolation:
         config = GraphConfiguration()
         assert config.port == 7687 and config.database == "neo4j"
         assert str(_safe_error(RuntimeError("EquivalentSchemaRuleAlreadyExists"))) == "graph_index_exists"
+
+
+class TestBulkDispatchOrdering:
+    """Characterize SafeSession.execute_write: journal, capture, validate, journal again, then one transaction."""
+
+    @staticmethod
+    async def _session(monkeypatch: pytest.MonkeyPatch, log: list[str], extra_calls: int = 0) -> tuple[Any, Any, Any]:
+        """Build a session over a driver whose hook and statement executor append to ``log``."""
+        from graphiti_core.driver.driver import GraphProvider
+        from graphiti_core.utils import bulk_utils
+
+        driver, _, _ = await _make_driver()
+        calls, args, kwargs, payload = TestBulkShape._bulk(GraphProvider.NEO4J)
+
+        async def hook(*hook_args: Any, final_node_payloads: Any = None, **_kw: Any) -> None:
+            """Record whether this is the id pass or the hydrated pass."""
+            log.append("hook_final" if final_node_payloads is not None else "hook_ids")
+
+        async def execute_statements(statements: Any) -> None:
+            """Record the single atomic dispatch and its statement count."""
+            log.append(f"tx:{len(statements)}")
+
+        async def fake_bulk(session: Any, *_a: Any, **_k: Any) -> str:
+            """Stand-in for Graphiti's writer: issue the four structured statements through the session."""
+            log.append("writer")
+            for query, params in [*calls, *[calls[0]] * extra_calls]:
+                await session.run(query, **params)
+            return "written"
+
+        monkeypatch.setattr(bulk_utils, "add_nodes_and_edges_bulk_tx", fake_bulk)
+        driver._write_intent_hook = hook
+        driver.execute_statements = execute_statements
+        return driver.session(), (fake_bulk, args, kwargs), payload
+
+    @pytest.mark.asyncio
+    async def test_journals_before_and_after_capture_then_one_transaction(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Nothing reaches the transaction until both receipts are journaled."""
+        log: list[str] = []
+        session, (func, args, kwargs), _ = await self._session(monkeypatch, log)
+        assert await session.execute_write(func, *args, **kwargs) == "written"
+        assert log == ["hook_ids", "writer", "hook_final", "tx:4"]
+        assert session._bulk_capture is None
+
+    @pytest.mark.asyncio
+    async def test_fifth_statement_exceeds_capture_limit(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A fifth captured statement aborts before the final journal or any transaction."""
+        log: list[str] = []
+        session, (func, args, kwargs), _ = await self._session(monkeypatch, log, extra_calls=1)
+        with pytest.raises(GraphOperationError, match="graph_bulk_capture_limit"):
+            await session.execute_write(func, *args, **kwargs)
+        assert log == ["hook_ids", "writer"] and session._bulk_capture is None
+
+    @pytest.mark.asyncio
+    async def test_missing_hook_refuses_bulk_write(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Without a prewrite hook the bulk writer is refused before capturing."""
+        log: list[str] = []
+        session, (func, args, kwargs), _ = await self._session(monkeypatch, log)
+        session.driver._write_intent_hook = None
+        with pytest.raises(GraphOperationError, match="graph_write_intent_unavailable"):
+            await session.execute_write(func, *args, **kwargs)
+        assert log == []
+
+    @pytest.mark.asyncio
+    async def test_list_query_denied_and_plain_run_dispatches(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Outside capture a plain statement dispatches once; list-form queries are denied."""
+        log: list[str] = []
+        session, _, _ = await self._session(monkeypatch, log)
+        await session.run("MATCH (n) RETURN n", p=1)
+        assert log == ["tx:1"]
+        with pytest.raises(GraphOperationError, match="graph_dispatch_command_denied"):
+            await session.run(["MATCH (n)"])

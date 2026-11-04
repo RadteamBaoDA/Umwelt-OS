@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
+from core.errors import ConflictError
 from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.ingestion import public as ingestion
 from modules.knowledge.documents.schemas import DocumentCleanupPreparationLimitError
@@ -274,7 +275,7 @@ async def test_stale_fence_rejected_before_any_sql(name: str, change: str) -> No
     else:
         bad = {**HELD, "source_fence": SRC_FENCE.model_copy(update={"workspace_id": uuid4()})}
     rec = Rec()
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises((HTTPException, ConflictError)) as caught:
         await call(rec, bad)
     assert caught.value.status_code == 409 and rec.stmts == []
 

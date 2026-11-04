@@ -17,5 +17,5 @@ FENCE = AccessFence(workspace_id=WORKSPACE_ID, user_id=1, membership_revision=1,
 @pytest.fixture
 def admitted_owner():
     """Replace the workspace fence read with the matching owner fence."""
-    with patch("modules.knowledge.temporal.public.workspaces.read_access_fence", AsyncMock(return_value=FENCE)):
+    with patch("core.workspaces.public.read_access_fence", AsyncMock(return_value=FENCE)):
         yield

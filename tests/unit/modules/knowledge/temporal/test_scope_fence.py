@@ -10,6 +10,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
+from core.errors import ConflictError
 from core.workspaces.schemas import AccessFence, InternalJobScope, WorkspaceContext
 from modules.knowledge.temporal import public, routes, worker
 from modules.knowledge.temporal.schemas import ReconcileRequest
@@ -48,7 +49,7 @@ def _adm() -> worker._Admission:
 ])
 async def test_member_is_denied_before_any_query(call) -> None:
     session = _session()
-    with patch("modules.knowledge.temporal.public.workspaces.read_access_fence", AsyncMock(return_value=FENCE)), \
+    with patch("core.workspaces.public.read_access_fence", AsyncMock(return_value=FENCE)), \
             pytest.raises(HTTPException) as denied:
         await call(session)
     assert denied.value.status_code == 403
@@ -71,7 +72,7 @@ def owner_fence():
     """Admit OWNER with a fence built from OWNER itself (independent of conftest module identity)."""
     fence = AccessFence(workspace_id=OWNER.workspace_id, user_id=OWNER.user_id,
                         membership_revision=OWNER.membership_revision, configuration_revision=1)
-    with patch("modules.knowledge.temporal.public.workspaces.read_access_fence", AsyncMock(return_value=fence)):
+    with patch("core.workspaces.public.read_access_fence", AsyncMock(return_value=fence)):
         yield
 
 
@@ -116,7 +117,7 @@ async def test_changed_original_fence_is_rejected_before_the_effect() -> None:
     drifted = AccessFence(workspace_id=WORKSPACE_ID, user_id=1, membership_revision=1, configuration_revision=2)
     session = _session()
     with patch.object(worker.workspaces, "read_access_fence", AsyncMock(return_value=drifted)), \
-            pytest.raises(HTTPException) as stale:
+            pytest.raises(ConflictError) as stale:
         await worker._finish(_factory(session), _adm(), uuid4(), uuid4(), "succeeded", None)
     assert stale.value.status_code == 409
     session.commit.assert_not_awaited()
@@ -201,13 +202,17 @@ async def test_admit_workspace_locks_the_fence_before_the_module_gate() -> None:
 
 
 @pytest.mark.parametrize("status", [401, 403, 404, 409])
-async def test_denied_admission_skips_the_workspace(status: int) -> None:
+@pytest.mark.parametrize("family", ["http", "domain"])
+async def test_denied_admission_skips_the_workspace(status: int, family: str) -> None:
+    from core.errors import DomainError
+
+    denial = HTTPException(status_code=status) if family == "http" else DomainError(status_code=status)
     owner = SimpleNamespace(user_id=1, membership_revision=1)
     settings = SimpleNamespace(multi_workspace_enabled=False)
     gate = AsyncMock(return_value=True)
     with patch.object(worker.workspaces, "resolve_workspace_owner_context", AsyncMock(return_value=owner)), \
             patch.object(worker.workspaces, "authorize_internal_job",
-                         AsyncMock(side_effect=HTTPException(status_code=status))), \
+                         AsyncMock(side_effect=denial)), \
             patch.object(worker.settings_public, "module_is_enabled", gate):
         assert await worker.admit_workspace(_factory(_session()), settings, WORKSPACE_ID) is None  # type: ignore[arg-type]
     gate.assert_not_awaited()
@@ -263,7 +268,8 @@ async def test_cancellation_with_fence_drift_reraises_the_cancellation() -> None
         await worker.process_graph_operation(ctx, str(uuid4()))
 
 
-async def test_plain_fence_drift_is_still_a_silent_skip() -> None:
+@pytest.mark.parametrize("drift", [HTTPException(status_code=409), ConflictError("Workspace authority changed")])
+async def test_plain_fence_drift_is_still_a_silent_skip(drift: Exception) -> None:
     @asynccontextmanager
     async def slot(*_args, **_kwargs):
         yield
@@ -271,7 +277,7 @@ async def test_plain_fence_drift_is_still_a_silent_skip() -> None:
     graph = MagicMock(close=AsyncMock())
     ctx = {"session_factory": _factory(_session()), "settings": SimpleNamespace()}
     with patch.object(worker, "_admit_job", AsyncMock(return_value=_adm())), \
-            patch.object(worker, "_claim", AsyncMock(side_effect=HTTPException(status_code=409))), \
+            patch.object(worker, "_claim", AsyncMock(side_effect=drift)), \
             patch.object(worker, "heavy_job_slot", slot), \
             patch.object(worker, "TemporalGraph", MagicMock(return_value=graph)), \
             patch.object(worker.GraphConfiguration, "from_settings", MagicMock()):
