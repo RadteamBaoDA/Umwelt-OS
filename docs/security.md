@@ -15,6 +15,9 @@ Keep current upload size/archive/PDF, URL/SSRF and provider controls in their ow
 - **Client IP:** uvicorn runs with `--no-proxy-headers` and never reads forwarded headers. A public production origin refuses to start without `AUTH_TRUST_FORWARDED_FOR=true` or `AUTH_CLIENT_IP_HEADER` (otherwise login limit and lockout would be global); failed logins are counted only after Origin and CSRF pass. The per-IP auth limit uses the TCP peer unless `AUTH_TRUST_FORWARDED_FOR=true` (rightmost `X-Forwarded-For`, valid only when the front proxy overwrites it; see deployment.md). Per-session request budgets (`core/rate_limit.py`) key on the session cookie or bearer token first; the address is only a fallback for unauthenticated callers.
 - **SSE paths** (`/api/v1/realtime/events`, `/api/v1/responses/{id}/events`) need proxy buffering off, read timeout of at least 75 s and `Last-Event-ID` preserved; see deployment.md.
 
+- Local-service connectors (`health` FHIR, `home_assistant`) fetch only private/loopback addresses, so they are operator-only: `put_configuration` returns 403 for other accounts and collection refuses with `destination_not_allowed`, preventing a workspace owner from reaching internal services.
+- The browser collector serves no `/docs`, `/redoc` or OpenAPI; its healthcheck is a TCP probe. Its IPv6 egress firewall (`docker/browser-entrypoint.sh`) also drops mapped/NAT64/6to4/Teredo ranges; do not enable IPv6 on `browser_egress` without reviewing it.
+
 ## Deletion completion
 
 Immediate access revocation, canonical cleanup, raw-file cleanup and external graph convergence are distinct stages. Source generation/tombstone changes deny stale access before asynchronous cleanup. Connector-only removal preserves imported data; with-data removal requires owned derived copies to be cleaned. Shared facts remain when independent retained evidence supports them.

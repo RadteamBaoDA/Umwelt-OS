@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.auth.dependencies import is_instance_operator
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
 from core.errors import DomainError
@@ -696,6 +697,10 @@ async def put_configuration(
     source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
     if source.status != "active" or source.type not in registry.SUPPORTED_TYPES:
         raise HTTPException(status_code=409, detail="Active packaged connector required")
+    # Local-service providers fetch private addresses; only the instance operator's LAN is in scope.
+    # Collection re-checks as the backstop, but fail clearly at save time.
+    if source.provider in collection.HEADER_AUTH_PROVIDERS and not is_instance_operator(request.state.auth_session):
+        raise HTTPException(status_code=403, detail="Local-service connectors are restricted to the instance operator")
     pending = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
     if pending is not None and pending.state == "disabled" and pending.error_code == "deactivation_pending":
         raise HTTPException(status_code=409, detail="Wait for source deactivation to finish before saving")

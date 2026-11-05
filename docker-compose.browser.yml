@@ -24,7 +24,7 @@ services:
     cpus: 1.5
     pids_limit: 128
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/docs', timeout=2)"]
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8001), 2)"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -54,6 +54,7 @@ networks:
     ipam:
       config:
         - subnet: 172.29.250.0/24
+  # Do not set enable_ipv6 here without reviewing the ip6tables drop list in docker/browser-entrypoint.sh.
   browser_egress:
     driver: bridge
 
