@@ -70,8 +70,26 @@ class Settings(BaseSettings):
     # Most model rounds of one turn that may add widgets (a round after widgets lets the model write text or add more).
     generative_ui_max_rounds: int = Field(default=3, ge=1, le=5, validation_alias="GENERATIVE_UI_MAX_ROUNDS")
     data_dir: Path = Path("/data")
-    # Original-file backend (core.storage.factory registry); only the local filesystem ships today.
-    storage_backend: Literal["local"] = Field(default="local", validation_alias="STORAGE_BACKEND")
+    # Original-file backend (core.storage.factory registry): the local filesystem, or S3-compatible object
+    # storage (AWS S3, MinIO) fenced by PostgreSQL. See docs/deployment.md "S3 / MinIO storage".
+    storage_backend: Literal["local", "s3"] = Field(default="local", validation_alias="STORAGE_BACKEND")
+    s3_endpoint_url: str | None = Field(default=None, validation_alias="S3_ENDPOINT_URL")  # MinIO / non-AWS endpoint
+    s3_bucket: str = Field(default="", validation_alias="S3_BUCKET")
+    s3_region: str = Field(default="us-east-1", validation_alias="S3_REGION")
+    s3_access_key_id: SecretStr = Field(default=SecretStr(""), validation_alias="S3_ACCESS_KEY_ID", repr=False)
+    s3_secret_access_key: SecretStr = Field(default=SecretStr(""), validation_alias="S3_SECRET_ACCESS_KEY", repr=False)
+    s3_prefix: str = Field(default="", validation_alias="S3_PREFIX")  # optional key prefix inside the bucket
+    # "", "AES256" (SSE-S3) or "aws:kms" (SSE-KMS, optionally with S3_SSE_KMS_KEY_ID).
+    s3_sse: Literal["", "AES256", "aws:kms"] = Field(default="", validation_alias="S3_SSE")
+    s3_sse_kms_key_id: str = Field(default="", validation_alias="S3_SSE_KMS_KEY_ID")
+    s3_path_style: bool = Field(default=True, validation_alias="S3_PATH_STYLE")  # MinIO needs path-style addressing
+    # If-None-Match: * conditional create; disable for stores without it (publication then uses a staging key + copy).
+    s3_conditional_put: bool = Field(default=True, validation_alias="S3_CONDITIONAL_PUT")
+    s3_part_size_bytes: int = Field(default=8 * 1024 * 1024, ge=5 * 1024 * 1024, le=512 * 1024 * 1024, validation_alias="S3_PART_SIZE_BYTES")
+    # Optional presigned downloads (default off: bytes stream through the API behind authorization + nosniff).
+    storage_presigned_downloads: bool = Field(default=False, validation_alias="STORAGE_PRESIGNED_DOWNLOADS")
+    storage_presigned_ttl_seconds: int = Field(default=60, ge=1, le=60, validation_alias="STORAGE_PRESIGNED_TTL_SECONDS")
+    s3_presign_endpoint_url: str | None = Field(default=None, validation_alias="S3_PRESIGN_ENDPOINT_URL")  # browser-reachable host
     upload_max_bytes: int = Field(default=25 * 1024 * 1024, gt=0, le=1024 * 1024 * 1024)
     parser_timeout_seconds: int = Field(default=120, gt=0, le=3600)
     # How long a chat run parks on `request_user_input`; modules/chat/user_input.py clamps it to the worker job budget.
@@ -413,6 +431,20 @@ class Settings(BaseSettings):
         """
         if self.pgbouncer_enabled and not self.database_direct_url:
             raise ValueError("DATABASE_DIRECT_URL is required when PGBOUNCER_ENABLED is true")
+        return self
+
+    @model_validator(mode="after")
+    def require_s3_bucket_and_credentials(self) -> "Settings":
+        """Fail startup when ``STORAGE_BACKEND=s3`` lacks a bucket or only one half of the static key pair is set.
+
+        Both credentials empty is allowed: the AWS default credential chain (instance/role) then applies.
+        """
+        if self.storage_backend != "s3":
+            return self
+        if not self.s3_bucket:
+            raise ValueError("S3_BUCKET is required when STORAGE_BACKEND=s3")
+        if bool(self.s3_access_key_id.get_secret_value()) != bool(self.s3_secret_access_key.get_secret_value()):
+            raise ValueError("S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY must be set together")
         return self
 
     @model_validator(mode="after")

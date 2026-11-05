@@ -1,4 +1,4 @@
-"""Contract tests every ``StorageBackend`` implementation must satisfy (only local today)."""
+"""Contract tests every ``StorageBackend`` implementation must satisfy (local filesystem and S3 via moto)."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import hashlib
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -21,14 +22,12 @@ from core.storage import (
 
 WORKSPACE = UUID(int=7)
 
-BackendFactory = Callable[[Path], StorageBackend]
-BACKENDS: dict[str, BackendFactory] = {"local": lambda root: LocalFilesystemBackend(root)}
-
-
-@pytest.fixture(params=sorted(BACKENDS))
+@pytest.fixture(params=["local", "s3"])
 def backend(request: pytest.FixtureRequest, tmp_path: Path) -> StorageBackend:
-    """Build each registered backend rooted in an isolated temporary directory."""
-    return BACKENDS[request.param](tmp_path)
+    """Build each backend in isolation: local under a temp dir, S3 on a fresh moto bucket with an in-memory fence."""
+    if request.param == "local":
+        return LocalFilesystemBackend(tmp_path)
+    return cast(StorageBackend, request.getfixturevalue("make_s3")())
 
 
 async def _chunks(*blocks: bytes) -> AsyncIterator[bytes]:
@@ -113,9 +112,11 @@ def test_build_document_key_validates_identity_and_suffix() -> None:
 
 @pytest.mark.asyncio
 async def test_fence_blocks_second_writer_and_erased_workspace(backend: StorageBackend) -> None:
-    with backend.fence.hold(WORKSPACE), pytest.raises(WorkspaceStorageBusy), backend.fence.hold(WORKSPACE, erase=True):
-        pytest.fail("erasure overtook a live writer")
-    with backend.fence.hold(WORKSPACE, erase=True):
+    async with backend.fence.ahold(WORKSPACE):
+        with pytest.raises(WorkspaceStorageBusy):
+            async with backend.fence.ahold(WORKSPACE, erase=True):
+                pytest.fail("erasure overtook a live writer")
+    async with backend.fence.ahold(WORKSPACE, erase=True):
         pass
     with pytest.raises(WorkspaceStorageBusy, match="erased"):
         await backend.put_stream(_key(), _chunks(b"late"), 10, workspace_id=WORKSPACE)
@@ -168,18 +169,25 @@ async def test_delete_not_missing_ok_raises_when_absent(backend: StorageBackend)
 
 @pytest.mark.asyncio
 async def test_orphan_probe_states_and_file_response(backend: StorageBackend) -> None:
-    assert backend.probe_workspace_orphan(WORKSPACE).state == "absent"
+    assert (await backend.aprobe_workspace_orphan(WORKSPACE)).state == "absent"
     key = _key()
     await backend.put_stream(key, _chunks(b"abc"), 10, workspace_id=WORKSPACE)
-    probe = backend.probe_workspace_orphan(WORKSPACE)
+    probe = await backend.aprobe_workspace_orphan(WORKSPACE)
     assert (probe.state, probe.key) == ("file", key)
     backend.check_erasable(key, WORKSPACE)
     with pytest.raises(ValueError, match="outside the account"):
         backend.check_erasable(key, UUID(int=9))
-    response = backend.file_response(key, media_type="text/plain", filename="a.txt")
-    assert response.media_type == "text/plain"
-    assert "a.txt" in response.headers["content-disposition"]
+    for response in (
+        backend.file_response(key, media_type="text/plain", filename="a.txt"),
+        await backend.afile_response(key, media_type="text/plain", filename="a.txt"),
+    ):
+        assert response.media_type == "text/plain"
+        assert "a.txt" in response.headers["content-disposition"]
     await backend.delete(key)
-    assert backend.probe_workspace_orphan(WORKSPACE).state == "pruned_subdir"
-    assert backend.probe_workspace_orphan(WORKSPACE).state == "pruned_root"
-    assert backend.probe_workspace_orphan(WORKSPACE).state == "absent"
+    if isinstance(backend, LocalFilesystemBackend):
+        # erasure.py relies on the local bounded walk: one empty-directory prune per probe, then "absent".
+        states = [(await backend.aprobe_workspace_orphan(WORKSPACE)).state for _ in range(3)]
+        assert states == ["pruned_subdir", "pruned_root", "absent"]
+    else:
+        # Remote stores have no directories to prune and answer "absent" at once.
+        assert (await backend.aprobe_workspace_orphan(WORKSPACE)).state == "absent"

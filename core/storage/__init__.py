@@ -25,11 +25,13 @@ from core.storage.local import (
     save_upload,
     storage_path,
 )
+from core.storage.pg_fence import PostgresStorageFence
 
 __all__ = [
     "LocalFilesystemBackend",
     "LocalFilesystemFence",
     "OrphanProbe",
+    "PostgresStorageFence",
     "StorageBackend",
     "StorageFence",
     "StoredObject",

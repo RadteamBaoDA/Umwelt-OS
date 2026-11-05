@@ -161,6 +161,24 @@ services:
       - ./tests/integration/fake_local_services.py:/fake/fake_local_services.py:ro
     restart: unless-stopped
 
+  minio:
+    # Optional S3-compatible store for tests/integration/test_storage_s3_minio.py; start with
+    # `docker compose --profile minio ...`. Disposable credentials, loopback-only port, no volume.
+    profiles: ["minio"]
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: ["server", "/data"]
+    env_file: !reset []
+    environment:
+      MINIO_ROOT_USER: bbd-os-test-minio
+      MINIO_ROOT_PASSWORD: bbd-os-test-minio-only
+    ports:
+      - "127.0.0.1:${TEST_MINIO_PORT:-39000}:9000"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
 volumes:
   test-postgres-data:
   test-redis-data:

@@ -283,7 +283,7 @@ async def get_raw_document(
     if not present:
         raise HTTPException(status_code=404, detail="Raw document not found")
     filename = str(document.metadata_json.get("filename", "download"))
-    response = storage.file_response(
+    response = await storage.afile_response(
         document.raw_uri, media_type=document.mime_type or "application/octet-stream", filename=filename,
     )
     response.headers["Cache-Control"] = "private, no-store"

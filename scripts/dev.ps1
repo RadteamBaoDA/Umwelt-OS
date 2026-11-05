@@ -139,7 +139,7 @@ N8N_ENCRYPTION_KEY=$(New-Secret)
         Invoke-Checked 'uv' @('run', 'pytest', '-q')
       }
       $project = 'bbd-os-test-' + [guid]::NewGuid().ToString('N').Substring(0, 10)
-      $compose = @('compose', '-p', $project, '-f', 'docker-compose.yml', '-f', 'docker-compose.test.yml')
+      $compose = @('compose', '-p', $project, '-f', 'docker-compose.yml', '-f', 'docker-compose.test.yml', '--profile', 'minio')
       $previousWebPort = $env:WEB_PORT
       $previousApiTestPort = $env:API_TEST_PORT
       $previousTestPostgresPort = $env:TEST_POSTGRES_PORT
@@ -164,6 +164,12 @@ N8N_ENCRYPTION_KEY=$(New-Secret)
         $env:TEST_POSTGRES_PORT = [string]$postgresPort
         $env:TEST_DATABASE_URL = "postgresql+asyncpg://bbd_test:bbd-os-test-db-only@127.0.0.1:$postgresPort/bbd_test"
         $env:TEST_PUBLIC_ORIGIN = "http://localhost:$webPort"
+        # Optional MinIO profile backs tests/integration/test_storage_s3_minio.py (disposable credentials from docker-compose.test.yml).
+        $minioPort = Get-FreePort
+        $env:TEST_MINIO_PORT = [string]$minioPort
+        $env:S3_TEST_ENDPOINT_URL = "http://127.0.0.1:$minioPort"
+        $env:S3_TEST_ACCESS_KEY = 'bbd-os-test-minio'
+        $env:S3_TEST_SECRET_KEY = 'bbd-os-test-minio-only'
         # Opt-in real-model chat e2e: only when .env.e2e-real holds a non-empty key. The key itself is never exported to compose;
         # the spec reads the file directly. Without it the stack keeps AI egress pinned to the fake model.
         if ((Test-Path '.env.e2e-real') -and (Select-String -Path '.env.e2e-real' -Pattern '^\s*E2E_REAL_API_KEY\s*=\s*\S' -Quiet)) {

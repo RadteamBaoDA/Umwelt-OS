@@ -109,6 +109,14 @@ class StorageFence(Protocol):
         """
         ...
 
+    def ahold(self, workspace_id: UUID, *, erase: bool = False) -> AbstractAsyncContextManager[None]:
+        """Async twin of ``hold`` with identical semantics, usable by fences that need network I/O.
+
+        Remote fences (``PostgresStorageFence``) implement only this form; ``hold`` then raises
+        ``NotImplementedError``. Feature code should always prefer ``ahold``.
+        """
+        ...
+
 
 @runtime_checkable
 class StorageBackend(Protocol):
@@ -148,6 +156,14 @@ class StorageBackend(Protocol):
         """Return a download response for ``key`` (``FileResponse`` semantics for local storage)."""
         ...
 
+    async def afile_response(self, key: str, *, media_type: str, filename: str) -> Response:
+        """Async ``file_response``: may consult the store (size, presigned URL) before answering.
+
+        Always an attachment with the stored ``media_type``; callers add cache/nosniff headers after
+        authorizing the request. Local storage delegates to ``file_response``.
+        """
+        ...
+
     async def delete(self, key: str, *, missing_ok: bool = True) -> None:
         """Remove the object; ``missing_ok=False`` propagates ``FileNotFoundError`` when absent."""
         ...
@@ -169,6 +185,10 @@ class StorageBackend(Protocol):
 
         Synchronous on purpose (A9 local-ordering with SQL under the erasure fence).
         """
+        ...
+
+    async def aprobe_workspace_orphan(self, workspace_id: UUID) -> OrphanProbe:
+        """Async ``probe_workspace_orphan``; remote backends answer only ``absent`` or ``file``."""
         ...
 
     def probe_workspace_orphan(self, workspace_id: UUID) -> OrphanProbe:

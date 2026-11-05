@@ -28,3 +28,23 @@ def test_existing_values_kept_and_placeholders_filled(tmp_path):
     assert "mine@postgres" in values["DATABASE_URL"]
     assert not values["REDISCLI_AUTH"].startswith("replace-")
     assert values["REDIS_URL"].startswith(f"redis://:{values['REDISCLI_AUTH']}@")
+
+
+def test_env_example_loads_in_production_with_local_storage(tmp_path, monkeypatch):
+    """The shipped example plus ensure_env must not trip the placeholder check for the default local backend."""
+    from core.config import Settings
+
+    example = Path(__file__).parents[2] / ".env.example"
+    path = tmp_path / ".env"
+    path.write_text(example.read_text())
+    ensure_env.ensure(path)
+    values = ensure_env._parse(path.read_text())
+    for key in list(__import__("os").environ):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("PUBLIC_ORIGIN", "https://umwelt.example.com")
+    monkeypatch.setenv("SECURE_COOKIES", "true")
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
+    assert Settings(_env_file=None).storage_backend == "local"

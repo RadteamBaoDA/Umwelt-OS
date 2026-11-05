@@ -47,6 +47,7 @@ dependencies = [
     "opentelemetry-instrumentation-httpx>=0.66b0,<1",
     "opentelemetry-instrumentation-redis>=0.66b0,<1",
     "ofxtools>=0.9,<1",
+    "aioboto3>=15,<16",
 ]
 
 [dependency-groups]
@@ -59,6 +60,7 @@ dev = [
     "pytest>=8.4,<9",
     "pytest-asyncio>=1.1,<2",
     "ruff>=0.12,<1",
+    "moto[server]>=5,<6",
 ]
 
 [build-system]
@@ -83,3 +85,8 @@ strict = true
 mypy_path = "."
 packages = ["core", "apps", "modules"]
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+# aioboto3/botocore ship no type information; the S3 backend isolates them behind core.storage.s3.
+module = ["aioboto3", "aioboto3.*", "botocore", "botocore.*"]
+ignore_missing_imports = true

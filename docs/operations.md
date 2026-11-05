@@ -86,3 +86,27 @@ All recurring jobs run on the `cron-worker` service (`apps.worker.main.CronWorke
 ## Search indexing batches
 
 `SEARCH_EMBED_BATCH_SIZE` (default 64, max 128) chunks are claimed per keyset query, embedded in one gateway request, revalidated in one short session (access -> Source -> chunk) before the send and again under locks (Sources in sorted order) at publication, and written with one transaction per batch. A malformed response or a source that changed mid-batch falls back to the per-chunk path for that batch only. The run loops while work remains for up to 45 s (2048 chunks); `document.version.ready` also wakes it. Index contents are identical to the one-chunk path (`tests/unit/modules/search/test_embed_batch.py`).
+
+
+## Object storage operations (S3 / MinIO)
+
+**Migrate from local files to S3.** Do this in a maintenance window or with uploads quiet; the tool is resumable and never modifies the source.
+
+1. Create the bucket and set the `S3_*` variables, but keep `STORAGE_BACKEND=local`. Run the database migration (`make migrate`) so `workspace_storage_state` exists.
+2. Dry run from the API or worker container: `python -m core.storage.migrate --from local --to s3 --dry-run`. It lists every original, reports what would be copied and verifies objects already present.
+3. Copy: `python -m core.storage.migrate --from local --to s3`. Each object is streamed through the destination's `put_stream` (so size bound, never-overwrite and the erasure fence apply), re-read from S3 and compared by SHA-256 and size; a mismatch deletes the copy and is reported. Exit status 1 means failures or skipped keys (legacy `documents/...` or stray temp files are not copied; review them manually). Re-run until it reports `failures=0`.
+4. Set `STORAGE_BACKEND=s3`, restart API and worker, upload and download a test file.
+5. Keep the local `DATA_DIR/workspaces` tree until you are satisfied, then remove it manually. Rolling back is the reverse command (`--from s3 --to local`) before step 4's uploads diverge.
+
+**Orphans.** The worker's orphan sweep lists `workspaces/` (and the legacy `documents/` and `staging/` prefixes) with paginated `ListObjectsV2`, and deletes upload objects older than `STORAGE_ORPHAN_GRACE_SECONDS` that no document or cleanup receipt references, exactly like the local sweep. Unrelated keys in the bucket are never touched.
+
+**Bucket lifecycle rules (recommended).** Publication never leaves objects under `staging/` unless a process dies at the wrong moment (only with `S3_CONDITIONAL_PUT=false`), and an interrupted multipart upload leaves invisible parts. Add both rules (with `S3_PREFIX`, prefix the filter accordingly):
+
+```json
+{"Rules": [
+  {"ID": "expire-staging", "Status": "Enabled", "Filter": {"Prefix": "staging/"}, "Expiration": {"Days": 1}},
+  {"ID": "abort-stale-multipart", "Status": "Enabled", "Filter": {"Prefix": ""}, "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1}}
+]}
+```
+
+Apply with `aws s3api put-bucket-lifecycle-configuration --bucket <bucket> --lifecycle-configuration file://lifecycle.json` (MinIO: `mc ilm rule add`). Do not add an expiration rule for `workspaces/`; deletion of originals is owned by the application. Backups and bucket versioning/replication are the provider's responsibility.

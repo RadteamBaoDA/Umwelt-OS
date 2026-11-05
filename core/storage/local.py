@@ -141,6 +141,15 @@ class LocalFilesystemFence:
         """Return ``workspace_filesystem_lease(root, workspace_id, erase=erase)`` unchanged."""
         return workspace_filesystem_lease(self._root, workspace_id, erase=erase)
 
+    @asynccontextmanager
+    async def ahold(self, workspace_id: UUID, *, erase: bool = False) -> AsyncIterator[None]:
+        """Async form of ``hold``: the same OS lock, taken and released inline (non-blocking, microseconds).
+
+        The body may await; the lock stays held across it exactly as with the synchronous form.
+        """
+        with self.hold(workspace_id, erase=erase):
+            yield
+
 
 class LocalFilesystemBackend:
     """``StorageBackend`` over a local directory; paths and URIs match the pre-abstraction layout.
@@ -262,6 +271,14 @@ class LocalFilesystemBackend:
             return sorted(found)
 
         return await to_thread_joined(walk)
+
+    async def afile_response(self, key: str, *, media_type: str, filename: str) -> Response:
+        """Return ``file_response`` unchanged (a local path needs no store round trip)."""
+        return self.file_response(key, media_type=media_type, filename=filename)
+
+    async def aprobe_workspace_orphan(self, workspace_id: UUID) -> OrphanProbe:
+        """Run the synchronous probe inline (A9: its filesystem steps must interleave with SQL under the fence)."""
+        return self.probe_workspace_orphan(workspace_id)
 
     async def cleanup_orphans(self, referenced: set[str], grace_seconds: int) -> int:
         """Run ``cleanup_orphaned_files`` in a thread (the worker's previous ``asyncio.to_thread``)."""

@@ -136,3 +136,15 @@ def test_worker_dead_letters_revision_follows_perf_indexes_and_creates_the_table
     assert script.get_revision("0015_worker_dead_letters").down_revision == "0014_perf_indexes_and_safety"  # type: ignore[union-attr]
     sql = _upgrade_sql()
     assert "CREATE TABLE worker_dead_letters" in sql and "uq_worker_dead_letters_queue_job" in sql
+
+
+def test_workspace_storage_state_migration_makes_the_erasure_flag_permanent() -> None:
+    script = ScriptDirectory.from_config(Config("alembic.ini"))
+    revision = script.get_revision("0016_workspace_storage_state")
+    assert revision is not None and revision.down_revision == "0015_worker_dead_letters"
+    sql = _upgrade_sql()
+    assert "CREATE TABLE workspace_storage_state" in sql
+    assert "rows are permanent" in sql and "cannot be undone" in sql  # DELETE and un-delete are rejected by the trigger
+    down = _alembic("downgrade", "0016_workspace_storage_state:0015_worker_dead_letters", "--sql")
+    assert down.returncode == 0, down.stderr
+    assert "DROP TABLE workspace_storage_state" in down.stdout

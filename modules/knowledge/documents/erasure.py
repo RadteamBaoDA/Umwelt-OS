@@ -58,13 +58,13 @@ async def erase_account_storage_page(
             await session.rollback()
         # SQL connection loss cannot release this destination lock or clear its erasure flag.
         storage = get_storage_backend(settings)
-        with storage.fence.hold(scope.workspace_id, erase=True):
+        async with storage.fence.ahold(scope.workspace_id, erase=True):
             kind = cursor.get("kind", "documents")
             if kind not in {"documents", "receipts", "orphans"}:
                 raise ValueError("Invalid storage erasure checkpoint")
             after = UUID(cursor["after"]) if "after" in cursor else None
             if kind == "orphans":
-                probe = storage.probe_workspace_orphan(scope.workspace_id)
+                probe = await storage.aprobe_workspace_orphan(scope.workspace_id)
                 if probe.state in {"absent", "pruned_root"}:
                     return True, {}
                 if probe.state == "pruned_subdir":

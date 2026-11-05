@@ -27,7 +27,15 @@ def get_storage_backend(settings: Any) -> StorageBackend:
     Cheap and stateless (fences are OS file locks / remote primitives), so callers may call it per
     request. Raises ``ValueError`` for an unknown backend name.
     """
-    name = str(getattr(settings, "storage_backend", "local"))
+    return build_storage_backend(str(getattr(settings, "storage_backend", "local")), settings)
+
+
+def build_storage_backend(name: str, settings: Any) -> StorageBackend:
+    """Build the backend registered as ``name`` from ``settings`` regardless of ``settings.storage_backend``.
+
+    Used by the migration tool to open a source and a destination side by side. Raises ``ValueError``
+    for an unknown name.
+    """
     try:
         builder = _BUILDERS[name]
     except KeyError:
@@ -36,3 +44,14 @@ def get_storage_backend(settings: Any) -> StorageBackend:
 
 
 register_storage_backend("local", lambda settings: LocalFilesystemBackend(settings.data_dir))
+
+
+def _build_s3_backend(settings: Any) -> StorageBackend:
+    """Build ``S3StorageBackend`` + ``PostgresStorageFence`` from settings (imported lazily: local users never load aioboto3)."""
+    from core.storage.pg_fence import PostgresStorageFence, fence_engine
+    from core.storage.s3 import S3Config, S3StorageBackend
+
+    return S3StorageBackend(S3Config.from_settings(settings), PostgresStorageFence(fence_engine(settings.database_url)))
+
+
+register_storage_backend("s3", _build_s3_backend)
