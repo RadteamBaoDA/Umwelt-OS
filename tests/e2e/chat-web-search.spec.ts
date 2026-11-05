@@ -53,7 +53,7 @@ test.describe('web search toggle', () => {
     await mockChat(page, { configured: false });
     await page.goto('/chat');
     await page.getByRole('button', { name: 'Add context, files or options' }).click();
-    await expect(page.getByRole('menuitemcheckbox', { name: 'Search the web for this message' })).toBeDisabled();
+    await expect(page.getByRole('menuitemcheckbox', { name: 'Search the web' })).toBeDisabled();
   });
 
   test('is hidden while the send flag is off', async ({ page }) => {
@@ -74,7 +74,8 @@ test.describe('web search toggle', () => {
     });
     await openChat(page);
     await page.getByRole('button', { name: 'Add context, files or options' }).click();
-    await page.getByRole('menuitemcheckbox', { name: 'Search the web for this message' }).click();
+    // The toggle defaults to on whenever web search is usable (use-chat-composer-state.ts), so it is ticked already.
+    await expect(page.getByRole('menuitemcheckbox', { name: 'Search the web' })).toBeChecked();
     await page.keyboard.press('Escape');
     // The checkbox item keeps the + menu open (and focused); press Enter on the composer itself, not the menu.
     const composer = page.getByRole('textbox', { name: /Ask a question about your knowledge/ });
