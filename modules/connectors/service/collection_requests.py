@@ -14,6 +14,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.async_runtime import run_dns_lookup
+from core.net_policy import is_public_address
 from core.workspaces.schemas import Scope
 
 if TYPE_CHECKING:
@@ -45,7 +46,7 @@ async def validate_public_url(value: str) -> str:
         ), 5)
     except (OSError, TimeoutError) as exc:
         raise ValueError("URL host could not be resolved") from exc
-    if not addresses or any(not ip_address(item[4][0]).is_global for item in addresses):
+    if not addresses or any(not is_public_address(ip_address(item[4][0])) for item in addresses):
         raise ValueError("URL resolves to a non-public address")
     return value
 
