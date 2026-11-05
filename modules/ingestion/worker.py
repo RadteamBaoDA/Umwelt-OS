@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.chunking import chunk_text
 from core.config import Settings
+from core.cron import notify_on_commit
 from core.errors import ConflictError, DomainError
 from core.events import DomainEvent
 from core.heavy_work import bounded_heavy_work, to_thread_joined
@@ -34,6 +35,7 @@ from core.realtime import (
 )
 from core.storage import get_storage_backend
 from core.telemetry import count, set_trace, timed
+from core.worker_retry import retry_with_backoff
 from core.workspaces.public import read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.connectors import public as connectors
@@ -701,6 +703,18 @@ async def _capture_normalization_claim(
     return claim, True
 
 
+def _wake_dispatcher_after_commit(session: AsyncSession, delay_seconds: float = 1.0) -> None:
+    """Wake ``dispatch_pending_work`` once ``session`` commits an outbox row that was returned to ``pending``.
+
+    The dispatcher poll is only a 30 s safety net, so every continuation path (normalization slices with rows
+    left, transient retries, observation deferral) must wake it itself; otherwise each slice would wait for the
+    poll. The wake is deferred by the row's backoff but capped at the 5 s wake-debounce window (a longer
+    deferral would block fresher wakes); rows still not due then are picked up by the safety net.
+    No-op without a wake hook; rolled-back transactions discard the wake.
+    """
+    notify_on_commit(session, "dispatch_pending_work", defer_seconds=min(max(delay_seconds, 1.0), 5.0))
+
+
 async def _commit_ingestion_change(
     session: AsyncSession,
     run: IngestionRun,
@@ -1037,6 +1051,7 @@ async def _schedule_transient_retry(
         work.run.status = "queued"
         work.event.status = "pending"
         work.event.next_attempt_at = work.stage.next_attempt_at
+        _wake_dispatcher_after_commit(session, delay)
         _update_native_run_lease(work.state, work.run.id, terminal=False)
         logger.warning("Ingestion stage retry scheduled run_id=%s stage_id=%s attempt=%s",
                        work.run.id, work.stage.id, work.stage.attempts)
@@ -1445,6 +1460,7 @@ async def _settle_stage(
         run.status = "queued"
         event.status = "pending"
         event.next_attempt_at = datetime.now(UTC) + timedelta(seconds=1)
+        _wake_dispatcher_after_commit(session, 1.0)
     else:
         await _settle_terminal_run(session, work, enabled, failed_count)
     if native_source:
@@ -1483,6 +1499,7 @@ async def _defer_until_observations_enabled(
     run.error_code = None
     event.status = "pending"
     event.next_attempt_at = deferred_until
+    _wake_dispatcher_after_commit(session, 60.0)
     if native_source:
         _update_native_run_lease(work.state, run.id, terminal=False)
     await _commit_ingestion_change(
@@ -1530,12 +1547,12 @@ async def _normalize_slice(session: AsyncSession, identifier: UUID, enabled: boo
 
 async def _settle_failure(
     factory: async_sessionmaker[AsyncSession], identifier: UUID, enabled: bool, box: _ClaimBox, exc: Exception,
-    event_id: str,
+    event_id: str, ctx: dict[str, object] | None = None,
 ) -> None:
     """Spend one durable failure attempt for a normalization slice that failed, in a fresh transaction.
 
-    The failed slice's transaction has already rolled back. Without a captured claim the whole job is deferred
-    60 s; a preparation conflict must agree with the already captured claim. Under the original claim the
+    The failed slice's transaction has already rolled back. Without a captured claim the whole job is retried
+    with jittered exponential backoff (``retry_with_backoff``, base 15 s, cap 60 s); a preparation conflict must agree with the already captured claim. Under the original claim the
     retry-only loader freshly locks admission/Source/roots/outbox; attempts are capped at ``MAX_STAGE_ATTEMPTS``
     (then stage/run/event fail) and the dispatcher is the only next schedule. Lost admission or uncertain
     settlement grants no counter, epoch or lease and is swallowed.
@@ -1551,7 +1568,7 @@ async def _settle_failure(
         elif claim != exc.claim:
             raise RuntimeError("Normalization preparation comparisons disagree") from exc
     if claim is None:
-        raise Retry(defer=60.0) from exc
+        raise retry_with_backoff(ctx, base=15.0, cap=60.0) from exc
     try:
         async with factory() as session:
             work = await _lock_normalization_retry_event(
@@ -1576,6 +1593,7 @@ async def _settle_failure(
                 event.status = "pending"
                 event.next_attempt_at = next_attempt_at
                 run.status = "queued"
+                _wake_dispatcher_after_commit(session, delay)
             stage.lease_expires_at = None
             if connectors.is_native_provider(work.projection.provider):
                 _update_native_run_lease(work.state, run.id,
@@ -1631,7 +1649,7 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
         async with factory() as session:
             await _normalize_slice(session, identifier, enabled, box)
     except (OperationalError, IntegrityError, RuntimeError) as exc:
-        await _settle_failure(factory, identifier, enabled, box, exc, event_id)
+        await _settle_failure(factory, identifier, enabled, box, exc, event_id, ctx)
 
 
 @dataclass(frozen=True)

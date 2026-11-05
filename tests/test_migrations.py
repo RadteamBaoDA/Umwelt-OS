@@ -129,3 +129,10 @@ def test_chat_sql_reader_role_migration_is_least_privilege_and_guarded() -> None
     down = _alembic("downgrade", f"{CHAT_SQL_READER}:{MERGE_REVISION}", "--sql")
     assert down.returncode == 0, down.stderr
     assert "DROP ROLE IF EXISTS umwelt_chat_sql_reader" in down.stdout
+
+
+def test_worker_dead_letters_revision_follows_perf_indexes_and_creates_the_table() -> None:
+    script = ScriptDirectory.from_config(Config("alembic.ini"))
+    assert script.get_revision("0015_worker_dead_letters").down_revision == "0014_perf_indexes_and_safety"  # type: ignore[union-attr]
+    sql = _upgrade_sql()
+    assert "CREATE TABLE worker_dead_letters" in sql and "uq_worker_dead_letters_queue_job" in sql

@@ -95,7 +95,7 @@ Production telemetry is additive: it never changes business behaviour, every rec
 | --- | --- | --- |
 | `METRICS_TOKEN` | empty | API `GET /metrics` requires `Authorization: Bearer <token>` (constant-time compare, any network location). Generate a long random value; keep it only in `.env` and the Prometheus secret file. |
 | *(no token)* | | Note: private-range peers include other LAN devices, not only the compose bridge; set `METRICS_TOKEN` on shared networks. In `development`/`test` (or `auto` with a local origin) `/metrics` answers only direct loopback/private peers without `X-Forwarded-*`/`Forwarded` headers. In `production` it is disabled (404). |
-| `METRICS_WORKER_PORT` | `0` (off) | Starts a plain HTTP metrics server in each worker process: worker on the port, chat worker on port+1, model worker on port+2. |
+| `METRICS_WORKER_PORT` | `0` (off) | Starts a plain HTTP metrics server in each worker process: worker on the port, chat worker on port+1, model worker on port+2, cron worker on port+3 (`METRICS_PORT_OFFSETS` in `apps/worker/main.py`). |
 | `METRICS_WORKER_BIND` | `127.0.0.1` | Bind address for the worker servers. The monitoring overlay sets `0.0.0.0` so Prometheus can reach them on the compose network; the ports are never published to the host. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | empty (off) | OTLP/HTTP base URL (for example `http://otel-collector:4318`). Empty means no OpenTelemetry module is imported or patched: zero overhead. |
 | `OTEL_TRACES_SAMPLE_RATIO` | `1.0` | Head sampling ratio for new traces (a sampled parent is always honoured). |
@@ -121,13 +121,13 @@ Labels are bounded: route templates (never raw paths or ids), fixed job/queue na
 | `umwelt_http_requests_total` | counter | `method`, `route`, `status` | api | Requests; unmatched paths share `route="unmatched"`. |
 | `umwelt_http_request_duration_seconds` | histogram | `method`, `route` | api | Request latency. |
 | `umwelt_db_pool_size` / `_checked_out` / `_overflow` / `_max_connections` | gauge | `pool` (engine index) | all | SQLAlchemy pool occupancy, read at scrape time. |
-| `umwelt_arq_queue_depth` | gauge | `queue` | api | Jobs in `arq:queue`, `arq:model`, `arq:chat`. |
+| `umwelt_arq_queue_depth` | gauge | `queue` | api | Jobs in `arq:queue`, `arq:model`, `arq:chat`, `arq:cron`. |
 | `umwelt_arq_queue_oldest_job_age_seconds` | gauge | `queue` | api | Age of the oldest *due* job (deferred jobs excluded). |
 | `umwelt_outbox_pending_count` | gauge | none | api | `event_outbox` rows in `pending`/`queued`. |
 | `umwelt_outbox_oldest_pending_age_seconds` | gauge | none | api | Outbox lag. |
-| `umwelt_cron_job_duration_seconds` | histogram | `job` | worker, chat-worker | Scheduled-job run time. |
-| `umwelt_cron_job_last_success_timestamp_seconds` | gauge | `job` | worker, chat-worker | Unix time of last success. |
-| `umwelt_cron_job_failures_total` | counter | `job` | worker, chat-worker | Failed runs. |
+| `umwelt_cron_job_duration_seconds` | histogram | `job` | cron-worker, chat-worker | Scheduled-job run time (scheduled ticks, wake-ups and catch-up runs, recorded once per lease-guarded run by `core.cron.record_cron_run`; lease-held skips are not recorded). |
+| `umwelt_cron_job_last_success_timestamp_seconds` | gauge | `job` | cron-worker, chat-worker | Unix time of last success. |
+| `umwelt_cron_job_failures_total` | counter | `job` | cron-worker, chat-worker | Failed runs. |
 | `umwelt_jobs_total`, `umwelt_job_duration_seconds` | counter, histogram | `job`, `outcome` | all workers | Event-driven (instrumented) jobs. |
 | `umwelt_ingestion_stage_total` | counter | `stage` (`upload`, `normalize`, `ingest`), `outcome` | worker | Ingestion stage executions. |
 | `umwelt_model_breaker_open_until_timestamp_seconds` | gauge | `provider` | workers, api | Per-process view: unix time until which a provider breaker was last seen open (set on trip and on rejection); open now means value > `time()`. |
@@ -167,7 +167,7 @@ p95 above 2 s on non-streaming routes. Find the slow `route` on the dashboard, t
 
 ### UmweltQueueDepthHigh
 
-More than 200 jobs waiting for 15 minutes. Identify the `queue`: `arq:queue` (main worker: ingestion, crons), `arq:model` (remote model jobs), `arq:chat`. Confirm the matching worker container is up and its `umwelt_jobs_total` is moving; a slow upstream shows as long `umwelt_job_duration_seconds` and an open breaker. Restart a stuck worker; do not flush Redis.
+More than 200 jobs waiting for 15 minutes. Identify the `queue`: `arq:queue` (main worker: ingestion and other event-driven jobs), `arq:cron` (cron worker: wake-ups and catch-up runs), `arq:model` (remote model jobs), `arq:chat`. Confirm the matching worker container is up and its `umwelt_jobs_total` is moving; a slow upstream shows as long `umwelt_job_duration_seconds` and an open breaker. Restart a stuck worker; do not flush Redis.
 
 ### UmweltQueueOldestJobTooOld
 

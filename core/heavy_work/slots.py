@@ -8,19 +8,23 @@ from functools import wraps
 from typing import ParamSpec, TypeVar, cast
 from uuid import UUID
 
-from arq import Retry
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.ids import uuid7
+from core.worker_retry import retry_with_backoff
 
 P = ParamSpec("P")
 R = TypeVar("R")
 MAX_OPERATION_SECONDS = 150
-HEAVY_RETRY_DEFER_SECONDS = 5
+HEAVY_RETRY_DEFER_SECONDS = 5  # backoff base for slot contention; see HEAVY_RETRY_CAP_SECONDS
+HEAVY_RETRY_CAP_SECONDS = 15  # contention backoff ceiling: 5, 10, 15, 15... s (equal jitter halves the floor)
+HEAVY_BLOCKED_BASE_SECONDS = 30  # remote-guard block backoff base; guards expire on their own
+HEAVY_BLOCKED_CAP_SECONDS = 120
 # arq counts every Retry as a try and, once tries run out, stores the failure for the worker-level
 # keep_result_s (3600 s), which blocks re-enqueue of the same job id. A contended heavy job must
-# therefore outlast the longest slot hold: 60 tries x 5 s = 300 s > MAX_OPERATION_SECONDS (150 s).
+# therefore outlast the longest slot hold. With equal-jitter backoff capped at 15 s the minimum delays
+# are 2.5 s (try 1), 5 s (try 2) and 7.5 s (tries 3+), so 60 tries wait >= ~435 s > MAX_OPERATION_SECONDS (150 s).
 HEAVY_JOB_MAX_TRIES = 60
 HEAVY_LOCK_KEY = 732941801
 
@@ -149,8 +153,9 @@ def bounded_heavy_work(function: Callable[P, Awaitable[R]]) -> Callable[P, Await
             async with heavy_job_slot(factory):
                 return await function(*args, **kwargs)
         except HeavyWorkBusy as exc:
-            raise Retry(defer=HEAVY_RETRY_DEFER_SECONDS) from exc
+            raise retry_with_backoff(ctx, base=HEAVY_RETRY_DEFER_SECONDS, cap=HEAVY_RETRY_CAP_SECONDS) from exc
         except RemoteHeavyWorkBlocked as exc:
             # Guards expire on their own; defer instead of failing the job permanently.
-            raise Retry(defer=30) from exc
+            raise retry_with_backoff(
+                ctx, base=HEAVY_BLOCKED_BASE_SECONDS, cap=HEAVY_BLOCKED_CAP_SECONDS) from exc
     return bounded

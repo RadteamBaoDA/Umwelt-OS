@@ -49,7 +49,8 @@ def full_sql() -> str:
 
 @pytest.fixture(scope="module")
 def perf_sql() -> str:
-    result = _alembic("upgrade", f"{PREVIOUS}:head", "--sql")
+    # Only revision 0014's own DDL: later revisions (e.g. 0015 creating a new table) may index their new tables plainly.
+    result = _alembic("upgrade", f"{PREVIOUS}:{REVISION}", "--sql")
     assert result.returncode == 0, result.stderr
     return result.stdout
 

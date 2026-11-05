@@ -61,6 +61,10 @@ Metrics: p50/p95/p99 first-token latency; event-loop lag; DB pool wait time and 
 - r19 indexes (FK cascade paths, dedupe, GIN), dropped unused indexes, keyset indexing, vector query rewrite using the partial HNSW index, batched reads: lower query counts and delete/index cost.
 - Postgres `jit=off` and larger `max_wal_size`: effect on a 2-core host is unmeasured.
 
+- Cron split and offsets (P5): recurring jobs no longer share ingestion `max_jobs` slots; no more than 4 jobs share a second, so the :00 and hh:00:00 bursts disappear. Lease-guarded runs stop overlapping and replica duplication. Outbox dispatch and indexing react to commits instead of waiting for a 5 s / 60 s tick (safety net 30 s / 60 s).
+- Batch embedding (P7): up to 64 chunks per request and per claim/publication transaction instead of one of each per chunk; expect roughly `batch size` fewer gateway requests and claim/publish round trips for the same index. Unmeasured; the old rate was about 50 chunks per minute tick.
+- Jittered exponential retry (P11): contention retries stop returning in lock-step; dead letters make exhausted jobs visible.
+
 ## Event-loop offload (plan section 5A.2, A1-A12)
 
 Behaviour-preserving moves of CPU-bound work off the API/worker event loop. Nothing here was benchmarked end to end; the numbers are the plan's estimates and the guard test below.

@@ -18,7 +18,7 @@ scrape_configs:
       - targets: ["api:8000"]
         labels: {process: api}
 
-  # Workers serve /metrics on METRICS_WORKER_PORT (+0 worker, +1 chat-worker, +2 model-worker) inside the
+  # Workers serve /metrics on METRICS_WORKER_PORT (+0 worker, +1 chat-worker, +2 model-worker, +3 cron-worker) inside the
   # compose network only. The overlay sets METRICS_WORKER_PORT=9100 and METRICS_WORKER_BIND=0.0.0.0.
   - job_name: umwelt-worker
     static_configs:
@@ -28,3 +28,5 @@ scrape_configs:
         labels: {process: chat-worker}
       - targets: ["model-worker:9102"]
         labels: {process: model-worker}
+      - targets: ["cron-worker:9103"]
+        labels: {process: cron-worker}

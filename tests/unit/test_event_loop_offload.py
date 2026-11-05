@@ -376,9 +376,12 @@ def test_startup_hooks_configure_the_executor():
     from apps.api import main as api_main
     from apps.worker import main as worker_main
 
-    for hook in (worker_main.startup, worker_main.chat_startup, worker_main.model_startup):
+    # startup and cron_startup delegate to the shared _boot_runtime, which owns the executor configuration.
+    for hook in (worker_main._boot_runtime, worker_main.chat_startup, worker_main.model_startup):
         assert "configure_default_executor()" in inspect.getsource(hook)
     assert "configure_default_executor()" in inspect.getsource(api_main)
+    assert "_boot_runtime(" in inspect.getsource(worker_main.startup)
+    assert "_boot_runtime(" in inspect.getsource(worker_main.cron_startup)
 
 
 # ---------------------------------------------------------------- wiring guards (fail if an offload is reverted)

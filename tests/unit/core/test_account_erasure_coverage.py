@@ -15,6 +15,9 @@ from core.auth.deletion_cleanup import (
 from core.auth.erasure_contracts import AccountErasureScope
 from core.database import Base
 from core.erasure_sql import account_row_predicate
+from core.worker_dlq import (
+    WorkerDeadLetter,  # noqa: F401  # registers worker_dead_letters (no account data)
+)
 
 
 @pytest.mark.asyncio
@@ -114,7 +117,7 @@ def test_every_registered_table_has_one_erasure_owner_or_finalizer() -> None:
     finalizer = {
         "owner", "auth_session", "google_identity", "account_deletion_operations",
         "workspaces", "workspace_memberships", "workspace_invitations", "workspace_shares",
-        "remote_heavy_guards", "maintenance_summary", "system_health_samples", "system_history_settings",
+        "remote_heavy_guards", "worker_dead_letters", "maintenance_summary", "system_health_samples", "system_history_settings",
     }
     assert len(declared) == len(set(declared))
     assert ordinary | _SPECIAL_TABLES | finalizer == set(Base.metadata.tables)

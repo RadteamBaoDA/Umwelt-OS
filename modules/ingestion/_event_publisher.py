@@ -11,6 +11,7 @@ from uuid import UUID
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.cron import notify_on_commit
 from core.errors import NotFoundError
 from core.events import DomainEvent
 from core.workspaces.schemas import InternalJobScope, Scope
@@ -215,6 +216,11 @@ async def publish_event(session: AsyncSession, event: DomainEvent, *, scope: Sco
         await _verify_ready_event(
             session, event, outbox, payload, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     session.add(outbox)
+    # Event-driven dispatch: once this transaction commits, wake the dispatcher poller instead of
+    # waiting for its slow safety-net tick. No-op when no process hook is installed.
+    notify_on_commit(session, "dispatch_pending_work")
+    if event.type == "document.version.ready":
+        notify_on_commit(session, "index_pending_chunks")  # chunks exist now: index without waiting for the minute tick
 
 
 NORMALIZATION_VERSION = 1

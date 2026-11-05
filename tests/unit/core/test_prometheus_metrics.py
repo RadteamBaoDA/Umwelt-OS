@@ -13,7 +13,7 @@ from prometheus_client import generate_latest
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from apps.worker.main import _observe_cron
+from apps.worker.cron_schedule import CronSpec, guarded_function
 from core import metrics
 from core.config import Settings
 from core.metrics_http import MetricsMiddleware, metrics_access, metrics_enabled
@@ -129,8 +129,12 @@ def test_record_job_maps_ingestion_stages() -> None:
     assert "stage=\"translate" not in generate_latest(metrics.REGISTRY).decode()
 
 
-async def test_cron_wrapper_records_success_failure_and_preserves_behaviour() -> None:
-    """Duration and last success on success; failure counter on error; result and exception unchanged."""
+async def test_cron_run_records_success_failure_and_preserves_behaviour() -> None:
+    """Each lease-guarded cron run (the scheduled/wake/catch-up wrapper) publishes the Prometheus cron series once.
+
+    Duration and last success on success; failure counter on error; result and exception unchanged.
+    Without ``ctx["redis"]`` the single-flight wrapper simply runs the job.
+    """
     async def good(ctx: dict[str, object]) -> int:
         """Succeed."""
         return 7
@@ -139,7 +143,12 @@ async def test_cron_wrapper_records_success_failure_and_preserves_behaviour() ->
         """Fail."""
         raise RuntimeError("x")
 
-    wrapped_good, wrapped_bad = _observe_cron(good), _observe_cron(bad)
+    def ungated(function: Any) -> Any:
+        """Identity module gate."""
+        return function
+
+    wrapped_good = guarded_function(CronSpec(good, 60), ungated)
+    wrapped_bad = guarded_function(CronSpec(bad, 60), ungated)
     assert wrapped_good.__name__ == "good"
     started = time.time()
     assert await wrapped_good({}) == 7
@@ -149,6 +158,25 @@ async def test_cron_wrapper_records_success_failure_and_preserves_behaviour() ->
     assert _sample("umwelt_cron_job_duration_seconds_count", job="good") == 1
     assert _sample("umwelt_cron_job_failures_total", job="bad") == 1
     assert _sample("umwelt_cron_job_last_success_timestamp_seconds", job="bad") == 0
+
+
+async def test_cron_run_skipped_by_held_lease_records_no_metrics() -> None:
+    """A tick that finds the single-flight lease held is not a run: no duration, success or failure sample."""
+    class _HeldLease:
+        """Redis stand-in whose ``SET NX`` always loses."""
+
+        async def set(self, *args: Any, **kwargs: Any) -> None:
+            """Report the lease as already held."""
+            return
+
+    async def held_job(ctx: dict[str, object]) -> int:
+        """Must not run."""
+        raise AssertionError("ran while lease held")
+
+    wrapped = guarded_function(CronSpec(held_job, 60), lambda function: function)
+    assert await wrapped({"redis": _HeldLease()}) is None
+    assert _sample("umwelt_cron_job_duration_seconds_count", job="held_job") == 0
+    assert _sample("umwelt_cron_job_failures_total", job="held_job") == 0
 
 
 class _FakeRedis:

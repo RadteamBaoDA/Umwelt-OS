@@ -19,6 +19,7 @@ from core.demo_seed import DemoSeedReceipt
 from core.heavy_work.models import RemoteHeavyGuard
 from core.migration_support import timeout_statements
 from core.realtime import ReplayHead, ReplayRecord
+from core.worker_dlq import WorkerDeadLetter
 from core.workspaces.models import (
     Workspace,
     WorkspaceInvitation,
@@ -141,6 +142,7 @@ _auth_models = (AuthSession, GoogleIdentity, Owner, AccountDeletionOperation)
 _workspace_models = (Workspace, WorkspaceMembership, WorkspaceInvitation, WorkspaceShare)
 _demo_seed_models = (DemoSeedReceipt,)
 _core_remote_heavy_models = (RemoteHeavyGuard,)
+_core_worker_models = (WorkerDeadLetter,)
 _chat_models = (Conversation, Message, ResponseRun, StreamEvent, AgentActivityLink)
 _memory_models = (Memory, MemoryCandidate, MemoryPrivacyRecord)
 _browser_read_models = (BrowserReadJob, BrowserPageEvidence)

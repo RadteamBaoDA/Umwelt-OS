@@ -13,6 +13,7 @@ The web port binds to loopback by default. For remote access, terminate HTTPS at
 | `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | `10` / `10` | API SQLAlchemy pool per process (pool timeout 5 s, recycle 1800 s). Size total connections across API processes, workers and admin below PostgreSQL `max_connections`. |
 | `DB_STATEMENT_TIMEOUT_MS` | `60000` | API and chat-worker `statement_timeout` (also bounds lock waits). `0` disables. The main worker never sets a statement timeout. The chat-worker pool is fixed at 10 + 10 (not affected by `DB_POOL_SIZE` / `DB_MAX_OVERFLOW`). |
 | `BACKGROUND_LLM_TIMEOUT_SECONDS` / `MODEL_WORKER_JOB_TIMEOUT_SECONDS` | `60` / `900` | Per-call model timeout for background entity/timeline extraction (work leases are this plus 75 s, at least 110 s), and the model-worker arq job timeout. |
+| `SEARCH_EMBED_BATCH_SIZE` | `64` | Chunks per embedding request in search indexing (1-128). `1` restores one request per chunk. Each batch is claimed in one keyset query, revalidated and published in one transaction. |
 | `DB_IDLE_TX_TIMEOUT_MS` | `240000` | `idle_in_transaction_session_timeout` for API and worker connections; a backstop above the longest legitimate send-fence hold. `0` disables. |
 | `MAX_REQUEST_BODY_BYTES` | `5242880` | Request body cap returning 413; `POST /api/v1/documents/upload` allows `UPLOAD_MAX_BYTES` plus 1 MiB. |
 | `WEB_CONCURRENCY` | `2` (image `ENV`) | API process count. Above 1 (also `UVICORN_WORKERS` > 1) the API refuses to start unless `CSRF_SIGNING_SECRET` is set, so every process signs sessions with the same secret. |
@@ -26,18 +27,19 @@ The web port binds to loopback by default. For remote access, terminate HTTPS at
 
 | Service | Memory limit / reservation | CPU shares | Key settings |
 |---|---|---|---|
-| postgres | 2.5 GiB / 1 GiB (`shm_size` 1 GiB) | 768 | `max_connections=100 shared_buffers=1GB effective_cache_size=2GB work_mem=16MB maintenance_work_mem=256MB` |
+| postgres | 2.5 GiB / 1 GiB (`shm_size` 1 GiB) | 768 | `max_connections=120 shared_buffers=1GB effective_cache_size=2GB work_mem=16MB maintenance_work_mem=256MB` |
 | redis | 384 MiB / 64 MiB | 128 | `maxmemory 256mb`, `noeviction` (never drop queued ARQ jobs; writes fail loudly instead) |
 | api | 1 GiB / 512 MiB | 1024 | `WEB_CONCURRENCY=2`, uvicorn `asyncio` + `httptools` via `apps.api.protocol:NoDelayHttpToolsProtocol` (sets TCP_NODELAY; pre-bound multi-worker sockets lack it) (no `--proxy-headers`: uvicorn never takes the client address from request headers), keep-alive 15 s, graceful shutdown 8 s, `--limit-concurrency 400`; `stop_grace_period` 15 s |
 | worker | 1 GiB / 256 MiB | 512 | `max_jobs=6`, DB pool 7 + 10 |
 | chat-worker | 768 MiB / 256 MiB | 512 | `max_jobs=15`, `job_timeout=600`, DB pool 10 + 10 |
+| cron-worker | 512 MiB / 192 MiB | 512 | queue `arq:cron`, `max_jobs=8`, `job_timeout=180`, DB pool 9 + 5; runs every recurring job (pollers, recovery, retention) so they never take ingestion `max_jobs` slots; each job is lease-guarded, extra replicas are safe |
 | model-worker | 768 MiB / 256 MiB | 512 | queue `arq:model`, `max_jobs=4`, `job_timeout=MODEL_WORKER_JOB_TIMEOUT_SECONDS` (900), DB pool 5 + 5; runs entity/timeline extraction and translation so remote model calls never hold main-worker slots or the heavy slot |
 | web | 768 MiB / 256 MiB | 512 | `NODE_OPTIONS=--max-old-space-size=512`, `experimental.proxyTimeout=210000` (above the worst-case brief: lease wait + `request_timeout_seconds` up to 180 s; keep it larger than that setting) |
 | migrate | 512 MiB (one-shot, exits before the others start) | - | - |
 
-Memory limits sum to 7.15 GiB (2.5 + 0.375 + 1 + 1 + 0.75 + 0.75 + 0.75), leaving about 0.85 GiB for the OS and page cache. The optional connectors overlay adds limits of 768 MiB + 1.5 GiB (2.25 GiB), so with it the limits total about 9.4 GiB, above 8 GiB: they are caps, not reservations, and the stack relies on actual RSS (about 4.2 GiB steady, plus connectors) staying below RAM. CPU shares apply only under contention (no hard CPU caps).
+Memory limits sum to 7.66 GiB (2.5 + 0.375 + 1 + 1 + 0.5 + 0.75 + 0.75 + 0.75), leaving about 0.34 GiB for the OS and page cache. The optional connectors overlay adds limits of 768 MiB + 1.5 GiB (2.25 GiB), so with it the limits total about 9.4 GiB, above 8 GiB: they are caps, not reservations, and the stack relies on actual RSS (about 4.2 GiB steady, plus connectors) staying below RAM. CPU shares apply only under contention (no hard CPU caps).
 
-Connection budget (`max_connections=100`): API 2 x (10 + 10) = 40, main worker 7 + 10 = 17, chat-worker 10 + 10 = 20, model-worker 5 + 5 = 10, total 87. The main worker also opens one non-pooled agent checkpoint connection per running agent run (at most 6, so worker worst case 23); plus migrate, backup and admin about 5 gives a worst case of about 98, leaving about 2 spare. If you change `WEB_CONCURRENCY`, `DB_POOL_SIZE` or `DB_MAX_OVERFLOW`, recompute this before applying.
+Connection budget (`max_connections=120`, raised from 100 when the cron worker was split out): API 2 x (10 + 10) = 40, main worker 7 + 10 = 17, cron-worker 9 + 5 = 14, chat-worker 10 + 10 = 20, model-worker 5 + 5 = 10, total 101. The main worker also opens one non-pooled agent checkpoint connection per running agent run (at most 6, so worker worst case 23); plus migrate, backup and admin about 5 gives a worst case of about 112, leaving about 8 spare. A second cron-worker replica adds 14 more; recompute before scaling. If you change `WEB_CONCURRENCY`, `DB_POOL_SIZE` or `DB_MAX_OVERFLOW`, recompute this before applying.
 
 Redis clients use `socket_timeout=5`, `socket_connect_timeout=2`, `health_check_interval=30` and at most 100 connections. Each API process allows 32 concurrent Realtime SSE streams and 64 concurrent chat response streams (503 beyond). No global `lock_timeout` is set because it would turn waits on the Memory privacy lock into errors.
 
@@ -54,7 +56,7 @@ Set `AUTH_TRUST_FORWARDED_FOR=true` (or the header) to get a separate bucket per
 
 ## Deploys and in-flight chats
 
-arq cancels running jobs on SIGTERM; `stop_grace_period` only covers shutdown hooks. On SIGTERM (compose `stop_grace_period` is 30 s) a chat run that has published nothing returns to `pending` and is re-enqueued within about 15-30 s. A run that has already published content is failed immediately, and the owner can resend. A run killed without the hook (SIGKILL or OOM) is failed by `recover_chat_runs` after `RECOVER_STREAMING_AFTER` (660 s). Pending runs not updated for 15 minutes (for example after a long chat-worker outage) are failed instead of re-enqueued. Main-worker jobs are retried automatically.
+**Graceful drain.** Every worker class sets arq `job_completion_wait = job_timeout + 5`: on SIGTERM the worker stops taking new jobs, lets running ones finish for up to that long, then cancels the rest (arq re-runs cancelled jobs on the next worker). Compose `stop_grace_period` is therefore larger than the job timeout: worker and cron-worker 240 s (`job_timeout` 180), chat-worker 660 s (600), model-worker 960 s (`MODEL_WORKER_JOB_TIMEOUT_SECONDS` 900; raise it together with that variable). A chat run killed without the hook (SIGKILL or OOM) is failed by `recover_chat_runs` after `RECOVER_STREAMING_AFTER` (660 s). Pending runs not updated for 15 minutes (for example after a long chat-worker outage) are failed instead of re-enqueued. Main-worker jobs are retried automatically with jittered exponential backoff (see Operations), and a job that exhausts its tries is recorded in `worker_dead_letters`.
 
 ## Known ceilings
 

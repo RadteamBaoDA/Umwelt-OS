@@ -51,7 +51,7 @@ async def test_expired_session_cleanup_is_batched_and_reports_deleted_rows() -> 
 
 @pytest.mark.asyncio
 async def test_collection_receipt_retention_runs_bounded_in_its_own_committed_session(monkeypatch) -> None:
-    from apps.worker.main import WorkerSettings
+    from apps.worker.main import CronWorkerSettings
     from modules.ingestion import worker as ingestion_worker
 
     seen = {}
@@ -64,4 +64,4 @@ async def test_collection_receipt_retention_runs_bounded_in_its_own_committed_se
     session = FakeSession(rowcount=0)
     assert await ingestion_worker.purge_collection_receipts({"session_factory": lambda: session}) == 3
     assert seen == {"limit": 500} and session.committed
-    assert any("purge_collection_receipts" in repr(job) for job in WorkerSettings.cron_jobs)
+    assert any("purge_collection_receipts" in repr(job) for job in CronWorkerSettings.cron_jobs)

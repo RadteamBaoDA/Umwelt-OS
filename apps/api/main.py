@@ -15,6 +15,7 @@ from core.async_runtime import configure_default_executor
 from core.auth.dependencies import session_middleware_secret
 from core.body_limit import BodyLimitMiddleware
 from core.config import Settings
+from core.cron import CRON_QUEUE, set_wake_hook, wake
 from core.database import make_session_factory
 from core.errors import install_error_handling
 from core.metrics import monitor_event_loop_lag, run_sampler_loop, spawn_background, stop_background
@@ -80,6 +81,12 @@ def _make_lifespan(redis: ArqRedis, engine: AsyncEngine) -> Callable[[FastAPI], 
         """
         configure_default_executor()
         metrics_tasks = _start_metrics_tasks(_app)
+
+        async def wake_poller(job_name: str, defer_seconds: float = 1.0) -> None:
+            """Enqueue an immediate run of a worker poller after an API commit (best-effort)."""
+            await wake(redis, job_name, defer_seconds=defer_seconds)
+
+        set_wake_hook(wake_poller)  # lets outbox publishers wake the dispatcher; cleared on exit
         try:
             async with AsyncExitStack() as stack:
                 try:
@@ -96,6 +103,7 @@ def _make_lifespan(redis: ArqRedis, engine: AsyncEngine) -> Callable[[FastAPI], 
                     if admission is not None:
                         admission.stop()
         finally:
+            set_wake_hook(None)  # no more wake-ups once the Redis client is about to close
             await stop_background(metrics_tasks)
             try:
                 await close_pinned_clients()  # pooled model-gateway HTTP clients
@@ -115,7 +123,8 @@ def _start_metrics_tasks(app: FastAPI) -> list[asyncio.Task[None]]:
     app_settings: Settings = app.state.settings
     if not metrics_enabled(app_settings):
         return []
-    samplers = build_api_samplers(app.state.redis, app.state.session_factory, (default_queue_name, MODEL_QUEUE, CHAT_QUEUE))
+    samplers = build_api_samplers(app.state.redis, app.state.session_factory, (default_queue_name, MODEL_QUEUE, CHAT_QUEUE, CRON_QUEUE),
+    )
     return [
         spawn_background(monitor_event_loop_lag(), "metrics-loop-lag"),
         spawn_background(run_sampler_loop(samplers), "metrics-samplers"),

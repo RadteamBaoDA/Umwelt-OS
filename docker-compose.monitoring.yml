@@ -16,7 +16,7 @@ x-logging: &default-logging
     max-file: "3"
 
 services:
-  # Enable the worker metrics HTTP servers (off by default in the application). worker=9100, chat-worker=9101, model-worker=9102.
+  # Enable the worker metrics HTTP servers (off by default in the application). worker=9100, chat-worker=9101, model-worker=9102, cron-worker=9103.
   worker:
     environment:
       METRICS_WORKER_PORT: "9100"
@@ -26,6 +26,10 @@ services:
       METRICS_WORKER_PORT: "9100"
       METRICS_WORKER_BIND: "0.0.0.0"
   model-worker:
+    environment:
+      METRICS_WORKER_PORT: "9100"
+      METRICS_WORKER_BIND: "0.0.0.0"
+  cron-worker:
     environment:
       METRICS_WORKER_PORT: "9100"
       METRICS_WORKER_BIND: "0.0.0.0"

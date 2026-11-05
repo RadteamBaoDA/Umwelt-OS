@@ -11,7 +11,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast, overload
 from uuid import UUID, uuid5
 
-from arq import Retry
 from arq.connections import ArqRedis
 from fastapi import HTTPException
 from pydantic import TypeAdapter
@@ -29,11 +28,17 @@ from core.heavy_work import (
     RemoteHeavyWorkBlocked,
     heavy_job_slot,
 )
+from core.heavy_work.slots import (
+    HEAVY_BLOCKED_BASE_SECONDS,
+    HEAVY_BLOCKED_CAP_SECONDS,
+    HEAVY_RETRY_CAP_SECONDS,
+)
 from core.ids import uuid7
 from core.job_denial import admit_retry_stale, denial_code, terminalize
 from core.model_gateway.client import ModelGateway, PrivacyPolicyDenied
 from core.model_gateway.schemas import ModelMapping, RequestPolicy
 from core.realtime import commit_with_replay
+from core.worker_retry import retry_with_backoff
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
 from modules.knowledge.documents import public as documents
@@ -1555,9 +1560,9 @@ async def process_graph_operation(ctx: dict[str, object], operation_id_value: st
             finally:
                 await _join_local_cleanup(graph.close())
     except HeavyWorkBusy as exc:
-        raise Retry(defer=HEAVY_RETRY_DEFER_SECONDS) from exc
+        raise retry_with_backoff(ctx, base=HEAVY_RETRY_DEFER_SECONDS, cap=HEAVY_RETRY_CAP_SECONDS) from exc
     except RemoteHeavyWorkBlocked as exc:
-        raise Retry(defer=30) from exc
+        raise retry_with_backoff(ctx, base=HEAVY_BLOCKED_BASE_SECONDS, cap=HEAVY_BLOCKED_CAP_SECONDS) from exc
     except (HTTPException, DomainError):
         # A drift raised while handling cancellation must not turn the cancel into a normal completion.
         if interrupted is not None:

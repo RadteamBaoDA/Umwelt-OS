@@ -333,7 +333,7 @@ async def test_lost_retry_admission_and_database_errors_are_swallowed(monkeypatc
 
 @pytest.mark.asyncio
 async def test_error_before_any_claim_is_retried_by_the_queue(monkeypatch):
-    """A transient failure before the claim was captured defers the whole job for 60 seconds."""
+    """A transient failure before the claim was captured retries the whole job with jittered backoff (try 1: 7.5-15 s)."""
     env = Env(monkeypatch, [])
 
     async def boom(*_a, **_k):
@@ -342,7 +342,7 @@ async def test_error_before_any_claim_is_retried_by_the_queue(monkeypatch):
     monkeypatch.setattr(worker, "_lock_worker_event", boom)
     with pytest.raises(Retry) as exc:
         await env.run_event()
-    assert exc.value.defer_score == 60000
+    assert 7500 <= exc.value.defer_score <= 15000
 
 
 @pytest.mark.asyncio

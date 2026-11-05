@@ -124,6 +124,8 @@ class Settings(BaseSettings):
     background_llm_timeout_seconds: int = Field(default=60, ge=5, le=600, validation_alias="BACKGROUND_LLM_TIMEOUT_SECONDS")
     # arq job_timeout of the dedicated model worker (extraction + translation).
     model_worker_job_timeout_seconds: int = Field(default=900, ge=60, le=3600, validation_alias="MODEL_WORKER_JOB_TIMEOUT_SECONDS")
+    # Chunks per embedding request in search indexing (1 = legacy one-chunk requests); clamped to 128.
+    search_embed_batch_size: int = Field(default=64, ge=1, le=128, validation_alias="SEARCH_EMBED_BATCH_SIZE")
     ai_credential_encryption_key: SecretStr = Field(
         default=SecretStr(""), validation_alias="AI_CREDENTIAL_ENCRYPTION_KEY", repr=False
     )
