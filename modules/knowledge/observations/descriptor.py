@@ -13,7 +13,8 @@ class ObservationDescriptor(ModuleDescriptor):
     version: str = "1.0.0"
     description: str = "Store provider-declared structured measurements with immutable evidence links."
     enabled: bool = True
-    dependencies: tuple[str, ...] = ("sources", "ingestion", "knowledge.documents")
+    dependencies: tuple[str, ...] = ("sources", "knowledge.documents")
+    optional_dependencies: tuple[str, ...] = ("connectors",)
     provides: tuple[str, ...] = ("world_observations",)
     requires: tuple[str, ...] = ("sources", "ingestion_receipts", "document_versions")
     routes: tuple[str, ...] = ("/api/v1/observations",)

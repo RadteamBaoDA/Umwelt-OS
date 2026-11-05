@@ -13,6 +13,14 @@ class EntityDescriptor(ModuleDescriptor):
     description: str = "Store owner-managed entities and exact evidence memberships."
     enabled: bool = True
     dependencies: tuple[str, ...] = ("knowledge.documents",)
+    optional_dependencies: tuple[str, ...] = (
+        "connectors",
+        "ingestion",
+        "knowledge.relationships",
+        "knowledge.temporal",
+        "knowledge.timeline",
+        "sources",
+    )
     scheduled_jobs: tuple[str, ...] = ("process_entity_extraction_work",)
     provides: tuple[str, ...] = ("entities", "entity_evidence")
     requires: tuple[str, ...] = ("document_versions", "document_chunks")

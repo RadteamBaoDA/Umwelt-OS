@@ -21,7 +21,7 @@ from core.workspaces.schemas import (
     PublicationFence,
     WorkspaceContext,
 )
-from modules.goals.schemas import GoalFilter
+from modules.goals.public import GoalFilter
 from modules.search import indexing, public
 from modules.search.schemas import (
     GlobalSearchResponse,
@@ -33,7 +33,7 @@ from modules.search.schemas import (
     SearchResponse,
 )
 from modules.settings.public import module_dependency
-from modules.tasks.schemas import TaskFilter
+from modules.tasks.public import TaskFilter
 
 router = APIRouter(prefix="/api/v1/search", tags=["search"], dependencies=[Depends(module_dependency("search"))])
 Session = Annotated[AsyncSession, Depends(get_session)]

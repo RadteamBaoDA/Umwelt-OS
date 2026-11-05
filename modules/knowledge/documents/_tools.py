@@ -22,7 +22,7 @@ from modules.knowledge.documents.models import (
     Document,
     DocumentVersion,
 )
-from modules.sources.models import Source
+from modules.sources.public import SourceReadProjection as Source
 
 
 @dataclass(frozen=True)

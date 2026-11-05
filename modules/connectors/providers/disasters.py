@@ -15,7 +15,7 @@ from modules.connectors.providers.macro import (
     finite_decimal,
     provider_instant,
 )
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 
 USGS_URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson"
 _MAX_FEATURES = 500  # ReceiveBatch record limit; more is reported incomplete rather than truncated silently

@@ -17,7 +17,7 @@ from modules.connectors.provider_specs import (
 )
 from modules.connectors.public import DEFAULT_TIMEZONE, OPTIONAL_SCOPE_FIELDS, ConnectorConfig
 from modules.connectors.sections import SECTION_CATALOG, validate_sections
-from modules.sources.schemas import ConnectorSource
+from modules.sources.public import ConnectorSource
 
 SUPPORTED_TYPES = GENERIC_SOURCE_TYPES - {"mcp"} | set(PROVIDER_SOURCE_TYPES.values())
 

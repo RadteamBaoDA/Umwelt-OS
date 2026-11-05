@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from core.module_descriptor import ModuleDescriptor, RouterSpec
+from core.module_descriptor import CapabilitySpec, ModuleDescriptor, RouterSpec
 
 
 @dataclass(frozen=True)
@@ -15,6 +15,24 @@ class DocumentDescriptor(ModuleDescriptor):
     description: str = "Store source-backed documents and immutable revisions."
     enabled: bool = True
     dependencies: tuple[str, ...] = ("sources",)
+    optional_dependencies: tuple[str, ...] = (
+        "agents",
+        "automations",
+        "chat",
+        "connectors",
+        "dashboard",
+        "goals",
+        "ingestion",
+        "knowledge.entities",
+        "knowledge.observations",
+        "knowledge.relationships",
+        "knowledge.temporal",
+        "knowledge.timeline",
+        "memory",
+        "news",
+        "notifications",
+        "tasks",
+    )
     scheduled_jobs: tuple[str, ...] = ("process_document_ready", "process_document_cleanup")
     provides: tuple[str, ...] = ("documents", "document_versions", "document_chunks")
     requires: tuple[str, ...] = ("sources",)
@@ -35,6 +53,10 @@ class DocumentDescriptor(ModuleDescriptor):
     settings_schema: dict[str, object] | None = None
     routers: tuple[RouterSpec, ...] = (
         RouterSpec("modules.knowledge.documents.routes", 70),
+    )
+    capabilities: tuple[CapabilitySpec, ...] = (
+        CapabilitySpec("documents.lock_document_ids", "modules.knowledge.documents.public:lock_document_ids"),
+        CapabilitySpec("documents.read_document_access_projection", "modules.knowledge.documents.public:read_document_access_projection"),
     )
     erasure_module: str | None = "modules.knowledge.documents.erasure"
     erasure_order: int = 80

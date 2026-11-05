@@ -17,7 +17,7 @@ from modules.connectors.public import (
     TelegramScopeValidation,
     TelegramUpdatePage,
 )
-from modules.ingestion.schemas import IngestionRecord, TelegramDeliveryProof, TelegramRawDelivery
+from modules.ingestion.public import IngestionRecord, TelegramDeliveryProof, TelegramRawDelivery
 
 _METHODS = frozenset({"getMe", "getWebhookInfo", "getChat", "getChatMember", "getUpdates"})
 _MAX_RESPONSE_BYTES = 10 * 1024 * 1024

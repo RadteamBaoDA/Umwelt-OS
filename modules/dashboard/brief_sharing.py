@@ -31,7 +31,7 @@ from modules.dashboard import briefs
 from modules.dashboard.daily_schemas import BriefRead
 from modules.dashboard.models import DailyBrief, DailyBriefEvidence
 from modules.knowledge.documents import public as documents
-from modules.translations.schemas import TranslationInput
+from modules.translations.public import TranslationInput
 
 _PAGE = 50
 

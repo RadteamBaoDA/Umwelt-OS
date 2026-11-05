@@ -32,8 +32,8 @@ from modules.connectors.providers.security import SECURITY_ADAPTERS
 from modules.connectors.providers.space import SPACE_ADAPTERS
 from modules.connectors.providers.vn_stock import VN_STOCK_ADAPTERS
 from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
-from modules.ingestion.schemas import IngestionRecord
-from modules.sources.schemas import ConnectorSource, SourceFence
+from modules.ingestion.public import IngestionRecord
+from modules.sources.public import ConnectorSource, SourceFence
 
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 _WEATHER_VARIABLES = {
@@ -178,7 +178,7 @@ def _market_records(source: ConnectorSource, config: ConnectorConfig, payload: d
     measurement date is not a provider modification clock; version stays absent
     and timestamp provenance conservatively uses collection time.
     """
-    from modules.knowledge.documents.schemas import ProviderRecordMetadata, WorldDataMeasurement
+    from modules.knowledge.documents.public import ProviderRecordMetadata, WorldDataMeasurement
 
     metadata = payload.get("Meta Data")
     series = payload.get("Time Series (Daily)")
@@ -269,7 +269,7 @@ def _weather_records(
     Typed identity/version match the record and no measurement time is claimed
     as a provider modification time. Missing numbers retain an explicit reason.
     """
-    from modules.knowledge.documents.schemas import ProviderRecordMetadata, WorldDataMeasurement
+    from modules.knowledge.documents.public import ProviderRecordMetadata, WorldDataMeasurement
 
     hourly = payload.get("hourly")
     units = payload.get("hourly_units")

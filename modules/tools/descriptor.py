@@ -14,6 +14,7 @@ class ToolsDescriptor(ModuleDescriptor):
     description: str = "Bounded registered native tool dispatch."
     enabled: bool = True
     dependencies: tuple[str, ...] = ("sources", "knowledge.documents", "search")
+    optional_dependencies: tuple[str, ...] = ("agents", "connectors", "knowledge.timeline")
     provides: tuple[str, ...] = ("tool_registry", "mcp_runtime", "mcp_inbound_server")
     requires: tuple[str, ...] = ("sources", "documents", "search")
     routes: tuple[str, ...] = ("/api/v1/tools", "/api/v1/mcp/connections", "/api/v1/mcp/inbound-clients", "/api/v1/mcp/")

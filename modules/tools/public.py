@@ -1,5 +1,27 @@
 """Public registry contracts and native output-fence revalidation boundary."""
 
+# Cross-module contract re-exports (importers use this public module, never private submodules).
+from modules.tools.browser import (
+    register_browser_tool,
+)
+from modules.tools.builtins import (
+    register_builtin_tools,
+)
+from modules.tools.mcp_credentials import (
+    hash_inbound_token,
+    issue_inbound_token,
+    verify_inbound_token,
+)
+from modules.tools.mcp_transport import (
+    McpOperationNetworkBudget,
+    McpPinnedHttpTransport,
+)
+from modules.tools.webhook import (
+    load_webhook_profiles,
+    register_webhook_tool,
+)
+
+# isort: split
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
@@ -24,7 +46,7 @@ from core.tools import (
 )
 from core.tools.schemas import ToolOutputFence
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
-from modules.sources.schemas import SourceFence
+from modules.sources.public import SourceFence
 from modules.tools.mcp_admission import McpAdmission, McpInboundLease
 from modules.tools.mcp_collection import McpCollectionRead, read_collection_capability
 from modules.tools.mcp_repository import McpConflict, McpNotFound, McpUnavailable
@@ -674,6 +696,8 @@ __all__ = [
     "McpConflict",
     "McpInboundLease",
     "McpNotFound",
+    "McpOperationNetworkBudget",
+    "McpPinnedHttpTransport",
     "McpRisk",
     "McpRuntime",
     "McpServerBundle",
@@ -688,13 +712,20 @@ __all__ = [
     "ToolRisk",
     "create_inbound_mcp_bundle",
     "derive_mcp_public_endpoint",
+    "hash_inbound_token",
+    "issue_inbound_token",
+    "load_webhook_profiles",
     "lock_source_browser_results_in_uow",
     "purge_browser_results_in_uow",
     "purge_expired_browser_evidence",
     "purge_source_browser_results_in_uow",
     "read_collection_capability",
+    "register_browser_tool",
+    "register_builtin_tools",
+    "register_webhook_tool",
     "revalidate_native_output_fences",
     "send_webhook_once",
+    "verify_inbound_token",
     "webhook_aliases",
     "webhook_profile_revision",
 ]

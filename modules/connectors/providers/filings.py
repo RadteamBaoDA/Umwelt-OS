@@ -19,7 +19,7 @@ from modules.connectors.providers.macro import (
     parse_iso_date,
 )
 from modules.connectors.providers.news import _record, plain_text
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 ARCHIVES_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{document}"

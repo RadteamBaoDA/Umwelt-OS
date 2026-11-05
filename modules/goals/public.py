@@ -7,6 +7,30 @@ Cross-module task reads/writes go through modules.tasks.public DTO contracts.
 
 from __future__ import annotations
 
+from importlib import import_module as _import_module
+from typing import TYPE_CHECKING as _TYPE_CHECKING
+from typing import Any as _Any
+
+# Re-exports of private submodules that themselves import this facade are resolved lazily (PEP 562) so the two cannot
+# form an import cycle; type checkers see them through the TYPE_CHECKING block at the end of the module.
+_LAZY_DTO_MODULES = {
+    "register_goal_tools": "modules.goals.tools",
+}
+
+
+def __getattr__(name: str) -> _Any:
+    """Resolve the lazily re-exported names on first access (module-level ``__getattr__``).
+
+    Raises ``AttributeError`` for any other missing attribute, preserving normal module semantics.
+    """
+    module_name = _LAZY_DTO_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(_import_module(module_name), name)
+    globals()[name] = value
+    return value
+
+
 import hashlib
 import json
 from collections.abc import Sequence
@@ -58,6 +82,7 @@ __all__ = [
     "GoalPage",
     "GoalRead",
     "ensure_demo_goals",
+    "register_goal_tools",
 ]
 
 
@@ -627,7 +652,7 @@ async def _create_plan_tasks_and_milestones(
     task by ``task_index`` and start completed only when that task is already ``done``.
     """
     from modules.tasks import public as tasks
-    from modules.tasks.schemas import TaskCreate
+    from modules.tasks.public import TaskCreate
 
     milestone_values = deepcopy(goal.milestones or [])
     task_ids: list[UUID] = []
@@ -780,3 +805,8 @@ async def list_deadlines_within(
         Goal.deadline.between(today - timedelta(days=1), today + timedelta(days=lead_days)),
     ).order_by(Goal.deadline, Goal.id).limit(limit))).all()
     return [(g.id, g.status, d.isoformat(), (d - today).days, float(g.progress)) for g in rows if (d := g.deadline) is not None]
+
+if _TYPE_CHECKING:
+    from modules.goals.tools import (
+        register_goal_tools,
+    )

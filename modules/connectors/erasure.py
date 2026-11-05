@@ -41,7 +41,7 @@ from modules.connectors.n8n import (
     workflow_matches,
 )
 from modules.settings.public import n8n_http_client, resolve_n8n
-from modules.sources.models import Source
+from modules.sources.public import SourceReadProjection as Source
 
 from . import models as _models  # noqa: F401 - register this owner's tables
 

@@ -45,7 +45,7 @@ from modules.connectors.service.schemas import (
     ConnectorConfigurationSnapshot,
     NativeCredentialSnapshot,
 )
-from modules.sources.schemas import ConnectorSource, SourceFence
+from modules.sources.public import ConnectorSource, SourceFence
 
 _OAUTH_PROVIDERS = frozenset({"google_mail", "google_calendar", "google_drive", "reddit"})
 

@@ -8,7 +8,61 @@ the same name on this facade only affects callers that resolve it through the fa
 and silently does nothing for helpers used inside ``service.*``.
 """
 
-# ruff: noqa: F401
+# ruff: noqa: F401, PLC0414
+# Approved read projection (AGENTS.md "Testing Guidelines" / docs/architecture/module-boundaries.md): connectors owns
+# ConnectorOAuthGrant, ConnectorProvisioning; other modules may build SELECT/JOIN statements on these columns and must never INSERT, UPDATE, DELETE,
+# instantiate or add them (guarded by tests/unit/architecture/test_module_boundaries.py). Permission and deletion
+# checks stay with the caller's own admission fence plus the owner's workspace/source predicates; the projection adds
+# no access of its own.
+from modules.connectors.models import ConnectorOAuthGrant as ConnectorOAuthGrantReadProjection
+from modules.connectors.models import ConnectorProvisioning as ConnectorProvisioningReadProjection
+
+# isort: split
+from importlib import import_module as _import_module
+from typing import Any as _Any
+
+# Cross-module contracts re-exported lazily (PEP 562). Ingestion, Documents and Sources import this facade while this
+# facade's own implementation imports their contracts, so eager re-exports would close import cycles. The mapping and
+# ``__getattr__`` sit first so a partially initialised facade can still resolve them; type checkers see the names
+# through the ``TYPE_CHECKING`` blocks below.
+_LAZY_SUBMODULES = {"live_map": "modules.connectors.live_map"}
+_LAZY_DTO_MODULES = {
+    "PROVIDER_SOURCE_TYPES": "modules.connectors.backends",
+    "FREE_PROVIDER_SPECS": "modules.connectors.provider_specs",
+    "MAX_IMPORT_BYTES": "modules.connectors.providers.manual_finance",
+    "get_provider_spec": "modules.connectors.provider_specs",
+    "get_realtime_tier": "modules.connectors.provider_specs",
+    "parse_finance_import": "modules.connectors.providers.manual_finance",
+    "render_finance_markdown": "modules.connectors.providers.manual_finance",
+    "CollectionAdmissionRead": "modules.connectors.collection_schemas",
+    "CollectionAdmissionRequest": "modules.connectors.collection_schemas",
+    "CollectionRequestRead": "modules.connectors.collection_schemas",
+    "CollectionRequestRef": "modules.connectors.collection_schemas",
+    "ManagedConnectorReceipt": "modules.connectors.collection_schemas",
+    "ManagedCrawlRequest": "modules.connectors.collection_schemas",
+    "ManagedNoChanges": "modules.connectors.collection_schemas",
+    "GitHubBindingFence": "modules.connectors.github.schemas",
+    "GitHubSegmentProof": "modules.connectors.github.schemas",
+}
+
+
+def __getattr__(name: str) -> _Any:
+    """Resolve the lazily re-exported schema DTOs on first access (module-level ``__getattr__``).
+
+    Raises ``AttributeError`` for any other missing attribute, preserving normal module semantics.
+    """
+    if name in _LAZY_SUBMODULES:
+        # Whole-module handle (Live Map query surface); callers keep attribute access on the module object.
+        value = _import_module(_LAZY_SUBMODULES[name])
+        globals()[name] = value
+        return value
+    module_name = _LAZY_DTO_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(_import_module(module_name), name)
+    globals()[name] = value
+    return value
+
 import asyncio
 import base64
 import hashlib
@@ -140,8 +194,8 @@ from modules.connectors.provider_specs import (
 )
 from modules.connectors.providers.cii import CiiProjection
 from modules.connectors.sections import MAX_SECTIONS, SECTION_CATALOG
-from modules.ingestion.schemas import IngestionRecord, TelegramRawDelivery
-from modules.sources.schemas import ConnectorSource, SourceFence
+from modules.ingestion.public import IngestionRecord, TelegramRawDelivery
+from modules.sources.public import ConnectorSource, SourceFence
 
 if TYPE_CHECKING:
     from core.config import Settings
@@ -497,32 +551,33 @@ from modules.connectors.service.scope import (
     update_agent_browser_grant_in_uow as update_agent_browser_grant_in_uow,
 )
 
-# DTOs other modules import from ``collection_schemas`` / ``github.schemas``. ``collection_schemas``
-# imports this facade, so they are resolved lazily (PEP 562) to avoid an import cycle; type
-# checkers see them through the ``TYPE_CHECKING`` re-exports above.
-_LAZY_DTO_MODULES = {
-    "CollectionAdmissionRead": "modules.connectors.collection_schemas",
-    "CollectionAdmissionRequest": "modules.connectors.collection_schemas",
-    "CollectionRequestRead": "modules.connectors.collection_schemas",
-    "CollectionRequestRef": "modules.connectors.collection_schemas",
-    "ManagedConnectorReceipt": "modules.connectors.collection_schemas",
-    "ManagedCrawlRequest": "modules.connectors.collection_schemas",
-    "ManagedNoChanges": "modules.connectors.collection_schemas",
-    "GitHubBindingFence": "modules.connectors.github.schemas",
-    "GitHubSegmentProof": "modules.connectors.github.schemas",
-}
+if TYPE_CHECKING:
+    from modules.connectors.provider_specs import (
+        FREE_PROVIDER_SPECS as FREE_PROVIDER_SPECS,
+    )
+    from modules.connectors.provider_specs import (
+        get_provider_spec as get_provider_spec,
+    )
+    from modules.connectors.provider_specs import (
+        get_realtime_tier as get_realtime_tier,
+    )
+    from modules.connectors.providers.manual_finance import (
+        MAX_IMPORT_BYTES as MAX_IMPORT_BYTES,
+    )
+    from modules.connectors.providers.manual_finance import (
+        parse_finance_import as parse_finance_import,
+    )
+    from modules.connectors.providers.manual_finance import (
+        render_finance_markdown as render_finance_markdown,
+    )
 
+if TYPE_CHECKING:
+    from modules.connectors.backends import PROVIDER_SOURCE_TYPES as PROVIDER_SOURCE_TYPES
 
-def __getattr__(name: str) -> Any:
-    """Resolve the lazily re-exported schema DTOs on first access (module-level ``__getattr__``).
+__all__ = [
+    "ConnectorOAuthGrantReadProjection",
+    "ConnectorProvisioningReadProjection",
+]
 
-    Raises ``AttributeError`` for any other missing attribute, preserving normal module semantics.
-    """
-    module_name = _LAZY_DTO_MODULES.get(name)
-    if module_name is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    import importlib
-
-    value = getattr(importlib.import_module(module_name), name)
-    globals()[name] = value
-    return value
+if TYPE_CHECKING:
+    from modules.connectors import live_map as live_map

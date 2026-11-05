@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from modules.knowledge.entities.schemas import validate_metadata
+from modules.knowledge.entities.public import validate_metadata
 
 
 def _aware_utc(value: datetime | None) -> datetime | None:

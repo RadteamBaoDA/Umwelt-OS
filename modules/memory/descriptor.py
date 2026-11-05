@@ -15,6 +15,7 @@ class MemoryDescriptor(ModuleDescriptor):
     description: str = "Selective memory lifecycle, candidate evaluation, and privacy management."
     enabled: bool = True
     dependencies: tuple[str, ...] = ()
+    optional_dependencies: tuple[str, ...] = ("chat", "knowledge.documents", "sources")
     provides: tuple[str, ...] = ("memories", "memory_candidates", "memory_privacy")
     requires: tuple[str, ...] = ()
     routes: tuple[str, ...] = ("/api/v1/memories", "/api/v1/settings/memory-privacy")

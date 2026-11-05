@@ -141,8 +141,8 @@ class ToolRegistry:
         if not callable(factory) or type(flag) is not bool:
             return None
         try:
+            from core.capabilities import read_module_availability
             from core.modules import effective_modules, register_modules
-            from modules.settings.public import read_module_availability
 
             async with factory() as session:
                 lifecycle = await read_module_availability(

@@ -5,7 +5,6 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 from core.workspaces.schemas import AccessFence
-from modules.connectors.backends import PROVIDER_SOURCE_TYPES
 
 SourceType = Literal[
     "rss", "web", "file", "github", "calendar", "email", "api", "mcp", "manual", "other"
@@ -26,6 +25,9 @@ class SourceCreate(BaseModel):
     @model_validator(mode="after")
     def validate_provider_type(self) -> "SourceCreate":
         """Require a registered provider to use the source type owned by Connectors."""
+        # Resolved at validation time: a module-level import would close an import cycle with the connectors facade.
+        from modules.connectors.public import PROVIDER_SOURCE_TYPES
+
         expected = PROVIDER_SOURCE_TYPES.get(self.provider or "")
         if self.provider is not None and expected is None:
             raise ValueError("Provider is not registered")

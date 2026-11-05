@@ -36,7 +36,7 @@ class SetupRequest(BaseModel):
     @classmethod
     def _normalize_display_name(cls, value: str | None) -> str | None:
         """Apply the settings module's name rules (trim, blank->None, <=80, no control chars)."""
-        from modules.settings.display_name import normalize_display_name
+        from core.capabilities import normalize_display_name
 
         return normalize_display_name(value)
 

@@ -4,6 +4,12 @@ Authorization is deny-by-default: a resource type is admitted only after its own
 registers an authorizer (W3 News/Brief projections). Callers commit; no network I/O happens here.
 """
 
+# Cross-module contract re-exports (importers use this public module, never private submodules).
+from modules.translations.lifecycle import (
+    purge_resource_translations,
+)
+
+# isort: split
 import hashlib
 import json
 from collections.abc import Awaitable, Callable
@@ -14,7 +20,6 @@ from uuid import UUID
 
 from pydantic import Field
 from sqlalchemy import func, select, update
-from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.schemas import AccountSessionRef
@@ -29,8 +34,12 @@ from core.errors import (
 from core.telemetry import count
 from core.workspaces.public import lock_access_fence, read_access_fence
 from core.workspaces.schemas import Scope, WorkspaceContext
-from modules.settings.models import TranslationSettingsRecord
-from modules.settings.schemas import TranslationSettingsRead, TranslationSettingsUpdate
+from modules.settings.public import (
+    TranslationSettingsRead,
+    TranslationSettingsUpdate,
+    read_translation_settings_projection,
+    save_translation_settings_cas,
+)
 from modules.translations.models import (
     ContentTranslation,
     TranslationBatch,
@@ -92,25 +101,12 @@ def _member(scope: Scope) -> WorkspaceContext:
     return scope
 
 
-def _read(row: TranslationSettingsRecord | None) -> TranslationSettingsRead:
-    """Project a row (or the default for an absent row) to the public DTO."""
-    if row is None:
-        return TranslationSettingsRead()
-    return TranslationSettingsRead(
-        enabled=row.enabled, target_language=row.target_language,
-        configuration_revision=row.configuration_revision,
-    )
-
-
 async def read_translation_settings(
     session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> TranslationSettingsRead:
     """Member-safe read projection; admission precedes the workspace-predicated query."""
     await read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    row = await session.scalar(select(TranslationSettingsRecord).where(
-        TranslationSettingsRecord.workspace_id == scope.workspace_id,
-    ).execution_options(populate_existing=True))
-    return _read(row)
+    return await read_translation_settings_projection(session, scope.workspace_id)
 
 
 async def save_translation_settings(
@@ -127,21 +123,12 @@ async def save_translation_settings(
     await lock_access_fence(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, auth_sessions=auth_sessions,
     )
-    await session.execute(insert(TranslationSettingsRecord).values(workspace_id=scope.workspace_id)
-                          .on_conflict_do_nothing(index_elements=["workspace_id"]))
-    row = await session.scalar(select(TranslationSettingsRecord).where(
-        TranslationSettingsRecord.workspace_id == scope.workspace_id,
-    ).with_for_update().execution_options(populate_existing=True))
-    if row is None:
-        raise RuntimeError("Translation settings could not be initialized")
-    if row.configuration_revision != value.expected_revision:
-        raise ConflictError(detail="Translation settings changed; reload before saving")
-    if row.enabled == value.enabled and row.target_language == value.target_language:
-        return _read(row)
-    row.enabled = value.enabled
-    row.target_language = value.target_language
-    row.configuration_revision += 1
-    row.updated_by_user_id = owner.user_id
+    settings, changed = await save_translation_settings_cas(
+        session, scope.workspace_id, enabled=value.enabled, target_language=value.target_language,
+        expected_revision=value.expected_revision, updated_by_user_id=owner.user_id,
+    )
+    if not changed:
+        return settings
     await session.execute(update(ContentTranslation).where(
         ContentTranslation.workspace_id == scope.workspace_id, ContentTranslation.status == "pending",
     ).values(
@@ -149,7 +136,7 @@ async def save_translation_settings(
         lease_token=None, lease_expires_at=None, slot_token=None, slot_expires_at=None,
     ))
     await session.flush()
-    return _read(row)
+    return settings
 
 
 def translation_fingerprint(parts: dict[str, str | int]) -> str:
@@ -244,10 +231,7 @@ async def request_translations(
     await lock_access_fence(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, auth_sessions=auth_sessions,
     )
-    row = await session.scalar(select(TranslationSettingsRecord).where(
-        TranslationSettingsRecord.workspace_id == actor.workspace_id,
-    ).with_for_update().execution_options(populate_existing=True))
-    settings = _read(row)
+    settings = await read_translation_settings_projection(session, actor.workspace_id, lock=True)
     if not settings.enabled:
         return TranslationBatchEnqueue(batch_id=None, settings=settings, items=[
             TranslationItemStatusRead(resource_type=i.resource_type, resource_id=i.resource_id, status="blocked")
@@ -337,9 +321,7 @@ async def read_batch(
         TranslationBatch.actor_user_id == actor.user_id).execution_options(populate_existing=True))
     if batch is None:
         raise NotFoundError(detail="Batch not found")
-    settings_row = await session.scalar(select(TranslationSettingsRecord).where(
-        TranslationSettingsRecord.workspace_id == actor.workspace_id).execution_options(populate_existing=True))
-    settings = _read(settings_row)
+    settings = await read_translation_settings_projection(session, actor.workspace_id)
     gate: str | None = None
     if not settings.enabled:
         gate = "translation_disabled"
@@ -380,3 +362,8 @@ async def read_batch(
             original_revision=item.resource_revision, error_code=code))
     return TranslationBatchRead(
         batch_id=batch.id, target_language=batch.target_language, items=items)
+
+# Names re-exported from the owner's private submodules for other modules (see top of file).
+__all__ = [
+    "purge_resource_translations",
+]

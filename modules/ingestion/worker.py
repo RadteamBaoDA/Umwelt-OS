@@ -62,13 +62,10 @@ from modules.ingestion.models import (
 from modules.ingestion.parsers import ParsedDocument, parse_file_bounded
 from modules.ingestion.schemas import EventDelivery, IngestionRecord
 from modules.knowledge.documents import public as documents
-from modules.knowledge.documents.schemas import (
-    MEASUREMENT_PROVIDER_IDS,
-    NormalizedDocumentInput,
-)
+from modules.knowledge.documents.public import MEASUREMENT_PROVIDER_IDS, NormalizedDocumentInput
 from modules.knowledge.observations import public as observations
 from modules.sources import public as sources
-from modules.sources.schemas import ConnectorSource, SourceFence
+from modules.sources.public import ConnectorSource, SourceFence
 
 logger = logging.getLogger("bbd.worker")
 STAGE_TIMEOUT_SECONDS = 120
@@ -1232,7 +1229,7 @@ async def _write_world_observation(
     retryable preparation conflicts; a rejected observation write is too. Returns ``result`` copied with the
     observation's ``selected_current`` and records it on ``progress``.
     """
-    from modules.knowledge.observations.schemas import WorldMeasurement
+    from modules.knowledge.observations.public import WorldMeasurement
 
     provider_record, provider_scope = prepared.provider_record, prepared.provider_scope
     generation = work.source.generation

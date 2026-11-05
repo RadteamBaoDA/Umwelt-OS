@@ -1,5 +1,13 @@
 """Public module contracts and API boundary for the chat capability."""
 
+# Cross-module contract re-exports (importers use this public module, never private submodules).
+from modules.chat.generative_ui import (
+    external_router,
+)
+from modules.chat.web_search import WebSearchError
+from modules.chat.web_search import search as run_web_search
+
+# isort: split
 import binascii as _binascii
 import hashlib as _hashlib
 import json as _json
@@ -15,6 +23,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from pydantic import BaseModel
+from redis.asyncio import Redis as _Redis
 from sqlalchemy import ColumnElement
 from sqlalchemy import delete as _delete
 from sqlalchemy import func as _func
@@ -24,8 +33,10 @@ from sqlalchemy import tuple_ as _tuple
 from sqlalchemy import union as _union
 from sqlalchemy import update as _update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import async_sessionmaker as _async_sessionmaker
 
 from core.auth.models import Owner as _Owner
+from core.config import Settings as _Settings
 from core.errors import (
     ConflictError,
     DomainError,
@@ -164,13 +175,16 @@ __all__ = [
     "TemporalContextItem",
     "ValidatedAnswer",
     "WebCitation",
+    "WebSearchError",
     "authorize_agent_run_access",
+    "build_answer_context",
     "build_context",
     "count_source_conversations",
     "delete_conversation",
     "ensure_demo_conversation",
     "ensure_grounded_answer",
     "export_page",
+    "external_router",
     "filter_current_citations",
     "filter_live_agent_run_ids",
     "format_grounded_context",
@@ -193,6 +207,7 @@ __all__ = [
     "read_memory_export_origin",
     "revalidate_context_fence",
     "run_response_generation",
+    "run_web_search",
     "search_conversations",
     "validate_answer_citations",
     "validate_citations",
@@ -409,7 +424,7 @@ async def resolve_gadget_context(
         # Strip server-reserved keys: "selected_only" and every "_"-prefixed private key.
         return {key: value for key, value in context.items() if key != "selected_only" and not key.startswith("_")}
     from modules.knowledge.documents import public as documents_public
-    from modules.knowledge.documents.schemas import GadgetDocumentSelectionFence
+    from modules.knowledge.documents.public import GadgetDocumentSelectionFence
 
     selections = _parse_selection_items(context.get("items"))
 
@@ -1109,7 +1124,7 @@ async def _chat_export_evidence_fences(
     source_fences = await documents_public.review_version_fences(
         session, versions, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     from modules.sources import public as sources_public
-    from modules.sources.schemas import SourceExportFence
+    from modules.sources.public import SourceExportFence
 
     source_generations: dict[UUID, int] = {}
     conflicting_sources: set[UUID] = set()
@@ -1540,7 +1555,7 @@ async def _revalidate_export_citations(
     current_sources = await documents_public.review_version_fences(
         session, version_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     from modules.sources import public as sources_public
-    from modules.sources.schemas import SourceExportFence
+    from modules.sources.public import SourceExportFence
 
     current_generations: dict[UUID, int] = {}
     conflicting_sources: set[UUID] = set()
@@ -2129,3 +2144,23 @@ async def count_source_conversations(session: AsyncSession, source_id: UUID, *, 
     ).subquery()
     capped = _select(ids.c.conversation_id).limit(cap).subquery()
     return int(await session.scalar(_select(_func.count()).select_from(capped)) or 0)
+
+
+async def build_answer_context(
+    session: AsyncSession,
+    session_factory: _async_sessionmaker[AsyncSession],
+    redis: _Redis,
+    settings: _Settings,
+    request: AnswerContextRequest,
+    *,
+    scope: Scope,
+) -> AnswerContext:
+    """Compose grounded answer context for Knowledge's service facade (delegates to ``chat.retrieval.build_context``).
+
+    Thin contract wrapper so Knowledge does not import Chat's private retrieval module. Arguments, transaction use
+    (the caller's ``session`` plus short isolated ``session_factory`` sessions), authorization (the caller's scope) and
+    errors are exactly those of ``build_context``; nothing is committed here.
+    """
+    from modules.chat import retrieval
+
+    return await retrieval.build_context(session, session_factory, redis, settings, request, scope=scope)

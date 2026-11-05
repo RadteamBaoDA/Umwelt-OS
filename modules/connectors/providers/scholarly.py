@@ -23,7 +23,7 @@ from modules.connectors.providers.macro import (
     decode_json,
 )
 from modules.connectors.providers.news import _record, https_link, plain_text
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 
 OPENALEX_URL = "https://api.openalex.org/works"
 OPENALEX_MAX_BODY = 2 * 1024 * 1024

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.workspaces.schemas import Scope
 from modules.goals import public as goals
-from modules.goals.schemas import GoalFilter
+from modules.goals.public import GoalFilter
 from modules.news import topics
 from modules.news.schemas import RecordedSignal, RelevanceRead, StoryRead
 from modules.news.stories import _tokens

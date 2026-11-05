@@ -9,6 +9,30 @@ document-seed coordinator.
 
 from __future__ import annotations
 
+from importlib import import_module as _import_module
+from typing import TYPE_CHECKING as _TYPE_CHECKING
+from typing import Any as _Any
+
+# Re-exports of private submodules that themselves import this facade are resolved lazily (PEP 562) so the two cannot
+# form an import cycle; type checkers see them through the TYPE_CHECKING block at the end of the module.
+_LAZY_DTO_MODULES = {
+    "register_task_tools": "modules.tasks.tools",
+}
+
+
+def __getattr__(name: str) -> _Any:
+    """Resolve the lazily re-exported names on first access (module-level ``__getattr__``).
+
+    Raises ``AttributeError`` for any other missing attribute, preserving normal module semantics.
+    """
+    module_name = _LAZY_DTO_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(_import_module(module_name), name)
+    globals()[name] = value
+    return value
+
+
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
@@ -61,6 +85,7 @@ __all__ = [
     "TaskRead",
     "TaskStatus",
     "ensure_demo_tasks",
+    "register_task_tools",
 ]
 
 
@@ -682,3 +707,8 @@ async def list_due_within(
             continue  # the date-only prefilter is coarse
         result.append((task.id, task.status, due.isoformat(), (due - now).total_seconds() / 3600, task.goal_id))
     return result
+
+if _TYPE_CHECKING:
+    from modules.tasks.tools import (
+        register_task_tools,
+    )

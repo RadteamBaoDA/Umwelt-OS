@@ -79,7 +79,7 @@ from modules.connectors.public import (
 from modules.connectors.sections import MAX_SECTIONS, SECTION_CATALOG
 from modules.settings.public import module_dependency
 from modules.sources import public as sources
-from modules.sources.schemas import ConnectorSource, SourceCreate, SourcePatch
+from modules.sources.public import ConnectorSource, SourceCreate, SourcePatch
 
 router = APIRouter(prefix="/api/v1/connectors/builtins", tags=["connectors"],
                    dependencies=[Depends(module_dependency("connectors"))])

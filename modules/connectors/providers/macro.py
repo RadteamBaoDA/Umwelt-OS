@@ -19,7 +19,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 
 MAX_BODY_BYTES = 2 * 1024 * 1024
 _DECIMAL_RE = re.compile(r"^-?[0-9]{1,40}(\.[0-9]{1,40})?([eE][+-]?[0-9]{1,3})?$")
@@ -165,7 +165,7 @@ def build_record(
     modified_at: datetime | None = None,
 ) -> IngestionRecord:
     """Build the trusted typed envelope; ``value`` None becomes explicit provider_null missing."""
-    from modules.knowledge.documents.schemas import ProviderRecordMetadata, WorldDataMeasurement
+    from modules.knowledge.documents.public import ProviderRecordMetadata, WorldDataMeasurement
 
     if collected_at.tzinfo is None or collected_at.utcoffset() is None:
         raise ValueError("collected_at must be timezone-aware")

@@ -32,7 +32,7 @@ from modules.knowledge.documents.models import (
     DocumentVersion,
 )
 from modules.sources import public as sources
-from modules.sources.models import Source
+from modules.sources.public import SourceReadProjection as Source
 
 
 @dataclass(frozen=True)

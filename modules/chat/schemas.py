@@ -15,7 +15,7 @@ from pydantic import (
 )
 
 from modules.chat.web_search import sanitize_url
-from modules.knowledge.documents.schemas import GadgetDocumentSelectionFence
+from modules.knowledge.documents.public import GadgetDocumentSelectionFence
 
 MAX_RETRIEVAL_LIMIT = 50
 MAX_SOURCE_SCOPE = 100

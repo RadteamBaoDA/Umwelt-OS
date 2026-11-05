@@ -23,9 +23,7 @@ from modules.knowledge.documents.models import (
     DocumentVersion,
     NormalizedDocumentIdentity,
 )
-from modules.sources.schemas import (
-    SourceFence,
-)
+from modules.sources.public import SourceFence
 
 
 async def _upload_document_state(

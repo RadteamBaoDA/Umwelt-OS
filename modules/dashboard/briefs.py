@@ -43,9 +43,9 @@ from modules.dashboard.models import BriefSchedule as BriefScheduleRow
 from modules.dashboard.models import DailyBrief, DailyBriefEvidence
 from modules.knowledge.documents import public as documents
 from modules.notifications import public as notifications
-from modules.notifications.schemas import NotificationEmit
+from modules.notifications.public import NotificationEmit
 from modules.settings import public as settings_public
-from modules.settings.prompts import resolve_prompt
+from modules.settings.public import resolve_prompt
 from modules.sources import public as sources
 
 MAX_FACTS = 40

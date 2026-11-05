@@ -13,7 +13,7 @@ from core.realtime import commit_with_replay
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.public import lock_access_fence
 from core.workspaces.schemas import WorkspaceContext
-from modules.knowledge.entities.schemas import EntityHistoryPage
+from modules.knowledge.entities.public import EntityHistoryPage
 from modules.knowledge.service import KnowledgeService
 from modules.knowledge.temporal import public
 from modules.knowledge.temporal.schemas import (
@@ -22,7 +22,7 @@ from modules.knowledge.temporal.schemas import (
     ReconcileRequest,
     ReconcileStatus,
 )
-from modules.timeline.schemas import TimelineQuery
+from modules.timeline.public import TimelineQuery
 
 router = APIRouter(tags=["temporal-knowledge"])
 Session = Annotated[AsyncSession, Depends(get_session)]

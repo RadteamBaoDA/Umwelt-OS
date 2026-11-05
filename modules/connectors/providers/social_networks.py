@@ -17,8 +17,8 @@ from typing import Any, Literal
 from urllib.parse import quote, urlencode
 
 from modules.connectors.providers import rest, social_walk
-from modules.ingestion.schemas import IngestionRecord
-from modules.knowledge.documents.schemas import ProviderRecordMetadata
+from modules.ingestion.public import IngestionRecord
+from modules.knowledge.documents.public import ProviderRecordMetadata
 
 MAX_RECORDS = 100
 MAX_TEXT = 20_000

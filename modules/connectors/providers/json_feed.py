@@ -38,7 +38,7 @@ from modules.connectors.providers.news import (
     parse_when,
     plain_text,
 )
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 
 MAX_ROWS_SCANNED = 2000  # sanity bound on the decoded list; real feeds here return tens to a few hundred rows
 _TZ_SUFFIX_RE = re.compile(r"(?:Z|[+-]\d{2}:?\d{2})$")

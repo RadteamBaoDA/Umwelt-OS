@@ -23,8 +23,7 @@ from core.publication import require_publication_gate
 from core.workspaces.dependencies import require_workspace_observer_read
 from core.workspaces.public import lock_access_fence, read_access_fence
 from core.workspaces.schemas import AdminWorkspaceReadContext, PublicationFence, WorkspaceContext
-from modules.connectors import live_map
-from modules.connectors.public import ProviderRateLimited
+from modules.connectors.public import ProviderRateLimited, live_map
 from modules.dashboard.live_credentials import read_live_credentials, require_live_terms
 
 router = APIRouter(prefix="/api/v1/live-map", tags=["live-map"])

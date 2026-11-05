@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.workspaces.schemas import Scope
 from modules.connectors import public as connectors
 from modules.knowledge.observations import public as observations
-from modules.knowledge.observations.schemas import ObservationQuery
+from modules.knowledge.observations.public import ObservationQuery
 from modules.news.schemas import (
     CorrelationBucketRead,
     CorrelationCoverageRead,

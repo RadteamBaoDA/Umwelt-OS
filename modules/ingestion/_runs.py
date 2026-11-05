@@ -48,7 +48,7 @@ from modules.ingestion.schemas import (
     StageRead,
 )
 from modules.sources import public as sources
-from modules.sources.schemas import SourceFence
+from modules.sources.public import SourceFence
 
 _RUN_RETRY_ORDER = {"receive": 0, "collect_web": 1, "normalize": 2, "parse_file": 3}
 

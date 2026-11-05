@@ -18,7 +18,7 @@ from modules.connectors.providers.macro import (
     parse_iso_date,
     provider_instant,
 )
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 
 # CISA's official GitHub mirror of the catalog: cisa.gov's Akamai edge answers 403 to some egress networks (Vietnam).
 KEV_URL = "https://raw.githubusercontent.com/cisagov/kev-data/develop/known_exploited_vulnerabilities.json"

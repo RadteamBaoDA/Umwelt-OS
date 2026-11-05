@@ -34,7 +34,7 @@ from modules.connectors.providers.macro import (
     decode_json,
 )
 from modules.connectors.sections import SECTION_CATALOG
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 
 MAX_FEED_BYTES = 1024 * 1024
 MAX_FEED_ITEMS_SCANNED = 500
@@ -220,7 +220,7 @@ def _record(
     provider_updated_at: str | None = None,
 ) -> IngestionRecord:
     """Assemble a news ingestion record with typed provider provenance and optional canonical link."""
-    from modules.knowledge.documents.schemas import ProviderRecordMetadata
+    from modules.knowledge.documents.public import ProviderRecordMetadata
 
     envelope = ProviderRecordMetadata(
         provider=provider, identity=identity, provider_version=version,

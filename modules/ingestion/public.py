@@ -7,6 +7,41 @@ This module is the stable facade: implementations live in the private ``_*`` sub
 package and are re-exported here under their original names.
 """
 
+# Hoisted first: DTO contracts must be bound before heavy imports so cyclic importers see them.
+# Approved read projection (AGENTS.md "Testing Guidelines" / docs/architecture/module-boundaries.md): ingestion owns
+# SourceIngestionState; other modules may build SELECT/JOIN statements on these columns and must never INSERT, UPDATE, DELETE,
+# instantiate or add them (guarded by tests/unit/architecture/test_module_boundaries.py). Permission and deletion
+# checks stay with the caller's own admission fence plus the owner's workspace/source predicates; the projection adds
+# no access of its own.
+from modules.ingestion.models import SourceIngestionState as SourceIngestionStateReadProjection
+
+# isort: split
+from modules.ingestion.schemas import (
+    ChatAttachmentRead,
+    CollectionState,
+    CollectionStateUpdate,
+    CollectorCredentialRead,
+    ConnectorCollectionLease,
+    CrawlReceipt,
+    EventDelivery,
+    IngestionRecord,
+    NativeCollectionBatch,
+    NativeCollectionReceipt,
+    Receipt,
+    ReceiveBatch,
+    RetryRunRequest,
+    RunRead,
+    SourceIngestionRead,
+    StageRead,
+    TelegramCursor,
+    TelegramDeliveryProof,
+    TelegramPageDelivery,
+    TelegramProbeClassification,
+    TelegramRawDelivery,
+    classify_telegram_probe,
+)
+
+# isort: split
 from modules.ingestion._batches import (
     _NO_EXPECTED_CURSOR,
     accept_collection_no_changes,
@@ -133,30 +168,6 @@ from modules.ingestion._scope import (
     resolve_ingestion_event_scope,
     resolve_ingestion_run_scope,
 )
-from modules.ingestion.schemas import (
-    ChatAttachmentRead,
-    CollectionState,
-    CollectionStateUpdate,
-    CollectorCredentialRead,
-    ConnectorCollectionLease,
-    CrawlReceipt,
-    EventDelivery,
-    IngestionRecord,
-    NativeCollectionBatch,
-    NativeCollectionReceipt,
-    Receipt,
-    ReceiveBatch,
-    RetryRunRequest,
-    RunRead,
-    SourceIngestionRead,
-    StageRead,
-    TelegramCursor,
-    TelegramDeliveryProof,
-    TelegramPageDelivery,
-    TelegramProbeClassification,
-    TelegramRawDelivery,
-    classify_telegram_probe,
-)
 
 __all__ = [
     "COLLECTION_STATS_MAX_BYTES",
@@ -187,6 +198,7 @@ __all__ = [
     "RetryRunRequest",
     "RunRead",
     "SourceIngestionRead",
+    "SourceIngestionStateReadProjection",
     "StageRead",
     "TelegramCursor",
     "TelegramDeliveryProof",

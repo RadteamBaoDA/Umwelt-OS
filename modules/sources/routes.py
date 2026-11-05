@@ -34,7 +34,7 @@ async def _with_timing(session: AsyncSession, scope: WorkspaceContext | AdminWor
 
 def _to_read(source: object) -> SourceRead:
     """Project an ORM Source into SourceRead and resolve its effective realtime tracking tier."""
-    from modules.connectors.provider_specs import get_realtime_tier
+    from modules.connectors.public import get_realtime_tier
 
     read = SourceRead.model_validate(source, from_attributes=True)
     if read.type != "manual":

@@ -489,7 +489,7 @@ async def _fetch_static_target(
     """
     from httpx2 import AsyncClient
 
-    from modules.tools.mcp_transport import McpPinnedHttpTransport
+    from modules.tools.public import McpPinnedHttpTransport
 
     redirects = 0
     current = requested
@@ -579,7 +579,7 @@ async def _execute_static_agent_read(
     """Fetch static pages only after per-request API permits and pinned public HTTPS resolution."""
     import time
 
-    from modules.tools.mcp_transport import McpOperationNetworkBudget
+    from modules.tools.public import McpOperationNetworkBudget
 
     if (
         payload.service_instance_id != _SERVICE_INSTANCE_ID

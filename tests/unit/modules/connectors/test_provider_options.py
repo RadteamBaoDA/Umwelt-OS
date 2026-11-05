@@ -12,10 +12,10 @@ from modules.connectors.providers.hazards import nasa_eonet_request
 from modules.connectors.providers.json_feed import JSON_FEEDS, feed_request
 from modules.connectors.providers.news import hn_top_request
 from modules.connectors.providers.security import ioda_request, nvd_request
-from modules.connectors.public import ConnectorConfig
+from modules.connectors.public import PROVIDER_SOURCE_TYPES, ConnectorConfig
 from modules.connectors.registry import validate
 from modules.ingestion.schemas import IngestionRecord
-from modules.sources.schemas import PROVIDER_SOURCE_TYPES, ConnectorSource
+from modules.sources.schemas import ConnectorSource
 
 NOW = datetime(2026, 11, 2, 12, 0, 0, tzinfo=UTC)
 BASE = {"history_mode": "returned_snapshot", "schedule_interval_minutes": 1440, "timeout_seconds": 30}  # 1440 clears every provider floor

@@ -325,7 +325,7 @@ async def _select_admission_slot(
     is still live. Otherwise the lowest free slot is locked with ``skip_locked`` so concurrent
     admitters never block each other.
     """
-    from modules.ingestion.models import SourceIngestionState
+    from modules.ingestion.public import SourceIngestionStateReadProjection as SourceIngestionState
 
     state = await session.scalar(
         select(SourceIngestionState).where(SourceIngestionState.source_id == request.source_id)
@@ -838,7 +838,7 @@ async def dispatch_due_collections(ctx: dict[str, object]) -> int:
 
 async def _emit_metrics(factory: async_sessionmaker[AsyncSession], now: datetime, stale_leases: int) -> None:
     """Sample bounded-label tick metrics; per-tick samples, never IDs. Telemetry faults never fail the tick."""
-    from modules.sources.models import Source
+    from modules.sources.public import SourceReadProjection as Source
 
     try:
         async with factory() as session:

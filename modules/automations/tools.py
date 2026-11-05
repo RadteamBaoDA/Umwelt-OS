@@ -81,7 +81,7 @@ async def _list(arguments: dict[str, Any], context: dict[str, Any]) -> ToolResul
 
 async def _create(arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
     """Persist one owner-approved proposal as a disabled draft rule and return its reference."""
-    from modules.agents.internal_writes import run_approved_write
+    from modules.agents.public import run_approved_write
 
     async def perform(session: AsyncSession, scope: Scope) -> str:
         """Validate the proposal and create it disabled; returns ``automation:<id>``."""

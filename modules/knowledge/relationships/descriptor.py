@@ -13,6 +13,7 @@ class RelationshipDescriptor(ModuleDescriptor):
     description: str = "Store owner-authored and evidence-backed relationships."
     enabled: bool = True
     dependencies: tuple[str, ...] = ("knowledge.entities", "knowledge.documents")
+    optional_dependencies: tuple[str, ...] = ("knowledge.temporal", "sources")
     provides: tuple[str, ...] = ("relationships", "relationship_evidence")
     requires: tuple[str, ...] = ("entities", "document_versions", "document_chunks")
     routes: tuple[str, ...] = ("/api/v1/relationships", "/api/v1/entities/{id}/neighbors")

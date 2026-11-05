@@ -21,7 +21,7 @@ from modules.connectors.providers.macro import (
     positive_decimal,
     provider_instant,
 )
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 
 BINANCE_URL = "https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT"
 FEAR_GREED_URL = "https://api.alternative.me/fng/?limit=2"

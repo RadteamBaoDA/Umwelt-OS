@@ -79,7 +79,7 @@ def register_modules(descriptors: Iterable[ModuleDescriptor] = LIFECYCLE_DESCRIP
             raise ValueError(f"Duplicate module id: {descriptor.id}")
         registry[descriptor.id] = descriptor
     for descriptor in registry.values():
-        missing = set(descriptor.dependencies) - registry.keys()
+        missing = (set(descriptor.dependencies) | set(getattr(descriptor, "optional_dependencies", ()))) - registry.keys()
         if missing:
             raise ValueError(
                 f"Module {descriptor.id} has missing dependencies: {', '.join(sorted(missing))}"
@@ -88,7 +88,10 @@ def register_modules(descriptors: Iterable[ModuleDescriptor] = LIFECYCLE_DESCRIP
 
 
 def effective_modules(disabled: Iterable[str], descriptors: ModuleRegistry | None = None) -> ModuleRegistry:
-    """Return descriptor copies with explicit disables and unavailable dependencies applied transitively."""
+    """Return descriptor copies with explicit disables and unavailable dependencies applied transitively.
+
+    Only hard ``dependencies`` cascade; ``optional_dependencies`` record import coupling and never disable a module.
+    """
     registry = descriptors or register_modules()
     unavailable = set(disabled)
     changed = True

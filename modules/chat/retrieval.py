@@ -32,11 +32,11 @@ from modules.knowledge.documents import public as documents_public
 from modules.knowledge.entities import public as entities_public
 from modules.knowledge.relationships import public as relationships_public
 from modules.search import public as search_public
-from modules.search.schemas import SearchFilters, SearchRequest
+from modules.search.public import SearchFilters, SearchRequest
 from modules.settings import public as settings_public
 from modules.sources import public as sources_public
 from modules.timeline import public as timeline_public
-from modules.timeline.schemas import TimelineQuery
+from modules.timeline.public import TimelineQuery
 
 logger = logging.getLogger(__name__)
 

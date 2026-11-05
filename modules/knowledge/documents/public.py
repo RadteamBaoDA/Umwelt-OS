@@ -5,6 +5,77 @@ public name (and the historical private helpers other code reaches through it) s
 and attribute access via ``modules.knowledge.documents.public`` keep working unchanged.
 """
 
+# Hoisted first: DTO contracts must be bound before heavy imports so cyclic importers see them.
+# Approved read projection (AGENTS.md "Testing Guidelines" / docs/architecture/module-boundaries.md): knowledge.documents owns
+# Document, DocumentChunk, DocumentVersion, NormalizedVersionProvenance; other modules may build SELECT/JOIN statements on these columns and must never INSERT, UPDATE, DELETE,
+# instantiate or add them (guarded by tests/unit/architecture/test_module_boundaries.py). Permission and deletion
+# checks stay with the caller's own admission fence plus the owner's workspace/source predicates; the projection adds
+# no access of its own.
+from modules.knowledge.documents.models import Document as DocumentReadProjection
+from modules.knowledge.documents.models import DocumentChunk as DocumentChunkReadProjection
+from modules.knowledge.documents.models import DocumentVersion as DocumentVersionReadProjection
+from modules.knowledge.documents.models import (
+    NormalizedVersionProvenance as NormalizedVersionProvenanceReadProjection,
+)
+
+# isort: split
+from modules.knowledge.documents.schemas import (
+    BUILTIN_FEED_PROVIDER_IDS,
+    KEYED_FEED_PROVIDER_IDS,
+    MAX_CONTENT_BYTES,
+    MAX_METADATA_BYTES,
+    MEASUREMENT_PROVIDER_FIELDS,
+    MEASUREMENT_PROVIDER_IDS,
+    NEWS_PROVIDER_IDS,
+    PROVIDER_IDS,
+    CitationTargetRead,
+    ContentUpdate,
+    DocumentCleanupJobIdentity,
+    DocumentCleanupPreparationLimitError,
+    DocumentCreate,
+    DocumentDeletionRead,
+    DocumentExportFence,
+    DocumentExportFenceValidation,
+    DocumentExportPage,
+    DocumentExportProvenance,
+    DocumentExportRead,
+    DocumentList,
+    DocumentPatch,
+    DocumentRead,
+    DocumentVersionExportRead,
+    EvidenceReferenceRead,
+    GadgetDocumentInteractionPatch,
+    GadgetDocumentInteractionRead,
+    GadgetDocumentProjectionList,
+    GadgetDocumentProjectionRead,
+    GadgetDocumentSelectionFence,
+    GadgetHighlightProjectionPage,
+    GadgetProviderMetadataRead,
+    GadgetTelegramMediaRead,
+    GadgetTelegramRecordRead,
+    MemberDocumentList,
+    MemberDocumentRead,
+    NormalizedDocumentInput,
+    NormalizedDocumentKeyState,
+    NormalizedDocumentPreparation,
+    NormalizedDocumentResult,
+    ObservationExportEvidenceCandidate,
+    ObservationExportEvidenceRead,
+    ProviderDocumentSnapshotList,
+    ProviderDocumentSnapshotRead,
+    ProviderRecordMetadata,
+    ProviderSnapshotRequest,
+    ProviderTelegramMedia,
+    ProviderTelegramMetadata,
+    TelegramDocumentOrder,
+    TimelineExportEvidenceCandidate,
+    TimelineExportEvidenceRead,
+    VersionList,
+    VersionRead,
+    WorldDataMeasurement,
+)
+
+# isort: split
 from core.workspaces import public as workspaces
 from modules.knowledge.documents._chat_evidence import (
     ChatEvidenceChunk,
@@ -208,61 +279,6 @@ from modules.knowledge.documents._versions import (
 )
 
 # Schema/DTO contract re-exports so other modules can import them from this facade.
-from modules.knowledge.documents.schemas import (
-    BUILTIN_FEED_PROVIDER_IDS,
-    KEYED_FEED_PROVIDER_IDS,
-    MAX_CONTENT_BYTES,
-    MAX_METADATA_BYTES,
-    MEASUREMENT_PROVIDER_FIELDS,
-    MEASUREMENT_PROVIDER_IDS,
-    NEWS_PROVIDER_IDS,
-    PROVIDER_IDS,
-    CitationTargetRead,
-    ContentUpdate,
-    DocumentCleanupJobIdentity,
-    DocumentCleanupPreparationLimitError,
-    DocumentCreate,
-    DocumentDeletionRead,
-    DocumentExportFence,
-    DocumentExportFenceValidation,
-    DocumentExportPage,
-    DocumentExportProvenance,
-    DocumentExportRead,
-    DocumentList,
-    DocumentPatch,
-    DocumentRead,
-    DocumentVersionExportRead,
-    EvidenceReferenceRead,
-    GadgetDocumentInteractionPatch,
-    GadgetDocumentInteractionRead,
-    GadgetDocumentProjectionList,
-    GadgetDocumentProjectionRead,
-    GadgetDocumentSelectionFence,
-    GadgetHighlightProjectionPage,
-    GadgetProviderMetadataRead,
-    GadgetTelegramMediaRead,
-    GadgetTelegramRecordRead,
-    MemberDocumentList,
-    MemberDocumentRead,
-    NormalizedDocumentInput,
-    NormalizedDocumentKeyState,
-    NormalizedDocumentPreparation,
-    NormalizedDocumentResult,
-    ObservationExportEvidenceCandidate,
-    ObservationExportEvidenceRead,
-    ProviderDocumentSnapshotList,
-    ProviderDocumentSnapshotRead,
-    ProviderRecordMetadata,
-    ProviderSnapshotRequest,
-    ProviderTelegramMedia,
-    ProviderTelegramMetadata,
-    TelegramDocumentOrder,
-    TimelineExportEvidenceCandidate,
-    TimelineExportEvidenceRead,
-    VersionList,
-    VersionRead,
-    WorldDataMeasurement,
-)
 from modules.sources import public as sources
 
 # Explicit re-export surface (mypy strict forbids implicit re-exports; private helpers are kept
@@ -288,6 +304,7 @@ __all__ = [
     "ChatEvidenceLockState",
     "CitationTargetRead",
     "ContentUpdate",
+    "DocumentChunkReadProjection",
     "DocumentCleanupEvidenceIdentity",
     "DocumentCleanupEvidenceScope",
     "DocumentCleanupJobIdentity",
@@ -302,7 +319,9 @@ __all__ = [
     "DocumentList",
     "DocumentPatch",
     "DocumentRead",
+    "DocumentReadProjection",
     "DocumentVersionExportRead",
+    "DocumentVersionReadProjection",
     "EvidenceReferenceRead",
     "ExtractionChunk",
     "ExtractionEvidenceRef",
@@ -327,6 +346,7 @@ __all__ = [
     "NormalizedDocumentPreparation",
     "NormalizedDocumentResult",
     "NormalizedDocumentValidationRejected",
+    "NormalizedVersionProvenanceReadProjection",
     "ObservationEvidenceCandidate",
     "ObservationExportEvidenceCandidate",
     "ObservationExportEvidenceRead",

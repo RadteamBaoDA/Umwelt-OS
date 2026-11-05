@@ -32,7 +32,7 @@ from modules.connectors.public import (
     _read_scoped_source,
 )
 from modules.sources import public as sources
-from modules.sources.schemas import ConnectorSource, SourceFence
+from modules.sources.public import ConnectorSource, SourceFence
 
 _ALL_CREDENTIAL_SLOTS = ("collector", "manual_trigger", "provider")
 

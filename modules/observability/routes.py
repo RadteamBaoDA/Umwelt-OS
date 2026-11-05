@@ -20,8 +20,7 @@ from modules.observability.schemas import (
     RunKind,
     RunsRead,
 )
-from modules.settings.public import module_dependency
-from modules.settings.schemas import MaintenanceSummaryRead
+from modules.settings.public import MaintenanceSummaryRead, module_dependency
 
 router = APIRouter(prefix="/api/v1/system", tags=["system"], dependencies=[Depends(module_dependency("observability"))])
 

@@ -1,5 +1,29 @@
 """Owner-scoped agent run creation, lookup, and cancellation contracts."""
 
+from importlib import import_module as _import_module
+from typing import TYPE_CHECKING as _TYPE_CHECKING
+from typing import Any as _Any
+
+# Re-exports of private submodules that themselves import this facade are resolved lazily (PEP 562) so the two cannot
+# form an import cycle; type checkers see them through the TYPE_CHECKING block at the end of the module.
+_LAZY_DTO_MODULES = {
+    "mark_effect_outcome": "modules.agents.approvals",
+}
+
+
+def __getattr__(name: str) -> _Any:
+    """Resolve the lazily re-exported names on first access (module-level ``__getattr__``).
+
+    Raises ``AttributeError`` for any other missing attribute, preserving normal module semantics.
+    """
+    module_name = _LAZY_DTO_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(_import_module(module_name), name)
+    globals()[name] = value
+    return value
+
+
 import asyncio
 import binascii
 import hashlib
@@ -35,6 +59,7 @@ from modules.agents.access import actor, admit, read_workspace_modules, run_epoc
 from modules.agents.account_checkpoints import (
     erase_account_checkpoints_page,
 )
+from modules.agents.internal_writes import run_approved_write, uuid_arg
 from modules.agents.leases import try_agent_run_lease_in_uow
 from modules.agents.models import (
     AgentApproval,
@@ -1963,15 +1988,19 @@ __all__ = [
     "list_run_meta",
     "list_runs",
     "lock_write_admission",
+    "mark_effect_outcome",
     "preflight_document_copied_evidence_lease",
     "purge_agent_runs",
     "purge_conversation_actions",
     "purge_document_copied_evidence_page",
+    "read_workspace_modules",
     "redact_expired_agent_traces",
     "request_cancel",
     "request_cancel_for_owner",
     "reserve_browser_run_budget_in_uow",
     "revalidate_browser_run_authority",
+    "run_approved_write",
+    "uuid_arg",
 ]
 
 
@@ -2087,3 +2116,8 @@ async def redact_expired_agent_traces(
         ).values(payload=None))
     await session.flush()
     return redacted
+
+if _TYPE_CHECKING:
+    from modules.agents.approvals import (
+        mark_effect_outcome,
+    )

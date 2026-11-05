@@ -24,10 +24,7 @@ from modules.knowledge.documents.schemas import (
     NormalizedDocumentPreparation,
 )
 from modules.sources import public as sources
-from modules.sources.schemas import (
-    ConnectorSource,
-    SourceFence,
-)
+from modules.sources.public import ConnectorSource, SourceFence
 
 
 async def _normalized_source_proof(
