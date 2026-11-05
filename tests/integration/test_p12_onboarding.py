@@ -34,9 +34,22 @@ async def _setup(
 
 
 async def _reset_to_fresh_instance(engine: AsyncEngine) -> None:
-    """Return the disposable database to its pre-setup state (the owner and every row that depends on it)."""
+    """Return the disposable database to its pre-setup state (the owner and every row that depends on it).
+
+    The cascade also empties singleton rows seeded by migration 0001 (admission slots, webhook capacity,
+    checkpoint versions); later tests on the same stack need them, so re-seed exactly what
+    scripts/sql/e2e-reset.sql re-inserts, in the same transaction and idempotently.
+    """
     async with engine.begin() as connection:
         await connection.execute(text("TRUNCATE TABLE owner CASCADE"))
+        for seed in (
+            "INSERT INTO github_webhook_capacity (id, digest_count, pending_count) VALUES (1, 0, 0)",
+            "INSERT INTO checkpoint_migrations (v) SELECT generate_series(0, 8)",
+            "INSERT INTO connector_admission_slots (slot_id) VALUES (1), (2)",
+            "INSERT INTO translation_admission_slots (id, translation_id, fencing_token, expires_at)"
+            " VALUES (1, NULL, 0, NULL)",
+        ):
+            await connection.execute(text(seed + " ON CONFLICT DO NOTHING"))
 
 
 @pytest.fixture
