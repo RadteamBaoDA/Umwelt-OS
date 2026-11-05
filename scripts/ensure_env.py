@@ -60,6 +60,11 @@ def ensure(env_path: Path) -> list[str]:
     # Derived URLs are only generated when unset, from the (possibly pre-existing) password.
     if unset("DATABASE_URL"):
         updates["DATABASE_URL"] = f"postgresql+asyncpg://{current['POSTGRES_USER']}:{db_password}@postgres:5432/{current['POSTGRES_DB']}"
+    chat_sql_password = _token()
+    if unset("CHAT_SQL_READER_DATABASE_URL"):
+        updates["CHAT_SQL_READER_DATABASE_URL"] = (
+            f"postgresql+asyncpg://umwelt_chat_sql_login:{chat_sql_password}@postgres:5432/{current['POSTGRES_DB']}"
+        )
     redis_password = want("REDISCLI_AUTH", _token)
     if unset("REDIS_URL"):
         updates["REDIS_URL"] = f"redis://:{redis_password}@redis:6379/0"

@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     # Direct (non-pooled) PostgreSQL URL for migrations and session-level features (session advisory locks).
     # Required when PGBOUNCER_ENABLED=true, where DATABASE_URL points at PgBouncer in transaction-pooling mode.
     database_direct_url: str | None = Field(default=None, validation_alias="DATABASE_DIRECT_URL", repr=False)
+    # Direct (never pooled) URL that logs in as the dedicated read-only role ``umwelt_chat_sql_login`` (migration
+    # 0017); the chat SQL tool runs model-written SQL only on it. Unset disables SQL mode (it never falls back to
+    # database_url).
+    chat_sql_reader_database_url: str | None = Field(default=None, validation_alias="CHAT_SQL_READER_DATABASE_URL", repr=False)
     pgbouncer_enabled: bool = Field(default=False, validation_alias="PGBOUNCER_ENABLED")
     # Pool bound of the small direct engine that owns session advisory leases (only used in PgBouncer mode).
     db_direct_pool_size: int = Field(default=4, ge=1, le=100, validation_alias="DB_DIRECT_POOL_SIZE")
@@ -472,7 +476,7 @@ class Settings(BaseSettings):
             if isinstance(value, SecretStr):
                 text = value.get_secret_value()
                 bad = text.startswith(_PLACEHOLDER_PREFIXES)
-            elif name in {"database_url", "redis_url"}:
+            elif name in {"database_url", "redis_url", "chat_sql_reader_database_url"} and value:
                 text = str(value)
                 bad = any(prefix in text for prefix in _PLACEHOLDER_PREFIXES) or (
                     name == "database_url" and _DEFAULT_DB_CREDENTIALS in text
