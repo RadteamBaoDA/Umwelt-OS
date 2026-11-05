@@ -138,6 +138,29 @@ def test_grant_refuses_unsafe_group_role(monkeypatch: pytest.MonkeyPatch, capsys
     assert "unsafe attributes" in capsys.readouterr().err
 
 
+def test_grant_reverted_when_reader_would_reach_group(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """If the reader login ends up a member after the grant, the grant is revoked and the run fails."""
+    log: list[str] = []
+
+    class _MemberConn(_Conn):
+        """Reports the reader as a member; the unsafe-attribute check finds nothing."""
+
+        async def exec_driver_sql(self, sql: str) -> Any:
+            self.log.append(sql)
+            return SimpleNamespace(first=lambda: (True,) if "pg_has_role" in sql else None)
+
+    class _MemberEngine(_Engine):
+        """Engine yielding the member-reporting connection."""
+
+        def __init__(self, log: list[str], fail: Exception | None) -> None:
+            self.conn = _MemberConn(log, fail)
+
+    monkeypatch.setattr(mod, "create_async_engine", lambda url, **kw: _MemberEngine(log, None))
+    assert asyncio.run(mod.grant_runtime_role(_runtime_settings("app"))) == 1
+    assert 'REVOKE umwelt_app FROM "app"' in log
+    assert "grant was reverted" in capsys.readouterr().err
+
+
 def test_grant_runs_for_safe_group_role(monkeypatch: pytest.MonkeyPatch) -> None:
     """With safe attributes the grant is issued."""
     log: list[str] = []

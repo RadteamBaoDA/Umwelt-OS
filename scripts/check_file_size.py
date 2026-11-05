@@ -66,11 +66,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--update", action="store_true", help="lower or drop baseline entries")
     options = parser.parse_args(argv)
-    baseline: dict[str, int] = json.loads(BASELINE.read_text(encoding="utf-8")) if BASELINE.exists() else {}
+    has_baseline = BASELINE.exists()
+    baseline: dict[str, int] = json.loads(BASELINE.read_text(encoding="utf-8")) if has_baseline else {}
     counts = {name: n for name in tracked_files() if (n := count_lines(name)) is not None}
     if options.update:
-        # Only lower or drop: a missing baseline file means "create it" from current oversize files.
-        base = baseline or {n: c for n, c in counts.items() if c > LIMIT}
+        # Only lower or drop: only a missing baseline *file* means "create it" from current oversize files;
+        # an existing (even empty) baseline must never be re-grown from today's oversize files.
+        base = baseline if has_baseline else {n: c for n, c in counts.items() if c > LIMIT}
         new = {n: min(c, base[n]) for n, c in counts.items() if n in base and c > LIMIT}
         BASELINE.write_text(json.dumps(dict(sorted(new.items())), indent=2) + "\n", encoding="utf-8")
         print(f"baseline updated: {len(new)} entries")

@@ -338,6 +338,29 @@ async def test_outbox_sampler_sets_backlog_and_lag() -> None:
     assert _sample("umwelt_outbox_oldest_pending_age_seconds") == 0
 
 
+async def test_outbox_sampler_runs_size_query_at_most_every_five_minutes() -> None:
+    """Pending/lag are read every tick; the size/backlog query runs once, then waits out the interval."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from modules.observability import metrics_sampler
+
+    calls: list[bool] = []
+
+    async def fake_sample(_factory: object, *, retention_days: int = 30, include_size: bool = True) -> None:
+        """Record whether the size query was requested."""
+        calls.append(include_size)
+
+    sampler = dict(metrics_sampler.build_api_samplers(None, SimpleNamespace(), []))["outbox"]  # type: ignore[arg-type]
+    with patch.object(metrics_sampler, "sample_outbox", fake_sample), patch.object(
+        metrics_sampler.time, "monotonic", side_effect=[1000.0, 1000.0, 1015.0, 1301.0, 1301.0]
+    ):
+        await sampler()  # first tick: due, then stamps 1000.0
+        await sampler()  # 15s later: not due
+        await sampler()  # 301s later: due again
+    assert calls == [True, False, True]
+
+
 async def test_create_app_serves_metrics_without_adding_a_route() -> None:
     """The composed API answers /metrics from middleware (dev, internal peer) and keeps it out of the route table."""
     from apps.api.main import create_app
