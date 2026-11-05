@@ -105,3 +105,12 @@ def test_error_message_has_no_password_or_statement(
     err = capsys.readouterr().err
     assert "RuntimeError" in err and "SQLSTATE" in err
     assert PW not in err and "ALTER" not in err and "SCRAM" not in err
+
+
+def test_distinct_runtime_user_only_when_usernames_differ() -> None:
+    """A runtime user equal to the admin user needs no grant; a different one is returned for the group grant."""
+    same = SimpleNamespace(database_url="postgresql+asyncpg://a:p@h/db", admin_database_url="postgresql+asyncpg://a:p@h/db")
+    diff = SimpleNamespace(database_url="postgresql+asyncpg://app:p@h/db", admin_database_url="postgresql+asyncpg://adm:p@h/db")
+    assert mod.distinct_runtime_user(same) is None  # type: ignore[arg-type]
+    assert mod.distinct_runtime_user(diff) == "app"  # type: ignore[arg-type]
+    assert asyncio.run(mod.grant_runtime_role(same)) == 0  # type: ignore[arg-type]

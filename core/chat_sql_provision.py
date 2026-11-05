@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from core.config import Settings
 
 LOGIN_ROLE = "umwelt_chat_sql_login"
+APP_GROUP_ROLE = "umwelt_app"
 SCRAM_ITERATIONS = 4096
 # libpq applies SASLprep to the password; we sidestep normalization by requiring printable ASCII, which
 # SASLprep leaves unchanged. ``scripts/ensure_env.py`` generates URL-safe tokens that satisfy this.
@@ -58,6 +59,17 @@ def scram_sha256_verifier(password: str, *, salt: bytes | None = None, iteration
     stored_key = hashlib.sha256(client_key).digest()
     server_key = hmac.new(salted, b"Server Key", hashlib.sha256).digest()
     return f"SCRAM-SHA-256${iterations}:{_b64(salt)}${_b64(stored_key)}:{_b64(server_key)}"
+
+
+def distinct_runtime_user(settings: Settings) -> str | None:
+    """Return the runtime DB username when it differs from the admin/migration username, else ``None``.
+
+    Migration 0020 grants ``umwelt_app`` (TEMPORARY + advisory-lock EXECUTE) to the migration user and database
+    owner only; a separate runtime role needs membership too.
+    """
+    runtime = make_url(settings.database_url).username
+    admin = make_url(settings.admin_database_url).username
+    return runtime if runtime and runtime != admin else None
 
 
 async def provision(settings: Settings) -> int:
@@ -98,5 +110,35 @@ async def provision(settings: Settings) -> int:
     return 0
 
 
+async def grant_runtime_role(settings: Settings) -> int:
+    """Grant ``umwelt_app`` to a distinct runtime user; return an exit code (0 ok or nothing to do, 1 failed).
+
+    Independent of the reader URL so separate-role deployments work with the SQL tool disabled. Idempotent;
+    the quoted identifier comes from the configured URL, never from request input.
+    """
+    runtime = distinct_runtime_user(settings)
+    if not runtime:
+        return 0
+    quoted = '"' + runtime.replace('"', '""') + '"'
+    engine = create_async_engine(settings.admin_database_url, isolation_level="AUTOCOMMIT", hide_parameters=True)
+    try:
+        async with engine.connect() as conn:
+            await conn.exec_driver_sql(f"GRANT {APP_GROUP_ROLE} TO {quoted}")
+    except Exception as exc:  # noqa: BLE001 - deliberately generic; str(exc) would carry statement text
+        orig = getattr(exc, "orig", None)
+        sqlstate = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None) or "unknown"
+        print(f"Granting {APP_GROUP_ROLE} to the runtime user failed: {type(exc).__name__} (SQLSTATE {sqlstate}).", file=sys.stderr)
+        return 1
+    finally:
+        await engine.dispose()
+    print(f"{APP_GROUP_ROLE} granted to the runtime user.")
+    return 0
+
+
+async def _main(settings: Settings) -> int:
+    """Run the runtime-role grant then the reader password step; non-zero if either failed."""
+    return max(await grant_runtime_role(settings), await provision(settings))
+
+
 if __name__ == "__main__":
-    sys.exit(asyncio.run(provision(Settings())))
+    sys.exit(asyncio.run(_main(Settings())))
