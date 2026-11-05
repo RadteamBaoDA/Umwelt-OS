@@ -15,6 +15,7 @@ class IngestionDescriptor(ModuleDescriptor):
     description: str = "Receive, normalize, and process source-backed content."
     enabled: bool = True
     dependencies: tuple[str, ...] = ("sources", "knowledge.documents")
+    optional_dependencies: tuple[str, ...] = ("connectors", "knowledge.observations")
     scheduled_jobs: tuple[str, ...] = (
         "dispatch_pending_work", "process_ingestion_event", "process_normalize_event", "process_uploaded_file",
         "purge_collection_receipts",

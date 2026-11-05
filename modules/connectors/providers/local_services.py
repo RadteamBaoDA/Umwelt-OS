@@ -22,8 +22,8 @@ import httpx
 
 from core.async_runtime import run_dns_lookup
 from core.heavy_work import to_thread_joined
-from modules.ingestion.schemas import IngestionRecord
-from modules.knowledge.documents.schemas import ProviderRecordMetadata
+from modules.ingestion.public import IngestionRecord
+from modules.knowledge.documents.public import ProviderRecordMetadata
 
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_FHIR_PAGES = 10

@@ -23,9 +23,17 @@ from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, Scope
 from modules.chat.schemas import DB_QUERY_KEY, GADGET_SCOPE_KEY, EvidenceItem
 from modules.chat.sql_guard import check_select_policy
-from modules.knowledge.documents.models import Document, DocumentChunk, DocumentVersion
-from modules.knowledge.observations.models import Observation
-from modules.sources.models import Source
+from modules.knowledge.documents.public import (
+    DocumentChunkReadProjection as DocumentChunk,
+)
+from modules.knowledge.documents.public import (
+    DocumentReadProjection as Document,
+)
+from modules.knowledge.documents.public import (
+    DocumentVersionReadProjection as DocumentVersion,
+)
+from modules.knowledge.observations.public import ObservationReadProjection as Observation
+from modules.sources.public import SourceReadProjection as Source
 
 TOOL_QUERY_COLLECTED_DATA = "query_collected_data"
 MAX_DB_QUERY_ROWS = 50

@@ -23,7 +23,7 @@ from modules.connectors.providers.macro import (
     parse_iso_date,
     positive_decimal,
 )
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 
 VN_STOCK_HOST = "api-finfo.vndirect.com.vn"
 STOCK_URL = f"https://{VN_STOCK_HOST}/v4/stock_prices"

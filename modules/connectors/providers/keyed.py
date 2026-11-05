@@ -48,7 +48,7 @@ from modules.connectors.providers.news import (
     parse_when,
     plain_text,
 )
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 
 # httpx/httpcore log full request URLs at INFO, and query/path-placed keys (see module docstring) ride in the
 # URL. Pin both to WARNING once at import so a key can never reach logs (a later dictConfig can undo it).

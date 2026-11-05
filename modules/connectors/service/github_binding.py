@@ -31,7 +31,7 @@ from modules.connectors.models import (
     GithubSourceHint,
     GithubWebhookCapacity,
 )
-from modules.sources.schemas import ConnectorSource, SourceFence
+from modules.sources.public import ConnectorSource, SourceFence
 
 if TYPE_CHECKING:
     from modules.connectors.github.schemas import GitHubBindingFence, GitHubSegmentProof

@@ -34,7 +34,7 @@ from modules.agents.schemas import (
 from modules.agents.specialists import get_profile, list_profiles, update_profile_in_uow
 from modules.settings import public as settings_public
 from modules.settings.public import module_dependency
-from modules.tools.webhook import load_webhook_profiles
+from modules.tools.public import load_webhook_profiles
 
 router = APIRouter(tags=["agents"], dependencies=[Depends(module_dependency("agents"))])
 logger = logging.getLogger(__name__)

@@ -46,12 +46,12 @@ from modules.ingestion.schemas import (
     classify_telegram_probe,
 )
 from modules.sources import public as sources
-from modules.sources.schemas import ConnectorSource, SourceFence
+from modules.sources.public import ConnectorSource, SourceFence
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from modules.connectors.github.schemas import GitHubBindingFence, GitHubSegmentProof
+    from modules.connectors.public import GitHubBindingFence, GitHubSegmentProof
 
 # A normalized row must fit the worker's bounded single-record budget.
 TELEGRAM_OBSERVATION_MAX_BYTES = 4 * 1024 * 1024
@@ -240,7 +240,12 @@ class BaseNativeVerifier:
             raise _fail(422, f"{label} credential proof does not match the provider")
         if not owned:
             return
-        from modules.connectors.models import ConnectorOAuthGrant, ConnectorProvisioning
+        from modules.connectors.public import (
+            ConnectorOAuthGrantReadProjection as ConnectorOAuthGrant,
+        )
+        from modules.connectors.public import (
+            ConnectorProvisioningReadProjection as ConnectorProvisioning,
+        )
 
         session = ctx.session
         grant = await session.scalar(select(ConnectorOAuthGrant).where(
@@ -275,7 +280,7 @@ class BaseNativeVerifier:
     @staticmethod
     def _parse_metadata(ctx: NativeAcceptance, record: IngestionRecord) -> Any:
         """Parse and cross-check the typed provider metadata (identity, version, provider, coverage)."""
-        from modules.knowledge.documents.schemas import ProviderRecordMetadata
+        from modules.knowledge.documents.public import ProviderRecordMetadata
         try:
             metadata = ProviderRecordMetadata.model_validate(record.metadata.get("provider_record"))
         except (TypeError, ValueError) as exc:
@@ -448,7 +453,7 @@ class GitHubVerifier(BaseNativeVerifier):
         Visibility preparation takes the credential rows itself, so the orchestrator then skips its own
         ``lock_source_credentials_in_uow`` (never re-enter that set).
         """
-        from modules.connectors.github.schemas import GitHubSegmentProof
+        from modules.connectors.public import GitHubSegmentProof
 
         payload = ctx.payload
         if payload.github_segment is None or payload.telegram_raw_deliveries or payload.telegram_deliveries:

@@ -5,13 +5,17 @@ decides which records to accept this sync (oldest first, capped) and the cursor 
 Cap, backlog and gap information stays in run stats and never enters ``IngestionRecord.metadata``.
 """
 
+from __future__ import annotations
+
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from modules.ingestion.schemas import IngestionRecord
+if TYPE_CHECKING:
+    # Annotation-only: a runtime import would close an import cycle between public contracts.
+    from modules.ingestion.public import IngestionRecord
 
 DEFAULT_MAX_ITEMS = 100
 SKEW = timedelta(minutes=10)  # clock-skew margin below a stored cursor; dedup absorbs the re-read

@@ -1,5 +1,13 @@
 """Owner-scoped observation revision writes, selection and bounded reads."""
 
+# Approved read projection (AGENTS.md "Testing Guidelines" / docs/architecture/module-boundaries.md): knowledge.observations owns
+# Observation; other modules may build SELECT/JOIN statements on these columns and must never INSERT, UPDATE, DELETE,
+# instantiate or add them (guarded by tests/unit/architecture/test_module_boundaries.py). Permission and deletion
+# checks stay with the caller's own admission fence plus the owner's workspace/source predicates; the projection adds
+# no access of its own.
+from modules.knowledge.observations.models import Observation as ObservationReadProjection
+
+# isort: split
 import hashlib
 import json
 from collections.abc import Sequence
@@ -53,11 +61,12 @@ from modules.knowledge.observations.schemas import (
     WorldMeasurement,
 )
 from modules.sources import public as sources
-from modules.sources.schemas import SourceExportFence, SourceFence
+from modules.sources.public import SourceExportFence, SourceFence
 
 # Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
 __all__ = [
     "ObservationQuery",
+    "ObservationReadProjection",
     "WorldMeasurement",
 ]
 

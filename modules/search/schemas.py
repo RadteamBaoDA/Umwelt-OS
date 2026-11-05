@@ -4,8 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from modules.goals.schemas import GoalRead
-from modules.tasks.schemas import TaskRead
+from modules.goals.public import GoalRead
+from modules.tasks.public import TaskRead
 
 
 class SearchFilters(BaseModel):

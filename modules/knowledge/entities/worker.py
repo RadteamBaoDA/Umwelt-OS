@@ -64,7 +64,7 @@ from modules.knowledge.entities.resolution import candidate_match_fingerprint, r
 from modules.knowledge.entities.schemas import canonicalize_name
 from modules.knowledge.relationships import public as relationships
 from modules.settings import public as settings_public
-from modules.settings.prompts import resolve_prompt
+from modules.settings.public import resolve_prompt
 from modules.sources import public as sources
 
 logger = logging.getLogger(__name__)

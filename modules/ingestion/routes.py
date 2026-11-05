@@ -33,7 +33,7 @@ from core.workspaces.dependencies import (
 from core.workspaces.public import lock_access_fence
 from core.workspaces.schemas import WorkspaceContext
 from modules.connectors import public as connectors
-from modules.connectors.providers.manual_finance import (
+from modules.connectors.public import (
     MAX_IMPORT_BYTES,
     parse_finance_import,
     render_finance_markdown,

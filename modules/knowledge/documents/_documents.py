@@ -32,7 +32,6 @@ from core.workspaces.schemas import (
     Scope,
     WorkspaceContext,
 )
-from modules.connectors.provider_specs import FREE_PROVIDER_SPECS
 from modules.knowledge.documents._chunks import add_content_chunks
 from modules.knowledge.documents._hashing import content_hash_async
 from modules.knowledge.documents._ready import _publish_document_ready
@@ -54,7 +53,7 @@ from modules.knowledge.documents.schemas import (
     DocumentPatch,
 )
 from modules.sources import public as sources
-from modules.sources.models import Source
+from modules.sources.public import SourceReadProjection as Source
 
 
 async def observability_quality_summary(
@@ -342,6 +341,10 @@ async def list_documents(
     if source_id is not None:
         statement = statement.where(Document.source_id == source_id)
     if exclude_measurements:
+        # Deferred: Connectors' facade imports Documents' contract at module level, so importing it here at module
+        # level would form an import cycle.
+        from modules.connectors.public import FREE_PROVIDER_SPECS
+
         measurement_providers = [spec.id for spec in FREE_PROVIDER_SPECS if spec.data_kind == "measurement"]
         statement = statement.where(Document.source_id.not_in(
             select(Source.id).where(Source.provider.in_(measurement_providers))))

@@ -35,7 +35,7 @@ from modules.knowledge.entities.schemas import (
     canonicalize_name,
 )
 from modules.knowledge.relationships import public as relationships
-from modules.knowledge.relationships.schemas import CorrectionRelationshipRef
+from modules.knowledge.relationships.public import CorrectionRelationshipRef
 from modules.sources import public as sources
 from modules.timeline import public as timeline
 

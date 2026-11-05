@@ -15,6 +15,13 @@ class ConnectorsDescriptor(ModuleDescriptor):
     description: str = "Manage configured connector credentials, collection, and provider synchronization."
     enabled: bool = True
     dependencies: tuple[str, ...] = ("sources", "ingestion")
+    optional_dependencies: tuple[str, ...] = (
+        "knowledge.documents",
+        "knowledge.entities",
+        "knowledge.relationships",
+        "knowledge.timeline",
+        "tools",
+    )
     scheduled_jobs: tuple[str, ...] = ("dispatch_due_collections", "process_collection_request")
     provides: tuple[str, ...] = ("source_connectors",)
     requires: tuple[str, ...] = ("sources", "ingestion_runs")

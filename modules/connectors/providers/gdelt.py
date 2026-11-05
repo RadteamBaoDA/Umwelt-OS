@@ -20,7 +20,7 @@ from modules.connectors.providers.macro import (
     content_version,
 )
 from modules.connectors.providers.news import _record, https_link, plain_text
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 
 EXPERIMENTAL = True
 # Measured 2026-10: the DOC API answers in 12-20 s (a 429 throttle also takes ~12 s), so 8 s could never succeed.

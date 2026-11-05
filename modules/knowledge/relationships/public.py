@@ -66,7 +66,7 @@ from modules.knowledge.relationships.seed import (
     ensure_demo_relationships,  # re-export: used by documents seed
 )
 from modules.sources import public as sources
-from modules.sources.schemas import SourceExportFence, SourceFence
+from modules.sources.public import SourceExportFence, SourceFence
 
 
 async def _admit(
@@ -92,6 +92,7 @@ async def _admit(
 
 # Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
 __all__ = [
+    "CorrectionRelationshipRef",
     "NeighborPage",
     "RelationshipSnapshot",
     "ensure_demo_relationships",

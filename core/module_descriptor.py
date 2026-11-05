@@ -55,16 +55,35 @@ class EventConsumerSpec:
 
 
 @dataclass(frozen=True)
+class CapabilitySpec:
+    """One late-bound cross-module capability a module offers to core (dependency inversion).
+
+    ``name`` is the contract key declared in ``core.capabilities``; ``target`` is the lazily imported
+    ``"package.module:attribute"`` of the owner's public function. Core resolves the attribute on every call (never
+    caching the callable), so the owner's ``public`` module stays the single patch/override point.
+    """
+
+    name: str
+    target: str
+
+
+@dataclass(frozen=True)
 class ModuleDescriptor:
     """Declarative identity, wiring and lifecycle metadata for one module.
 
     Fields keep the names of the original per-module descriptors so existing readers
     (``.id``, ``.dependencies``, ``.scheduled_jobs``, ``.tools``, ``.enabled``) are unaffected.
 
-    * ``dependencies``: module IDs that must be enabled for this one to be available.
+    * ``dependencies``: module IDs that must be enabled for this one to be available (hard lifecycle gate:
+      ``core.modules.effective_modules`` disables this module when any of them is unavailable).
+    * ``optional_dependencies``: other modules this one imports (through their public contracts) without a lifecycle
+      gate. Declaring them keeps the descriptor truthful about code coupling (checked by
+      ``tests/unit/core/test_descriptor_dependencies.py``) while a disabled peer degrades the feature instead of
+      switching this whole module off; promote an entry to ``dependencies`` only when the module cannot work without it.
     * ``scheduled_jobs``: worker entry points owned by this module (persisted dispatch gate).
     * ``routes``: public URL prefixes (documentation/gating metadata); ``routers`` are the
       importable router objects actually mounted.
+    * ``capabilities``: public functions core consumes through ``core.capabilities`` instead of importing the module.
     * ``erasure_module`` / ``erasure_order``: account-erasure package and its position in the
       deletion order (lower runs first; the order encodes foreign-key cleanup dependencies).
     * ``event_consumers``: outbox event types this module consumes, with their worker job, allowed producers
@@ -79,6 +98,7 @@ class ModuleDescriptor:
     description: str = ""
     enabled: bool = True
     dependencies: tuple[str, ...] = ()
+    optional_dependencies: tuple[str, ...] = ()
     scheduled_jobs: tuple[str, ...] = ()
     provides: tuple[str, ...] = ()
     requires: tuple[str, ...] = ()
@@ -89,6 +109,7 @@ class ModuleDescriptor:
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
     routers: tuple[RouterSpec, ...] = ()
+    capabilities: tuple[CapabilitySpec, ...] = ()
     erasure_module: str | None = None
     erasure_order: int = 0
     event_consumers: tuple[EventConsumerSpec, ...] = ()

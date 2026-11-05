@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from core.auth.deletion_service import authorize_account_erasure
 from core.auth.erasure_contracts import AccountErasureScope
 from core.auth.models import GoogleIdentity, Owner
-from modules.agents.public import erase_account_checkpoints_page
+from core.capabilities import erase_account_checkpoints_page
 
 
 def _owned_cache_key(key: str, scope: AccountErasureScope, mailboxes: set[str]) -> bool:

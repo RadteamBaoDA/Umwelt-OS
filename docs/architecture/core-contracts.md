@@ -62,25 +62,22 @@ still imported when `deletion_cleanup` is imported, preserving the metadata-regi
 effect that account recovery relies on. Stage hooks (`connectors`, `documents`, `settings`,
 `temporal`, `tools`, `translations`) are looked up by module ID.
 
-### Remaining core -> modules imports (not inverted)
+### Remaining core -> modules imports
 
-* `core/modules.py`: imports descriptors by design (the composition root).
-* `core/auth/routes.py:60`: `modules.settings.public.set_initial_owner_display_name`.
-* `core/auth/schemas.py:39`: lazy `modules.settings.display_name.normalize_display_name`.
-* `core/auth/deletion_auxiliary.py:16`: `modules.agents.public.erase_account_checkpoints_page`
-  (an auxiliary stage hook; a candidate for an `auxiliary_erasure` descriptor field).
-* `core/workspaces/public.py` (lazy): documents and dashboard access projections,
-  `modules.translations.lifecycle.purge_resource_translations`.
-* `core/tools/registry.py:145` (lazy): `modules.settings.public.read_module_availability`.
-* `core/system/routes.py:15-16`: `modules.sources.public` purge-operation reads and
-  `modules.sources.schemas.OperationRead`.
+Inverted through `core/capabilities.py` (descriptor `capabilities`, resolved lazily; no import edge from core): setup
+display name (`settings`), module availability for the tool registry (`settings`), agent checkpoint erasure (`agents`),
+document and brief access projections (`documents`, `dashboard`) and translation purge (`translations`).
 
-Those are read/projection contracts rather than registrations; inverting them needs per-concern
-Protocols (access projections, availability reader, purge reader) and is left for the module
-packages.
+Still imported (allow-listed in `.importlinter`, contracts `core-does-not-import-modules` and `layers`):
+
+* `core/modules.py`: imports each `modules.*.descriptor` by design (the composition root).
+* `core/system/routes.py`: `modules.sources.public` purge-operation reads and the `OperationRead` response model;
+  moving the route would reorder the recorded route table (`tests/fixtures/api_route_table.json`).
+
+See `docs/architecture/module-boundaries.md` for the module-to-module rules.
 
 ## Descriptor dependency audit
 
-`tests/unit/core/test_descriptor_dependencies.py` AST-scans each lifecycle module's imports
-and compares them with `dependencies`. The current mismatches are recorded as an allow-list
-with counts (`MAX_UNDECLARED`, `MAX_UNUSED`) so the debt can only shrink.
+`tests/unit/core/test_descriptor_dependencies.py` AST-scans each lifecycle module's imports and requires
+`dependencies | optional_dependencies` to match them exactly (`MAX_UNDECLARED = MAX_UNUSED = 0`, empty allow-lists).
+Only `dependencies` cascade in `effective_modules` (`tests/unit/core/test_effective_modules.py`).

@@ -13,13 +13,13 @@ from core.workspaces.schemas import Scope
 from modules.dashboard import briefs
 from modules.dashboard.daily_schemas import DailyContext, DailyWidget, DayRelation
 from modules.goals import public as goals
-from modules.goals.schemas import GoalFilter
+from modules.goals.public import GoalFilter
 from modules.news.public import StoryFilter, list_stories
 from modules.notifications import public as notifications
 from modules.tasks import public as tasks
-from modules.tasks.schemas import TaskFilter
+from modules.tasks.public import TaskFilter
 from modules.timeline import public as timeline
-from modules.timeline.schemas import TimelineQuery
+from modules.timeline.public import TimelineQuery
 
 MAX_ITEMS = 25
 

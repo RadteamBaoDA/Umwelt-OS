@@ -20,7 +20,7 @@ from core.tools import ToolRisk
 from modules.agents import approvals as approvals_module
 from modules.agents import harness
 from modules.agents.harness import HarnessContext, RunCancelled, RunIncompatible, RunLimitReached
-from modules.tools import webhook as webhook_module
+from modules.tools import public as webhook_module
 
 RUN_ID = uuid4()
 EMPTY_SINK: dict[str, Any] = {"source_generations": {}, "records": []}

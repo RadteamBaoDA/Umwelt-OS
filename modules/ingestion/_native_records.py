@@ -26,7 +26,7 @@ def validate_telegram_record_delivery(
     proof. Telegram's Unix clocks and identity are compared to exact Bot API fields;
     optional scope filtering is enforced only at initial acceptance.
     """
-    from modules.knowledge.documents.schemas import ProviderRecordMetadata
+    from modules.knowledge.documents.public import ProviderRecordMetadata
 
     metadata = ProviderRecordMetadata.model_validate(provider_metadata)
     detail = metadata.telegram
@@ -114,7 +114,7 @@ async def seen_record_keys(
     ``upsert_from_ingestion_in_uow`` needs its observation row. Scoping to the current generation lets a
     source reset re-ingest everything. Read-only; bounded by the caller's record cap.
     """
-    from modules.knowledge.documents.schemas import MEASUREMENT_PROVIDER_IDS
+    from modules.knowledge.documents.public import MEASUREMENT_PROVIDER_IDS
 
     wanted = list(set(keys))
     if not wanted or provider in MEASUREMENT_PROVIDER_IDS:

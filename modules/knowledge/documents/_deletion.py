@@ -48,10 +48,7 @@ from modules.knowledge.documents.schemas import (
     DocumentCleanupPreparationLimitError,
 )
 from modules.sources import public as sources
-from modules.sources.schemas import (
-    SourceFence,
-    SourcePurgeJobIdentity,
-)
+from modules.sources.public import SourceFence, SourcePurgeJobIdentity
 
 if TYPE_CHECKING:
     from modules.knowledge.entities.public import EntitySupportClosure

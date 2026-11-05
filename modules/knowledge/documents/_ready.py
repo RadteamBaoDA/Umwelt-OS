@@ -15,9 +15,7 @@ from modules.knowledge.documents.models import (
     Document,
     DocumentVersion,
 )
-from modules.sources.schemas import (
-    SourceFence,
-)
+from modules.sources.public import SourceFence
 
 
 async def _publish_extraction_ready(

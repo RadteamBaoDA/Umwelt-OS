@@ -1,15 +1,15 @@
-"""Descriptor ``dependencies`` must reflect real cross-module imports (ratcheting allow-list).
+"""Descriptor dependencies must reflect real cross-module imports (zero allow-list).
 
 The AST scan maps every ``modules.<pkg>`` import to the lifecycle module that owns it, then
-compares with each descriptor's declared ``dependencies``:
+compares with each descriptor's declared ``dependencies`` plus ``optional_dependencies``:
 
 * ``undeclared``: imported but not declared (the lifecycle gate would not disable the module
   when that dependency is switched off).
 * ``unused``: declared but never imported (metadata drift or runtime-only coupling).
 
-Existing mismatches are allow-listed below with a count so the debt can only shrink. Fix a
-mismatch by editing the descriptor (or removing the import), then delete its allow-list entry
-and lower ``MAX_*``; adding a new mismatch fails the test.
+The allow-lists are empty and ``MAX_*`` is zero: fix a mismatch by editing the descriptor (or removing the import).
+Only ``dependencies`` cascade in ``core.modules.effective_modules``; ``optional_dependencies`` are truthful
+coupling metadata that never disable a module.
 """
 
 from __future__ import annotations
@@ -21,57 +21,12 @@ from core.modules import register_modules
 
 ROOT = Path(__file__).resolve().parents[3]
 
-# TODO(core-contracts ratchet): shrink these; they record mismatches present when the test was added.
-UNDECLARED_ALLOWED: dict[str, set[str]] = {
-    "agents": {"automations", "goals", "knowledge.documents", "memory", "sources", "tasks"},
-    "automations": {"chat", "ingestion"},
-    "chat": {
-        "agents", "knowledge.observations", "knowledge.relationships", "knowledge.timeline", "memory", "search",
-        "sources",
-    },
-    "connectors": {
-        "knowledge.documents", "knowledge.entities", "knowledge.relationships", "knowledge.timeline", "tools",
-    },
-    "dashboard": {"connectors"},
-    "export": {
-        "chat", "dashboard", "goals", "knowledge.documents", "knowledge.entities", "knowledge.observations",
-        "knowledge.relationships", "knowledge.timeline", "memory", "news", "sources", "tasks",
-    },
-    "goals": {"agents", "knowledge.entities"},
-    "ingestion": {"connectors", "knowledge.observations"},
-    "knowledge.documents": {
-        "agents", "automations", "chat", "connectors", "dashboard", "goals", "ingestion", "knowledge.entities",
-        "knowledge.observations", "knowledge.relationships", "knowledge.temporal", "knowledge.timeline", "memory",
-        "news", "notifications", "tasks",
-    },
-    "knowledge.entities": {
-        "connectors", "ingestion", "knowledge.relationships", "knowledge.temporal", "knowledge.timeline", "sources",
-    },
-    "knowledge.observations": {"connectors"},
-    "knowledge.relationships": {"knowledge.temporal", "sources"},
-    "knowledge.temporal": {"sources"},
-    "knowledge.timeline": {"knowledge.temporal", "sources"},
-    "memory": {"chat", "knowledge.documents", "sources"},
-    "news": {
-        "connectors", "goals", "ingestion", "knowledge.documents", "knowledge.entities", "knowledge.observations",
-        "knowledge.timeline", "search", "sources",
-    },
-    "notifications": {"knowledge.documents", "sources"},
-    "observability": {
-        "agents", "automations", "chat", "connectors", "ingestion", "knowledge.documents", "knowledge.entities",
-        "sources", "tools",
-    },
-    "search": {"goals", "sources", "tasks"},
-    "sources": {"chat", "connectors", "dashboard", "ingestion", "knowledge.documents", "memory", "tools"},
-    "tasks": {"agents", "goals", "knowledge.entities"},
-    "tools": {"agents", "connectors", "knowledge.timeline"},
-}
-UNUSED_ALLOWED: dict[str, set[str]] = {
-    "dashboard": {"knowledge.observations"},
-    "knowledge.observations": {"ingestion"},
-}
-MAX_UNDECLARED = 104
-MAX_UNUSED = 2
+# The allow-lists are empty: every import coupling is declared (``dependencies`` gate the lifecycle,
+# ``optional_dependencies`` record coupling that degrades instead of disabling) and nothing declared is unused.
+UNDECLARED_ALLOWED: dict[str, set[str]] = {}
+UNUSED_ALLOWED: dict[str, set[str]] = {}
+MAX_UNDECLARED = 0
+MAX_UNUSED = 0
 
 
 def _package_dirs() -> dict[str, Path]:
@@ -107,7 +62,7 @@ def scan_imports() -> dict[str, set[str]]:
             # Nested lifecycle packages (modules/knowledge/documents) belong to their own id.
             if _owner_of("modules." + ".".join(source.relative_to(ROOT / "modules").parts[:-1]), prefixes) != module_id:
                 continue
-            for node in ast.walk(ast.parse(source.read_text())):
+            for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
                 names: list[str] = []
                 if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
                     names = [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]
@@ -124,8 +79,9 @@ def test_descriptor_dependencies_match_imports_with_ratchet() -> None:
     """Undeclared/unused dependency mismatches may not grow beyond the recorded allow-list."""
     registry = register_modules()
     imports = scan_imports()
-    undeclared = {mid: imports[mid] - set(item.dependencies) for mid, item in registry.items()}
-    unused = {mid: set(item.dependencies) - imports[mid] for mid, item in registry.items()}
+    declared = {mid: set(item.dependencies) | set(item.optional_dependencies) for mid, item in registry.items()}
+    undeclared = {mid: imports[mid] - declared[mid] for mid, item in registry.items()}
+    unused = {mid: declared[mid] - imports[mid] for mid, item in registry.items()}
     undeclared = {mid: deps - UNDECLARED_ALLOWED.get(mid, set()) for mid, deps in undeclared.items()}
     unused = {mid: deps - UNUSED_ALLOWED.get(mid, set()) for mid, deps in unused.items()}
     assert not {mid: deps for mid, deps in undeclared.items() if deps}, "new undeclared module imports"
@@ -134,6 +90,13 @@ def test_descriptor_dependencies_match_imports_with_ratchet() -> None:
     assert sum(len(v) for v in UNUSED_ALLOWED.values()) <= MAX_UNUSED
     # Allow-list entries that no longer mismatch must be deleted so the ratchet tightens.
     for mid, allowed in UNDECLARED_ALLOWED.items():
-        assert allowed <= imports[mid] - set(registry[mid].dependencies), f"stale allow-list entry for {mid}"
+        assert allowed <= imports[mid] - declared[mid], f"stale allow-list entry for {mid}"
     for mid, allowed in UNUSED_ALLOWED.items():
-        assert allowed <= set(registry[mid].dependencies) - imports[mid], f"stale allow-list entry for {mid}"
+        assert allowed <= declared[mid] - imports[mid], f"stale allow-list entry for {mid}"
+
+
+def test_hard_and_optional_dependencies_are_disjoint_and_exclude_self() -> None:
+    """A peer is either a lifecycle gate or optional coupling, never both, and never the module itself."""
+    for mid, item in register_modules().items():
+        assert not set(item.dependencies) & set(item.optional_dependencies), mid
+        assert mid not in item.dependencies and mid not in item.optional_dependencies, mid

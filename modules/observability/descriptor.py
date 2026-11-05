@@ -13,6 +13,17 @@ class ObservabilityDescriptor(ModuleDescriptor):
     description: str = "Bounded metrics, run inspection and telemetry redaction."
     enabled: bool = True
     dependencies: tuple[str, ...] = ()
+    optional_dependencies: tuple[str, ...] = (
+        "agents",
+        "automations",
+        "chat",
+        "connectors",
+        "ingestion",
+        "knowledge.documents",
+        "knowledge.entities",
+        "sources",
+        "tools",
+    )
     provides: tuple[str, ...] = ("metrics", "run_inspection")
     requires: tuple[str, ...] = ()
     routes: tuple[str, ...] = (

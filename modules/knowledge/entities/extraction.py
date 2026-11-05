@@ -7,7 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from modules.settings.prompts import DEFAULT_SYSTEM_PROMPTS
+from modules.settings.public import DEFAULT_SYSTEM_PROMPTS
 
 MAX_FACTS = 30
 MAX_ENTITY_CHUNKS = 5

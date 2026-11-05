@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from core.module_descriptor import ModuleDescriptor, RouterSpec
+from core.module_descriptor import CapabilitySpec, ModuleDescriptor, RouterSpec
 
 
 @dataclass(frozen=True)
@@ -16,6 +16,11 @@ class SettingsDescriptor(ModuleDescriptor):
     routers: tuple[RouterSpec, ...] = (
         RouterSpec("modules.settings.routes", 230),
         RouterSpec("modules.settings.onboarding_routes", 250),
+    )
+    capabilities: tuple[CapabilitySpec, ...] = (
+        CapabilitySpec("settings.set_initial_owner_display_name", "modules.settings.public:set_initial_owner_display_name"),
+        CapabilitySpec("settings.normalize_display_name", "modules.settings.public:normalize_display_name"),
+        CapabilitySpec("settings.read_module_availability", "modules.settings.public:read_module_availability"),
     )
     erasure_module: str | None = "modules.settings.erasure"
     erasure_order: int = 180

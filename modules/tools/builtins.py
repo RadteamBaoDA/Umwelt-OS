@@ -192,7 +192,7 @@ async def _handle_search_query(args: dict[str, Any], context: dict[str, Any]) ->
     authorization, embedding privacy, and this original source snapshot immediately before send.
     """
     from modules.search import public
-    from modules.search.schemas import SearchFilters, SearchRequest
+    from modules.search.public import SearchFilters, SearchRequest
     _, source_ids, owner_all, scope, flag = _principal_scope(context)
     requested = frozenset(UUID(value) for value in args.get("source_ids", []))
     destination = _destination(context)
@@ -291,7 +291,7 @@ async def _handle_github_list_project_events(args: dict[str, Any], context: dict
     """
     from modules.sources import public as sources_public
     from modules.timeline import public as timeline_public
-    from modules.timeline.schemas import TimelineQuery
+    from modules.timeline.public import TimelineQuery
     _, source_ids, owner_all, scope, flag = _principal_scope(context)
     source_id = UUID(args["source_id"])
     async with _resolve_session(context) as session:

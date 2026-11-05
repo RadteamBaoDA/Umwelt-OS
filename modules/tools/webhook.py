@@ -106,7 +106,7 @@ async def _send_webhook(arguments: dict[str, Any], context: dict[str, Any]) -> T
     """
     from httpx2 import AsyncClient, Timeout
 
-    from modules.agents.approvals import mark_effect_outcome
+    from modules.agents.public import mark_effect_outcome
 
     profiles = load_webhook_profiles(context["settings"])
     alias = arguments.get("profile")

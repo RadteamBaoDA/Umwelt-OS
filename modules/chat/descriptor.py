@@ -15,6 +15,15 @@ class ChatDescriptor(ModuleDescriptor):
     description: str = "Persistent conversations, grounded model answer generation, and replayable SSE streaming."
     enabled: bool = True
     dependencies: tuple[str, ...] = ("knowledge.documents", "knowledge.entities")
+    optional_dependencies: tuple[str, ...] = (
+        "agents",
+        "knowledge.observations",
+        "knowledge.relationships",
+        "knowledge.timeline",
+        "memory",
+        "search",
+        "sources",
+    )
     scheduled_jobs: tuple[str, ...] = ("process_chat_response", "recover_chat_runs")
     provides: tuple[str, ...] = ("conversations", "chat_stream", "grounded_answers")
     requires: tuple[str, ...] = ("document_versions", "document_chunks")

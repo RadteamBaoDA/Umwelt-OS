@@ -1,7 +1,9 @@
 """Batch, crawl and file receipt acceptance (internal; import through ``public``)."""
 
+from __future__ import annotations
+
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from typing import cast as typing_cast
 from uuid import UUID
 
@@ -20,7 +22,6 @@ from core.realtime import (
     make_source_change,
 )
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
-from modules.connectors.collection_schemas import CollectionRequestRef
 from modules.ingestion._collection import (
     _apply_state_update,
     _authorize_collection,
@@ -54,8 +55,11 @@ from modules.ingestion.schemas import (
 )
 from modules.knowledge.documents import public as documents
 from modules.sources import public as sources
-from modules.sources.schemas import ConnectorSource, SourceFence
+from modules.sources.public import ConnectorSource, SourceFence
 
+if TYPE_CHECKING:
+    # Annotation-only: a runtime import would close an import cycle between public contracts.
+    from modules.connectors.public import CollectionRequestRef
 
 async def _admit_batch(
     session: AsyncSession, payload: ReceiveBatch, collector_token: str | None, *, scope: Scope,

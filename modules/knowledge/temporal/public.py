@@ -40,7 +40,7 @@ from modules.knowledge.temporal.schemas import (
     ReconcileStatus,
 )
 from modules.sources import public as sources
-from modules.sources.schemas import SourceFence
+from modules.sources.public import SourceFence
 
 
 def _operator_actor(scope: Scope) -> int:
@@ -695,3 +695,7 @@ async def find_changes(session: AsyncSession, *, kind: str | None = None, canoni
                                 deleted=row.deleted, observed_at=row.created_at,
                                 evidence=[item.model_dump(mode="json") for item in refs]))
     return ChangePage(items=items, next_cursor=_cursor(rows[limit - 1].id, fingerprint) if len(rows) > limit else None)
+
+__all__ = [
+    "ChangePage",
+]

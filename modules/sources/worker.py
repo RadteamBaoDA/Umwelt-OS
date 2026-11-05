@@ -23,7 +23,7 @@ from core.worker_cursors import STATE_KEY, read_cursor, write_cursor
 from core.workspaces.access import read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.ingestion import public as ingestion
-from modules.ingestion.schemas import EventDelivery
+from modules.ingestion.public import EventDelivery
 from modules.knowledge.documents import public as documents
 from modules.memory import public as memory
 from modules.memory.public import SourceCopiedEvidenceScope

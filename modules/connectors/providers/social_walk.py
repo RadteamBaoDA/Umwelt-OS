@@ -11,7 +11,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 
 
 @dataclass(frozen=True)

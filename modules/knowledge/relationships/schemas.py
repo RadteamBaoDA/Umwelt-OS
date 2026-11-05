@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from modules.knowledge.entities.schemas import EvidenceRef, validate_metadata
+from modules.knowledge.entities.public import EvidenceRef, validate_metadata
 
 
 class EntityGraphRead(BaseModel):

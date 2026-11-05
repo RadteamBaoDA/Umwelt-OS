@@ -1,0 +1,54 @@
+# Architecture contracts for the modular monolith (docs/architecture/module-boundaries.md).
+# Run: lint-imports   (wired into `make lint` and `./scripts/dev.ps1 lint`).
+[importlinter]
+root_packages =
+    core
+    modules
+    apps
+contract_types =
+    module_public_api: scripts.importlinter_contracts.ModulePublicApiContract
+
+# (a) A module reaches another module only through that module's public contract (public.py) or its descriptor.
+#     Persistence models, schemas, workers, routes and helpers are private to the owner.
+[importlinter:contract:module-public-api]
+name = Modules integrate only through each other's public contracts
+type = module_public_api
+package = modules
+allowed_submodules =
+    public
+    descriptor
+extra_packages =
+    modules.knowledge
+ignore_imports =
+    # Dependency-free DTO leaf: the Connectors facade eagerly imports Ingestion's contract, so Ingestion's request DTO
+    # cannot take this field type through modules.connectors.public without an import cycle. Move
+    # GitHubSegmentProof into the shared contract to remove this exception.
+    modules.ingestion.schemas -> modules.connectors.github.schemas
+
+# (b) Core is infrastructure: it never imports a module. Modules contribute through descriptors (routers, erasure,
+#     capabilities, see core/capabilities.py).
+[importlinter:contract:core-does-not-import-modules]
+name = Core does not import modules
+type = forbidden
+source_modules =
+    core
+forbidden_modules =
+    modules
+allow_indirect_imports = true
+ignore_imports =
+    # Composition root: core.modules reads each module's descriptor (declaration only, no behaviour).
+    core.modules -> modules.**.descriptor
+    # The system operations route returns the Sources purge DTO; moving it would reorder the recorded route table.
+    core.system.routes -> modules.sources.public
+
+# (c) Layering: apps (composition) may use modules, modules may use core, never the reverse.
+[importlinter:contract:layers]
+name = apps > modules > core
+type = layers
+layers =
+    apps
+    modules
+    core
+ignore_imports =
+    core.modules -> modules.**.descriptor
+    core.system.routes -> modules.sources.public

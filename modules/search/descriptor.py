@@ -13,6 +13,7 @@ class SearchDescriptor(ModuleDescriptor):
     description: str = "Search current document chunks with lexical and permitted vector retrieval."
     enabled: bool = True
     dependencies: tuple[str, ...] = ("knowledge.documents",)
+    optional_dependencies: tuple[str, ...] = ("goals", "sources", "tasks")
     scheduled_jobs: tuple[str, ...] = ("index_pending_chunks",)
     provides: tuple[str, ...] = ("search",)
     requires: tuple[str, ...] = ("document_chunks",)

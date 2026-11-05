@@ -17,7 +17,7 @@ from modules.connectors.providers.macro import (
     naive_utc_instant,
     provider_instant,
 )
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 
 NASA_EONET_URL = "https://eonet.gsfc.nasa.gov/api/v3/events?status=open&limit=50"
 _MAX_EVENTS = 50  # equals the request limit; more is reported incomplete rather than truncated silently
