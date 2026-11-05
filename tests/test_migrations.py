@@ -175,3 +175,16 @@ def test_chat_sql_query_fence_migration_has_no_reader_grants_and_restores_views(
     down = _alembic("downgrade", "0018_chat_sql_query_fence:0017_chat_sql_login_role", "--sql")
     assert down.returncode == 0, down.stderr
     assert "current_setting('umwelt.chat_sql_workspace'" in down.stdout and "DROP TABLE IF EXISTS chat_sql.query_fence" in down.stdout
+
+
+def test_chat_sql_reader_no_public_writes_migration_revokes_and_restores() -> None:
+    """0019 revokes PUBLIC TEMPORARY and large-object/notify/advisory EXECUTE; downgrade grants them back to PUBLIC."""
+    up = _alembic("upgrade", "0018_chat_sql_query_fence:0019_chat_sql_reader_no_public_writes", "--sql")
+    assert up.returncode == 0, up.stderr
+    assert "REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC" in up.stdout
+    assert "REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC" in up.stdout and "lo_from_bytea" in up.stdout
+    assert "GRANT EXECUTE ON FUNCTION %s TO %I" in up.stdout
+    down = _alembic("downgrade", "0019_chat_sql_reader_no_public_writes:0018_chat_sql_query_fence", "--sql")
+    assert down.returncode == 0, down.stderr
+    assert "GRANT TEMPORARY ON DATABASE %I TO PUBLIC" in down.stdout
+    assert "GRANT EXECUTE ON FUNCTION %s TO PUBLIC" in down.stdout

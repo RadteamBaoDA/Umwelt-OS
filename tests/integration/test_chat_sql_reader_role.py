@@ -103,6 +103,10 @@ async def test_session_user_is_the_login_role_and_cannot_switch_to_app_role(read
         "SELECT count(*) FROM public.chat_messages",
         "SELECT count(*) FROM public.observations",
         "SELECT lo_from_bytea(0, 'x'::bytea)",
+        "SELECT lo_create(0)",
+        "CREATE TEMP TABLE t (x int)",
+        "SELECT pg_advisory_lock(1)",
+        "SELECT pg_notify('x', 'y')",
     ],
 )
 async def test_writes_and_base_table_reads_fail_even_after_leaving_read_only(
@@ -185,3 +189,10 @@ async def test_guc_and_foreign_pid_fence_rows_do_not_widen_the_views(
             for table in ("observations", "source_observations", "ingestion_batches"):
                 await session.execute(text(f"DELETE FROM {table} WHERE source_id = :id"), {"id": seed.source_id})  # noqa: S608
             await session.commit()
+
+
+async def test_app_role_keeps_advisory_locks_and_temp_tables(committed_engine: AsyncEngine) -> None:
+    """Migration 0019 revokes PUBLIC grants but the application role still locks and creates temp tables."""
+    async with committed_engine.begin() as conn:
+        await conn.execute(text("SELECT pg_advisory_xact_lock(1)"))
+        await conn.execute(text("CREATE TEMP TABLE t_0019 (x int) ON COMMIT DROP"))
