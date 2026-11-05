@@ -129,30 +129,33 @@ async def _send(client: AsyncClient, prompt: str) -> str:
 async def _events(
     client: AsyncClient, response_id: str, last_id: str | None, stop_after: int | None = None,
 ) -> AsyncIterator[tuple[str, str, dict[str, object]]]:
-    """Yield (event_id, event, data) frames until message.done / terminal status, or `stop_after` frames."""
+    """Yield (event_id, event, data) frames until message.done / terminal status, or `stop_after` frames.
+
+    The whole read is bounded by `asyncio.timeout(120)`, so a stream that stalls without delivering any line
+    still fails at the deadline (a per-line check would never run) instead of hanging the suite.
+    """
     headers = {"Last-Event-ID": last_id} if last_id else {}
     seen = 0
-    deadline = time.monotonic() + 120  # heartbeats keep a stalled stream alive; never hang the suite
-    async with client.stream(
-        "GET", f"/api/v1/responses/{response_id}/events", headers=headers, timeout=120,
-    ) as response:
-        assert response.status_code == 200
-        frame: dict[str, str] = {}
-        async for line in response.aiter_lines():
-            assert time.monotonic() < deadline, f"stream {response_id} did not finish within 120 s"
-            if line:
-                key, _, value = line.partition(": ")
-                frame[key] = value
-                continue
-            if "event" in frame and "id" in frame:
-                data = json.loads(frame.get("data", "{}") or "{}")
-                yield frame["id"], frame["event"], data
-                seen += 1
-                if frame["event"] == "message.done" or (
-                    frame["event"] == "status" and data.get("status") in {"failed", "cancelled"}
-                ) or (stop_after is not None and seen >= stop_after):
-                    return
-            frame = {}
+    async with asyncio.timeout(120):
+        async with client.stream(
+            "GET", f"/api/v1/responses/{response_id}/events", headers=headers, timeout=120,
+        ) as response:
+            assert response.status_code == 200
+            frame: dict[str, str] = {}
+            async for line in response.aiter_lines():
+                if line:
+                    key, _, value = line.partition(": ")
+                    frame[key] = value
+                    continue
+                if "event" in frame and "id" in frame:
+                    data = json.loads(frame.get("data", "{}") or "{}")
+                    yield frame["id"], frame["event"], data
+                    seen += 1
+                    if frame["event"] == "message.done" or (
+                        frame["event"] == "status" and data.get("status") in {"failed", "cancelled"}
+                    ) or (stop_after is not None and seen >= stop_after):
+                        return
+                frame = {}
 
 
 @pytest.mark.asyncio
