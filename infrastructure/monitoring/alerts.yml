@@ -48,6 +48,14 @@ groups:
           summary: "Oldest undelivered outbox event is over 5 minutes old"
           runbook: "docs/observability.md#umweltoutboxlaghigh"
 
+      - alert: UmweltOutboxPurgeBacklog
+        expr: umwelt_outbox_purge_backlog > 0
+        for: 6h
+        labels: {severity: ticket}
+        annotations:
+          summary: "Expired event_outbox rows are not being purged (purge_delivered_outbox falling behind)"
+          runbook: "docs/observability.md#umweltoutboxpurgebacklog"
+
   - name: umwelt-cron
     rules:
       - alert: UmweltCronJobFailing

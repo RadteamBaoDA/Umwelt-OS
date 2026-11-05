@@ -125,6 +125,8 @@ Labels are bounded: route templates (never raw paths or ids), fixed job/queue na
 | `umwelt_arq_queue_oldest_job_age_seconds` | gauge | `queue` | api | Age of the oldest *due* job (deferred jobs excluded). |
 | `umwelt_outbox_pending_count` | gauge | none | api | `event_outbox` rows in `pending`/`queued`. |
 | `umwelt_outbox_oldest_pending_age_seconds` | gauge | none | api | Outbox lag. |
+| `umwelt_outbox_rows_total` | gauge | none | api | Estimated `event_outbox` rows (`pg_class.reltuples`, not `count(*)`). |
+| `umwelt_outbox_purge_backlog` | gauge | none | api | `delivered`/`failed` rows already past retention (capped at 100k per status); 0 when the hourly purge keeps up. |
 | `umwelt_cron_job_duration_seconds` | histogram | `job` | cron-worker, chat-worker | Scheduled-job run time (scheduled ticks, wake-ups and catch-up runs, recorded once per lease-guarded run by `core.cron.record_cron_run`; lease-held skips are not recorded). |
 | `umwelt_cron_job_last_success_timestamp_seconds` | gauge | `job` | cron-worker, chat-worker | Unix time of last success. |
 | `umwelt_cron_job_failures_total` | counter | `job` | cron-worker, chat-worker | Failed runs. |
@@ -176,6 +178,10 @@ The oldest due job has waited over 5 minutes: workers are stuck or down even if 
 ### UmweltOutboxLagHigh
 
 Undelivered outbox events are older than 5 minutes: the `dispatch_pending_work` cron is not running or is failing. Check `UmweltCronJobFailing` / `UmweltCronJobStale` for `dispatch_pending_work`, the queue age alert, and the database. Events are durable and at-least-once; recovery after the worker returns is automatic.
+
+### UmweltOutboxPurgeBacklog
+
+Terminal `event_outbox` rows past their retention cutoff stayed above zero for 6 hours. The hourly purge deletes at most 1000 rows per run (24k/day), so either `purge_delivered_outbox` is failing (check `UmweltCronJobFailing` for it) or the inflow exceeds that bound. See [operations](operations.md#why-event_outbox-is-not-partitioned) for the revisit trigger and the bounded drain loop to add first.
 
 ### UmweltCronJobFailing
 
