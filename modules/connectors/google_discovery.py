@@ -37,7 +37,9 @@ async def discover_google_resources(
     raise google_api.GoogleProviderError("google_discovery_provider_invalid")
 
 
-async def _discover_gmail_labels(budget: google_api._RequestBudget) -> tuple[list[dict[str, str]], bool]:
+async def _discover_gmail_labels(
+    budget: google_api._RequestBudget,
+) -> tuple[list[dict[str, str]], bool]:
     """List Gmail labels with one bounded request; ``True`` flags more rows than the item cap."""
     body = await budget.get(f"{google_api.GMAIL_ORIGIN}/labels")
     payload = google_api._json(body)
@@ -48,7 +50,9 @@ async def _discover_gmail_labels(budget: google_api._RequestBudget) -> tuple[lis
     return _safe_rows(label_rows, kind="label"), len(label_rows) > _MAX_DISCOVERY_ITEMS
 
 
-async def _discover_calendars(budget: google_api._RequestBudget) -> tuple[list[dict[str, str]], bool]:
+async def _discover_calendars(
+    budget: google_api._RequestBudget,
+) -> tuple[list[dict[str, str]], bool]:
     """Page through the calendar list (at most five pages / 500 rows).
 
     Returns ``(rows, truncated)``. Malformed pages or tokens raise ``GoogleProviderError``;
@@ -82,7 +86,9 @@ async def _discover_calendars(budget: google_api._RequestBudget) -> tuple[list[d
     raise rest.CollectionIncomplete
 
 
-async def _discover_drive(budget: google_api._RequestBudget, parent_id: str | None) -> tuple[list[dict[str, str]], bool]:
+async def _discover_drive(
+    budget: google_api._RequestBudget, parent_id: str | None
+) -> tuple[list[dict[str, str]], bool]:
     """Page through one Drive folder's children (at most five pages / 500 rows).
 
     ``parent_id`` must match the Drive id pattern (``root`` when omitted) and is quoted into the
@@ -92,7 +98,9 @@ async def _discover_drive(budget: google_api._RequestBudget, parent_id: str | No
     if parent_id is not None and not re.fullmatch(r"[A-Za-z0-9_-]{5,200}", parent_id):
         raise google_api.GoogleProviderError("drive_parent_invalid")
     query_parent = parent_id or "root"
-    drive_query = f"'{query_parent.replace(chr(39), chr(92) + chr(39))}' in parents and trashed = false"
+    drive_query = (
+        f"'{query_parent.replace(chr(39), chr(92) + chr(39))}' in parents and trashed = false"
+    )
     drive_rows: list[Any] = []
     page_token: str | None = None
     for _ in range(_MAX_DISCOVERY_PAGES):
@@ -112,7 +120,9 @@ async def _discover_drive(budget: google_api._RequestBudget, parent_id: str | No
         drive_rows.extend(files)
         next_token = payload.get("nextPageToken")
         if next_token is None:
-            return _drive_choices(drive_rows[:_MAX_DISCOVERY_ITEMS]), len(drive_rows) > _MAX_DISCOVERY_ITEMS
+            return _drive_choices(drive_rows[:_MAX_DISCOVERY_ITEMS]), len(
+                drive_rows
+            ) > _MAX_DISCOVERY_ITEMS
         if not isinstance(next_token, str) or not next_token:
             raise google_api.GoogleProviderError("drive_page_token_invalid")
         page_token = next_token
@@ -128,7 +138,13 @@ def _safe_rows(values: list[Any], *, kind: str) -> list[dict[str, str]]:
         if not isinstance(value, dict):
             raise google_api.GoogleProviderError("google_discovery_row_invalid")
         identifier = value.get("id")
-        name = value.get("name") if kind == "label" else value.get("summary") if kind == "calendar" else value.get("name")
+        name = (
+            value.get("name")
+            if kind == "label"
+            else value.get("summary")
+            if kind == "calendar"
+            else value.get("name")
+        )
         if not isinstance(identifier, str) or not identifier or len(identifier) > 512:
             raise google_api.GoogleProviderError("google_discovery_id_invalid")
         if kind == "label" and not re.fullmatch(r"[A-Za-z0-9_-]{1,225}", identifier):

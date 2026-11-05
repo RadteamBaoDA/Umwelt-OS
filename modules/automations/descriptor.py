@@ -16,8 +16,16 @@ class AutomationsDescriptor(ModuleDescriptor):
     enabled: bool = True
     # Every action target module is a hard dependency; trigger modules are re-checked per rule.
     dependencies: tuple[str, ...] = (
-        "tasks", "goals", "notifications", "dashboard", "agents", "tools", "sources",
-        "knowledge.documents", "knowledge.entities", "knowledge.timeline",
+        "tasks",
+        "goals",
+        "notifications",
+        "dashboard",
+        "agents",
+        "tools",
+        "sources",
+        "knowledge.documents",
+        "knowledge.entities",
+        "knowledge.timeline",
     )
     optional_dependencies: tuple[str, ...] = ("chat", "ingestion")
     scheduled_jobs: tuple[str, ...] = ("process_automation_run",)

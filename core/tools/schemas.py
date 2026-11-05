@@ -186,9 +186,13 @@ class ToolDefinition(BaseModel):
         if cached_state is not None and cached_state[0] == current_state:
             return cast("str", cached_state[1])
         identity = {
-            "name": self.name, "version": self.version,
-            "input_schema": self.input_schema, "output_schema": self.output_schema,
-            "module": self.module, "permissions": self.permissions, "risk": self.risk.value,
+            "name": self.name,
+            "version": self.version,
+            "input_schema": self.input_schema,
+            "output_schema": self.output_schema,
+            "module": self.module,
+            "permissions": self.permissions,
+            "risk": self.risk.value,
             "confirmation_required": self.confirmation_required,
             "timeout_seconds": self.timeout_seconds,
             "max_arguments_bytes": self.max_arguments_bytes,

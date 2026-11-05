@@ -22,7 +22,10 @@ CID = uuid4()
 
 def _event(seq: int, data: dict[str, Any] | None = None) -> Any:
     return SimpleNamespace(
-        seq=seq, event_type="message.delta", event_id=f"{RID}:{seq}", data=data or {"text": f"t{seq}"},
+        seq=seq,
+        event_type="message.delta",
+        event_id=f"{RID}:{seq}",
+        data=data or {"text": f"t{seq}"},
     )
 
 
@@ -55,7 +58,11 @@ class _Session:
             return SimpleNamespace(id=CID, ephemeral=False, expires_at=None)
         if entity is ResponseRun:
             return SimpleNamespace(
-                id=RID, conversation_id=CID, status=self.store.status, actor_user_id=1, workspace_id=CID,
+                id=RID,
+                conversation_id=CID,
+                status=self.store.status,
+                actor_user_id=1,
+                workspace_id=CID,
                 retrieval_context={"_chat_privacy_fence": {}},
             )
         raise AssertionError(stmt)
@@ -76,7 +83,9 @@ class _Session:
         self.store.log.append("rollback")
 
 
-def _install(monkeypatch: pytest.MonkeyPatch, store: _Store, *, auth: list[bool] | None = None) -> None:
+def _install(
+    monkeypatch: pytest.MonkeyPatch, store: _Store, *, auth: list[bool] | None = None
+) -> None:
     async def current(_request: Any) -> int:
         return 1
 
@@ -117,17 +126,26 @@ def _request(store: _Store, semaphore: asyncio.Semaphore | None = None) -> Any:
     return SimpleNamespace(
         is_disconnected=disconnected,
         cookies={},
-        app=SimpleNamespace(state=SimpleNamespace(
-            session_factory=lambda: _Session(store),
-            chat_streams=semaphore or asyncio.Semaphore(routes.MAX_CHAT_STREAMS_PER_API_PROCESS),
-        )),
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                session_factory=lambda: _Session(store),
+                chat_streams=semaphore
+                or asyncio.Semaphore(routes.MAX_CHAT_STREAMS_PER_API_PROCESS),
+            )
+        ),
     )
 
 
-async def _open(store: _Store, last_event_id: str | None = None, semaphore: asyncio.Semaphore | None = None) -> Any:
+async def _open(
+    store: _Store, last_event_id: str | None = None, semaphore: asyncio.Semaphore | None = None
+) -> Any:
     request = _request(store, semaphore)
     return await routes.get_response_events(
-        RID, request, _DependencySession(store), last_event_id=last_event_id, cursor=None,  # type: ignore[arg-type]
+        RID,
+        request,
+        _DependencySession(store),
+        last_event_id=last_event_id,
+        cursor=None,  # type: ignore[arg-type]
     )
 
 
@@ -147,7 +165,9 @@ async def _next(response: StreamingResponse, store: _Store) -> str:
     return str(chunk)
 
 
-async def test_drain_is_outside_txn_and_64_events_are_one_write_inside_it(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_drain_is_outside_txn_and_64_events_are_one_write_inside_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = _Store([_event(n) for n in range(1, 101)])
     _install(monkeypatch, store)
     response = await _open(store)
@@ -162,14 +182,18 @@ async def test_drain_is_outside_txn_and_64_events_are_one_write_inside_it(monkey
     assert store.log[:6] == ["yield:drain", "begin", "probe", "end", "begin", "lock"]
     assert store.log[-1].startswith("yield:") and "commit" not in store.log
 
-    assert await _next(response, store) == ""  # previous txn committed and closed before the next drain
+    assert (
+        await _next(response, store) == ""
+    )  # previous txn committed and closed before the next drain
     assert store.log[-3:] == ["commit", "end", "yield:drain"]
     rest = await _next(response, store)
     assert rest.count("event: message.delta") == 36 and f"id: {RID}:100\n" in rest
     await response.body_iterator.aclose()  # type: ignore[attr-defined]
 
 
-async def test_router_dependency_session_is_released_before_streaming(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_router_dependency_session_is_released_before_streaming(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = _Store([], status="completed")
     _install(monkeypatch, store)
     response = await _open(store)
@@ -185,12 +209,16 @@ async def test_last_event_id_resumes_after_that_seq(monkeypatch: pytest.MonkeyPa
     batch = await _next(response, store)
     assert store.seq_floors == [7]
     assert [line for line in batch.splitlines() if line.startswith("id:")] == [
-        f"id: {RID}:8", f"id: {RID}:9", f"id: {RID}:10",
+        f"id: {RID}:8",
+        f"id: {RID}:9",
+        f"id: {RID}:10",
     ]
     await response.body_iterator.aclose()  # type: ignore[attr-defined]
 
 
-async def test_auth_checked_in_the_publication_txn_and_revocation_stops_text(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_auth_checked_in_the_publication_txn_and_revocation_stops_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = _Store([_event(1)])
     _install(monkeypatch, store, auth=[False])
     response = await _open(store)
@@ -199,7 +227,9 @@ async def test_auth_checked_in_the_publication_txn_and_revocation_stops_text(mon
     assert not any("message.delta" in str(chunk) for chunk in chunks)
 
 
-async def test_backoff_doubles_to_half_a_second_and_resets_after_a_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_backoff_doubles_to_half_a_second_and_resets_after_a_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = _Store([])
     _install(monkeypatch, store)
     sleeps: list[float] = []
@@ -242,7 +272,9 @@ async def test_only_a_full_batch_repolls_without_sleeping(monkeypatch: pytest.Mo
     assert timeline == ["batch:64", "batch:36"]
 
 
-async def test_batch_is_capped_by_bytes_and_the_rest_follows_without_sleeping(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_batch_is_capped_by_bytes_and_the_rest_follows_without_sleeping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     big = "y" * (150 * 1024)
     store = _Store([_event(n, {"text": big}) for n in range(1, 4)], status="completed")
     _install(monkeypatch, store)
@@ -264,7 +296,9 @@ async def test_batch_is_capped_by_bytes_and_the_rest_follows_without_sleeping(mo
     assert sleeps == []  # the final batch of the terminal run ends the stream; no trailing wait
 
 
-async def test_permit_and_txn_released_when_send_fails_mid_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_permit_and_txn_released_when_send_fails_mid_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = _Store([_event(1)])
     _install(monkeypatch, store)
     semaphore = asyncio.Semaphore(1)
@@ -281,7 +315,12 @@ async def test_permit_and_txn_released_when_send_fails_mid_stream(monkeypatch: p
         await asyncio.sleep(10)
         return {"type": "http.disconnect"}
 
-    scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.4"}, "method": "GET", "headers": []}
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.4"},
+        "method": "GET",
+        "headers": [],
+    }
     with pytest.raises(ClientDisconnect):  # Starlette maps the OSError from send on the 2.4 path
         await response(scope, receive, send)
     # The generator was closed by the response (not left for GC): its finally released the permit
@@ -290,7 +329,9 @@ async def test_permit_and_txn_released_when_send_fails_mid_stream(monkeypatch: p
     assert store.log[-1] == "end"
 
 
-async def test_idle_poll_takes_no_lock_and_publishes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_idle_poll_takes_no_lock_and_publishes_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = _Store([])
     _install(monkeypatch, store)
     store.probe_says_work = False
@@ -315,30 +356,58 @@ async def test_idle_poll_takes_no_lock_and_publishes_nothing(monkeypatch: pytest
 class _ProbeSession:
     def __init__(self, run: Any, newer: int | None = None, parent: Any = "ok") -> None:
         self.run, self.newer = run, newer
-        self.parent = SimpleNamespace(ephemeral=False, expires_at=None) if parent == "ok" else parent
+        self.parent = (
+            SimpleNamespace(ephemeral=False, expires_at=None) if parent == "ok" else parent
+        )
 
     async def scalar(self, stmt: Any) -> Any:
         entity = stmt.column_descriptions[0]["entity"]
         return {ResponseRun: self.run, StreamEvent: self.newer, Conversation: self.parent}[entity]
 
 
-FENCE = {"store_conversation_history": True, "persisted": True, "updated_at": "2026-10-07T00:00:00+00:00"}
+FENCE = {
+    "store_conversation_history": True,
+    "persisted": True,
+    "updated_at": "2026-10-07T00:00:00+00:00",
+}
 
 
-@pytest.mark.parametrize(("run", "newer", "parent", "fence", "auth", "expected"), [
-    (None, None, "ok", FENCE, True, True),  # run gone -> locked path returns
-    ("completed", None, "ok", FENCE, True, True),  # terminal -> locked path drains/ends
-    ("streaming", 5, "ok", FENCE, True, True),  # new event -> publish under locks
-    ("streaming", None, None, FENCE, True, True),  # parent gone
-    ("streaming", None, SimpleNamespace(ephemeral=True, expires_at=None), FENCE, True, True),  # expired
-    ("streaming", None, "ok", {**FENCE, "store_conversation_history": False}, True, True),  # fence changed
-    ("streaming", None, "ok", FENCE, False, True),  # session revoked
-    ("pending", None, "ok", FENCE, True, False),  # idle: nothing to publish or close
-    ("streaming", None, "ok", FENCE, True, False),
-])
+@pytest.mark.parametrize(
+    ("run", "newer", "parent", "fence", "auth", "expected"),
+    [
+        (None, None, "ok", FENCE, True, True),  # run gone -> locked path returns
+        ("completed", None, "ok", FENCE, True, True),  # terminal -> locked path drains/ends
+        ("streaming", 5, "ok", FENCE, True, True),  # new event -> publish under locks
+        ("streaming", None, None, FENCE, True, True),  # parent gone
+        (
+            "streaming",
+            None,
+            SimpleNamespace(ephemeral=True, expires_at=None),
+            FENCE,
+            True,
+            True,
+        ),  # expired
+        (
+            "streaming",
+            None,
+            "ok",
+            {**FENCE, "store_conversation_history": False},
+            True,
+            True,
+        ),  # fence changed
+        ("streaming", None, "ok", FENCE, False, True),  # session revoked
+        ("pending", None, "ok", FENCE, True, False),  # idle: nothing to publish or close
+        ("streaming", None, "ok", FENCE, True, False),
+    ],
+)
 async def test_probe_takes_the_locked_path_for_every_publish_or_close_reason(
-    monkeypatch: pytest.MonkeyPatch, run: str | None, newer: int | None, parent: Any,
-    fence: dict[str, Any], auth: bool, expected: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    run: str | None,
+    newer: int | None,
+    parent: Any,
+    fence: dict[str, Any],
+    auth: bool,
+    expected: bool,
 ) -> None:
     from datetime import UTC, datetime
 
@@ -346,8 +415,11 @@ async def test_probe_takes_the_locked_path_for_every_publish_or_close_reason(
         return SimpleNamespace()
 
     async def privacy(_session: Any, **_kw: Any) -> Any:
-        return SimpleNamespace(store_conversation_history=True, persisted=True,
-                               updated_at=datetime(2026, 10, 7, tzinfo=UTC))
+        return SimpleNamespace(
+            store_conversation_history=True,
+            persisted=True,
+            updated_at=datetime(2026, 10, 7, tzinfo=UTC),
+        )
 
     async def auth_row(_session: Any, _hash: Any) -> int | None:
         return 1 if auth else None
@@ -355,14 +427,23 @@ async def test_probe_takes_the_locked_path_for_every_publish_or_close_reason(
     monkeypatch.setattr(routes, "read_export_privacy", privacy)
     monkeypatch.setattr(routes, "_run_scope", run_scope)
     monkeypatch.setattr(routes, "_auth_row_current", auth_row)
-    row = None if run is None else SimpleNamespace(
-        status=run, conversation_id=CID, actor_user_id=1, retrieval_context={"_chat_privacy_fence": fence},
+    row = (
+        None
+        if run is None
+        else SimpleNamespace(
+            status=run,
+            conversation_id=CID,
+            actor_user_id=1,
+            retrieval_context={"_chat_privacy_fence": fence},
+        )
     )
     session = _ProbeSession(row, newer, parent)
     assert await routes._poll_needs_lock(session, RID, 4, "h") is expected  # type: ignore[arg-type]
 
 
-async def test_65th_stream_gets_503_and_permits_are_released(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_65th_stream_gets_503_and_permits_are_released(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = _Store([], status="completed")
     _install(monkeypatch, store)
     semaphore = asyncio.Semaphore(routes.MAX_CHAT_STREAMS_PER_API_PROCESS)
@@ -370,7 +451,9 @@ async def test_65th_stream_gets_503_and_permits_are_released(monkeypatch: pytest
     with pytest.raises(HTTPException) as exc:
         await _open(store, semaphore=semaphore)
     assert exc.value.status_code == 503 and exc.value.detail == "Chat stream limit reached"
-    async for _chunk in responses[0].body_iterator:  # terminal run: the stream ends and frees its permit
+    async for _chunk in responses[
+        0
+    ].body_iterator:  # terminal run: the stream ends and frees its permit
         pass
     assert semaphore._value == 1
     await _open(store, semaphore=semaphore)
@@ -387,11 +470,13 @@ def test_api_process_chat_stream_cap_is_64() -> None:
 async def test_batch_citations_filtered_with_one_call(monkeypatch: pytest.MonkeyPatch) -> None:
     keep = {"documentVersionId": "v1", "keep": True}
     drop = {"documentVersionId": "v2"}
-    store = _Store([
-        _event(1, {"text": "a", "citations": [keep, drop]}),
-        _event(2, {"text": "b"}),
-        _event(3, {"text": "c", "citations": [drop]}),
-    ])
+    store = _Store(
+        [
+            _event(1, {"text": "a", "citations": [keep, drop]}),
+            _event(2, {"text": "b"}),
+            _event(3, {"text": "c", "citations": [drop]}),
+        ]
+    )
     _install(monkeypatch, store)
     calls: list[list[Any]] = []
 
@@ -413,12 +498,16 @@ async def test_batch_citations_filtered_with_one_call(monkeypatch: pytest.Monkey
 
 def _cite(version: UUID, chunk: UUID, source: UUID, document: UUID) -> dict[str, object]:
     return {
-        "sourceId": str(source), "documentId": str(document),
-        "documentVersionId": str(version), "chunkId": str(chunk),
+        "sourceId": str(source),
+        "documentId": str(document),
+        "documentVersionId": str(version),
+        "chunkId": str(chunk),
     }
 
 
-async def test_conversation_citations_batched_identical_to_per_message(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_conversation_citations_batched_identical_to_per_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from modules.knowledge.documents import public as documents_public
 
     source, document = uuid4(), uuid4()
@@ -429,8 +518,11 @@ async def test_conversation_citations_batched_identical_to_per_message(monkeypat
     async def lock_chunks(_session: Any, refs: list[tuple[UUID, UUID]], **_kw: Any) -> list[Any]:
         lock_calls.append(len(refs))
         return [
-            SimpleNamespace(document_version_id=v, chunk_id=c, source_id=source, document_id=document)
-            for v, c in refs if (v, c) in live
+            SimpleNamespace(
+                document_version_id=v, chunk_id=c, source_id=source, document_id=document
+            )
+            for v, c in refs
+            if (v, c) in live
         ]
 
     monkeypatch.setattr(documents_public, "lock_chat_evidence_chunks", lock_chunks)
@@ -438,7 +530,7 @@ async def test_conversation_citations_batched_identical_to_per_message(monkeypat
     scope = SimpleNamespace()
     kw: dict[str, Any] = {"scope": scope, "multi_workspace_enabled": False}
     messages: list[object] = [
-        [_cite(v, c, source, document) for v, c in pairs[i:i + 30]] for i in range(0, 150, 30)
+        [_cite(v, c, source, document) for v, c in pairs[i : i + 30]] for i in range(0, 150, 30)
     ]
     messages += [[], {"not": "a list"}, ["junk", _cite(*pairs[0], uuid4(), document)]]
 
@@ -448,11 +540,18 @@ async def test_conversation_citations_batched_identical_to_per_message(monkeypat
     batched = await routes._filter_citation_lists(None, messages, scope)  # type: ignore[arg-type]
 
     assert batched == per_message
-    assert old_calls == 6 and lock_calls == [100, 50]  # one lock call per 100 unique refs, not per message
+    assert old_calls == 6 and lock_calls == [
+        100,
+        50,
+    ]  # one lock call per 100 unique refs, not per message
 
 
-@pytest.mark.parametrize("spec_version", ["2.3", "2.4"])  # uvicorn 0.54 advertises 2.3 (task-group path)
-async def test_pure_asgi_stack_passes_empty_drain_chunk_and_writes_before_generator_resumes(spec_version: str) -> None:
+@pytest.mark.parametrize(
+    "spec_version", ["2.3", "2.4"]
+)  # uvicorn 0.54 advertises 2.3 (task-group path)
+async def test_pure_asgi_stack_passes_empty_drain_chunk_and_writes_before_generator_resumes(
+    spec_version: str,
+) -> None:
     """Guard for the drain/write ordering through the real middleware stack (fails with BaseHTTPMiddleware)."""
     from apps.api.main import create_app
 
@@ -479,10 +578,24 @@ async def test_pure_asgi_stack_passes_empty_drain_chunk_and_writes_before_genera
             order.append(f"send:{message['body']!r}")
 
     scope = {
-        "type": "http", "asgi": {"version": "3.0", "spec_version": spec_version}, "http_version": "1.1",
-        "method": "GET", "scheme": "http", "path": "/t4-probe", "raw_path": b"/t4-probe", "root_path": "",
-        "query_string": b"", "headers": [], "client": ("127.0.0.1", 1), "server": ("127.0.0.1", 80),
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": spec_version},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/t4-probe",
+        "raw_path": b"/t4-probe",
+        "root_path": "",
+        "query_string": b"",
+        "headers": [],
+        "client": ("127.0.0.1", 1),
+        "server": ("127.0.0.1", 80),
         "state": {},
     }
     await app(scope, receive, send)
-    assert order[:4] == ["send:b''", "after-drain-yield", "send:b'data: x\\n\\n'", "after-batch-yield"]
+    assert order[:4] == [
+        "send:b''",
+        "after-drain-yield",
+        "send:b'data: x\\n\\n'",
+        "after-batch-yield",
+    ]

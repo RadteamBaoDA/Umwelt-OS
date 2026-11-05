@@ -60,7 +60,8 @@ class ScopedMcpServer(MCPServer):
         self.revalidate_inbound = revalidate_inbound
         self.revalidate_inbound_output = revalidate_inbound_output
         self._request_state: ContextVar[InboundRequestState | None] = ContextVar(
-            "bbd_mcp_request_state", default=None,
+            "bbd_mcp_request_state",
+            default=None,
         )
         super().__init__(
             name="bbd-os",
@@ -73,21 +74,29 @@ class ScopedMcpServer(MCPServer):
         )
 
     async def _scoped_message_boundary(
-        self, ctx: ServerRequestContext, call_next: CallNext,
+        self,
+        ctx: ServerRequestContext,
+        call_next: CallNext,
     ) -> HandlerResult:
         """Load server-owned ASGI identity, reject unsupported protocol features, and scope each SDK task."""
         request = ctx.request
         state = (
             request.scope.get("state", {}).get("bbd_mcp_authorization")
-            if request is not None else None
+            if request is not None
+            else None
         )
         if not isinstance(state, InboundRequestState):
             raise MCPError(code=-32001, message="Inbound authorization is unavailable")
 
         method = ctx.method
         supported = {
-            "initialize", "notifications/initialized", "notifications/cancelled", "ping",
-            "server/discover", "tools/list", "tools/call",
+            "initialize",
+            "notifications/initialized",
+            "notifications/cancelled",
+            "ping",
+            "server/discover",
+            "tools/list",
+            "tools/call",
         }
         if method not in supported:
             raise MCPError(code=-32601, message="Method is unavailable")
@@ -98,7 +107,14 @@ class ScopedMcpServer(MCPServer):
         if method == "tools/list" and params.get("cursor"):
             raise MCPError(code=-32602, message="Pagination is unavailable")
         if method == "tools/call" and any(
-            key in params for key in ("task", "requestState", "request_state", "inputResponses", "input_responses")
+            key in params
+            for key in (
+                "task",
+                "requestState",
+                "request_state",
+                "inputResponses",
+                "input_responses",
+            )
         ):
             raise MCPError(code=-32602, message="This request mode is unavailable")
         if not await self.revalidate_inbound(state.identity, state.expected):
@@ -142,14 +158,19 @@ class ScopedMcpServer(MCPServer):
         bindings = {
             (binding.name, binding.version, binding.schema_fingerprint): binding
             for binding in state.identity.bindings
-            if binding.name in {"search.query", "knowledge.get_document", "knowledge.list_documents"}
+            if binding.name
+            in {"search.query", "knowledge.get_document", "knowledge.list_documents"}
             and binding.name in principal.allowed_tools
         }
-        definitions = self.registry.list_tools(frozenset(binding.name for binding in bindings.values()))
+        definitions = self.registry.list_tools(
+            frozenset(binding.name for binding in bindings.values())
+        )
         tools: list[Tool] = []
         captured: list[InboundBinding] = []
         for definition in definitions:
-            binding = bindings.get((definition.name, definition.version, definition.schema_fingerprint))
+            binding = bindings.get(
+                (definition.name, definition.version, definition.schema_fingerprint)
+            )
             if (
                 binding is None
                 or definition.risk != ToolRisk.READ_ONLY
@@ -179,12 +200,17 @@ class ScopedMcpServer(MCPServer):
         return tools
 
     async def call_tool(
-        self, name: str, arguments: dict[str, Any], context: Context | None = None,
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        context: Context | None = None,
     ) -> CallToolResult:
         """Invoke one exact approved native binding and fence its result before SDK serialization."""
         state = self._request_state.get()
         if state is None or context is None:
-            return CallToolResult(content=[TextContent(text='{"error":"forbidden"}')], is_error=True)
+            return CallToolResult(
+                content=[TextContent(text='{"error":"forbidden"}')], is_error=True
+            )
         request = context.request_context.request
         if (
             request is None
@@ -195,7 +221,9 @@ class ScopedMcpServer(MCPServer):
             or state.expected.is_owner
             or state.expected.owner_all_sources
         ):
-            return CallToolResult(content=[TextContent(text='{"error":"forbidden"}')], is_error=True)
+            return CallToolResult(
+                content=[TextContent(text='{"error":"forbidden"}')], is_error=True
+            )
         binding = next((item for item in state.identity.bindings if item.name == name), None)
         definition = self.registry.get_tool(name, binding.version) if binding is not None else None
         if (
@@ -211,13 +239,21 @@ class ScopedMcpServer(MCPServer):
             or state.expected.destinations != frozenset({state.identity.destination_id})
             or not state.expected.capabilities.issubset({"source.read"})
         ):
-            return CallToolResult(content=[TextContent(text='{"error":"tool_unavailable"}')], is_error=True)
+            return CallToolResult(
+                content=[TextContent(text='{"error":"tool_unavailable"}')], is_error=True
+            )
         try:
-            encoded_args = json.dumps(arguments, separators=(",", ":"), allow_nan=False).encode("utf-8")
+            encoded_args = json.dumps(arguments, separators=(",", ":"), allow_nan=False).encode(
+                "utf-8"
+            )
         except (TypeError, ValueError, RecursionError):
-            return CallToolResult(content=[TextContent(text='{"error":"invalid_arguments"}')], is_error=True)
+            return CallToolResult(
+                content=[TextContent(text='{"error":"invalid_arguments"}')], is_error=True
+            )
         if len(encoded_args) > min(64_000, definition.max_arguments_bytes):
-            return CallToolResult(content=[TextContent(text='{"error":"invalid_arguments"}')], is_error=True)
+            return CallToolResult(
+                content=[TextContent(text='{"error":"invalid_arguments"}')], is_error=True
+            )
 
         sink: dict[str, Any] = {"records": [], "source_generations": {}}
         native_context = {
@@ -238,12 +274,24 @@ class ScopedMcpServer(MCPServer):
                 context=native_context,
             )
         except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
-            return CallToolResult(content=[TextContent(text='{"error":"execution_failed"}')], is_error=True)
+            return CallToolResult(
+                content=[TextContent(text='{"error":"execution_failed"}')], is_error=True
+            )
         if not result.success:
-            code = result.error_code if result.error_code in {
-                "tool_unavailable", "forbidden", "approval_required", "invalid_arguments",
-                "invalid_result", "timeout", "execution_failed",
-            } else "execution_failed"
+            code = (
+                result.error_code
+                if result.error_code
+                in {
+                    "tool_unavailable",
+                    "forbidden",
+                    "approval_required",
+                    "invalid_arguments",
+                    "invalid_result",
+                    "timeout",
+                    "execution_failed",
+                }
+                else "execution_failed"
+            )
             text = json.dumps(
                 {"success": False, "error": {"code": code, "message": "Tool execution failed"}},
                 separators=(",", ":"),
@@ -252,31 +300,47 @@ class ScopedMcpServer(MCPServer):
 
         try:
             current = await self.revalidate_inbound_output(
-                state.identity, state.expected, binding=binding, sink=sink,
+                state.identity,
+                state.expected,
+                binding=binding,
+                sink=sink,
             )
         except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
             current = False
         if not current:
             return CallToolResult(
-                content=[TextContent(text='{"success":false,"error":{"code":"forbidden","message":"Tool execution failed"}}')],
+                content=[
+                    TextContent(
+                        text='{"success":false,"error":{"code":"forbidden","message":"Tool execution failed"}}'
+                    )
+                ],
                 is_error=True,
             )
 
         structured = {"data": result.data, "evidence_refs": list(result.evidence_refs)}
         try:
             text = json.dumps(
-                {"success": True, **structured}, separators=(",", ":"), ensure_ascii=False, allow_nan=False,
+                {"success": True, **structured},
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
             )
         except (TypeError, ValueError, RecursionError):
             return CallToolResult(
-                content=[TextContent(text='{"success":false,"error":{"code":"invalid_result","message":"Tool execution failed"}}')],
+                content=[
+                    TextContent(
+                        text='{"success":false,"error":{"code":"invalid_result","message":"Tool execution failed"}}'
+                    )
+                ],
                 is_error=True,
             )
         # The same sink and reviewed binding are required again at the final ASGI send boundary.
         state.response_fence.binding = binding
         state.response_fence.sink = sink
         state.response_fence.has_successful_native_result = True
-        return CallToolResult(content=[TextContent(text=text)], structured_content=structured, is_error=False)
+        return CallToolResult(
+            content=[TextContent(text=text)], structured_content=structured, is_error=False
+        )
 
     async def _revalidate_active_principal(self, principal: ToolExecutionPrincipal) -> bool:
         """Revalidate only the principal bound to this SDK task's authenticated request state."""

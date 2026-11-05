@@ -51,25 +51,50 @@ class _Session:
 
 def _request(**over: Any) -> SimpleNamespace:
     base = {
-        "id": REQUEST_ID, "source_id": SOURCE_ID, "workspace_id": WORKSPACE_ID, "status": "queued",
-        "actor_user_id": 7, "membership_revision": 3, "source_generation": 2, "attempt": 0,
-        "available_at": datetime.now(UTC) - timedelta(seconds=1), "provider_deadline": None,
-        "error_code": None, "active_admission_token": None,
+        "id": REQUEST_ID,
+        "source_id": SOURCE_ID,
+        "workspace_id": WORKSPACE_ID,
+        "status": "queued",
+        "actor_user_id": 7,
+        "membership_revision": 3,
+        "source_generation": 2,
+        "attempt": 0,
+        "available_at": datetime.now(UTC) - timedelta(seconds=1),
+        "provider_deadline": None,
+        "error_code": None,
+        "active_admission_token": None,
     }
     return SimpleNamespace(**(base | over))
 
 
-async def _admit(session: _Session, *, enabled: bool = True, access: Any = None, stale: str | None = None,
-                 lock: Any = None) -> tuple[Any, dict[str, Any]]:
+async def _admit(
+    session: _Session,
+    *,
+    enabled: bool = True,
+    access: Any = None,
+    stale: str | None = None,
+    lock: Any = None,
+) -> tuple[Any, dict[str, Any]]:
     spies = {"defer": AsyncMock(), "stale": AsyncMock(return_value=stale)}
-    with patch.object(scheduler.connectors, "_connector_access", access or AsyncMock()), \
-            patch("modules.settings.public.module_is_enabled", AsyncMock(return_value=enabled)), \
-            patch.object(scheduler.provisioning, "lock_connector", lock or AsyncMock(return_value=("fence", "row", {}))), \
-            patch("modules.sources.public.get_connector_source", AsyncMock(return_value=SimpleNamespace(provider=None, configuration=None))), \
-            patch.object(scheduler, "_stale_reason", spies["stale"]), \
-            patch.object(scheduler, "_defer", spies["defer"]), \
-            patch.object(scheduler, "_penalize", lambda *a, **k: None):
-        result = await scheduler.admit_collection_request(session, REQUEST_ID, multi_workspace_enabled=False)  # type: ignore[arg-type]
+    with (
+        patch.object(scheduler.connectors, "_connector_access", access or AsyncMock()),
+        patch("modules.settings.public.module_is_enabled", AsyncMock(return_value=enabled)),
+        patch.object(
+            scheduler.provisioning,
+            "lock_connector",
+            lock or AsyncMock(return_value=("fence", "row", {})),
+        ),
+        patch(
+            "modules.sources.public.get_connector_source",
+            AsyncMock(return_value=SimpleNamespace(provider=None, configuration=None)),
+        ),
+        patch.object(scheduler, "_stale_reason", spies["stale"]),
+        patch.object(scheduler, "_defer", spies["defer"]),
+        patch.object(scheduler, "_penalize", lambda *a, **k: None),
+    ):
+        result = await scheduler.admit_collection_request(
+            session, REQUEST_ID, multi_workspace_enabled=False
+        )  # type: ignore[arg-type]
     return result, spies
 
 
@@ -86,7 +111,9 @@ async def test_missing_or_non_queued_request_is_ignored() -> None:
 async def test_disabled_module_leaves_the_request_untouched() -> None:
     session = _Session(_request(), [])
     result, _ = await _admit(session, enabled=False)
-    assert result is None and session.log == ["get", "rollback", "rollback"] and session.executed == []
+    assert (
+        result is None and session.log == ["get", "rollback", "rollback"] and session.executed == []
+    )
 
 
 @pytest.mark.asyncio
@@ -116,7 +143,11 @@ async def test_conflict_is_reresolved_once_then_becomes_stale_scope() -> None:
 
 @pytest.mark.asyncio
 async def test_missing_future_or_non_queued_locked_request_rolls_back() -> None:
-    for locked in (None, _request(status="running"), _request(available_at=datetime.now(UTC) + timedelta(hours=1))):
+    for locked in (
+        None,
+        _request(status="running"),
+        _request(available_at=datetime.now(UTC) + timedelta(hours=1)),
+    ):
         session = _Session(_request(), [locked])
         result, _ = await _admit(session)
         assert result is None and session.log[-1] == "rollback"
@@ -133,16 +164,23 @@ async def test_stale_and_exhausted_requests_are_terminal() -> None:
     exhausted = _request(attempt=scheduler.MAX_ATTEMPTS)
     session2 = _Session(_request(), [exhausted, SimpleNamespace()])
     result2, _ = await _admit(session2)
-    assert result2 is None and (exhausted.status, exhausted.error_code) == ("failed", "attempts_exhausted")
+    assert result2 is None and (exhausted.status, exhausted.error_code) == (
+        "failed",
+        "attempts_exhausted",
+    )
 
 
 @pytest.mark.asyncio
 async def test_busy_workspace_or_live_lease_or_no_slot_defers_without_attempt() -> None:
     now = datetime.now(UTC)
     for scripted in (
-        [_request(), None, 5],                                        # workspace already holds a slot
-        [_request(), SimpleNamespace(lease_expires_at=now + timedelta(minutes=5)), None],  # live ingestion lease
-        [_request(), None, None, None],                               # no free global slot
+        [_request(), None, 5],  # workspace already holds a slot
+        [
+            _request(),
+            SimpleNamespace(lease_expires_at=now + timedelta(minutes=5)),
+            None,
+        ],  # live ingestion lease
+        [_request(), None, None, None],  # no free global slot
     ):
         locked = scripted[0]
         session = _Session(_request(), scripted)
@@ -170,7 +208,9 @@ async def test_free_slot_is_claimed_and_request_marked_running() -> None:
 async def test_concurrent_same_workspace_admission_defers_after_integrity_error() -> None:
     locked = _request()
     slot = SimpleNamespace(occupied_request_id=None)
-    session = _Session(_request(), [locked, None, None, slot], flush_error=IntegrityError("s", {}, Exception("x")))
+    session = _Session(
+        _request(), [locked, None, None, slot], flush_error=IntegrityError("s", {}, Exception("x"))
+    )
     result, spies = await _admit(session)
     assert result is None and session.log[-2:] == ["flush", "rollback"]
     spies["defer"].assert_awaited_once()

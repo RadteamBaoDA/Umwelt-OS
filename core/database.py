@@ -26,6 +26,7 @@ class Base(DeclarativeBase):
 
 class CreatedAtMixin:
     """Reusable database-generated UTC creation timestamp column for persistent records."""
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -51,7 +52,10 @@ def _pooled_connect_args() -> dict[str, Any]:
 
 
 def build_connect_args(
-    *, pgbouncer: bool, statement_timeout_ms: int = 0, idle_tx_timeout_ms: int = 0,
+    *,
+    pgbouncer: bool,
+    statement_timeout_ms: int = 0,
+    idle_tx_timeout_ms: int = 0,
 ) -> dict[str, Any]:
     """Compute the asyncpg ``connect_args`` for one engine; pure so every mode is unit-testable.
 
@@ -105,10 +109,14 @@ def make_session_factory(
         pool_timeout=5,
         pool_recycle=1800,
         connect_args=build_connect_args(
-            pgbouncer=pgbouncer, statement_timeout_ms=statement_timeout_ms, idle_tx_timeout_ms=idle_tx_timeout_ms,
+            pgbouncer=pgbouncer,
+            statement_timeout_ms=statement_timeout_ms,
+            idle_tx_timeout_ms=idle_tx_timeout_ms,
         ),
     )
-    register_engine(engine)  # pool size / checked-out / overflow gauges (read lazily at scrape time)
+    register_engine(
+        engine
+    )  # pool size / checked-out / overflow gauges (read lazily at scrape time)
     if pgbouncer and direct_url:
         # Only session advisory leases use this engine; each holds one connection for a run/upload, so the
         # bound is the maximum number of concurrent leases, not request concurrency.

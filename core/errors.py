@@ -18,6 +18,7 @@ from core.telemetry import bind_trace, count, observe_ms
 logger = logging.getLogger("bbd.api")
 _TIMEOUT_SQLSTATES = {"57014", "55P03"}
 
+
 class DomainError(Exception):
     """Framework-independent failure that the API renders exactly like an ``HTTPException``.
 
@@ -33,7 +34,11 @@ class DomainError(Exception):
     status_code: int = 500
 
     def __init__(
-        self, detail: Any = None, *, headers: dict[str, str] | None = None, status_code: int | None = None,
+        self,
+        detail: Any = None,
+        *,
+        headers: dict[str, str] | None = None,
+        status_code: int | None = None,
     ) -> None:
         """Capture the client-visible detail/headers; ``status_code`` overrides the class default.
 
@@ -163,7 +168,10 @@ def error_detail(exc: BaseException) -> Any:
 
 
 def render_http_error(
-    request: Request, status_code: int, detail: Any, headers: Any,
+    request: Request,
+    status_code: int,
+    detail: Any,
+    headers: Any,
 ) -> JSONResponse:
     """Build the stable API error envelope shared by ``HTTPException`` and ``DomainError``.
 
@@ -237,8 +245,10 @@ class _RequestIdMiddleware:
                 if path.startswith("/api/v1/"):
                     # Preserve the SSE no-transform directive while retaining the
                     # existing auth/API no-store override of cacheable responses.
-                    no_transform = any(value.strip().lower() == "no-transform"
-                                       for value in headers.get("Cache-Control", "").split(","))
+                    no_transform = any(
+                        value.strip().lower() == "no-transform"
+                        for value in headers.get("Cache-Control", "").split(",")
+                    )
                     policy = "no-store" if path.startswith("/api/v1/auth/") else "private, no-store"
                     headers["Cache-Control"] = policy + (", no-transform" if no_transform else "")
                 if not recorded:
@@ -299,7 +309,9 @@ def install_error_handling(app: FastAPI) -> None:
     async def database_error(request: Request, exc: DBAPIError) -> JSONResponse:
         """Map only statement/lock timeouts (SQLSTATE 57014/55P03, e.g. privacy-lock waits) to retryable 503; others stay 500."""
         orig = exc.orig
-        code = getattr(orig, "sqlstate", None) or getattr(getattr(orig, "__cause__", None), "sqlstate", None)
+        code = getattr(orig, "sqlstate", None) or getattr(
+            getattr(orig, "__cause__", None), "sqlstate", None
+        )
         if code not in _TIMEOUT_SQLSTATES:
             return await internal_error(request, exc)
         return JSONResponse(
@@ -322,8 +334,11 @@ def install_error_handling(app: FastAPI) -> None:
         Enqueues and rate-limit/session writes fail loudly rather than being dropped; the client is told to retry.
         Only the exception class is logged: Redis messages can carry key names or URLs.
         """
-        logger.warning("Redis unavailable; request_id=%s error=%s", getattr(request.state, "request_id", ""),
-                       type(exc).__name__)
+        logger.warning(
+            "Redis unavailable; request_id=%s error=%s",
+            getattr(request.state, "request_id", ""),
+            type(exc).__name__,
+        )
         return JSONResponse(
             status_code=503,
             headers={"Retry-After": "5"},

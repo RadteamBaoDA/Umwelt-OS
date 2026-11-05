@@ -26,24 +26,39 @@ class _Session:
 
 
 async def test_member_denied_before_sql() -> None:
-    member = WorkspaceContext(user_id=2, workspace_id=WORKSPACE_ID, role="member", membership_revision=1)
+    member = WorkspaceContext(
+        user_id=2, workspace_id=WORKSPACE_ID, role="member", membership_revision=1
+    )
     session = _Session(None)
     with pytest.raises(ForbiddenError) as caught:
         await documents.list_document_cleanup_evidence_scope(
-            session, uuid4(), scope=member, multi_workspace_enabled=False,  # type: ignore[arg-type]
+            session,
+            uuid4(),
+            scope=member,
+            multi_workspace_enabled=False,  # type: ignore[arg-type]
         )
     assert caught.value.status_code == 403 and session.sql == []
 
 
 async def test_operation_is_workspace_and_actor_bound_and_dto_carries_both() -> None:
     session = _Session(None)
-    assert await documents.list_document_cleanup_evidence_scope(session, uuid4(), **SCOPE_KW) is None  # type: ignore[arg-type]
+    assert (
+        await documents.list_document_cleanup_evidence_scope(session, uuid4(), **SCOPE_KW) is None
+    )  # type: ignore[arg-type]
     where = session.sql[0].split("WHERE", 1)[1]
     assert "workspace_id = " in where and "actor_user_id = " in where
     operation = SimpleNamespace(
-        id=uuid4(), source_id=uuid4(), document_id=uuid4(), workspace_id=WORKSPACE_ID, actor_user_id=1,
+        id=uuid4(),
+        source_id=uuid4(),
+        document_id=uuid4(),
+        workspace_id=WORKSPACE_ID,
+        actor_user_id=1,
     )
     session = _Session(operation)
     page = await documents.list_document_cleanup_evidence_scope(session, operation.id, **SCOPE_KW)  # type: ignore[arg-type]
-    assert page is not None and page.workspace_id == WORKSPACE_ID and page.actor_user_id == SCOPE.user_id
+    assert (
+        page is not None
+        and page.workspace_id == WORKSPACE_ID
+        and page.actor_user_id == SCOPE.user_id
+    )
     assert "workspace_id = " in session.sql[1].split("WHERE", 1)[1]

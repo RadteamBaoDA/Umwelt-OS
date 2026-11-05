@@ -31,17 +31,33 @@ NOW = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
 
 
 def rule(**kw: Any) -> HighlightRule:
-    return HighlightRule(**{
-        "id": uuid4(), "keywords": ["rates"], "severity": "warning", "notify": True, **kw,
-    })
+    return HighlightRule(
+        **{
+            "id": uuid4(),
+            "keywords": ["rates"],
+            "severity": "warning",
+            "notify": True,
+            **kw,
+        }
+    )
 
 
 def test_schema_bounds_and_defaults() -> None:
-    assert rule().model_dump(mode="json", exclude_defaults=True).keys() == {"id", "keywords", "severity", "notify"}
+    assert rule().model_dump(mode="json", exclude_defaults=True).keys() == {
+        "id",
+        "keywords",
+        "severity",
+        "notify",
+    }
     assert rule(cooldown_minutes=7 * 24 * 60).cooldown_minutes == 10080
-    for bad in ({"cooldown_minutes": -1}, {"cooldown_minutes": 10081}, {"expires_at": "2026-01-01T00:00:00"},
-                {"quiet_start": "22:00"}, {"quiet_start": "25:00", "quiet_end": "01:00"},
-                {"quiet_start": "08:00", "quiet_end": "08:00"}):
+    for bad in (
+        {"cooldown_minutes": -1},
+        {"cooldown_minutes": 10081},
+        {"expires_at": "2026-01-01T00:00:00"},
+        {"quiet_start": "22:00"},
+        {"quiet_start": "25:00", "quiet_end": "01:00"},
+        {"quiet_start": "08:00", "quiet_end": "08:00"},
+    ):
         with pytest.raises(ValidationError):
             rule(**bad)
 
@@ -96,33 +112,55 @@ def dump(r: HighlightRule) -> dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_emit_cooldown_suppresses_second_but_lists_both(
-    monkeypatch: pytest.MonkeyPatch, news: FakeNews, emit_spy: list[Any], frozen: None,
+    monkeypatch: pytest.MonkeyPatch,
+    news: FakeNews,
+    emit_spy: list[Any],
+    frozen: None,
 ) -> None:
     r = rule(cooldown_minutes=60)
     items = [item(FP_SOURCE, "rates up"), item(FP_SOURCE, "rates down")]
     session = run_emit(monkeypatch, definition_row([dump(r)], [FP_SOURCE]), items)
-    matches = await public.evaluate_gadget_highlights(session, uuid4(), **KW, emit_notifications=True)  # type: ignore[arg-type]
+    matches = await public.evaluate_gadget_highlights(
+        session, uuid4(), **KW, emit_notifications=True
+    )  # type: ignore[arg-type]
     assert len(matches) == 2 and len(emit_spy) == 1
     assert session.progress.rule_last_notified == {str(r.id): NOW.isoformat()}
 
 
 @pytest.mark.asyncio
 async def test_emit_expired_and_quiet_never_notify_but_are_listed(
-    monkeypatch: pytest.MonkeyPatch, news: FakeNews, emit_spy: list[Any], frozen: None,
+    monkeypatch: pytest.MonkeyPatch,
+    news: FakeNews,
+    emit_spy: list[Any],
+    frozen: None,
 ) -> None:
     expired = rule(expires_at=NOW - timedelta(days=1))
     quiet = rule(quiet_start="11:00", quiet_end="13:00")
-    session = run_emit(monkeypatch, definition_row([dump(expired), dump(quiet)], [FP_SOURCE]), [item(FP_SOURCE, "rates")])
-    matches = await public.evaluate_gadget_highlights(session, uuid4(), **KW, emit_notifications=True)  # type: ignore[arg-type]
+    session = run_emit(
+        monkeypatch,
+        definition_row([dump(expired), dump(quiet)], [FP_SOURCE]),
+        [item(FP_SOURCE, "rates")],
+    )
+    matches = await public.evaluate_gadget_highlights(
+        session, uuid4(), **KW, emit_notifications=True
+    )  # type: ignore[arg-type]
     assert len(matches) == 2 and emit_spy == []
     assert session.progress.rule_last_notified == {}
 
 
 @pytest.mark.asyncio
 async def test_state_resets_when_fingerprint_changes_and_legacy_fingerprint_holds(
-    monkeypatch: pytest.MonkeyPatch, news: FakeNews, emit_spy: list[Any], frozen: None,
+    monkeypatch: pytest.MonkeyPatch,
+    news: FakeNews,
+    emit_spy: list[Any],
+    frozen: None,
 ) -> None:
-    legacy = {"id": "00000000-0000-0000-0000-0000000000a1", "keywords": ["rates"], "severity": "warning", "notify": True}
+    legacy = {
+        "id": "00000000-0000-0000-0000-0000000000a1",
+        "keywords": ["rates"],
+        "severity": "warning",
+        "notify": True,
+    }
     session = run_emit(monkeypatch, definition_row([legacy], [FP_SOURCE]), [])
     await public.evaluate_gadget_highlights(session, uuid4(), **KW, emit_notifications=True)  # type: ignore[arg-type]
     assert session.progress.rules_fingerprint == LEGACY_FINGERPRINT
@@ -161,10 +199,15 @@ async def evaluate(session: Any) -> list[Any]:
 
 @pytest.mark.asyncio
 async def test_quiet_hours_suppress_not_defer_across_runs(
-    monkeypatch: pytest.MonkeyPatch, news: FakeNews, dedupe_emit: list[str], frozen: None,
+    monkeypatch: pytest.MonkeyPatch,
+    news: FakeNews,
+    dedupe_emit: list[str],
+    frozen: None,
 ) -> None:
     r = rule(quiet_start="11:00", quiet_end="13:00")
-    session = run_emit(monkeypatch, definition_row([dump(r)], [FP_SOURCE]), [item(FP_SOURCE, "rates")])
+    session = run_emit(
+        monkeypatch, definition_row([dump(r)], [FP_SOURCE]), [item(FP_SOURCE, "rates")]
+    )
     await evaluate(session)
     assert dedupe_emit == [] and len(session.suppressed) == 1
     CLOCK[0] = NOW + timedelta(hours=2)  # 14:00, outside quiet hours
@@ -174,17 +217,25 @@ async def test_quiet_hours_suppress_not_defer_across_runs(
 
 @pytest.mark.asyncio
 async def test_expired_rule_writes_no_suppression_row(
-    monkeypatch: pytest.MonkeyPatch, news: FakeNews, dedupe_emit: list[str], frozen: None,
+    monkeypatch: pytest.MonkeyPatch,
+    news: FakeNews,
+    dedupe_emit: list[str],
+    frozen: None,
 ) -> None:
     r = rule(expires_at=NOW - timedelta(days=1))
-    session = run_emit(monkeypatch, definition_row([dump(r)], [FP_SOURCE]), [item(FP_SOURCE, "rates")])
+    session = run_emit(
+        monkeypatch, definition_row([dump(r)], [FP_SOURCE]), [item(FP_SOURCE, "rates")]
+    )
     await evaluate(session)
     assert dedupe_emit == [] and len(session.suppressed) == 0
 
 
 @pytest.mark.asyncio
 async def test_cooldown_suppresses_not_defers_across_runs(
-    monkeypatch: pytest.MonkeyPatch, news: FakeNews, dedupe_emit: list[str], frozen: None,
+    monkeypatch: pytest.MonkeyPatch,
+    news: FakeNews,
+    dedupe_emit: list[str],
+    frozen: None,
 ) -> None:
     r = rule(cooldown_minutes=60)
     items = [item(FP_SOURCE, "rates up"), item(FP_SOURCE, "rates down")]
@@ -205,10 +256,15 @@ async def test_cooldown_suppresses_not_defers_across_runs(
 
 @pytest.mark.asyncio
 async def test_fingerprint_change_clears_suppression(
-    monkeypatch: pytest.MonkeyPatch, news: FakeNews, dedupe_emit: list[str], frozen: None,
+    monkeypatch: pytest.MonkeyPatch,
+    news: FakeNews,
+    dedupe_emit: list[str],
+    frozen: None,
 ) -> None:
     r = rule(quiet_start="11:00", quiet_end="13:00")
-    session = run_emit(monkeypatch, definition_row([dump(r)], [FP_SOURCE]), [item(FP_SOURCE, "rates")])
+    session = run_emit(
+        monkeypatch, definition_row([dump(r)], [FP_SOURCE]), [item(FP_SOURCE, "rates")]
+    )
     await evaluate(session)
     assert len(session.suppressed) == 1
     session.definition.revision = 2
@@ -221,7 +277,9 @@ async def test_fingerprint_change_clears_suppression(
 
 @pytest.mark.asyncio
 async def test_cooldown_not_armed_when_emit_returns_false(
-    monkeypatch: pytest.MonkeyPatch, news: FakeNews, frozen: None,
+    monkeypatch: pytest.MonkeyPatch,
+    news: FakeNews,
+    frozen: None,
 ) -> None:
     import modules.notifications.public as notif
 
@@ -243,7 +301,9 @@ async def test_cooldown_not_armed_when_emit_returns_false(
 
 @pytest.mark.asyncio
 async def test_failed_emit_leaves_cooldown_unarmed(
-    monkeypatch: pytest.MonkeyPatch, news: FakeNews, frozen: None,
+    monkeypatch: pytest.MonkeyPatch,
+    news: FakeNews,
+    frozen: None,
 ) -> None:
     import modules.notifications.public as notif
 
@@ -252,7 +312,9 @@ async def test_failed_emit_leaves_cooldown_unarmed(
 
     monkeypatch.setattr(notif, "emit", spy)
     r = rule(cooldown_minutes=60)
-    session = run_emit(monkeypatch, definition_row([dump(r)], [FP_SOURCE]), [item(FP_SOURCE, "rates")])
+    session = run_emit(
+        monkeypatch, definition_row([dump(r)], [FP_SOURCE]), [item(FP_SOURCE, "rates")]
+    )
     await evaluate(session)
     assert session.progress.rule_last_notified == {}
 
@@ -260,8 +322,15 @@ async def test_failed_emit_leaves_cooldown_unarmed(
 def test_quiet_hours_dst_fall_back_new_york() -> None:
     ny = ZoneInfo("America/New_York")
     r = rule(quiet_start="01:00", quiet_end="03:00")
-    for hour, minute, allowed in ((5, 30, False), (6, 30, False), (8, 30, True)):  # 01:30 EDT, 01:30 EST, 03:30 EST
-        assert notification_allowed(r, datetime(2026, 11, 1, hour, minute, tzinfo=UTC), ny, None) is allowed
+    for hour, minute, allowed in (
+        (5, 30, False),
+        (6, 30, False),
+        (8, 30, True),
+    ):  # 01:30 EDT, 01:30 EST, 03:30 EST
+        assert (
+            notification_allowed(r, datetime(2026, 11, 1, hour, minute, tzinfo=UTC), ny, None)
+            is allowed
+        )
 
 
 def test_owner_tzinfo_falls_back_to_utc() -> None:

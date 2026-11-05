@@ -61,8 +61,17 @@ class FakeSession:
 
 
 def _row(name: str = "t", **kw: Any) -> ChatTemplate:
-    return ChatTemplate(id=uuid4(), workspace_id=WS, actor_user_id=1, name=name, description="", html="<p/>",
-                        data_description="", version=kw.pop("version", 1), **kw)
+    return ChatTemplate(
+        id=uuid4(),
+        workspace_id=WS,
+        actor_user_id=1,
+        name=name,
+        description="",
+        html="<p/>",
+        data_description="",
+        version=kw.pop("version", 1),
+        **kw,
+    )
 
 
 def _save(session: FakeSession, **kw: Any) -> ChatTemplate:
@@ -73,7 +82,12 @@ def _save(session: FakeSession, **kw: Any) -> ChatTemplate:
 def test_save_creates_version_one_for_the_owner() -> None:
     session = FakeSession()
     row = _save(session)
-    assert session.added == [row] and row.version == 1 and row.workspace_id == WS and row.actor_user_id == 1
+    assert (
+        session.added == [row]
+        and row.version == 1
+        and row.workspace_id == WS
+        and row.actor_user_id == 1
+    )
 
 
 def test_save_updates_own_row_and_bumps_version() -> None:
@@ -95,14 +109,24 @@ def test_cap_of_thirty_per_owner() -> None:
     assert err.value.code == "limit"
 
 
-@pytest.mark.parametrize("bad", [
-    {"name": ""}, {"name": "x" * 121}, {"description": "d" * 501}, {"data_description": "d" * 501},
-    {"html": ""}, {"html": "h" * 60_001},
-])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"name": ""},
+        {"name": "x" * 121},
+        {"description": "d" * 501},
+        {"data_description": "d" * 501},
+        {"html": ""},
+        {"html": "h" * 60_001},
+    ],
+)
 def test_field_bounds(bad: dict[str, Any]) -> None:
     with pytest.raises(ValueError):
         templates.TemplateIn(**{"name": "n", "html": "<p/>", **bad})
-    assert templates.TemplateIn(name="x" * 120, html="h" * 60_000, description="d" * 500).name == "x" * 120
+    assert (
+        templates.TemplateIn(name="x" * 120, html="h" * 60_000, description="d" * 500).name
+        == "x" * 120
+    )
 
 
 def test_delete_seed_is_rejected_and_foreign_is_not_found() -> None:
@@ -110,7 +134,9 @@ def test_delete_seed_is_rejected_and_foreign_is_not_found() -> None:
         asyncio.run(templates.delete_template(FakeSession(), SCOPE, "seed-kpi-q1"))
     assert err.value.code == "invalid"
     with pytest.raises(templates.TemplateError) as err2:
-        asyncio.run(templates.delete_template(FakeSession(), SCOPE, str(uuid4())))  # scalar() -> None
+        asyncio.run(
+            templates.delete_template(FakeSession(), SCOPE, str(uuid4()))
+        )  # scalar() -> None
     assert err2.value.code == "not_found"
 
 
@@ -124,7 +150,9 @@ def test_delete_removes_row_and_clears_pending() -> None:
 
 def test_pending_requires_owned_conversation_and_template() -> None:
     with pytest.raises(templates.TemplateError):
-        asyncio.run(templates.set_pending(FakeSession(), SCOPE, CONV, "seed-kpi-q1"))  # no conversation
+        asyncio.run(
+            templates.set_pending(FakeSession(), SCOPE, CONV, "seed-kpi-q1")
+        )  # no conversation
     conv = SimpleNamespace(pending_template=None)
 
     class Sess(FakeSession):
@@ -140,13 +168,25 @@ def test_pending_requires_owned_conversation_and_template() -> None:
 
 
 def test_three_read_only_seeds_with_bounded_html() -> None:
-    assert [s["id"] for s in templates.SEED_TEMPLATES] == ["seed-weather-ny", "seed-invoice-northwind", "seed-kpi-q1"]
-    assert all(len(s["html"]) <= templates.MAX_HTML_CHARS and "<script" not in s["html"]
-               for s in templates.SEED_TEMPLATES)
+    assert [s["id"] for s in templates.SEED_TEMPLATES] == [
+        "seed-weather-ny",
+        "seed-invoice-northwind",
+        "seed-kpi-q1",
+    ]
+    assert all(
+        len(s["html"]) <= templates.MAX_HTML_CHARS and "<script" not in s["html"]
+        for s in templates.SEED_TEMPLATES
+    )
 
 
-def _run_tool(name: str, args: Any, conv: Any, rows: list[ChatTemplate], monkeypatch: pytest.MonkeyPatch,
-              item: Any = None) -> tuple[dict[str, Any], FakeSession]:
+def _run_tool(
+    name: str,
+    args: Any,
+    conv: Any,
+    rows: list[ChatTemplate],
+    monkeypatch: pytest.MonkeyPatch,
+    item: Any = None,
+) -> tuple[dict[str, Any], FakeSession]:
     async def scope(_s: Any, _owner: int) -> WorkspaceContext:
         return SCOPE
 
@@ -180,7 +220,10 @@ def test_model_cannot_save_templates(monkeypatch: pytest.MonkeyPatch) -> None:
     out, sess = _run_tool("save_template", {"name": "a", "html": "<p/>"}, _conv(), [], monkeypatch)
     assert "Unknown template tool" in out["error"] and sess.added == []
     assert "save_template" not in TEMPLATE_TOOLS
-    names = {s["function"]["name"] for s in build_chat_tool_specs(include_read_skill=False, include_templates=True)}
+    names = {
+        s["function"]["name"]
+        for s in build_chat_tool_specs(include_read_skill=False, include_templates=True)
+    }
     assert "save_template" not in names
     assert "save_template" not in build_generative_ui_system_prompt(locale="en-US", templates=True)
 
@@ -201,10 +244,15 @@ def test_tool_apply_without_id_or_pending_is_error(monkeypatch: pytest.MonkeyPat
 
 def test_model_cannot_delete_templates(monkeypatch: pytest.MonkeyPatch) -> None:
     mine = _row()
-    out, sess = _run_tool("delete_template", {"template_id": str(mine.id)}, _conv(), [], monkeypatch, item=mine)
+    out, sess = _run_tool(
+        "delete_template", {"template_id": str(mine.id)}, _conv(), [], monkeypatch, item=mine
+    )
     assert "Unknown template tool" in out["error"] and sess.deleted == []
     assert "delete_template" not in TEMPLATE_TOOLS
-    names = {s["function"]["name"] for s in build_chat_tool_specs(include_read_skill=False, include_templates=True)}
+    names = {
+        s["function"]["name"]
+        for s in build_chat_tool_specs(include_read_skill=False, include_templates=True)
+    }
     assert "delete_template" not in names
 
 
@@ -215,13 +263,15 @@ def test_owner_save_has_no_provenance() -> None:
 def test_save_takes_the_per_owner_advisory_lock_before_counting() -> None:
     session = FakeSession()
     _save(session)
-    (sql, params), = session.executed
+    ((sql, params),) = session.executed
     assert "pg_advisory_xact_lock" in sql and params == {"key": f"chat.templates:{WS}:1"}
 
 
 def test_apply_by_name_picks_most_recent_match_then_seed(monkeypatch: pytest.MonkeyPatch) -> None:
     newest, older = _row("Plan"), _row("plan")
-    out, _ = _run_tool("apply_template", {"name": "PLAN"}, _conv(), [newest, older], monkeypatch)  # list is newest first
+    out, _ = _run_tool(
+        "apply_template", {"name": "PLAN"}, _conv(), [newest, older], monkeypatch
+    )  # list is newest first
     assert out["template"]["id"] == str(newest.id)
     out, _ = _run_tool("apply_template", {"name": "q1 kpi dashboard"}, _conv(), [], monkeypatch)
     assert out["template"]["id"] == "seed-kpi-q1"
@@ -236,9 +286,13 @@ def test_tool_clear(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_specs_and_prompt_are_opt_in() -> None:
-    names = lambda **kw: {s["function"]["name"] for s in build_chat_tool_specs(include_read_skill=False, **kw)}  # noqa: E731  # terse test stub
+    names = lambda **kw: {
+        s["function"]["name"] for s in build_chat_tool_specs(include_read_skill=False, **kw)
+    }  # noqa: E731  # terse test stub
     assert not (TEMPLATE_TOOLS | {TOOL_SET_THEME}) & names()
-    assert TEMPLATE_TOOLS <= names(include_templates=True) and TOOL_SET_THEME not in names(include_templates=True)
+    assert TEMPLATE_TOOLS <= names(include_templates=True) and TOOL_SET_THEME not in names(
+        include_templates=True
+    )
     assert TOOL_SET_THEME in names(include_theme=True)
     base = build_generative_ui_system_prompt(locale="en-US")
     assert "apply_template" not in base and "set_theme" not in base
@@ -284,9 +338,12 @@ def test_routes_registered_with_account_auth() -> None:
 
     routes = {(m, r.path): r for r in templates_routes.router.routes for m in r.methods}
     assert _account_read in _deps(routes[("GET", "/api/v1/chat/templates")])
-    for key in (("POST", "/api/v1/chat/templates"), ("DELETE", "/api/v1/chat/templates/{template_id}"),
-                ("PUT", "/api/v1/conversations/{conversation_id}/pending-template"),
-                ("DELETE", "/api/v1/conversations/{conversation_id}/pending-template")):
+    for key in (
+        ("POST", "/api/v1/chat/templates"),
+        ("DELETE", "/api/v1/chat/templates/{template_id}"),
+        ("PUT", "/api/v1/conversations/{conversation_id}/pending-template"),
+        ("DELETE", "/api/v1/conversations/{conversation_id}/pending-template"),
+    ):
         assert _account_write in _deps(routes[key]), key
 
 

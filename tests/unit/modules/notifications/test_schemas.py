@@ -76,11 +76,13 @@ class TestNotificationEmitSchemas:
     def test_notification_emit_extra_fields_forbidden(self) -> None:
         """Extra fields are rejected to prevent unauthorized parameter tampering."""
         with pytest.raises(ValidationError):
-            NotificationEmit.model_validate({
-                "dedupe_key": "k1",
-                "kind": "system",
-                "unauthorized_field": "injected",
-            })
+            NotificationEmit.model_validate(
+                {
+                    "dedupe_key": "k1",
+                    "kind": "system",
+                    "unauthorized_field": "injected",
+                }
+            )
 
     def test_notification_emit_params_bound(self) -> None:
         """Params dictionary bounds: at most 16 entries of string or integer."""

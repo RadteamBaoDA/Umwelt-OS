@@ -29,11 +29,15 @@ async def test_vector_query_orders_inner_by_distance_only_and_inlines_generation
     gen = SimpleNamespace(id=uuid4(), dimensions=3)
     session = _Session()
     await public._vector_ids(
-        session, SearchRequest(query="q"), gen, [0.1, 0.2, 0.3], workspace_id=uuid4(),  # type: ignore[arg-type]
+        session,
+        SearchRequest(query="q"),
+        gen,
+        [0.1, 0.2, 0.3],
+        workspace_id=uuid4(),  # type: ignore[arg-type]
     )
     sql = session.queries[0]
-    inner = sql[sql.index("FROM search_index_items"):]
-    inner_order = inner[inner.index("ORDER BY"):inner.index(") t")]
+    inner = sql[sql.index("FROM search_index_items") :]
+    inner_order = inner[inner.index("ORDER BY") : inner.index(") t")]
     assert "chunk_id" not in inner_order
     assert "<=>" in inner_order
     assert f"i.generation_id = '{gen.id}'" in sql
@@ -49,5 +53,9 @@ async def test_vector_query_rejects_non_uuid_generation() -> None:
     gen = SimpleNamespace(id="x'; DROP TABLE a;--", dimensions=3)
     with pytest.raises(ValueError):
         await public._vector_ids(
-            _Session(), SearchRequest(query="q"), gen, [0.1], workspace_id=uuid4(),  # type: ignore[arg-type]
+            _Session(),
+            SearchRequest(query="q"),
+            gen,
+            [0.1],
+            workspace_id=uuid4(),  # type: ignore[arg-type]
         )

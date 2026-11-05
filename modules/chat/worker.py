@@ -236,19 +236,25 @@ async def _generate(c: _RunCtx, claimed: _ClaimedRun) -> None:
     route_decision = await _route_visualization(c, turn, setup)
     messages_payload = setup.base_messages(True)
     ts = _TurnState(
-        messages_payload=messages_payload, stream_iter=setup.open_stream(messages_payload, setup.ui_tools),
+        messages_payload=messages_payload,
+        stream_iter=setup.open_stream(messages_payload, setup.ui_tools),
         tools_active=setup.ui_tools is not None,
         max_parts=max(1, int(getattr(c.settings, "generative_ui_max_parts", 4))),
         max_ui_rounds=max(1, int(getattr(c.settings, "generative_ui_max_rounds", 3))),
         input_ttl_seconds=int(getattr(c.settings, "chat_input_request_ttl_seconds", 900)),
-        last_cancel_check=asyncio.get_running_loop().time(), route_decision=route_decision,
+        last_cancel_check=asyncio.get_running_loop().time(),
+        route_decision=route_decision,
     )
     st = _StreamState()
     env = _ToolEnv(c, claimed, turn, setup, ts)
     await _stream_turn(env, st)
     # 5. Complete generation and citation validation
     cited = _validate_citations(
-        st.accumulated_text, cast(AnswerContext, turn.answer_context), turn.answer_request, turn.web_run, ts.ui_parts,
+        st.accumulated_text,
+        cast(AnswerContext, turn.answer_context),
+        turn.answer_request,
+        turn.web_run,
+        ts.ui_parts,
     )
     generative_uis = _finalize_widgets(env, cited.final_answer, cited)
     await _persist_final(env, st, cited.final_answer, cited.valid_citations, generative_uis)
@@ -302,10 +308,19 @@ async def _run_response_generation(
         return
     claimed_at = time.monotonic()
     raw_context_req = claimed.context_req
-    privacy_fence = (raw_context_req or {}).get("_chat_privacy_fence") if isinstance(raw_context_req, dict) else None
+    privacy_fence = (
+        (raw_context_req or {}).get("_chat_privacy_fence")
+        if isinstance(raw_context_req, dict)
+        else None
+    )
     c = _RunCtx(
-        response_id=response_id, session_factory=session_factory, settings=settings, redis=redis,
-        conversation_id=claimed.conversation_id, privacy_fence=privacy_fence, seq=_CLAIM_SEQ,
+        response_id=response_id,
+        session_factory=session_factory,
+        settings=settings,
+        redis=redis,
+        conversation_id=claimed.conversation_id,
+        privacy_fence=privacy_fence,
+        seq=_CLAIM_SEQ,
     )
     try:
         await _generate(c, claimed)
@@ -321,11 +336,15 @@ async def _run_response_generation(
         timed_out = time.monotonic() - claimed_at >= CHAT_JOB_TIMEOUT - SHUTDOWN_TIMEOUT_MARGIN
         try:
             await asyncio.wait_for(
-                _release_on_shutdown(response_id, session_factory, privacy_fence, timed_out, scope=c.job_scope),
+                _release_on_shutdown(
+                    response_id, session_factory, privacy_fence, timed_out, scope=c.job_scope
+                ),
                 SHUTDOWN_RELEASE_TIMEOUT,
             )
         except Exception as exc:  # noqa: BLE001  # boundary: recovery's abandonment threshold is the safety net
-            logger.warning("Chat run shutdown release failed for %s (%s)", response_id, type(exc).__name__)
+            logger.warning(
+                "Chat run shutdown release failed for %s (%s)", response_id, type(exc).__name__
+            )
         raise
     except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
         # Router failures carry a safe code (never a URL, body or key); logging it names the setting to fix.
@@ -334,8 +353,16 @@ async def _run_response_generation(
         # failed; other exception text may carry payloads, so it stays out of the log.
         code = getattr(exc, "code", None)
         reason = f" [{exc}]" if isinstance(exc, ModelGatewayError) else ""
-        logger.error("Response generation failed for run %s: %s%s%s", response_id, type(exc).__name__, f" ({code})" if code else "", reason)
-        await _mark_failed(response_id, session_factory, c.seq, privacy_fence, exc, scope=c.job_scope)
+        logger.error(
+            "Response generation failed for run %s: %s%s%s",
+            response_id,
+            type(exc).__name__,
+            f" ({code})" if code else "",
+            reason,
+        )
+        await _mark_failed(
+            response_id, session_factory, c.seq, privacy_fence, exc, scope=c.job_scope
+        )
 
 
 async def process_chat_response(ctx: dict[str, object], response_id: str) -> None:
@@ -351,7 +378,9 @@ async def process_chat_response(ctx: dict[str, object], response_id: str) -> Non
     await run_response_generation(UUID(response_id), session_factory, settings, redis)
 
 
-async def _fail_expired_pending(response_id: UUID, session_factory: async_sessionmaker[AsyncSession]) -> None:
+async def _fail_expired_pending(
+    response_id: UUID, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
     """Fail a run that never started (nothing published); privacy -> conversation -> run lock order."""
     async with session_factory() as session:
         hint = await session.scalar(select(ResponseRun).where(ResponseRun.id == response_id))
@@ -360,24 +389,42 @@ async def _fail_expired_pending(response_id: UUID, session_factory: async_sessio
         # Reader: terminal publication only needs a stable consent read (shared, per workspace).
         # The workspace is immutable on the run, so this lock-free hint read may precede the lock.
         await lock_export_privacy(session, hint.workspace_id, shared=True)
-        await session.scalar(select(Conversation).where(
-            Conversation.id == hint.conversation_id,
-        ).with_for_update().execution_options(populate_existing=True))
-        run = await session.scalar(select(ResponseRun).where(
-            ResponseRun.id == response_id,
-        ).with_for_update().execution_options(populate_existing=True))
-        if run is None or run.status != "pending" or run.updated_at >= datetime.now(UTC) - RECOVER_PENDING_MAX_AGE:
+        await session.scalar(
+            select(Conversation)
+            .where(
+                Conversation.id == hint.conversation_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        run = await session.scalar(
+            select(ResponseRun)
+            .where(
+                ResponseRun.id == response_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if (
+            run is None
+            or run.status != "pending"
+            or run.updated_at >= datetime.now(UTC) - RECOVER_PENDING_MAX_AGE
+        ):
             return  # released back to pending (fresh updated_at) between select and lock: re-enqueue instead
         run.status = "failed"
         run.error_code = "TimeoutError"
         run.error_message = "chat worker unavailable"
         run.completed_at = func.now()
         seq = await _next_event_seq(session, response_id, 0)
-        session.add(StreamEvent(
-            response_id=response_id, seq=seq, event_type="status",
-            event_id=make_event_id(response_id, seq),
-            data={"status": "failed", "error": "chat worker unavailable"},
-        ))
+        session.add(
+            StreamEvent(
+                response_id=response_id,
+                seq=seq,
+                event_type="status",
+                event_id=make_event_id(response_id, seq),
+                data={"status": "failed", "error": "chat worker unavailable"},
+            )
+        )
         await session.commit()
 
 
@@ -393,52 +440,83 @@ async def recover_chat_runs(ctx: dict[str, object]) -> dict[str, int]:
     redis = cast(Any, ctx["redis"])
     now = datetime.now(UTC)
     async with factory() as session:
-        pending_ids = list(await session.scalars(
-            select(ResponseRun.id)
-            .where(
-                ResponseRun.status == "pending",
-                ResponseRun.created_at < now - RECOVER_PENDING_AFTER,
-                ResponseRun.updated_at >= now - RECOVER_PENDING_MAX_AGE,
+        pending_ids = list(
+            await session.scalars(
+                select(ResponseRun.id)
+                .where(
+                    ResponseRun.status == "pending",
+                    ResponseRun.created_at < now - RECOVER_PENDING_AFTER,
+                    ResponseRun.updated_at >= now - RECOVER_PENDING_MAX_AGE,
+                )
+                .order_by(ResponseRun.created_at)
+                .limit(50)
             )
-            .order_by(ResponseRun.created_at).limit(50)
-        ))
-        expired = list(await session.scalars(
-            select(ResponseRun.id)
-            .where(ResponseRun.status == "pending", ResponseRun.updated_at < now - RECOVER_PENDING_MAX_AGE)
-            .order_by(ResponseRun.created_at).limit(50)
-        ))
+        )
+        expired = list(
+            await session.scalars(
+                select(ResponseRun.id)
+                .where(
+                    ResponseRun.status == "pending",
+                    ResponseRun.updated_at < now - RECOVER_PENDING_MAX_AGE,
+                )
+                .order_by(ResponseRun.created_at)
+                .limit(50)
+            )
+        )
         last_event = (
             select(func.max(StreamEvent.created_at))
-            .where(StreamEvent.response_id == ResponseRun.id).scalar_subquery()
+            .where(StreamEvent.response_id == ResponseRun.id)
+            .scalar_subquery()
         )
         cutoff = now - RECOVER_STREAMING_AFTER
-        stale = (await session.execute(
-            select(ResponseRun.id, ResponseRun.retrieval_context, ResponseRun.workspace_id, ResponseRun.actor_user_id)
-            .where(
-                ResponseRun.status == "streaming",
-                ResponseRun.updated_at < cutoff,
-                func.coalesce(last_event, ResponseRun.updated_at) < cutoff,
+        stale = (
+            await session.execute(
+                select(
+                    ResponseRun.id,
+                    ResponseRun.retrieval_context,
+                    ResponseRun.workspace_id,
+                    ResponseRun.actor_user_id,
+                )
+                .where(
+                    ResponseRun.status == "streaming",
+                    ResponseRun.updated_at < cutoff,
+                    func.coalesce(last_event, ResponseRun.updated_at) < cutoff,
+                )
+                .order_by(ResponseRun.updated_at)
+                .limit(50)
             )
-            .order_by(ResponseRun.updated_at).limit(50)
-        )).all()
+        ).all()
     for expired_id in expired:
         await _fail_expired_pending(expired_id, factory)
     for run_id in pending_ids:
         try:
             await redis.enqueue_job(
-                "process_chat_response", str(run_id),
-                _job_id=f"chat-response:{run_id}", _queue_name=CHAT_QUEUE,
+                "process_chat_response",
+                str(run_id),
+                _job_id=f"chat-response:{run_id}",
+                _queue_name=CHAT_QUEUE,
             )
         except Exception as exc:  # noqa: BLE001  # boundary: next poll retries
             logger.warning("Chat run re-enqueue failed for %s (%s)", run_id, type(exc).__name__)
     for stale_id, context, stale_workspace, stale_actor in stale:
         fence = context.get("_chat_privacy_fence") if isinstance(context, dict) else None
         async with factory() as session:
-            seq = await session.scalar(select(func.coalesce(func.max(StreamEvent.seq), 0)).where(
-                StreamEvent.response_id == stale_id,
-            )) or 0
+            seq = (
+                await session.scalar(
+                    select(func.coalesce(func.max(StreamEvent.seq), 0)).where(
+                        StreamEvent.response_id == stale_id,
+                    )
+                )
+                or 0
+            )
         await _mark_failed(
-            cast(UUID, stale_id), factory, seq, fence, TimeoutError("generation abandoned"),
-            scope=await _scope_for_run(factory, cast(UUID, stale_workspace), cast(int, stale_actor)),
+            cast(UUID, stale_id),
+            factory,
+            seq,
+            fence,
+            TimeoutError("generation abandoned"),
+            scope=await _scope_for_run(
+                factory, cast(UUID, stale_workspace), cast(int, stale_actor)
+            ),
         )
     return {"requeued": len(pending_ids), "failed": len(stale) + len(expired)}

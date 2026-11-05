@@ -139,10 +139,15 @@ class ResponseSignalSubscription:
             await asyncio.sleep(timeout)
             return False
         try:
-            message = await self._pubsub.get_message(ignore_subscribe_messages=True, timeout=timeout)
+            message = await self._pubsub.get_message(
+                ignore_subscribe_messages=True, timeout=timeout
+            )
             if message is None:
                 return False
-            while await self._pubsub.get_message(ignore_subscribe_messages=True, timeout=0) is not None:
+            while (
+                await self._pubsub.get_message(ignore_subscribe_messages=True, timeout=0)
+                is not None
+            ):
                 pass
             return True
         except Exception as exc:  # noqa: BLE001  # boundary: degrade to polling

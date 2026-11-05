@@ -11,7 +11,9 @@ class McpWidgetsDescriptor(ModuleDescriptor):
 
     id: str = "mcp_widgets"
     name: str = "MCP widgets"
-    description: str = "Optional bearer-guarded widget MCP server mounted at /mcp when MCP_WIDGETS_ENABLED is set."
+    description: str = (
+        "Optional bearer-guarded widget MCP server mounted at /mcp when MCP_WIDGETS_ENABLED is set."
+    )
     routes: tuple[str, ...] = ("/mcp",)
 
 

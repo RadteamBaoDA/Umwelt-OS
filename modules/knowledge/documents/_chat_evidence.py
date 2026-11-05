@@ -79,7 +79,8 @@ async def read_chat_evidence_chunks(
     require_active_source: bool = True,
     require_current_version: bool = False,
     selection_fences: tuple[GadgetDocumentSelectionFence, ...] | None = None,
-    scope: Scope, multi_workspace_enabled: bool,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> list[ChatEvidenceChunk]:
     """Read bounded detached evidence chunks with exact content and source privacy fence.
 
@@ -107,13 +108,17 @@ async def read_chat_evidence_chunks(
             fail when a requested reference is missing instead of silently shrinking the selection.
     """
     await _admit_document_scope(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True)
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True
+    )
     if len(refs) > 100 or len(set(refs)) != len(refs):
         raise ValueError("Evidence references must be unique and contain at most 100 items")
     if not refs:
         return []
     if selection_fences is not None and not await validate_gadget_document_selection_fences(
-        session, selection_fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        selection_fences,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     ):
         raise ValueError("Selected document version or source privacy scope is stale")
 
@@ -122,7 +127,10 @@ async def read_chat_evidence_chunks(
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id)
         .join(Source, Source.id == Document.source_id)
-        .where(tuple_(DocumentVersion.id, DocumentChunk.id).in_(refs), *_document_scope(scope, allow_member=True))
+        .where(
+            tuple_(DocumentVersion.id, DocumentChunk.id).in_(refs),
+            *_document_scope(scope, allow_member=True),
+        )
     )
     if require_active_source:
         statement = statement.where(Source.status == "active")
@@ -135,13 +143,17 @@ async def read_chat_evidence_chunks(
             raise ValueError("Evidence reference is missing or unavailable")
         return []
 
-    provenance_rows = (await session.scalars(
-        select(NormalizedVersionProvenance).where(
-            NormalizedVersionProvenance.document_version_id.in_(
-                {version.id for _, version, _, _ in rows}
+    provenance_rows = (
+        await session.scalars(
+            select(NormalizedVersionProvenance)
+            .where(
+                NormalizedVersionProvenance.document_version_id.in_(
+                    {version.id for _, version, _, _ in rows}
+                )
             )
-        ).execution_options(populate_existing=True)
-    )).all()
+            .execution_options(populate_existing=True)
+        )
+    ).all()
     provenance_by_version = {item.document_version_id: item for item in provenance_rows}
 
     by_ref = {}
@@ -194,7 +206,8 @@ async def _lock_evidence_rows(
     refs: list[tuple[UUID, UUID]],
     *,
     selection_fences: tuple[GadgetDocumentSelectionFence, ...] | None,
-    scope: Scope, multi_workspace_enabled: bool,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Admit, validate and take Source -> Document -> version -> chunk key-share locks for ``refs``.
 
@@ -202,52 +215,83 @@ async def _lock_evidence_rows(
     False (nothing locked) for an empty ``refs``; raises ValueError for bad/duplicate references or a
     stale exact selection. Callers own commit/rollback, which releases every lock.
     """
-    access_fence = await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    access_fence = await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if len(refs) > 100 or len(set(refs)) != len(refs):
         raise ValueError("Evidence references must be unique and contain at most 100 items")
     if not refs:
         return False
-    if selection_fences is not None and not await _validate_gadget_document_selection_fences_admitted(
-        session, selection_fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        expected_access_fence=access_fence, lock_rows=False, max_documents=32,
+    if (
+        selection_fences is not None
+        and not await _validate_gadget_document_selection_fences_admitted(
+            session,
+            selection_fences,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=access_fence,
+            lock_rows=False,
+            max_documents=32,
+        )
     ):
         raise ValueError("Selected document version or source privacy scope is stale")
     ref_filter = tuple_(DocumentVersion.id, DocumentChunk.id).in_(refs)
-    scoped_refs = list((await session.execute(
-        select(Source.id, Document.id, DocumentVersion.id, DocumentChunk.id)
-        .join(Document, Document.source_id == Source.id)
-        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
-        .join(DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id)
-        .where(ref_filter, *_document_scope(scope))
-        .order_by(Source.id, Document.id, DocumentVersion.id, DocumentChunk.id)
-    )).all())
+    scoped_refs = list(
+        (
+            await session.execute(
+                select(Source.id, Document.id, DocumentVersion.id, DocumentChunk.id)
+                .join(Document, Document.source_id == Source.id)
+                .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+                .join(DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id)
+                .where(ref_filter, *_document_scope(scope))
+                .order_by(Source.id, Document.id, DocumentVersion.id, DocumentChunk.id)
+            )
+        ).all()
+    )
     source_ids = sorted({row[0] for row in scoped_refs}, key=str)
     document_ids = sorted({row[1] for row in scoped_refs}, key=str)
     version_ids = sorted({row[2] for row in scoped_refs}, key=str)
     chunk_ids = sorted({row[3] for row in scoped_refs}, key=str)
     if source_ids:
         await sources.lock_source_set(
-            session, source_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            source_ids,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
             expected_access_fence=access_fence,
         )
     if document_ids:
         await session.scalars(
-        select(Document.id).where(Document.id.in_(document_ids), *_document_scope(scope)).order_by(Document.id)
+            select(Document.id)
+            .where(Document.id.in_(document_ids), *_document_scope(scope))
+            .order_by(Document.id)
             .with_for_update(read=True, key_share=True, of=Document)
         )
     if version_ids:
         await session.scalars(
-            select(DocumentVersion.id).where(DocumentVersion.id.in_(version_ids)).order_by(DocumentVersion.id)
+            select(DocumentVersion.id)
+            .where(DocumentVersion.id.in_(version_ids))
+            .order_by(DocumentVersion.id)
             .with_for_update(read=True, key_share=True, of=DocumentVersion)
         )
     if chunk_ids:
         await session.scalars(
-            select(DocumentChunk.id).where(DocumentChunk.id.in_(chunk_ids)).order_by(DocumentChunk.id)
+            select(DocumentChunk.id)
+            .where(DocumentChunk.id.in_(chunk_ids))
+            .order_by(DocumentChunk.id)
             .with_for_update(read=True, key_share=True, of=DocumentChunk)
         )
-    if selection_fences is not None and not await _validate_gadget_document_selection_fences_admitted(
-        session, selection_fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        expected_access_fence=access_fence, lock_rows=False, max_documents=32,
+    if (
+        selection_fences is not None
+        and not await _validate_gadget_document_selection_fences_admitted(
+            session,
+            selection_fences,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=access_fence,
+            lock_rows=False,
+            max_documents=32,
+        )
     ):
         raise ValueError("Selected document version or source privacy scope is stale")
     return True
@@ -260,7 +304,8 @@ async def lock_chat_evidence_chunks(
     require_active_source: bool = True,
     require_current_version: bool = False,
     selection_fences: tuple[GadgetDocumentSelectionFence, ...] | None = None,
-    scope: Scope, multi_workspace_enabled: bool,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> list[ChatEvidenceChunk]:
     """Hold key-share locks on exact evidence through Chat's short publication transaction.
 
@@ -269,14 +314,20 @@ async def lock_chat_evidence_chunks(
     caller's publication commit; callers must release locks promptly by committing or rolling back.
     """
     if not await _lock_evidence_rows(
-        session, refs, selection_fences=selection_fences, scope=scope,
+        session,
+        refs,
+        selection_fences=selection_fences,
+        scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
     ):
         return []
     evidence = await read_chat_evidence_chunks(
-        session, refs, require_active_source=require_active_source,
+        session,
+        refs,
+        require_active_source=require_active_source,
         require_current_version=require_current_version,
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if selection_fences is not None and len(evidence) != len(refs):
         raise ValueError("One or more exact selected evidence chunks are unavailable")
@@ -290,7 +341,8 @@ async def lock_chat_evidence_state(
     require_active_source: bool = True,
     require_current_version: bool = False,
     selection_fences: tuple[GadgetDocumentSelectionFence, ...] | None = None,
-    scope: Scope, multi_workspace_enabled: bool,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> list[ChatEvidenceLockState]:
     """Lock-only variant of ``lock_chat_evidence_chunks`` for per-flush publication fences.
 
@@ -301,19 +353,30 @@ async def lock_chat_evidence_state(
     stale exact selection; refs in caller order, deleted/inactive ones omitted.
     """
     if not await _lock_evidence_rows(
-        session, refs, selection_fences=selection_fences, scope=scope,
+        session,
+        refs,
+        selection_fences=selection_fences,
+        scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
     ):
         return []
     statement = (
         select(
-            DocumentVersion.id, DocumentChunk.id, Source.id, Source.generation, Source.status, Source.local_only,
+            DocumentVersion.id,
+            DocumentChunk.id,
+            Source.id,
+            Source.generation,
+            Source.status,
+            Source.local_only,
         )
         .select_from(Document)
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id)
         .join(Source, Source.id == Document.source_id)
-        .where(tuple_(DocumentVersion.id, DocumentChunk.id).in_(refs), *_document_scope(scope, allow_member=True))
+        .where(
+            tuple_(DocumentVersion.id, DocumentChunk.id).in_(refs),
+            *_document_scope(scope, allow_member=True),
+        )
     )
     if require_active_source:
         statement = statement.where(Source.status == "active")

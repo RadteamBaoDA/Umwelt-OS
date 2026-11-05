@@ -35,7 +35,9 @@ def configuration(source: ConnectorSource) -> ConnectorConfig:
         if floor > 30:
             raw_configuration.setdefault("schedule_interval_minutes", floor)
     config = ConnectorConfig.model_validate(raw_configuration)
-    if is_native_provider(source.provider) and "timeout_seconds" not in (source.configuration or {}):
+    if is_native_provider(source.provider) and "timeout_seconds" not in (
+        source.configuration or {}
+    ):
         config = config.model_copy(update={"timeout_seconds": 30})
     return config
 
@@ -53,8 +55,10 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
 
         mcp_config = validate_mcp(source)
         return {
-            "source_id": str(source.id), "source_generation": source.generation,
-            "type": "mcp", "timezone": mcp_config.timezone,
+            "source_id": str(source.id),
+            "source_generation": source.generation,
+            "type": "mcp",
+            "timezone": mcp_config.timezone,
             "configuration": mcp_config.model_dump(mode="json"),
         }
     if source.type not in SUPPORTED_TYPES:
@@ -68,23 +72,39 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
 # with extra mandatory scope adds one row here; ``_validate_provider_source`` never changes.
 _PROVIDER_SCOPE_RULES: dict[str, tuple[Callable[[ConnectorConfig], bool], str]] = {
     "github_releases": (
-        lambda c: not c.github_owner or not c.github_repository, "GitHub owner and repository are required"),
+        lambda c: not c.github_owner or not c.github_repository,
+        "GitHub owner and repository are required",
+    ),
     "bluesky": (lambda c: not c.bluesky_actor, "A Bluesky handle or DID is required"),
     "mastodon": (
         lambda c: bool(c.mastodon_account) == bool(c.mastodon_hashtag),
-        "Choose exactly one Mastodon account or hashtag"),
-    "x": (lambda c: bool(c.x_account) == bool(c.x_query), "Choose exactly one X account or search query"),
+        "Choose exactly one Mastodon account or hashtag",
+    ),
+    "x": (
+        lambda c: bool(c.x_account) == bool(c.x_query),
+        "Choose exactly one X account or search query",
+    ),
     "alpha_vantage": (
         lambda c: not c.market_symbols or not c.market_currency or not c.market_exchange_timezone,
-        "Alpha Vantage symbols, currency, and exchange timezone are required"),
+        "Alpha Vantage symbols, currency, and exchange timezone are required",
+    ),
     "open_meteo": (
-        lambda c: (c.weather_latitude is None or c.weather_longitude is None
-                   or not c.weather_timezone or not c.weather_metrics),
-        "Open-Meteo coordinates, timezone, and metric scope are required"),
-    "health": (lambda c: not c.fhir_base_url or not c.fhir_patient_id, "FHIR endpoint and patient ID are required"),
+        lambda c: (
+            c.weather_latitude is None
+            or c.weather_longitude is None
+            or not c.weather_timezone
+            or not c.weather_metrics
+        ),
+        "Open-Meteo coordinates, timezone, and metric scope are required",
+    ),
+    "health": (
+        lambda c: not c.fhir_base_url or not c.fhir_patient_id,
+        "FHIR endpoint and patient ID are required",
+    ),
     "home_assistant": (
         lambda c: not c.ha_base_url or not c.ha_entity_ids,
-        "Home Assistant endpoint and selected entities are required"),
+        "Home Assistant endpoint and selected entities are required",
+    ),
 }
 
 
@@ -96,8 +116,12 @@ def _check_provider_keys(source: ConnectorSource, provider: str) -> None:
     """
     scope_fields = PROVIDER_SCOPE_FIELDS[provider]
     common = {
-        "timezone", "schedule_interval_minutes", "timeout_seconds",
-        "realtime_mode", "retention_days", "skip_embedding",
+        "timezone",
+        "schedule_interval_minutes",
+        "timeout_seconds",
+        "realtime_mode",
+        "retention_days",
+        "skip_embedding",
     }
     expected_history = "pending_updates" if provider == "telegram" else "returned_snapshot"
     raw_keys = set(source.configuration or {})
@@ -163,15 +187,52 @@ def _validate_generic_source(source: ConnectorSource) -> dict[str, Any]:
     Provider-scope keys are rejected (they need a registered provider); the feed/page URL is
     required, REST needs ``items_path`` and the default HTTP(S) port. Pure; raises ``ValueError``.
     """
-    if set(source.configuration or {}) & (COLLECTION_FILTER_FIELDS | {
-        "feed_sections", *sorted(ALL_OPTION_NAMES - COLLECTION_FILTER_FIELDS), "youtube_channel_id", "arxiv_category", "huggingface_author", "bluesky_actor",
-        "github_owner", "github_repository", "include_issues", "include_pulls", "include_commits", "include_releases", "telegram_chat_ids", "history_mode",
-        "market_symbols", "market_currency", "market_exchange_timezone", "coingecko_assets", "weather_latitude", "weather_longitude", "weather_timezone", "weather_metrics",
-        "news_query", "news_site", "news_locale", "sec_cik", "sec_contact_email", "scholarly_query",
-        "fred_series_id", "owm_latitude", "owm_longitude", "openaq_location_id", "firms_country",
-        "google_mail_label_ids", "google_mail_history_days", "google_calendar_ids", "google_drive_ids",
-        "fhir_base_url", "fhir_patient_id", "ha_base_url", "ha_entity_ids",
-    }):
+    if set(source.configuration or {}) & (
+        COLLECTION_FILTER_FIELDS
+        | {
+            "feed_sections",
+            *sorted(ALL_OPTION_NAMES - COLLECTION_FILTER_FIELDS),
+            "youtube_channel_id",
+            "arxiv_category",
+            "huggingface_author",
+            "bluesky_actor",
+            "github_owner",
+            "github_repository",
+            "include_issues",
+            "include_pulls",
+            "include_commits",
+            "include_releases",
+            "telegram_chat_ids",
+            "history_mode",
+            "market_symbols",
+            "market_currency",
+            "market_exchange_timezone",
+            "coingecko_assets",
+            "weather_latitude",
+            "weather_longitude",
+            "weather_timezone",
+            "weather_metrics",
+            "news_query",
+            "news_site",
+            "news_locale",
+            "sec_cik",
+            "sec_contact_email",
+            "scholarly_query",
+            "fred_series_id",
+            "owm_latitude",
+            "owm_longitude",
+            "openaq_location_id",
+            "firms_country",
+            "google_mail_label_ids",
+            "google_mail_history_days",
+            "google_calendar_ids",
+            "google_drive_ids",
+            "fhir_base_url",
+            "fhir_patient_id",
+            "ha_base_url",
+            "ha_entity_ids",
+        }
+    ):
         raise ValueError("Provider scope requires a registered source provider")
     config = configuration(source)
     required_url = config.feed_url if source.type == "rss" else config.url
@@ -218,7 +279,11 @@ def normalize(record: dict[str, Any]) -> dict[str, Any]:
     from datetime import UTC, datetime
 
     raw_timestamp = str(record.get("observed_at") or "")
-    timestamp = datetime.fromisoformat(raw_timestamp.replace("Z", "+00:00")) if raw_timestamp else datetime.now(UTC)
+    timestamp = (
+        datetime.fromisoformat(raw_timestamp.replace("Z", "+00:00"))
+        if raw_timestamp
+        else datetime.now(UTC)
+    )
     if timestamp.tzinfo is None:
         timestamp = timestamp.replace(tzinfo=UTC)
     return {

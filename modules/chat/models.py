@@ -37,16 +37,25 @@ class Conversation(Base):
         Index("ix_chat_conversations_created_at", "created_at"),
         Index("ix_chat_conversations_updated_at", "updated_at"),
         Index("ix_chat_conversations_archived", "archived"),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_chat_conversations_workspace", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["workspace_id", "actor_user_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_chat_conversations_principal", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_chat_conversations_workspace",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "actor_user_id"],
+            ["workspaces.id", "workspaces.owner_user_id"],
+            name="fk_w2_chat_conversations_principal",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint("workspace_id", "id", name="uq_w2_chat_conversations_id"),
-        Index("ix_w2_chat_conversations_scope", 'workspace_id', 'id'),
-        Index("ix_w2_chat_conversations_work", 'workspace_id', 'created_at', 'id'),
+        Index("ix_w2_chat_conversations_scope", "workspace_id", "id"),
+        Index("ix_w2_chat_conversations_work", "workspace_id", "created_at", "id"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
-
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     title: Mapped[str] = mapped_column(String(255), nullable=False, default="New conversation")
@@ -56,23 +65,34 @@ class Conversation(Base):
     archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ephemeral: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONB, nullable=False, server_default="{}"
+    )
     # Id (user template UUID or built-in seed id) the owner picked in the library for `apply_template` to consume.
     pending_template: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
     # passive_deletes: chat_messages/chat_response_runs FKs are ON DELETE CASCADE (models + p06/p14
     # migrations), so deleting a Conversation lets Postgres remove children instead of the ORM
     # loading and deleting them row by row. delete-orphan is kept for in-session removals.
     messages: Mapped[list["Message"]] = relationship(
-        "Message", back_populates="conversation", cascade="all, delete-orphan", passive_deletes=True,
+        "Message",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
         order_by="Message.created_at",
     )
     response_runs: Mapped[list["ResponseRun"]] = relationship(
-        "ResponseRun", back_populates="conversation", cascade="all, delete-orphan", passive_deletes=True,
+        "ResponseRun",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
-
 
 
 class Message(Base):
@@ -96,14 +116,22 @@ class Message(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     client_request_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     model_identity: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    citations: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
-    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
+    citations: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, server_default="[]"
+    )
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONB, nullable=False, server_default="{}"
+    )
     response_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     revision_of_message_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("chat_messages.id", ondelete="SET NULL"), nullable=True
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
     conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="messages")
 
@@ -120,35 +148,49 @@ class ResponseRun(Base):
         Index("ix_chat_response_runs_client_request_id", "client_request_id"),
         # Active runs only (recovery/awaiting-input/dispatch filters); terminal rows use the partial below.
         Index(
-            "ix_chat_response_runs_active_status", "status",
+            "ix_chat_response_runs_active_status",
+            "status",
             postgresql_where=text("status IN ('pending', 'streaming', 'awaiting_input')"),
         ),
         Index("ix_chat_response_runs_created_at", "created_at"),
         Index("ix_chat_response_runs_user_message_id", "user_message_id"),
         Index("ix_chat_response_runs_assistant_message_id", "assistant_message_id"),
         Index(
-            "ix_chat_response_runs_terminal_completed", "completed_at",
+            "ix_chat_response_runs_terminal_completed",
+            "completed_at",
             postgresql_where=text("status IN ('completed', 'cancelled', 'failed')"),
         ),
         CheckConstraint(
             "status IN ('pending', 'streaming', 'awaiting_input', 'completed', 'cancelled', 'failed')",
             name="ck_chat_response_runs_status",
         ),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_chat_response_runs_workspace", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["workspace_id", "actor_user_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_chat_response_runs_principal", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["workspace_id", "conversation_id"], ["chat_conversations.workspace_id", "chat_conversations.id"], name="fk_w2_chat_response_runs_conversation_id", ondelete="CASCADE"),
-        Index("ix_w2_chat_response_runs_scope", 'workspace_id', 'id'),
-        Index("ix_w2_chat_response_runs_work", 'workspace_id', 'created_at', 'id'),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_chat_response_runs_workspace",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "actor_user_id"],
+            ["workspaces.id", "workspaces.owner_user_id"],
+            name="fk_w2_chat_response_runs_principal",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "conversation_id"],
+            ["chat_conversations.workspace_id", "chat_conversations.id"],
+            name="fk_w2_chat_response_runs_conversation_id",
+            ondelete="CASCADE",
+        ),
+        Index("ix_w2_chat_response_runs_scope", "workspace_id", "id"),
+        Index("ix_w2_chat_response_runs_work", "workspace_id", "created_at", "id"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
 
-
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
-    conversation_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), nullable=False
-    )
+    conversation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     user_message_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=False
     )
@@ -163,22 +205,34 @@ class ResponseRun(Base):
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     token_usage: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
-    citations: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
-    retrieval_context: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    citations: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, server_default="[]"
+    )
+    retrieval_context: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default="{}"
+    )
     ephemeral: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # The single open `request_user_input` request while status is awaiting_input (see modules/chat/user_input.py).
     input_request: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="response_runs")
+    conversation: Mapped["Conversation"] = relationship(
+        "Conversation", back_populates="response_runs"
+    )
     stream_events: Mapped[list["StreamEvent"]] = relationship(
-        "StreamEvent", back_populates="response_run", cascade="all, delete-orphan", passive_deletes=True,
+        "StreamEvent",
+        back_populates="response_run",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
         order_by="StreamEvent.seq",  # chat_stream_events.response_id is ON DELETE CASCADE
     )
-
 
 
 class MessageMutationReceipt(Base):
@@ -186,7 +240,9 @@ class MessageMutationReceipt(Base):
 
     __tablename__ = "chat_message_mutation_receipts"
     __table_args__ = (
-        UniqueConstraint("conversation_id", "client_request_id", name="uq_chat_message_mutation_request"),
+        UniqueConstraint(
+            "conversation_id", "client_request_id", name="uq_chat_message_mutation_request"
+        ),
         CheckConstraint("action IN ('edit', 'regenerate')", name="ck_chat_message_mutation_action"),
         CheckConstraint("length(request_digest) = 64", name="ck_chat_message_mutation_digest"),
         Index("ix_chat_message_mutation_receipts_response_id", "response_id"),
@@ -210,7 +266,9 @@ class MessageMutationReceipt(Base):
     response_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("chat_response_runs.id", ondelete="CASCADE"), nullable=False
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class StreamEvent(Base):
@@ -231,9 +289,13 @@ class StreamEvent(Base):
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     event_id: Mapped[str] = mapped_column(String(128), nullable=False)
     data: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
-    response_run: Mapped["ResponseRun"] = relationship("ResponseRun", back_populates="stream_events")
+    response_run: Mapped["ResponseRun"] = relationship(
+        "ResponseRun", back_populates="stream_events"
+    )
 
 
 class AgentActivityLink(Base):
@@ -247,30 +309,49 @@ class AgentActivityLink(Base):
         UniqueConstraint("agent_run_id", name="uq_chat_agent_activity_run"),
         Index("ix_chat_agent_activity_conversation", "conversation_id", "updated_at"),
         CheckConstraint("length(auth_session_hash) = 64", name="ck_chat_agent_activity_owner_auth"),
-        CheckConstraint("jsonb_array_length(activities) <= 64", name="ck_chat_agent_activity_bound"),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_chat_agent_activity_links_workspace", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_chat_agent_activity_links_principal", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["workspace_id", "conversation_id"], ["chat_conversations.workspace_id", "chat_conversations.id"], name="fk_w2_chat_agent_activity_links_conversation_id", ondelete="CASCADE"),
-        Index("ix_w2_chat_agent_activity_links_scope", 'workspace_id', 'id'),
-        Index("ix_w2_chat_agent_activity_links_work", 'workspace_id', 'created_at', 'id'),
+        CheckConstraint(
+            "jsonb_array_length(activities) <= 64", name="ck_chat_agent_activity_bound"
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_chat_agent_activity_links_workspace",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "owner_id"],
+            ["workspaces.id", "workspaces.owner_user_id"],
+            name="fk_w2_chat_agent_activity_links_principal",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "conversation_id"],
+            ["chat_conversations.workspace_id", "chat_conversations.id"],
+            name="fk_w2_chat_agent_activity_links_conversation_id",
+            ondelete="CASCADE",
+        ),
+        Index("ix_w2_chat_agent_activity_links_scope", "workspace_id", "id"),
+        Index("ix_w2_chat_agent_activity_links_work", "workspace_id", "created_at", "id"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
-
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
-    conversation_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), nullable=False
-    )
+    conversation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     agent_run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     owner_id: Mapped[int] = mapped_column(Integer, nullable=False)
     auth_session_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    activities: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    activities: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, server_default="[]"
+    )
     ephemeral: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
-
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
 
 class ChatTodo(Base):
@@ -285,10 +366,14 @@ class ChatTodo(Base):
     __table_args__ = (
         CheckConstraint("status IN ('pending', 'completed')", name="ck_chat_todos_status"),
         CheckConstraint("position >= 0", name="ck_chat_todos_position"),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_chat_todos_workspace", ondelete="RESTRICT"),
         ForeignKeyConstraint(
-            ["workspace_id", "conversation_id"], ["chat_conversations.workspace_id", "chat_conversations.id"],
-            name="fk_chat_todos_conversation", ondelete="CASCADE",
+            ["workspace_id"], ["workspaces.id"], name="fk_chat_todos_workspace", ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "conversation_id"],
+            ["chat_conversations.workspace_id", "chat_conversations.id"],
+            name="fk_chat_todos_conversation",
+            ondelete="CASCADE",
         ),
         Index("ix_chat_todos_conversation_position", "conversation_id", "position"),
     )
@@ -305,9 +390,12 @@ class ChatTodo(Base):
     # Run whose model tool call last wrote this row; deleted when that run's evidence is cleaned up.
     # No FK: run retention must not null the provenance, and cleanup deletes by this id directly.
     source_response_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
 
 class ChatTemplate(Base):
@@ -322,8 +410,10 @@ class ChatTemplate(Base):
     __table_args__ = (
         CheckConstraint("version >= 1", name="ck_chat_templates_version"),
         ForeignKeyConstraint(
-            ["workspace_id", "actor_user_id"], ["workspaces.id", "workspaces.owner_user_id"],
-            name="fk_chat_templates_principal", ondelete="RESTRICT",
+            ["workspace_id", "actor_user_id"],
+            ["workspaces.id", "workspaces.owner_user_id"],
+            name="fk_chat_templates_principal",
+            ondelete="RESTRICT",
         ),
         Index("ix_chat_templates_owner_created", "workspace_id", "actor_user_id", "created_at"),
     )
@@ -338,6 +428,9 @@ class ChatTemplate(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     # Set only for templates created through the model tool (owner-UI templates stay NULL and are never purged).
     source_response_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )

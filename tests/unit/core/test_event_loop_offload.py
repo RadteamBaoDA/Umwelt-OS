@@ -93,11 +93,15 @@ async def test_add_content_chunks_runs_off_loop_thread(monkeypatch: pytest.Monke
         return real(text)
 
     monkeypatch_documents(monkeypatch, "chunk_text", spy)
-    await documents_public.add_content_chunks(_Session(), SimpleNamespace(id=uuid4(), content="a b c"))  # type: ignore[arg-type]
+    await documents_public.add_content_chunks(
+        _Session(), SimpleNamespace(id=uuid4(), content="a b c")
+    )  # type: ignore[arg-type]
     assert seen and seen[0] != threading.get_ident()
 
 
-async def test_large_chunking_runs_off_the_event_loop_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_large_chunking_runs_off_the_event_loop_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # Deterministic guard: a wall-clock lag threshold flaked under full-suite GIL contention, so
     # assert the thread identity instead. Reverting the offload runs chunk_text on the loop thread.
     loop_thread = threading.get_ident()
@@ -117,14 +121,18 @@ async def test_save_upload_oversize_removes_temp_file(tmp_path: Path) -> None:
     upload = UploadFile(io.BytesIO(b"y" * (2 * 1024 * 1024)), filename="a.txt")
     doc, workspace = uuid4(), uuid4()
     with pytest.raises(ValueError, match="size limit"):
-        await storage.save_upload(tmp_path, upload, doc, ".txt", 1024 * 1024, workspace_id=workspace)
+        await storage.save_upload(
+            tmp_path, upload, doc, ".txt", 1024 * 1024, workspace_id=workspace
+        )
     assert list((tmp_path / "workspaces" / str(workspace) / "documents" / str(doc)).iterdir()) == []
 
 
 async def test_save_upload_digest_matches(tmp_path: Path) -> None:
     payload = b"hello world" * 1000
     upload = UploadFile(io.BytesIO(payload), filename="a.txt")
-    _, size, digest = await storage.save_upload(tmp_path, upload, uuid4(), ".txt", 10**7, workspace_id=uuid4())
+    _, size, digest = await storage.save_upload(
+        tmp_path, upload, uuid4(), ".txt", 10**7, workspace_id=uuid4()
+    )
     assert size == len(payload)
     assert digest == hashlib.sha256(payload).hexdigest()
 
@@ -134,10 +142,13 @@ def _slow(record: list[int], result: Any = None) -> Any:
         record.append(threading.get_ident())
         time.sleep(0.2)
         return result
+
     return fn
 
 
-async def test_save_upload_blocks_run_off_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_save_upload_blocks_run_off_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     idents: list[int] = []
     real = storage._write_block
 
@@ -148,7 +159,9 @@ async def test_save_upload_blocks_run_off_loop(tmp_path: Path, monkeypatch: pyte
 
     monkeypatch.setattr(storage, "_write_block", slow_write)
     upload = UploadFile(io.BytesIO(b"x" * 1000), filename="a.txt")
-    lag = await _lag_while(storage.save_upload(tmp_path, upload, uuid4(), ".txt", 10**6, workspace_id=uuid4()))
+    lag = await _lag_while(
+        storage.save_upload(tmp_path, upload, uuid4(), ".txt", 10**6, workspace_id=uuid4())
+    )
     assert lag < 0.1
     assert idents and threading.get_ident() not in idents
 
@@ -182,15 +195,29 @@ async def test_auth_hashing_runs_off_loop(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(auth_routes, "provision_bootstrap_account_in_uow", provision)
     monkeypatch.setattr(auth_routes, "_lock_owner", lock)
     settings = SimpleNamespace(setup_token=SecretStr("tok"))
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=settings)), cookies={}, headers={}, client=None)
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(settings=settings)),
+        cookies={},
+        headers={},
+        client=None,
+    )
 
     async def login() -> None:
         with pytest.raises(HTTPException):
-            await auth_routes.login(request, Response(), SimpleNamespace(password="p", identifier=None), Sess(), None)  # type: ignore[arg-type]
+            await auth_routes.login(
+                request, Response(), SimpleNamespace(password="p", identifier=None), Sess(), None
+            )  # type: ignore[arg-type]
 
     async def setup() -> None:
         await auth_routes.create_owner(
-            SimpleNamespace(password="p", display_name=None), request, Response(), Sess(), None, "tok", "o", "c",  # type: ignore[arg-type]
+            SimpleNamespace(password="p", display_name=None),
+            request,
+            Response(),
+            Sess(),
+            None,
+            "tok",
+            "o",
+            "c",  # type: ignore[arg-type]
         )
 
     assert await _lag_while(login()) < 0.1
@@ -214,7 +241,10 @@ async def test_feed_records_run_off_loop(monkeypatch: pytest.MonkeyPatch) -> Non
 
     lag = await _lag_while(
         feed_catalog.collect_provider_feed(  # type: ignore[arg-type]
-            source, collected_at=datetime.now(UTC), session_factory=None, before_request=allow_request,
+            source,
+            collected_at=datetime.now(UTC),
+            session_factory=None,
+            before_request=allow_request,
         )
     )
     assert lag < 0.1 and idents and threading.get_ident() not in idents
@@ -280,9 +310,15 @@ async def test_export_render_off_loop_then_fence_and_bytes_identical(
     monkeypatch.setattr(export_routes, "_collect_dataset", collect)
     monkeypatch.setattr(export_routes, "_validate_final_fences", fence)
     result = await export_routes._build_export_response(
-        fmt, object(), SimpleNamespace(owner_id=1),
+        fmt,
+        object(),
+        SimpleNamespace(owner_id=1),
         SimpleNamespace(user_id=1, role="owner"),
-        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=SimpleNamespace(multi_workspace_enabled=False)))),
+        SimpleNamespace(
+            app=SimpleNamespace(
+                state=SimpleNamespace(settings=SimpleNamespace(multi_workspace_enabled=False))
+            )
+        ),
         Response(),  # type: ignore[arg-type]
     )
     assert order == ["render", "fence"]

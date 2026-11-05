@@ -20,15 +20,21 @@ def test_stale_epoch_cursor_first_frame_is_epoch_changed_resync(monkeypatch) -> 
 
     monkeypatch.setattr(realtime_routes, "_prepare_realtime", fake_prepare)
     request = SimpleNamespace(
-        app=SimpleNamespace(state=SimpleNamespace(
-            realtime_connections=asyncio.Semaphore(1),
-        )),
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                realtime_connections=asyncio.Semaphore(1),
+            )
+        ),
     )
     stale = ReplayCursor(epoch=uuid4(), sequence=3).encode()
 
     async def run() -> str:
         response = await realtime_routes.stream_events(
-            None, request, None, cursor=stale, last_event_id=None,
+            None,
+            request,
+            None,
+            cursor=stale,
+            last_event_id=None,
         )
         # Inspect the wrapped stream; the outer response only gates actual ASGI sends.
         return await anext(response.response.body_iterator)
@@ -54,7 +60,9 @@ def test_permit_response_disconnect_spec_2_3_does_not_cancel_db_rollback() -> No
             return self
 
         async def __aexit__(self, *exc: object) -> None:
-            await asyncio.sleep(0.01)  # rollback await: CancelledError here if a task group cancelled us
+            await asyncio.sleep(
+                0.01
+            )  # rollback await: CancelledError here if a task group cancelled us
             events.append("rollback-ok")
 
     async def run() -> int:
@@ -86,7 +94,9 @@ def test_permit_response_disconnect_spec_2_3_does_not_cancel_db_rollback() -> No
     assert events == ["rollback-ok"]
 
 
-def test_polling_response_lets_inflight_db_call_finish_and_returns_connection_on_disconnect() -> None:
+def test_polling_response_lets_inflight_db_call_finish_and_returns_connection_on_disconnect() -> (
+    None
+):
     """Disconnect mid-poll must not cancel the body: the in-flight 'query' completes and nothing stays checked out.
 
     Starlette's default task group would cancel the body mid-await (leaking the connection via a cancelled
@@ -147,10 +157,14 @@ def test_stream_yields_retry_preamble_immediately_without_replay(monkeypatch) ->
 
     monkeypatch.setattr(realtime_routes, "_prepare_realtime", fake_prepare)
     monkeypatch.setattr(realtime_routes, "HEARTBEAT_INTERVAL_SECONDS", 10_000)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(realtime_connections=asyncio.Semaphore(1))))
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(realtime_connections=asyncio.Semaphore(1)))
+    )
 
     async def run() -> str:
-        response = await realtime_routes.stream_events(None, request, None, cursor=None, last_event_id=None)
+        response = await realtime_routes.stream_events(
+            None, request, None, cursor=None, last_event_id=None
+        )
         return await asyncio.wait_for(anext(response.response.body_iterator), timeout=1)
 
     assert asyncio.run(run()) == "retry: 3000\n\n"

@@ -18,7 +18,9 @@ def _trigger(event: Any = None, **over: Any) -> SimpleNamespace:
     """Build an inbox trigger for a ready-document event."""
     event = event or uuid4()
     values: dict[str, Any] = {
-        "trigger_type": "new_document", "document_evidence_revoked": False, "event_key": str(event),
+        "trigger_type": "new_document",
+        "document_evidence_revoked": False,
+        "event_key": str(event),
     }
     values.update(over)
     return SimpleNamespace(**values)
@@ -27,7 +29,9 @@ def _trigger(event: Any = None, **over: Any) -> SimpleNamespace:
 @pytest.fixture
 def provenance(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     """Stub ingestion's ready-event provenance resolver."""
-    resolver = AsyncMock(return_value=SimpleNamespace(source_id=SOURCE, document_id=DOC, document_version_id=VERSION))
+    resolver = AsyncMock(
+        return_value=SimpleNamespace(source_id=SOURCE, document_id=DOC, document_version_id=VERSION)
+    )
     monkeypatch.setattr("modules.ingestion.public.resolve_ready_event_provenance", resolver)
     return resolver
 
@@ -36,11 +40,17 @@ def provenance(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
 async def test_trigger_sources_skip_unusable_triggers(provenance: AsyncMock) -> None:
     """Other types, revoked rows and non-canonical keys never reach provenance."""
     triggers = [
-        _trigger(trigger_type="webhook"), _trigger(document_evidence_revoked=True),
-        _trigger(event_key="not-a-uuid"), _trigger(event_key=str(uuid4()).upper()), _trigger(),
+        _trigger(trigger_type="webhook"),
+        _trigger(document_evidence_revoked=True),
+        _trigger(event_key="not-a-uuid"),
+        _trigger(event_key=str(uuid4()).upper()),
+        _trigger(),
     ]
     found = await execution._document_trigger_sources(
-        SimpleNamespace(), triggers, scope=SimpleNamespace(), multi_workspace_enabled=False,  # type: ignore[arg-type]
+        SimpleNamespace(),
+        triggers,
+        scope=SimpleNamespace(),
+        multi_workspace_enabled=False,  # type: ignore[arg-type]
     )
     assert found == {SOURCE} and provenance.await_count == 1
 
@@ -50,12 +60,18 @@ async def test_trigger_sources_held_set_short_circuits(provenance: AsyncMock) ->
     """A Source outside the held set stops the scan and reports None."""
     triggers = [_trigger(), _trigger()]
     result = await execution._document_trigger_sources(
-        SimpleNamespace(), triggers, scope=SimpleNamespace(), multi_workspace_enabled=False,  # type: ignore[arg-type]
+        SimpleNamespace(),
+        triggers,
+        scope=SimpleNamespace(),
+        multi_workspace_enabled=False,  # type: ignore[arg-type]
         held=set(),
     )
     assert result is None and provenance.await_count == 1
     ok = await execution._document_trigger_sources(
-        SimpleNamespace(), triggers, scope=SimpleNamespace(), multi_workspace_enabled=False,  # type: ignore[arg-type]
+        SimpleNamespace(),
+        triggers,
+        scope=SimpleNamespace(),
+        multi_workspace_enabled=False,  # type: ignore[arg-type]
         held={SOURCE},
     )
     assert ok == {SOURCE}
@@ -65,8 +81,12 @@ def _run(**over: Any) -> SimpleNamespace:
     """Build a new-document run with a recorded document and canonical event pair."""
     event = uuid4()
     values: dict[str, Any] = {
-        "trigger_type": "new_document", "document_evidence_revoked": False, "document_id": DOC,
-        "document_version_id": VERSION, "trigger_event_id": str(event), "trigger_key": f"event:{event}",
+        "trigger_type": "new_document",
+        "document_evidence_revoked": False,
+        "document_id": DOC,
+        "document_version_id": VERSION,
+        "trigger_event_id": str(event),
+        "trigger_key": f"event:{event}",
         "payload": {"source_id": str(SOURCE)},
     }
     values.update(over)
@@ -75,9 +95,15 @@ def _run(**over: Any) -> SimpleNamespace:
 
 async def _current(run: Any, monkeypatch: pytest.MonkeyPatch, retained: bool = True) -> bool:
     """Evaluate ``_run_evidence_current`` with the retained-evidence check stubbed."""
-    monkeypatch.setattr(execution, "_retained_document_evidence_current", AsyncMock(return_value=retained))
+    monkeypatch.setattr(
+        execution, "_retained_document_evidence_current", AsyncMock(return_value=retained)
+    )
     return await execution._run_evidence_current(
-        SimpleNamespace(), run, scope=SimpleNamespace(), multi_workspace_enabled=False, access_fence=SimpleNamespace(),  # type: ignore[arg-type]
+        SimpleNamespace(),
+        run,
+        scope=SimpleNamespace(),
+        multi_workspace_enabled=False,
+        access_fence=SimpleNamespace(),  # type: ignore[arg-type]
     )
 
 
@@ -99,7 +125,9 @@ async def test_recorded_document_requires_canonical_pair(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
-async def test_legacy_run_is_proven_and_backfilled(provenance: AsyncMock, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_legacy_run_is_proven_and_backfilled(
+    provenance: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A legacy run is stamped with the proven document only after provenance and evidence agree."""
     run = _run(document_id=None, document_version_id=None)
     assert await _current(run, monkeypatch) is True
@@ -110,5 +138,7 @@ async def test_legacy_run_is_proven_and_backfilled(provenance: AsyncMock, monkey
     assert await _current(bad, monkeypatch) is False
     provenance.return_value = None
     assert await _current(_run(document_id=None, document_version_id=None), monkeypatch) is False
-    mismatched = _run(document_id=None, document_version_id=None, trigger_key="event:" + str(uuid4()))
+    mismatched = _run(
+        document_id=None, document_version_id=None, trigger_key="event:" + str(uuid4())
+    )
     assert await _current(mismatched, monkeypatch) is False

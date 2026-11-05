@@ -50,10 +50,22 @@ def validate_telegram_record_delivery(
         or edited_present == original_present
         or detail.edited_received != edited_present
         or chat.get("type") != "channel"
-        or isinstance(chat_id_value, bool) or not isinstance(chat_id_value, int)
-        or isinstance(message_id_value, bool) or not isinstance(message_id_value, int) or message_id_value < 0
-        or isinstance(date_value, bool) or not isinstance(date_value, int) or date_value < 0
-        or (edited_present and (isinstance(edit_date_value, bool) or not isinstance(edit_date_value, int) or edit_date_value < 0))
+        or isinstance(chat_id_value, bool)
+        or not isinstance(chat_id_value, int)
+        or isinstance(message_id_value, bool)
+        or not isinstance(message_id_value, int)
+        or message_id_value < 0
+        or isinstance(date_value, bool)
+        or not isinstance(date_value, int)
+        or date_value < 0
+        or (
+            edited_present
+            and (
+                isinstance(edit_date_value, bool)
+                or not isinstance(edit_date_value, int)
+                or edit_date_value < 0
+            )
+        )
     ):
         raise ValueError("Telegram raw identity or clock fields are invalid")
     channel_id = str(chat_id_value)
@@ -62,7 +74,11 @@ def validate_telegram_record_delivery(
         raise ValueError("Telegram channel is outside configured source scope")
     try:
         published_at = datetime.fromtimestamp(date_value, UTC)
-        edited_at = datetime.fromtimestamp(edit_date_value, UTC) if edited_present and edit_date_value is not None else None
+        edited_at = (
+            datetime.fromtimestamp(edit_date_value, UTC)
+            if edited_present and edit_date_value is not None
+            else None
+        )
     except (OverflowError, OSError, ValueError) as exc:
         raise ValueError("Telegram raw timestamps are invalid") from exc
     observed_at = edited_at if edited_present else published_at
@@ -84,7 +100,8 @@ def validate_telegram_record_delivery(
         or detail.edited_at != edited_at
         or metadata.provider_modified_at != edited_at
         or record.observed_at != observed_at
-        or metadata.timestamp_basis != ("provider_modified" if edited_present else "provider_published")
+        or metadata.timestamp_basis
+        != ("provider_modified" if edited_present else "provider_published")
         or detail.raw_update_sha256 is not None
     ):
         raise ValueError("Telegram mapped record does not match its raw delivery")
@@ -97,14 +114,21 @@ def native_record_key(record: IngestionRecord) -> tuple[str, str]:
     read-only pre-cap dedup and the in-transaction accept path call this one function so the two keys
     cannot diverge.
     """
-    return record.provider_id, _digest({
-        "version": record.version, "content": record.content,
-        "metadata": record.model_dump(mode="json", exclude={"collected_at"})["metadata"],
-    })
+    return record.provider_id, _digest(
+        {
+            "version": record.version,
+            "content": record.content,
+            "metadata": record.model_dump(mode="json", exclude={"collected_at"})["metadata"],
+        }
+    )
 
 
 async def seen_record_keys(
-    session: AsyncSession, *, source_id: UUID, source_generation: int, provider: str | None,
+    session: AsyncSession,
+    *,
+    source_id: UUID,
+    source_generation: int,
+    provider: str | None,
     keys: Iterable[tuple[str, str]],
 ) -> set[tuple[str, str]]:
     """Return the ``(provider_id, record_hash)`` pairs this source already observed in its current generation.
@@ -128,14 +152,21 @@ async def seen_record_keys(
             .where(
                 SourceObservation.source_id == source_id,
                 IngestionBatch.source_generation == source_generation,
-                tuple_(SourceObservation.provider_id, SourceObservation.record_hash).in_(wanted[start:start + 500]),
-            ))
+                tuple_(SourceObservation.provider_id, SourceObservation.record_hash).in_(
+                    wanted[start : start + 500]
+                ),
+            )
+        )
         found.update((row.provider_id, row.record_hash) for row in rows)
     return found
 
 
 async def seen_provider_ids(
-    session: AsyncSession, *, source_id: UUID, source_generation: int, provider_ids: Iterable[str],
+    session: AsyncSession,
+    *,
+    source_id: UUID,
+    source_generation: int,
+    provider_ids: Iterable[str],
 ) -> set[str]:
     """Return which ``provider_ids`` this source already observed in its current generation.
 
@@ -152,23 +183,34 @@ async def seen_provider_ids(
             .where(
                 SourceObservation.source_id == source_id,
                 IngestionBatch.source_generation == source_generation,
-                SourceObservation.provider_id.in_(wanted[start:start + 500]),
-            ))
+                SourceObservation.provider_id.in_(wanted[start : start + 500]),
+            )
+        )
         found.update(row.provider_id for row in rows)
     return found
 
 
 def record_key(record: IngestionRecord) -> tuple[str, str]:
     """Return the ``(provider_id, record_hash)`` identity stored for a generic-path record."""
-    return record.provider_id, _digest({"version": record.version, "content": record.content, "metadata": record.metadata})
+    return record.provider_id, _digest(
+        {"version": record.version, "content": record.content, "metadata": record.metadata}
+    )
 
 
 async def drop_seen_records(
-    session: AsyncSession, *, source_id: UUID, source_generation: int, provider: str | None,
+    session: AsyncSession,
+    *,
+    source_id: UUID,
+    source_generation: int,
+    provider: str | None,
     records: list[IngestionRecord],
 ) -> list[IngestionRecord]:
     """Filter out generic-path records whose observation was already stored (see ``seen_record_keys``)."""
     seen = await seen_record_keys(
-        session, source_id=source_id, source_generation=source_generation, provider=provider,
-        keys=[record_key(record) for record in records])
+        session,
+        source_id=source_id,
+        source_generation=source_generation,
+        provider=provider,
+        keys=[record_key(record) for record in records],
+    )
     return [record for record in records if record_key(record) not in seen] if seen else records

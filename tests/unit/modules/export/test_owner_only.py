@@ -22,7 +22,12 @@ def _scope(user_id: int, role: str) -> WorkspaceContext:
 async def test_non_owner_or_mismatched_actor_is_403(scope: WorkspaceContext, actor: int) -> None:
     with pytest.raises(HTTPException) as exc:
         await routes._build_export_response(
-            routes.ExportFormat.json, None, SimpleNamespace(owner_id=actor), scope, None, None,  # type: ignore[arg-type]
+            routes.ExportFormat.json,
+            None,
+            SimpleNamespace(owner_id=actor),
+            scope,
+            None,
+            None,  # type: ignore[arg-type]
         )
     assert exc.value.status_code == 403
 
@@ -33,7 +38,9 @@ def test_export_route_uses_account_auth_not_bootstrap_only() -> None:
 
 
 @pytest.mark.asyncio
-async def test_domain_error_from_export_page_carries_no_store_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_domain_error_from_export_page_carries_no_store_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A DomainError raised by an owner export page still gets Cache-Control and Pragma no-store."""
     from core.errors import PayloadTooLargeError
 
@@ -44,7 +51,12 @@ async def test_domain_error_from_export_page_carries_no_store_headers(monkeypatc
     response = SimpleNamespace(headers={})
     with pytest.raises(PayloadTooLargeError) as exc:
         await routes.download_export(
-            routes.ExportFormat.json, None, SimpleNamespace(owner_id=1), None, None, response,  # type: ignore[arg-type]
+            routes.ExportFormat.json,
+            None,
+            SimpleNamespace(owner_id=1),
+            None,
+            None,
+            response,  # type: ignore[arg-type]
         )
     assert exc.value.headers["Cache-Control"] == "private, no-store, max-age=0"
     assert exc.value.headers["Pragma"] == "no-cache"

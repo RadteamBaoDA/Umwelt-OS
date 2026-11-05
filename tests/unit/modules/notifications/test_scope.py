@@ -62,12 +62,17 @@ async def test_member_denied_before_any_query(call: str) -> None:
     with pytest.raises(DomainError) as caught:
         if call == "emit":
             await public.emit(
-                session, NotificationEmit(dedupe_key="k", kind="x"), scope=MEMBER, multi_workspace_enabled=FLAG,
+                session,
+                NotificationEmit(dedupe_key="k", kind="x"),
+                scope=MEMBER,
+                multi_workspace_enabled=FLAG,
             )
         elif call == "list":
             await public.list_notifications(session, scope=MEMBER, multi_workspace_enabled=FLAG)
         else:
-            await public.set_read(session, uuid4(), True, scope=MEMBER, multi_workspace_enabled=FLAG)
+            await public.set_read(
+                session, uuid4(), True, scope=MEMBER, multi_workspace_enabled=FLAG
+            )
     assert caught.value.status_code == 403
     for awaited in (session.execute, session.scalar, session.scalars):
         awaited.assert_not_called()
@@ -89,9 +94,13 @@ async def test_list_page_and_count_are_workspace_and_owner_scoped() -> None:
 async def test_emit_insert_carries_workspace_and_actor_with_json_safe_values() -> None:
     session = AsyncMock()
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: uuid4()))
-    payload = NotificationEmit(dedupe_key="brief:1", kind="brief.ready", params={"date": "2026-10-08", "n": 3})
+    payload = NotificationEmit(
+        dedupe_key="brief:1", kind="brief.ready", params={"date": "2026-10-08", "n": 3}
+    )
     with _fences():
-        assert await public.emit(session, payload, scope=OWNER, multi_workspace_enabled=FLAG) is True
+        assert (
+            await public.emit(session, payload, scope=OWNER, multi_workspace_enabled=FLAG) is True
+        )
     text, params = _sql(session.execute.call_args.args[0])
     assert "workspace_id" in text and "owner_id" in text
     assert WS in params.values() and OWNER.user_id in params.values()
@@ -140,8 +149,11 @@ async def test_emit_with_evidence_call_order_and_admitted_fence() -> None:
         patch("modules.knowledge.documents.public.get_ready_version_ref", ready),
     ):
         ok = await public.emit(
-            session, payload, evidence=NotificationEvidence(document_id, version_id),
-            scope=OWNER, multi_workspace_enabled=FLAG,
+            session,
+            payload,
+            evidence=NotificationEvidence(document_id, version_id),
+            scope=OWNER,
+            multi_workspace_enabled=FLAG,
         )
     assert ok is True
     assert order == ["admit", "locator", "lock", "ready"]
@@ -150,11 +162,32 @@ async def test_emit_with_evidence_call_order_and_admitted_fence() -> None:
 
 def test_frozen_signatures_match_n_callers() -> None:
     emit = inspect.signature(public.emit)
-    assert list(emit.parameters) == ["session", "payload", "evidence", "scope", "multi_workspace_enabled"]
+    assert list(emit.parameters) == [
+        "session",
+        "payload",
+        "evidence",
+        "scope",
+        "multi_workspace_enabled",
+    ]
     assert emit.parameters["evidence"].kind is inspect.Parameter.KEYWORD_ONLY
     assert emit.parameters["scope"].default is inspect.Parameter.empty
     listing = inspect.signature(public.list_notifications)
-    assert list(listing.parameters) == ["session", "unread_only", "limit", "scope", "multi_workspace_enabled"]
-    assert listing.parameters["unread_only"].default is False and listing.parameters["limit"].default == 50
+    assert list(listing.parameters) == [
+        "session",
+        "unread_only",
+        "limit",
+        "scope",
+        "multi_workspace_enabled",
+    ]
+    assert (
+        listing.parameters["unread_only"].default is False
+        and listing.parameters["limit"].default == 50
+    )
     read = inspect.signature(public.set_read)
-    assert list(read.parameters) == ["session", "notification_id", "read", "scope", "multi_workspace_enabled"]
+    assert list(read.parameters) == [
+        "session",
+        "notification_id",
+        "read",
+        "scope",
+        "multi_workspace_enabled",
+    ]

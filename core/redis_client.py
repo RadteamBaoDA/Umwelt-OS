@@ -5,6 +5,7 @@ set, the host/port in ``REDIS_URL`` are ignored and the master named ``REDIS_MAS
 through the listed Sentinels, so a failover only needs the clients to reconnect (``retry_on_timeout`` and the
 health check below do that), never a configuration change. The public API of the returned clients is unchanged.
 """
+
 from __future__ import annotations
 
 from typing import Any, cast
@@ -53,7 +54,10 @@ def build_redis_settings(settings: Settings) -> RedisSettings:
 
 
 def _sentinel_master_client(
-    settings: Settings, sentinels: list[tuple[str, int]], *, redis_class: type[ArqRedis] = ArqRedis,
+    settings: Settings,
+    sentinels: list[tuple[str, int]],
+    *,
+    redis_class: type[ArqRedis] = ArqRedis,
     **client_kwargs: Any,
 ) -> ArqRedis:
     """Build an ``ArqRedis`` (or ``redis_class`` subclass) bound to the Sentinel-resolved master.
@@ -65,7 +69,11 @@ def _sentinel_master_client(
     sentinel_password = settings.redis_sentinel_password.get_secret_value() or None
     sentinel = Sentinel(  # type: ignore[no-untyped-call]  # redis-py ships Sentinel untyped
         sentinels,
-        sentinel_kwargs={"password": sentinel_password, "socket_timeout": 2, "socket_connect_timeout": 2},
+        sentinel_kwargs={
+            "password": sentinel_password,
+            "socket_timeout": 2,
+            "socket_connect_timeout": 2,
+        },
     )
     path = url.path.lstrip("/")
     client = sentinel.master_for(
@@ -116,5 +124,9 @@ def create_api_redis(settings: Settings, *, redis_class: type[ArqRedis] = ArqRed
     if not sentinels:
         return cast(ArqRedis, redis_class.from_url(settings.redis_url, **common))
     return _sentinel_master_client(
-        settings, sentinels, redis_class=redis_class, decode_responses=True, max_connections=100,
+        settings,
+        sentinels,
+        redis_class=redis_class,
+        decode_responses=True,
+        max_connections=100,
     )

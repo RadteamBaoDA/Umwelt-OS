@@ -42,23 +42,33 @@ class FakeSession:
         return object()
 
 
-@pytest.mark.parametrize(("status", "code"), [
-    (401, "provider_unauthorized"), (403, "provider_unauthorized"),
-    (500, "provider_collection_failed"), (503, "provider_collection_failed"),
-])
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [
+        (401, "provider_unauthorized"),
+        (403, "provider_unauthorized"),
+        (500, "provider_collection_failed"),
+        (503, "provider_collection_failed"),
+    ],
+)
 def test_provider_status_maps_to_error_code(status: int, code: str) -> None:
     request = httpx.Request("GET", "https://example.test")
-    exc = httpx.HTTPStatusError("x", request=request, response=httpx.Response(status, request=request))
+    exc = httpx.HTTPStatusError(
+        "x", request=request, response=httpx.Response(status, request=request)
+    )
     assert _collection_error_code(exc) == code
     assert _collection_error_code(TimeoutError()) == "provider_collection_failed"
 
 
-@pytest.mark.parametrize(("exc", "code"), [
-    (_TelegramAPIError("telegram_credentials_rejected"), "provider_unauthorized"),
-    (_TelegramAPIError("telegram_provider_unavailable"), "provider_collection_failed"),
-    (HTTPException(409, GITHUB_RECONNECT_DETAIL), "provider_unauthorized"),
-    (HTTPException(409, "other"), "provider_collection_failed"),
-])
+@pytest.mark.parametrize(
+    ("exc", "code"),
+    [
+        (_TelegramAPIError("telegram_credentials_rejected"), "provider_unauthorized"),
+        (_TelegramAPIError("telegram_provider_unavailable"), "provider_collection_failed"),
+        (HTTPException(409, GITHUB_RECONNECT_DETAIL), "provider_unauthorized"),
+        (HTTPException(409, "other"), "provider_collection_failed"),
+    ],
+)
 def test_non_httpx_auth_failures_map_to_error_code(exc: BaseException, code: str) -> None:
     assert _collection_error_code(exc) == code
 
@@ -69,9 +79,13 @@ def test_fetch_native_provider_uses_error_code_helper_in_both_branches() -> None
 
 
 SCOPE = WorkspaceContext(user_id=7, workspace_id=WORKSPACE_ID, role="owner", membership_revision=3)
-REQUEST = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-    settings=SimpleNamespace(multi_workspace_enabled=False),
-)))
+REQUEST = SimpleNamespace(
+    app=SimpleNamespace(
+        state=SimpleNamespace(
+            settings=SimpleNamespace(multi_workspace_enabled=False),
+        )
+    )
+)
 
 
 @pytest.mark.asyncio
@@ -105,15 +119,24 @@ async def test_document_count_is_workspace_scoped_and_capped_before_limit() -> N
 
 
 @pytest.mark.asyncio
-async def test_find_document_identity_sql_carries_workspace_predicate(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_find_document_identity_sql_carries_workspace_predicate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def admitted(*_a: Any, **_kw: Any) -> None:
         return None
 
     monkeypatch_documents(monkeypatch, "_admit_document_scope", admitted)
     session = FakeSession(uuid4())
-    assert await documents.find_document_identity(
-        session, uuid4(), "file:abc", scope=SCOPE, multi_workspace_enabled=False,  # type: ignore[arg-type]
-    ) is not None
+    assert (
+        await documents.find_document_identity(
+            session,
+            uuid4(),
+            "file:abc",
+            scope=SCOPE,
+            multi_workspace_enabled=False,  # type: ignore[arg-type]
+        )
+        is not None
+    )
     assert "workspace_id" in session.sql[0] and "external_id" in session.sql[0]
 
 
@@ -128,7 +151,9 @@ class ImpactSession:
 
 
 @pytest.mark.asyncio
-async def test_impact_foreign_source_is_none_without_running_counts(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_impact_foreign_source_is_none_without_running_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def not_found(*_a: Any, **_kw: Any) -> None:
         return None
 
@@ -137,9 +162,15 @@ async def test_impact_foreign_source_is_none_without_running_counts(monkeypatch:
 
     monkeypatch.setattr(sources, "get_source", not_found)
     monkeypatch.setattr(documents, "count_source_documents", boom)
-    assert await sources.get_source_impact(
-        ImpactSession(), uuid4(), scope=SCOPE, multi_workspace_enabled=False,  # type: ignore[arg-type]
-    ) is None
+    assert (
+        await sources.get_source_impact(
+            ImpactSession(),
+            uuid4(),
+            scope=SCOPE,
+            multi_workspace_enabled=False,  # type: ignore[arg-type]
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
@@ -150,7 +181,10 @@ async def test_impact_is_409_while_purge_pending(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(sources, "get_source", found)
     with pytest.raises(DomainError) as caught:
         await sources.get_source_impact(
-            ImpactSession(None), uuid4(), scope=SCOPE, multi_workspace_enabled=False,  # type: ignore[arg-type]
+            ImpactSession(None),
+            uuid4(),
+            scope=SCOPE,
+            multi_workspace_enabled=False,  # type: ignore[arg-type]
         )
     assert caught.value.status_code == 409
 
@@ -179,7 +213,10 @@ async def test_impact_passes_scope_to_all_counts(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(dashboard, "count_source_gadgets", gadget_count, raising=False)
     monkeypatch.setattr(chat, "count_source_conversations", conv_count)
     impact = await sources.get_source_impact(
-        ImpactSession(uuid4()), uuid4(), scope=SCOPE, multi_workspace_enabled=False,  # type: ignore[arg-type]
+        ImpactSession(uuid4()),
+        uuid4(),
+        scope=SCOPE,
+        multi_workspace_enabled=False,  # type: ignore[arg-type]
     )
     assert impact == sources.SourceImpact(1, 2, 3, 4)
     assert seen == [SCOPE, SCOPE, SCOPE]

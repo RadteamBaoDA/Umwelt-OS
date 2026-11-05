@@ -46,14 +46,21 @@ def _pending(workspace_id: UUID) -> Any:
     """Observations of one workspace that lack attribution and have a provider value to copy."""
     return (
         select(NewsObservation.id, Provenance.provenance_json)
-        .join(Provenance, (Provenance.document_version_id == NewsObservation.document_version_id)
-              & (Provenance.document_id == NewsObservation.document_id))
+        .join(
+            Provenance,
+            (Provenance.document_version_id == NewsObservation.document_version_id)
+            & (Provenance.document_id == NewsObservation.document_id),
+        )
         .where(NewsObservation.workspace_id == workspace_id, _MISSING, _HAS_SOURCE_VALUE)
     )
 
 
 async def backfill_workspace(
-    session: AsyncSession, workspace_id: UUID, *, apply: bool = False, limit: int | None = None,
+    session: AsyncSession,
+    workspace_id: UUID,
+    *,
+    apply: bool = False,
+    limit: int | None = None,
 ) -> dict[str, int]:
     """Page one workspace's missing rows; return counts of rows examined and written (or writable)."""
     after: UUID | None = None
@@ -69,7 +76,9 @@ async def backfill_workspace(
         for observation_id, provenance in rows:
             raw = cast(dict[str, Any], provenance).get("provider_record")
             try:
-                attribution = _attribution(ProviderRecordMetadata.model_validate(raw)) if raw else {}
+                attribution = (
+                    _attribution(ProviderRecordMetadata.model_validate(raw)) if raw else {}
+                )
             except ValidationError:
                 attribution = {}
             if not attribution:
@@ -78,10 +87,19 @@ async def backfill_workspace(
             if apply:
                 await session.execute(
                     update(NewsObservation)
-                    .where(NewsObservation.id == observation_id, NewsObservation.workspace_id == workspace_id, _MISSING)
-                    .values(match_evidence=func.jsonb_set(
-                        NewsObservation.match_evidence, "{attribution}", sql_cast(json.dumps(attribution), JSONB), True,
-                    ))
+                    .where(
+                        NewsObservation.id == observation_id,
+                        NewsObservation.workspace_id == workspace_id,
+                        _MISSING,
+                    )
+                    .values(
+                        match_evidence=func.jsonb_set(
+                            NewsObservation.match_evidence,
+                            "{attribution}",
+                            sql_cast(json.dumps(attribution), JSONB),
+                            True,
+                        )
+                    )
                 )
         examined += len(rows)
         after = rows[-1][0]
@@ -91,17 +109,29 @@ async def backfill_workspace(
 
 
 async def backfill_attribution(
-    factory: async_sessionmaker[AsyncSession], *, apply: bool = False, limit: int | None = None,
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    apply: bool = False,
+    limit: int | None = None,
     workspace_limit: int = 20,
 ) -> dict[str, int]:
     """Backfill every workspace that still has fillable rows (bounded per call)."""
     async with factory() as session:
-        workspace_ids = list((await session.scalars(
-            select(NewsObservation.workspace_id).join(
-                Provenance, (Provenance.document_version_id == NewsObservation.document_version_id)
-                & (Provenance.document_id == NewsObservation.document_id),
-            ).where(_MISSING, _HAS_SOURCE_VALUE).distinct().limit(workspace_limit)
-        )).all())
+        workspace_ids = list(
+            (
+                await session.scalars(
+                    select(NewsObservation.workspace_id)
+                    .join(
+                        Provenance,
+                        (Provenance.document_version_id == NewsObservation.document_version_id)
+                        & (Provenance.document_id == NewsObservation.document_id),
+                    )
+                    .where(_MISSING, _HAS_SOURCE_VALUE)
+                    .distinct()
+                    .limit(workspace_limit)
+                )
+            ).all()
+        )
     total = {"workspaces": len(workspace_ids), "examined": 0, "filled": 0}
     for workspace_id in workspace_ids:
         async with factory() as session:
@@ -119,9 +149,15 @@ async def backfill_news_attribution(ctx: dict[str, object]) -> int:
 
 async def _main(args: argparse.Namespace) -> int:
     """CLI entry: run one backfill (dry-run unless ``--apply``), print its JSON summary, always dispose the engine."""
-    engine, factory = make_session_factory(Settings().admin_database_url, pool_size=2, max_overflow=0)
+    engine, factory = make_session_factory(
+        Settings().admin_database_url, pool_size=2, max_overflow=0
+    )
     try:
-        print(json.dumps(await backfill_attribution(factory, apply=args.apply, limit=args.limit), indent=2))
+        print(
+            json.dumps(
+                await backfill_attribution(factory, apply=args.apply, limit=args.limit), indent=2
+            )
+        )
     finally:
         await engine.dispose()
     return 0
@@ -131,7 +167,9 @@ def main(argv: list[str] | None = None) -> int:
     """Operator entrypoint; dry run unless ``--apply``."""
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     parser.add_argument("--apply", action="store_true", help="write; default is a dry run")
-    parser.add_argument("--limit", type=int, default=None, help="maximum rows examined per workspace")
+    parser.add_argument(
+        "--limit", type=int, default=None, help="maximum rows examined per workspace"
+    )
     return asyncio.run(_main(parser.parse_args(argv)))
 
 

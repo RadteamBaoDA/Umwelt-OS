@@ -19,25 +19,44 @@ CUTOFF = datetime(2026, 5, 1, tzinfo=UTC)
 WS = uuid4()
 SCOPE = SimpleNamespace(workspace_id=WS)
 KW: dict[str, Any] = {
-    "limit": 2, "cursor": None, "entity_id": None, "valid_at": None, "include_unknown_validity": False,
-    "knowledge_as_of": CUTOFF, "fingerprint": "fp", "scope": SCOPE, "multi_workspace_enabled": False,
+    "limit": 2,
+    "cursor": None,
+    "entity_id": None,
+    "valid_at": None,
+    "include_unknown_validity": False,
+    "knowledge_as_of": CUTOFF,
+    "fingerprint": "fp",
+    "scope": SCOPE,
+    "multi_workspace_enabled": False,
 }
 
 
 def _state(origin: str = "owner", *, valid: bool = True) -> dict[str, Any]:
     """Serialized RelationshipRead state with bounded (or unknown) validity."""
     return {
-        "id": str(uuid4()), "source_entity_id": str(uuid4()), "target_entity_id": str(uuid4()), "type": "KNOWS",
-        "origin": origin, "confidence": 0.5,
-        "valid_from": CUTOFF.isoformat() if valid else None, "valid_to": CUTOFF.isoformat() if valid else None,
-        "metadata": {}, "created_at": CUTOFF.isoformat(),
+        "id": str(uuid4()),
+        "source_entity_id": str(uuid4()),
+        "target_entity_id": str(uuid4()),
+        "type": "KNOWS",
+        "origin": origin,
+        "confidence": 0.5,
+        "valid_from": CUTOFF.isoformat() if valid else None,
+        "valid_to": CUTOFF.isoformat() if valid else None,
+        "metadata": {},
+        "created_at": CUTOFF.isoformat(),
     }
 
 
-def _history(state: dict[str, Any] | None, *, deleted: bool = False, support: list[Any] | None = None) -> Any:
+def _history(
+    state: dict[str, Any] | None, *, deleted: bool = False, support: list[Any] | None = None
+) -> Any:
     """Snapshot history row."""
     return SimpleNamespace(
-        relationship_id=uuid4(), recorded_at=CUTOFF, deleted=deleted, state=state, support=support or [],
+        relationship_id=uuid4(),
+        recorded_at=CUTOFF,
+        deleted=deleted,
+        state=state,
+        support=support or [],
     )
 
 
@@ -50,13 +69,15 @@ def _session(*results: list[Any], exists: bool = True) -> Any:
         return SimpleNamespace(all=lambda: batch)
 
     return SimpleNamespace(
-        scalars=AsyncMock(side_effect=scalars), scalar=AsyncMock(return_value=uuid4() if exists else None),
+        scalars=AsyncMock(side_effect=scalars),
+        scalar=AsyncMock(return_value=uuid4() if exists else None),
     )
 
 
 @pytest.fixture(autouse=True)
 def _entities(monkeypatch: pytest.MonkeyPatch) -> None:
     """Endpoint refs resolve to themselves."""
+
     async def refs(session: Any, ids: list[Any], **_k: Any) -> list[Any]:
         return [SimpleNamespace(requested_id=i, canonical_id=i) for i in ids]
 
@@ -69,7 +90,11 @@ async def test_owner_snapshot_without_support_is_listed_and_history_complete() -
     page = await rel._list_relationships_as_of(_session([], [row]), **KW)
     assert [str(item.id) for item in page.items] == [row.state["id"]]
     assert page.items[0].evidence == [] and page.canonical_history_available is True
-    assert page.next_cursor is None and page.knowledge_as_of == CUTOFF and page.unavailable_relationship_ids == []
+    assert (
+        page.next_cursor is None
+        and page.knowledge_as_of == CUTOFF
+        and page.unavailable_relationship_ids == []
+    )
 
 
 async def test_deleted_and_unknown_validity_snapshots_are_skipped() -> None:
@@ -77,7 +102,9 @@ async def test_deleted_and_unknown_validity_snapshots_are_skipped() -> None:
     rows = [_history(_state(), deleted=True), _history(_state(valid=False))]
     page = await rel._list_relationships_as_of(_session([], rows), **KW)
     assert page.items == [] and page.unavailable_relationship_ids == []
-    page = await rel._list_relationships_as_of(_session([], [_history(_state(valid=False))]), **{**KW, "include_unknown_validity": True})
+    page = await rel._list_relationships_as_of(
+        _session([], [_history(_state(valid=False))]), **{**KW, "include_unknown_validity": True}
+    )
     assert len(page.items) == 1
 
 
@@ -96,7 +123,9 @@ async def test_missing_snapshots_are_hints_and_break_coverage() -> None:
     """Relationships without any snapshot at the cutoff are listed (max 100) and mark history incomplete."""
     missing = [uuid4() for _ in range(3)]
     page = await rel._list_relationships_as_of(_session(missing, []), **KW)
-    assert page.unavailable_relationship_ids == missing and page.canonical_history_available is False
+    assert (
+        page.unavailable_relationship_ids == missing and page.canonical_history_available is False
+    )
 
 
 async def test_extra_row_produces_cursor_that_round_trips() -> None:
@@ -104,15 +133,23 @@ async def test_extra_row_produces_cursor_that_round_trips() -> None:
     rows = [_history(_state()) for _ in range(3)]
     page = await rel._list_relationships_as_of(_session([], rows), **KW)
     assert len(page.items) == 2 and page.next_cursor is not None
-    bound, position = json.loads(base64.b64decode(page.next_cursor + "=" * (-len(page.next_cursor) % 4), altchars=b"-_"))
+    bound, position = json.loads(
+        base64.b64decode(page.next_cursor + "=" * (-len(page.next_cursor) % 4), altchars=b"-_")
+    )
     assert bound == "fp" and position == encode_cursor(rows[1].recorded_at, rows[1].relationship_id)
-    again = await rel._list_relationships_as_of(_session([], []), **{**KW, "cursor": page.next_cursor})
+    again = await rel._list_relationships_as_of(
+        _session([], []), **{**KW, "cursor": page.next_cursor}
+    )
     assert again.items == []
 
 
 async def test_cursor_for_other_fingerprint_is_invalid() -> None:
     """A cursor bound to another fingerprint (or garbage) raises ValueError before the page query runs."""
-    cursor = base64.urlsafe_b64encode(json.dumps(["other", encode_cursor(CUTOFF, uuid4())]).encode()).decode().rstrip("=")
+    cursor = (
+        base64.urlsafe_b64encode(json.dumps(["other", encode_cursor(CUTOFF, uuid4())]).encode())
+        .decode()
+        .rstrip("=")
+    )
     for bad in (cursor, "!!!", "A" * 2000):
         session = _session([])
         with pytest.raises(ValueError, match="Invalid relationship history cursor"):
@@ -123,5 +160,7 @@ async def test_cursor_for_other_fingerprint_is_invalid() -> None:
 async def test_valid_at_filters_out_of_range_intervals() -> None:
     """Snapshots whose validity interval excludes ``valid_at`` are dropped."""
     row = _history(_state())
-    page = await rel._list_relationships_as_of(_session([], [row]), **{**KW, "valid_at": datetime(2027, 1, 1, tzinfo=UTC)})
+    page = await rel._list_relationships_as_of(
+        _session([], [row]), **{**KW, "valid_at": datetime(2027, 1, 1, tzinfo=UTC)}
+    )
     assert page.items == []

@@ -121,7 +121,9 @@ class ApprovalRead(BaseModel):
     destination_id: str
     destination_revision: str
     status: Literal["pending", "approved", "denied", "expired", "cancelled", "requires_review"]
-    effect_status: Literal["reserved", "in_flight", "succeeded", "failed", "requires_review"] | None = None
+    effect_status: (
+        Literal["reserved", "in_flight", "succeeded", "failed", "requires_review"] | None
+    ) = None
     result_reference: str | None = None
     created_at: datetime
     expires_at: datetime

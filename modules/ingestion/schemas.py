@@ -22,6 +22,7 @@ def _require_aware_utc(value: datetime, field: str) -> datetime:
 
 class IngestionRecord(BaseModel):
     """Validate one provider record and require a timezone-aware observation time."""
+
     model_config = ConfigDict(extra="forbid")
 
     provider_id: str = Field(min_length=1, max_length=512)
@@ -41,13 +42,17 @@ class IngestionRecord(BaseModel):
     @classmethod
     def bounded_record_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
         """Enforce the existing 64 KiB JSON metadata bound for every provider record."""
-        encoded = json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+        encoded = json.dumps(
+            value, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+        ).encode("utf-8")
         if len(encoded) > 65_536:
             raise ValueError("record metadata exceeds 64 KiB")
         return value
 
+
 class ReceiveBatch(BaseModel):
     """Validate a source-generation-fenced batch with bounded records and cursors."""
+
     model_config = ConfigDict(extra="forbid")
 
     source_id: UUID
@@ -69,9 +74,15 @@ class ReceiveBatch(BaseModel):
     @model_validator(mode="after")
     def limit_serialized_payload(self) -> "ReceiveBatch":
         """Reject oversized batches and untrusted attempts to supply provider proof."""
-        if any({"provider_record", "world_data", "_owner_telegram_proof", "_native_telegram"} & record.metadata.keys() for record in self.records):
+        if any(
+            {"provider_record", "world_data", "_owner_telegram_proof", "_native_telegram"}
+            & record.metadata.keys()
+            for record in self.records
+        ):
             raise ValueError("provider_record metadata is reserved for trusted normalization")
-        payload = json.dumps(self.model_dump(mode="json"), separators=(",", ":"), ensure_ascii=False)
+        payload = json.dumps(
+            self.model_dump(mode="json"), separators=(",", ":"), ensure_ascii=False
+        )
         if len(payload.encode("utf-8")) > 10 * 1024 * 1024:
             raise ValueError("Batch payload exceeds 10 MiB")
         return self
@@ -79,6 +90,7 @@ class ReceiveBatch(BaseModel):
 
 class Receipt(BaseModel):
     """Report workspace-bound durable batch/run identity; the DTO itself grants no authority."""
+
     workspace_id: UUID
     batch_id: UUID
     run_id: UUID
@@ -92,6 +104,7 @@ class ChatAttachmentRead(BaseModel):
     ``too_large`` when the version exceeds the whole-document selection bound, and ``failed``
     otherwise. ``local_only`` mirrors the owning source: such content never reaches a cloud model.
     """
+
     document_id: UUID
     source_id: UUID
     title: str
@@ -103,12 +116,14 @@ class ChatAttachmentRead(BaseModel):
 
 class RetryRunRequest(BaseModel):
     """Select the failed ingestion stage to retry."""
+
     model_config = ConfigDict(extra="forbid")
     stage_key: str = Field(min_length=1, max_length=128)
 
 
 class CrawlReceipt(BaseModel):
     """Return the workspace and durable crawl run identity without expanding collector authority."""
+
     workspace_id: UUID
     run_id: UUID
 
@@ -119,6 +134,7 @@ class EventDelivery(BaseModel):
     dispatched_at is nullable for an undispatched row. A detached queued status/timestamp
     is only a captured claim, never permission to mutate a later dispatch attempt.
     """
+
     workspace_id: UUID
     actor_user_id: int = Field(gt=0)
     membership_revision: int = Field(gt=0)
@@ -133,6 +149,7 @@ class EventDelivery(BaseModel):
 
 class CollectorCredentialRead(BaseModel):
     """Return a one-time credential token with its authorized workspace and Source identity."""
+
     workspace_id: UUID
     source_id: UUID
     token: str
@@ -140,6 +157,7 @@ class CollectorCredentialRead(BaseModel):
 
 class StageRead(BaseModel):
     """Expose one ingestion stage's retry state and processing counts."""
+
     stage_key: str
     status: Literal["pending", "queued", "running", "retrying", "succeeded", "failed"]
     attempts: int
@@ -156,6 +174,7 @@ class StageRead(BaseModel):
 
 class RunRead(BaseModel):
     """Serialize one authorized workspace run and owner-scoped stage counts; never implicit admission."""
+
     workspace_id: UUID
     run_id: UUID
     source_id: UUID
@@ -170,6 +189,7 @@ class RunRead(BaseModel):
 
 class SourceIngestionRead(BaseModel):
     """Return workspace-bound current/history runs with a principal/revision-bound pagination cursor."""
+
     workspace_id: UUID
     current_run: RunRead | None
     items: list[RunRead]
@@ -182,6 +202,7 @@ class ConnectorCollectionLease(BaseModel):
     A detached lease is not authority: readers recheck current admission, Source,
     connector revision, native credential and actual durable state token before effects.
     """
+
     workspace_id: UUID
     actor_user_id: int = Field(gt=0)
     membership_revision: int = Field(gt=0)
@@ -211,6 +232,7 @@ class ConnectorCollectionLease(BaseModel):
 
 class TelegramDeliveryProof(BaseModel):
     """Bind one accepted Telegram update to its native bot and stream epoch."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     bot_id: str = Field(pattern=r"^[0-9]{1,20}$")
     epoch: int = Field(ge=1)
@@ -220,6 +242,7 @@ class TelegramDeliveryProof(BaseModel):
 
 class TelegramPageDelivery(BaseModel):
     """Retain a bounded delivery hash ledger for exact Telegram replay checks."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     update_id: int = Field(ge=0, le=2**63 - 1)
     raw_update_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -227,6 +250,7 @@ class TelegramPageDelivery(BaseModel):
 
 class TelegramRawDelivery(BaseModel):
     """Carry one bounded Bot API update and its deterministic canonical digest."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     update_id: int = Field(ge=0, le=2**63 - 1)
     raw_update_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -235,14 +259,20 @@ class TelegramRawDelivery(BaseModel):
     @model_validator(mode="after")
     def validate_digest_and_bound(self) -> "TelegramRawDelivery":
         """Bind digest to canonical bounded bytes before owner classification."""
-        encoded = json.dumps(self.update, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        if len(encoded) > MAX_NATIVE_COLLECTION_BYTES or sha256(encoded).hexdigest() != self.raw_update_sha256:
+        encoded = json.dumps(
+            self.update, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+        if (
+            len(encoded) > MAX_NATIVE_COLLECTION_BYTES
+            or sha256(encoded).hexdigest() != self.raw_update_sha256
+        ):
             raise ValueError("Telegram update digest or size is invalid")
         return self
 
 
 class TelegramCursor(BaseModel):
     """Persist Telegram stream epoch and the last durable delivery ledger."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     kind: Literal["telegram_getupdates_v1"]
     bot_id: str = Field(pattern=r"^[0-9]{1,20}$")
@@ -275,6 +305,7 @@ class TelegramCursor(BaseModel):
 
 class TelegramProbeClassification(BaseModel):
     """Describe the owner-classified cursor transition and replay set."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     epoch: int | None = Field(default=None, ge=1)
     delivery_proofs: tuple[TelegramDeliveryProof, ...] = Field(max_length=100)
@@ -285,6 +316,7 @@ class TelegramProbeClassification(BaseModel):
 
 class NativeCollectionBatch(BaseModel):
     """Carry owner-reserved provider output and immutable provider-credential revision proof."""
+
     model_config = ConfigDict(extra="forbid")
     source_id: UUID
     source_generation: int = Field(ge=1)
@@ -321,7 +353,9 @@ class NativeCollectionBatch(BaseModel):
     @model_validator(mode="after")
     def bounded_native_payload(self) -> "NativeCollectionBatch":
         """Reject native transport payloads above the frozen 10 MiB bound."""
-        encoded = json.dumps(self.model_dump(mode="json"), separators=(",", ":"), ensure_ascii=False)
+        encoded = json.dumps(
+            self.model_dump(mode="json"), separators=(",", ":"), ensure_ascii=False
+        )
         if len(encoded.encode("utf-8")) > MAX_NATIVE_COLLECTION_BYTES:
             raise ValueError("Native collection payload exceeds 10 MiB")
         return self
@@ -329,6 +363,7 @@ class NativeCollectionBatch(BaseModel):
 
 class NativeCollectionReceipt(BaseModel):
     """Return scoped batch/run outcome and private cursor under the original actor/membership epoch."""
+
     workspace_id: UUID
     actor_user_id: int = Field(gt=0)
     membership_revision: int = Field(gt=0)
@@ -347,7 +382,9 @@ def _stream_conflict(cursor: TelegramCursor | None) -> TelegramProbeClassificati
     """Build the fail-closed ``telegram_stream_conflict`` classification that leaves the cursor unchanged."""
     return TelegramProbeClassification(
         epoch=cursor.epoch if cursor else None,
-        delivery_proofs=(), replay_update_ids=(), cursor_after=cursor,
+        delivery_proofs=(),
+        replay_update_ids=(),
+        cursor_after=cursor,
         conflict_code="telegram_stream_conflict",
     )
 
@@ -359,9 +396,12 @@ def _page_is_canonical(updates: tuple[TelegramRawDelivery, ...]) -> bool:
         return False
     for item in updates:
         update_id = item.update.get("update_id")
-        canonical = json.dumps(item.update, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        canonical = json.dumps(
+            item.update, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
         if (
-            isinstance(update_id, bool) or update_id != item.update_id
+            isinstance(update_id, bool)
+            or update_id != item.update_id
             or sha256(canonical).hexdigest() != item.raw_update_sha256
         ):
             return False
@@ -370,20 +410,33 @@ def _page_is_canonical(updates: tuple[TelegramRawDelivery, ...]) -> bool:
 
 def _page_ledger(items: list[TelegramRawDelivery]) -> list[TelegramPageDelivery]:
     """Convert raw deliveries into retained ledger entries (id + digest)."""
-    return [TelegramPageDelivery(update_id=item.update_id, raw_update_sha256=item.raw_update_sha256) for item in items]
+    return [
+        TelegramPageDelivery(update_id=item.update_id, raw_update_sha256=item.raw_update_sha256)
+        for item in items
+    ]
 
 
 def _delivery_proofs(
-    updates: tuple[TelegramRawDelivery, ...], bot_id: str, epoch: int,
+    updates: tuple[TelegramRawDelivery, ...],
+    bot_id: str,
+    epoch: int,
 ) -> tuple[TelegramDeliveryProof, ...]:
     """Bind every page update to the verified bot and the stream epoch."""
-    return tuple(TelegramDeliveryProof(
-        bot_id=bot_id, epoch=epoch, update_id=item.update_id, raw_update_sha256=item.raw_update_sha256,
-    ) for item in updates)
+    return tuple(
+        TelegramDeliveryProof(
+            bot_id=bot_id,
+            epoch=epoch,
+            update_id=item.update_id,
+            raw_update_sha256=item.raw_update_sha256,
+        )
+        for item in updates
+    )
 
 
 def _advance_cursor(
-    cursor: TelegramCursor, updates: tuple[TelegramRawDelivery, ...], received_at: datetime,
+    cursor: TelegramCursor,
+    updates: tuple[TelegramRawDelivery, ...],
+    received_at: datetime,
 ) -> TelegramProbeClassification | tuple[int, list[int], list[TelegramPageDelivery]]:
     """Classify a page against an existing cursor.
 
@@ -394,28 +447,47 @@ def _advance_cursor(
     page_ids = [item.update_id for item in updates]
     retained = {item.update_id: item.raw_update_sha256 for item in cursor.last_page_deliveries}
     known = [item for item in updates if retained.get(item.update_id) == item.raw_update_sha256]
-    changed_known = [item for item in updates if item.update_id in retained and retained[item.update_id] != item.raw_update_sha256]
+    changed_known = [
+        item
+        for item in updates
+        if item.update_id in retained and retained[item.update_id] != item.raw_update_sha256
+    ]
     unknown = [item for item in updates if item.update_id not in retained]
     replay_ids = [item.update_id for item in known]
     age = received_at - cursor.last_nonduplicate_received_at
     fresh = timedelta(0) <= age < timedelta(hours=24)
-    has_mixed_unknown_lower = bool(known and any(item.update_id <= cursor.last_update_id for item in unknown))
+    has_mixed_unknown_lower = bool(
+        known and any(item.update_id <= cursor.last_update_id for item in unknown)
+    )
     if has_mixed_unknown_lower or (known and changed_known):
         return _stream_conflict(cursor)
     if not unknown and not changed_known and fresh:
         return TelegramProbeClassification(
             epoch=cursor.epoch,
             delivery_proofs=_delivery_proofs(updates, cursor.bot_id, cursor.epoch),
-            replay_update_ids=tuple(page_ids), cursor_after=cursor,
+            replay_update_ids=tuple(page_ids),
+            cursor_after=cursor,
         )
-    all_new_higher = bool(unknown) and all(item.update_id > cursor.last_update_id for item in unknown) and not changed_known
+    all_new_higher = (
+        bool(unknown)
+        and all(item.update_id > cursor.last_update_id for item in unknown)
+        and not changed_known
+    )
     if all_new_higher and fresh:
-        return cursor.epoch, replay_ids, [*cursor.last_page_deliveries, *_page_ledger(unknown)][-100:]
+        return (
+            cursor.epoch,
+            replay_ids,
+            [*cursor.last_page_deliveries, *_page_ledger(unknown)][-100:],
+        )
     if known and unknown and fresh:
         # Retained known deliveries may prefix a newly delivered suffix; only that suffix is new.
         if any(item.update_id <= cursor.last_update_id for item in unknown):
             return _stream_conflict(cursor)
-        return cursor.epoch, replay_ids, [*cursor.last_page_deliveries, *_page_ledger(unknown)][-100:]
+        return (
+            cursor.epoch,
+            replay_ids,
+            [*cursor.last_page_deliveries, *_page_ledger(unknown)][-100:],
+        )
     # Reset after retention expiry or changed/older IDs starts a new local ordinal epoch.
     return cursor.epoch + 1, [], _page_ledger(list(updates))
 
@@ -442,7 +514,9 @@ def classify_telegram_probe(
     if not updates:
         return TelegramProbeClassification(
             epoch=cursor.epoch if cursor else None,
-            delivery_proofs=(), replay_update_ids=(), cursor_after=cursor,
+            delivery_proofs=(),
+            replay_update_ids=(),
+            cursor_after=cursor,
         )
     if not _page_is_canonical(updates):
         return _stream_conflict(cursor)
@@ -457,14 +531,18 @@ def classify_telegram_probe(
             return advanced
         epoch, replay_ids, ledger = advanced
     cursor_after = TelegramCursor(
-        kind="telegram_getupdates_v1", bot_id=verified_bot_id, epoch=epoch,
+        kind="telegram_getupdates_v1",
+        bot_id=verified_bot_id,
+        epoch=epoch,
         last_update_id=ledger[-1].update_id,
         last_nonduplicate_received_at=received_at,
         last_page_deliveries=ledger,
     )
     return TelegramProbeClassification(
-        epoch=epoch, delivery_proofs=_delivery_proofs(updates, verified_bot_id, epoch),
-        replay_update_ids=tuple(replay_ids), cursor_after=cursor_after,
+        epoch=epoch,
+        delivery_proofs=_delivery_proofs(updates, verified_bot_id, epoch),
+        replay_update_ids=tuple(replay_ids),
+        cursor_after=cursor_after,
     )
 
 

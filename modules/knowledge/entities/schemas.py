@@ -6,8 +6,21 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 EntityType = Literal[
-    "person", "organization", "company", "project", "repository", "place", "country",
-    "product", "topic", "technology", "asset", "device", "website", "event_subject", "other",
+    "person",
+    "organization",
+    "company",
+    "project",
+    "repository",
+    "place",
+    "country",
+    "product",
+    "topic",
+    "technology",
+    "asset",
+    "device",
+    "website",
+    "event_subject",
+    "other",
 ]
 
 
@@ -18,7 +31,9 @@ def canonicalize_name(value: str) -> str:
 
 def validate_metadata(value: dict[str, Any]) -> dict[str, Any]:
     """Reject non-JSON values and metadata whose compact UTF-8 form exceeds 64 KiB."""
-    encoded = json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+    encoded = json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
     if len(encoded) > 65_536:
         raise ValueError("metadata exceeds 64 KiB")
     return value
@@ -26,6 +41,7 @@ def validate_metadata(value: dict[str, Any]) -> dict[str, Any]:
 
 class EntityCreate(BaseModel):
     """Validate owner-created entity fields, aliases, metadata, and audit reason."""
+
     model_config = ConfigDict(extra="forbid")
     type: EntityType
     name: str = Field(min_length=1, max_length=300)
@@ -63,6 +79,7 @@ class EntityCreate(BaseModel):
 
 class EntityPatch(BaseModel):
     """Validate an optimistic entity update with its expected revision and reason."""
+
     model_config = ConfigDict(extra="forbid")
     expected_revision: int = Field(ge=1)
     reason: str = Field(default="owner_update", min_length=1, max_length=300)
@@ -90,6 +107,7 @@ class EntityPatch(BaseModel):
 
 class AliasCreate(BaseModel):
     """Validate one owner-confirmed alias and its correction reason."""
+
     model_config = ConfigDict(extra="forbid")
     alias: str = Field(min_length=1, max_length=300)
     confirmed: bool = True
@@ -107,6 +125,7 @@ class AliasCreate(BaseModel):
 
 class EntityAliasRead(BaseModel):
     """Serialize an alias with confirmation, provenance, and confidence fields."""
+
     id: UUID
     entity_id: UUID
     alias: str
@@ -119,6 +138,7 @@ class EntityAliasRead(BaseModel):
 
 class EntityRead(BaseModel):
     """Serialize canonical entity state, revision, field origins, and aliases."""
+
     id: UUID
     type: EntityType
     name: str | None
@@ -137,12 +157,14 @@ class EntityRead(BaseModel):
 
 class EntityPage(BaseModel):
     """Return a bounded entity page and its optional continuation cursor."""
+
     items: list[EntityRead]
     next_cursor: str | None
 
 
 class EntityExportAliasEvidence(BaseModel):
     """Identify one exact alias support membership and its eligible source generation."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     membership_id: UUID
     source_id: UUID
@@ -152,6 +174,7 @@ class EntityExportAliasEvidence(BaseModel):
 
 class EntityExportAlias(BaseModel):
     """Expose one canonical alias and exact eligible support, without creator-source metadata."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     id: UUID
     alias: str
@@ -164,6 +187,7 @@ class EntityExportAlias(BaseModel):
 
 class EntityExportEvidence(BaseModel):
     """Expose stable citation identity for one retained entity support membership."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     id: UUID
     source_id: UUID
@@ -178,6 +202,7 @@ class EntityExportEvidence(BaseModel):
 
 class EntitySourceExportFence(BaseModel):
     """Capture one public source generation used by the entity's citation references."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     source_id: UUID
     generation: int = Field(ge=1)
@@ -185,6 +210,7 @@ class EntitySourceExportFence(BaseModel):
 
 class EntityExportRead(BaseModel):
     """Serialize allowlisted canonical entity facts and exact retained provenance."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     record_kind: Literal["entity"] = "entity"
     id: UUID
@@ -205,6 +231,7 @@ class EntityExportRead(BaseModel):
 
 class EntityExportFence(BaseModel):
     """Bind a canonical entity page item to its live revision and support identities."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     id: UUID
     created_at: datetime
@@ -219,6 +246,7 @@ class EntityExportFence(BaseModel):
 
 class EntityExportPage(BaseModel):
     """Return one bounded canonical entity export page and its validation fences."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     owner_id: int = Field(ge=1)
     record_kind: Literal["entities"]
@@ -235,6 +263,7 @@ class EntityExportPage(BaseModel):
 
 class EntityExportFenceValidation(BaseModel):
     """Report whether a captured entity count, revision, and citation set remain current."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     valid: bool
     reason: Literal["valid", "owner_unavailable", "snapshot_count_changed", "record_changed"]
@@ -243,6 +272,7 @@ class EntityExportFenceValidation(BaseModel):
 
 class EntityExtractionStatus(BaseModel):
     """Expose extraction progress and any facts or candidates awaiting review."""
+
     document_version_id: UUID
     status: Literal["pending", "running", "succeeded", "blocked", "failed"]
     attempt: int
@@ -255,6 +285,7 @@ class EntityExtractionStatus(BaseModel):
 
 class EntityReferenceRead(BaseModel):
     """Represent a requested entity ID resolved to its current canonical record."""
+
     requested_id: UUID
     canonical_id: UUID
     revision: int
@@ -264,6 +295,7 @@ class EntityReferenceRead(BaseModel):
 
 class EntityMembershipReferenceRead(BaseModel):
     """Identify an evidence membership and its document chunk and timestamps."""
+
     id: UUID
     entity_id: UUID
     document_version_id: UUID
@@ -275,6 +307,7 @@ class EntityMembershipReferenceRead(BaseModel):
 
 class VersionMembershipReference(BaseModel):
     """Expose a bounded current-version membership key, canonical entity revision, chunk, and observation."""
+
     membership_id: UUID
     entity_id: UUID
     entity_type: EntityType
@@ -286,6 +319,7 @@ class VersionMembershipReference(BaseModel):
 
 class EntityEvidenceRead(BaseModel):
     """Serialize evidence with version snapshot metadata and its source details."""
+
     id: UUID
     entity_id: UUID
     document_id: UUID
@@ -304,12 +338,14 @@ class EntityEvidenceRead(BaseModel):
 
 class EntityEvidencePage(BaseModel):
     """Return a bounded entity-evidence page and optional continuation cursor."""
+
     items: list[EntityEvidenceRead]
     next_cursor: str | None
 
 
 class EntityReviewEvidence(BaseModel):
     """Provide provenance and excerpt fields used to review extracted evidence."""
+
     document_id: UUID
     document_version_id: UUID
     version_number: int
@@ -325,6 +361,7 @@ class EntityReviewEvidence(BaseModel):
 
 class EntityReviewEndpoint(BaseModel):
     """Describe whether a review candidate endpoint is assigned, absent, or ambiguous."""
+
     state: Literal["assigned", "unassigned", "ambiguous"]
     entity_id: UUID | None = None
     entity_name: str | None = None
@@ -334,6 +371,7 @@ class EntityReviewEndpoint(BaseModel):
 
 class EntityReviewCandidate(BaseModel):
     """Serialize an entity or relationship candidate with snapshot and evidence context."""
+
     kind: Literal["entity", "relationship"] = "entity"
     candidate_id: UUID | None = None
     work_id: UUID
@@ -360,6 +398,7 @@ class EntityReviewCandidate(BaseModel):
 
 class EntityReviewAssignmentRequest(BaseModel):
     """Fence an owner assignment against result, source, owner, and target revisions."""
+
     model_config = ConfigDict(extra="forbid")
     result_id: UUID
     snapshot_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
@@ -373,6 +412,7 @@ class EntityReviewAssignmentRequest(BaseModel):
 
 class EntityReviewAssignmentResult(BaseModel):
     """Report the assigned candidate, created memberships, and resulting revision."""
+
     candidate_id: UUID
     target_entity_id: UUID
     membership_ids: list[UUID]
@@ -381,6 +421,7 @@ class EntityReviewAssignmentResult(BaseModel):
 
 class EntityRelationshipReviewRequest(BaseModel):
     """Fence relationship review against the extraction snapshot and generations."""
+
     model_config = ConfigDict(extra="forbid")
     result_id: UUID
     snapshot_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
@@ -391,18 +432,21 @@ class EntityRelationshipReviewRequest(BaseModel):
 
 class EntityRelationshipReviewResult(BaseModel):
     """Report the candidate and relationship created by owner review."""
+
     candidate_id: UUID
     relationship_id: UUID
 
 
 class EntityReviewPage(BaseModel):
     """Return review candidates with an optional continuation cursor."""
+
     items: list[EntityReviewCandidate]
     next_cursor: str | None
 
 
 class EntityMergeRequest(BaseModel):
     """Validate merge target and both entity revisions before correction."""
+
     model_config = ConfigDict(extra="forbid")
     into_id: UUID
     expected_revision: int = Field(ge=1)
@@ -413,6 +457,7 @@ class EntityMergeRequest(BaseModel):
 
 class EntitySplitRequest(BaseModel):
     """Validate evidence memberships to move and the replacement entity payload."""
+
     model_config = ConfigDict(extra="forbid")
     evidence_ids: list[UUID] = Field(min_length=1, max_length=200)
     expected_revision: int = Field(ge=1)
@@ -431,6 +476,7 @@ class EntitySplitRequest(BaseModel):
 
 class EntitySuppressionRequest(BaseModel):
     """Validate evidence memberships to suppress and the expected entity revision."""
+
     model_config = ConfigDict(extra="forbid")
     evidence_ids: list[UUID] = Field(min_length=1, max_length=200)
     expected_revision: int = Field(ge=1)
@@ -448,6 +494,7 @@ class EntitySuppressionRequest(BaseModel):
 
 class EntityCorrectionResult(BaseModel):
     """Report correction outcome, canonical target, replacements, and conflicts."""
+
     operation: Literal["merge", "split", "suppress"]
     entity_id: UUID
     canonical_entity_id: UUID
@@ -458,6 +505,7 @@ class EntityCorrectionResult(BaseModel):
 
 class EntityCorrectionConflict(BaseModel):
     """Identify a correction conflict and the involved entity, evidence, and links."""
+
     code: str
     message: str
     entity_ids: list[UUID] = Field(default_factory=list)
@@ -467,6 +515,7 @@ class EntityCorrectionConflict(BaseModel):
 
 class EntityCorrectionPreview(BaseModel):
     """Summarize merge or split scope and conflicts without applying the change."""
+
     operation: Literal["merge", "split"]
     entity_ids: list[UUID]
     membership_ids: list[UUID]
@@ -477,6 +526,7 @@ class EntityCorrectionPreview(BaseModel):
 
 class EvidenceRef(BaseModel):
     """Reference a versioned chunk and optional endpoint memberships as evidence."""
+
     model_config = ConfigDict(extra="forbid")
     document_version_id: UUID
     chunk_id: UUID
@@ -487,6 +537,7 @@ class EvidenceRef(BaseModel):
 
 class EntityTemporalNodeSeed(BaseModel):
     """Detached current field proof over exactly selected source-local memberships."""
+
     entity_id: UUID
     revision: int
     type: str
@@ -503,6 +554,7 @@ class EntityTemporalNodeSeed(BaseModel):
 
 class EntityHistoryItem(BaseModel):
     """Expose identifier-only correction audit without retaining reasons or deleted text."""
+
     id: UUID
     recorded_at: datetime
     operation: str
@@ -512,6 +564,7 @@ class EntityHistoryItem(BaseModel):
 
 class EntityHistoryPage(BaseModel):
     """Page owner edits separately from currently retained membership observations."""
+
     items: list[EntityHistoryItem]
     next_cursor: str | None
     historical_values_available: bool = False

@@ -22,7 +22,10 @@ pytestmark = pytest.mark.skipif(
 
 
 async def _setup(
-    client: AsyncClient, post: Callable[..., Awaitable[Response]], *, token: str | None,
+    client: AsyncClient,
+    post: Callable[..., Awaitable[Response]],
+    *,
+    token: str | None,
     password: str = OWNER_PASSWORD,
 ) -> Response:
     origin = os.getenv("TEST_PUBLIC_ORIGIN", "http://localhost:3300")
@@ -58,7 +61,8 @@ async def fresh_instance(committed_engine: AsyncEngine) -> None:
 
 
 async def test_fresh_setup_requires_token_creates_one_owner_and_rejects_a_second_setup(
-    fresh_instance: None, committed_engine: AsyncEngine,
+    fresh_instance: None,
+    committed_engine: AsyncEngine,
     post_throttled: Callable[..., Awaitable[Response]],
 ) -> None:
     base_url = os.getenv("API_URL", "http://localhost:38000")
@@ -67,7 +71,9 @@ async def test_fresh_setup_requires_token_creates_one_owner_and_rejects_a_second
 
         # Token gate: neither a missing nor a wrong token may create the owner.
         assert (await _setup(client, post_throttled, token=None)).status_code == 403
-        assert (await _setup(client, post_throttled, token="not-the-setup-token")).status_code == 403
+        assert (
+            await _setup(client, post_throttled, token="not-the-setup-token")
+        ).status_code == 403
         assert (await client.get("/api/v1/auth/setup-status")).json() == {"setupRequired": True}
         async with committed_engine.connect() as connection:
             assert await connection.scalar(text("SELECT count(*) FROM owner")) == 0
@@ -82,7 +88,9 @@ async def test_fresh_setup_requires_token_creates_one_owner_and_rejects_a_second
 
         # A second setup, even with the valid token and a different password, is rejected
         # and must not replace the owner credential.
-        second = await _setup(client, post_throttled, token=SETUP_TOKEN, password="a-different-owner-password-99")
+        second = await _setup(
+            client, post_throttled, token=SETUP_TOKEN, password="a-different-owner-password-99"
+        )
         assert second.status_code == 409
         async with committed_engine.connect() as connection:
             after = (await connection.execute(text("SELECT id, password_hash FROM owner"))).all()
@@ -90,7 +98,8 @@ async def test_fresh_setup_requires_token_creates_one_owner_and_rejects_a_second
 
 
 async def test_onboarding_progress_is_ordered_revisioned_and_resumable(
-    fresh_instance: None, ready_owner_client: AsyncClient,
+    fresh_instance: None,
+    ready_owner_client: AsyncClient,
     post_throttled: Callable[..., Awaitable[Response]],
 ) -> None:
     client = ready_owner_client
@@ -115,7 +124,9 @@ async def test_onboarding_progress_is_ordered_revisioned_and_resumable(
         assert revision > start_revision
 
     # A stale revision (a second tab) is rejected rather than overwriting progress.
-    stale = await client.put("/api/v1/settings/onboarding", json=update(start_revision, "sample_or_import"))
+    stale = await client.put(
+        "/api/v1/settings/onboarding", json=update(start_revision, "sample_or_import")
+    )
     assert stale.status_code == 409
 
     choice = await client.put(
@@ -130,7 +141,9 @@ async def test_onboarding_progress_is_ordered_revisioned_and_resumable(
     async with AsyncClient(base_url=base_url, timeout=30) as resumed:
         csrf = (await resumed.get("/api/v1/auth/csrf")).json()["csrfToken"]
         login = await post_throttled(
-            resumed, "/api/v1/auth/login", headers={"Origin": origin, "X-CSRF-Token": csrf},
+            resumed,
+            "/api/v1/auth/login",
+            headers={"Origin": origin, "X-CSRF-Token": csrf},
             json={"password": OWNER_PASSWORD},
         )
         login.raise_for_status()
@@ -140,7 +153,9 @@ async def test_onboarding_progress_is_ordered_revisioned_and_resumable(
         assert persisted["data_choice"] == "sample"
         assert persisted["configuration_revision"] == revision
 
-        indexing = await resumed.put("/api/v1/settings/onboarding", json=update(revision, "indexing"))
+        indexing = await resumed.put(
+            "/api/v1/settings/onboarding", json=update(revision, "indexing")
+        )
         assert indexing.status_code == 200
         done = await resumed.put(
             "/api/v1/settings/onboarding",

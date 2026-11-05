@@ -24,8 +24,15 @@ from tests.unit.modules.tools.test_browser_scope import (
 def _event(job: SimpleNamespace, event: str, **over: Any) -> Any:
     """Build a control event bound to ``job``'s operation and claim."""
     values: dict[str, Any] = {
-        "event": event, "operation_id": job.operation_id, "claim_generation": 1, "service_instance_id": "svc-1",
-        "request_ordinal": 0, "target_url": None, "actual_pages": 0, "actual_bytes": 0, "result_hash": None,
+        "event": event,
+        "operation_id": job.operation_id,
+        "claim_generation": 1,
+        "service_instance_id": "svc-1",
+        "request_ordinal": 0,
+        "target_url": None,
+        "actual_pages": 0,
+        "actual_bytes": 0,
+        "result_hash": None,
     }
     values.update(over)
     return browser_control.BrowserControlEvent(**values)
@@ -34,8 +41,11 @@ def _event(job: SimpleNamespace, event: str, **over: Any) -> Any:
 def _guard(job: SimpleNamespace, **over: Any) -> SimpleNamespace:
     """Build a remote guard matching the job's instance and nonce."""
     values: dict[str, Any] = {
-        "state": "active", "service_instance_id": "svc-1", "remote_job_id": job.id,
-        "nonce_hash": hashlib.sha256(("ab" * 32).encode("ascii")).hexdigest(), "expires_at": datetime.now(UTC) + timedelta(seconds=30),
+        "state": "active",
+        "service_instance_id": "svc-1",
+        "remote_job_id": job.id,
+        "nonce_hash": hashlib.sha256(("ab" * 32).encode("ascii")).hexdigest(),
+        "expires_at": datetime.now(UTC) + timedelta(seconds=30),
     }
     values.update(over)
     return SimpleNamespace(**values)
@@ -48,16 +58,32 @@ def seams(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     grant = SimpleNamespace(origin="https://example.com", path_prefix="/")
     monkeypatch.setattr(browser_control, "_browser_network_verified", lambda: True)
     monkeypatch.setattr(
-        browser_control, "_current_authority",
-        AsyncMock(side_effect=lambda *a, **k: (state["valid"], grant if state["valid"] else None, SimpleNamespace_scope(), FENCE)),
+        browser_control,
+        "_current_authority",
+        AsyncMock(
+            side_effect=lambda *a, **k: (
+                state["valid"],
+                grant if state["valid"] else None,
+                SimpleNamespace_scope(),
+                FENCE,
+            )
+        ),
     )
-    monkeypatch.setattr(browser_control, "get_remote_heavy_guard", AsyncMock(side_effect=lambda *a, **k: state["guard"]))
+    monkeypatch.setattr(
+        browser_control,
+        "get_remote_heavy_guard",
+        AsyncMock(side_effect=lambda *a, **k: state["guard"]),
+    )
     monkeypatch.setattr(browser_control, "cleanup_proof_after_ack", lambda *a: "proof")
     monkeypatch.setattr(
-        browser_control, "clear_remote_heavy_in_uow", AsyncMock(side_effect=lambda *a: state["events"].append("clear")),
+        browser_control,
+        "clear_remote_heavy_in_uow",
+        AsyncMock(side_effect=lambda *a: state["events"].append("clear")),
     )
     monkeypatch.setattr(
-        browser_control, "commit_with_replay", AsyncMock(side_effect=lambda *a, **k: state["events"].append("commit")),
+        browser_control,
+        "commit_with_replay",
+        AsyncMock(side_effect=lambda *a, **k: state["events"].append("commit")),
     )
     return state
 
@@ -66,7 +92,11 @@ async def _post(job: SimpleNamespace, event: Any) -> Any:
     """Deliver ``event`` through the endpoint with a matching service credential."""
     request, _session, token = _control_request(job)
     return await browser_control.browser_control_event(
-        job.id, event, request, authorization="Bearer svc", job_token=token,
+        job.id,
+        event,
+        request,
+        authorization="Bearer svc",
+        job_token=token,
     )
 
 
@@ -76,16 +106,25 @@ async def test_authorize_grants_next_ordinal(seams: dict[str, Any]) -> None:
     job = _control_job()
     job.status, job.service_instance_id = "running", "svc-1"
     seams["guard"] = _guard(job)
-    out = await _post(job, _event(job, "authorize", request_ordinal=1, target_url="https://example.com/a"))
+    out = await _post(
+        job, _event(job, "authorize", request_ordinal=1, target_url="https://example.com/a")
+    )
     assert out == {"allowed": True, "request_ordinal": 1} and job.request_ordinal == 1
     assert seams["events"] == ["commit"]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("override", [
-    {"request_ordinal": 2}, {"target_url": "https://evil.example/"}, {"target_url": None},
-])
-async def test_authorize_denies_out_of_sequence_or_scope(seams: dict[str, Any], override: dict[str, Any]) -> None:
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"request_ordinal": 2},
+        {"target_url": "https://evil.example/"},
+        {"target_url": None},
+    ],
+)
+async def test_authorize_denies_out_of_sequence_or_scope(
+    seams: dict[str, Any], override: dict[str, Any]
+) -> None:
     """A wrong ordinal or target is 403 and commits nothing."""
     job = _control_job()
     job.status, job.service_instance_id = "running", "svc-1"
@@ -103,20 +142,31 @@ async def test_authorize_with_revoked_authority_fails_job(seams: dict[str, Any])
     job.status, job.service_instance_id = "running", "svc-1"
     seams["guard"], seams["valid"] = _guard(job), False
     with pytest.raises(HTTPException) as caught:
-        await _post(job, _event(job, "authorize", request_ordinal=1, target_url="https://example.com/a"))
-    assert caught.value.status_code == 403 and (job.status, job.error_code) == ("failed", "authority_revoked")
+        await _post(
+            job, _event(job, "authorize", request_ordinal=1, target_url="https://example.com/a")
+        )
+    assert caught.value.status_code == 403 and (job.status, job.error_code) == (
+        "failed",
+        "authority_revoked",
+    )
     assert seams["events"] == ["commit"]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("guard_override", [{"service_instance_id": "other"}, {"nonce_hash": "x"}, {"state": "cleared"}])
-async def test_guard_mismatch_is_conflict(seams: dict[str, Any], guard_override: dict[str, Any]) -> None:
+@pytest.mark.parametrize(
+    "guard_override", [{"service_instance_id": "other"}, {"nonce_hash": "x"}, {"state": "cleared"}]
+)
+async def test_guard_mismatch_is_conflict(
+    seams: dict[str, Any], guard_override: dict[str, Any]
+) -> None:
     """A guard for another instance/nonce (or a cleared one on authorize) is a 409."""
     job = _control_job()
     job.status, job.service_instance_id = "running", "svc-1"
     seams["guard"] = _guard(job, **guard_override)
     with pytest.raises(HTTPException) as caught:
-        await _post(job, _event(job, "authorize", request_ordinal=1, target_url="https://example.com/a"))
+        await _post(
+            job, _event(job, "authorize", request_ordinal=1, target_url="https://example.com/a")
+        )
     assert caught.value.status_code == 409
     assert caught.value.detail == "Browser remote guard is not active"
 
@@ -138,8 +188,14 @@ async def test_complete_records_totals_and_clears_guard(seams: dict[str, Any]) -
     job.status, job.service_instance_id = "running", "svc-1"
     job.max_pages, job.max_bytes = 3, 1000
     seams["guard"] = _guard(job)
-    out = await _post(job, _event(job, "complete", actual_pages=2, actual_bytes=500, result_hash="b" * 64))
-    assert out == {"allowed": True} and (job.actual_pages, job.actual_bytes, job.result_hash) == (2, 500, "b" * 64)
+    out = await _post(
+        job, _event(job, "complete", actual_pages=2, actual_bytes=500, result_hash="b" * 64)
+    )
+    assert out == {"allowed": True} and (job.actual_pages, job.actual_bytes, job.result_hash) == (
+        2,
+        500,
+        "b" * 64,
+    )
     assert job.status == "running" and seams["events"] == ["clear", "commit"]
 
 
@@ -151,12 +207,16 @@ async def test_complete_with_stale_totals_is_conflict(seams: dict[str, Any]) -> 
     job.max_pages, job.max_bytes = 3, 10
     seams["guard"] = _guard(job)
     with pytest.raises(HTTPException) as caught:
-        await _post(job, _event(job, "complete", actual_pages=1, actual_bytes=500, result_hash="b" * 64))
+        await _post(
+            job, _event(job, "complete", actual_pages=1, actual_bytes=500, result_hash="b" * 64)
+        )
     assert caught.value.status_code == 409 and seams["events"] == []
 
 
 @pytest.mark.asyncio
-async def test_complete_for_cancelled_job_clears_without_resurrecting(seams: dict[str, Any]) -> None:
+async def test_complete_for_cancelled_job_clears_without_resurrecting(
+    seams: dict[str, Any],
+) -> None:
     """A cancelled job answers cleaned and settles as cancelled instead of running."""
     job = _control_job()
     job.status, job.service_instance_id, job.cancel_requested = "running", "svc-1", True
@@ -173,7 +233,10 @@ async def test_cancelled_event_and_idempotent_cleared_guard(seams: dict[str, Any
     job.status, job.service_instance_id = "running", "svc-1"
     seams["guard"] = _guard(job, state="uncertain")
     assert await _post(job, _event(job, "cancelled")) == {"allowed": True}
-    assert (job.status, job.cancel_requested) == ("cancelled", True) and seams["events"] == ["clear", "commit"]
+    assert (job.status, job.cancel_requested) == ("cancelled", True) and seams["events"] == [
+        "clear",
+        "commit",
+    ]
     seams["events"].clear()
     seams["guard"] = _guard(job, state="cleared")
     assert await _post(job, _event(job, "cancelled")) == {"allowed": True, "cleaned": True}

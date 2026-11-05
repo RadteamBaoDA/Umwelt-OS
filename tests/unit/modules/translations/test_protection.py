@@ -18,8 +18,17 @@ def test_values_roundtrip_exactly():
         "and `code 42` (AAPL) $TSLA [link](https://b.io/p)"
     )
     masked, protected = p.protect_text(text)
-    literals = ("+12.5%", "1,250 USD", "2026-10-08", "[3]", "https://a.io/x?y=1", "`code 42`", "(AAPL)", "$TSLA",
-                "https://b.io/p")
+    literals = (
+        "+12.5%",
+        "1,250 USD",
+        "2026-10-08",
+        "[3]",
+        "https://a.io/x?y=1",
+        "`code 42`",
+        "(AAPL)",
+        "$TSLA",
+        "https://b.io/p",
+    )
     for literal in literals:
         assert literal in protected.values()
         assert literal not in masked

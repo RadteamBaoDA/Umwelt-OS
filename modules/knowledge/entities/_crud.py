@@ -62,7 +62,9 @@ async def publish_derived_field(
     if field_name not in {"name", "description"}:
         raise ValueError("Unsupported derived entity field")
     entity = await session.scalar(
-        select(Entity).where(Entity.id == entity_id, Entity.workspace_id == scope.workspace_id).with_for_update()
+        select(Entity)
+        .where(Entity.id == entity_id, Entity.workspace_id == scope.workspace_id)
+        .with_for_update()
     )
     if entity is None:
         raise LookupError("Entity is missing")
@@ -96,41 +98,59 @@ async def publish_derived_field(
         entity.description = value
         entity.description_origin = "derived"
     value_hash = sha256(value.encode("utf-8")).hexdigest()
-    await session.execute(delete(EntityFieldEvidence).where(
-        EntityFieldEvidence.entity_id == entity_id,
-        EntityFieldEvidence.field_name == field_name,
-        EntityFieldEvidence.value_hash != value_hash,
-    ))
-    support_exists = await session.scalar(select(EntityFieldEvidence.id).where(
-        EntityFieldEvidence.entity_id == entity_id,
-        EntityFieldEvidence.field_name == field_name,
-        EntityFieldEvidence.value_hash == value_hash,
-        EntityFieldEvidence.membership_id == membership_id,
-    ).limit(1))
+    await session.execute(
+        delete(EntityFieldEvidence).where(
+            EntityFieldEvidence.entity_id == entity_id,
+            EntityFieldEvidence.field_name == field_name,
+            EntityFieldEvidence.value_hash != value_hash,
+        )
+    )
+    support_exists = await session.scalar(
+        select(EntityFieldEvidence.id)
+        .where(
+            EntityFieldEvidence.entity_id == entity_id,
+            EntityFieldEvidence.field_name == field_name,
+            EntityFieldEvidence.value_hash == value_hash,
+            EntityFieldEvidence.membership_id == membership_id,
+        )
+        .limit(1)
+    )
     if support_exists is None:
-        session.add(EntityFieldEvidence(
-            entity_id=entity_id,
-            field_name=field_name,
-            value_hash=value_hash,
-            membership_id=membership_id,
-        ))
+        session.add(
+            EntityFieldEvidence(
+                entity_id=entity_id,
+                field_name=field_name,
+                value_hash=value_hash,
+                membership_id=membership_id,
+            )
+        )
         entity.revision += 1
     elif previous_value != value or previous_origin != "derived":
         entity.revision += 1
     await session.flush()
     if support_exists is None or previous_value != value or previous_origin != "derived":
         await _schedule_entity_change(
-            session, entity, [field_name, "support"], "derived", scope=scope,
+            session,
+            entity,
+            [field_name, "support"],
+            "derived",
+            scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
         )
     return True
 
 
 async def create_entity(
-    session: AsyncSession, payload: EntityCreate, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    payload: EntityCreate,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> EntityRead:
     """Create an owner-authored entity and aliases inside one admitted workspace transaction."""
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
     entity = Entity(
         workspace_id=scope.workspace_id,
         type=payload.type,
@@ -160,17 +180,28 @@ async def create_entity(
         await session.refresh(entity)
         result = _entity_read(entity, aliases)
         await record_owner_action(
-            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            operation="entity_create", reason=payload.reason,
-            affected_ids=[entity.id], revisions={str(entity.id): 1},
+            session,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            operation="entity_create",
+            reason=payload.reason,
+            affected_ids=[entity.id],
+            revisions={str(entity.id): 1},
         )
         await _schedule_entity_change(
-            session, entity, ["name", "description", "metadata", "aliases"], "owner",
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            entity,
+            ["name", "description", "metadata", "aliases"],
+            "owner",
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
         await commit_with_replay(
-            session, [make_graph_change(entity_id=entity.id, scope=scope)], scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+            session,
+            [make_graph_change(entity_id=entity.id, scope=scope)],
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
         )
     except IntegrityError:
         await session.rollback()
@@ -179,8 +210,12 @@ async def create_entity(
 
 
 async def update_entity(
-    session: AsyncSession, entity_id: UUID, payload: EntityPatch, *,
-    scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    entity_id: UUID,
+    payload: EntityPatch,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> EntityRead | None:
     """Apply a canonical owner-field update with revision and redirect fences.
 
@@ -190,23 +225,38 @@ async def update_entity(
     owner-authored, removes their derived field support, then commits audit and
     graph changes plus exact-support temporal desired state in one transaction.
     """
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
     try:
         canonical_id = await resolve_canonical_entity_id(
-            session, entity_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            entity_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
     except LookupError as exc:
-        if await session.scalar(select(EntityRedirect.old_entity_id).where(
-            EntityRedirect.workspace_id == scope.workspace_id,
-            EntityRedirect.old_entity_id == entity_id,
-        )) is not None:
+        if (
+            await session.scalar(
+                select(EntityRedirect.old_entity_id).where(
+                    EntityRedirect.workspace_id == scope.workspace_id,
+                    EntityRedirect.old_entity_id == entity_id,
+                )
+            )
+            is not None
+        ):
             raise TerminalEntityConflict("Entity identity was deleted") from exc
         raise
     if canonical_id != entity_id:
         raise RedirectedEntityConflict("Entity ID was merged; use its canonical ID")
-    entity = await session.scalar(select(Entity).where(
-        Entity.id == entity_id, Entity.workspace_id == scope.workspace_id,
-    ).with_for_update())
+    entity = await session.scalar(
+        select(Entity)
+        .where(
+            Entity.id == entity_id,
+            Entity.workspace_id == scope.workspace_id,
+        )
+        .with_for_update()
+    )
     if entity is None:
         return None
     previous_revision = entity.revision
@@ -218,23 +268,31 @@ async def update_entity(
         entity.name = payload.name
         entity.canonical_name = canonicalize_name(payload.name)
         entity.name_origin = "owner"
-        await session.execute(delete(EntityFieldEvidence).where(
-            EntityFieldEvidence.entity_id == entity_id,
-            EntityFieldEvidence.field_name == "name",
-            EntityFieldEvidence.membership_id.in_(select(EntityEvidenceMembership.id).where(
-                EntityEvidenceMembership.workspace_id == scope.workspace_id,
-            )),
-        ))
+        await session.execute(
+            delete(EntityFieldEvidence).where(
+                EntityFieldEvidence.entity_id == entity_id,
+                EntityFieldEvidence.field_name == "name",
+                EntityFieldEvidence.membership_id.in_(
+                    select(EntityEvidenceMembership.id).where(
+                        EntityEvidenceMembership.workspace_id == scope.workspace_id,
+                    )
+                ),
+            )
+        )
     if "description" in payload.model_fields_set:
         entity.description = payload.description
         entity.description_origin = "owner"
-        await session.execute(delete(EntityFieldEvidence).where(
-            EntityFieldEvidence.entity_id == entity_id,
-            EntityFieldEvidence.field_name == "description",
-            EntityFieldEvidence.membership_id.in_(select(EntityEvidenceMembership.id).where(
-                EntityEvidenceMembership.workspace_id == scope.workspace_id,
-            )),
-        ))
+        await session.execute(
+            delete(EntityFieldEvidence).where(
+                EntityFieldEvidence.entity_id == entity_id,
+                EntityFieldEvidence.field_name == "description",
+                EntityFieldEvidence.membership_id.in_(
+                    select(EntityEvidenceMembership.id).where(
+                        EntityEvidenceMembership.workspace_id == scope.workspace_id,
+                    )
+                ),
+            )
+        )
     if "metadata" in payload.model_fields_set and payload.metadata is not None:
         entity.metadata_json = payload.metadata
     entity.revision += 1
@@ -243,24 +301,39 @@ async def update_entity(
     aliases = await _aliases(session, [entity.id], scope=scope)
     result = _entity_read(entity, aliases.get(entity.id))
     await record_owner_action(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        operation="entity_update", reason=payload.reason,
-        affected_ids=[entity.id], revisions={str(entity.id): previous_revision},
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        operation="entity_update",
+        reason=payload.reason,
+        affected_ids=[entity.id],
+        revisions={str(entity.id): previous_revision},
     )
     await _schedule_entity_change(
-        session, entity, sorted(payload.model_fields_set - {"expected_revision", "reason"}), "owner",
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        entity,
+        sorted(payload.model_fields_set - {"expected_revision", "reason"}),
+        "owner",
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     await commit_with_replay(
-        session, [make_graph_change(entity_id=entity.id, scope=scope)], scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+        session,
+        [make_graph_change(entity_id=entity.id, scope=scope)],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
     )
     return result
 
 
 async def add_alias(
-    session: AsyncSession, entity_id: UUID, payload: AliasCreate, *,
-    scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    entity_id: UUID,
+    payload: AliasCreate,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> EntityRead | None:
     """Add an owner-authored alias to a canonical entity and commit its audit.
 
@@ -268,23 +341,38 @@ async def add_alias(
     raise typed conflicts; a missing canonical row returns None. A successful
     insert records the actor/reason and atomically schedules graph desired state.
     """
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
     try:
         canonical_id = await resolve_canonical_entity_id(
-            session, entity_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            entity_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
     except LookupError as exc:
-        if await session.scalar(select(EntityRedirect.old_entity_id).where(
-            EntityRedirect.workspace_id == scope.workspace_id,
-            EntityRedirect.old_entity_id == entity_id,
-        )) is not None:
+        if (
+            await session.scalar(
+                select(EntityRedirect.old_entity_id).where(
+                    EntityRedirect.workspace_id == scope.workspace_id,
+                    EntityRedirect.old_entity_id == entity_id,
+                )
+            )
+            is not None
+        ):
             raise TerminalEntityConflict("Entity identity was deleted") from exc
         raise
     if canonical_id != entity_id:
         raise RedirectedEntityConflict("Entity ID was merged; use its canonical ID")
-    entity = await session.scalar(select(Entity).where(
-        Entity.id == entity_id, Entity.workspace_id == scope.workspace_id,
-    ).with_for_update())
+    entity = await session.scalar(
+        select(Entity)
+        .where(
+            Entity.id == entity_id,
+            Entity.workspace_id == scope.workspace_id,
+        )
+        .with_for_update()
+    )
     if entity is None:
         return None
     normalized = canonicalize_name(payload.alias)
@@ -302,24 +390,40 @@ async def add_alias(
     aliases = await _aliases(session, [entity.id], scope=scope)
     result = _entity_read(entity, aliases.get(entity.id))
     await record_owner_action(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        operation="alias_create", reason=payload.reason,
-        affected_ids=[entity.id, alias.id], revisions={str(entity.id): entity.revision},
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        operation="alias_create",
+        reason=payload.reason,
+        affected_ids=[entity.id, alias.id],
+        revisions={str(entity.id): entity.revision},
     )
     await _schedule_entity_change(
-        session, entity, ["aliases"], "owner", scope=scope,
+        session,
+        entity,
+        ["aliases"],
+        "owner",
+        scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
     )
     await commit_with_replay(
-        session, [make_graph_change(entity_id=entity.id, scope=scope)], scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+        session,
+        [make_graph_change(entity_id=entity.id, scope=scope)],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
     )
     return result
 
 
 async def delete_alias(
-    session: AsyncSession, entity_id: UUID, alias_id: UUID, *, reason: str = "owner_alias_delete",
-    scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    entity_id: UUID,
+    alias_id: UUID,
+    *,
+    reason: str = "owner_alias_delete",
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Delete one alias from a canonical entity and commit its owner audit.
 
@@ -327,57 +431,93 @@ async def delete_alias(
     terminal IDs raise typed conflicts; a missing entity or alias returns False. Success
     records the actor/reason and atomically schedules graph desired state.
     """
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
     try:
         canonical_id = await resolve_canonical_entity_id(
-            session, entity_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            entity_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
     except LookupError as exc:
-        if await session.scalar(select(EntityRedirect.old_entity_id).where(
-            EntityRedirect.workspace_id == scope.workspace_id,
-            EntityRedirect.old_entity_id == entity_id,
-        )) is not None:
+        if (
+            await session.scalar(
+                select(EntityRedirect.old_entity_id).where(
+                    EntityRedirect.workspace_id == scope.workspace_id,
+                    EntityRedirect.old_entity_id == entity_id,
+                )
+            )
+            is not None
+        ):
             raise TerminalEntityConflict("Entity identity was deleted") from exc
         raise
     if canonical_id != entity_id:
         raise RedirectedEntityConflict("Entity ID was merged; use its canonical ID")
-    entity = await session.scalar(select(Entity).where(
-        Entity.id == entity_id, Entity.workspace_id == scope.workspace_id,
-    ).with_for_update())
+    entity = await session.scalar(
+        select(Entity)
+        .where(
+            Entity.id == entity_id,
+            Entity.workspace_id == scope.workspace_id,
+        )
+        .with_for_update()
+    )
     if entity is None:
         return False
     alias = await session.scalar(
-        select(EntityAlias).where(
-            EntityAlias.id == alias_id, EntityAlias.entity_id == entity_id,
-        ).with_for_update()
+        select(EntityAlias)
+        .where(
+            EntityAlias.id == alias_id,
+            EntityAlias.entity_id == entity_id,
+        )
+        .with_for_update()
     )
     if alias is None:
         return False
     await session.delete(alias)
     await record_owner_action(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        operation="alias_delete", reason=reason,
-        affected_ids=[entity.id, alias_id], revisions={str(entity.id): entity.revision},
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        operation="alias_delete",
+        reason=reason,
+        affected_ids=[entity.id, alias_id],
+        revisions={str(entity.id): entity.revision},
     )
     await _schedule_entity_change(
-        session, entity, ["aliases"], "owner", scope=scope,
+        session,
+        entity,
+        ["aliases"],
+        "owner",
+        scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
     )
     await commit_with_replay(
-        session, [make_graph_change(entity_id=entity.id, scope=scope)], scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+        session,
+        [make_graph_change(entity_id=entity.id, scope=scope)],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
     )
     return True
 
 
 async def delete_entity(
-    session: AsyncSession, entity_id: UUID, *, reason: str = "owner_entity_delete",
-    scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    entity_id: UUID,
+    *,
+    reason: str = "owner_entity_delete",
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Delegate canonical deletion and its support cleanup to the correction owner."""
     from modules.knowledge.entities.corrections import delete_canonical_entity
 
     return await delete_canonical_entity(
-        session, entity_id, reason=reason, scope=scope,
+        session,
+        entity_id,
+        reason=reason,
+        scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
     )

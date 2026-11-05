@@ -38,7 +38,10 @@ def worker_multi_workspace_flag(ctx: dict[str, object]) -> bool:
 
 
 async def resolve_owner_job_scope(
-    session: AsyncSession, workspace_id: UUID, *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    workspace_id: UUID,
+    *,
+    multi_workspace_enabled: bool,
 ) -> InternalJobScope | None:
     """Resolve an owner-backed durable job scope for a stored workspace binding.
 
@@ -47,11 +50,14 @@ async def resolve_owner_job_scope(
     when the workspace has no resolvable owner so callers skip the job.
     """
     owner = await workspaces.resolve_workspace_owner_context(
-        session, workspace_id, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        workspace_id,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if owner is None:
         return None
     return InternalJobScope(
-        workspace_id=workspace_id, actor_user_id=owner.user_id,
+        workspace_id=workspace_id,
+        actor_user_id=owner.user_id,
         membership_revision=owner.membership_revision,
     )

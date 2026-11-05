@@ -17,10 +17,14 @@ async def test_purge_commits_between_items_and_locks_once_per_transaction() -> N
     """Two expired conversations (one fails the locked expiry re-check) -> commit before each item."""
     now = datetime.now(UTC)
     expired = SimpleNamespace(
-        ephemeral=True, expires_at=now - timedelta(hours=1), actor_user_id=uuid4(),
+        ephemeral=True,
+        expires_at=now - timedelta(hours=1),
+        actor_user_id=uuid4(),
     )
     renewed = SimpleNamespace(
-        ephemeral=True, expires_at=now + timedelta(hours=1), actor_user_id=uuid4(),
+        ephemeral=True,
+        expires_at=now + timedelta(hours=1),
+        actor_user_id=uuid4(),
     )
     locked = [renewed, expired]  # served in order to the FOR UPDATE parent lookups
     events: list[str] = []

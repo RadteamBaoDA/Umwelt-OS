@@ -19,8 +19,14 @@ from modules.sources.public import SourceFence
 
 
 async def _publish_extraction_ready(
-    session: AsyncSession, document: Document, version: DocumentVersion, *,
-    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+    session: AsyncSession,
+    document: Document,
+    version: DocumentVersion,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    source_fence: SourceFence,
 ) -> None:
     """Publish the two Documents-owned parser ready events under original held proof.
 
@@ -31,22 +37,46 @@ async def _publish_extraction_ready(
     from modules.ingestion import public as ingestion
 
     await _normalized_source_proof(
-        session, document.source_id, source_fence.generation, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence,
+        session,
+        document.source_id,
+        source_fence.generation,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        source_fence=source_fence,
     )
-    payload = {"source_id": str(document.source_id), "document_id": str(document.id),
-               "document_version_id": str(version.id), "source_generation": source_fence.generation,
-               "version_number": version.version_number}
+    payload = {
+        "source_id": str(document.source_id),
+        "document_id": str(document.id),
+        "document_version_id": str(version.id),
+        "source_generation": source_fence.generation,
+        "version_number": version.version_number,
+    }
     for event_type in ("document.version.ready", "news.document.ready"):
-        await ingestion.publish_event(session, DomainEvent(
-            id=uuid7(), type=event_type, version=1, occurred_at=datetime.now(UTC),
-            producer="modules.knowledge.documents", payload=payload,
-        ), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        await ingestion.publish_event(
+            session,
+            DomainEvent(
+                id=uuid7(),
+                type=event_type,
+                version=1,
+                occurred_at=datetime.now(UTC),
+                producer="modules.knowledge.documents",
+                payload=payload,
+            ),
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
 
 
 async def _publish_document_ready(
-    session: AsyncSession, document: Document, version: DocumentVersion, *,
-    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+    session: AsyncSession,
+    document: Document,
+    version: DocumentVersion,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    source_fence: SourceFence,
 ) -> None:
     """Publish separate Documents ready events through the accepted held D0 publisher.
 
@@ -55,5 +85,12 @@ async def _publish_document_ready(
     enrichment. No foreign Source ORM, parent lock reacquisition, commit or external I/O.
     The legacy backfill caller prepares the same mandatory proof per version.
     """
-    await _publish_extraction_ready(session, document, version, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
+    await _publish_extraction_ready(
+        session,
+        document,
+        version,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        source_fence=source_fence,
+    )

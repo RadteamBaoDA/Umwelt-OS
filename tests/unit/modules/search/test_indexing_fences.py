@@ -23,20 +23,29 @@ from modules.settings import public as settings_public
 from modules.sources import public as sources_public
 
 WORKSPACE = uuid4()
-FENCE = AccessFence(workspace_id=WORKSPACE, user_id=1, membership_revision=2, configuration_revision=3)
+FENCE = AccessFence(
+    workspace_id=WORKSPACE, user_id=1, membership_revision=2, configuration_revision=3
+)
 MAPPING = ModelMapping(model="embed", version="1", destination="remote")
 
 
 def _config(revision: int = 5) -> Any:
     return SimpleNamespace(
-        configuration_revision=revision, gateway_identity="g" * 64, model_identity="g" * 64,
-        endpoint_destination_id="dest", endpoint_policy_denied=False, gateway_api_key="k",
+        configuration_revision=revision,
+        gateway_identity="g" * 64,
+        model_identity="g" * 64,
+        endpoint_destination_id="dest",
+        endpoint_policy_denied=False,
+        gateway_api_key="k",
     )
 
 
 def _authority(revision: int = 5) -> indexing.EmbeddingAuthority:
     return indexing.EmbeddingAuthority(
-        FENCE, _config(revision), MAPPING, SimpleNamespace(embeddings_allowed=True),  # type: ignore[arg-type]
+        FENCE,
+        _config(revision),
+        MAPPING,
+        SimpleNamespace(embeddings_allowed=True),  # type: ignore[arg-type]
     )
 
 
@@ -54,7 +63,9 @@ class _ExplodingSession:
 @pytest.mark.parametrize("call", ["index_status", "tasks_goals", "news", "fences"])
 async def test_member_without_share_gets_nothing(call: str) -> None:
     """A member (membership, no share) is rejected before any query, so no hit/count/snippet exists."""
-    member = WorkspaceContext(user_id=9, workspace_id=WORKSPACE, role="member", membership_revision=1)
+    member = WorkspaceContext(
+        user_id=9, workspace_id=WORKSPACE, role="member", membership_revision=1
+    )
     session: Any = _ExplodingSession()
     from modules.goals.schemas import GoalFilter
     from modules.search.schemas import SearchRequest
@@ -62,29 +73,49 @@ async def test_member_without_share_gets_nothing(call: str) -> None:
 
     with pytest.raises((DomainError, HTTPException)) as caught:
         if call == "search":
-            await public.search(session, None, None, SearchRequest(query="secret"),  # type: ignore[arg-type]
-                                scope=member, multi_workspace_enabled=True)
+            await public.search(
+                session,
+                None,
+                None,
+                SearchRequest(query="secret"),  # type: ignore[arg-type]
+                scope=member,
+                multi_workspace_enabled=True,
+            )
         elif call == "index_status":
-            await public.index_status(session, scope=member, multi_workspace_enabled=True,
-                                      settings=None, redis=None)  # type: ignore[arg-type]
+            await public.index_status(
+                session, scope=member, multi_workspace_enabled=True, settings=None, redis=None
+            )  # type: ignore[arg-type]
         elif call == "tasks_goals":
-            await public.search_tasks_and_goals(session, TaskFilter(q="x"), GoalFilter(q="x"),
-                                                scope=member, multi_workspace_enabled=True)
+            await public.search_tasks_and_goals(
+                session,
+                TaskFilter(q="x"),
+                GoalFilter(q="x"),
+                scope=member,
+                multi_workspace_enabled=True,
+            )
         elif call == "news":
-            await public.compare_news_evidence_embeddings(session, uuid4(), (), scope=member,
-                                                          multi_workspace_enabled=True)
+            await public.compare_news_evidence_embeddings(
+                session, uuid4(), (), scope=member, multi_workspace_enabled=True
+            )
         else:
-            await public.revalidate_tool_search_fences(session, [], source_ids=frozenset(), scope=member,
-                                                       multi_workspace_enabled=True)
+            await public.revalidate_tool_search_fences(
+                session, [], source_ids=frozenset(), scope=member, multi_workspace_enabled=True
+            )
     assert caught.value.status_code == 403
 
 
 async def test_indexing_admit_rejects_member_for_both_modes() -> None:
-    member = WorkspaceContext(user_id=9, workspace_id=WORKSPACE, role="member", membership_revision=1)
+    member = WorkspaceContext(
+        user_id=9, workspace_id=WORKSPACE, role="member", membership_revision=1
+    )
     for lock in (False, True):
         with pytest.raises((DomainError, HTTPException)) as caught:
-            await indexing._admit(_ExplodingSession(), scope=member, multi_workspace_enabled=True,  # type: ignore[arg-type]
-                                  lock=lock)
+            await indexing._admit(
+                _ExplodingSession(),
+                scope=member,
+                multi_workspace_enabled=True,  # type: ignore[arg-type]
+                lock=lock,
+            )
         assert caught.value.status_code == 403
 
 
@@ -93,7 +124,9 @@ async def test_indexing_admit_rejects_member_for_both_modes() -> None:
 
 async def test_nonlocking_admit_compares_expected(monkeypatch: pytest.MonkeyPatch) -> None:
     scope = WorkspaceContext(user_id=1, workspace_id=WORKSPACE, role="owner", membership_revision=2)
-    changed = AccessFence(workspace_id=WORKSPACE, user_id=1, membership_revision=3, configuration_revision=3)
+    changed = AccessFence(
+        workspace_id=WORKSPACE, user_id=1, membership_revision=3, configuration_revision=3
+    )
 
     async def read(*_a: Any, **_k: Any) -> AccessFence:
         return changed
@@ -105,7 +138,9 @@ async def test_nonlocking_admit_compares_expected(monkeypatch: pytest.MonkeyPatc
     assert await indexing._admit(None, scope=scope, multi_workspace_enabled=True) == changed  # type: ignore[arg-type]
 
 
-def _patch_publication(monkeypatch: pytest.MonkeyPatch, *, config_revision: int, events: list[str]) -> None:
+def _patch_publication(
+    monkeypatch: pytest.MonkeyPatch, *, config_revision: int, events: list[str]
+) -> None:
     async def admit(_s: Any, **kwargs: Any) -> AccessFence:
         events.append(f"admit lock={kwargs['lock']} expected={kwargs['expected'] is FENCE}")
         return FENCE
@@ -140,19 +175,30 @@ async def test_publication_compares_original_under_mutex(monkeypatch: pytest.Mon
     events: list[str] = []
     _patch_publication(monkeypatch, config_revision=5, events=events)
     result = await indexing.create_generation_for_authority(
-        None, _authority(), SETTINGS, None, scope=SCOPE, honor_retry_delay=True,  # type: ignore[arg-type]
+        None,
+        _authority(),
+        SETTINGS,
+        None,
+        scope=SCOPE,
+        honor_retry_delay=True,  # type: ignore[arg-type]
     )
     assert result == "generation"  # type: ignore[comparison-overlap]
     # locked admission against the ORIGINAL fence, then mutex, then config, then retry decision.
     assert events == ["admit lock=True expected=True", "mutex", "config", "dedupe retry=True"]
 
 
-async def test_publication_aborts_when_config_changed_under_mutex(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_publication_aborts_when_config_changed_under_mutex(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     events: list[str] = []
     _patch_publication(monkeypatch, config_revision=6, events=events)
     with pytest.raises((DomainError, HTTPException)) as caught:
         await indexing.create_generation_for_authority(
-            None, _authority(5), SETTINGS, None, scope=SCOPE,  # type: ignore[arg-type]
+            None,
+            _authority(5),
+            SETTINGS,
+            None,
+            scope=SCOPE,  # type: ignore[arg-type]
         )
     assert caught.value.status_code == 409
     assert not any(event.startswith("dedupe") for event in events)
@@ -162,8 +208,13 @@ async def test_retry_delay_decided_inside_dedupe() -> None:
     """The failed-run decision lives in the post-mutex helper (returns None, no row written)."""
     from datetime import UTC, datetime
 
-    failed = SimpleNamespace(status="failed", model_id="embed", model_version="1",
-                             gateway_identity="g" * 64, updated_at=datetime.now(UTC))
+    failed = SimpleNamespace(
+        status="failed",
+        model_id="embed",
+        model_version="1",
+        gateway_identity="g" * 64,
+        updated_at=datetime.now(UTC),
+    )
 
     class Session:
         rolled = False
@@ -176,8 +227,13 @@ async def test_retry_delay_decided_inside_dedupe() -> None:
 
     session = Session()
     result = await indexing._dedupe_or_create(
-        session, MAPPING, "g" * 64, scope=SCOPE, multi_workspace_enabled=True,  # type: ignore[arg-type]
-        access_fence=FENCE, honor_retry_delay=True,
+        session,
+        MAPPING,
+        "g" * 64,
+        scope=SCOPE,
+        multi_workspace_enabled=True,  # type: ignore[arg-type]
+        access_fence=FENCE,
+        honor_retry_delay=True,
     )
     assert result is None
     assert session.rolled
@@ -229,7 +285,9 @@ class _Factory:
         return Session()
 
 
-def _patch_generation_run(monkeypatch: pytest.MonkeyPatch, factory: _Factory, *, stale: bool) -> list[int]:
+def _patch_generation_run(
+    monkeypatch: pytest.MonkeyPatch, factory: _Factory, *, stale: bool
+) -> list[int]:
     seen_open: list[int] = []
     chunk_id, source_id = uuid4(), uuid4()
     factory.rows.append((chunk_id, "chunk text", source_id))
@@ -279,8 +337,13 @@ def _patch_generation_run(monkeypatch: pytest.MonkeyPatch, factory: _Factory, *,
 
 def _generation() -> Any:
     return SimpleNamespace(
-        model_id="embed", model_version="1", gateway_identity="g" * 64, status="active",
-        dimensions=None, response_model_id=None, error_code=None,
+        model_id="embed",
+        model_version="1",
+        gateway_identity="g" * 64,
+        status="active",
+        dimensions=None,
+        response_model_id=None,
+        error_code=None,
     )
 
 
@@ -288,11 +351,11 @@ async def test_embed_runs_with_no_open_transaction(monkeypatch: pytest.MonkeyPat
     generation = _generation()
     item = SimpleNamespace(id=uuid4(), generation_id=uuid4(), status="pending", error_code=None)
     scripts = [
-        [generation],                 # preparation snapshot
-        [generation, None],           # claim: locked generation, no item yet
-        [],                           # short pre-send preparation (patched recheck)
-        [generation, item],           # publication
-        [generation],                 # second claim iteration: no rows left
+        [generation],  # preparation snapshot
+        [generation, None],  # claim: locked generation, no item yet
+        [],  # short pre-send preparation (patched recheck)
+        [generation, item],  # publication
+        [generation],  # second claim iteration: no rows left
     ]
     factory = _Factory(scripts, [])
     seen = _patch_generation_run(monkeypatch, factory, stale=False)
@@ -313,7 +376,9 @@ async def test_stale_authority_after_embed_discards_output(monkeypatch: pytest.M
 
 
 async def test_recheck_prepared_rejects_changed_fence(monkeypatch: pytest.MonkeyPatch) -> None:
-    other = AccessFence(workspace_id=WORKSPACE, user_id=1, membership_revision=9, configuration_revision=3)
+    other = AccessFence(
+        workspace_id=WORKSPACE, user_id=1, membership_revision=9, configuration_revision=3
+    )
 
     async def admit(*_a: Any, **_k: Any) -> AccessFence:
         return other
@@ -321,9 +386,17 @@ async def test_recheck_prepared_rejects_changed_fence(monkeypatch: pytest.Monkey
     monkeypatch.setattr(indexing, "_admit", admit)
     with pytest.raises(indexing._AuthorityChanged):
         await indexing._recheck_prepared(
-            None, scope=SCOPE, settings=SETTINGS, redis=None, original=_authority(),  # type: ignore[arg-type]
-            source_id=uuid4(), source_generation=None, chunk_id=uuid4(), content="x",
-            workspace_id=WORKSPACE, lock=False,
+            None,
+            scope=SCOPE,
+            settings=SETTINGS,
+            redis=None,
+            original=_authority(),  # type: ignore[arg-type]
+            source_id=uuid4(),
+            source_generation=None,
+            chunk_id=uuid4(),
+            content="x",
+            workspace_id=WORKSPACE,
+            lock=False,
         )
 
 
@@ -345,9 +418,15 @@ async def test_cursor_falls_back_to_local_state_when_redis_down() -> None:
     ctx: dict[str, object] = {"redis": _DownRedis(), "w2_cursor_state": {}}
     first = uuid4()
     await indexing.write_cursor(ctx, indexing.AUTO_INDEX_CURSOR_KEY, first, indexing._CURSOR_KEYS)
-    assert await indexing.read_cursor(ctx, indexing.AUTO_INDEX_CURSOR_KEY, indexing._CURSOR_KEYS) == first
+    assert (
+        await indexing.read_cursor(ctx, indexing.AUTO_INDEX_CURSOR_KEY, indexing._CURSOR_KEYS)
+        == first
+    )
     await indexing.write_cursor(ctx, indexing.AUTO_INDEX_CURSOR_KEY, None, indexing._CURSOR_KEYS)
-    assert await indexing.read_cursor(ctx, indexing.AUTO_INDEX_CURSOR_KEY, indexing._CURSOR_KEYS) is None
+    assert (
+        await indexing.read_cursor(ctx, indexing.AUTO_INDEX_CURSOR_KEY, indexing._CURSOR_KEYS)
+        is None
+    )
 
 
 async def test_denied_oldest_row_does_not_block_next(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -376,10 +455,16 @@ async def test_denied_oldest_row_does_not_block_next(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(indexing, "_candidate_page", page)
     monkeypatch.setattr(indexing, "_index_generation", index)
     ctx: dict[str, object] = {
-        "session_factory": Session, "redis": _DownRedis(), "settings": SETTINGS, "w2_cursor_state": {},
+        "session_factory": Session,
+        "redis": _DownRedis(),
+        "settings": SETTINGS,
+        "w2_cursor_state": {},
     }
-    done = await indexing.index_pending_chunks.__wrapped__(ctx) if hasattr(
-        indexing.index_pending_chunks, "__wrapped__") else await indexing.index_pending_chunks(ctx)
+    done = (
+        await indexing.index_pending_chunks.__wrapped__(ctx)
+        if hasattr(indexing.index_pending_chunks, "__wrapped__")
+        else await indexing.index_pending_chunks(ctx)
+    )
     assert done == 4
     assert attempts == [denied[0], eligible[0]]
     # cursor advanced to the processed subject and survives Redis loss in the shared state.
@@ -419,7 +504,8 @@ async def _noop(*_a: Any, **_k: Any) -> None:
 
 @pytest.mark.parametrize("redis", [_DownRedis, _StaleSetRedis])
 async def test_cursor_advances_across_arq_ctx_copies(
-    monkeypatch: pytest.MonkeyPatch, redis: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    redis: Any,
 ) -> None:
     ids = sorted(uuid4() for _ in range(5))
     afters: list[Any] = []
@@ -438,7 +524,10 @@ async def test_cursor_advances_across_arq_ctx_copies(
     monkeypatch.setattr(indexing, "_candidate_page", page)
     monkeypatch.setattr(indexing, "_index_generation", index)
     base: dict[str, object] = {
-        "session_factory": _Session, "redis": redis(), "settings": SETTINGS, "w2_cursor_state": {},
+        "session_factory": _Session,
+        "redis": redis(),
+        "settings": SETTINGS,
+        "w2_cursor_state": {},
     }
     for _ in range(2):  # ARQ: every job runs on a shallow copy of the worker ctx
         await indexing.index_pending_chunks.__wrapped__({**base})  # type: ignore[attr-defined]
@@ -451,7 +540,11 @@ async def test_cursor_advances_across_arq_ctx_copies(
 
 
 def _patch_denial(
-    monkeypatch: pytest.MonkeyPatch, factory: _Factory, *, prepared: Any, embed_error: Exception | None = None,
+    monkeypatch: pytest.MonkeyPatch,
+    factory: _Factory,
+    *,
+    prepared: Any,
+    embed_error: Exception | None = None,
 ) -> dict[str, list[Any]]:
     _patch_generation_run(monkeypatch, factory, stale=False)
     calls: dict[str, list[Any]] = {"drop": [], "fail": []}
@@ -494,7 +587,9 @@ def _denial_factory() -> _Factory:
     return _Factory([[generation], [generation, None], [], [generation, None], [generation]], [])
 
 
-async def test_send_denied_by_authority_leaves_item_pending(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_send_denied_by_authority_leaves_item_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     factory = _denial_factory()
     calls = _patch_denial(monkeypatch, factory, prepared=indexing._AuthorityChanged())
     await indexing._index_generation(factory, None, SETTINGS, uuid4(), WORKSPACE)  # type: ignore[arg-type]
@@ -512,7 +607,9 @@ async def test_real_gateway_failure_still_fails_item(monkeypatch: pytest.MonkeyP
     from core.model_gateway.client import PrivacyPolicyDenied
 
     factory = _denial_factory()
-    calls = _patch_denial(monkeypatch, factory, prepared=True, embed_error=PrivacyPolicyDenied("policy"))
+    calls = _patch_denial(
+        monkeypatch, factory, prepared=True, embed_error=PrivacyPolicyDenied("policy")
+    )
     await indexing._index_generation(factory, None, SETTINGS, uuid4(), WORKSPACE)  # type: ignore[arg-type]
     assert len(calls["fail"]) == 1 and calls["drop"] == []
 
@@ -536,7 +633,10 @@ async def test_queued_and_active_classes_both_served(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(indexing, "_candidate_page", page)
     monkeypatch.setattr(indexing, "_index_generation", index)
     ctx: dict[str, object] = {
-        "session_factory": _Session, "redis": _DownRedis(), "settings": SETTINGS, "w2_cursor_state": {},
+        "session_factory": _Session,
+        "redis": _DownRedis(),
+        "settings": SETTINGS,
+        "w2_cursor_state": {},
     }
     for _ in range(2):
         await indexing.index_pending_chunks.__wrapped__(ctx)  # type: ignore[attr-defined]
@@ -558,8 +658,14 @@ async def test_idle_active_generation_returns_none(monkeypatch: pytest.MonkeyPat
 
 
 async def _prepared(
-    monkeypatch: pytest.MonkeyPatch, *, source: Any, current: str | None = "x", module: bool = True,
-    config_revision: int = 5, source_generation: int | None = 3, lock: bool = False,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    source: Any,
+    current: str | None = "x",
+    module: bool = True,
+    config_revision: int = 5,
+    source_generation: int | None = 3,
+    lock: bool = False,
 ) -> tuple[tuple[Any, bool, int | None], list[Any]]:
     locked: list[Any] = []
     authority = _authority()
@@ -592,42 +698,72 @@ async def _prepared(
     monkeypatch.setattr(documents_public, "lock_document_ids", lock_documents)
     monkeypatch.setattr(indexing, "configured_embedding", configured)
     result = await indexing._recheck_prepared(
-        Session(), scope=SCOPE, settings=SETTINGS, redis=None, original=authority,  # type: ignore[arg-type]
-        source_id=uuid4(), source_generation=source_generation, chunk_id=uuid4(), content="x",
-        workspace_id=WORKSPACE, lock=lock,
+        Session(),
+        scope=SCOPE,
+        settings=SETTINGS,
+        redis=None,
+        original=authority,  # type: ignore[arg-type]
+        source_id=uuid4(),
+        source_generation=source_generation,
+        chunk_id=uuid4(),
+        content="x",
+        workspace_id=WORKSPACE,
+        lock=lock,
     )
     return result, locked
 
 
 def _source(**kw: Any) -> Any:
-    return SimpleNamespace(**{"status": "active", "local_only": False, "rag_index_enabled": True, "generation": 3, **kw})
+    return SimpleNamespace(
+        **{
+            "status": "active",
+            "local_only": False,
+            "rag_index_enabled": True,
+            "generation": 3,
+            **kw,
+        }
+    )
 
 
-async def test_recheck_prepared_live_and_locks_document_on_publication(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_recheck_prepared_live_and_locks_document_on_publication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     (_f, live, generation), locked = await _prepared(monkeypatch, source=_source(), lock=True)
     assert live and generation == 3 and len(locked) == 1
 
 
 @pytest.mark.parametrize(
-    "case", ["source_gone", "archived", "local_only", "rag_off", "generation_moved", "content_changed"],
+    "case",
+    ["source_gone", "archived", "local_only", "rag_off", "generation_moved", "content_changed"],
 )
-async def test_recheck_prepared_reports_stale_source(monkeypatch: pytest.MonkeyPatch, case: str) -> None:
+async def test_recheck_prepared_reports_stale_source(
+    monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
     source: Any = {
-        "source_gone": None, "archived": _source(status="archived"), "local_only": _source(local_only=True),
+        "source_gone": None,
+        "archived": _source(status="archived"),
+        "local_only": _source(local_only=True),
         "rag_off": _source(rag_index_enabled=False),
-        "generation_moved": _source(generation=4), "content_changed": _source(),
+        "generation_moved": _source(generation=4),
+        "content_changed": _source(),
     }[case]
     (_f, live, _g), _ = await _prepared(
-        monkeypatch, source=source, current="y" if case == "content_changed" else "x",
+        monkeypatch,
+        source=source,
+        current="y" if case == "content_changed" else "x",
     )
     assert not live
 
 
 @pytest.mark.parametrize("case", ["module_off", "config_changed"])
-async def test_recheck_prepared_raises_on_authority_change(monkeypatch: pytest.MonkeyPatch, case: str) -> None:
+async def test_recheck_prepared_raises_on_authority_change(
+    monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
     with pytest.raises(indexing._AuthorityChanged):
         await _prepared(
-            monkeypatch, source=_source(), module=case != "module_off",
+            monkeypatch,
+            source=_source(),
+            module=case != "module_off",
             config_revision=6 if case == "config_changed" else 5,
         )
 
@@ -656,12 +792,16 @@ async def test_candidate_page_wraps_after_empty_tail() -> None:
 # ---- SRCH-R7: public.search rechecks the access fence before the query embedding --------------
 
 
-async def test_search_send_denied_when_access_fence_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_search_send_denied_when_access_fence_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from core.model_gateway.client import PrivacyPolicyDenied
     from modules.search.schemas import SearchRequest
 
     scope = WorkspaceContext(user_id=1, workspace_id=WORKSPACE, role="owner", membership_revision=2)
-    changed = AccessFence(workspace_id=WORKSPACE, user_id=1, membership_revision=9, configuration_revision=3)
+    changed = AccessFence(
+        workspace_id=WORKSPACE, user_id=1, membership_revision=9, configuration_revision=3
+    )
     fences = iter([FENCE, changed])
     outcome: list[Any] = []
 
@@ -691,7 +831,10 @@ async def test_search_send_denied_when_access_fence_changes(monkeypatch: pytest.
     class Session:
         async def scalar(self, _stmt: Any) -> Any:
             return SimpleNamespace(
-                model_id="embed", model_version="1", gateway_identity="g" * 64, dimensions=2,
+                model_id="embed",
+                model_version="1",
+                gateway_identity="g" * 64,
+                dimensions=2,
                 response_model_id="embed",
             )
 
@@ -705,8 +848,12 @@ async def test_search_send_denied_when_access_fence_changes(monkeypatch: pytest.
     monkeypatch.setattr(public, "gateway", lambda _c, _r, before_send, **_k: Gateway(before_send))
     with pytest.raises(Stop):
         await public.search(
-            Session(), None, SETTINGS, SearchRequest(query="q", mode="hybrid"),  # type: ignore[arg-type]
-            scope=scope, multi_workspace_enabled=True,
+            Session(),
+            None,
+            SETTINGS,
+            SearchRequest(query="q", mode="hybrid"),  # type: ignore[arg-type]
+            scope=scope,
+            multi_workspace_enabled=True,
         )
     assert outcome and "access changed" in str(outcome[0])
 

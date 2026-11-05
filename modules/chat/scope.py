@@ -21,10 +21,13 @@ async def owner_default_scope(session: AsyncSession, owner_id: int = 1) -> Works
     from core.auth.public import get_active_account
     from core.workspaces.public import resolve_workspace_context
 
-    account = await get_active_account(session, owner_id, multi_workspace_enabled=multi_workspace_enabled())
+    account = await get_active_account(
+        session, owner_id, multi_workspace_enabled=multi_workspace_enabled()
+    )
     context = (
         await resolve_workspace_context(session, account.id, account.default_workspace_id)
-        if account is not None else None
+        if account is not None
+        else None
     )
     if context is None:
         raise NotFoundError("Workspace not found")
@@ -36,13 +39,19 @@ async def revalidate_chat_session(session: AsyncSession, token_hash: str, owner_
     from core.auth.public import revalidate_account_session
 
     return await revalidate_account_session(
-        session, token_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled(),
+        session,
+        token_hash,
+        owner_id,
+        multi_workspace_enabled=multi_workspace_enabled(),
     )
 
 
 async def owner_scope_kwargs(session: AsyncSession, owner_id: int = 1) -> dict[str, object]:
     """`scope`/`multi_workspace_enabled` keyword arguments for owner-backed Chat call sites."""
-    return {"scope": await owner_default_scope(session, owner_id), "multi_workspace_enabled": multi_workspace_enabled()}
+    return {
+        "scope": await owner_default_scope(session, owner_id),
+        "multi_workspace_enabled": multi_workspace_enabled(),
+    }
 
 
 async def read_owner_export_privacy(session: AsyncSession, owner_id: int = 1):  # type: ignore[no-untyped-def]
@@ -50,12 +59,15 @@ async def read_owner_export_privacy(session: AsyncSession, owner_id: int = 1):  
     from modules.memory.public import read_export_privacy
 
     return await read_export_privacy(
-        session, scope=await owner_default_scope(session, owner_id),
+        session,
+        scope=await owner_default_scope(session, owner_id),
         multi_workspace_enabled=multi_workspace_enabled(),
     )
 
 
-async def ensure_ai_config_unchanged(session_factory, settings, redis, scope, snapshot, role, mapping) -> None:  # type: ignore[no-untyped-def]
+async def ensure_ai_config_unchanged(
+    session_factory, settings, redis, scope, snapshot, role, mapping
+) -> None:  # type: ignore[no-untyped-def]
     """Fresh-session recheck at ``before_send``: raise when settings/access drifted since the snapshot."""
     from modules.settings import public as settings_public
 

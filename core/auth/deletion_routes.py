@@ -1,4 +1,5 @@
 """Password-confirmed account deletion and a preissued browser-bound status receipt."""
+
 import asyncio
 import re
 import secrets
@@ -38,16 +39,26 @@ def receipt_token(request: Request) -> str | None:
     return value if re.fullmatch(r"[A-Za-z0-9_-]{43}", value) else None
 
 
-def set_receipt_cookie(request: Request, response: Response, token: str, seconds: int = RECEIPT_SECONDS) -> None:
+def set_receipt_cookie(
+    request: Request, response: Response, token: str, seconds: int = RECEIPT_SECONDS
+) -> None:
     """Keep status authority out of JavaScript/URLs and renew pending polling lifetime."""
-    response.set_cookie(RECEIPT_COOKIE, token, httponly=True, secure=request.app.state.settings.secure_cookies,
-                        samesite="strict", path=RECEIPT_PATH, max_age=seconds)
+    response.set_cookie(
+        RECEIPT_COOKIE,
+        token,
+        httponly=True,
+        secure=request.app.state.settings.secure_cookies,
+        samesite="strict",
+        path=RECEIPT_PATH,
+        max_age=seconds,
+    )
     response.headers["Cache-Control"] = "no-store"
 
 
 @router.get("/deletion-preview", response_model=DeletionPreview)
 async def preview_account_deletion(
-    request: Request, response: Response,
+    request: Request,
+    response: Response,
     auth: Annotated[AuthSession, Depends(require_account)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> DeletionPreview:
@@ -62,12 +73,19 @@ async def preview_account_deletion(
             token = secrets.token_urlsafe(32)
     set_receipt_cookie(request, response, token)
     _, blockers = await account_deletion_blockers(session, auth.owner_id)
-    return DeletionPreview(can_delete=not blockers, blockers=blockers, workspace_count=1, instance_operator=auth.owner_id == 1)
+    return DeletionPreview(
+        can_delete=not blockers,
+        blockers=blockers,
+        workspace_count=1,
+        instance_operator=auth.owner_id == 1,
+    )
 
 
 @router.post("/deletion", response_model=DeletionStatus, status_code=202)
 async def accept_account_deletion(
-    body: DeletionRequest, request: Request, response: Response,
+    body: DeletionRequest,
+    request: Request,
+    response: Response,
     auth: Annotated[AuthSession, Depends(require_account_write)],
     session: Annotated[AsyncSession, Depends(get_session)],
     redis: Annotated[Redis, Depends(get_auth_redis)],
@@ -83,17 +101,28 @@ async def accept_account_deletion(
         raise HTTPException(status_code=409, detail={"code": "deletion_preview_required"})
     await _allow_attempt(request, redis, "account-deletion")
     owner, _ = await _lock_owner_session(request, session, auth, csrf_token)
-    if not await asyncio.to_thread(verify_password, owner.password_hash, body.current_password.get_secret_value()):
-        raise HTTPException(status_code=400, detail={"code": "password_incorrect", "message": "Password is incorrect"})
+    if not await asyncio.to_thread(
+        verify_password, owner.password_hash, body.current_password.get_secret_value()
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "password_incorrect", "message": "Password is incorrect"},
+        )
     workspace_id, blockers = await account_deletion_blockers(session, owner.id, lock=True)
     if blockers:
         raise HTTPException(status_code=409, detail={"code": blockers[0], "blockers": blockers})
     existing = await receipt_operation(session, _hash(token))
     if existing is not None:
         raise HTTPException(status_code=409, detail={"code": "deletion_preview_required"})
-    operation = AccountDeletionOperation(receipt_hash=_hash(token), account_id=owner.id,
-                                         workspace_id=workspace_id, status="queued", phase="queued", cursor={},
-                                         next_attempt_at=datetime.now(UTC))
+    operation = AccountDeletionOperation(
+        receipt_hash=_hash(token),
+        account_id=owner.id,
+        workspace_id=workspace_id,
+        status="queued",
+        phase="queued",
+        cursor={},
+        next_attempt_at=datetime.now(UTC),
+    )
     session.add(operation)
     owner.account_state = "disabled"
     await session.execute(delete(AuthSession).where(AuthSession.owner_id == owner.id))
@@ -106,7 +135,9 @@ async def accept_account_deletion(
 
 @router.get("/deletion-status", response_model=DeletionStatus)
 async def account_deletion_status(
-    request: Request, response: Response, session: Annotated[AsyncSession, Depends(get_session)],
+    request: Request,
+    response: Response,
+    session: Annotated[AsyncSession, Depends(get_session)],
 ) -> DeletionStatus:
     """Read safe progress using only receipt authority, including after session revocation."""
     response.headers["Cache-Control"] = "no-store"
@@ -116,6 +147,10 @@ async def account_deletion_status(
         raise HTTPException(status_code=404, detail={"code": "deletion_receipt_unavailable"})
     if token is None:
         raise RuntimeError("invariant violated: token must not be None")
-    seconds = RECEIPT_SECONDS if operation.expires_at is None else max(1, int((operation.expires_at - datetime.now(UTC)).total_seconds()))
+    seconds = (
+        RECEIPT_SECONDS
+        if operation.expires_at is None
+        else max(1, int((operation.expires_at - datetime.now(UTC)).total_seconds()))
+    )
     set_receipt_cookie(request, response, token, seconds)
     return deletion_status(operation)

@@ -52,9 +52,7 @@ def _extract_steps_from_text(text: str) -> list[str]:
                 extracted.append(cleaned[:280])
     if not extracted:
         sentences = [
-            s.strip()
-            for s in re.split(r"(?<=[.!?])\s+", text.strip())
-            if len(s.strip()) > 10
+            s.strip() for s in re.split(r"(?<=[.!?])\s+", text.strip()) if len(s.strip()) > 10
         ]
         extracted = [s[:280] for s in sentences[:5]]
     return extracted[:10]

@@ -4,4 +4,3 @@ from modules.knowledge.documents.public import ChatEvidenceChunk
 from modules.knowledge.service import KnowledgeService
 
 __all__ = ["ChatEvidenceChunk", "KnowledgeService"]
-

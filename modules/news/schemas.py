@@ -73,7 +73,9 @@ class StoryRead(BaseModel):
     why_relevant: list[str] = Field(default_factory=list)
     relevance_signals: dict[str, dict[str, object]] = Field(default_factory=dict)
     relevance_weights: dict[str, float] = Field(default_factory=dict)
-    relevance_profile_revisions: list[dict[str, str | int]] = Field(default_factory=list, max_length=2000)
+    relevance_profile_revisions: list[dict[str, str | int]] = Field(
+        default_factory=list, max_length=2000
+    )
     relevance_as_of: datetime | None = None
     relevance_state: Literal["available", "partial", "unavailable"] = "unavailable"
     translation_revision: str = Field(default="", max_length=32)
@@ -172,6 +174,7 @@ class TrendPage(BaseModel):
 
 class CorrelationQuery(BaseModel):
     """Bound an evidence correlation request to explicit sources, regions, and a 30-day window."""
+
     model_config = ConfigDict(extra="forbid")
     source_ids: list[UUID] = Field(default_factory=list, max_length=32)
     regions: list[str] = Field(min_length=1, max_length=32)
@@ -191,10 +194,14 @@ class CorrelationQuery(BaseModel):
     def validate_scope(self) -> "CorrelationQuery":
         """Reject duplicate selectors and prevent unbounded history reads."""
         if (
-            self.from_at >= self.to_at or self.to_at - self.from_at > timedelta(days=30)
+            self.from_at >= self.to_at
+            or self.to_at - self.from_at > timedelta(days=30)
             or len(self.source_ids) != len(set(self.source_ids))
             or len(self.regions) != len(set(self.regions))
-            or any(not region or region != region.strip() or len(region) > 80 for region in self.regions)
+            or any(
+                not region or region != region.strip() or len(region) > 80
+                for region in self.regions
+            )
         ):
             raise ValueError("correlation scope is invalid")
         return self
@@ -202,6 +209,7 @@ class CorrelationQuery(BaseModel):
 
 class CorrelationBucketRead(BaseModel):
     """Describe one region and exact UTC hour containing evidence-backed signals."""
+
     region: str
     window_start: datetime
     window_end: datetime
@@ -221,6 +229,7 @@ class CorrelationBucketRead(BaseModel):
 
 class CorrelationCoverageRead(BaseModel):
     """Show domain coverage, omitted source count, and bounded-query truncation explicitly."""
+
     signal_count: StrictInt = Field(ge=0, le=100)
     available: bool
     truncated: bool = False
@@ -229,6 +238,7 @@ class CorrelationCoverageRead(BaseModel):
 
 class CorrelationResult(BaseModel):
     """Return deterministic temporal co-occurrence and evidence references, never causal scores."""
+
     method_version: str = "co_occurrence_v1"
     from_at: datetime
     to_at: datetime
@@ -243,6 +253,7 @@ class CorrelationResult(BaseModel):
 
 class CiiUnavailableRead(BaseModel):
     """Return the unchanged requested CII scope while method and licensed evidence remain unverified."""
+
     method_version: str = "v8"
     requested_countries: list[str] = Field(max_length=31)
     score: None = None
@@ -250,7 +261,9 @@ class CiiUnavailableRead(BaseModel):
     movement_24h: None = None
     as_of: None = None
     availability: str = "method_data_license_unverified"
-    reason: str = "Authoritative v8 method, source licensing, and the specified country set are not verified."
+    reason: str = (
+        "Authoritative v8 method, source licensing, and the specified country set are not verified."
+    )
 
 
 class RecordedSignal(BaseModel):
@@ -267,7 +280,10 @@ class RelevanceRead(BaseModel):
 
     score: float = Field(ge=0, le=1)
     why_relevant: list[str]
-    signals: dict[Literal["topic", "entity", "goal", "project", "recency", "importance", "novelty"], RecordedSignal]
+    signals: dict[
+        Literal["topic", "entity", "goal", "project", "recency", "importance", "novelty"],
+        RecordedSignal,
+    ]
     weights: dict[str, float]
     profile_revisions: list[dict[str, str | int]] = Field(default_factory=list, max_length=2000)
     formula_version: int = 1

@@ -25,5 +25,7 @@ def test_baselined_file_growth_fails_but_equal_passes() -> None:
 
 
 def test_shrunk_or_deleted_baseline_entries_are_stale() -> None:
-    violations, stale = evaluate({"a.py": 1600, "b.py": 10}, {"a.py": 1700, "b.py": 1800, "c.py": 1600})
+    violations, stale = evaluate(
+        {"a.py": 1600, "b.py": 10}, {"a.py": 1700, "b.py": 1800, "c.py": 1600}
+    )
     assert violations == [] and len(stale) == 3

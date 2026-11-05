@@ -31,30 +31,51 @@ Member = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WriteAdmission = Annotated[object, Depends(require_account_write)]
 
 
-@router.post("/batches", response_model=TranslationBatchAccepted, status_code=202,
-             dependencies=[Depends(require_budget("translation_queue", 20, 60))])
+@router.post(
+    "/batches",
+    response_model=TranslationBatchAccepted,
+    status_code=202,
+    dependencies=[Depends(require_budget("translation_queue", 20, 60))],
+)
 async def create_batch(
-    value: TranslationBatchRequest, request: Request, session: Session,
-    member: Member, _admission: WriteAdmission,
+    value: TranslationBatchRequest,
+    request: Request,
+    session: Session,
+    member: Member,
+    _admission: WriteAdmission,
 ) -> TranslationBatchAccepted:
     """Authorize and queue references; disabled workspaces get blocked items and nothing is queued."""
     result = await public.request_translations(
-        session, member, value,
+        session,
+        member,
+        value,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
         auth_sessions=(authenticated_session_ref(request),),
-        app_settings=request.app.state.settings, redis=request.app.state.redis)
+        app_settings=request.app.state.settings,
+        redis=request.app.state.redis,
+    )
     await session.commit()
-    for translation_id in result.enqueue_ids:  # best effort: recover_translation_jobs covers a lost enqueue
+    for (
+        translation_id
+    ) in result.enqueue_ids:  # best effort: recover_translation_jobs covers a lost enqueue
         with contextlib.suppress(Exception):
             await request.app.state.redis.enqueue_job(
-                "translate_content", str(translation_id), _job_id=f"translation:{translation_id}",
-                _queue_name=queue_for("translate_content"))
+                "translate_content",
+                str(translation_id),
+                _job_id=f"translation:{translation_id}",
+                _queue_name=queue_for("translate_content"),
+            )
     return result
 
 
 @router.get("/batches/{batch_id}", response_model=TranslationBatchRead)
-async def read_batch(batch_id: UUID, request: Request, session: Session, member: Member) -> TranslationBatchRead:
+async def read_batch(
+    batch_id: UUID, request: Request, session: Session, member: Member
+) -> TranslationBatchRead:
     """Read this actor's batch in this workspace; other actors and workspaces see 404."""
     return await public.read_batch(
-        session, batch_id, scope=member,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+        session,
+        batch_id,
+        scope=member,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )

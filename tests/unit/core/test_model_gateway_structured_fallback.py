@@ -34,7 +34,13 @@ async def _call(replies: list[Any], store: _Store | None = None) -> tuple[Any, A
     sent = AsyncMock(side_effect=replies)
     with patch.object(ModelGateway, "_request", sent):
         result = await _gateway(MagicMock(), evidence=store).structured(
-            "background", _MAPPING, _policy(), [{"role": "user", "content": "x"}], SCHEMA, before_send=AsyncMock())
+            "background",
+            _MAPPING,
+            _policy(),
+            [{"role": "user", "content": "x"}],
+            SCHEMA,
+            before_send=AsyncMock(),
+        )
     return result, sent
 
 
@@ -49,12 +55,19 @@ async def test_native_structured_is_tried_first_without_any_evidence() -> None:
 @pytest.mark.asyncio
 async def test_native_rejection_falls_back_to_prompted_json_and_records() -> None:
     store = _Store()
-    result, sent = await _call([CapabilityUnsupported("Gateway rejected (HTTP 400: response_format)"),
-                                _reply('Sure!\n```json\n{"a": 2}\n```')], store)
+    result, sent = await _call(
+        [
+            CapabilityUnsupported("Gateway rejected (HTTP 400: response_format)"),
+            _reply('Sure!\n```json\n{"a": 2}\n```'),
+        ],
+        store,
+    )
     payload = sent.await_args_list[1].args[5]
     assert "response_format" not in payload
     assert payload["messages"][0]["role"] == "system" and '"a"' in payload["messages"][0]["content"]
-    assert sent.await_args_list[1].args[3] == "structured"  # privacy is still decided for the structured capability
+    assert (
+        sent.await_args_list[1].args[3] == "structured"
+    )  # privacy is still decided for the structured capability
     assert sent.await_args_list[1].kwargs["record_as"] == "chat"
     assert result["choices"][0]["message"]["content"] == '{"a": 2}'
     assert store.records == [("structured", "unsupported")]
@@ -69,15 +82,23 @@ async def test_stored_unsupported_skips_native_attempt() -> None:
 @pytest.mark.asyncio
 async def test_fallback_failure_propagates_real_error() -> None:
     with pytest.raises(CapabilityUnsupported, match="HTTP 400: nope"):
-        await _call([CapabilityUnsupported("native"), CapabilityUnsupported("Gateway rejected (HTTP 400: nope)")])
+        await _call(
+            [
+                CapabilityUnsupported("native"),
+                CapabilityUnsupported("Gateway rejected (HTTP 400: nope)"),
+            ]
+        )
 
 
-@pytest.mark.parametrize(("text", "expected"), [
-    ('{"a":1}', '{"a":1}'),
-    ('<think>plan {x}</think>{"a":1}', '{"a":1}'),
-    ('```json\n[1, 2]\n```', "[1, 2]"),
-    ('Result: {"a": {"b": 1}} done', '{"a": {"b": 1}}'),
-    ("not json", "not json"),
-])
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ('{"a":1}', '{"a":1}'),
+        ('<think>plan {x}</think>{"a":1}', '{"a":1}'),
+        ("```json\n[1, 2]\n```", "[1, 2]"),
+        ('Result: {"a": {"b": 1}} done', '{"a": {"b": 1}}'),
+        ("not json", "not json"),
+    ],
+)
 def test_extract_json(text: str, expected: str) -> None:
     assert _extract_json(text) == expected

@@ -29,11 +29,20 @@ tools = _ERASURE_MODULES["tools"]
 translations = _ERASURE_MODULES["translations"]
 _CORE_TABLES = ("demo_seed_receipts", "realtime_replay_head", "realtime_replay_events")
 _CORE_OWNER = AccountErasureOwner(_CORE_TABLES)
-_SPECIAL_TABLES = frozenset({
-    "connector_admission_slots", "translation_admission_slots", "github_webhook_capacity",
-    "github_webhook_deliveries", "github_webhook_outbox", "connector_quota_windows",
-    "remote_heavy_guards", "maintenance_summary", "system_health_samples", "system_history_settings",
-})
+_SPECIAL_TABLES = frozenset(
+    {
+        "connector_admission_slots",
+        "translation_admission_slots",
+        "github_webhook_capacity",
+        "github_webhook_deliveries",
+        "github_webhook_outbox",
+        "connector_quota_windows",
+        "remote_heavy_guards",
+        "maintenance_summary",
+        "system_health_samples",
+        "system_history_settings",
+    }
+)
 
 
 class AccountErasureStageError(RuntimeError):
@@ -60,7 +69,10 @@ def _table_owner(table: str) -> AccountErasureOwner:
 
 
 async def _run_paged_stage(
-    call: Callable[[], Awaitable[tuple[bool, dict[str, Any]]]], error_code: str, phase: str, next_phase: str,
+    call: Callable[[], Awaitable[tuple[bool, dict[str, Any]]]],
+    error_code: str,
+    phase: str,
+    next_phase: str,
 ) -> ErasureProgress:
     """Invoke and await one cursor-paged owner stage, wrapping any failure as ``AccountErasureStageError``.
 
@@ -77,7 +89,9 @@ async def _run_paged_stage(
 
 
 async def _erase_shared_stage(
-    factory: async_sessionmaker[AsyncSession], scope: AccountErasureScope, cursor: dict[str, Any],
+    factory: async_sessionmaker[AsyncSession],
+    scope: AccountErasureScope,
+    cursor: dict[str, Any],
 ) -> ErasureProgress:
     """Erase shared connector/tool/translation rows in one session, committing once at the end.
 
@@ -99,7 +113,9 @@ async def _erase_shared_stage(
 
 
 async def _erase_database_stage(
-    factory: async_sessionmaker[AsyncSession], scope: AccountErasureScope, cursor: dict[str, Any],
+    factory: async_sessionmaker[AsyncSession],
+    scope: AccountErasureScope,
+    cursor: dict[str, Any],
 ) -> ErasureProgress:
     """Erase up to 16 inventory tables per call, one session and commit per table.
 
@@ -116,20 +132,28 @@ async def _erase_database_stage(
     try:
         for table_index in range(index, min(index + 16, len(order))):
             async with factory() as session:
-                count = await _table_owner(order[table_index]).erase_page(session, scope, order[table_index])
+                count = await _table_owner(order[table_index]).erase_page(
+                    session, scope, order[table_index]
+                )
                 await session.commit()
             if count:
                 return ErasureProgress("database", {"table": table_index})
     except Exception as exc:
         raise AccountErasureStageError("data_cleanup_failed") from exc
     next_index = min(index + 16, len(order))
-    return ErasureProgress("references") if next_index == len(order) else ErasureProgress(
-        "database", {"table": next_index},
+    return (
+        ErasureProgress("references")
+        if next_index == len(order)
+        else ErasureProgress(
+            "database",
+            {"table": next_index},
+        )
     )
 
 
 async def _erase_references_stage(
-    factory: async_sessionmaker[AsyncSession], scope: AccountErasureScope,
+    factory: async_sessionmaker[AsyncSession],
+    scope: AccountErasureScope,
 ) -> ErasureProgress:
     """Anonymize settings/workspace references in one session and commit once."""
     async with factory() as session:
@@ -140,7 +164,8 @@ async def _erase_references_stage(
 
 
 async def _verify_erasure_stage(
-    factory: async_sessionmaker[AsyncSession], scope: AccountErasureScope,
+    factory: async_sessionmaker[AsyncSession],
+    scope: AccountErasureScope,
 ) -> ErasureProgress:
     """Verify every owner reports absence of account data; read-only, ends with a rollback."""
     async with factory() as session:
@@ -154,7 +179,10 @@ async def _verify_erasure_stage(
 
 
 async def erase_account_data(
-    ctx: dict[str, Any], scope: AccountErasureScope, phase: str, cursor: dict[str, Any],
+    ctx: dict[str, Any],
+    scope: AccountErasureScope,
+    phase: str,
+    cursor: dict[str, Any],
 ) -> ErasureProgress:
     """Advance one durable deletion stage; report completion only after all owners verify absence.
 
@@ -175,19 +203,31 @@ async def erase_account_data(
     # Owner callables are resolved at call time so module-level patches stay effective.
     if phase == "auxiliary":
         return await _run_paged_stage(
-            lambda: erase_auxiliary_data(ctx, scope, cursor), "auxiliary_cleanup_failed", phase, "remote",
+            lambda: erase_auxiliary_data(ctx, scope, cursor),
+            "auxiliary_cleanup_failed",
+            phase,
+            "remote",
         )
     if phase == "remote":
         return await _run_paged_stage(
-            lambda: connectors.erase_account_remote_page(ctx, scope, cursor), "remote_cleanup_failed", phase, "graph",
+            lambda: connectors.erase_account_remote_page(ctx, scope, cursor),
+            "remote_cleanup_failed",
+            phase,
+            "graph",
         )
     if phase == "graph":
         return await _run_paged_stage(
-            lambda: temporal.erase_account_graph_page(ctx, scope, cursor), "graph_cleanup_failed", phase, "storage",
+            lambda: temporal.erase_account_graph_page(ctx, scope, cursor),
+            "graph_cleanup_failed",
+            phase,
+            "storage",
         )
     if phase == "storage":
         return await _run_paged_stage(
-            lambda: documents.erase_account_storage_page(ctx, scope, cursor), "storage_cleanup_failed", phase, "shared",
+            lambda: documents.erase_account_storage_page(ctx, scope, cursor),
+            "storage_cleanup_failed",
+            phase,
+            "shared",
         )
     if phase == "shared":
         return await _erase_shared_stage(factory, scope, cursor)

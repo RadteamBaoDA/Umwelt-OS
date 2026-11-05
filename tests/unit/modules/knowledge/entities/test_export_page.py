@@ -26,25 +26,53 @@ def _entity(n: int, *, owner: bool = False) -> Any:
     """Entity row stand-in; ``owner`` makes name/description owner-origin (exported without support)."""
     origin = "owner" if owner else "derived"
     return SimpleNamespace(
-        id=uuid4(), type="person", name=f"Name {n}", canonical_name=f"name {n}", description="desc", revision=2,
-        name_origin=origin, description_origin=origin, first_seen_at=None, last_seen_at=None,
-        created_at=NOW + timedelta(seconds=n), updated_at=NOW + timedelta(seconds=n),
+        id=uuid4(),
+        type="person",
+        name=f"Name {n}",
+        canonical_name=f"name {n}",
+        description="desc",
+        revision=2,
+        name_origin=origin,
+        description_origin=origin,
+        first_seen_at=None,
+        last_seen_at=None,
+        created_at=NOW + timedelta(seconds=n),
+        updated_at=NOW + timedelta(seconds=n),
     )
 
 
 def _alias(entity: Any) -> Any:
     """Alias row stand-in."""
-    return SimpleNamespace(id=uuid4(), entity_id=entity.id, alias="al", confirmed=True, origin="owner",
-                           confidence=None, created_at=NOW)
+    return SimpleNamespace(
+        id=uuid4(),
+        entity_id=entity.id,
+        alias="al",
+        confirmed=True,
+        origin="owner",
+        confidence=None,
+        created_at=NOW,
+    )
 
 
 def _membership(source_id: Any) -> Any:
     """Evidence membership stand-in."""
-    return SimpleNamespace(id=uuid4(), source_id=source_id, document_id=uuid4(), document_version_id=uuid4(),
-                           chunk_id=uuid4(), observed_at=NOW, extracted_at=NOW, confidence=0.5)
+    return SimpleNamespace(
+        id=uuid4(),
+        source_id=source_id,
+        document_id=uuid4(),
+        document_version_id=uuid4(),
+        chunk_id=uuid4(),
+        observed_at=NOW,
+        extracted_at=NOW,
+        confidence=0.5,
+    )
 
 
-def _session(rows: list[Any], children: dict[Any, tuple[list[Any], list[Any]]], support: list[Any] | None = None) -> Any:
+def _session(
+    rows: list[Any],
+    children: dict[Any, tuple[list[Any], list[Any]]],
+    support: list[Any] | None = None,
+) -> Any:
     """Session whose scalars answer: entity page, then per-entity aliases and evidence in order."""
     queue: list[list[Any]] = [rows]
     for row in rows:
@@ -58,7 +86,9 @@ def _session(rows: list[Any], children: dict[Any, tuple[list[Any], list[Any]]], 
     async def execute(_statement: Any) -> Any:
         return SimpleNamespace(all=lambda: support or [])
 
-    return SimpleNamespace(scalars=AsyncMock(side_effect=scalars), execute=AsyncMock(side_effect=execute))
+    return SimpleNamespace(
+        scalars=AsyncMock(side_effect=scalars), execute=AsyncMock(side_effect=execute)
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -85,7 +115,13 @@ def _patched(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
 
 async def _export(session: Any, **over: Any) -> Any:
     """Call ``export_page`` with defaults."""
-    kwargs: dict[str, Any] = {"owner_id": 7, "record_kind": "entities", "limit": 50, "scope": _scope(), "multi_workspace_enabled": False}
+    kwargs: dict[str, Any] = {
+        "owner_id": 7,
+        "record_kind": "entities",
+        "limit": 50,
+        "scope": _scope(),
+        "multi_workspace_enabled": False,
+    }
     kwargs.update(over)
     return await ent.export_page(session, **kwargs)
 
@@ -97,7 +133,9 @@ async def test_invalid_kind_owner_or_limit_is_rejected() -> None:
             await _export(_session([], {}), **over)
 
 
-async def test_owner_origin_entity_exports_with_children_fence_and_no_field_checks(_patched: SimpleNamespace) -> None:
+async def test_owner_origin_entity_exports_with_children_fence_and_no_field_checks(
+    _patched: SimpleNamespace,
+) -> None:
     """Owner-origin fields skip support checks; aliases, citations and source fences are exported together."""
     row = _entity(1, owner=True)
     source = uuid4()
@@ -107,7 +145,9 @@ async def test_owner_origin_entity_exports_with_children_fence_and_no_field_chec
     assert page.snapshot_count == 5 and page.next_cursor is None and page.owner_id == 7
     item, fence = page.items[0], page.fences[0]
     assert item.name == "Name 1" and item.name_origin == "owner" and item.description == "desc"
-    assert [a.id for a in item.aliases] == [alias.id] and item.aliases[0].supports[0].source_generation == 4
+    assert [a.id for a in item.aliases] == [alias.id] and item.aliases[0].supports[
+        0
+    ].source_generation == 4
     assert item.evidence[0].source_generation == 4
     assert fence.alias_ids == [alias.id] and fence.evidence_ids == [evidence.id]
     assert {(f.source_id, f.generation) for f in fence.source_fences} == {(source, 4)}
@@ -130,8 +170,13 @@ async def test_extra_row_sets_cursor_at_last_item() -> None:
     rows = [_entity(n, owner=True) for n in range(3)]
     page = await _export(_session(rows, {}), limit=2)
     assert [i.id for i in page.items] == [rows[0].id, rows[1].id] and page.next_cursor is not None
-    snapshot_at, position_at, position_id = ent._decode_entity_export_cursor(page.next_cursor, 7, WS)
-    assert (position_at, position_id) == (rows[1].created_at, rows[1].id) and snapshot_at == page.snapshot_at
+    snapshot_at, position_at, position_id = ent._decode_entity_export_cursor(
+        page.next_cursor, 7, WS
+    )
+    assert (position_at, position_id) == (
+        rows[1].created_at,
+        rows[1].id,
+    ) and snapshot_at == page.snapshot_at
 
 
 async def test_bounds_raise_explicit_errors() -> None:

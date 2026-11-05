@@ -30,7 +30,9 @@ from modules.agents.harness import (
 
 WORKSPACE_ID = uuid4()
 SCOPE = InternalJobScope(workspace_id=WORKSPACE_ID, actor_user_id=1, membership_revision=1)
-ORIGINAL_FENCE = AccessFence(workspace_id=WORKSPACE_ID, user_id=1, membership_revision=1, configuration_revision=1)
+ORIGINAL_FENCE = AccessFence(
+    workspace_id=WORKSPACE_ID, user_id=1, membership_revision=1, configuration_revision=1
+)
 
 
 class TestStrictJsonSerializer:
@@ -148,7 +150,11 @@ class TestSupervisorHandoffDepthLimits:
         parent_context.profile_snapshot = {"id": "supervisor"}
 
         # Frozen parent input fences are required before the target is judged.
-        state = {"pending_tool_calls": [{"id": "call_1"}], "pending_source_fences": [], "source_fences": []}
+        state = {
+            "pending_tool_calls": [{"id": "call_1"}],
+            "pending_source_fences": [],
+            "source_fences": [],
+        }
         arguments = {"specialist": "unknown_specialist", "request": "Do work"}
 
         with pytest.raises(HandoffRefused) as exc_info:

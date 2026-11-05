@@ -55,7 +55,9 @@ _OUTBOX_SIZE_SQL = text(
 )
 
 
-async def sample_outbox(session_factory: async_sessionmaker[AsyncSession], *, retention_days: int = 30) -> None:
+async def sample_outbox(
+    session_factory: async_sessionmaker[AsyncSession], *, retention_days: int = 30
+) -> None:
     """Set the outbox backlog count, oldest undelivered age, estimated row total and purge backlog.
 
     Opens one short read-only session (no writes, no locks beyond the statements) and rolls it back
@@ -65,20 +67,30 @@ async def sample_outbox(session_factory: async_sessionmaker[AsyncSession], *, re
     now = datetime.now(UTC)
     async with session_factory() as session:
         row = (await session.execute(_OUTBOX_BACKLOG_SQL)).one()
-        size = (await session.execute(_OUTBOX_SIZE_SQL, {
-            "general_cutoff": now - timedelta(days=max(1, retention_days)),
-            "stage_cutoff": now - _PURGE_STAGE_RETENTION,
-        })).one()
+        size = (
+            await session.execute(
+                _OUTBOX_SIZE_SQL,
+                {
+                    "general_cutoff": now - timedelta(days=max(1, retention_days)),
+                    "stage_cutoff": now - _PURGE_STAGE_RETENTION,
+                },
+            )
+        ).one()
     OUTBOX_ROWS_TOTAL.set(max(0, int(size.rows_total or 0)))
     OUTBOX_PURGE_BACKLOG.set(int(size.backlog or 0))
     OUTBOX_PENDING.set(int(row.pending))
     oldest: datetime | None = row.oldest
-    OUTBOX_LAG.set(max(0.0, (datetime.now(UTC) - oldest).total_seconds()) if oldest is not None else 0.0)
+    OUTBOX_LAG.set(
+        max(0.0, (datetime.now(UTC) - oldest).total_seconds()) if oldest is not None else 0.0
+    )
 
 
 def build_api_samplers(
-    redis: Any, session_factory: async_sessionmaker[AsyncSession], queues: Iterable[str],
-    *, outbox_retention_days: int = 30,
+    redis: Any,
+    session_factory: async_sessionmaker[AsyncSession],
+    queues: Iterable[str],
+    *,
+    outbox_retention_days: int = 30,
 ) -> list[tuple[str, Sampler]]:
     """Return the named samplers the API metrics loop runs: ``arq_queues`` and ``outbox``."""
     queue_names = tuple(queues)

@@ -33,13 +33,19 @@ def _state_directory() -> Path:
             raise RuntimeError("LOCALAPPDATA is required to register a reset-safe workspace")
         return Path(root) / "Umwelt-OS" / "workspaces"
     root = os.environ.get("XDG_STATE_HOME")
-    return Path(root) / "umwelt-os" / "workspaces" if root else Path.home() / ".local" / "state" / "umwelt-os" / "workspaces"
+    return (
+        Path(root) / "umwelt-os" / "workspaces"
+        if root
+        else Path.home() / ".local" / "state" / "umwelt-os" / "workspaces"
+    )
 
 
 def _project_name(value: str) -> str:
     """Validate the exact unique project namespace that reset is allowed to remove."""
     if not WORKSPACE_PATTERN.fullmatch(value):
-        raise ValueError("workspace must be bbd-os-ws- followed by exactly 12 lowercase hexadecimal characters")
+        raise ValueError(
+            "workspace must be bbd-os-ws- followed by exactly 12 lowercase hexadecimal characters"
+        )
     return value
 
 
@@ -57,7 +63,11 @@ def _fingerprint(project: str, web_port: int) -> str:
         environment = _workspace_environment(project, web_port)
         result = subprocess.run(
             _compose(project, "config", "--format", "json"),
-            cwd=REPOSITORY, check=True, capture_output=True, text=True, env=environment,
+            cwd=REPOSITORY,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=environment,
         )
     except (OSError, subprocess.CalledProcessError) as exc:
         raise RuntimeError("could not resolve the named workspace Compose configuration") from exc
@@ -73,17 +83,32 @@ def _workspace_environment(project: str, web_port: int) -> dict[str, str]:
     environment.pop("REDIS_URL", None)
     try:
         result = subprocess.run(
-            _compose(project, "config", "--format", "json"), cwd=REPOSITORY,
-            check=True, capture_output=True, text=True, env=environment,
+            _compose(project, "config", "--format", "json"),
+            cwd=REPOSITORY,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=environment,
         )
         config = json.loads(result.stdout)
         postgres_environment = config["services"]["postgres"]["environment"]
         password = postgres_environment["POSTGRES_PASSWORD"]
         if not isinstance(password, str) or not password:
             raise ValueError("missing local Postgres password")
-    except (OSError, subprocess.CalledProcessError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise RuntimeError("could not resolve named workspace's local database configuration") from exc
-    environment["DATABASE_URL"] = f"postgresql+asyncpg://bbd:{quote(password, safe='')}@postgres:5432/bbd"
+    except (
+        OSError,
+        subprocess.CalledProcessError,
+        KeyError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise RuntimeError(
+            "could not resolve named workspace's local database configuration"
+        ) from exc
+    environment["DATABASE_URL"] = (
+        f"postgresql+asyncpg://bbd:{quote(password, safe='')}@postgres:5432/bbd"
+    )
     environment["REDIS_URL"] = "redis://redis:6379/0"
     return environment
 
@@ -92,11 +117,16 @@ def _daemon_identity() -> str:
     """Return the Docker daemon ID that fences a registration from other contexts or daemon replacements."""
     try:
         result = subprocess.run(
-            ["docker", "info", "--format", "{{.ID}}"], cwd=REPOSITORY,
-            check=True, capture_output=True, text=True,
+            ["docker", "info", "--format", "{{.ID}}"],
+            cwd=REPOSITORY,
+            check=True,
+            capture_output=True,
+            text=True,
         )
     except (OSError, subprocess.CalledProcessError) as exc:
-        raise RuntimeError("could not identify Docker daemon; refusing workspace operation") from exc
+        raise RuntimeError(
+            "could not identify Docker daemon; refusing workspace operation"
+        ) from exc
     identity = result.stdout.strip()
     if not identity:
         raise RuntimeError("Docker daemon identity is unavailable; refusing workspace operation")
@@ -112,18 +142,26 @@ def _existing_project_resources(project: str) -> bool:
     )
     for command, name_prefix in queries:
         try:
-            result = subprocess.run(command, cwd=REPOSITORY, check=True, capture_output=True, text=True)
+            result = subprocess.run(
+                command, cwd=REPOSITORY, check=True, capture_output=True, text=True
+            )
             resources = [json.loads(line) for line in result.stdout.splitlines()]
         except (OSError, subprocess.CalledProcessError) as exc:
-            raise RuntimeError("could not check existing Docker resources; refusing workspace registration") from exc
+            raise RuntimeError(
+                "could not check existing Docker resources; refusing workspace registration"
+            ) from exc
         except json.JSONDecodeError as exc:
-            raise RuntimeError("could not parse existing Docker resources; refusing workspace registration") from exc
+            raise RuntimeError(
+                "could not parse existing Docker resources; refusing workspace registration"
+            ) from exc
         for resource in resources:
             name = resource.get("Names", resource.get("Name", ""))
             labels = resource.get("Labels", "")
             if isinstance(name, str) and name.startswith(name_prefix):
                 return True
-            if isinstance(labels, str) and f"com.docker.compose.project={project}" in labels.split(","):
+            if isinstance(labels, str) and f"com.docker.compose.project={project}" in labels.split(
+                ","
+            ):
                 return True
     return False
 
@@ -178,16 +216,28 @@ def _read_registration(project: str) -> dict[str, object]:
     try:
         value = json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError("workspace is not registered by this checkout; refusing operation") from exc
+        raise RuntimeError(
+            "workspace is not registered by this checkout; refusing operation"
+        ) from exc
     if not isinstance(value, dict):
         raise RuntimeError("workspace registration is invalid; refusing operation")
     if value.get("project") != project or value.get("repository") != str(REPOSITORY):
-        raise RuntimeError("workspace registration does not belong to this checkout; refusing operation")
+        raise RuntimeError(
+            "workspace registration does not belong to this checkout; refusing operation"
+        )
     if value.get("daemon_id") != _daemon_identity():
-        raise RuntimeError("workspace registration belongs to a different Docker daemon; refusing operation")
+        raise RuntimeError(
+            "workspace registration belongs to a different Docker daemon; refusing operation"
+        )
     port = value.get("web_port")
-    if type(port) is not int or not 1024 <= port <= 65535 or value.get("fingerprint") != _fingerprint(project, port):
-        raise RuntimeError("workspace registration or Compose fingerprint changed; refusing operation")
+    if (
+        type(port) is not int
+        or not 1024 <= port <= 65535
+        or value.get("fingerprint") != _fingerprint(project, port)
+    ):
+        raise RuntimeError(
+            "workspace registration or Compose fingerprint changed; refusing operation"
+        )
     value["marker_path"] = marker
     return value
 
@@ -208,10 +258,17 @@ def _register(project: str) -> dict[str, object]:
         return _read_registration(project)
     port = _free_web_port()
     fingerprint = _fingerprint(project, port)
-    expected = {"project": project, "repository": str(REPOSITORY), "web_port": port, "fingerprint": fingerprint}
+    expected = {
+        "project": project,
+        "repository": str(REPOSITORY),
+        "web_port": port,
+        "fingerprint": fingerprint,
+    }
     expected["daemon_id"] = _daemon_identity()
     if _existing_project_resources(project):
-        raise RuntimeError("Docker project resources already exist without this checkout's registration; refusing adoption")
+        raise RuntimeError(
+            "Docker project resources already exist without this checkout's registration; refusing adoption"
+        )
     try:
         with marker.open("x", encoding="utf-8") as stream:
             json.dump(expected, stream, separators=(",", ":"))
@@ -221,7 +278,9 @@ def _register(project: str) -> dict[str, object]:
         raise RuntimeError("could not create exclusive workspace registration") from exc
     try:
         if _existing_project_resources(project):
-            raise RuntimeError("Docker project resources appeared during registration; refusing adoption")
+            raise RuntimeError(
+                "Docker project resources appeared during registration; refusing adoption"
+            )
     except RuntimeError:
         marker.unlink(missing_ok=True)
         raise
@@ -235,7 +294,9 @@ def _run(project: str, arguments: list[str], web_port: int) -> None:
         environment = _workspace_environment(project, web_port)
         subprocess.run(arguments, cwd=REPOSITORY, check=True, env=environment)
     except (OSError, subprocess.CalledProcessError) as exc:
-        raise RuntimeError(f"Compose operation failed: {arguments[2] if len(arguments) > 2 else 'docker'}") from exc
+        raise RuntimeError(
+            f"Compose operation failed: {arguments[2] if len(arguments) > 2 else 'docker'}"
+        ) from exc
 
 
 def _verify_target(project: str, web_port: int) -> None:
@@ -243,7 +304,9 @@ def _verify_target(project: str, web_port: int) -> None:
     command = _compose(project, "ps", "--all", "-q")
     try:
         environment = _workspace_environment(project, web_port)
-        result = subprocess.run(command, cwd=REPOSITORY, check=True, capture_output=True, text=True, env=environment)
+        result = subprocess.run(
+            command, cwd=REPOSITORY, check=True, capture_output=True, text=True, env=environment
+        )
     except (OSError, subprocess.CalledProcessError) as exc:
         raise RuntimeError("could not inspect named workspace; refusing reset") from exc
     expected_configs = {
@@ -254,68 +317,128 @@ def _verify_target(project: str, web_port: int) -> None:
         try:
             inspected = subprocess.run(
                 ["docker", "inspect", "--format", "{{json .Config.Labels}}", container_id],
-                check=True, capture_output=True, text=True,
+                check=True,
+                capture_output=True,
+                text=True,
             )
             labels = json.loads(inspected.stdout)
-            config_label = labels.get("com.docker.compose.project.config_files") if isinstance(labels, dict) else None
+            config_label = (
+                labels.get("com.docker.compose.project.config_files")
+                if isinstance(labels, dict)
+                else None
+            )
             if not isinstance(config_label, str):
                 raise ValueError("Compose config label is unavailable")
             config_files = {
-                str(Path(value).resolve()).casefold()
-                for value in config_label.split(",")
+                str(Path(value).resolve()).casefold() for value in config_label.split(",")
             }
             working_dir = str(Path(labels["com.docker.compose.project.working_dir"]).resolve())
-        except (OSError, subprocess.CalledProcessError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise RuntimeError("could not verify named workspace container labels; refusing reset") from exc
+        except (
+            OSError,
+            subprocess.CalledProcessError,
+            KeyError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise RuntimeError(
+                "could not verify named workspace container labels; refusing reset"
+            ) from exc
         if (
             labels.get("com.docker.compose.project") != project
             or working_dir.casefold() != str(REPOSITORY).casefold()
             or config_files != expected_configs
         ):
-            raise RuntimeError("container ownership does not match the registered Compose workspace; refusing reset")
+            raise RuntimeError(
+                "container ownership does not match the registered Compose workspace; refusing reset"
+            )
     try:
         volumes = subprocess.run(
-            ["docker", "volume", "ls", "--filter", f"label=com.docker.compose.project={project}", "--format", "{{.Name}}"],
-            check=True, capture_output=True, text=True,
+            [
+                "docker",
+                "volume",
+                "ls",
+                "--filter",
+                f"label=com.docker.compose.project={project}",
+                "--format",
+                "{{.Name}}",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
         )
     except (OSError, subprocess.CalledProcessError) as exc:
         raise RuntimeError("could not inspect named workspace volumes; refusing reset") from exc
-    expected_volumes = {"app-data", "postgres-data", "redis-data", "web-node-modules", "web-app-node-modules"}
+    expected_volumes = {
+        "app-data",
+        "postgres-data",
+        "redis-data",
+        "web-node-modules",
+        "web-app-node-modules",
+    }
     for name in volumes.stdout.splitlines():
-        if not name.startswith(f"{project}_") or name[len(project) + 1:] not in expected_volumes:
+        if not name.startswith(f"{project}_") or name[len(project) + 1 :] not in expected_volumes:
             raise RuntimeError("named project contains an unexpected volume; refusing reset")
         try:
             inspected = subprocess.run(
                 ["docker", "volume", "inspect", "--format", "{{json .Labels}}", name],
-                check=True, capture_output=True, text=True,
+                check=True,
+                capture_output=True,
+                text=True,
             )
             labels = json.loads(inspected.stdout)
         except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
-            raise RuntimeError("could not verify named workspace volume labels; refusing reset") from exc
+            raise RuntimeError(
+                "could not verify named workspace volume labels; refusing reset"
+            ) from exc
         if not isinstance(labels, dict) or labels.get("com.docker.compose.project") != project:
-            raise RuntimeError("volume ownership does not match the registered Compose workspace; refusing reset")
+            raise RuntimeError(
+                "volume ownership does not match the registered Compose workspace; refusing reset"
+            )
     if not result.stdout.splitlines() and not volumes.stdout.splitlines():
-        raise RuntimeError("named workspace has no Compose resources; refusing a successful no-op reset")
+        raise RuntimeError(
+            "named workspace has no Compose resources; refusing a successful no-op reset"
+        )
     try:
         networks = subprocess.run(
-            ["docker", "network", "ls", "--filter", f"label=com.docker.compose.project={project}", "--format", "{{.Name}}"],
-            check=True, capture_output=True, text=True,
+            [
+                "docker",
+                "network",
+                "ls",
+                "--filter",
+                f"label=com.docker.compose.project={project}",
+                "--format",
+                "{{.Name}}",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
         )
     except (OSError, subprocess.CalledProcessError) as exc:
         raise RuntimeError("could not inspect named workspace networks; refusing reset") from exc
-    if not networks.stdout.splitlines() or any(name != f"{project}_default" for name in networks.stdout.splitlines()):
-        raise RuntimeError("named project contains an unexpected or missing network; refusing reset")
+    if not networks.stdout.splitlines() or any(
+        name != f"{project}_default" for name in networks.stdout.splitlines()
+    ):
+        raise RuntimeError(
+            "named project contains an unexpected or missing network; refusing reset"
+        )
     for name in networks.stdout.splitlines():
         try:
             inspected = subprocess.run(
                 ["docker", "network", "inspect", "--format", "{{json .Labels}}", name],
-                check=True, capture_output=True, text=True,
+                check=True,
+                capture_output=True,
+                text=True,
             )
             labels = json.loads(inspected.stdout)
         except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
-            raise RuntimeError("could not verify named workspace network labels; refusing reset") from exc
+            raise RuntimeError(
+                "could not verify named workspace network labels; refusing reset"
+            ) from exc
         if not isinstance(labels, dict) or labels.get("com.docker.compose.project") != project:
-            raise RuntimeError("network ownership does not match the registered Compose workspace; refusing reset")
+            raise RuntimeError(
+                "network ownership does not match the registered Compose workspace; refusing reset"
+            )
 
 
 def _workspace_up(project: str) -> None:
@@ -337,7 +460,17 @@ def _workspace_seed(project: str) -> None:
     registration = _read_registration(project)
     _run(
         project,
-        _compose(project, "run", "--rm", "--build", "api", "python", "-m", "modules.knowledge.documents.seed", development=False),
+        _compose(
+            project,
+            "run",
+            "--rm",
+            "--build",
+            "api",
+            "python",
+            "-m",
+            "modules.knowledge.documents.seed",
+            development=False,
+        ),
         int(registration["web_port"]),
     )
 
@@ -367,8 +500,12 @@ def main() -> int:
     """Parse a bounded workspace command, serialize it by project, and report failures without exposing config."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("up", "stop", "seed", "reset-preview", "reset"))
-    parser.add_argument("--name", required=True, help="unique project name bbd-os-ws-<12 lowercase hex>")
-    parser.add_argument("--confirm", help="exact fingerprint printed by reset-preview; required by reset")
+    parser.add_argument(
+        "--name", required=True, help="unique project name bbd-os-ws-<12 lowercase hex>"
+    )
+    parser.add_argument(
+        "--confirm", help="exact fingerprint printed by reset-preview; required by reset"
+    )
     args = parser.parse_args()
     try:
         project = _project_name(args.name)
@@ -383,7 +520,9 @@ def main() -> int:
                 _reset_preview(project)
             else:
                 if not args.confirm:
-                    raise ValueError("reset requires --confirm with the exact reset-preview fingerprint")
+                    raise ValueError(
+                        "reset requires --confirm with the exact reset-preview fingerprint"
+                    )
                 _reset(project, args.confirm)
     except (RuntimeError, ValueError) as exc:
         print(str(exc), file=sys.stderr)

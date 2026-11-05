@@ -34,10 +34,14 @@ async def test_link_agent_run_allows_owner_7_and_denies_other_actor(monkeypatch)
     _flag(monkeypatch)
     monkeypatch.setattr("core.auth.public.revalidate_account_session", AsyncMock(return_value=True))
     monkeypatch.setattr(chat_public, "is_history_storage_enabled", AsyncMock(return_value=True))
-    conv = SimpleNamespace(id=uuid4(), workspace_id=WS, actor_user_id=7, ephemeral=False, expires_at=None)
+    conv = SimpleNamespace(
+        id=uuid4(), workspace_id=WS, actor_user_id=7, ephemeral=False, expires_at=None
+    )
     session = MagicMock(scalar=AsyncMock(return_value=conv), add=MagicMock())
     await chat_public.link_agent_run(session, conv.id, uuid4(), 7, "h" * 64)
-    (link,) = [c.args[0] for c in session.add.call_args_list if isinstance(c.args[0], AgentActivityLink)]
+    (link,) = [
+        c.args[0] for c in session.add.call_args_list if isinstance(c.args[0], AgentActivityLink)
+    ]
     assert link.owner_id == 7 and link.workspace_id == WS
     conv.actor_user_id = 8  # a member/other actor cannot link onto someone else's conversation
     with pytest.raises(DomainError) as denied:
@@ -55,19 +59,29 @@ async def test_live_agent_conversation_id_not_pinned_to_owner_1():
 @pytest.mark.asyncio
 async def test_filter_live_run_ids_denies_when_session_invalid(monkeypatch):
     _flag(monkeypatch)
-    monkeypatch.setattr("core.auth.public.revalidate_account_session", AsyncMock(return_value=False))
-    assert await chat_public.filter_live_agent_run_ids(MagicMock(), [uuid4()], 7, "h") == frozenset()
+    monkeypatch.setattr(
+        "core.auth.public.revalidate_account_session", AsyncMock(return_value=False)
+    )
+    assert (
+        await chat_public.filter_live_agent_run_ids(MagicMock(), [uuid4()], 7, "h") == frozenset()
+    )
 
 
 @pytest.mark.asyncio
 async def test_export_owner_gate(monkeypatch):
     session = MagicMock(scalar=AsyncMock(return_value=7))
-    await chat_public._require_chat_export_owner(session, 7, scope=OWNER7, multi_workspace_enabled=True)
+    await chat_public._require_chat_export_owner(
+        session, 7, scope=OWNER7, multi_workspace_enabled=True
+    )
     with pytest.raises(PermissionError):  # rollout off: only the bootstrap account
-        await chat_public._require_chat_export_owner(session, 7, scope=OWNER7, multi_workspace_enabled=False)
+        await chat_public._require_chat_export_owner(
+            session, 7, scope=OWNER7, multi_workspace_enabled=False
+        )
     member = WorkspaceContext(user_id=8, workspace_id=WS, role="member", membership_revision=1)
     with pytest.raises(PermissionError):  # scope belongs to someone else
-        await chat_public._require_chat_export_owner(session, 7, scope=member, multi_workspace_enabled=True)
+        await chat_public._require_chat_export_owner(
+            session, 7, scope=member, multi_workspace_enabled=True
+        )
 
 
 @pytest.mark.asyncio
@@ -75,7 +89,9 @@ async def test_export_owner_gate_denies_member_role_of_same_user():
     session = MagicMock(scalar=AsyncMock(return_value=7))
     member = WorkspaceContext(user_id=7, workspace_id=WS, role="member", membership_revision=1)
     with pytest.raises(PermissionError):
-        await chat_public._require_chat_export_owner(session, 7, scope=member, multi_workspace_enabled=True)
+        await chat_public._require_chat_export_owner(
+            session, 7, scope=member, multi_workspace_enabled=True
+        )
 
 
 MEMBER7 = WorkspaceContext(user_id=7, workspace_id=WS, role="member", membership_revision=1)
@@ -86,12 +102,18 @@ async def test_agent_activity_allows_owner_7_filters_workspace(monkeypatch):
     _flag(monkeypatch)
     monkeypatch.setattr("core.auth.public.revalidate_account_session", AsyncMock(return_value=True))
     link = SimpleNamespace(
-        conversation_id=uuid4(), agent_run_id=uuid4(), activities=[], updated_at=__import__("datetime").datetime.now(__import__("datetime").UTC),
-        auth_session_hash="h", expires_at=None,
+        conversation_id=uuid4(),
+        agent_run_id=uuid4(),
+        activities=[],
+        updated_at=__import__("datetime").datetime.now(__import__("datetime").UTC),
+        auth_session_hash="h",
+        expires_at=None,
     )
     conv = SimpleNamespace(expires_at=None)
     session = MagicMock(scalar=AsyncMock(side_effect=[link, conv]))
-    read = await chat_public.get_agent_activity(session, link.conversation_id, link.agent_run_id, 7, "h", scope=OWNER7)
+    read = await chat_public.get_agent_activity(
+        session, link.conversation_id, link.agent_run_id, 7, "h", scope=OWNER7
+    )
     assert read.agent_run_id == link.agent_run_id
     for call in session.scalar.await_args_list:
         assert str(WS) in str(call.args[0].compile().params.values())
@@ -118,7 +140,9 @@ async def test_agent_activity_foreign_workspace_is_404(monkeypatch):
         await chat_public.get_agent_activity(session, uuid4(), uuid4(), 7, "h", scope=OWNER7)
     with pytest.raises(DomainError) as b:
         await chat_public.list_agent_run_ids_for_owner(session, uuid4(), 7, "h", scope=OWNER7)
-    other_user = WorkspaceContext(user_id=8, workspace_id=uuid4(), role="owner", membership_revision=1)
+    other_user = WorkspaceContext(
+        user_id=8, workspace_id=uuid4(), role="owner", membership_revision=1
+    )
     with pytest.raises(DomainError) as c:
         await chat_public.list_agent_run_ids_for_owner(session, uuid4(), 7, "h", scope=other_user)
     assert a.value.status_code == b.value.status_code == c.value.status_code == 404

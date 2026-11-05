@@ -45,7 +45,10 @@ class DocumentDescriptor(ModuleDescriptor):
         "/api/v1/documents/{document_id}/versions/{version_number}/interaction",
     )
     emitted_events: tuple[str, ...] = (
-        "document.cleanup.requested", "source.purge.progressed", "document.version.ready", "news.document.ready",
+        "document.cleanup.requested",
+        "source.purge.progressed",
+        "document.version.ready",
+        "news.document.ready",
     )
     consumed_events: tuple[str, ...] = ("document.cleanup.requested", "document.version.ready")
     tools: tuple[str, ...] = ("knowledge.get_document", "knowledge.list_documents")
@@ -53,22 +56,31 @@ class DocumentDescriptor(ModuleDescriptor):
         {"label": "Documents", "href": "/knowledge/documents"},
     )
     settings_schema: dict[str, object] | None = None
-    routers: tuple[RouterSpec, ...] = (
-        RouterSpec("modules.knowledge.documents.routes", 70),
-    )
+    routers: tuple[RouterSpec, ...] = (RouterSpec("modules.knowledge.documents.routes", 70),)
     capabilities: tuple[CapabilitySpec, ...] = (
-        CapabilitySpec("documents.lock_document_ids", "modules.knowledge.documents.public:lock_document_ids"),
-        CapabilitySpec("documents.read_document_access_projection", "modules.knowledge.documents.public:read_document_access_projection"),
+        CapabilitySpec(
+            "documents.lock_document_ids", "modules.knowledge.documents.public:lock_document_ids"
+        ),
+        CapabilitySpec(
+            "documents.read_document_access_projection",
+            "modules.knowledge.documents.public:read_document_access_projection",
+        ),
     )
     erasure_module: str | None = "modules.knowledge.documents.erasure"
     erasure_order: int = 80
     event_consumers: tuple[EventConsumerSpec, ...] = (
-        EventConsumerSpec("document.cleanup.requested", "process_document_cleanup",
-                          ("modules.knowledge.documents",),
-                          "modules.ingestion.public:DocumentCleanupEventHandler"),
-        EventConsumerSpec("document.version.ready", "process_document_ready",
-                          ("modules.ingestion", "modules.knowledge.documents"),
-                          "modules.ingestion.public:DocumentReadyEventHandler"),
+        EventConsumerSpec(
+            "document.cleanup.requested",
+            "process_document_cleanup",
+            ("modules.knowledge.documents",),
+            "modules.ingestion.public:DocumentCleanupEventHandler",
+        ),
+        EventConsumerSpec(
+            "document.version.ready",
+            "process_document_ready",
+            ("modules.ingestion", "modules.knowledge.documents"),
+            "modules.ingestion.public:DocumentReadyEventHandler",
+        ),
     )
 
 

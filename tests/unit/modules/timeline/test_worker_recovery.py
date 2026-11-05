@@ -39,40 +39,81 @@ class _Factory:
 
 
 def _ref(**over: Any) -> SimpleNamespace:
-    base = {"source_id": uuid4(), "document_id": uuid4(), "document_version_id": uuid4(),
-            "source_generation": 3, "raw_uri": "raw", "mime_type": "text/plain", "local_only": False}
+    base = {
+        "source_id": uuid4(),
+        "document_id": uuid4(),
+        "document_version_id": uuid4(),
+        "source_generation": 3,
+        "raw_uri": "raw",
+        "mime_type": "text/plain",
+        "local_only": False,
+    }
     return SimpleNamespace(**{**base, **over})
 
 
-async def _recover(ref: SimpleNamespace, *, source: SimpleNamespace | None, current: SimpleNamespace | None,
-                   locked: bool = True, next_cursor: str | None = "n", blocked: list[Any] | None = None,
-                   recoverable: list[Any] | None = None, requeue: bool = True) -> SimpleNamespace:
+async def _recover(
+    ref: SimpleNamespace,
+    *,
+    source: SimpleNamespace | None,
+    current: SimpleNamespace | None,
+    locked: bool = True,
+    next_cursor: str | None = "n",
+    blocked: list[Any] | None = None,
+    recoverable: list[Any] | None = None,
+    requeue: bool = True,
+) -> SimpleNamespace:
     factory = _Factory()
     redis = MagicMock()
     redis.get = AsyncMock(return_value=b"c1")
     redis.set, redis.delete, redis.enqueue_job = AsyncMock(), AsyncMock(), AsyncMock()
-    ctx = {"session_factory": factory, "redis": redis,
-           "settings": SimpleNamespace(multi_workspace_enabled=True)}
+    ctx = {
+        "session_factory": factory,
+        "redis": redis,
+        "settings": SimpleNamespace(multi_workspace_enabled=True),
+    }
     probes = SimpleNamespace(
-        schedule=AsyncMock(return_value=uuid4()), defer=AsyncMock(), requeue=AsyncMock(return_value=requeue),
-        factory=factory, redis=redis,
+        schedule=AsyncMock(return_value=uuid4()),
+        defer=AsyncMock(),
+        requeue=AsyncMock(return_value=requeue),
+        factory=factory,
+        redis=redis,
     )
     patches = [
         patch.object(worker, "_recovery_workspace_ids", AsyncMock(return_value=[WS])),
         patch.object(worker, "_workspace_job_scope", AsyncMock(return_value=SCOPE)),
         patch.object(worker.settings_public, "module_is_enabled", AsyncMock(return_value=True)),
-        patch.object(worker.documents, "list_ready_version_refs", AsyncMock(return_value=([ref], next_cursor))),
+        patch.object(
+            worker.documents,
+            "list_ready_version_refs",
+            AsyncMock(return_value=([ref], next_cursor)),
+        ),
         patch.object(worker.workspaces, "read_access_fence", AsyncMock(return_value="fence")),
         patch.object(worker.sources, "lock_source", AsyncMock(return_value=source)),
         patch.object(worker.documents, "get_ready_version_ref", AsyncMock(return_value=current)),
-        patch.object(worker.documents, "lock_document_for_extraction", AsyncMock(return_value=locked)),
+        patch.object(
+            worker.documents, "lock_document_for_extraction", AsyncMock(return_value=locked)
+        ),
         patch.object(worker.timeline, "schedule_extraction_work", probes.schedule),
-        patch.object(worker.timeline, "list_blocked_extraction_work", AsyncMock(return_value=blocked or [])),
+        patch.object(
+            worker.timeline, "list_blocked_extraction_work", AsyncMock(return_value=blocked or [])
+        ),
         patch.object(worker.timeline, "defer_blocked_extraction_recheck", probes.defer),
         patch.object(worker.timeline, "requeue_blocked_extraction_work", probes.requeue),
-        patch.object(worker.timeline, "list_recoverable_extraction_work", AsyncMock(return_value=recoverable or [])),
-        patch.object(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=SimpleNamespace(
-            endpoint_destination_id="d", defaults=SimpleNamespace(resolve=lambda _r: "mapping")))),
+        patch.object(
+            worker.timeline,
+            "list_recoverable_extraction_work",
+            AsyncMock(return_value=recoverable or []),
+        ),
+        patch.object(
+            worker.settings_public,
+            "get_ai_execution_config",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    endpoint_destination_id="d",
+                    defaults=SimpleNamespace(resolve=lambda _r: "mapping"),
+                )
+            ),
+        ),
         patch.object(worker.settings_public, "derive_for_role", lambda cfg, _r: cfg),
         patch.object(worker, "_dependency_snapshot", AsyncMock(return_value=("fp2", True))),
         patch.object(worker, "_allowed", lambda *_a: True),
@@ -85,8 +126,16 @@ async def _recover(ref: SimpleNamespace, *, source: SimpleNamespace | None, curr
 
 
 def _source(ref: SimpleNamespace, **over: Any) -> SimpleNamespace:
-    return SimpleNamespace(**{"id": ref.source_id, "status": "active", "generation": 3, "local_only": False,
-                              "graph_enabled": True, **over})
+    return SimpleNamespace(
+        **{
+            "id": ref.source_id,
+            "status": "active",
+            "generation": 3,
+            "local_only": False,
+            "graph_enabled": True,
+            **over,
+        }
+    )
 
 
 @pytest.mark.asyncio
@@ -107,7 +156,9 @@ async def test_current_ref_is_scheduled_and_cursor_saved() -> None:
 async def test_exhausted_cursor_is_deleted_and_inactive_source_is_skipped() -> None:
     """No next cursor deletes the stored one; an inactive source never schedules."""
     ref = _ref()
-    probes = await _recover(ref, source=_source(ref, status="disabled"), current=ref, next_cursor=None)
+    probes = await _recover(
+        ref, source=_source(ref, status="disabled"), current=ref, next_cursor=None
+    )
     probes.schedule.assert_not_awaited()
     probes.redis.delete.assert_awaited_once()
     probes.redis.set.assert_not_awaited()
@@ -119,7 +170,11 @@ async def test_drift_unlocked_and_graph_disabled_refs_do_not_schedule(case: str)
     """Generation drift, a failed document lock, or a graph-off source commit without scheduling."""
     ref = _ref()
     source = _source(ref, graph_enabled=case != "graph_off")
-    current = _ref(document_id=ref.document_id, source_id=ref.source_id, source_generation=4 if case == "drift" else 3)
+    current = _ref(
+        document_id=ref.document_id,
+        source_id=ref.source_id,
+        source_generation=4 if case == "drift" else 3,
+    )
     probes = await _recover(ref, source=source, current=current, locked=case != "unlocked")
     probes.schedule.assert_not_awaited()
 
@@ -128,8 +183,13 @@ async def test_drift_unlocked_and_graph_disabled_refs_do_not_schedule(case: str)
 async def test_local_only_ref_is_parked_as_blocked() -> None:
     """A local-only version's work row is parked, with the lease cleared and retry pushed to max."""
     ref = _ref(local_only=True)
-    work = SimpleNamespace(status="pending", error_code=None, next_attempt_at=None,
-                           lease_owner="x", lease_expires_at=datetime.now(UTC))
+    work = SimpleNamespace(
+        status="pending",
+        error_code=None,
+        next_attempt_at=None,
+        lease_owner="x",
+        lease_expires_at=datetime.now(UTC),
+    )
     factory_holder: list[Any] = []
     original = _Factory.__call__
 
@@ -140,8 +200,11 @@ async def test_local_only_ref_is_parked_as_blocked() -> None:
         return result
 
     with patch.object(_Factory, "__call__", call):
-        await _recover(ref, source=_source(ref), current=_ref(
-            document_id=ref.document_id, source_id=ref.source_id, local_only=True))
+        await _recover(
+            ref,
+            source=_source(ref),
+            current=_ref(document_id=ref.document_id, source_id=ref.source_id, local_only=True),
+        )
     assert (work.status, work.error_code) == ("blocked", "local_only_source")
     assert work.next_attempt_at == datetime.max.replace(tzinfo=UTC)
     assert work.lease_owner is None and work.lease_expires_at is None
@@ -159,12 +222,16 @@ async def test_blocked_items_requeue_only_for_policy_codes_and_changed_fingerpri
         (blocked_nofp, ready.document_version_id, 3, "ai_policy_denied", None),
     ]
     current = _ref(document_id=ready.document_id, source_id=ref.source_id)
-    probes = await _recover(ref, source=_source(ref, graph_enabled=False), current=current, blocked=items)
+    probes = await _recover(
+        ref, source=_source(ref, graph_enabled=False), current=current, blocked=items
+    )
     # ``ready`` and ``current`` are the same mocked ref here, so the requeue path is taken for one item.
     probes.requeue.assert_awaited_once()
     assert probes.requeue.await_args.args[1:4] == (blocked_ok, "fp1", "fp2")
     probes.defer.assert_not_awaited()
     assert probes.count == 1  # the requeued ID is enqueued
 
-    denied = await _recover(ref, source=_source(ref, graph_enabled=False), current=current, blocked=items, requeue=False)
+    denied = await _recover(
+        ref, source=_source(ref, graph_enabled=False), current=current, blocked=items, requeue=False
+    )
     denied.defer.assert_awaited_once()

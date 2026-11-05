@@ -21,10 +21,17 @@ logger = logging.getLogger(__name__)
 ToolHandler = Callable[[dict[str, Any], dict[str, Any]], Awaitable[Any]]
 PrincipalRevalidator = Callable[[ToolExecutionPrincipal], Awaitable[bool]]
 MAX_CONCURRENCY = 4
-ALLOWED_ERROR_CODES = frozenset({
-    "tool_unavailable", "forbidden", "approval_required", "invalid_arguments",
-    "invalid_result", "timeout", "execution_failed",
-})
+ALLOWED_ERROR_CODES = frozenset(
+    {
+        "tool_unavailable",
+        "forbidden",
+        "approval_required",
+        "invalid_arguments",
+        "invalid_result",
+        "timeout",
+        "execution_failed",
+    }
+)
 MAX_EVIDENCE_REFS = 100
 MAX_EVIDENCE_BYTES = 8_192
 
@@ -91,10 +98,17 @@ class ToolRegistry:
     def get_tool(self, name: str, version: str | None = None) -> ToolDefinition | None:
         """Return a defensive copy of the registered contract for exact name and optional version."""
         definition = self._tools.get(name)
-        return definition.model_copy(deep=True) if definition and (version is None or version == definition.version) else None
+        return (
+            definition.model_copy(deep=True)
+            if definition and (version is None or version == definition.version)
+            else None
+        )
 
     def list_tools(
-        self, allowed_tools: frozenset[str] | None = None, *, modules: Mapping[str, Any] | None = None,
+        self,
+        allowed_tools: frozenset[str] | None = None,
+        *,
+        modules: Mapping[str, Any] | None = None,
     ) -> list[ToolDefinition]:
         """Return defensive copies of enabled contracts intersected with optional server grants.
 
@@ -102,8 +116,12 @@ class ToolRegistry:
         """
         # ponytail: build-time descriptors only; workspace disables are applied per call via `modules=`.
         return sorted(
-            (item.model_copy(deep=True) for item in self._tools.values()
-             if (allowed_tools is None or item.name in allowed_tools) and self._module_enabled(item.module, modules)),
+            (
+                item.model_copy(deep=True)
+                for item in self._tools.values()
+                if (allowed_tools is None or item.name in allowed_tools)
+                and self._module_enabled(item.module, modules)
+            ),
             key=lambda item: item.name,
         )
 
@@ -114,8 +132,7 @@ class ToolRegistry:
         if dispatcher is None or not getattr(dispatcher, "enabled", False):
             return False
         if any(
-            dependency not in registry
-            or not getattr(registry[dependency], "enabled", False)
+            dependency not in registry or not getattr(registry[dependency], "enabled", False)
             for dependency in getattr(dispatcher, "dependencies", ())
         ):
             return False
@@ -123,13 +140,14 @@ class ToolRegistry:
         if descriptor is None or not getattr(descriptor, "enabled", False):
             return False
         return all(
-            dependency in registry
-            and getattr(registry[dependency], "enabled", False)
+            dependency in registry and getattr(registry[dependency], "enabled", False)
             for dependency in getattr(descriptor, "dependencies", ())
         )
 
     async def _refresh_module_registry(
-        self, context: dict[str, Any], principal: ToolExecutionPrincipal,
+        self,
+        context: dict[str, Any],
+        principal: ToolExecutionPrincipal,
     ) -> Mapping[str, Any] | None:
         """Return the principal workspace's effective modules; never mutates shared process state.
 
@@ -146,7 +164,9 @@ class ToolRegistry:
 
             async with factory() as session:
                 lifecycle = await read_module_availability(
-                    session, scope=principal.scope, multi_workspace_enabled=flag,
+                    session,
+                    scope=principal.scope,
+                    multi_workspace_enabled=flag,
                 )
             disabled = {item.id for item in lifecycle.modules if item.explicitly_disabled}
             return effective_modules(disabled, register_modules())
@@ -167,11 +187,17 @@ class ToolRegistry:
         # Single dispatch point: bind a per-call ID (caller-supplied or fresh), reset on exit.
         call_id = str((context or {}).get("tool_call_id") or uuid7())
         with bind_trace(tool_call_id=call_id):
-            result = await self._invoke_tool(name, args, principal, version=version, context=context)
+            result = await self._invoke_tool(
+                name, args, principal, version=version, context=context
+            )
         # Unknown names fold to one label so callers cannot inflate cardinality.
         label = name if name in self._tools else "unknown"
         observe_ms("tool_call_ms", started, tool=label)
-        count("tool_calls_total", tool=label, outcome="ok" if result.success else (result.error_code or "error"))
+        count(
+            "tool_calls_total",
+            tool=label,
+            outcome="ok" if result.success else (result.error_code or "error"),
+        )
         return result
 
     @staticmethod
@@ -181,12 +207,27 @@ class ToolRegistry:
         Pure validation: no I/O and no side effects; ``None`` means the arguments are acceptable.
         """
         if validate_json_schema(args, definition.input_schema):
-            return ToolResult(success=False, error="Tool arguments do not match its registered schema", error_code="invalid_arguments")
+            return ToolResult(
+                success=False,
+                error="Tool arguments do not match its registered schema",
+                error_code="invalid_arguments",
+            )
         try:
-            if len(json.dumps(args, allow_nan=False, separators=(",", ":")).encode()) > definition.max_arguments_bytes:
-                return ToolResult(success=False, error="Tool arguments exceed their size limit", error_code="invalid_arguments")
+            if (
+                len(json.dumps(args, allow_nan=False, separators=(",", ":")).encode())
+                > definition.max_arguments_bytes
+            ):
+                return ToolResult(
+                    success=False,
+                    error="Tool arguments exceed their size limit",
+                    error_code="invalid_arguments",
+                )
         except (TypeError, ValueError, RecursionError):
-            return ToolResult(success=False, error="Tool arguments must be JSON data", error_code="invalid_arguments")
+            return ToolResult(
+                success=False,
+                error="Tool arguments must be JSON data",
+                error_code="invalid_arguments",
+            )
         return None
 
     def _authorization_changed(
@@ -224,7 +265,9 @@ class ToolRegistry:
             or destination not in principal.destinations
             or self._principal_scope_missing(principal)
             or not self.policy.evaluate(
-                principal.actor_id, registered, args,
+                principal.actor_id,
+                registered,
+                args,
                 trusted_approval=queued_approval,
             ).allowed
         )
@@ -248,10 +291,16 @@ class ToolRegistry:
         """
         if isinstance(raw, ToolResult):
             if not raw.success:
-                code = raw.error_code if raw.error_code in ALLOWED_ERROR_CODES else "execution_failed"
+                code = (
+                    raw.error_code if raw.error_code in ALLOWED_ERROR_CODES else "execution_failed"
+                )
                 failure = ToolResult(success=False, error="Tool execution failed", error_code=code)
                 if len(failure.model_dump_json().encode()) > definition.max_result_bytes:
-                    return ToolResult(success=False, error="Tool result is unavailable", error_code="invalid_result")
+                    return ToolResult(
+                        success=False,
+                        error="Tool result is unavailable",
+                        error_code="invalid_result",
+                    )
                 return failure
             raw_data = raw.data
             evidence_refs = raw.evidence_refs
@@ -264,18 +313,29 @@ class ToolRegistry:
         if (
             len(encoded) > definition.max_result_bytes
             or len(refs) > MAX_EVIDENCE_REFS
-            or sum(len(value.encode("utf-8")) for value in refs if isinstance(value, str)) > MAX_EVIDENCE_BYTES
+            or sum(len(value.encode("utf-8")) for value in refs if isinstance(value, str))
+            > MAX_EVIDENCE_BYTES
             or any(not isinstance(value, str) or not value or len(value) > 256 for value in refs)
             or validate_json_schema(payload, definition.output_schema)
         ):
-            return ToolResult(success=False, error="Tool returned an invalid or oversized result", error_code="invalid_result")
+            return ToolResult(
+                success=False,
+                error="Tool returned an invalid or oversized result",
+                error_code="invalid_result",
+            )
         result = ToolResult(
-            success=True, data=payload, evidence_refs=refs,
-            execution_time_ms=(time.perf_counter()-started)*1000,
+            success=True,
+            data=payload,
+            evidence_refs=refs,
+            execution_time_ms=(time.perf_counter() - started) * 1000,
         )
         # Bound the actual public envelope, including evidence IDs and status metadata.
         if len(result.model_dump_json().encode()) > definition.max_result_bytes:
-            return ToolResult(success=False, error="Tool returned an invalid or oversized result", error_code="invalid_result")
+            return ToolResult(
+                success=False,
+                error="Tool returned an invalid or oversized result",
+                error_code="invalid_result",
+            )
         return result
 
     async def _invoke_tool(
@@ -301,38 +361,68 @@ class ToolRegistry:
         started = time.perf_counter()
         definition = self.get_tool(name, version)
         if definition is None or name not in self._handlers:
-            return ToolResult(success=False, error="Unknown tool or version", error_code="tool_unavailable")
+            return ToolResult(
+                success=False, error="Unknown tool or version", error_code="tool_unavailable"
+            )
         modules = await self._refresh_module_registry(context or {}, principal)
         if modules is None:
-            return ToolResult(success=False, error="Module availability could not be refreshed", error_code="tool_unavailable")
-        if name not in principal.allowed_tools or not self._module_enabled(definition.module, modules):
-            return ToolResult(success=False, error="Tool is unavailable for this principal", error_code="forbidden")
+            return ToolResult(
+                success=False,
+                error="Module availability could not be refreshed",
+                error_code="tool_unavailable",
+            )
+        if name not in principal.allowed_tools or not self._module_enabled(
+            definition.module, modules
+        ):
+            return ToolResult(
+                success=False,
+                error="Tool is unavailable for this principal",
+                error_code="forbidden",
+            )
         if not set(definition.permissions).issubset(principal.capabilities):
-            return ToolResult(success=False, error="Required tool capability is not granted", error_code="forbidden")
+            return ToolResult(
+                success=False,
+                error="Required tool capability is not granted",
+                error_code="forbidden",
+            )
         execution_context = dict(context or {})
         execution_context["principal"] = principal
         destination = execution_context.get("destination_id")
         if destination is None or destination not in principal.destinations:
-            return ToolResult(success=False, error="Tool destination is not granted", error_code="forbidden")
+            return ToolResult(
+                success=False, error="Tool destination is not granted", error_code="forbidden"
+            )
         if self._principal_scope_missing(principal):
-            return ToolResult(success=False, error="Execution principal has no authorized scope", error_code="forbidden")
+            return ToolResult(
+                success=False,
+                error="Execution principal has no authorized scope",
+                error_code="forbidden",
+            )
         args_failure = self._arguments_failure(args, definition)
         if args_failure is not None:
             return args_failure
-        approval_required = definition.risk != ToolRisk.READ_ONLY or definition.confirmation_required
+        approval_required = (
+            definition.risk != ToolRisk.READ_ONLY or definition.confirmation_required
+        )
         approval_verifier = execution_context.get("approval_verifier")
         try:
             trusted_approval = bool(
-                approval_required and callable(approval_verifier)
+                approval_required
+                and callable(approval_verifier)
                 and await approval_verifier(definition, args, principal, "admission")
             )
         except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
             trusted_approval = False
         decision = self.policy.evaluate(
-            principal.actor_id, definition, args, trusted_approval=trusted_approval,
+            principal.actor_id,
+            definition,
+            args,
+            trusted_approval=trusted_approval,
         )
         if not decision.allowed:
-            return ToolResult(success=False, error="Tool action is not authorized", error_code="approval_required")
+            return ToolResult(
+                success=False, error="Tool action is not authorized", error_code="approval_required"
+            )
         handler = self._handlers[name]
         try:
             async with asyncio.timeout(definition.timeout_seconds):
@@ -341,12 +431,15 @@ class ToolRegistry:
                     # Queue wait can outlive a capability revocation or registry replacement.
                     # Only skip the second DB module refresh when the semaphore was acquired without waiting (>5ms)
                     # and no admission approval await yielded before acquiring the semaphore.
-                    waited_for_admission_approval = bool(approval_required and callable(approval_verifier))
+                    waited_for_admission_approval = bool(
+                        approval_required and callable(approval_verifier)
+                    )
                     waited_on_semaphore = (time.monotonic() - t0) > 0.005
                     principal_revalidator = execution_context.get("principal_revalidator")
                     principal_current = (
                         await principal_revalidator(principal)
-                        if callable(principal_revalidator) else False
+                        if callable(principal_revalidator)
+                        else False
                     )
                     queued_modules = (
                         await self._refresh_module_registry(execution_context, principal)
@@ -356,23 +449,52 @@ class ToolRegistry:
                     module_state_current = queued_modules is not None
                     queued_definition = self._tools.get(name)
                     try:
-                        queued_approval = bool(
-                            approval_required and callable(approval_verifier) and queued_definition is not None
-                            and await approval_verifier(queued_definition, args, principal, "dispatch")
-                        ) if principal_current else False
+                        queued_approval = (
+                            bool(
+                                approval_required
+                                and callable(approval_verifier)
+                                and queued_definition is not None
+                                and await approval_verifier(
+                                    queued_definition, args, principal, "dispatch"
+                                )
+                            )
+                            if principal_current
+                            else False
+                        )
                     except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
                         queued_approval = False
                     # Resolve again after the awaited owner recheck; no await separates this from dispatch.
                     if self._authorization_changed(
-                        name, definition, handler, principal, args, destination,
-                        principal_current=principal_current, module_state_current=module_state_current,
-                        queued_modules=queued_modules, queued_approval=queued_approval,
+                        name,
+                        definition,
+                        handler,
+                        principal,
+                        args,
+                        destination,
+                        principal_current=principal_current,
+                        module_state_current=module_state_current,
+                        queued_modules=queued_modules,
+                        queued_approval=queued_approval,
                     ):
-                        return ToolResult(success=False, error="Tool authorization changed while queued", error_code="forbidden")
+                        return ToolResult(
+                            success=False,
+                            error="Tool authorization changed while queued",
+                            error_code="forbidden",
+                        )
                     raw = await handler(args, execution_context)
             return self._finalize_result(raw, definition, started)
         except TimeoutError:
-            return ToolResult(success=False, error="Tool execution timed out", error_code="timeout", execution_time_ms=(time.perf_counter()-started)*1000)
+            return ToolResult(
+                success=False,
+                error="Tool execution timed out",
+                error_code="timeout",
+                execution_time_ms=(time.perf_counter() - started) * 1000,
+            )
         except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
             logger.warning("Tool dispatch failed (%s)", type(exc).__name__)
-            return ToolResult(success=False, error="Tool execution failed", error_code="execution_failed", execution_time_ms=(time.perf_counter()-started)*1000)
+            return ToolResult(
+                success=False,
+                error="Tool execution failed",
+                error_code="execution_failed",
+                execution_time_ms=(time.perf_counter() - started) * 1000,
+            )

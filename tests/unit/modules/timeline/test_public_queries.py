@@ -55,7 +55,12 @@ class TestCursorCodec:
     def test_cursor_roundtrip(self) -> None:
         """Cursor encodes and decodes accurately when fingerprint matches."""
         fingerprint = "abc123def456"
-        payload = {"v": 1, "f": fingerprint, "p": 0, "k": ["2026-01-01T00:00:00+00:00", str(uuid4())]}
+        payload = {
+            "v": 1,
+            "f": fingerprint,
+            "p": 0,
+            "k": ["2026-01-01T00:00:00+00:00", str(uuid4())],
+        }
         encoded = _cursor_encode(payload)
         assert isinstance(encoded, str)
         decoded = _cursor_decode(encoded, fingerprint)
@@ -136,7 +141,9 @@ class TestEventFilteringAndQueries:
             date_to=date(2026, 1, 31),
         )
         data = query.model_dump(mode="json")
-        fp = hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        fp = hashlib.sha256(
+            json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
         assert len(fp) == 64
 
     @pytest.mark.asyncio
@@ -250,7 +257,8 @@ class TestEntityAndSourceLinkage:
 
         with patch("modules.timeline.public._schedule_temporal_event", return_value=None):
             result = await apply_entity_merge(
-                session, source_id=source_id, target_id=target_id, event_ids=[event_id], **KW)
+                session, source_id=source_id, target_id=target_id, event_ids=[event_id], **KW
+            )
             assert result == [event_id]
             assert participant_row.entity_id == target_id
 
@@ -272,7 +280,9 @@ class TestEntityAndSourceLinkage:
                 source_id=source_id,
                 target_id=target_id,
                 event_ids=[event_id],
-                selected_pairs=set(), **KW)
+                selected_pairs=set(),
+                **KW,
+            )
             assert result == []
 
     @pytest.mark.asyncio
@@ -296,7 +306,13 @@ class TestEntityAndSourceLinkage:
         session = AsyncMock()
         event_id = uuid4()
         workspace_id = uuid4()
-        unsupported_event = Event(id=event_id, workspace_id=workspace_id, origin="derived", owner_fields=[], deleted_at=None)
+        unsupported_event = Event(
+            id=event_id,
+            workspace_id=workspace_id,
+            origin="derived",
+            owner_fields=[],
+            deleted_at=None,
+        )
 
         session.get.return_value = unsupported_event
         session.scalar.return_value = None  # No remaining evidence

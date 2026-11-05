@@ -32,7 +32,10 @@ async def test_404_falls_back_to_legacy_path() -> None:
     client = _Client([404, 200])
     response = await _post_wake(client, "http://n8n", PATHS, {}, "t")
     assert response.status_code == 200
-    assert client.urls == ["http://n8n/webhook/umwelt-collect-x", "http://n8n/webhook/bbd-collect-x"]
+    assert client.urls == [
+        "http://n8n/webhook/umwelt-collect-x",
+        "http://n8n/webhook/bbd-collect-x",
+    ]
 
 
 @pytest.mark.asyncio

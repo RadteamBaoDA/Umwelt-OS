@@ -6,12 +6,25 @@ from modules.settings import public
 from tests.unit.modules.settings.test_providers import _derived_config, _settings
 
 settings = _settings(public_ok=True)
-config = _derived_config().model_copy(update={"providers": {
-    "oa": ProviderConfig(kind="openai", base_url="https://api.openai.com", api_key="sk-saved", credential_configured=True, destination_id="remote:oa")}})
+config = _derived_config().model_copy(
+    update={
+        "providers": {
+            "oa": ProviderConfig(
+                kind="openai",
+                base_url="https://api.openai.com",
+                api_key="sk-saved",
+                credential_configured=True,
+                destination_id="remote:oa",
+            )
+        }
+    }
+)
 
 
 def test_hosted_draft_ignores_client_url():
-    endpoint, kind = public.resolve_draft_endpoint(config, "https://evil.example/v1", "groq", None, settings)
+    endpoint, kind = public.resolve_draft_endpoint(
+        config, "https://evil.example/v1", "groq", None, settings
+    )
     assert (endpoint, kind) == ("https://api.groq.com/openai/v1", "groq")
 
 

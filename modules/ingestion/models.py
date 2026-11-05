@@ -34,15 +34,22 @@ RECEIPT_RETENTION = timedelta(days=30)
 
 class IngestionBatch(Base):
     """Persist an idempotency key and payload identity for a source batch."""
+
     __tablename__ = "ingestion_batches"
-    __table_args__ = (UniqueConstraint("source_id", "batch_key", name="uq_ingestion_batches_source_key"),)
+    __table_args__ = (
+        UniqueConstraint("source_id", "batch_key", name="uq_ingestion_batches_source_key"),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
-    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="RESTRICT"), nullable=False)
+    source_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="RESTRICT"), nullable=False
+    )
     batch_key: Mapped[str] = mapped_column(String(255), nullable=False)
     payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     source_generation: Mapped[int | None] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class IngestionRun(Base):
@@ -52,70 +59,121 @@ class IngestionRun(Base):
     The owned-default actor and captured membership revision retain job authorization
     context; runtime execution must revalidate this epoch against current membership.
     """
+
     __tablename__ = "ingestion_runs"
     __table_args__ = (
-        CheckConstraint("status IN ('queued', 'running', 'succeeded', 'needs_ocr', 'failed')", name="ck_ingestion_runs_status"),
-        CheckConstraint("membership_revision > 0", name="ck_w2_ingestion_runs_membership_revision_positive"),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'succeeded', 'needs_ocr', 'failed')",
+            name="ck_ingestion_runs_status",
+        ),
+        CheckConstraint(
+            "membership_revision > 0", name="ck_w2_ingestion_runs_membership_revision_positive"
+        ),
         Index("ix_ingestion_runs_source_created", "source_id", "created_at"),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_ingestion_runs_workspace", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["workspace_id", "actor_user_id"], ["workspaces.id", "workspaces.owner_user_id"], name="fk_w2_ingestion_runs_principal", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_ingestion_runs_workspace",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "actor_user_id"],
+            ["workspaces.id", "workspaces.owner_user_id"],
+            name="fk_w2_ingestion_runs_principal",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint("workspace_id", "id", name="uq_w2_ingestion_runs_id"),
-        ForeignKeyConstraint(["workspace_id", "source_id"], ["sources.workspace_id", "sources.id"], name="fk_w2_ingestion_runs_source_id", ondelete="RESTRICT"),
-        Index("ix_w2_ingestion_runs_scope", 'workspace_id', 'id'),
-        Index("ix_w2_ingestion_runs_work", 'workspace_id', 'created_at', 'id'),
+        ForeignKeyConstraint(
+            ["workspace_id", "source_id"],
+            ["sources.workspace_id", "sources.id"],
+            name="fk_w2_ingestion_runs_source_id",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_w2_ingestion_runs_scope", "workspace_id", "id"),
+        Index("ix_w2_ingestion_runs_work", "workspace_id", "created_at", "id"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     membership_revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
-
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
-    batch_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("ingestion_batches.id", ondelete="CASCADE"), unique=True, nullable=False)
+    batch_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("ingestion_batches.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+    )
     source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
     error_code: Mapped[str | None] = mapped_column(String(64))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
-
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
 
 
 class IngestionStage(Base):
     """Persist stage retry scheduling, lease, outcome, and result count."""
+
     __tablename__ = "ingestion_stages"
     __table_args__ = (
         UniqueConstraint("run_id", "stage_key", name="uq_ingestion_stages_run_key"),
-        CheckConstraint("status IN ('pending', 'queued', 'running', 'retrying', 'succeeded', 'failed')", name="ck_ingestion_stages_status"),
+        CheckConstraint(
+            "status IN ('pending', 'queued', 'running', 'retrying', 'succeeded', 'failed')",
+            name="ck_ingestion_stages_status",
+        ),
         Index("ix_ingestion_stages_pending", "status", "next_attempt_at"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
-    run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="CASCADE"), nullable=False)
+    run_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="CASCADE"), nullable=False
+    )
     stage_key: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_code: Mapped[str | None] = mapped_column(String(64))
     result_count: Mapped[int | None] = mapped_column(Integer)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
 
 
 class SourceObservation(Base):
     """Retain an immutable provider observation with collection timestamps."""
+
     __tablename__ = "source_observations"
     __table_args__ = (
         UniqueConstraint(
-            "batch_id", "provider_id", "record_hash", "observed_at",
+            "batch_id",
+            "provider_id",
+            "record_hash",
+            "observed_at",
             name="uq_source_observations_batch_record_observed",
         ),
         Index("ix_source_observations_source_observed", "source_id", "observed_at"),
-        Index("ix_source_observations_source_provider_record", "source_id", "provider_id", "record_hash"),
+        Index(
+            "ix_source_observations_source_provider_record",
+            "source_id",
+            "provider_id",
+            "record_hash",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
-    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="RESTRICT"), nullable=False)
-    batch_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("ingestion_batches.id", ondelete="CASCADE"), nullable=False)
+    source_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="RESTRICT"), nullable=False
+    )
+    batch_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("ingestion_batches.id", ondelete="CASCADE"), nullable=False
+    )
     provider_id: Mapped[str] = mapped_column(String(512), nullable=False)
     record_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
@@ -129,44 +187,81 @@ class ObservationNormalization(Base):
 
     Workspace identity is mandatory and survives nullable or detached canonical references.
     """
+
     __tablename__ = "observation_normalizations"
     __table_args__ = (
-        UniqueConstraint("observation_id", "normalization_version", name="uq_observation_normalizations_identity"),
-        CheckConstraint("disposition IN ('pending', 'normalized', 'duplicate', 'skipped', 'failed')", name="ck_observation_normalizations_disposition"),
+        UniqueConstraint(
+            "observation_id", "normalization_version", name="uq_observation_normalizations_identity"
+        ),
+        CheckConstraint(
+            "disposition IN ('pending', 'normalized', 'duplicate', 'skipped', 'failed')",
+            name="ck_observation_normalizations_disposition",
+        ),
         Index("ix_observation_normalizations_stage", "stage_id", "disposition"),
         Index("ix_observation_normalizations_document_version_id", "document_version_id"),
         Index("ix_observation_normalizations_document_id", "document_id"),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_observation_normalizations_workspace", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["workspace_id", "source_id"], ["sources.workspace_id", "sources.id"], name="fk_w2_observation_normalizations_source_id", ondelete="CASCADE"),
-        ForeignKeyConstraint(["workspace_id", "run_id"], ["ingestion_runs.workspace_id", "ingestion_runs.id"], name="fk_w2_observation_normalizations_run_id", ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_observation_normalizations_workspace",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "source_id"],
+            ["sources.workspace_id", "sources.id"],
+            name="fk_w2_observation_normalizations_source_id",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "run_id"],
+            ["ingestion_runs.workspace_id", "ingestion_runs.id"],
+            name="fk_w2_observation_normalizations_run_id",
+            ondelete="CASCADE",
+        ),
         # Scalar SET NULL clears only the parent ID; this deferred FK retains workspace.
-        ForeignKeyConstraint(["workspace_id", "document_id"], ["documents.workspace_id", "documents.id"], name="fk_w2_observation_normalizations_document_id", ondelete="NO ACTION", deferrable=True, initially="DEFERRED"),
-        Index("ix_w2_observation_normalizations_scope", 'workspace_id', 'id'),
-        Index("ix_w2_observation_normalizations_work", 'workspace_id', 'updated_at', 'id'),
+        ForeignKeyConstraint(
+            ["workspace_id", "document_id"],
+            ["documents.workspace_id", "documents.id"],
+            name="fk_w2_observation_normalizations_document_id",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        Index("ix_w2_observation_normalizations_scope", "workspace_id", "id"),
+        Index("ix_w2_observation_normalizations_work", "workspace_id", "updated_at", "id"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
-
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
-    observation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("source_observations.id", ondelete="CASCADE"), nullable=False)
+    observation_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("source_observations.id", ondelete="CASCADE"), nullable=False
+    )
     source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-    stage_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("ingestion_stages.id", ondelete="CASCADE"), nullable=False)
+    stage_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("ingestion_stages.id", ondelete="CASCADE"), nullable=False
+    )
     source_generation: Mapped[int] = mapped_column(Integer, nullable=False)
     normalization_version: Mapped[int] = mapped_column(Integer, nullable=False)
     disposition: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
     selected_current: Mapped[bool | None] = mapped_column(Boolean)
     error_code: Mapped[str | None] = mapped_column(String(64))
-    document_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"))
-    document_version_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("document_versions.id", ondelete="SET NULL"))
+    document_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL")
+    )
+    document_version_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("document_versions.id", ondelete="SET NULL")
+    )
     chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
-
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
 
 
 class SourceIngestionState(Base):
     """Store the source cursor, pre-fetch collection reservation, and active ingestion-run lease; these ownership tokens are distinct."""
+
     __tablename__ = "source_ingestion_state"
     __table_args__ = (
         CheckConstraint(
@@ -179,9 +274,13 @@ class SourceIngestionState(Base):
         ),
     )
 
-    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), primary_key=True)
+    source_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), primary_key=True
+    )
     cursor: Mapped[str | None] = mapped_column(Text)
-    lease_run_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="SET NULL"))
+    lease_run_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="SET NULL")
+    )
     collection_lease_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Conditional-GET validators and the exact pagination checkpoint; written only with an accepted commit.
@@ -189,7 +288,9 @@ class SourceIngestionState(Base):
     last_modified: Mapped[str | None] = mapped_column(String(128))
     validators_revision: Mapped[int | None] = mapped_column(Integer)
     continuation_state: Mapped[str | None] = mapped_column(Text)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
 
 
 class CollectionReceipt(Base):
@@ -199,12 +300,24 @@ class CollectionReceipt(Base):
     content may be accepted for several distinct requests. Cleanup honours ``retain_until`` and
     never deletes a receipt whose request is still recoverable.
     """
+
     __tablename__ = "ingestion_collection_receipts"
     __table_args__ = (
-        CheckConstraint("outcome IN ('accepted', 'no_changes')", name="ck_ingestion_collection_receipts_outcome"),
-        CheckConstraint("coverage IN ('complete', 'partial')", name="ck_ingestion_collection_receipts_coverage"),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_ingestion_collection_receipts_workspace", ondelete="RESTRICT"),
-        Index("ix_ingestion_collection_receipts_source", "workspace_id", "source_id", "accepted_at"),
+        CheckConstraint(
+            "outcome IN ('accepted', 'no_changes')", name="ck_ingestion_collection_receipts_outcome"
+        ),
+        CheckConstraint(
+            "coverage IN ('complete', 'partial')", name="ck_ingestion_collection_receipts_coverage"
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_ingestion_collection_receipts_workspace",
+            ondelete="RESTRICT",
+        ),
+        Index(
+            "ix_ingestion_collection_receipts_source", "workspace_id", "source_id", "accepted_at"
+        ),
         Index("ix_ingestion_collection_receipts_retain", "retain_until"),
     )
 
@@ -226,16 +339,23 @@ class CollectionReceipt(Base):
     last_modified: Mapped[str | None] = mapped_column(String(128))
     # Bounded (~1 KB) run telemetry: new / backlog / gap / duplicates / failed sections. Never record metadata.
     collection_stats: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
-    accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    accepted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
     retain_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class CollectorCredential(Base):
     """Persist only a hashed collector token and its source-scoped authority."""
+
     __tablename__ = "collector_credentials"
 
     token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
-    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     scope: Mapped[str] = mapped_column(String(64), nullable=False, server_default="ingestion:write")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

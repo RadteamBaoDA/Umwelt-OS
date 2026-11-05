@@ -118,15 +118,21 @@ class TestReconcileRequest:
 
     def test_empty_scope_rejected(self) -> None:
         """Verify ReconcileRequest without any scope raises ValueError."""
-        with pytest.raises(ValidationError, match="Choose exactly one bounded reconciliation scope"):
+        with pytest.raises(
+            ValidationError, match="Choose exactly one bounded reconciliation scope"
+        ):
             ReconcileRequest()
 
     def test_multiple_scopes_rejected(self) -> None:
         """Verify ReconcileRequest providing multiple scopes raises ValueError."""
-        with pytest.raises(ValidationError, match="Choose exactly one bounded reconciliation scope"):
+        with pytest.raises(
+            ValidationError, match="Choose exactly one bounded reconciliation scope"
+        ):
             ReconcileRequest(source_id=uuid4(), entity_id=uuid4())
 
-        with pytest.raises(ValidationError, match="Choose exactly one bounded reconciliation scope"):
+        with pytest.raises(
+            ValidationError, match="Choose exactly one bounded reconciliation scope"
+        ):
             ReconcileRequest(source_id=uuid4(), document_version_ids=[uuid4()])
 
     def test_duplicate_version_ids_rejected(self) -> None:
@@ -274,7 +280,9 @@ class TestTimezoneAwarenessAndInstants:
             TemporalAnchor(
                 source_id=uuid4(),
                 source_generation=1,
-                anchor_time=datetime(2025, 3, 15, 10, 0),  # naive rejected  # intentionally naive: wall-clock/DST math or naive-rejection test
+                anchor_time=datetime(
+                    2025, 3, 15, 10, 0
+                ),  # naive rejected  # intentionally naive: wall-clock/DST math or naive-rejection test
             )
 
 

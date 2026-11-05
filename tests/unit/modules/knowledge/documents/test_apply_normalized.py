@@ -32,10 +32,22 @@ HASH_HIGH = "f" * 64
 
 def _payload(**over):  # type: ignore[no-untyped-def]
     base = {
-        "source_id": SRC, "provider_id": "ext-1", "provider_version": "1", "accepted_record_hash": HASH_HIGH,
-        "normalization_version": 1, "observed_at": T0, "received_at": None, "collected_at": None,
-        "title": "T", "canonical_url": None, "published_at": None, "content_type": "text/plain",
-        "content": "hello", "provenance": {}, "telegram_order": None, "expected_source_generation": 1,
+        "source_id": SRC,
+        "provider_id": "ext-1",
+        "provider_version": "1",
+        "accepted_record_hash": HASH_HIGH,
+        "normalization_version": 1,
+        "observed_at": T0,
+        "received_at": None,
+        "collected_at": None,
+        "title": "T",
+        "canonical_url": None,
+        "published_at": None,
+        "content_type": "text/plain",
+        "content": "hello",
+        "provenance": {},
+        "telegram_order": None,
+        "expected_source_generation": 1,
     }
     base.update(over)
     return SimpleNamespace(**base)
@@ -43,16 +55,30 @@ def _payload(**over):  # type: ignore[no-untyped-def]
 
 def _doc(current_version=0):  # type: ignore[no-untyped-def]
     return SimpleNamespace(
-        id=uuid4(), workspace_id=WS, source_id=SRC, external_id="ext-1", current_version=current_version,
-        content_hash="old", title="old", canonical_url=None, published_at=None, content_type=None,
-        observed_at=T0, language=None, extraction_status="ready",
+        id=uuid4(),
+        workspace_id=WS,
+        source_id=SRC,
+        external_id="ext-1",
+        current_version=current_version,
+        content_hash="old",
+        title="old",
+        canonical_url=None,
+        published_at=None,
+        content_type=None,
+        observed_at=T0,
+        language=None,
+        extraction_status="ready",
     )
 
 
 def _ident(document):  # type: ignore[no-untyped-def]
     return SimpleNamespace(
-        id=uuid4(), workspace_id=WS, source_id=SRC, external_id="ext-1",
-        document_id=document.id, tombstoned_at=None,
+        id=uuid4(),
+        workspace_id=WS,
+        source_id=SRC,
+        external_id="ext-1",
+        document_id=document.id,
+        tombstoned_at=None,
     )
 
 
@@ -71,10 +97,14 @@ def _source(provider="rss"):  # type: ignore[no-untyped-def]
 
 async def _apply(session, payload, source, document, identity, hooks=()):  # type: ignore[no-untyped-def]
     # Hooks are process-global (the search module registers one on import); isolate them.
-    with patch_documents("add_content_chunks", AsyncMock(return_value=2)), \
-            patch_documents("content_hash_async", AsyncMock(return_value="digest")), \
-            patch_documents("_superseded_version_hooks", list(hooks)):
-        return await public._apply_normalized_document(session, payload, source, document, identity, WS)
+    with (
+        patch_documents("add_content_chunks", AsyncMock(return_value=2)),
+        patch_documents("content_hash_async", AsyncMock(return_value="digest")),
+        patch_documents("_superseded_version_hooks", list(hooks)),
+    ):
+        return await public._apply_normalized_document(
+            session, payload, source, document, identity, WS
+        )
 
 
 @pytest.mark.asyncio
@@ -99,15 +129,25 @@ async def test_non_normalized_existing_document_is_rejected() -> None:
 @pytest.mark.asyncio
 async def test_telegram_without_provenance_is_rejected_before_any_query() -> None:
     session = _session([])
-    with pytest.raises(NormalizedDocumentValidationRejected, match="requires immutable delivery provenance"):
+    with pytest.raises(
+        NormalizedDocumentValidationRejected, match="requires immutable delivery provenance"
+    ):
         await _apply(session, _payload(), _source("telegram"), None, None)
     session.scalar.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_malformed_provider_provenance_is_rejected() -> None:
-    with pytest.raises(NormalizedDocumentValidationRejected, match="Incoming provider provenance rejected"):
-        await _apply(_session([]), _payload(provenance={"provider_record": {"bad": 1}}), _source(), None, None)
+    with pytest.raises(
+        NormalizedDocumentValidationRejected, match="Incoming provider provenance rejected"
+    ):
+        await _apply(
+            _session([]),
+            _payload(provenance={"provider_record": {"bad": 1}}),
+            _source(),
+            None,
+            None,
+        )
 
 
 @pytest.mark.asyncio
@@ -118,7 +158,11 @@ async def test_duplicate_returns_existing_revision_without_writes() -> None:
     prior = SimpleNamespace(document_version_id=version.id, provider_id="ext-1")
     session = _session([prior, version, 4])
     result, _, _ = await _apply(session, _payload(), _source(), document, identity)
-    assert (result.disposition, result.version_number, result.created_version) == ("duplicate", 3, False)
+    assert (result.disposition, result.version_number, result.created_version) == (
+        "duplicate",
+        3,
+        False,
+    )
     assert result.selected_current is True
     assert result.chunk_count == 4
     session.add.assert_not_called()
@@ -136,7 +180,9 @@ async def test_duplicate_with_missing_revision_is_a_consistency_error() -> None:
 @pytest.mark.asyncio
 async def test_owner_authored_current_revision_conflicts() -> None:
     document = _doc(current_version=2)
-    with pytest.raises(NormalizedDocumentValidationRejected, match="owner-authored current revision"):
+    with pytest.raises(
+        NormalizedDocumentValidationRejected, match="owner-authored current revision"
+    ):
         await _apply(_session([None, None]), _payload(), _source(), document, _ident(document))
 
 
@@ -145,7 +191,10 @@ async def test_new_document_writes_identity_document_version_provenance_in_order
     session = _session([0, None])  # max version number, previous current-version id
     result, document, identity = await _apply(session, _payload(), _source(), None, None)
     assert [type(obj) for obj in session.added] == [
-        NormalizedDocumentIdentity, Document, DocumentVersion, NormalizedVersionProvenance,
+        NormalizedDocumentIdentity,
+        Document,
+        DocumentVersion,
+        NormalizedVersionProvenance,
     ]
     assert (result.disposition, result.version_number, result.chunk_count) == ("normalized", 1, 2)
     assert result.created_version is True and result.selected_current is True
@@ -165,7 +214,9 @@ async def test_measurement_provider_never_selects_current_here() -> None:
 @pytest.mark.asyncio
 async def test_generic_lower_rank_is_stored_but_not_selected() -> None:
     document = _doc(current_version=1)
-    current = SimpleNamespace(selection_observed_at=T0 + timedelta(days=1), accepted_record_hash=HASH_LOW)
+    current = SimpleNamespace(
+        selection_observed_at=T0 + timedelta(days=1), accepted_record_hash=HASH_LOW
+    )
     session = _session([None, current, 1])
     result, document, _ = await _apply(session, _payload(), _source(), document, _ident(document))
     assert (result.version_number, result.selected_current) == (2, False)
@@ -179,7 +230,9 @@ async def test_generic_higher_rank_selects_and_runs_superseded_hooks() -> None:
     previous_version_id = uuid4()
     session = _session([None, current, 1, previous_version_id])
     hook = AsyncMock()
-    result, document, _ = await _apply(session, _payload(), _source(), document, _ident(document), hooks=[hook])
+    result, document, _ = await _apply(
+        session, _payload(), _source(), document, _ident(document), hooks=[hook]
+    )
     assert (result.version_number, result.selected_current) == (2, True)
     assert document.current_version == 2 and document.title == "T"
     hook.assert_awaited_once_with(session, previous_version_id)
@@ -188,9 +241,11 @@ async def test_generic_higher_rank_selects_and_runs_superseded_hooks() -> None:
 @pytest.mark.asyncio
 async def test_chunk_write_value_error_becomes_runtime_error() -> None:
     session = _session([0, None])
-    with patch_documents("add_content_chunks", AsyncMock(side_effect=ValueError("x"))), \
-            patch_documents("content_hash_async", AsyncMock(return_value="digest")), \
-            pytest.raises(RuntimeError, match="normalized_preparation_chunk_write_conflict"):
+    with (
+        patch_documents("add_content_chunks", AsyncMock(side_effect=ValueError("x"))),
+        patch_documents("content_hash_async", AsyncMock(return_value="digest")),
+        pytest.raises(RuntimeError, match="normalized_preparation_chunk_write_conflict"),
+    ):
         await public._apply_normalized_document(session, _payload(), _source(), None, None, WS)
 
 
@@ -205,7 +260,9 @@ async def test_post_write_identity_proof_detects_foreign_workspace() -> None:
 
 
 def _telegram_metadata(bot="1", epoch=1, update=5):  # type: ignore[no-untyped-def]
-    return SimpleNamespace(provider="telegram", telegram=SimpleNamespace(bot_id=bot, epoch=epoch, update_id=update))
+    return SimpleNamespace(
+        provider="telegram", telegram=SimpleNamespace(bot_id=bot, epoch=epoch, update_id=update)
+    )
 
 
 class _FakeProviderRecord:
@@ -217,23 +274,33 @@ class _FakeProviderRecord:
             raise ValueError("bad")
         return SimpleNamespace(
             provider=raw["provider"],
-            telegram=None if raw.get("no_telegram") else SimpleNamespace(
-                bot_id=raw.get("bot", "1"), epoch=raw.get("epoch", 1), update_id=raw.get("update", 5)),
+            telegram=None
+            if raw.get("no_telegram")
+            else SimpleNamespace(
+                bot_id=raw.get("bot", "1"),
+                epoch=raw.get("epoch", 1),
+                update_id=raw.get("update", 5),
+            ),
         )
 
 
 def _tg_payload(update=9, hash_=HASH_HIGH, bot="1", order=True):  # type: ignore[no-untyped-def]
     return _payload(
         accepted_record_hash=hash_,
-        provenance={"provider_record": {"provider": "telegram", "bot": bot, "epoch": 1, "update": update}},
+        provenance={
+            "provider_record": {"provider": "telegram", "bot": bot, "epoch": 1, "update": update}
+        },
         telegram_order=SimpleNamespace(epoch=1, update_id=update) if order else None,
     )
 
 
 def _tg_current(update=5, hash_=HASH_LOW, bot="1"):  # type: ignore[no-untyped-def]
     return SimpleNamespace(
-        selection_observed_at=T0, accepted_record_hash=hash_,
-        provenance_json={"provider_record": {"provider": "telegram", "bot": bot, "epoch": 1, "update": update}},
+        selection_observed_at=T0,
+        accepted_record_hash=hash_,
+        provenance_json={
+            "provider_record": {"provider": "telegram", "bot": bot, "epoch": 1, "update": update}
+        },
     )
 
 
@@ -271,6 +338,12 @@ async def test_telegram_bot_mismatch_is_rejected() -> None:
 @pytest.mark.asyncio
 async def test_telegram_equal_rank_distinguishes_conflicting_content() -> None:
     with pytest.raises(NormalizedDocumentValidationRejected, match="conflicting immutable content"):
-        await _apply_tg(_tg_payload(update=5, hash_=HASH_HIGH), _tg_current(update=5, hash_=HASH_LOW))
-    with pytest.raises(NormalizedDocumentValidationRejected, match="different normalization version"):
-        await _apply_tg(_tg_payload(update=5, hash_=HASH_HIGH), _tg_current(update=5, hash_=HASH_HIGH))
+        await _apply_tg(
+            _tg_payload(update=5, hash_=HASH_HIGH), _tg_current(update=5, hash_=HASH_LOW)
+        )
+    with pytest.raises(
+        NormalizedDocumentValidationRejected, match="different normalization version"
+    ):
+        await _apply_tg(
+            _tg_payload(update=5, hash_=HASH_HIGH), _tg_current(update=5, hash_=HASH_HIGH)
+        )

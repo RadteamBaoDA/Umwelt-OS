@@ -8,6 +8,7 @@ from core.module_descriptor import ModuleDescriptor, RouterSpec
 @dataclass(frozen=True)
 class ToolsDescriptor(ModuleDescriptor):
     """Declare the protected native registry, owner management API, and guarded inbound mount."""
+
     id: str = "tools"
     name: str = "Tools"
     version: str = "1.0.0"
@@ -17,10 +18,24 @@ class ToolsDescriptor(ModuleDescriptor):
     optional_dependencies: tuple[str, ...] = ("agents", "connectors", "knowledge.timeline")
     provides: tuple[str, ...] = ("tool_registry", "mcp_runtime", "mcp_inbound_server")
     requires: tuple[str, ...] = ("sources", "documents", "search")
-    routes: tuple[str, ...] = ("/api/v1/tools", "/api/v1/mcp/connections", "/api/v1/mcp/inbound-clients", "/api/v1/mcp/")
+    routes: tuple[str, ...] = (
+        "/api/v1/tools",
+        "/api/v1/mcp/connections",
+        "/api/v1/mcp/inbound-clients",
+        "/api/v1/mcp/",
+    )
     emitted_events: tuple[str, ...] = ()
     consumed_events: tuple[str, ...] = ()
-    tools: tuple[str, ...] = ("knowledge.get_document", "knowledge.list_documents", "search.query", "sources.list_sources", "sources.get_source", "github.list_project_events", "webhook.send", "browser.read")
+    tools: tuple[str, ...] = (
+        "knowledge.get_document",
+        "knowledge.list_documents",
+        "search.query",
+        "sources.list_sources",
+        "sources.get_source",
+        "github.list_project_events",
+        "webhook.send",
+        "browser.read",
+    )
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
     routers: tuple[RouterSpec, ...] = (

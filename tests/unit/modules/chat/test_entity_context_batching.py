@@ -14,20 +14,31 @@ from modules.chat.retrieval import _RefCollector, _resolve_entity_context
 
 def _entity(entity_id, name="Acme"):
     return SimpleNamespace(
-        id=entity_id, name=name, canonical_name=name.lower(), type="company", description="d",
+        id=entity_id,
+        name=name,
+        canonical_name=name.lower(),
+        type="company",
+        description="d",
     )
 
 
 def _evidence(document_version_id, chunk_id):
     return SimpleNamespace(
-        document_version_id=document_version_id, chunk_id=chunk_id, source_id=uuid4(), document_id=uuid4(),
-        title="T", canonical_url=None, observed_at=datetime(2026, 1, 1, tzinfo=UTC), excerpt="quote",
+        document_version_id=document_version_id,
+        chunk_id=chunk_id,
+        source_id=uuid4(),
+        document_id=uuid4(),
+        title="T",
+        canonical_url=None,
+        observed_at=datetime(2026, 1, 1, tzinfo=UTC),
+        excerpt="quote",
     )
 
 
 def _neighbor(target_id):
     return SimpleNamespace(
-        relationship=SimpleNamespace(id=uuid4(), type="owns"), entity=SimpleNamespace(id=target_id, name="Beta"),
+        relationship=SimpleNamespace(id=uuid4(), type="owns"),
+        entity=SimpleNamespace(id=target_id, name="Beta"),
     )
 
 
@@ -45,8 +56,11 @@ async def _resolve_or_raise(entity_id, bad):
 def owners(monkeypatch):
     """Patch both owner modules with AsyncMocks and return them for call-count assertions."""
     entities = SimpleNamespace(
-        get_entities=AsyncMock(), list_entity_evidence_bulk=AsyncMock(),
-        resolve_canonical_entity_id=AsyncMock(), get_entity=AsyncMock(), list_entity_evidence=AsyncMock(),
+        get_entities=AsyncMock(),
+        list_entity_evidence_bulk=AsyncMock(),
+        resolve_canonical_entity_id=AsyncMock(),
+        get_entity=AsyncMock(),
+        list_entity_evidence=AsyncMock(),
     )
     relationships = SimpleNamespace(get_neighbors_bulk=AsyncMock(), get_neighbors=AsyncMock())
     monkeypatch.setattr(retrieval, "entities_public", entities)
@@ -60,8 +74,12 @@ async def test_many_entities_use_exactly_three_bulk_reads(owners) -> None:
     ids = [uuid4() for _ in range(40)]
     ref = (uuid4(), uuid4())
     entities.get_entities.return_value = [_entity(i, f"E{n}") for n, i in enumerate(ids)]
-    entities.list_entity_evidence_bulk.return_value = [SimpleNamespace(items=[_evidence(*ref)]) for _ in ids]
-    relationships.get_neighbors_bulk.return_value = [SimpleNamespace(items=[_neighbor(uuid4())]) for _ in ids]
+    entities.list_entity_evidence_bulk.return_value = [
+        SimpleNamespace(items=[_evidence(*ref)]) for _ in ids
+    ]
+    relationships.get_neighbors_bulk.return_value = [
+        SimpleNamespace(items=[_neighbor(uuid4())]) for _ in ids
+    ]
     collector = _RefCollector()
 
     items = await _resolve_entity_context(AsyncMock(), _request(ids), {"scope": "s"}, collector)
@@ -70,7 +88,10 @@ async def test_many_entities_use_exactly_three_bulk_reads(owners) -> None:
     assert entities.get_entities.await_count == 1
     assert entities.list_entity_evidence_bulk.await_count == 1
     assert relationships.get_neighbors_bulk.await_count == 1
-    assert entities.resolve_canonical_entity_id.await_count == 0 and entities.get_entity.await_count == 0
+    assert (
+        entities.resolve_canonical_entity_id.await_count == 0
+        and entities.get_entity.await_count == 0
+    )
     assert collector.refs == [ref]  # de-duplicated, first-seen order
     assert entities.list_entity_evidence_bulk.await_args.kwargs == {"limit": 10, "scope": "s"}
     assert items[0].neighbors[0]["type"] == "owns" and items[0].backing_refs[0].quote == "quote"
@@ -122,7 +143,11 @@ async def test_type_error_in_bulk_path_is_not_swallowed(owners) -> None:
 @pytest.mark.asyncio
 async def test_selected_only_and_empty_requests_read_nothing(owners) -> None:
     entities, _ = owners
-    assert await _resolve_entity_context(
-        AsyncMock(), _request([uuid4()], selected_only=True), {}, _RefCollector()) == []
+    assert (
+        await _resolve_entity_context(
+            AsyncMock(), _request([uuid4()], selected_only=True), {}, _RefCollector()
+        )
+        == []
+    )
     assert await _resolve_entity_context(AsyncMock(), _request([]), {}, _RefCollector()) == []
     assert entities.get_entities.await_count == 0

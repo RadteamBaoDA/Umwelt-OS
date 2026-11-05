@@ -22,6 +22,7 @@ from core.storage import (
 
 WORKSPACE = UUID(int=7)
 
+
 @pytest.fixture(params=["local", "s3"])
 def backend(request: pytest.FixtureRequest, tmp_path: Path) -> StorageBackend:
     """Build each backend in isolation: local under a temp dir, S3 on a fresh moto bucket with an in-memory fence."""
@@ -49,7 +50,9 @@ def _key(document: UUID | None = None, suffix: str = ".txt") -> str:
 @pytest.mark.asyncio
 async def test_put_stream_roundtrip_reports_size_and_sha256(backend: StorageBackend) -> None:
     key = _key()
-    stored = await backend.put_stream(key, _chunks(b"hello ", b"world"), 100, workspace_id=WORKSPACE)
+    stored = await backend.put_stream(
+        key, _chunks(b"hello ", b"world"), 100, workspace_id=WORKSPACE
+    )
     assert (stored.key, stored.size) == (key, 11)
     assert stored.sha256 == hashlib.sha256(b"hello world").hexdigest()
     assert await backend.exists(key)
@@ -59,7 +62,9 @@ async def test_put_stream_roundtrip_reports_size_and_sha256(backend: StorageBack
 
 
 @pytest.mark.asyncio
-async def test_put_stream_rejects_empty_and_oversized_and_leaves_nothing(backend: StorageBackend) -> None:
+async def test_put_stream_rejects_empty_and_oversized_and_leaves_nothing(
+    backend: StorageBackend,
+) -> None:
     key = _key()
     with pytest.raises(ValueError, match="empty"):
         await backend.put_stream(key, _chunks(), 10, workspace_id=WORKSPACE)
@@ -93,7 +98,9 @@ async def test_list_prefix_returns_sorted_keys_under_prefix(backend: StorageBack
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("bad", ["../escape", "/abs/path", "a/../../b"])
-async def test_invalid_keys_are_rejected_with_value_error(backend: StorageBackend, bad: str) -> None:
+async def test_invalid_keys_are_rejected_with_value_error(
+    backend: StorageBackend, bad: str
+) -> None:
     with pytest.raises(ValueError, match="Invalid storage path"):
         await backend.exists(bad)
     with pytest.raises(ValueError, match="Invalid storage path"):
@@ -102,7 +109,10 @@ async def test_invalid_keys_are_rejected_with_value_error(backend: StorageBacken
 
 def test_build_document_key_validates_identity_and_suffix() -> None:
     document = uuid4()
-    assert build_document_key(WORKSPACE, document, ".pdf") == f"workspaces/{WORKSPACE}/documents/{document}/{document}.pdf"
+    assert (
+        build_document_key(WORKSPACE, document, ".pdf")
+        == f"workspaces/{WORKSPACE}/documents/{document}/{document}.pdf"
+    )
     with pytest.raises(ValueError, match="UUIDs"):
         build_document_key("x", document, ".pdf")  # type: ignore[arg-type]
     for suffix in ("pdf", ".a/b", ".a\\b", ".a:b", ".a\x00"):
@@ -135,27 +145,42 @@ async def test_cleanup_orphans_keeps_referenced_and_recent(backend: StorageBacke
 
 
 def test_factory_defaults_to_local_and_rejects_unknown(tmp_path: Path) -> None:
-    assert isinstance(get_storage_backend(SimpleNamespace(data_dir=tmp_path)), LocalFilesystemBackend)
-    assert isinstance(get_storage_backend(SimpleNamespace(data_dir=tmp_path, storage_backend="local")), LocalFilesystemBackend)
+    assert isinstance(
+        get_storage_backend(SimpleNamespace(data_dir=tmp_path)), LocalFilesystemBackend
+    )
+    assert isinstance(
+        get_storage_backend(SimpleNamespace(data_dir=tmp_path, storage_backend="local")),
+        LocalFilesystemBackend,
+    )
     with pytest.raises(ValueError, match="Unknown storage backend"):
         get_storage_backend(SimpleNamespace(data_dir=tmp_path, storage_backend="nope"))
 
 
-def test_registry_allows_plugging_another_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_registry_allows_plugging_another_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     sentinel = LocalFilesystemBackend(tmp_path)
     monkeypatch.setitem(factory._BUILDERS, "memory-test", lambda _settings: sentinel)
-    assert get_storage_backend(SimpleNamespace(data_dir=tmp_path, storage_backend="memory-test")) is sentinel
+    assert (
+        get_storage_backend(SimpleNamespace(data_dir=tmp_path, storage_backend="memory-test"))
+        is sentinel
+    )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bad", [
-    lambda: build_document_key(UUID(int=8), uuid4(), ".txt"),  # foreign workspace
-    lambda: ".storage-fences/evil",
-    lambda: f"workspaces/{WORKSPACE}/documents/x.txt",
-    lambda: f"workspaces/{WORKSPACE}/documents/{uuid4()}/other.txt",
-    lambda: f"workspaces/{WORKSPACE}/documents/{uuid4()}/../x",
-])
-async def test_put_stream_rejects_non_canonical_or_foreign_keys(backend: StorageBackend, bad: Callable[[], str]) -> None:
+@pytest.mark.parametrize(
+    "bad",
+    [
+        lambda: build_document_key(UUID(int=8), uuid4(), ".txt"),  # foreign workspace
+        lambda: ".storage-fences/evil",
+        lambda: f"workspaces/{WORKSPACE}/documents/x.txt",
+        lambda: f"workspaces/{WORKSPACE}/documents/{uuid4()}/other.txt",
+        lambda: f"workspaces/{WORKSPACE}/documents/{uuid4()}/../x",
+    ],
+)
+async def test_put_stream_rejects_non_canonical_or_foreign_keys(
+    backend: StorageBackend, bad: Callable[[], str]
+) -> None:
     with pytest.raises(ValueError, match="Invalid storage path"):
         await backend.put_stream(bad(), _chunks(b"x"), 10, workspace_id=WORKSPACE)
     assert await backend.list_prefix("") == []

@@ -21,8 +21,11 @@ def body(*works: dict) -> bytes:
 
 
 WORK = {
-    "id": "https://openalex.org/W1", "doi": "https://doi.org/10.1/abc", "title": "A <b>study</b> of things",
-    "publication_date": "2026-10-01", "cited_by_count": 0,
+    "id": "https://openalex.org/W1",
+    "doi": "https://doi.org/10.1/abc",
+    "title": "A <b>study</b> of things",
+    "publication_date": "2026-10-01",
+    "cited_by_count": 0,
     "abstract_inverted_index": {"things": [3], "Study": [0], "of": [1, 2]},
     "authorships": [{"author": {"display_name": f"Author {i}"}} for i in range(15)],
     "primary_location": {"source": {"display_name": "Journal of Things"}},
@@ -31,7 +34,9 @@ WORK = {
 
 def test_url_is_fixed_host_with_escaped_query():
     url = openalex_url("llm & agents=1\r\n#x")
-    assert url.startswith("https://api.openalex.org/works?search=llm%20%26%20agents%3D1%20%23x&sort=publication_date%3Adesc")
+    assert url.startswith(
+        "https://api.openalex.org/works?search=llm%20%26%20agents%3D1%20%23x&sort=publication_date%3Adesc"
+    )
     assert "per-page=25" in url and "\n" not in url and url.count("search=") == 1
 
 
@@ -54,7 +59,12 @@ def test_abstract_is_rebuilt_and_bounded():
 
 
 def test_maps_one_record_per_work_with_bounded_metadata():
-    (record,) = map_openalex(body(WORK, {"id": "http://insecure", "title": "skipped"}, {"id": "https://openalex.org/W2"}), NOW)
+    (record,) = map_openalex(
+        body(
+            WORK, {"id": "http://insecure", "title": "skipped"}, {"id": "https://openalex.org/W2"}
+        ),
+        NOW,
+    )
     assert record.provider_id == "https://openalex.org/W1"
     assert record.content == "A study of things\n\nStudy of of things"
     assert record.observed_at == datetime(2026, 10, 1, tzinfo=UTC)
@@ -66,7 +76,10 @@ def test_maps_one_record_per_work_with_bounded_metadata():
 def test_future_date_falls_back_to_collection_and_version_ignores_citations():
     future = {**WORK, "publication_date": "2099-01-01"}
     (record,) = map_openalex(body(future), NOW)
-    assert record.observed_at == NOW and record.metadata["provider_record"]["timestamp_basis"] == "collection"
+    assert (
+        record.observed_at == NOW
+        and record.metadata["provider_record"]["timestamp_basis"] == "collection"
+    )
     (a,) = map_openalex(body(WORK), NOW)
     (b,) = map_openalex(body({**WORK, "cited_by_count": 99}), NOW)
     assert a.version == b.version
@@ -93,7 +106,12 @@ def test_catalog_marks_cc0_open_unverified_and_dispatchable():
 
 
 def test_malformed_works_are_skipped_and_oversized_body_refused():
-    (rec,) = map_openalex(body(WORK, "junk", {"id": "http://insecure", "title": "x"}, {"id": "https://openalex.org/W9"}), NOW)
+    (rec,) = map_openalex(
+        body(
+            WORK, "junk", {"id": "http://insecure", "title": "x"}, {"id": "https://openalex.org/W9"}
+        ),
+        NOW,
+    )
     assert rec.provider_id == "https://openalex.org/W1"
     with pytest.raises(ProviderPayloadError, match="too_large"):
         map_openalex(b"x" * (2 * 1024 * 1024 + 1), NOW)

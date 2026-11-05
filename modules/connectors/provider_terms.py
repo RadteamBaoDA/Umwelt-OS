@@ -33,6 +33,7 @@ from modules.sources.public import ConnectorSource
 
 class ProviderTermsAcknowledge(BaseModel):
     """Owner input only: the declared use and the terms version being acknowledged."""
+
     model_config = ConfigDict(extra="forbid")
     declared_use: Literal["personal", "noncommercial", "commercial", "unknown"]
     terms_version: str = Field(min_length=1, max_length=64, pattern=r"^\S(.*\S)?$")
@@ -40,6 +41,7 @@ class ProviderTermsAcknowledge(BaseModel):
 
 class OperatorTermsReview(BaseModel):
     """Operator input: evidence for one exact terms version."""
+
     model_config = ConfigDict(extra="forbid")
     state: Literal["approved", "rejected"]
     allowed_use: Literal["personal", "noncommercial", "commercial"] | None = None
@@ -49,6 +51,7 @@ class OperatorTermsReview(BaseModel):
 
 class ProviderTermsRead(BaseModel):
     """Owner-visible state; includes the live eligibility decision, never review contents beyond state."""
+
     source_id: UUID
     provider_id: str
     terms_revision: int
@@ -80,10 +83,16 @@ def decide(spec: FreeProviderSpec, row: ConnectorProviderTerms | None) -> TermsD
     if row is None:
         return evaluate_terms(spec, declared_use=None, acknowledged_terms_version=None)
     review = OperatorReview(
-        row.operator_review_state, row.reviewed_allowed_use, row.review_evidence_ref, row.reviewed_terms_version,  # type: ignore[arg-type]
+        row.operator_review_state,
+        row.reviewed_allowed_use,
+        row.review_evidence_ref,
+        row.reviewed_terms_version,  # type: ignore[arg-type]
     )
     return evaluate_terms(
-        spec, declared_use=row.declared_use, acknowledged_terms_version=row.terms_version, review=review,
+        spec,
+        declared_use=row.declared_use,
+        acknowledged_terms_version=row.terms_version,
+        review=review,
     )
 
 
@@ -91,15 +100,23 @@ def _read(row: ConnectorProviderTerms, spec: FreeProviderSpec) -> ProviderTermsR
     """Project a stored terms row plus its live eligibility decision into the owner-facing read model."""
     decision = decide(spec, row)
     return ProviderTermsRead(
-        source_id=row.source_id, provider_id=row.provider_id, terms_revision=row.terms_revision,
-        terms_url=row.terms_url, terms_version=row.terms_version, checked_on=row.checked_on,
-        declared_use=row.declared_use, operator_review_state=row.operator_review_state,
-        reviewed_allowed_use=row.reviewed_allowed_use, eligible=decision.allowed, decision=decision.code,
+        source_id=row.source_id,
+        provider_id=row.provider_id,
+        terms_revision=row.terms_revision,
+        terms_url=row.terms_url,
+        terms_version=row.terms_version,
+        checked_on=row.checked_on,
+        declared_use=row.declared_use,
+        operator_review_state=row.operator_review_state,
+        reviewed_allowed_use=row.reviewed_allowed_use,
+        eligible=decision.allowed,
+        decision=decision.code,
     )
 
 
 async def list_operator_pending_terms(
-    session: AsyncSession, workspace_names: dict[UUID, str],
+    session: AsyncSession,
+    workspace_names: dict[UUID, str],
 ) -> list[OperatorTermsQueueItem]:
     """Return pending review metadata only; evidence references and source configuration stay private."""
     rows = await session.scalars(
@@ -124,12 +141,20 @@ async def list_operator_pending_terms(
 
 
 async def _terms_row(
-    session: AsyncSession, source: ConnectorSource, *, lock: bool = False,
+    session: AsyncSession,
+    source: ConnectorSource,
+    *,
+    lock: bool = False,
 ) -> ConnectorProviderTerms | None:
     """Workspace-predicated read; a row for another workspace's source id is never visible."""
-    query = select(ConnectorProviderTerms).where(
-        ConnectorProviderTerms.source_id == source.id, ConnectorProviderTerms.workspace_id == source.workspace_id,
-    ).execution_options(populate_existing=True)
+    query = (
+        select(ConnectorProviderTerms)
+        .where(
+            ConnectorProviderTerms.source_id == source.id,
+            ConnectorProviderTerms.workspace_id == source.workspace_id,
+        )
+        .execution_options(populate_existing=True)
+    )
     return await session.scalar(query.with_for_update() if lock else query)
 
 
@@ -151,11 +176,16 @@ async def require_terms_eligible(session: AsyncSession, source: ConnectorSource)
 
 
 async def get_terms(
-    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> ProviderTermsRead | None:
     """Owner read of the source's terms state; None when the provider has none or nothing is recorded."""
     source = await connectors._read_scoped_source(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if source is None:
         raise NotFoundError("Source not found")
     spec = get_provider_spec(source.provider)
@@ -164,16 +194,22 @@ async def get_terms(
 
 
 async def acknowledge_terms(
-    session: AsyncSession, source_id: UUID, body: ProviderTermsAcknowledge,
-    *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_id: UUID,
+    body: ProviderTermsAcknowledge,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> ProviderTermsRead:
     """Owner declares use and acknowledges a terms version; any change bumps ``terms_revision``."""
     actor = connectors._connector_actor(scope)
     try:
         source_fence, _, _ = await provisioning.lock_connector(
-            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
         source = await connectors._read_scoped_source(
-            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
         if source_fence is None or source is None:
             raise NotFoundError("Source not found")
         spec = get_provider_spec(source.provider)
@@ -183,10 +219,17 @@ async def acknowledge_terms(
         now = datetime.now(UTC)
         if row is None:
             row = ConnectorProviderTerms(
-                source_id=source.id, workspace_id=source.workspace_id, provider_id=spec.id,
-                terms_revision=1, terms_url=spec.terms_url, terms_version=body.terms_version,
-                checked_on=date.fromisoformat(spec.checked_on), owner_acknowledged_at=now,
-                owner_actor_user_id=actor, declared_use=body.declared_use, operator_review_state="pending",
+                source_id=source.id,
+                workspace_id=source.workspace_id,
+                provider_id=spec.id,
+                terms_revision=1,
+                terms_url=spec.terms_url,
+                terms_version=body.terms_version,
+                checked_on=date.fromisoformat(spec.checked_on),
+                owner_acknowledged_at=now,
+                owner_actor_user_id=actor,
+                declared_use=body.declared_use,
+                operator_review_state="pending",
             )
             session.add(row)
         elif (row.declared_use, row.terms_version) != (body.declared_use, body.terms_version):
@@ -205,17 +248,27 @@ async def acknowledge_terms(
 
 
 async def record_operator_review(
-    session: AsyncSession, *, workspace_id: UUID, source_id: UUID, reviewer_user_id: int,
-    body: OperatorTermsReview, instance_operator: bool,
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    source_id: UUID,
+    reviewer_user_id: int,
+    body: OperatorTermsReview,
+    instance_operator: bool,
 ) -> ProviderTermsRead:
     """Operator-only: record review evidence for the acknowledged terms version."""
     if instance_operator is not True:
         raise PermissionError("Instance operator admission required")
     try:
         row = await session.scalar(
-            select(ConnectorProviderTerms).where(
-                ConnectorProviderTerms.source_id == source_id, ConnectorProviderTerms.workspace_id == workspace_id,
-            ).with_for_update().execution_options(populate_existing=True))
+            select(ConnectorProviderTerms)
+            .where(
+                ConnectorProviderTerms.source_id == source_id,
+                ConnectorProviderTerms.workspace_id == workspace_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         spec = get_provider_spec(row.provider_id) if row is not None else None
         if row is None or spec is None:
             raise NotFoundError("Provider terms not found")
@@ -226,7 +279,10 @@ async def record_operator_review(
         row.operator_review_state = body.state
         row.reviewer_user_id, row.reviewed_at = reviewer_user_id, datetime.now(UTC)
         row.reviewed_allowed_use = body.allowed_use if body.state == "approved" else None
-        row.review_evidence_ref, row.reviewed_terms_version = body.evidence_ref, body.reviewed_terms_version
+        row.review_evidence_ref, row.reviewed_terms_version = (
+            body.evidence_ref,
+            body.reviewed_terms_version,
+        )
         row.terms_revision += 1
         await session.flush()
         result = _read(row, spec)

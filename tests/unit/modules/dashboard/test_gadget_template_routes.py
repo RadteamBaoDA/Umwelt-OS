@@ -54,7 +54,9 @@ class FakeSession:
 
 
 @pytest.fixture
-def client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, FakeSession, dict[UUID, tuple[str, str]]]:
+def client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TestClient, FakeSession, dict[UUID, tuple[str, str]]]:
     """App with the dashboard router, stubbed auth/session and stubbed source/persistence seams."""
     session = FakeSession()
     kinds: dict[UUID, tuple[str, str]] = {}
@@ -67,8 +69,12 @@ def client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, FakeSession, di
         return [SimpleNamespace(provider=kinds[i][0], type=kinds[i][1]) for i in ids]  # type: ignore[attr-defined]
 
     async def states(_s: object, ids: object, **_k: object) -> dict[UUID, object]:
-        return {i: SimpleNamespace(id=i, status="active", generation=1, provider=kinds[i][0], type=kinds[i][1])
-                for i in ids}  # type: ignore[attr-defined]
+        return {
+            i: SimpleNamespace(
+                id=i, status="active", generation=1, provider=kinds[i][0], type=kinds[i][1]
+            )
+            for i in ids
+        }  # type: ignore[attr-defined]
 
     async def active_kinds(*_a: object, **_k: object) -> list[tuple[UUID, str, str]]:
         return [(i, p, t) for i, (p, t) in kinds.items()]
@@ -76,15 +82,29 @@ def client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, FakeSession, di
     async def read_dashboard(_s: object, dashboard: Any, **_k: object) -> DashboardDetail:
         now = datetime.now(UTC)
         empty = {"columns": 20, "items": []}
-        return DashboardDetail.model_validate({
-            "id": dashboard.id, "name": dashboard.name, "revision": 1, "created_at": now, "updated_at": now,
-            "groups": [], "instances": [], "layouts": {"desktop": empty, "mobile": empty}})
+        return DashboardDetail.model_validate(
+            {
+                "id": dashboard.id,
+                "name": dashboard.name,
+                "revision": 1,
+                "created_at": now,
+                "updated_at": now,
+                "groups": [],
+                "instances": [],
+                "layouts": {"desktop": empty, "mobile": empty},
+            }
+        )
 
     async def definition_states(*_a: object, **_k: object) -> dict[UUID, object]:
         return {}
 
-    for name in ("_admit", "_lock_owner_creation_quota", "_lock_selected_sources", "validate_highlight_rules",
-                 "commit_with_replay"):
+    for name in (
+        "_admit",
+        "_lock_owner_creation_quota",
+        "_lock_selected_sources",
+        "validate_highlight_rules",
+        "commit_with_replay",
+    ):
         monkeypatch.setattr(public, name, noop)
     monkeypatch.setattr(public, "make_dashboard_change", lambda *a, **k: None)
     monkeypatch.setattr(public, "_source_states", states)
@@ -104,31 +124,53 @@ def client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, FakeSession, di
     return TestClient(app), session, kinds
 
 
-def test_create_and_rename_legacy_definition_and_counts(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_create_and_rename_legacy_definition_and_counts(
+    client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """finance_chart + noaa_kp + kp_index creates (201); a legacy off-catalog row renames (200); counts are served."""
     http, _session, kinds = client
     source = uuid4()
     kinds[source] = KINDS["kp"]
-    created = http.post("/api/v1/gadget-definitions", json={
-        "name": "kp", "renderer": "finance_chart", "source_ids": [str(source)], "scope": {"metrics": ["kp_index"]}})
+    created = http.post(
+        "/api/v1/gadget-definitions",
+        json={
+            "name": "kp",
+            "renderer": "finance_chart",
+            "source_ids": [str(source)],
+            "scope": {"metrics": ["kp_index"]},
+        },
+    )
     assert created.status_code == 201, created.text
     assert created.json()["scope"]["metrics"] == ["kp_index"]
 
     legacy = SimpleNamespace(
-        id=uuid4(), revision=1, name="old", renderer="provider_observation", source_ids=[str(source)],
-        scope={"metrics": ["legacy_metric"]}, filters={}, highlight_rules=[])
+        id=uuid4(),
+        revision=1,
+        name="old",
+        renderer="provider_observation",
+        source_ids=[str(source)],
+        scope={"metrics": ["legacy_metric"]},
+        filters={},
+        highlight_rules=[],
+    )
 
     async def lock_definition(*_a: object, **_k: object) -> object:
         return legacy
 
     monkeypatch.setattr(public, "_lock_definition", lock_definition)
-    renamed = http.patch(f"/api/v1/gadget-definitions/{legacy.id}", json={"expected_revision": 1, "name": "new"})
+    renamed = http.patch(
+        f"/api/v1/gadget-definitions/{legacy.id}", json={"expected_revision": 1, "name": "new"}
+    )
     assert renamed.status_code == 200, renamed.text
     assert renamed.json()["name"] == "new"
 
     counts = http.get("/api/v1/gadget-renderers/compatible-counts")
     assert counts.status_code == 200
-    assert counts.json()["finance_chart"] == 1 and counts.json()["news_feed"] == 0 and "tasks" not in counts.json()
+    assert (
+        counts.json()["finance_chart"] == 1
+        and counts.json()["news_feed"] == 0
+        and "tasks" not in counts.json()
+    )
 
 
 def test_preset_alias_preview_and_apply_bind_sources_and_seed_scope(client: Any) -> None:
@@ -137,7 +179,9 @@ def test_preset_alias_preview_and_apply_bind_sources_and_seed_scope(client: Any)
     kp, news = uuid4(), uuid4()
     kinds[kp], kinds[news] = KINDS["kp"], KINDS["news"]
 
-    unbound = http.post("/api/v1/dashboard-presets/finance_variant/preview", json={"slot_sources": {}})
+    unbound = http.post(
+        "/api/v1/dashboard-presets/finance_variant/preview", json={"slot_sources": {}}
+    )
     assert unbound.status_code == 200, unbound.text
     assert unbound.json()["preset_id"] == "finance"
     proposed = {s["slot_id"]: s["source_ids"] for s in unbound.json()["slots"]}
@@ -146,8 +190,14 @@ def test_preset_alias_preview_and_apply_bind_sources_and_seed_scope(client: Any)
     body = {"slot_sources": {"finance_chart": [str(kp)], "news_feed": [str(news)]}}
     preview = http.post("/api/v1/dashboard-presets/finance_variant/preview", json=body)
     assert preview.status_code == 200 and all(not s["warnings"] for s in preview.json()["slots"])
-    applied = http.post("/api/v1/dashboard-presets/finance_variant/apply", json={
-        **body, "preview_fingerprint": preview.json()["preview_fingerprint"], "mode": "create"})
+    applied = http.post(
+        "/api/v1/dashboard-presets/finance_variant/apply",
+        json={
+            **body,
+            "preview_fingerprint": preview.json()["preview_fingerprint"],
+            "mode": "create",
+        },
+    )
     assert applied.status_code == 201, applied.text
     definitions = {row.renderer: row for row in session.added if hasattr(row, "renderer")}
     assert definitions["finance_chart"].source_ids == [str(kp)]
@@ -159,12 +209,26 @@ def test_metric_catalog_route_is_typed(client: Any) -> None:
     """The catalog is served through ProviderMetricsRead: metrics[{id,unit}], symbol_keyed, suggestions, open flag."""
     http, _session, _kinds = client
     body = http.get("/api/v1/gadget-metric-catalog").json()
-    assert body["noaa_kp"] == {"metrics": [{"id": "kp_index", "unit": "kp"}], "symbol_keyed": False,
-                               "suggested_symbols": [], "metrics_open": False,
-                               "charts_as_series": True, "region_keyed": False, "suggested_regions": [],
-                               "seed_symbol": True, "cadence_days": 0.125, "default_lookback_days": 30}
+    assert body["noaa_kp"] == {
+        "metrics": [{"id": "kp_index", "unit": "kp"}],
+        "symbol_keyed": False,
+        "suggested_symbols": [],
+        "metrics_open": False,
+        "charts_as_series": True,
+        "region_keyed": False,
+        "suggested_regions": [],
+        "seed_symbol": True,
+        "cadence_days": 0.125,
+        "default_lookback_days": 30,
+    }
     assert body["usgs"]["charts_as_series"] is False
-    assert body["world_bank"]["region_keyed"] is False and body["world_bank"]["suggested_regions"] == []
+    assert (
+        body["world_bank"]["region_keyed"] is False
+        and body["world_bank"]["suggested_regions"] == []
+    )
     assert body["world_bank"]["default_lookback_days"] == 3650
     assert body["openaq"]["region_keyed"] is True
-    assert body["binance"]["suggested_symbols"] == ["BTCUSDT"] and body["binance"]["seed_symbol"] is False
+    assert (
+        body["binance"]["suggested_symbols"] == ["BTCUSDT"]
+        and body["binance"]["seed_symbol"] is False
+    )

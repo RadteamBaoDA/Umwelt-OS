@@ -35,7 +35,11 @@ _active_holds = 0
 
 def fence_lock_key(workspace_id: UUID) -> int:
     """Return the signed 64-bit advisory-lock key for ``workspace_id`` (namespaced apart from the SQL lease)."""
-    return int.from_bytes(hashlib.blake2b(workspace_id.bytes, digest_size=8, person=b"bbd-sfence").digest(), "big", signed=True)
+    return int.from_bytes(
+        hashlib.blake2b(workspace_id.bytes, digest_size=8, person=b"bbd-sfence").digest(),
+        "big",
+        signed=True,
+    )
 
 
 def fence_engine(database_url: str) -> AsyncEngine:
@@ -90,9 +94,12 @@ class PostgresStorageFence:
     async def _fenced(self, workspace_id: UUID, erase: bool) -> AsyncIterator[None]:
         """Take the advisory lock and check or set the erasure flag; see ``ahold`` for the ordering contract."""
         async with self._engine.connect() as lock_connection, lock_connection.begin():
-            await lock_connection.execute(text(f"SET LOCAL idle_in_transaction_session_timeout = {FENCE_MAX_HOLD_MS}"))
+            await lock_connection.execute(
+                text(f"SET LOCAL idle_in_transaction_session_timeout = {FENCE_MAX_HOLD_MS}")
+            )
             acquired = await lock_connection.scalar(
-                text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": fence_lock_key(workspace_id)},
+                text("SELECT pg_try_advisory_xact_lock(:key)"),
+                {"key": fence_lock_key(workspace_id)},
             )
             if not acquired:
                 raise WorkspaceStorageBusy("Workspace physical storage is still active")
@@ -109,7 +116,9 @@ class PostgresStorageFence:
                     )
             else:
                 erased = await lock_connection.scalar(
-                    text("SELECT deleted_at IS NOT NULL FROM workspace_storage_state WHERE workspace_id = :ws"),
+                    text(
+                        "SELECT deleted_at IS NOT NULL FROM workspace_storage_state WHERE workspace_id = :ws"
+                    ),
                     {"ws": workspace_id},
                 )
                 if erased:

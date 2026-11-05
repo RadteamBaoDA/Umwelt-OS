@@ -61,7 +61,9 @@ class _NotifyOnEnd(httpx.AsyncByteStream):
     response headers have not been read yet. Only valid for HTTP/1.1 (``approved_http_client``).
     """
 
-    def __init__(self, inner: httpx.AsyncByteStream, callback: Callable[[], Awaitable[None]]) -> None:
+    def __init__(
+        self, inner: httpx.AsyncByteStream, callback: Callable[[], Awaitable[None]]
+    ) -> None:
         self._inner = inner
         self._callback: Callable[[], Awaitable[None]] | None = callback
 
@@ -108,12 +110,18 @@ class ApprovedEndpointTransport(httpx.AsyncBaseTransport):
 
     def _approved(self, address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
         """Return whether an address is in the CIDR allowlist or, in ``allow_global`` mode, public."""
-        return any(address in network for network in self._networks) or (self._allow_global and _is_public(address))
+        return any(address in network for network in self._networks) or (
+            self._allow_global and _is_public(address)
+        )
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         """Validate the request origin, resolve every address, require all addresses to be allowlisted, and delegate to the selected pinned IP."""
         request_host = request.url.raw_host.decode("ascii").lower()
-        if (request.url.scheme, request_host, request.url.port) != (self._scheme, self._host, self._port):
+        if (request.url.scheme, request_host, request.url.port) != (
+            self._scheme,
+            self._host,
+            self._port,
+        ):
             raise EndpointNetworkPolicyError("Gateway request origin changed")
 
         if _is_ip(request_host):
@@ -135,8 +143,12 @@ class ApprovedEndpointTransport(httpx.AsyncBaseTransport):
             addresses = []
             for answer in answers:
                 sockaddr = answer[4]
-                if not sockaddr or (answer[0] == socket.AF_INET6 and len(sockaddr) > 3 and sockaddr[3]):
-                    raise EndpointNetworkPolicyError("Scoped IPv6 gateway addresses are not allowed")
+                if not sockaddr or (
+                    answer[0] == socket.AF_INET6 and len(sockaddr) > 3 and sockaddr[3]
+                ):
+                    raise EndpointNetworkPolicyError(
+                        "Scoped IPv6 gateway addresses are not allowed"
+                    )
                 addresses.append(_address(sockaddr[0]))
 
         unique: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
@@ -204,7 +216,9 @@ def approved_transport(
     return ApprovedEndpointTransport(origin, approved_cidrs, delegate, allow_global=allow_global)
 
 
-def approved_http_client(base_url: str, approved_cidrs: Sequence[str], *, allow_global: bool = False) -> httpx.AsyncClient:
+def approved_http_client(
+    base_url: str, approved_cidrs: Sequence[str], *, allow_global: bool = False
+) -> httpx.AsyncClient:
     """Create a no-proxy, no-redirect HTTP client using the approved-address transport.
 
     ``allow_global`` (``AI_ALLOW_PUBLIC_PROVIDERS``) additionally admits public addresses.
@@ -214,7 +228,11 @@ def approved_http_client(base_url: str, approved_cidrs: Sequence[str], *, allow_
 
 
 def approved_web_search_transport(
-    base_url: str, allowed_hosts: Collection[str], approved_cidrs: Sequence[str] = (), *, allow_http: bool = False,
+    base_url: str,
+    allowed_hosts: Collection[str],
+    approved_cidrs: Sequence[str] = (),
+    *,
+    allow_http: bool = False,
 ) -> ApprovedEndpointTransport:
     """Transport for ``modules.chat.web_search.search``: public addresses (``_is_public``) plus ``approved_cidrs``.
 
@@ -225,7 +243,11 @@ def approved_web_search_transport(
     ``search()`` closes the transport it is given, so build one transport per search call.
     """
     origin = httpx.URL(base_url)
-    if origin.scheme not in (("https", "http") if allow_http else ("https",)) or not origin.raw_host or origin.userinfo:
+    if (
+        origin.scheme not in (("https", "http") if allow_http else ("https",))
+        or not origin.raw_host
+        or origin.userinfo
+    ):
         raise EndpointNetworkPolicyError("Web search endpoint is invalid")
     host = origin.raw_host.decode("ascii").lower()
     if ":" in host:
@@ -238,5 +260,7 @@ def approved_web_search_transport(
     port = origin.port or default_port
     # Mirrors modules.settings.public: a bare entry admits only the default port, otherwise host:port is required.
     if (authority if port == default_port else f"{authority}:{port}") not in allowed_hosts:
-        raise EndpointNetworkPolicyError("Web search endpoint host is not allowed by deployment policy")
+        raise EndpointNetworkPolicyError(
+            "Web search endpoint host is not allowed by deployment policy"
+        )
     return approved_transport(base_url, approved_cidrs, allow_global=True)

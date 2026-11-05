@@ -19,10 +19,14 @@ def result_digest(pages: list[dict[str, object]]) -> str:
     import hashlib
     import json
 
-    return hashlib.sha256(json.dumps(
-        [{k: v for k, v in page.items() if k != "raw_content"} for page in pages],
-        sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-    ).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(
+            [{k: v for k, v in page.items() if k != "raw_content"} for page in pages],
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def wire_size(pages: list[dict[str, object]]) -> int:

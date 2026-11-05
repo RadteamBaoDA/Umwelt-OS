@@ -19,7 +19,11 @@ from modules.sources import public as sources
 
 NOW = datetime.now(UTC)
 SCOPE = InternalJobScope(
-    workspace_id=uuid4(), actor_user_id=7, membership_revision=3, source_id=uuid4(), source_generation=1,
+    workspace_id=uuid4(),
+    actor_user_id=7,
+    membership_revision=3,
+    source_id=uuid4(),
+    source_generation=1,
 )
 
 
@@ -40,11 +44,16 @@ class Redis:
 
 def ctx(redis: Redis) -> dict[str, Any]:
     """Build the invocation context with a no-op session factory."""
+
     @asynccontextmanager
     async def factory():
         yield SimpleNamespace()
 
-    return {"session_factory": factory, "redis": redis, "settings": SimpleNamespace(multi_workspace_enabled=False)}
+    return {
+        "session_factory": factory,
+        "redis": redis,
+        "settings": SimpleNamespace(multi_workspace_enabled=False),
+    }
 
 
 def patch_loop(monkeypatch, identities, claim_script):
@@ -95,7 +104,9 @@ async def test_enqueue_counts_only_new_jobs_with_the_claim_in_the_job_id(monkeyp
     assert await dispatcher.dispatch_pending_work(ctx(redis2)) == 1
     (name, identifier, kw) = redis2.calls[0]
     assert name == "process_ingestion_event" and identifier == str(rows[0][0])
-    assert kw["_job_id"] == f"ingestion:{rows[0][0]}:{NOW.isoformat()}" and kw["_defer_until"] == NOW
+    assert (
+        kw["_job_id"] == f"ingestion:{rows[0][0]}:{NOW.isoformat()}" and kw["_defer_until"] == NOW
+    )
 
 
 @pytest.mark.asyncio
@@ -108,7 +119,9 @@ async def test_lost_authorization_skips_the_identity_and_continues(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_error_before_the_claim_is_raised_but_after_it_the_attempt_returns_to_pending(monkeypatch):
+async def test_error_before_the_claim_is_raised_but_after_it_the_attempt_returns_to_pending(
+    monkeypatch,
+):
     """A failure with no claim propagates; once claimed (even a failed commit) the exact attempt is released."""
     rows = [ident()]
     patch_loop(monkeypatch, rows, [RuntimeError("db")])
@@ -192,11 +205,17 @@ def claim_env(monkeypatch, session: Session, *, scope: Any = SCOPE, valid: bool 
     return factory, quarantined
 
 
-def outbox(payload: dict[str, Any] | None = None, event_type: str = "ingestion.stage.requested") -> Any:
+def outbox(
+    payload: dict[str, Any] | None = None, event_type: str = "ingestion.stage.requested"
+) -> Any:
     """Build an outbox row stand-in."""
     return SimpleNamespace(
-        type=event_type, status="pending", dispatched_at=None,
-        payload=payload if payload is not None else {"run_id": str(uuid4()), "stage_id": str(uuid4())},
+        type=event_type,
+        status="pending",
+        dispatched_at=None,
+        payload=payload
+        if payload is not None
+        else {"run_id": str(uuid4()), "stage_id": str(uuid4())},
     )
 
 
@@ -207,9 +226,19 @@ async def test_claim_commits_the_queued_timestamp_before_redis(monkeypatch):
     session = Session(event, stage=SimpleNamespace(status="pending", lease_expires_at=None))
     factory, _ = claim_env(monkeypatch, session)
     record = core_dispatch._DispatchClaim()
-    assert await core_dispatch._claim_for_dispatch(factory, record, uuid4(), "pending", None, now=NOW, enabled=False)
-    assert event.status == "queued" and event.dispatched_at == record.claimed_at and session.commits == 1
-    assert record.job_name == "process_ingestion_event" and record.scope is SCOPE and record.access_fence == "fence"
+    assert await core_dispatch._claim_for_dispatch(
+        factory, record, uuid4(), "pending", None, now=NOW, enabled=False
+    )
+    assert (
+        event.status == "queued"
+        and event.dispatched_at == record.claimed_at
+        and session.commits == 1
+    )
+    assert (
+        record.job_name == "process_ingestion_event"
+        and record.scope is SCOPE
+        and record.access_fence == "fence"
+    )
 
 
 @pytest.mark.asyncio
@@ -217,33 +246,41 @@ async def test_claim_skips_and_fails_per_rule(monkeypatch):
     """Quarantine unresolvable identities, skip missing/running events, fail invalid or stage-less ones."""
     factory, quarantined = claim_env(monkeypatch, Session(None), scope=None)
     record = core_dispatch._DispatchClaim()
-    assert not await core_dispatch._claim_for_dispatch(factory, record, uuid4(), "pending", None, now=NOW, enabled=False)
+    assert not await core_dispatch._claim_for_dispatch(
+        factory, record, uuid4(), "pending", None, now=NOW, enabled=False
+    )
     assert len(quarantined) == 1 and record.claimed_at is None
 
     factory, _ = claim_env(monkeypatch, Session(None))
-    assert not await core_dispatch._claim_for_dispatch(factory, core_dispatch._DispatchClaim(), uuid4(), "pending", None,
-                                                    now=NOW, enabled=False)
+    assert not await core_dispatch._claim_for_dispatch(
+        factory, core_dispatch._DispatchClaim(), uuid4(), "pending", None, now=NOW, enabled=False
+    )
 
     event = outbox()
     session = Session(event)
     factory, _ = claim_env(monkeypatch, session, valid=False)
-    assert not await core_dispatch._claim_for_dispatch(factory, core_dispatch._DispatchClaim(), uuid4(), "pending", None,
-                                                    now=NOW, enabled=False)
+    assert not await core_dispatch._claim_for_dispatch(
+        factory, core_dispatch._DispatchClaim(), uuid4(), "pending", None, now=NOW, enabled=False
+    )
     assert event.status == "failed" and session.commits == 1
 
     event = outbox()
     session = Session(event, stage=None)  # the stage row vanished
     factory, _ = claim_env(monkeypatch, session)
-    assert not await core_dispatch._claim_for_dispatch(factory, core_dispatch._DispatchClaim(), uuid4(), "pending", None,
-                                                    now=NOW, enabled=False)
+    assert not await core_dispatch._claim_for_dispatch(
+        factory, core_dispatch._DispatchClaim(), uuid4(), "pending", None, now=NOW, enabled=False
+    )
     assert event.status == "failed"
 
     event = outbox()
-    live = SimpleNamespace(status="running", lease_expires_at=datetime.now(UTC) + timedelta(minutes=10))
+    live = SimpleNamespace(
+        status="running", lease_expires_at=datetime.now(UTC) + timedelta(minutes=10)
+    )
     session = Session(event, stage=live)  # an in-flight worker keeps its original timestamp
     factory, _ = claim_env(monkeypatch, session)
-    assert not await core_dispatch._claim_for_dispatch(factory, core_dispatch._DispatchClaim(), uuid4(), "pending", None,
-                                                    now=NOW, enabled=False)
+    assert not await core_dispatch._claim_for_dispatch(
+        factory, core_dispatch._DispatchClaim(), uuid4(), "pending", None, now=NOW, enabled=False
+    )
     assert event.status == "pending" and session.commits == 0
 
 
@@ -263,15 +300,17 @@ async def test_cleanup_and_purge_events_need_a_matching_retained_identity(monkey
 
     receipt.value = None
     monkeypatch.setattr(documents, "read_document_cleanup_job_identity", receipt)
-    assert not await core_dispatch._claim_for_dispatch(factory, core_dispatch._DispatchClaim(), uuid4(), "pending", None,
-                                                    now=NOW, enabled=False)
+    assert not await core_dispatch._claim_for_dispatch(
+        factory, core_dispatch._DispatchClaim(), uuid4(), "pending", None, now=NOW, enabled=False
+    )
     assert event.status == "failed"
     event = outbox(dict(operation), "document.cleanup.requested")
     session = Session(event)
     factory, _ = claim_env(monkeypatch, session)
     receipt.value = SimpleNamespace(source_id=SCOPE.source_id, source_generation=1)
-    assert await core_dispatch._claim_for_dispatch(factory, core_dispatch._DispatchClaim(), uuid4(), "pending", None,
-                                                now=NOW, enabled=False)
+    assert await core_dispatch._claim_for_dispatch(
+        factory, core_dispatch._DispatchClaim(), uuid4(), "pending", None, now=NOW, enabled=False
+    )
 
     async def retained(sess, op, **kw):
         return retained.value
@@ -281,6 +320,7 @@ async def test_cleanup_and_purge_events_need_a_matching_retained_identity(monkey
     event = outbox(dict(operation), "source.purge.requested")
     session = Session(event)
     factory, _ = claim_env(monkeypatch, session)
-    assert not await core_dispatch._claim_for_dispatch(factory, core_dispatch._DispatchClaim(), uuid4(), "pending", None,
-                                                    now=NOW, enabled=False)
+    assert not await core_dispatch._claim_for_dispatch(
+        factory, core_dispatch._DispatchClaim(), uuid4(), "pending", None, now=NOW, enabled=False
+    )
     assert event.status == "failed"

@@ -46,7 +46,9 @@ ERASURE_OWNER = AccountErasureOwner(ERASURE_TABLES)
 
 
 async def erase_account_graph_page(
-    ctx: dict[str, Any], scope: AccountErasureScope, cursor: dict[str, Any],
+    ctx: dict[str, Any],
+    scope: AccountErasureScope,
+    cursor: dict[str, Any],
 ) -> tuple[bool, dict[str, Any]]:
     """Delete one bounded graph partition page by a SQL-owned exact group ID.
 
@@ -75,18 +77,26 @@ async def erase_account_graph_page(
     if not settings.graph_host or not settings.graph_username:
         raise RuntimeError("Graph erasure requires graph connection settings")
     uri = f"bolt://{settings.graph_host}:{settings.graph_port}"
-    async with asyncio.timeout(30), AsyncGraphDatabase.driver(
-        uri, auth=(settings.graph_username, settings.graph_password.get_secret_value()),
-        connection_timeout=2, connection_acquisition_timeout=QUERY_SECONDS,
-        max_transaction_retry_time=0, max_connection_pool_size=1,
-    ) as driver, driver.session(database=settings.graph_database) as graph:
+    async with (
+        asyncio.timeout(30),
+        AsyncGraphDatabase.driver(
+            uri,
+            auth=(settings.graph_username, settings.graph_password.get_secret_value()),
+            connection_timeout=2,
+            connection_acquisition_timeout=QUERY_SECONDS,
+            max_transaction_retry_time=0,
+            max_connection_pool_size=1,
+        ) as driver,
+        driver.session(database=settings.graph_database) as graph,
+    ):
         schema = await graph.run(Query(PARTITION_FENCE_CONSTRAINT, timeout=QUERY_SECONDS))
         await schema.consume()
         schema_proof = await graph.run(Query(PARTITION_FENCE_SCHEMA, timeout=QUERY_SECONDS))
         schema_record = await schema_proof.single(strict=True)
         require_partition_fence_schema([schema_record.data()] if schema_record is not None else [])
         fence = await graph.run(
-            Query(ERASE_PARTITION_FENCE, timeout=QUERY_SECONDS), partition_id=str(partition_id),
+            Query(ERASE_PARTITION_FENCE, timeout=QUERY_SECONDS),
+            partition_id=str(partition_id),
         )
         fenced = await fence.single(strict=True)
         await fence.consume()  # Confirm auto-commit before any content deletion can start.
@@ -94,9 +104,11 @@ async def erase_account_graph_page(
             raise RuntimeError("Graph erasure fence was not confirmed")
         # Edges with stale/missing endpoints can survive a node-only deletion.
         edge = await graph.run(
-            Query("MATCH ()-[r]-() WHERE r.group_id = $group_id "
-                  "WITH DISTINCT r LIMIT 100 DELETE r RETURN count(r) AS removed",
-                  timeout=QUERY_SECONDS),
+            Query(
+                "MATCH ()-[r]-() WHERE r.group_id = $group_id "
+                "WITH DISTINCT r LIMIT 100 DELETE r RETURN count(r) AS removed",
+                timeout=QUERY_SECONDS,
+            ),
             group_id=str(partition_id),
         )
         edge_record = await edge.single()
@@ -106,17 +118,21 @@ async def erase_account_graph_page(
         if edge_count:
             return False, dict(cursor)
         foreign_edges = await graph.run(
-            Query("MATCH (n)-[r]-() WHERE n.group_id = $group_id "
-                  "AND coalesce(r.group_id, '') <> $group_id RETURN 1 AS found LIMIT 1",
-                  timeout=QUERY_SECONDS),
+            Query(
+                "MATCH (n)-[r]-() WHERE n.group_id = $group_id "
+                "AND coalesce(r.group_id, '') <> $group_id RETURN 1 AS found LIMIT 1",
+                timeout=QUERY_SECONDS,
+            ),
             group_id=str(partition_id),
         )
         if await foreign_edges.single():
             raise RuntimeError("Graph partition has a foreign relationship")
         node = await graph.run(
-            Query("MATCH (n) WHERE n.group_id = $group_id "
-                  "WITH n LIMIT 100 DELETE n RETURN count(n) AS removed",
-                  timeout=QUERY_SECONDS),
+            Query(
+                "MATCH (n) WHERE n.group_id = $group_id "
+                "WITH n LIMIT 100 DELETE n RETURN count(n) AS removed",
+                timeout=QUERY_SECONDS,
+            ),
             group_id=str(partition_id),
         )
         node_record = await node.single()
@@ -127,8 +143,10 @@ async def erase_account_graph_page(
             return False, dict(cursor)
         # An exact group read is required before advancing past its SQL receipt.
         remaining = await graph.run(
-            Query("MATCH (n) WHERE n.group_id = $group_id RETURN count(n) AS found",
-                  timeout=QUERY_SECONDS),
+            Query(
+                "MATCH (n) WHERE n.group_id = $group_id RETURN count(n) AS found",
+                timeout=QUERY_SECONDS,
+            ),
             group_id=str(partition_id),
         )
         remaining_record = await remaining.single()

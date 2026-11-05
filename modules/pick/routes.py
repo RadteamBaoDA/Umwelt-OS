@@ -50,15 +50,23 @@ async def pick_status(request: Request, owner: OwnerRead) -> dict[str, bool]:
 
 
 @router.post("/sessions", dependencies=[enabled, create_budget])
-async def create_pick_session(request: Request, response: Response, owner: OwnerWrite) -> dict[str, object]:
+async def create_pick_session(
+    request: Request, response: Response, owner: OwnerWrite
+) -> dict[str, object]:
     """Create a QR session; returns its id, lifetime and the host LAN IPv4 (only ever to this authenticated caller)."""
     response.headers["Cache-Control"] = "private, no-store"
     session_id = await public.create_session(request.app.state.redis)
-    return {"session_id": session_id, "expires_in": public.PICK_TTL_SECONDS, "lan_ip": public.lan_ipv4()}
+    return {
+        "session_id": session_id,
+        "expires_in": public.PICK_TTL_SECONDS,
+        "lan_ip": public.lan_ipv4(),
+    }
 
 
 @router.get("/sessions/{session_id}", dependencies=[enabled])
-async def poll_pick_session(session_id: str, request: Request, response: Response, owner: OwnerRead) -> dict[str, object]:
+async def poll_pick_session(
+    session_id: str, request: Request, response: Response, owner: OwnerRead
+) -> dict[str, object]:
     """Desktop poll; a picked prompt is delivered exactly once."""
     response.headers["Cache-Control"] = "private, no-store"
     try:
@@ -68,7 +76,9 @@ async def poll_pick_session(session_id: str, request: Request, response: Respons
 
 
 @router.put("/phone/{session_id}", dependencies=[enabled, phone_budget])
-async def scan_pick_session(session_id: str, request: Request, response: Response) -> dict[str, object]:
+async def scan_pick_session(
+    session_id: str, request: Request, response: Response
+) -> dict[str, object]:
     """Phone opened the link: mark scanned and return the 3 offered options."""
     response.headers["Cache-Control"] = "no-store"
     try:

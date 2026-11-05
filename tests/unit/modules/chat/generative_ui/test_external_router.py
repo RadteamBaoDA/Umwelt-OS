@@ -14,8 +14,13 @@ from core.model_gateway.schemas import ModelMapping, RequestPolicy
 from modules.chat.generative_ui import external_router as viz
 from modules.chat.generative_ui.visualization_router import CATEGORY_ROUTES
 
-POLICY = RequestPolicy(workspace_id=uuid4(), actor_user_id=1, membership_revision=1, gateway_identity="a" * 64,
-                       configuration_revision=1)
+POLICY = RequestPolicy(
+    workspace_id=uuid4(),
+    actor_user_id=1,
+    membership_revision=1,
+    gateway_identity="a" * 64,
+    configuration_revision=1,
+)
 MAPPING = ModelMapping(model="m", destination="remote")
 WINDOW = [{"role": "user", "content": "plot revenue over time"}]
 
@@ -45,7 +50,17 @@ def _content(category: str) -> dict[str, Any]:
 
 def _tool(category: str) -> dict[str, Any]:
     args = json.dumps({"category": category})
-    return {"choices": [{"message": {"tool_calls": [{"function": {"name": "select_visualization", "arguments": args}}]}}]}
+    return {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {"function": {"name": "select_visualization", "arguments": args}}
+                    ]
+                }
+            }
+        ]
+    }
 
 
 async def _llm(gateway: FakeGateway, **kw: Any) -> str:
@@ -62,7 +77,10 @@ def test_thirteen_categories_map_to_renderers() -> None:
 
 def test_window_is_bounded_and_excludes_system_and_tool_output() -> None:
     messages = [{"role": "system", "content": "SECRET"}, {"role": "tool", "content": "tool out"}]
-    messages += [{"role": "user" if i % 2 == 0 else "assistant", "content": f"{i}" + "x" * 7000} for i in range(6)]
+    messages += [
+        {"role": "user" if i % 2 == 0 else "assistant", "content": f"{i}" + "x" * 7000}
+        for i in range(6)
+    ]
     window = viz.bounded_window(messages)
     assert [m["content"][0] for m in window] == ["2", "3", "4", "5"]
     assert all(len(m["content"]) == 6000 for m in window)
@@ -101,7 +119,9 @@ async def test_llm_forced_tool_sends_tool_choice() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("response", [_content("pie"), {"choices": []}, {"choices": [{"message": {"content": "nope"}}]}])
+@pytest.mark.parametrize(
+    "response", [_content("pie"), {"choices": []}, {"choices": [{"message": {"content": "nope"}}]}]
+)
 async def test_llm_invalid_enum_raises_never_guesses(response: dict[str, Any]) -> None:
     with pytest.raises(viz.VisualizationRouterError) as err:
         await _llm(FakeGateway(response))
@@ -109,14 +129,19 @@ async def test_llm_invalid_enum_raises_never_guesses(response: dict[str, Any]) -
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("exc", "code", "retryable"), [
-    (ModelGatewayError("Model gateway request timed out"), "timeout", True),
-    (ModelGatewayError("Model gateway returned HTTP 401"), "auth_error", False),
-    (ModelGatewayError("Model gateway returned HTTP 500"), "provider_error", True),
-    (CapabilityUnsupported("rejected"), "mode_unsupported", False),
-    (PrivacyPolicyDenied("denied"), "privacy_denied", False),
-])
-async def test_llm_gateway_failures_map_to_safe_codes(exc: Exception, code: str, retryable: bool) -> None:
+@pytest.mark.parametrize(
+    ("exc", "code", "retryable"),
+    [
+        (ModelGatewayError("Model gateway request timed out"), "timeout", True),
+        (ModelGatewayError("Model gateway returned HTTP 401"), "auth_error", False),
+        (ModelGatewayError("Model gateway returned HTTP 500"), "provider_error", True),
+        (CapabilityUnsupported("rejected"), "mode_unsupported", False),
+        (PrivacyPolicyDenied("denied"), "privacy_denied", False),
+    ],
+)
+async def test_llm_gateway_failures_map_to_safe_codes(
+    exc: Exception, code: str, retryable: bool
+) -> None:
     with pytest.raises(viz.VisualizationRouterError) as err:
         await _llm(FakeGateway(exc))
     assert (err.value.code, err.value.retryable) == (code, retryable)
@@ -136,8 +161,18 @@ async def test_typesafe_valid_answer_and_request_shape() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        return httpx.Response(200, json={"answers": {"visualization": {
-            "type": "choice", "choice": "bar_chart", "probabilities": {"bar_chart": 0.8, "table": 0.2}}}})
+        return httpx.Response(
+            200,
+            json={
+                "answers": {
+                    "visualization": {
+                        "type": "choice",
+                        "choice": "bar_chart",
+                        "probabilities": {"bar_chart": 0.8, "table": 0.2},
+                    }
+                }
+            },
+        )
 
     category, probs = await viz.classify_typesafe("k-secret", WINDOW, _transport(handler))
     assert category == "bar_chart" and probs == {"bar_chart": 0.8, "table": 0.2}
@@ -151,13 +186,16 @@ async def test_typesafe_valid_answer_and_request_shape() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("answer", [
-    {"type": "choice", "choice": "pie", "probabilities": {}},
-    {"type": "choice", "choice": "map", "probabilities": {"map": 1.5}},
-    {"type": "choice", "choice": "map", "probabilities": {"unknown": 0.5}},
-    {"type": "choice", "choice": "map", "probabilities": {"map": True}},
-    {"type": "text", "choice": "map"},
-])
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"type": "choice", "choice": "pie", "probabilities": {}},
+        {"type": "choice", "choice": "map", "probabilities": {"map": 1.5}},
+        {"type": "choice", "choice": "map", "probabilities": {"unknown": 0.5}},
+        {"type": "choice", "choice": "map", "probabilities": {"map": True}},
+        {"type": "text", "choice": "map"},
+    ],
+)
 async def test_typesafe_invalid_answers_raise(answer: dict[str, Any]) -> None:
     with pytest.raises(viz.VisualizationRouterError) as err:
         await viz.classify_typesafe("k", WINDOW, _ok({"answers": {"visualization": answer}}))
@@ -189,7 +227,9 @@ async def test_typesafe_timeout_and_auth_and_server_error() -> None:
 
 @pytest.mark.asyncio
 async def test_typesafe_redirect_is_not_followed() -> None:
-    redirect = _transport(lambda r: httpx.Response(302, headers={"location": "https://evil.example/"}))
+    redirect = _transport(
+        lambda r: httpx.Response(302, headers={"location": "https://evil.example/"})
+    )
     with pytest.raises(viz.VisualizationRouterError) as err:
         await viz.classify_typesafe("k", WINDOW, redirect)
     assert err.value.code == "provider_error"
@@ -214,4 +254,6 @@ async def test_typesafe_oversized_response_is_aborted_while_streaming() -> None:
     with pytest.raises(viz.VisualizationRouterError) as err:
         await viz.classify_typesafe("k", WINDOW, transport)
     assert err.value.code == "provider_error"
-    assert stream.pulled <= viz.MAX_RESPONSE_BYTES // 16384 + 2  # stopped just past the cap, never read whole
+    assert (
+        stream.pulled <= viz.MAX_RESPONSE_BYTES // 16384 + 2
+    )  # stopped just past the cap, never read whole

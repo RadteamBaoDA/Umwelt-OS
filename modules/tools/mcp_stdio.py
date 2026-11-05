@@ -357,20 +357,27 @@ class _StdioRun:
     uncertain: bool = False
 
 
-def _validate_profile_fields(profile: StdioDeploymentProfile) -> tuple[tuple[str, ...], dict[str, str], dict[str, str]]:
+def _validate_profile_fields(
+    profile: StdioDeploymentProfile,
+) -> tuple[tuple[str, ...], dict[str, str], dict[str, str]]:
     """Check profile identity, argv, environment and manifest bounds; return copies of the mutable parts.
 
     Raises ``McpTransportError`` for any malformed field, unreviewed hash, or value outside the exact
     allowlists. Pure; no filesystem access.
     """
     try:
-        argv, env, artifacts = tuple(profile.argv), dict(profile.environment), dict(profile.artifact_sha256)
+        argv, env, artifacts = (
+            tuple(profile.argv),
+            dict(profile.environment),
+            dict(profile.artifact_sha256),
+        )
     except Exception as exc:
         raise McpTransportError("MCP stdio profile is invalid") from exc
     if (
         not isinstance(profile.profile_id, str)
         or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", profile.profile_id) is None
-        or profile.enabled is not True or profile.platform != "posix"
+        or profile.enabled is not True
+        or profile.platform != "posix"
         or profile.operation_kind not in ("ordinary", "discovery")
         or profile.runtime_kind not in ("native", "python", "node")
         or not isinstance(profile.profile_hash, str)
@@ -378,14 +385,25 @@ def _validate_profile_fields(profile: StdioDeploymentProfile) -> tuple[tuple[str
         or profile.reviewed_profile_hash != profile.profile_hash
     ):
         raise McpTransportError("MCP stdio profile or reviewed hash is invalid")
-    if not (1 <= len(argv) <= 32) or any(
-        not isinstance(v, str) or not v or len(v) > 2048 or "\x00" in v for v in argv
-    ) or sum(map(len, argv)) > 16 * 1024:
+    if (
+        not (1 <= len(argv) <= 32)
+        or any(not isinstance(v, str) or not v or len(v) > 2048 or "\x00" in v for v in argv)
+        or sum(map(len, argv)) > 16 * 1024
+    ):
         raise McpTransportError("MCP stdio arguments exceed reviewed bounds")
-    if len(env) > 32 or any(
-        k not in {"LANG", "LC_ALL", "TZ"} or not isinstance(v, str)
-        or len(k) > 128 or len(v) > 2048 or "\x00" in k or "\x00" in v for k, v in env.items()
-    ) or sum(len(k) + len(v) for k, v in env.items()) > 16 * 1024:
+    if (
+        len(env) > 32
+        or any(
+            k not in {"LANG", "LC_ALL", "TZ"}
+            or not isinstance(v, str)
+            or len(k) > 128
+            or len(v) > 2048
+            or "\x00" in k
+            or "\x00" in v
+            for k, v in env.items()
+        )
+        or sum(len(k) + len(v) for k, v in env.items()) > 16 * 1024
+    ):
         raise McpTransportError("MCP stdio environment exceeds exact allowlist")
     if not (1 <= len(artifacts) <= 32):
         raise McpTransportError("MCP stdio artifact manifest is invalid")
@@ -393,7 +411,8 @@ def _validate_profile_fields(profile: StdioDeploymentProfile) -> tuple[tuple[str
 
 
 def _resolve_launch_paths(
-    profile: StdioDeploymentProfile, argv: tuple[str, ...],
+    profile: StdioDeploymentProfile,
+    argv: tuple[str, ...],
 ) -> tuple[Path, Path, Path]:
     """Resolve root/cwd/executable to canonical symlink-free paths and reject unsafe launchers.
 
@@ -401,13 +420,19 @@ def _resolve_launch_paths(
     relative, escaping, non-canonical paths, shell/package-manager launchers, interpreter entry
     mismatches and command-evaluation or loader flags in ``argv``.
     """
-    if not all(isinstance(p, str) for p in (profile.immutable_root, profile.cwd, profile.executable)):
+    if not all(
+        isinstance(p, str) for p in (profile.immutable_root, profile.cwd, profile.executable)
+    ):
         raise McpTransportError("MCP stdio launch paths must be strings")
     root_in, cwd_in, exe_in = map(Path, (profile.immutable_root, profile.cwd, profile.executable))
     if not all(p.is_absolute() for p in (root_in, cwd_in, exe_in)):
         raise McpTransportError("MCP stdio paths must be absolute")
     try:
-        root, cwd, exe = root_in.resolve(strict=True), cwd_in.resolve(strict=True), exe_in.resolve(strict=True)
+        root, cwd, exe = (
+            root_in.resolve(strict=True),
+            cwd_in.resolve(strict=True),
+            exe_in.resolve(strict=True),
+        )
         cwd.relative_to(root)
         exe.relative_to(root)
     except (OSError, RuntimeError, ValueError) as exc:
@@ -415,23 +440,48 @@ def _resolve_launch_paths(
     if any(str(p) != str(q) for p, q in ((root, root_in), (cwd, cwd_in), (exe, exe_in))):
         raise McpTransportError("MCP stdio paths must be canonical and symlink-free")
     if exe.suffix.lower() in {".bat", ".cmd", ".ps1"} or exe.name.lower() in {
-        "sh", "bash", "dash", "zsh", "fish", "npm", "npx", "cmd", "powershell", "pwsh",
+        "sh",
+        "bash",
+        "dash",
+        "zsh",
+        "fish",
+        "npm",
+        "npx",
+        "cmd",
+        "powershell",
+        "pwsh",
     }:
         raise McpTransportError("MCP stdio shell and package-manager launchers are unsupported")
     if profile.runtime_kind == "native":
         if profile.entry_script is not None:
             raise McpTransportError("native profile cannot name an entry script")
     elif (
-        not isinstance(profile.entry_script, str) or not Path(profile.entry_script).is_absolute()
-        or str(Path(profile.entry_script)) != profile.entry_script or argv[0] != profile.entry_script
+        not isinstance(profile.entry_script, str)
+        or not Path(profile.entry_script).is_absolute()
+        or str(Path(profile.entry_script)) != profile.entry_script
+        or argv[0] != profile.entry_script
     ):
         raise McpTransportError("interpreter needs a canonical entry script as argv[0]")
     if any(
         arg in {"-c", "-m", "-e", "-r", "--eval", "--command", "--require", "--import", "--loader"}
-        or arg.startswith(("-c", "-m", "-e", "-r", "--eval=", "--command=", "--require=", "--import=", "--loader="))
+        or arg.startswith(
+            (
+                "-c",
+                "-m",
+                "-e",
+                "-r",
+                "--eval=",
+                "--command=",
+                "--require=",
+                "--import=",
+                "--loader=",
+            )
+        )
         for arg in argv
     ):
-        raise McpTransportError("MCP stdio command-evaluation and interpreter-loader options are unsupported")
+        raise McpTransportError(
+            "MCP stdio command-evaluation and interpreter-loader options are unsupported"
+        )
     return root, cwd, exe
 
 
@@ -442,23 +492,34 @@ def _verify_policy_hash(profile: StdioDeploymentProfile, plan: _LaunchPlan) -> N
     ``McpTransportError`` when the policy is not canonical JSON or the digest differs.
     """
     policy = {
-        "policy": "bbd-os-mcp-stdio-v1", "profile_id": profile.profile_id,
-        "platform": profile.platform, "enabled": profile.enabled,
-        "runtime_kind": profile.runtime_kind, "entry_script": profile.entry_script,
-        "executable": str(plan.exe), "argv": plan.argv, "cwd": str(plan.cwd),
-        "environment": dict(sorted(plan.env.items())), "immutable_root": str(plan.root),
+        "policy": "bbd-os-mcp-stdio-v1",
+        "profile_id": profile.profile_id,
+        "platform": profile.platform,
+        "enabled": profile.enabled,
+        "runtime_kind": profile.runtime_kind,
+        "entry_script": profile.entry_script,
+        "executable": str(plan.exe),
+        "argv": plan.argv,
+        "cwd": str(plan.cwd),
+        "environment": dict(sorted(plan.env.items())),
+        "immutable_root": str(plan.root),
         "artifact_sha256": dict(sorted(plan.artifacts.items())),
         "limits": {
-            "ordinary_frame": _ORDINARY_FRAME_BYTES, "ordinary_total": _ORDINARY_TOTAL_BYTES,
-            "ordinary_frames": _ORDINARY_FRAMES, "discovery_frame": _DISCOVERY_FRAME_BYTES,
-            "discovery_total": _DISCOVERY_TOTAL_BYTES, "discovery_frames": _DISCOVERY_FRAMES,
+            "ordinary_frame": _ORDINARY_FRAME_BYTES,
+            "ordinary_total": _ORDINARY_TOTAL_BYTES,
+            "ordinary_frames": _ORDINARY_FRAMES,
+            "discovery_frame": _DISCOVERY_FRAME_BYTES,
+            "discovery_total": _DISCOVERY_TOTAL_BYTES,
+            "discovery_frames": _DISCOVERY_FRAMES,
             "outbound_frame": _OUTBOUND_FRAME_BYTES,
         },
     }
     try:
-        calculated = hashlib.sha256(json.dumps(
-            policy, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-        ).encode("utf-8")).hexdigest()
+        calculated = hashlib.sha256(
+            json.dumps(policy, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+                "utf-8"
+            )
+        ).hexdigest()
     except (TypeError, ValueError, UnicodeError) as exc:
         raise McpTransportError("MCP stdio policy is not canonical JSON") from exc
     if calculated != profile.profile_hash:
@@ -478,7 +539,12 @@ async def _verify_path_ancestry(path: Path, plan: _LaunchPlan, work_deadline: fl
     for directory in (*root.parents, *dirs, *cwd_dirs):
         await anyio.lowlevel.checkpoint()
         item = directory.stat()
-        if not stat.S_ISDIR(item.st_mode) or item.st_uid != 0 or item.st_mode & 0o022 or os.access(directory, os.W_OK):
+        if (
+            not stat.S_ISDIR(item.st_mode)
+            or item.st_uid != 0
+            or item.st_mode & 0o022
+            or os.access(directory, os.W_OK)
+        ):
             raise McpTransportError("MCP stdio path ancestry is not root-owned and immutable")
         if time.monotonic() >= work_deadline:
             raise TimeoutError
@@ -502,7 +568,11 @@ async def _digest_artifact(path: Path, work_deadline: float) -> str:
 
 
 async def _verify_one_artifact(
-    raw_path: str, expected: str, plan: _LaunchPlan, work_deadline: float, total_before: int,
+    raw_path: str,
+    expected: str,
+    plan: _LaunchPlan,
+    work_deadline: float,
+    total_before: int,
 ) -> tuple[str, int]:
     """Verify one manifest artifact's location, ownership, immutability, ancestry and SHA-256.
 
@@ -512,7 +582,12 @@ async def _verify_one_artifact(
     changed or slow artifact. Synchronous ``stat``/read calls themselves cannot be interrupted.
     """
     root = plan.root
-    if not isinstance(raw_path, str) or not Path(raw_path).is_absolute() or not isinstance(expected, str) or re.fullmatch(r"[0-9a-f]{64}", expected) is None:
+    if (
+        not isinstance(raw_path, str)
+        or not Path(raw_path).is_absolute()
+        or not isinstance(expected, str)
+        or re.fullmatch(r"[0-9a-f]{64}", expected) is None
+    ):
         raise McpTransportError("MCP stdio artifact manifest is invalid")
     try:
         path = Path(raw_path).resolve(strict=True)  # noqa: ASYNC240  # one resolve() of a reviewed manifest path during startup validation
@@ -544,7 +619,9 @@ async def _verify_one_artifact(
 
 
 async def _verify_artifacts(
-    profile: StdioDeploymentProfile, plan: _LaunchPlan, work_deadline: float,
+    profile: StdioDeploymentProfile,
+    plan: _LaunchPlan,
+    work_deadline: float,
 ) -> None:
     """Verify the whole immutable manifest plus the executable, absolute arguments and entry script.
 
@@ -556,7 +633,9 @@ async def _verify_artifacts(
     total = 0
     for raw_path, expected in plan.artifacts.items():
         await anyio.lowlevel.checkpoint()
-        canonical, total = await _verify_one_artifact(raw_path, expected, plan, work_deadline, total)
+        canonical, total = await _verify_one_artifact(
+            raw_path, expected, plan, work_deadline, total
+        )
         paths[raw_path] = canonical
     if str(plan.exe) not in paths or not os.access(plan.exe, os.X_OK):
         raise McpTransportError("MCP stdio executable is not a reviewed executable artifact")
@@ -565,7 +644,11 @@ async def _verify_artifacts(
             raise McpTransportError("MCP stdio absolute argument is outside the reviewed manifest")
     if profile.runtime_kind != "native":
         try:
-            entry = Path(cast("str", profile.entry_script)).resolve(strict=True)  # non-native profiles always carry a script  # noqa: ASYNC240  # one resolve() of a reviewed manifest path during startup validation
+            entry = Path(
+                cast("str", profile.entry_script)
+            ).resolve(
+                strict=True
+            )  # non-native profiles always carry a script  # noqa: ASYNC240  # one resolve() of a reviewed manifest path during startup validation
             entry.relative_to(plan.root)
         except (OSError, RuntimeError, ValueError) as exc:
             raise McpTransportError("MCP stdio entry script is unavailable") from exc
@@ -575,7 +658,9 @@ async def _verify_artifacts(
         raise McpTransportError("MCP stdio verification exceeded work deadline")
 
 
-async def _require_fence(fence: Callable[[], Awaitable[bool]], stale_message: str, failed_message: str) -> None:
+async def _require_fence(
+    fence: Callable[[], Awaitable[bool]], stale_message: str, failed_message: str
+) -> None:
     """Run the authority fence under a 1 second cap.
 
     A false result raises ``stale_message``; any other failure (including the timeout) is reported
@@ -611,7 +696,10 @@ def _open_stdio_pipes(run: _StdioRun) -> tuple[int, int]:
 
 
 async def _spawn_stdio_child(
-    run: _StdioRun, loop: asyncio.AbstractEventLoop, plan: _LaunchPlan, child_fds: tuple[int, int],
+    run: _StdioRun,
+    loop: asyncio.AbstractEventLoop,
+    plan: _LaunchPlan,
+    child_fds: tuple[int, int],
     work_deadline: float,
 ) -> None:
     """Launch the child in a new session and prove the process object captured its transport.
@@ -627,9 +715,15 @@ async def _spawn_stdio_child(
         process = run.process
         with anyio.fail_after(budget):
             transport, _ = await loop.subprocess_exec(
-                lambda: process, str(plan.exe), *plan.argv,
-                stdin=child_in, stdout=child_out, stderr=subprocess.DEVNULL,
-                cwd=str(plan.cwd), env=plan.env, start_new_session=True,
+                lambda: process,
+                str(plan.exe),
+                *plan.argv,
+                stdin=child_in,
+                stdout=child_out,
+                stderr=subprocess.DEVNULL,
+                cwd=str(plan.cwd),
+                env=plan.env,
+                start_new_session=True,
             )
         run.launched = True
         if process._transport is not transport or process._pid is None or process._aborted:
@@ -733,7 +827,9 @@ def _require_posix_selector_loop() -> asyncio.AbstractEventLoop:
     except RuntimeError as exc:
         raise McpTransportError("MCP stdio requires the supported asyncio loop") from exc
     if type(loop) is not asyncio.SelectorEventLoop or os.geteuid() == 0:  # type: ignore[attr-defined,unused-ignore]  # POSIX-only
-        raise McpTransportError("MCP stdio requires default selector loop and non-root service identity")
+        raise McpTransportError(
+            "MCP stdio requires default selector loop and non-root service identity"
+        )
     return loop
 
 
@@ -741,9 +837,9 @@ def _require_posix_selector_loop() -> asyncio.AbstractEventLoop:
 async def stdio_client_transport(
     profile: StdioDeploymentProfile,
     fence: Callable[[], Awaitable[bool]],
-) -> AsyncIterator[tuple[
-    ObjectReceiveStream[SessionMessage | Exception], ObjectSendStream[SessionMessage]
-]]:
+) -> AsyncIterator[
+    tuple[ObjectReceiveStream[SessionMessage | Exception], ObjectSendStream[SessionMessage]]
+]:
     """Yield bounded SDK streams for a reviewed POSIX subprocess.
 
     The fence checks current authority before launch, after launch, before each
@@ -770,22 +866,41 @@ async def stdio_client_transport(
     ws, wr = anyio.create_memory_object_stream[SessionMessage](0)
     run = _StdioRun(
         _StdioProcess(spawn_deadline=min(work_deadline, time.monotonic() + _SPAWN_SECONDS)),
-        anyio.Event(), anyio.Event(), rs, rr, ws, wr, [],
+        anyio.Event(),
+        anyio.Event(),
+        rs,
+        rr,
+        ws,
+        wr,
+        [],
     )
     counters = [0, 0]  # Shared aggregate byte and complete-frame counters.
     try:
         with anyio.fail_after(max(0.0, work_deadline - time.monotonic())):
             await _require_fence(
-                fence, "MCP stdio fence is no longer current", "MCP stdio fence could not be verified",
+                fence,
+                "MCP stdio fence is no longer current",
+                "MCP stdio fence could not be verified",
             )
             child_fds = _open_stdio_pipes(run)
             await _spawn_stdio_child(run, loop, plan, child_fds, work_deadline)
-            await _require_fence(fence, "MCP stdio fence changed after spawn", "MCP stdio fence recheck failed")
+            await _require_fence(
+                fence, "MCP stdio fence changed after spawn", "MCP stdio fence recheck failed"
+            )
             stdin, stdout = cast("_StdioWritePipe", run.stdin), cast("_StdioReadPipe", run.stdout)
             async with anyio.create_task_group() as group:
-                group.start_soon(_read_stdio_stdout, stdout, rs, fence, counters, *limits, run.shutdown)
                 group.start_soon(
-                    _write_stdio_stdin, stdin, wr, fence, counters, limits[1], limits[2], run.writer_done,
+                    _read_stdio_stdout, stdout, rs, fence, counters, *limits, run.shutdown
+                )
+                group.start_soon(
+                    _write_stdio_stdin,
+                    stdin,
+                    wr,
+                    fence,
+                    counters,
+                    limits[1],
+                    limits[2],
+                    run.writer_done,
                 )
                 try:
                     yield rr, ws
@@ -883,7 +998,9 @@ async def _finish_stdio_process(
     except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
         uncertain = True
     uncertain |= await _wait_for_exit(process, min(end - 1.0, time.monotonic() + 1.0))
-    uncertain |= await _terminate_leader_tree(process, min(1.5, max(0.0, end - time.monotonic() - 1.0)))
+    uncertain |= await _terminate_leader_tree(
+        process, min(1.5, max(0.0, end - time.monotonic() - 1.0))
+    )
     # Probe the original group only; a setsid descendant leaves this cleanup scope.
     state_end = min(end - 0.5, time.monotonic() + 1.0)
     gone, probe_uncertain = await _poll_group_gone(process, state_end)
@@ -975,7 +1092,8 @@ async def _read_stdio_stdout(
                     raise McpTransportError("MCP stdio operation exceeded its message limit")
                 message = _decode_jsonrpc_frame(frame)
                 await _require_fence(
-                    fence, "MCP stdio execution fence changed before result delivery",
+                    fence,
+                    "MCP stdio execution fence changed before result delivery",
                     "MCP stdio execution fence could not be rechecked",
                 )
                 await messages.send(SessionMessage(message))
@@ -989,7 +1107,9 @@ async def _read_stdio_stdout(
         # SDK shutdown closes the receive end; keep consuming without retaining
         # child output so a cooperative process can still finish its shutdown.
         discarding = True
-        with suppress(anyio.EndOfStream, anyio.ClosedResourceError, anyio.BrokenResourceError, OSError):
+        with suppress(
+            anyio.EndOfStream, anyio.ClosedResourceError, anyio.BrokenResourceError, OSError
+        ):
             while True:
                 await stdout.receive(_READ_CHUNK_BYTES)
 
@@ -1015,14 +1135,19 @@ async def _write_stdio_stdin(
         async with messages:
             async for session_message in messages:
                 await _require_fence(
-                    fence, "MCP stdio execution fence changed before request delivery",
+                    fence,
+                    "MCP stdio execution fence changed before request delivery",
                     "MCP stdio execution fence could not be rechecked",
                 )
                 try:
-                    wire_message = session_message.message.model_dump_json(by_alias=True, exclude_unset=True)
+                    wire_message = session_message.message.model_dump_json(
+                        by_alias=True, exclude_unset=True
+                    )
                     frame = (wire_message + "\n").encode("utf-8", errors="strict")
                 except Exception as exc:
-                    raise McpTransportError("MCP stdio client message could not be serialized") from exc
+                    raise McpTransportError(
+                        "MCP stdio client message could not be serialized"
+                    ) from exc
                 if len(frame) > _OUTBOUND_FRAME_BYTES:
                     raise McpTransportError("MCP stdio client frame exceeds its byte limit")
                 counters[0] += len(frame)

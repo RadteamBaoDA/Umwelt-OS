@@ -14,7 +14,9 @@ from core.workspaces.schemas import InternalJobScope, Scope, WorkspaceContext
 from modules.tasks.models import Task
 
 
-async def _admit_seed(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> None:
+async def _admit_seed(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool
+) -> None:
     """Admit the owner workspace before inspecting or creating demo rows."""
     if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
         raise TypeError("An explicit seed workspace scope is required")
@@ -23,7 +25,9 @@ async def _admit_seed(session: AsyncSession, *, scope: Scope, multi_workspace_en
     if type(multi_workspace_enabled) is not bool:
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     await workspaces.read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
 
 
@@ -100,7 +104,10 @@ TASK_SEEDS = (
 
 
 async def ensure_demo_tasks(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> tuple[int, int]:
     """Add missing fictional tasks for the trusted owner and return created/existing counts.
 
@@ -113,19 +120,31 @@ async def ensure_demo_tasks(
     existing = 0
     for seed in TASK_SEEDS:
         task_id = _ws_id(scope, seed["id"])
-        found = await session.scalar(select(Task.id).where(
-            Task.id == task_id, Task.workspace_id == scope.workspace_id,
-        ))
+        found = await session.scalar(
+            select(Task.id).where(
+                Task.id == task_id,
+                Task.workspace_id == scope.workspace_id,
+            )
+        )
         if found is not None:
             existing += 1
             continue
-        session.add(Task(
-            id=task_id, workspace_id=scope.workspace_id, owner_id=_actor(scope), title=seed["title"],
-            description=seed["description"], status=seed["status"],
-            due_date=seed["due_date"], due_at=None,
-            completed_at=seed["completed_at"], goal_id=_ws_id(scope, seed["goal_id"]) if seed["goal_id"] else None,
-            entity_ids=[], revision=1,
-        ))
+        session.add(
+            Task(
+                id=task_id,
+                workspace_id=scope.workspace_id,
+                owner_id=_actor(scope),
+                title=seed["title"],
+                description=seed["description"],
+                status=seed["status"],
+                due_date=seed["due_date"],
+                due_at=None,
+                completed_at=seed["completed_at"],
+                goal_id=_ws_id(scope, seed["goal_id"]) if seed["goal_id"] else None,
+                entity_ids=[],
+                revision=1,
+            )
+        )
         created += 1
     await session.flush()
     return created, existing

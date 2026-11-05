@@ -28,8 +28,15 @@ _enabled = False
 
 # Attribute keys dropped outright (bodies, headers, bound parameters, raw queries).
 _DROP_PREFIXES = (
-    "http.request.header.", "http.response.header.", "http.request.body", "http.response.body",
-    "db.statement.parameters", "db.query.parameter.", "db.operation.parameter.", "url.query", "http.request_content",
+    "http.request.header.",
+    "http.response.header.",
+    "http.request.body",
+    "http.response.body",
+    "db.statement.parameters",
+    "db.query.parameter.",
+    "db.operation.parameter.",
+    "url.query",
+    "http.request_content",
 )
 _URL_KEYS = frozenset({"http.url", "url.full", "http.target", "url.path", "http.route"})
 _SQL_KEYS = frozenset({"db.statement", "db.query.text"})
@@ -183,7 +190,9 @@ def configure_tracing(endpoint: str, *, service_name: str, sample_ratio: float =
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
         from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
     except ImportError:
-        logger.warning("OTEL_EXPORTER_OTLP_ENDPOINT is set but OpenTelemetry packages are not installed")
+        logger.warning(
+            "OTEL_EXPORTER_OTLP_ENDPOINT is set but OpenTelemetry packages are not installed"
+        )
         return False
     provider = TracerProvider(
         resource=Resource.create({"service.name": service_name}),
@@ -216,7 +225,9 @@ def instrument_fastapi(app: Any) -> None:
         return
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
-    FastAPIInstrumentor.instrument_app(app, excluded_urls="/health$,/metrics$", exclude_spans=["send", "receive"])
+    FastAPIInstrumentor.instrument_app(
+        app, excluded_urls="/health$,/metrics$", exclude_spans=["send", "receive"]
+    )
 
 
 def inject_carrier() -> dict[str, str] | None:
@@ -266,8 +277,12 @@ def traced_job(fn: Callable[..., Any]) -> Callable[..., Any]:
 
         parent = propagate.extract(carrier) if isinstance(carrier, dict) else None
         tracer = trace.get_tracer(_TRACER_NAME)
-        with tracer.start_as_current_span(f"job {name}", context=parent, kind=trace.SpanKind.CONSUMER,
-                                          attributes={"messaging.system": "arq", "job.name": name}):
+        with tracer.start_as_current_span(
+            f"job {name}",
+            context=parent,
+            kind=trace.SpanKind.CONSUMER,
+            attributes={"messaging.system": "arq", "job.name": name},
+        ):
             return await fn(ctx, *args, **kwargs)
 
     return cast(Callable[..., Any], wrapper)

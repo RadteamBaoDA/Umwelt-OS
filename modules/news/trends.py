@@ -17,8 +17,13 @@ MAX_HISTORY_OBSERVATIONS = 5000
 
 
 async def _retained_baseline(
-    session: AsyncSession, story_ids: list[UUID], source_ids: tuple[UUID, ...], now: datetime, *,
-    scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    story_ids: list[UUID],
+    source_ids: tuple[UUID, ...],
+    now: datetime,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> tuple[dict[UUID, set[tuple[UUID, UUID]]], bool]:
     """Collect the bounded seven-day retained baseline per story, authority-checked per document.
 
@@ -28,22 +33,32 @@ async def _retained_baseline(
     """
     current_start = now - timedelta(hours=24)
     baseline_start = now - timedelta(days=8)
-    baseline_by_story: dict[UUID, set[tuple[UUID, UUID]]] = {story_id: set() for story_id in story_ids}
+    baseline_by_story: dict[UUID, set[tuple[UUID, UUID]]] = {
+        story_id: set() for story_id in story_ids
+    }
     history_incomplete = False
     if story_ids:
-        baseline_rows = list((await session.scalars(
-            select(NewsObservation).where(
-                NewsObservation.workspace_id == scope.workspace_id,
-                NewsObservation.story_id.in_(story_ids),
-                NewsObservation.source_id.in_(source_ids),
-                NewsObservation.algorithm_version == ALGORITHM_VERSION,
-                NewsObservation.created_at <= now,
-                NewsObservation.observed_at >= baseline_start,
-                NewsObservation.observed_at < current_start,
-            ).order_by(
-                NewsObservation.observed_at.desc(), NewsObservation.id,
-            ).limit(MAX_HISTORY_OBSERVATIONS + 1)
-        )).all())
+        baseline_rows = list(
+            (
+                await session.scalars(
+                    select(NewsObservation)
+                    .where(
+                        NewsObservation.workspace_id == scope.workspace_id,
+                        NewsObservation.story_id.in_(story_ids),
+                        NewsObservation.source_id.in_(source_ids),
+                        NewsObservation.algorithm_version == ALGORITHM_VERSION,
+                        NewsObservation.created_at <= now,
+                        NewsObservation.observed_at >= baseline_start,
+                        NewsObservation.observed_at < current_start,
+                    )
+                    .order_by(
+                        NewsObservation.observed_at.desc(),
+                        NewsObservation.id,
+                    )
+                    .limit(MAX_HISTORY_OBSERVATIONS + 1)
+                )
+            ).all()
+        )
         if len(baseline_rows) > MAX_HISTORY_OBSERVATIONS:
             baseline_rows = baseline_rows[:MAX_HISTORY_OBSERVATIONS]
             history_incomplete = True
@@ -53,10 +68,12 @@ async def _retained_baseline(
             allowed = authority_cache.get(key)
             if allowed is None:
                 allowed = await documents.news_retained_observation_allowed(
-                    session, document_id=observation.document_id,
+                    session,
+                    document_id=observation.document_id,
                     source_id=observation.source_id,
                     expected_source_generation=observation.source_generation,
-                    scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                    scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
                 )
                 authority_cache[key] = allowed
             if allowed:
@@ -67,8 +84,15 @@ async def _retained_baseline(
 
 
 def _rising_trend(
-    story: Any, observations: list[Any], evidence: list[Any], baseline_count: int, now: datetime,
-    live_reasons: set[str], *, source_selection_incomplete: bool, history_incomplete: bool,
+    story: Any,
+    observations: list[Any],
+    evidence: list[Any],
+    baseline_count: int,
+    now: datetime,
+    live_reasons: set[str],
+    *,
+    source_selection_incomplete: bool,
+    history_incomplete: bool,
 ) -> TrendRead | None:
     """Return the story's rising trend, or ``None`` when it does not qualify. Pure.
 
@@ -79,7 +103,8 @@ def _rising_trend(
     baseline_start = now - timedelta(days=8)
     current_versions = {item.document_id: item.document_version_id for item in evidence}
     current_observations = [
-        item for item in observations
+        item
+        for item in observations
         if current_versions.get(item.document_id) == item.document_version_id
         and current_start <= item.observed_at.astimezone(UTC) < now
     ]
@@ -89,8 +114,10 @@ def _rising_trend(
     baseline_per_day = baseline_count / 7.0
     low_baseline = baseline_per_day < 1.0
     ratio = None if low_baseline else current_count / baseline_per_day
-    rising = current_count >= 3 and source_count >= 2 and (
-        (low_baseline and current_count > 0) or (ratio is not None and ratio >= 2.0)
+    rising = (
+        current_count >= 3
+        and source_count >= 2
+        and ((low_baseline and current_count > 0) or (ratio is not None and ratio >= 2.0))
     )
     if not rising:
         return None
@@ -104,7 +131,9 @@ def _rising_trend(
         key=lambda item: (item.published_at or item.observed_at, str(item.document_id)),
     )
     incomplete_reasons = {
-        reason for item in observations if item.incomplete_reason
+        reason
+        for item in observations
+        if item.incomplete_reason
         for reason in item.incomplete_reason.split(",")
     }
     incomplete_reasons.update(live_reasons)
@@ -113,18 +142,30 @@ def _rising_trend(
     if history_incomplete:
         incomplete_reasons.add("history_scan_limit")
     return TrendRead(
-        story_id=story.id, title=representative.title, trend="rising",
-        current_count=current_count, baseline_per_day=round(baseline_per_day, 6),
-        ratio=round(ratio, 6) if ratio is not None else None, low_baseline=low_baseline,
-        source_count=source_count, evidence=current_evidence[:100],
+        story_id=story.id,
+        title=representative.title,
+        trend="rising",
+        current_count=current_count,
+        baseline_per_day=round(baseline_per_day, 6),
+        ratio=round(ratio, 6) if ratio is not None else None,
+        low_baseline=low_baseline,
+        source_count=source_count,
+        evidence=current_evidence[:100],
         incomplete_reasons=sorted(incomplete_reasons),
-        current_window_start=current_start, current_window_end=now,
-        baseline_window_start=baseline_start, baseline_window_end=current_start, as_of=now,
+        current_window_start=current_start,
+        current_window_end=now,
+        baseline_window_start=baseline_start,
+        baseline_window_end=current_start,
+        as_of=now,
     )
 
 
 async def list_trends(
-    session: AsyncSession, filters: TrendFilter, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    filters: TrendFilter,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
     as_of: datetime | None = None,
 ) -> TrendPage:
     """Compare 24 current hours with a bounded seven-day retained baseline.
@@ -139,27 +180,50 @@ async def list_trends(
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     now = (as_of or datetime.now(UTC)).astimezone(UTC)
     source_ids, source_selection_incomplete = await _resolve_source_scope(
-        session, tuple(filters.source_ids), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        tuple(filters.source_ids),
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     live = await _live_story_rows(
-        session, source_ids, now, scope=scope, multi_workspace_enabled=multi_workspace_enabled, candidate_limit=50,
+        session,
+        source_ids,
+        now,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        candidate_limit=50,
     )
     story_ids = [story.id for story, _observations, _evidence in live]
     baseline_by_story, history_incomplete = await _retained_baseline(
-        session, story_ids, source_ids, now, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        story_ids,
+        source_ids,
+        now,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
 
     # Baseline authorization can await many retained-document checks; reproject
     # current titles and window evidence after that work, immediately before output.
     live = await _live_story_rows(
-        session, source_ids, now, scope=scope, multi_workspace_enabled=multi_workspace_enabled, candidate_limit=50,
+        session,
+        source_ids,
+        now,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        candidate_limit=50,
     )
 
     result = []
     for story, observations, evidence in live:
         trend = _rising_trend(
-            story, observations, evidence, len(baseline_by_story.get(story.id, set())), now,
-            live.incomplete_reasons, source_selection_incomplete=source_selection_incomplete,
+            story,
+            observations,
+            evidence,
+            len(baseline_by_story.get(story.id, set())),
+            now,
+            live.incomplete_reasons,
+            source_selection_incomplete=source_selection_incomplete,
             history_incomplete=history_incomplete,
         )
         if trend is not None:
@@ -172,7 +236,8 @@ async def list_trends(
         page_reasons.add("history_scan_limit")
     page_reasons.update(reason for item in result for reason in item.incomplete_reasons)
     return TrendPage(
-        items=result[:filters.limit], as_of=now,
+        items=result[: filters.limit],
+        as_of=now,
         truncated=live.truncated or history_incomplete,
         incomplete=bool(page_reasons),
         incomplete_reasons=sorted(page_reasons),

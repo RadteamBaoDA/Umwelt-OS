@@ -61,11 +61,15 @@ OPTIONAL_SCOPE_FIELDS: dict[str, frozenset[str]] = {
     "github": frozenset({"github_history_days"}),
     "mastodon": frozenset({"mastodon_account", "mastodon_hashtag"}),
     "x": frozenset({"x_account", "x_query"}),
-    "coingecko": frozenset({"coingecko_assets"}),  # absent on legacy BTC/USD sources (collection falls back to BTC)
+    "coingecko": frozenset(
+        {"coingecko_assets"}
+    ),  # absent on legacy BTC/USD sources (collection falls back to BTC)
 }
 
 
-def _scope_values(provider_id: str, scope_fields: Sequence[str], configuration: dict[str, Any]) -> dict[str, Any] | None:
+def _scope_values(
+    provider_id: str, scope_fields: Sequence[str], configuration: dict[str, Any]
+) -> dict[str, Any] | None:
     """Collect the configured scope fields, or None when a required one is missing.
 
     Fields in OPTIONAL_SCOPE_FIELDS (the same map registry.validate uses) may be absent and are simply left out of
@@ -87,8 +91,12 @@ def _scope_values(provider_id: str, scope_fields: Sequence[str], configuration: 
 
 
 async def get_current_provider_scope(
-    session: AsyncSession, source_id: UUID, expected_source_generation: int,
-    *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_id: UUID,
+    expected_source_generation: int,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> ProviderScopeSnapshot | None:
     """Hash validated non-secret scope fields for supported active providers only.
 
@@ -98,15 +106,23 @@ async def get_current_provider_scope(
     from modules.connectors.catalog import get_catalog_entry
     from modules.sources import public as sources
 
-    fence = await sources.get_source_fence(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    fence = await sources.get_source_fence(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if fence is None or fence.status != "active" or fence.generation != expected_source_generation:
         return None
-    source = await sources.get_connector_source(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    source = await sources.get_connector_source(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if source is None or source.status != fence.status or source.generation != fence.generation:
         return None
     provider_id = source.provider or {"rss": "rss", "web": "web", "api": "rest"}.get(source.type)
     entry = get_catalog_entry(provider_id) if provider_id else None
-    if provider_id is None or entry is None or entry.availability not in {"available", "implemented", "requires_credentials"}:
+    if (
+        provider_id is None
+        or entry is None
+        or entry.availability not in {"available", "implemented", "requires_credentials"}
+    ):
         return None
     try:
         from modules.connectors.registry import configuration as provider_configuration
@@ -117,16 +133,25 @@ async def get_current_provider_scope(
     values = _scope_values(provider_id, entry.scope_fields, configuration)
     if values is None:
         return None
-    encoded = json.dumps([provider_id, values], sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    encoded = json.dumps(
+        [provider_id, values], sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
     return ProviderScopeSnapshot(
-        workspace_id=source.workspace_id, source_id=source.id, source_generation=source.generation,
-        provider_id=provider_id, discriminator=hashlib.sha256(encoded.encode()).hexdigest(),
+        workspace_id=source.workspace_id,
+        source_id=source.id,
+        source_generation=source.generation,
+        provider_id=provider_id,
+        discriminator=hashlib.sha256(encoded.encode()).hexdigest(),
     )
 
 
 async def export_provider_scope(
-    session: AsyncSession, source_id: UUID, expected_source_generation: int,
-    *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_id: UUID,
+    expected_source_generation: int,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> ProviderScopeSnapshot | None:
     """Project retained non-secret provider scope for owner exports across inactive states.
 
@@ -139,16 +164,31 @@ async def export_provider_scope(
     from modules.sources import public as sources
     from modules.sources.public import SourceExportFence
 
-    if not await sources.filter_export_eligible_sources(session, [SourceExportFence(
-        source_id=source_id, workspace_id=scope.workspace_id, generation=expected_source_generation,
-    )], scope=scope, multi_workspace_enabled=multi_workspace_enabled):
+    if not await sources.filter_export_eligible_sources(
+        session,
+        [
+            SourceExportFence(
+                source_id=source_id,
+                workspace_id=scope.workspace_id,
+                generation=expected_source_generation,
+            )
+        ],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    ):
         return None
-    source = await sources.get_connector_source(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    source = await sources.get_connector_source(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if source is None or source.generation != expected_source_generation:
         return None
     provider_id = source.provider or {"rss": "rss", "web": "web", "api": "rest"}.get(source.type)
     entry = get_catalog_entry(provider_id) if provider_id else None
-    if provider_id is None or entry is None or entry.availability not in {"available", "implemented", "requires_credentials"}:
+    if (
+        provider_id is None
+        or entry is None
+        or entry.availability not in {"available", "implemented", "requires_credentials"}
+    ):
         return None
     try:
         from modules.connectors.registry import configuration as provider_configuration
@@ -159,10 +199,15 @@ async def export_provider_scope(
     values = _scope_values(provider_id, entry.scope_fields, configuration)
     if values is None:
         return None
-    encoded = json.dumps([provider_id, values], sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    encoded = json.dumps(
+        [provider_id, values], sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
     return ProviderScopeSnapshot(
-        workspace_id=source.workspace_id, source_id=source.id, source_generation=source.generation,
-        provider_id=provider_id, discriminator=hashlib.sha256(encoded.encode()).hexdigest(),
+        workspace_id=source.workspace_id,
+        source_id=source.id,
+        source_generation=source.generation,
+        provider_id=provider_id,
+        discriminator=hashlib.sha256(encoded.encode()).hexdigest(),
     )
 
 
@@ -259,12 +304,16 @@ def agent_browser_target_in_scope(scope: AgentBrowserScope, value: str | None) -
     path = unquote(parsed.path or "/")
     prefix = unquote(scope.path_prefix or "/")
     return bool(
-        parsed.scheme == "https" and parsed.username is None and parsed.password is None
-        and parsed.query == "" and parsed.fragment == ""
+        parsed.scheme == "https"
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.query == ""
+        and parsed.fragment == ""
         and f"https://{rendered}" == scope.origin
         and (port is None or port == 443)
         and not any(segment in {".", ".."} for segment in path.split("/"))
-        and "%2f" not in parsed.path.lower() and "%5c" not in parsed.path.lower()
+        and "%2f" not in parsed.path.lower()
+        and "%5c" not in parsed.path.lower()
         and "%25" not in parsed.path.lower()
         and "\\" not in path
         and (path == prefix or prefix == "/" or path.startswith(prefix.rstrip("/") + "/"))
@@ -275,25 +324,38 @@ def _scope_hash(source_id: UUID, generation: int, revision: int, origin: str, pa
     """Hash canonical source identity and bounded scope fields for stale-grant detection."""
     value = json.dumps(
         [str(source_id), generation, revision, origin, path],
-        separators=(",", ":"), ensure_ascii=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
     )
     return hashlib.sha256(value.encode("ascii")).hexdigest()
 
 
 async def resolve_agent_browser_scope(
-    session: AsyncSession, owner_id: int, source_id: UUID,
-    *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    owner_id: int,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> AgentBrowserScope | None:
     """Resolve an enabled grant only while the active web source and connector revision match."""
     from modules.sources import public as sources
 
     if owner_id != _connector_actor(scope):
         return None
-    source = await sources.get_connector_source(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    source = await sources.get_connector_source(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if source is None or source.status != "active" or source.type != "web":
         return None
-    configuration = await get_connector_configuration(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    row = await session.scalar(select(AgentBrowserGrant).where(AgentBrowserGrant.source_id == source_id, AgentBrowserGrant.owner_id == owner_id).execution_options(populate_existing=True))
+    configuration = await get_connector_configuration(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    row = await session.scalar(
+        select(AgentBrowserGrant)
+        .where(AgentBrowserGrant.source_id == source_id, AgentBrowserGrant.owner_id == owner_id)
+        .execution_options(populate_existing=True)
+    )
     if configuration is None or row is None:
         return None
     try:
@@ -313,31 +375,50 @@ async def resolve_agent_browser_scope(
     ):
         return None
     # PRODUCTION FIX: ConnectorSource carries no local_only; read it from the source fence.
-    fence = await sources.get_source_fence(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    fence = await sources.get_source_fence(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if fence is None:
         return None
     return AgentBrowserScope(
-        source.workspace_id, source_id, source.generation, configuration.expected_revision,
-        row.grant_revision, scope_hash, origin, path_prefix,
-        fence.local_only, row.enabled and not fence.local_only,
+        source.workspace_id,
+        source_id,
+        source.generation,
+        configuration.expected_revision,
+        row.grant_revision,
+        scope_hash,
+        origin,
+        path_prefix,
+        fence.local_only,
+        row.enabled and not fence.local_only,
     )
 
 
 async def invalidate_agent_browser_grant_in_uow(
-    session: AsyncSession, source_id: UUID,
-    *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> None:
     """Disable/revision-bump the exact actor's grant under caller-held admission/Source.
 
     Fresh Source/grant reads acquire no row locks. Source serialization protects this
     lifecycle mutation; the prepared visibility apply uses its own identical mutation body.
     """
-    source = await _read_scoped_source(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    source = await _read_scoped_source(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if source is None:
         raise NotFoundError("Source not found")
-    row = await session.scalar(select(AgentBrowserGrant).where(
-        AgentBrowserGrant.source_id == source_id, AgentBrowserGrant.owner_id == _connector_actor(scope),
-    ).execution_options(populate_existing=True))
+    row = await session.scalar(
+        select(AgentBrowserGrant)
+        .where(
+            AgentBrowserGrant.source_id == source_id,
+            AgentBrowserGrant.owner_id == _connector_actor(scope),
+        )
+        .execution_options(populate_existing=True)
+    )
     if row is None:
         return
     row.enabled = False
@@ -346,9 +427,14 @@ async def invalidate_agent_browser_grant_in_uow(
 
 
 async def update_agent_browser_grant_in_uow(
-    session: AsyncSession, owner_id: int, source_id: UUID,
-    expected_revision: int, grant: AgentBrowserGrantPatch,
-    *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    owner_id: int,
+    source_id: UUID,
+    expected_revision: int,
+    grant: AgentBrowserGrantPatch,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> AgentBrowserScopeRead:
     """Acquire admission/Source/provisioning then browser grant for explicit web opt-in.
 
@@ -361,16 +447,26 @@ async def update_agent_browser_grant_in_uow(
         raise PermissionError("Browser grant owner is unavailable")
     from modules.connectors import provisioning
 
-    source, _provisioned, _slots = await provisioning.lock_connector(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    source_view = await sources.get_connector_source(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    configuration = await get_connector_configuration(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    source, _provisioned, _slots = await provisioning.lock_connector(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    source_view = await sources.get_connector_source(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    configuration = await get_connector_configuration(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if (
-        source is None or source_view is None or source.status != "active"
-        or source_view.type != "web" or configuration is None
+        source is None
+        or source_view is None
+        or source.status != "active"
+        or source_view.type != "web"
+        or configuration is None
     ):
         raise LookupError("Active configured web source is unavailable")
     if (
-        type(expected_revision) is not int or expected_revision < 0
+        type(expected_revision) is not int
+        or expected_revision < 0
         or grant.expected_source_generation != source.generation
         or grant.expected_connector_revision != configuration.expected_revision
     ):
@@ -379,18 +475,30 @@ async def update_agent_browser_grant_in_uow(
     scope_hash = _scope_hash(
         source_id, source.generation, configuration.expected_revision, origin, path_prefix
     )
-    row = await session.scalar(select(AgentBrowserGrant).where(
-        AgentBrowserGrant.source_id == source_id, AgentBrowserGrant.owner_id == owner_id,
-    ).with_for_update().execution_options(populate_existing=True))
+    row = await session.scalar(
+        select(AgentBrowserGrant)
+        .where(
+            AgentBrowserGrant.source_id == source_id,
+            AgentBrowserGrant.owner_id == owner_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     current_revision = row.grant_revision if row is not None else 0
     if current_revision != expected_revision:
         raise ValueError("Browser grant revision conflict")
     if row is None:
         row = AgentBrowserGrant(
-            source_id=source_id, owner_id=owner_id, source_generation=source.generation,
-            connector_revision=configuration.expected_revision, grant_revision=1,
-            scope_hash=scope_hash, origin=origin, path_prefix=path_prefix,
-            local_only=source.local_only, enabled=grant.enabled and not source.local_only,
+            source_id=source_id,
+            owner_id=owner_id,
+            source_generation=source.generation,
+            connector_revision=configuration.expected_revision,
+            grant_revision=1,
+            scope_hash=scope_hash,
+            origin=origin,
+            path_prefix=path_prefix,
+            local_only=source.local_only,
+            enabled=grant.enabled and not source.local_only,
         )
         session.add(row)
     else:
@@ -404,7 +512,14 @@ async def update_agent_browser_grant_in_uow(
         row.enabled = grant.enabled and not source.local_only
     await session.flush()
     return AgentBrowserScopeRead(
-        source.workspace_id, source_id, source.generation, configuration.expected_revision,
-        row.grant_revision, scope_hash, origin, path_prefix,
-        source.local_only, row.enabled,
+        source.workspace_id,
+        source_id,
+        source.generation,
+        configuration.expected_revision,
+        row.grant_revision,
+        scope_hash,
+        origin,
+        path_prefix,
+        source.local_only,
+        row.enabled,
     )

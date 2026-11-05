@@ -44,7 +44,9 @@ async def test_retry_calls_before_send_twice() -> None:
 
     before = AsyncMock()
     gw = _loopback_gateway("https://x")
-    with patch("core.model_gateway.client.AsyncOpenAI", side_effect=_fake_openai_with(create)), \
-         patch.object(ModelGateway, "_http_client", return_value=MagicMock()):
+    with (
+        patch("core.model_gateway.client.AsyncOpenAI", side_effect=_fake_openai_with(create)),
+        patch.object(ModelGateway, "_http_client", return_value=MagicMock()),
+    ):
         assert await gw.chat("chat", _MAPPING, _POLICY, [], before_send=before) == {"ok": True}
     assert attempts == 2 and before.await_count == 2

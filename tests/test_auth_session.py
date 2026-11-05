@@ -22,12 +22,16 @@ class MemoryAuthStore:
     def __init__(self) -> None:
         workspace_id = uuid4()
         self.owner = Owner(
-            id=1, password_hash=hash_password("test-owner-password-42"),
-            account_state="active", default_workspace_id=workspace_id,
+            id=1,
+            password_hash=hash_password("test-owner-password-42"),
+            account_state="active",
+            default_workspace_id=workspace_id,
         )
         self.workspace_row = (
             Workspace(id=workspace_id, name="Default", owner_user_id=1),
-            WorkspaceMembership(workspace_id=workspace_id, user_id=1, owner_user_id=1, role="owner", revision=1),
+            WorkspaceMembership(
+                workspace_id=workspace_id, user_id=1, owner_user_id=1, role="owner", revision=1
+            ),
         )
         self.sessions: dict[str, AuthSession] = {}
         self.pending = None
@@ -134,7 +138,11 @@ def test_csrf_cookie_expires_on_server(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_login_requires_csrf_and_rotates_session_tokens() -> None:
     store = MemoryAuthStore()
-    app = create_app(Settings(public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"))
+    app = create_app(
+        Settings(
+            public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"
+        )
+    )
 
     async def session_override():
         yield MemorySession(store)
@@ -220,7 +228,11 @@ async def test_expired_session_is_rejected() -> None:
         csrf_hash="unused",
         expires_at=datetime.now(UTC) - timedelta(seconds=1),
     )
-    app = create_app(Settings(public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"))
+    app = create_app(
+        Settings(
+            public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"
+        )
+    )
 
     async def session_override():
         yield MemorySession(store)
@@ -239,7 +251,11 @@ async def test_expired_session_is_rejected() -> None:
 async def test_login_rate_limit_rejects_the_sixth_attempt() -> None:
     store = MemoryAuthStore()
     redis = MemoryRedis()
-    app = create_app(Settings(public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"))
+    app = create_app(
+        Settings(
+            public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"
+        )
+    )
 
     async def session_override():
         yield MemorySession(store)
@@ -269,9 +285,16 @@ async def _session_fixture():
     token = "concurrent-session-token"
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     store.sessions[token_hash] = AuthSession(
-        token_hash=token_hash, owner_id=1, csrf_hash="stale", expires_at=datetime.now(UTC) + timedelta(hours=1)
+        token_hash=token_hash,
+        owner_id=1,
+        csrf_hash="stale",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
     )
-    app = create_app(Settings(public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"))
+    app = create_app(
+        Settings(
+            public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"
+        )
+    )
 
     async def session_override():
         yield MemorySession(store)
@@ -285,7 +308,9 @@ async def _session_fixture():
 @pytest.mark.asyncio
 async def test_session_reads_with_current_csrf_do_not_409_under_concurrency(monkeypatch) -> None:
     app, token = await _session_fixture()
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost:3000") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://localhost:3000"
+    ) as client:
         client.cookies.set("bbd_session", token)
         first = await client.get("/api/v1/auth/session")  # rotates; sets the current CSRF cookie
         assert first.status_code == 200, first.text
@@ -313,7 +338,9 @@ async def test_csrf_rotation_retries_busy_owner_lock_then_succeeds(monkeypatch) 
         return await real(*args, **kwargs)
 
     monkeypatch.setattr(auth_routes, "_lock_owner_session", flaky)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost:3000") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://localhost:3000"
+    ) as client:
         client.cookies.set("bbd_session", token)
         response = await client.get("/api/v1/auth/session")
     assert response.status_code == 200
@@ -362,7 +389,9 @@ async def test_lock_retry_does_not_swallow_non_409(monkeypatch) -> None:
 
     monkeypatch.setattr(auth_routes, "_lock_owner_session", denied)
     with pytest.raises(HTTPException) as exc:
-        await auth_routes._lock_owner_session_retrying(None, None, AuthSession(token_hash="h", owner_id=1))  # type: ignore[arg-type]
+        await auth_routes._lock_owner_session_retrying(
+            None, None, AuthSession(token_hash="h", owner_id=1)
+        )  # type: ignore[arg-type]
     assert exc.value.status_code == 401 and calls == 1
 
 
@@ -394,7 +423,9 @@ async def test_rotation_retry_requests_share_owner_lock(monkeypatch) -> None:
         return "ok"
 
     monkeypatch.setattr(auth_routes, "_lock_owner_session", fake)
-    await auth_routes._lock_owner_session_retrying(None, None, AuthSession(token_hash="h", owner_id=1))  # type: ignore[arg-type]
+    await auth_routes._lock_owner_session_retrying(
+        None, None, AuthSession(token_hash="h", owner_id=1)
+    )  # type: ignore[arg-type]
     assert seen["share_owner"] is True
 
 
@@ -421,6 +452,7 @@ async def test_owner_lock_wait_uses_lock_timeout_instead_of_nowait() -> None:
 @pytest.mark.asyncio
 async def test_login_lock_timeout_is_retryable_503_not_401(monkeypatch) -> None:
     """A correct password that cannot get the owner row within the wait is 503 + Retry-After, never 401."""
+
     async def busy(*_a, **_k):
         raise HTTPException(status_code=409, detail="busy")  # what _lock_owner raises on 55P03
 
@@ -457,8 +489,13 @@ async def test_login_contention_is_not_recorded_as_failed_attempt(monkeypatch) -
     monkeypatch.setattr(auth_routes, "_valid_csrf", lambda *_a: True)
     monkeypatch.setattr(auth_routes, "_origin_allowed", lambda *_a: True)
     request = SimpleNamespace(
-        app=SimpleNamespace(state=SimpleNamespace(settings=SimpleNamespace())), cookies={}, headers={}, client=None,
+        app=SimpleNamespace(state=SimpleNamespace(settings=SimpleNamespace())),
+        cookies={},
+        headers={},
+        client=None,
     )
     with pytest.raises(HTTPException) as exc:
-        await auth_routes.login(request, None, SimpleNamespace(identifier=None, password="p"), None, None)  # type: ignore[arg-type]
+        await auth_routes.login(
+            request, None, SimpleNamespace(identifier=None, password="p"), None, None
+        )  # type: ignore[arg-type]
     assert exc.value.status_code == 503 and recorded == []

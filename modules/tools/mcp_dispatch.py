@@ -38,7 +38,9 @@ def build_mcp_tool_definition(
     resource-template capabilities, which have no owner-bound expansion contract.
     """
     if grant.risk != McpRisk.READ_ONLY or grant.purpose != "chat":
-        raise McpTransportError("Only reviewed chat read capabilities can enter native tool dispatch")
+        raise McpTransportError(
+            "Only reviewed chat read capabilities can enter native tool dispatch"
+        )
     if capability.kind == "tool":
         input_schema = capability.descriptor.get("inputSchema")
         if not isinstance(input_schema, dict):
@@ -111,8 +113,11 @@ class McpDispatchAdapter:
     ) -> tuple[str, ...]:
         """Replace one connection's native projection with current, exact, read-only reviewed tools/resources."""
         self.unregister_connection(connection.id)
-        if (not connection.enabled or discovery.connection_id != connection.id
-                or discovery.connection_revision != connection.revision):
+        if (
+            not connection.enabled
+            or discovery.connection_id != connection.id
+            or discovery.connection_revision != connection.revision
+        ):
             return ()
         grants_by_capability = {grant.capability_id: grant for grant in grants}
         registered: set[str] = set()
@@ -223,10 +228,13 @@ class McpDispatchAdapter:
         source intersection, so a partial metadata intersection is not safe to execute.
         Any stale, malformed or exceptional check fails closed; cancellation still propagates.
         """
-        if (not principal.actor_id or registered_tool_name not in principal.allowed_tools
-                or destination_id != fence.destination_id
-                or destination_id not in principal.destinations
-                or (principal.owner_all_sources and not principal.is_owner)):
+        if (
+            not principal.actor_id
+            or registered_tool_name not in principal.allowed_tools
+            or destination_id != fence.destination_id
+            or destination_id not in principal.destinations
+            or (principal.owner_all_sources and not principal.is_owner)
+        ):
             return False
         grant_sources = frozenset(str(source_id) for source_id in fence.source_ids)
         if not principal.owner_all_sources:
@@ -256,13 +264,20 @@ class McpDispatchAdapter:
         principal = context.get("principal")
         destination_id = context.get("destination_id")
         principal_revalidator = context.get("principal_revalidator")
-        if (not isinstance(principal, ToolExecutionPrincipal) or not principal.actor_id
-                or not isinstance(destination_id, str)
-                or not callable(principal_revalidator)):
+        if (
+            not isinstance(principal, ToolExecutionPrincipal)
+            or not principal.actor_id
+            or not isinstance(destination_id, str)
+            or not callable(principal_revalidator)
+        ):
             raise McpTransportError("Native MCP execution context is incomplete")
-        if (not principal.is_owner and (principal.owner_all_sources or not principal.source_ids)
-                or principal.owner_all_sources and not principal.is_owner
-                or destination_id not in principal.destinations):
+        if (
+            not principal.is_owner
+            and (principal.owner_all_sources or not principal.source_ids)
+            or principal.owner_all_sources
+            and not principal.is_owner
+            or destination_id not in principal.destinations
+        ):
             raise McpTransportError("Native MCP principal has no source scope")
         # The registry is process-global: another workspace's principal must not reach this connection.
         if principal.scope.workspace_id != workspace_id:
@@ -281,9 +296,12 @@ class McpDispatchAdapter:
         # Partial source intersections have no provider-enforced semantics in this adapter, so
         # reject before the client opens a protocol session rather than letting remote args widen it.
         grant_sources = frozenset(str(source_id) for source_id in fence.source_ids)
-        if (not principal.owner_all_sources
-                and (not grant_sources or not grant_sources.issubset(principal.source_ids))):
-            raise McpTransportError("Current caller scope does not fully contain the reviewed MCP source scope")
+        if not principal.owner_all_sources and (
+            not grant_sources or not grant_sources.issubset(principal.source_ids)
+        ):
+            raise McpTransportError(
+                "Current caller scope does not fully contain the reviewed MCP source scope"
+            )
         registered_tool_name = f"mcp.{connection_id.hex}.{capability_id.hex}"
         before_request = partial(
             self._revalidate_execution,
@@ -303,7 +321,9 @@ class McpDispatchAdapter:
             )
         if capability_kind == "resource":
             if arguments:
-                raise McpTransportError("Selected MCP resource does not accept caller-supplied URI arguments")
+                raise McpTransportError(
+                    "Selected MCP resource does not accept caller-supplied URI arguments"
+                )
             return await self._client.read_resource(
                 scope,
                 fence,

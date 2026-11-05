@@ -70,7 +70,9 @@ def test_build_table_and_chart_payloads_preserve_grounding_citations() -> None:
     assert table.citations[0].document_id == "22222222-2222-2222-2222-222222222222"
     assert table.citations[0].chunk_id == "33333333-3333-3333-3333-333333333333"
 
-    chart = build_chart_payload("Q3 Spend Breakdown", chart_type="bar", records_or_evidence=evidence)
+    chart = build_chart_payload(
+        "Q3 Spend Breakdown", chart_type="bar", records_or_evidence=evidence
+    )
     assert chart.chart_type == "bar"
     assert chart.is_sample is False
     assert chart.series[0].color_token == "var(--chart-1)"

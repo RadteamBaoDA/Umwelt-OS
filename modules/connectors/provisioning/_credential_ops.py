@@ -39,10 +39,18 @@ from modules.connectors.public import (
 
 
 async def _settle_retained_credential_after_io(
-    session: AsyncSession, source_id: UUID, slot: str, *,
-    original_operation: dict[str, object], scope: Scope, multi_workspace_enabled: bool,
-    access_fence: AccessFence, outcome: str, remote_id: str | None = None,
-    binding: dict[str, object] | None = None, error_code: str | None = None,
+    session: AsyncSession,
+    source_id: UUID,
+    slot: str,
+    *,
+    original_operation: dict[str, object],
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    outcome: str,
+    remote_id: str | None = None,
+    binding: dict[str, object] | None = None,
+    error_code: str | None = None,
 ) -> bool:
     """Settle one trusted credential transport or durably journal definitive access loss.
 
@@ -53,14 +61,25 @@ async def _settle_retained_credential_after_io(
     """
     try:
         before = await lock_retained_connector_effect(
-            session, source_id, original_operation=original_operation, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            session,
+            source_id,
+            original_operation=original_operation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
         )
     except RetainedEffectAdmissionDenied as denied:
         await session.rollback()
         disposition = await record_retained_credential_result_in_uow(
-            session, source_id, slot, original_operation=original_operation, scope=scope,
-            access_fence=access_fence, outcome=outcome, remote_id=remote_id, error_code=error_code,
+            session,
+            source_id,
+            slot,
+            original_operation=original_operation,
+            scope=scope,
+            access_fence=access_fence,
+            outcome=outcome,
+            remote_id=remote_id,
+            error_code=error_code,
         )
         if disposition in {"stored", "duplicate"}:
             await session.commit()
@@ -72,26 +91,51 @@ async def _settle_retained_credential_after_io(
     if outcome == "known_success":
         if original_operation.get("kind") == "delete":
             changed = await acknowledge_credential_delete(
-                session, source_id, slot, operation_id, str(original_operation["target_id"]),
-                original_operation=original_operation, scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+                session,
+                source_id,
+                slot,
+                operation_id,
+                str(original_operation["target_id"]),
+                original_operation=original_operation,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+                access_fence=access_fence,
             )
         else:
             changed = await complete_credential_operation(
-                session, source_id, slot, operation_id, credential_id=remote_id,
-                binding=binding or {}, original_operation=original_operation, scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+                session,
+                source_id,
+                slot,
+                operation_id,
+                credential_id=remote_id,
+                binding=binding or {},
+                original_operation=original_operation,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+                access_fence=access_fence,
             )
     else:
         changed = await fail_credential_operation(
-            session, source_id, slot, operation_id, error_code or "credential_operation_outcome_unknown",
-            unknown=outcome == "unknown", original_operation=original_operation, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            session,
+            source_id,
+            slot,
+            operation_id,
+            error_code or "credential_operation_outcome_unknown",
+            unknown=outcome == "unknown",
+            original_operation=original_operation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
         )
     if changed:
         await commit_retained_connector_effect(
-            session, before, source_id=source_id, original_operation=original_operation,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            session,
+            before,
+            source_id=source_id,
+            original_operation=original_operation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
         )
     else:
         await session.rollback()
@@ -99,8 +143,14 @@ async def _settle_retained_credential_after_io(
 
 
 async def _credential_send_allowed(
-    session: AsyncSession, source_id: UUID, slot: str, envelope: dict[str, object], *,
-    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    session: AsyncSession,
+    source_id: UUID,
+    slot: str,
+    envelope: dict[str, object],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
 ) -> bool:
     """Freshly admit exact dispatched credential/Source/config before send and release SQL.
 
@@ -112,38 +162,73 @@ async def _credential_send_allowed(
 
     try:
         await lock_retained_connector_effect(
-            session, source_id, original_operation=envelope, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            session,
+            source_id,
+            original_operation=envelope,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
         )
         source, row, slots = await _read_retained_connector_rows(
-            session, source_id, original_operation=envelope, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            session,
+            source_id,
+            original_operation=envelope,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
         )
         credential = slots.get(slot)
         current = credential.operation_envelope if credential is not None else None
         cleanup = envelope.get("kind") == "delete"
         return bool(
-            source is not None and row is not None and credential is not None and current is not None
-            and _retained_operation_matches(current, envelope, source_id=source_id, scope=scope, access_fence=access_fence)
+            source is not None
+            and row is not None
+            and credential is not None
+            and current is not None
+            and _retained_operation_matches(
+                current, envelope, source_id=source_id, scope=scope, access_fence=access_fence
+            )
             and not current.get("retained_effect_result")
-            and current == envelope and envelope.get("state") == "dispatched"
-            and credential.operation_id is not None and str(credential.operation_id) == envelope.get("id")
+            and current == envelope
+            and envelope.get("state") == "dispatched"
+            and credential.operation_id is not None
+            and str(credential.operation_id) == envelope.get("id")
             and credential.operation_revision == envelope.get("revision")
             and credential.source_generation == envelope.get("source_generation")
             and credential.credential_type == envelope.get("credential_type")
-            and (cleanup and current.get("target_id") == credential.credential_id
-                 or not cleanup and source.generation == row.source_generation == envelope.get("source_generation")
-                 and row.desired_revision == envelope.get("revision")
-                 and (envelope.get("kind") == "create" and envelope.get("target_id") is None
-                      or envelope.get("kind") == "update" and envelope.get("target_id") == credential.credential_id)
-                 and source.status == "active" and not source.local_only
-                 and await module_is_enabled(session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled))
+            and (
+                cleanup
+                and current.get("target_id") == credential.credential_id
+                or not cleanup
+                and source.generation == row.source_generation == envelope.get("source_generation")
+                and row.desired_revision == envelope.get("revision")
+                and (
+                    envelope.get("kind") == "create"
+                    and envelope.get("target_id") is None
+                    or envelope.get("kind") == "update"
+                    and envelope.get("target_id") == credential.credential_id
+                )
+                and source.status == "active"
+                and not source.local_only
+                and await module_is_enabled(
+                    session,
+                    "connectors",
+                    scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                )
+            )
         )
     except RetainedEffectAdmissionDenied as denied:
         await session.rollback()
         disposition = await record_retained_credential_result_in_uow(
-            session, source_id, slot, original_operation=envelope, scope=scope,
-            access_fence=access_fence, outcome="not_sent", error_code="original_access_revoked",
+            session,
+            source_id,
+            slot,
+            original_operation=envelope,
+            scope=scope,
+            access_fence=access_fence,
+            outcome="not_sent",
+            error_code="original_access_revoked",
         )
         if disposition in {"stored", "duplicate"}:
             await session.commit()
@@ -160,7 +245,10 @@ async def claim_credential_operation(
     source_id: UUID,
     slot: str,
     operation_id: UUID,
-    *, scope: Scope, multi_workspace_enabled: bool, service_url: str,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    service_url: str,
 ) -> dict[str, object] | None:
     """Durably claim a prepared credential operation before external dispatch.
 
@@ -169,10 +257,15 @@ async def claim_credential_operation(
     dispatch barrier and actual endpoint (and stale-intent cleanup when applicable), preventing blind
     re-dispatch after an uncertain provider response.
     """
-    before = await capture_connector_observation(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    before = await capture_connector_observation(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     source, desired, slots = await _read_connector_rows(
-        session, source_id, ("collector", "manual_trigger", "provider"),
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        ("collector", "manual_trigger", "provider"),
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     row = slots.get(slot)
     if row is None or row.operation_id != operation_id:
@@ -180,27 +273,34 @@ async def claim_credential_operation(
     envelope = copy.deepcopy(row.operation_envelope)
     if not isinstance(envelope, dict):
         return None
-    if not await _operation_matches(session, envelope, scope=scope, multi_workspace_enabled=multi_workspace_enabled):
+    if not await _operation_matches(
+        session, envelope, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    ):
         return None
     if envelope.get("state") != "prepared":
         return None
     valid_enable = bool(
         envelope.get("kind") in {"create", "update"}
-        and source is not None and source.status == "active"
-        and desired is not None and desired.desired_enabled
+        and source is not None
+        and source.status == "active"
+        and desired is not None
+        and desired.desired_enabled
         and isinstance(desired.activation_intent, dict)
         and envelope.get("activation_id") == desired.activation_intent.get("id")
         and isinstance(desired.activation_intent.get("required_credentials"), dict)
         and isinstance(desired.activation_intent["required_credentials"].get(slot), dict)
-        and desired.activation_intent["required_credentials"][slot].get("operation_id") == str(operation_id)
+        and desired.activation_intent["required_credentials"][slot].get("operation_id")
+        == str(operation_id)
         and source.generation == envelope.get("source_generation")
         and desired.source_generation == envelope.get("source_generation")
         and desired.desired_revision == envelope.get("revision")
     )
     valid_delete = bool(
         envelope.get("kind") == "delete"
-        and source is not None and source.status == "paused"
-        and desired is not None and not desired.desired_enabled
+        and source is not None
+        and source.status == "paused"
+        and desired is not None
+        and not desired.desired_enabled
         and source.generation == envelope.get("source_generation")
         and desired.desired_revision == envelope.get("revision")
     )
@@ -210,12 +310,17 @@ async def claim_credential_operation(
         row.operation_id = None
         row.state = "ready" if row.credential_id else "queued"
         row.error_code = "prepared_credential_intent_stale"
-        if isinstance(activation_id, str) and desired is not None and isinstance(desired.activation_intent, dict):
+        if (
+            isinstance(activation_id, str)
+            and desired is not None
+            and isinstance(desired.activation_intent, dict)
+        ):
             if desired.activation_intent.get("id") == activation_id:
                 for sibling in slots.values():
                     sibling_envelope = sibling.operation_envelope
                     if (
-                        sibling is not row and isinstance(sibling_envelope, dict)
+                        sibling is not row
+                        and isinstance(sibling_envelope, dict)
                         and sibling_envelope.get("activation_id") == activation_id
                         and sibling_envelope.get("state") == "prepared"
                     ):
@@ -224,17 +329,27 @@ async def claim_credential_operation(
                         sibling.state = "ready" if sibling.credential_id else "queued"
                 desired.activation_intent = None
                 desired.desired_enabled = False
-                desired.state = "disabled" if source is None or source.status != "active" else "saved_not_active"
+                desired.state = (
+                    "disabled"
+                    if source is None or source.status != "active"
+                    else "saved_not_active"
+                )
                 desired.error_code = "activation_intent_stale"
-        await commit_connector_observation(session, before, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        await commit_connector_observation(
+            session, before, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
         return None
-    _bind_n8n_service(row, service_url, has_liability=bool(row.credential_id or envelope.get("target_id")))
+    _bind_n8n_service(
+        row, service_url, has_liability=bool(row.credential_id or envelope.get("target_id"))
+    )
     envelope["state"] = "dispatched"
     envelope["dispatch_started_at"] = datetime.now(UTC).isoformat()
     row.operation_envelope = envelope
     row.state = "dispatching"
     # Commit the dispatch barrier before the driver makes the external n8n call.
-    await commit_connector_observation(session, before, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await commit_connector_observation(
+        session, before, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     return envelope
 
 
@@ -244,7 +359,10 @@ async def drive_credential_operation(
     slot: str,
     client: Any,
     encryption_key: str,
-    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
 ) -> bool:
     """Dispatch current credentials; settle exact effects with original access/envelope CAS.
 
@@ -262,8 +380,15 @@ async def drive_credential_operation(
         decrypt_credential_input,
     )
 
-    await _connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
-    row = await get_managed_credential(session, source_id, slot, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _connector_access(
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+    )
+    row = await get_managed_credential(
+        session, source_id, slot, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if row is None or row.operation_id is None:
         return False
     operation_id = row.operation_id
@@ -281,15 +406,37 @@ async def drive_credential_operation(
     except CredentialEncryptionUnavailable:
         await session.rollback()
         return False
-    envelope = await claim_credential_operation(session, source_id, slot, operation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled, service_url=client.service_url)
+    envelope = await claim_credential_operation(
+        session,
+        source_id,
+        slot,
+        operation_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        service_url=client.service_url,
+    )
     if envelope is None:
         await session.rollback()
         return False
-    if not await _credential_send_allowed(session, source_id, slot, envelope, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence):
+    if not await _credential_send_allowed(
+        session,
+        source_id,
+        slot,
+        envelope,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+    ):
         await _settle_retained_credential_after_io(
-            session, source_id, slot, original_operation=envelope, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
-            outcome="not_sent", error_code="original_effect_send_fenced",
+            session,
+            source_id,
+            slot,
+            original_operation=envelope,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+            outcome="not_sent",
+            error_code="original_effect_send_fenced",
         )
         return False
     try:
@@ -306,32 +453,63 @@ async def drive_credential_operation(
             await client.rotate_http_header(target, name, header, secret)
             credential_id = target
         else:
-            raise CredentialEncryptionUnavailable("Stored connector credential operation is invalid")
+            raise CredentialEncryptionUnavailable(
+                "Stored connector credential operation is invalid"
+            )
     except asyncio.CancelledError:
         await _settle_retained_credential_after_io(
-            session, source_id, slot, original_operation=envelope, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
-            outcome="unknown", error_code="credential_operation_outcome_unknown",
+            session,
+            source_id,
+            slot,
+            original_operation=envelope,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+            outcome="unknown",
+            error_code="credential_operation_outcome_unknown",
         )
         raise
     except CredentialRequestRejected:
         await _settle_retained_credential_after_io(
-            session, source_id, slot, original_operation=envelope, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
-            outcome="known_rejection", error_code="n8n_credential_rejected",
+            session,
+            source_id,
+            slot,
+            original_operation=envelope,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+            outcome="known_rejection",
+            error_code="n8n_credential_rejected",
         )
         return False
-    except (CredentialOutcomeUnknown, CredentialUpdateOutcomeUnknown, CredentialEncryptionUnavailable):
+    except (
+        CredentialOutcomeUnknown,
+        CredentialUpdateOutcomeUnknown,
+        CredentialEncryptionUnavailable,
+    ):
         await _settle_retained_credential_after_io(
-            session, source_id, slot, original_operation=envelope, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
-            outcome="unknown", error_code="credential_operation_outcome_unknown",
+            session,
+            source_id,
+            slot,
+            original_operation=envelope,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+            outcome="unknown",
+            error_code="credential_operation_outcome_unknown",
         )
         return False
     return await _settle_retained_credential_after_io(
-        session, source_id, slot, original_operation=envelope, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
-        outcome="known_success", remote_id=credential_id, binding=binding,
+        session,
+        source_id,
+        slot,
+        original_operation=envelope,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        outcome="known_success",
+        remote_id=credential_id,
+        binding=binding,
     )
 
 
@@ -343,8 +521,10 @@ async def complete_credential_operation(
     *,
     credential_id: str | None,
     binding: dict[str, object],
-    scope: Scope, multi_workspace_enabled: bool,
-    original_operation: dict[str, object], access_fence: AccessFence,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    original_operation: dict[str, object],
+    access_fence: AccessFence,
 ) -> bool:
     """Acknowledge a matching dispatched credential operation in the caller transaction.
 
@@ -360,30 +540,49 @@ async def complete_credential_operation(
     from modules.settings.public import module_is_enabled
 
     source, desired, slots = await _read_retained_connector_rows(
-        session, source_id, original_operation=original_operation,
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        source_id,
+        original_operation=original_operation,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
     row = slots.get(slot)
     envelope = copy.deepcopy(row.operation_envelope) if row is not None else None
     if (
-        row is None or row.operation_id != operation_id or not isinstance(envelope, dict)
+        row is None
+        or row.operation_id != operation_id
+        or not isinstance(envelope, dict)
         or envelope.get("state") != "dispatched"
         or envelope.get("id") != str(operation_id)
-        or row.operation_revision != envelope.get("revision") or row.source_generation != envelope.get("source_generation")
+        or row.operation_revision != envelope.get("revision")
+        or row.source_generation != envelope.get("source_generation")
         or envelope.get("retained_effect_result")
-        or not _retained_operation_matches(envelope, original_operation, source_id=source_id, scope=scope, access_fence=access_fence)
-        or source is None or desired is None
+        or not _retained_operation_matches(
+            envelope,
+            original_operation,
+            source_id=source_id,
+            scope=scope,
+            access_fence=access_fence,
+        )
+        or source is None
+        or desired is None
         or envelope.get("kind") not in {"create", "update"}
-        or not isinstance(credential_id, str) or not credential_id
-        or envelope.get("kind") == "update" and envelope.get("target_id") != credential_id
+        or not isinstance(credential_id, str)
+        or not credential_id
+        or envelope.get("kind") == "update"
+        and envelope.get("target_id") != credential_id
     ):
         return False
     if credential_id is not None:
         row.credential_id = credential_id
     row.resolved_binding = copy.deepcopy(binding)
     current = bool(
-        await module_is_enabled(session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-        and source.status == "active" and not source.local_only
+        await module_is_enabled(
+            session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        and source.status == "active"
+        and not source.local_only
         and source.generation == desired.source_generation == envelope.get("source_generation")
         and desired.desired_revision == envelope.get("revision")
     )
@@ -397,7 +596,8 @@ async def complete_credential_operation(
     envelope.pop("input_ciphertext", None)
     row.operation_envelope = envelope
     if (
-        desired is not None and isinstance(desired.activation_intent, dict)
+        desired is not None
+        and isinstance(desired.activation_intent, dict)
         and desired.activation_intent.get("id") == envelope.get("activation_id")
         and not current
     ):
@@ -420,8 +620,10 @@ async def fail_credential_operation(
     error_code: str,
     *,
     unknown: bool,
-    scope: Scope, multi_workspace_enabled: bool,
-    original_operation: dict[str, object], access_fence: AccessFence,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    original_operation: dict[str, object],
+    access_fence: AccessFence,
 ) -> bool:
     """Record a known rejection or ambiguous outcome in the caller transaction.
 
@@ -434,25 +636,42 @@ async def fail_credential_operation(
     Flush-only; commit through commit_retained_connector_effect under original access.
     """
     source, desired, slots = await _read_retained_connector_rows(
-        session, source_id, original_operation=original_operation,
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        source_id,
+        original_operation=original_operation,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
     row = slots.get(slot)
     envelope = copy.deepcopy(row.operation_envelope) if row is not None else None
     if (
-        row is None or row.operation_id != operation_id or not isinstance(envelope, dict)
+        row is None
+        or row.operation_id != operation_id
+        or not isinstance(envelope, dict)
         or envelope.get("state") != "dispatched"
         or envelope.get("id") != str(operation_id)
-        or row.operation_revision != envelope.get("revision") or row.source_generation != envelope.get("source_generation")
+        or row.operation_revision != envelope.get("revision")
+        or row.source_generation != envelope.get("source_generation")
         or envelope.get("retained_effect_result")
-        or not _retained_operation_matches(envelope, original_operation, source_id=source_id, scope=scope, access_fence=access_fence)
-        or source is None or desired is None
+        or not _retained_operation_matches(
+            envelope,
+            original_operation,
+            source_id=source_id,
+            scope=scope,
+            access_fence=access_fence,
+        )
+        or source is None
+        or desired is None
     ):
         return False
     envelope["state"] = "unknown" if unknown else "rejected"
-    if unknown and (source.generation != envelope.get("source_generation")
-                    or desired.desired_revision != envelope.get("revision")
-                    or source.status != "active" or source.local_only):
+    if unknown and (
+        source.generation != envelope.get("source_generation")
+        or desired.desired_revision != envelope.get("revision")
+        or source.status != "active"
+        or source.local_only
+    ):
         envelope["cleanup_required"] = True
     if not unknown:
         envelope.pop("input_ciphertext", None)
@@ -465,14 +684,19 @@ async def fail_credential_operation(
             for sibling in slots.values():
                 sibling_envelope = sibling.operation_envelope
                 if (
-                    sibling is not row and isinstance(sibling_envelope, dict)
+                    sibling is not row
+                    and isinstance(sibling_envelope, dict)
                     and sibling_envelope.get("activation_id") == activation_id
                     and sibling_envelope.get("state") == "prepared"
                 ):
                     sibling.operation_id = None
                     sibling.operation_envelope = None
                     sibling.state = "ready" if sibling.credential_id else "queued"
-            if desired is not None and isinstance(desired.activation_intent, dict) and desired.activation_intent.get("id") == activation_id:
+            if (
+                desired is not None
+                and isinstance(desired.activation_intent, dict)
+                and desired.activation_intent.get("id") == activation_id
+            ):
                 desired.activation_intent = None
         if (
             desired is not None
@@ -491,19 +715,26 @@ async def fail_credential_operation(
             for sibling in slots.values():
                 sibling_envelope = sibling.operation_envelope
                 if (
-                    sibling is not row and isinstance(sibling_envelope, dict)
+                    sibling is not row
+                    and isinstance(sibling_envelope, dict)
                     and sibling_envelope.get("activation_id") == activation_id
                     and sibling_envelope.get("state") == "prepared"
                 ):
                     sibling.operation_id = None
                     sibling.operation_envelope = None
                     sibling.state = "ready" if sibling.credential_id else "queued"
-            if desired is not None and isinstance(desired.activation_intent, dict) and desired.activation_intent.get("id") == activation_id:
+            if (
+                desired is not None
+                and isinstance(desired.activation_intent, dict)
+                and desired.activation_intent.get("id") == activation_id
+            ):
                 desired.activation_intent["state"] = "outcome_unknown"
     row.error_code = error_code
     row.operation_envelope = envelope
     if (
-        desired is not None and unknown and desired.desired_revision == int(envelope["revision"])
+        desired is not None
+        and unknown
+        and desired.desired_revision == int(envelope["revision"])
         and desired.source_generation == envelope.get("source_generation")
     ):
         desired.state = "reconciliation_required"
@@ -517,17 +748,28 @@ async def create_delete_intent(
     source_id: UUID,
     slot: str,
     expected_revision: int,
-    *, scope: Scope, multi_workspace_enabled: bool,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> tuple[ConnectorProvisioning, ConnectorManagedCredential, UUID] | None:
     """Acquire admission/Source/provisioning/slots before the held create_delete_intent mutation.
 
     Enter before domain locks; caller retains ordered parents until final commit.
     """
-    access_fence = await _connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    _source, _desired, _slots = await lock_connector(session, source_id, (slot,), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    access_fence = await _connector_access(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    _source, _desired, _slots = await lock_connector(
+        session, source_id, (slot,), scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     return await create_delete_intent_in_uow(
-        session, source_id, slot, expected_revision,
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        source_id,
+        slot,
+        expected_revision,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
 
 
@@ -536,21 +778,36 @@ async def create_delete_intent_in_uow(
     source_id: UUID,
     slot: str,
     expected_revision: int,
-    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
 ) -> tuple[ConnectorProvisioning, ConnectorManagedCredential, UUID] | None:
     """Prepare deletion under held admission/Source/provisioning/exact credential slot locks.
 
     Compare original AccessFence without locks; Source must be paused/config disabled.
     Stamp the original principal/config in the durable intent; flush only, caller commits.
     """
-    await _connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
-    source, desired, slots = await _read_connector_rows(session, source_id, (slot,), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _connector_access(
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+    )
+    source, desired, slots = await _read_connector_rows(
+        session, source_id, (slot,), scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     row = slots.get(slot)
     if (
-        source is None or source.status != "paused" or desired is None
-        or desired.desired_revision != expected_revision or desired.desired_enabled
+        source is None
+        or source.status != "paused"
+        or desired is None
+        or desired.desired_revision != expected_revision
+        or desired.desired_enabled
         or desired.workflow_operation is not None
-        or desired.state != "disabled" or not row or not row.credential_id
+        or desired.state != "disabled"
+        or not row
+        or not row.credential_id
         or row.state in {"dispatching", "reconciliation_required", "delete_pending"}
     ):
         return None
@@ -582,8 +839,11 @@ async def acknowledge_credential_delete(
     slot: str,
     operation_id: UUID,
     target_id: str,
-    *, scope: Scope, multi_workspace_enabled: bool,
-    original_operation: dict[str, object], access_fence: AccessFence,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    original_operation: dict[str, object],
+    access_fence: AccessFence,
 ) -> bool:
     """Acknowledge exact dispatched deletion under held observation admission/Source/slots.
 
@@ -592,21 +852,37 @@ async def acknowledge_credential_delete(
     for this exact delete result. Flush-only; caller commits retained effect or rolls back.
     """
     source, desired, slots = await _read_retained_connector_rows(
-        session, source_id, original_operation=original_operation, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        source_id,
+        original_operation=original_operation,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
     row = slots.get(slot)
     envelope = copy.deepcopy(row.operation_envelope) if row is not None else None
     if (
-        row is None or row.operation_id != operation_id or row.credential_id != target_id
-        or row.state != "dispatching" or not isinstance(envelope, dict)
-        or envelope.get("id") != str(operation_id) or envelope.get("target_id") != target_id
+        row is None
+        or row.operation_id != operation_id
+        or row.credential_id != target_id
+        or row.state != "dispatching"
+        or not isinstance(envelope, dict)
+        or envelope.get("id") != str(operation_id)
+        or envelope.get("target_id") != target_id
         or envelope.get("state") != "dispatched"
         or envelope.get("kind") != "delete"
-        or row.operation_revision != envelope.get("revision") or row.source_generation != envelope.get("source_generation")
+        or row.operation_revision != envelope.get("revision")
+        or row.source_generation != envelope.get("source_generation")
         or envelope.get("retained_effect_result")
-        or not _retained_operation_matches(envelope, original_operation, source_id=source_id, scope=scope, access_fence=access_fence)
-        or source is None or desired is None
+        or not _retained_operation_matches(
+            envelope,
+            original_operation,
+            source_id=source_id,
+            scope=scope,
+            access_fence=access_fence,
+        )
+        or source is None
+        or desired is None
     ):
         return False
     row.credential_id = None

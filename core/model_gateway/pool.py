@@ -78,16 +78,24 @@ class SharedHttpClient(httpx.AsyncClient):
 
 
 # value: (weak ref to the owning event loop, client); a client is only reused on its own loop.
-_POOL: OrderedDict[_CacheKey, tuple[weakref.ReferenceType[asyncio.AbstractEventLoop], SharedHttpClient]] = OrderedDict()
+_POOL: OrderedDict[
+    _CacheKey, tuple[weakref.ReferenceType[asyncio.AbstractEventLoop], SharedHttpClient]
+] = OrderedDict()
 _CLOSERS: set[asyncio.Task[None]] = set()
 
 
-def _key(base_url: str, approved_cidrs: Sequence[str], allow_global: bool, protocol: str) -> _CacheKey:
+def _key(
+    base_url: str, approved_cidrs: Sequence[str], allow_global: bool, protocol: str
+) -> _CacheKey:
     """Build the cache key: origin (scheme/host/port), sorted CIDR policy, global flag, protocol."""
     origin = httpx.URL(base_url)
     return (
-        origin.scheme, origin.raw_host.decode("ascii").lower(), origin.port,
-        tuple(sorted(approved_cidrs)), allow_global, protocol,
+        origin.scheme,
+        origin.raw_host.decode("ascii").lower(),
+        origin.port,
+        tuple(sorted(approved_cidrs)),
+        allow_global,
+        protocol,
     )
 
 
@@ -106,7 +114,11 @@ def _schedule_close(client: SharedHttpClient) -> None:
 
 
 def pinned_client(
-    base_url: str, approved_cidrs: Sequence[str], *, allow_global: bool = False, protocol: str = "",
+    base_url: str,
+    approved_cidrs: Sequence[str],
+    *,
+    allow_global: bool = False,
+    protocol: str = "",
 ) -> httpx.AsyncClient:
     """Return the shared pinned client for this origin/policy/protocol, creating it on first use.
 

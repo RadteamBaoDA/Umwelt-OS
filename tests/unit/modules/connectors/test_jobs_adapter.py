@@ -29,7 +29,9 @@ def _ids(records) -> list[str]:
 def test_request_is_one_json_post_per_keyword() -> None:
     """Each keyword becomes its own POST to the search host with a bounded JSON body; the default is `developer`."""
     first, second = vietnamworks_requests(["python", "data engineer"])
-    assert first.method == "POST" and first.url == "https://ms.vietnamworks.com/job-search/v1.0/search"
+    assert (
+        first.method == "POST" and first.url == "https://ms.vietnamworks.com/job-search/v1.0/search"
+    )
     assert json.loads(first.body or b"") == {"query": "python", "hitsPerPage": 50, "page": 0}
     assert json.loads(second.body or b"")["query"] == "data engineer"
     assert json.loads(vietnamworks_request().body or b"")["query"] == "developer"
@@ -45,7 +47,12 @@ def test_bad_keyword_sets_are_refused(bad: list[str]) -> None:
 def test_maps_public_facts_and_rejects_foreign_link_host() -> None:
     """Four good hits map; the hit linking to a foreign host is skipped; identity, citation and body are public data."""
     records = map_vietnamworks(PAYLOAD, NOW)
-    assert _ids(records) == ["vietnamworks:900001", "vietnamworks:900002", "vietnamworks:900003", "vietnamworks:900005"]
+    assert _ids(records) == [
+        "vietnamworks:900001",
+        "vietnamworks:900002",
+        "vietnamworks:900003",
+        "vietnamworks:900005",
+    ]
     first = records[0]
     assert first.metadata["title"] == "Python Developer"
     assert first.metadata["canonical_url"].startswith("https://www.vietnamworks.com/")
@@ -56,21 +63,39 @@ def test_maps_public_facts_and_rejects_foreign_link_host() -> None:
 
 def test_personal_and_recruiter_fields_are_dropped() -> None:
     """Contact name, e-mail and the demographic display flags appear nowhere in the stored record."""
-    blob = json.dumps([r.model_dump(mode="json") for r in map_vietnamworks(PAYLOAD, NOW)], ensure_ascii=False)
-    for secret in ("Fictional Contact", "contact@example.invalid", "rangeAge", "isShowAge", "isShowGender", "1 Example Street"):
+    blob = json.dumps(
+        [r.model_dump(mode="json") for r in map_vietnamworks(PAYLOAD, NOW)], ensure_ascii=False
+    )
+    for secret in (
+        "Fictional Contact",
+        "contact@example.invalid",
+        "rangeAge",
+        "isShowAge",
+        "isShowGender",
+        "1 Example Street",
+    ):
         assert secret not in blob
 
 
 def test_city_level_and_salary_filters() -> None:
     """Cities and levels match the pinned provider ids; salary compares USD directly and VND at a fixed rate."""
     assert _ids(map_vietnamworks(PAYLOAD, NOW, cities=["ha_noi"])) == ["vietnamworks:900002"]
-    assert _ids(map_vietnamworks(PAYLOAD, NOW, cities=["da_nang", "ha_noi"])) == ["vietnamworks:900002", "vietnamworks:900003"]
+    assert _ids(map_vietnamworks(PAYLOAD, NOW, cities=["da_nang", "ha_noi"])) == [
+        "vietnamworks:900002",
+        "vietnamworks:900003",
+    ]
     assert _ids(map_vietnamworks(PAYLOAD, NOW, levels=["manager"])) == ["vietnamworks:900003"]
     assert _ids(map_vietnamworks(PAYLOAD, NOW, levels=["fresher", "experienced"])) == [
-        "vietnamworks:900001", "vietnamworks:900002", "vietnamworks:900005"]
+        "vietnamworks:900001",
+        "vietnamworks:900002",
+        "vietnamworks:900005",
+    ]
     # >= 2000 USD: 3000 USD kept, 20M VND (~800 USD) dropped, 100M VND (~4000 USD) kept, hidden salary kept.
     assert _ids(map_vietnamworks(PAYLOAD, NOW, min_salary_usd=2000)) == [
-        "vietnamworks:900001", "vietnamworks:900003", "vietnamworks:900005"]
+        "vietnamworks:900001",
+        "vietnamworks:900003",
+        "vietnamworks:900005",
+    ]
     assert len(map_vietnamworks(PAYLOAD, NOW, min_salary_usd=0)) == 4
 
 
@@ -91,15 +116,34 @@ def test_hostile_bodies_are_payload_errors(payload: object) -> None:
 def test_malformed_hits_are_skipped_not_fatal() -> None:
     """A hit without an integer id, a title or a link is skipped while the rest still map."""
     good = PAYLOAD["data"][0]
-    junk = [None, "x", {"jobId": "7"}, {"jobId": True}, {**good, "jobId": 1, "jobTitle": ""}, {**good, "jobId": 2, "jobUrl": "http://www.vietnamworks.com/a"}]
+    junk = [
+        None,
+        "x",
+        {"jobId": "7"},
+        {"jobId": True},
+        {**good, "jobId": 1, "jobTitle": ""},
+        {**good, "jobId": 2, "jobUrl": "http://www.vietnamworks.com/a"},
+    ]
     assert _ids(map_vietnamworks({"data": [*junk, good]}, NOW)) == ["vietnamworks:900001"]
 
 
 def test_option_types_and_validation() -> None:
     """Owner options are bounded enums/strings and only valid on their own provider."""
-    ConnectorConfig(job_keywords=("python", "go"), job_cities=("ha_noi",), job_levels=("fresher",), job_min_salary_usd=1500)
-    for bad in ({"job_cities": ("hue",)}, {"job_levels": ("ceo",)}, {"job_min_salary_usd": 20001}, {"job_min_salary_usd": -1},
-                {"job_keywords": ("a",) * 6}, {"job_keywords": ("x" * 61,)}, {"job_keywords": ()}):
+    ConnectorConfig(
+        job_keywords=("python", "go"),
+        job_cities=("ha_noi",),
+        job_levels=("fresher",),
+        job_min_salary_usd=1500,
+    )
+    for bad in (
+        {"job_cities": ("hue",)},
+        {"job_levels": ("ceo",)},
+        {"job_min_salary_usd": 20001},
+        {"job_min_salary_usd": -1},
+        {"job_keywords": ("a",) * 6},
+        {"job_keywords": ("x" * 61,)},
+        {"job_keywords": ()},
+    ):
         with pytest.raises(ValidationError):
             ConnectorConfig(**bad)
     with pytest.raises(ValueError, match="unique"):

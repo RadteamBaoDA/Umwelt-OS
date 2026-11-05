@@ -48,19 +48,26 @@ BATCH = 100
 # the longest producer write transaction.
 CURSOR_LAG = timedelta(seconds=30)
 DUE_GRACE = timedelta(days=1)  # a due moment missed by more than a day is not announced late
+
+
 class _Reader(Protocol):
     """Owner-module cursor reader: tuple position, bounded page, explicit workspace scope."""
 
     def __call__(
-        self, session: AsyncSession, position: tuple[datetime, UUID] | None, limit: int, /,
-        *, scope: Scope, multi_workspace_enabled: bool,
+        self,
+        session: AsyncSession,
+        position: tuple[datetime, UUID] | None,
+        limit: int,
+        /,
+        *,
+        scope: Scope,
+        multi_workspace_enabled: bool,
     ) -> Awaitable[Sequence[tuple[datetime, UUID, str, Mapping[str, Any] | None]]]:
         """Return up to ``limit`` items strictly after ``position`` as ``(ts, id, key, payload)`` rows.
 
         A ``None`` payload marks a malformed or soft-deleted item that still advances the cursor.
         """
         ...
-
 
 
 _CURSORS: dict[str, _Reader] = {
@@ -72,7 +79,9 @@ _CURSORS: dict[str, _Reader] = {
 
 
 async def _document_event_sources(
-    session: AsyncSession, items: Sequence[tuple[datetime, UUID, str, Any]], sk: dict[str, Any],
+    session: AsyncSession,
+    items: Sequence[tuple[datetime, UUID, str, Any]],
+    sk: dict[str, Any],
 ) -> set[UUID]:
     """Resolve the Source of every well-formed ready-document event in a cursor page.
 
@@ -96,8 +105,11 @@ async def _document_event_sources(
 
 
 async def _offer_items(
-    session: AsyncSession, name: str, offerable: list[tuple[datetime, UUID, str, Mapping[str, Any]]],
-    document_items: list[tuple[datetime, UUID, str, dict[str, Any], UUID, UUID]] | None, sk: dict[str, Any],
+    session: AsyncSession,
+    name: str,
+    offerable: list[tuple[datetime, UUID, str, Mapping[str, Any]]],
+    document_items: list[tuple[datetime, UUID, str, dict[str, Any], UUID, UUID]] | None,
+    sk: dict[str, Any],
 ) -> int:
     """Offer each item to the trigger inbox and return how many were enqueued.
 
@@ -109,8 +121,13 @@ async def _offer_items(
         for _ts, _item_id, key, payload, document_id, version_id in document_items:
             try:
                 offered += await execution.enqueue_trigger(
-                    session, name, key, payload,
-                    document_id=document_id, document_version_id=version_id, **sk,
+                    session,
+                    name,
+                    key,
+                    payload,
+                    document_id=document_id,
+                    document_version_id=version_id,
+                    **sk,
                 )
             except ValueError:
                 pass  # an item with an undeclared shape is skipped, never retried forever
@@ -124,8 +141,14 @@ async def _offer_items(
 
 
 async def _cursor_sweep(
-    session: AsyncSession, name: str, reader: _Reader, now: datetime,
-    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    session: AsyncSession,
+    name: str,
+    reader: _Reader,
+    now: datetime,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
 ) -> int:
     """Move one cursor forward by at most ``BATCH`` items, offering each to the trigger inbox.
 
@@ -140,13 +163,19 @@ async def _cursor_sweep(
     sk: dict[str, Any] = {"scope": scope, "multi_workspace_enabled": multi_workspace_enabled}
     cursor = await session.get(AutomationCursor, (scope.workspace_id, name))
     if cursor is None:
-        session.add(AutomationCursor(workspace_id=scope.workspace_id, name=name, ts=now, item_id=None))
+        session.add(
+            AutomationCursor(workspace_id=scope.workspace_id, name=name, ts=now, item_id=None)
+        )
         return 0
     if not await execution.live_rules(session, name, scope=scope):
         locked = await session.scalar(
-            select(AutomationCursor).where(
-                AutomationCursor.workspace_id == scope.workspace_id, AutomationCursor.name == name,
-            ).with_for_update().execution_options(populate_existing=True)
+            select(AutomationCursor)
+            .where(
+                AutomationCursor.workspace_id == scope.workspace_id,
+                AutomationCursor.name == name,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if locked is not None:
             locked.ts, locked.item_id = now, None
@@ -161,11 +190,17 @@ async def _cursor_sweep(
     if name == "new_document":
         source_ids = await _document_event_sources(session, items, sk)
         for source_id in sorted(source_ids, key=str):
-            await sources.lock_retained_evidence_source(session, source_id, **sk, expected_access_fence=access_fence)
+            await sources.lock_retained_evidence_source(
+                session, source_id, **sk, expected_access_fence=access_fence
+            )
     cursor = await session.scalar(
-        select(AutomationCursor).where(
-            AutomationCursor.workspace_id == scope.workspace_id, AutomationCursor.name == name,
-        ).with_for_update().execution_options(populate_existing=True)
+        select(AutomationCursor)
+        .where(
+            AutomationCursor.workspace_id == scope.workspace_id,
+            AutomationCursor.name == name,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if cursor is None or (cursor.ts, cursor.item_id or UUID(int=0)) != current:
         return 0
@@ -192,8 +227,11 @@ async def _cursor_sweep(
 
 
 async def _enrich_documents(
-    session: AsyncSession, items: Sequence[tuple[datetime, UUID, str, Mapping[str, Any]]],
-    *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    items: Sequence[tuple[datetime, UUID, str, Mapping[str, Any]]],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> list[tuple[datetime, UUID, str, dict[str, Any], UUID, UUID]]:
     """Add title, mime type and source type (metadata only, no content) to ready-document events.
 
@@ -215,7 +253,9 @@ async def _enrich_documents(
             continue
         proof = await ingestion.resolve_ready_event_provenance(session, event_id, **SK)
         if (
-            proof is None or proof.document_id != document_id or proof.document_version_id != version_id
+            proof is None
+            or proof.document_id != document_id
+            or proof.document_version_id != version_id
             or proof.source_id != UUID(payload["source_id"])
         ):
             continue
@@ -247,43 +287,78 @@ async def _due_sweep(session: AsyncSession, *, scope: Scope, multi_workspace_ena
     for rev in await execution.live_rules(session, "task_due", scope=scope):
         lead = rev.trigger.get("lead_minutes", 0)
         for task_id, status, due, hours, goal_id in await tasks.list_due_within(
-            session, timedelta(minutes=lead), DUE_GRACE, BATCH, **sk,
+            session,
+            timedelta(minutes=lead),
+            DUE_GRACE,
+            BATCH,
+            **sk,
         ):
             key = f"task:{task_id}:{due}:{lead}"
             if await execution.run_exists(session, rev, key, scope=scope):
                 continue
             origin = await execution.origin_for_reference(session, f"task:{task_id}", scope=scope)
-            created += await execution.plan_run(
-                session, rev=rev, trigger_type="task_due", trigger_key=key,
-                trigger_event_id=f"{task_id}:{due}", slot=None,
-                payload={
-                    "status": status, "hours_until_due": hours, "created_by_automation": origin is not None,
-                    **({"goal_id": str(goal_id)} if goal_id is not None else {}),
-                },
-                depth=origin[2] + 1 if origin else 1,
-                origin_automation_id=origin[0] if origin else None, origin_run_id=origin[1] if origin else None,
-                **sk,
-            ) is not None
+            created += (
+                await execution.plan_run(
+                    session,
+                    rev=rev,
+                    trigger_type="task_due",
+                    trigger_key=key,
+                    trigger_event_id=f"{task_id}:{due}",
+                    slot=None,
+                    payload={
+                        "status": status,
+                        "hours_until_due": hours,
+                        "created_by_automation": origin is not None,
+                        **({"goal_id": str(goal_id)} if goal_id is not None else {}),
+                    },
+                    depth=origin[2] + 1 if origin else 1,
+                    origin_automation_id=origin[0] if origin else None,
+                    origin_run_id=origin[1] if origin else None,
+                    **sk,
+                )
+                is not None
+            )
     for rev in await execution.live_rules(session, "goal_deadline", scope=scope):
         lead_days = rev.trigger.get("lead_days", 0)
         for goal_id, status, deadline, days, progress in await goals.list_deadlines_within(
-            session, lead_days, BATCH, **sk,
+            session,
+            lead_days,
+            BATCH,
+            **sk,
         ):
             key = f"goal:{goal_id}:{deadline}:{lead_days}"
             if await execution.run_exists(session, rev, key, scope=scope):
                 continue
-            created += await execution.plan_run(
-                session, rev=rev, trigger_type="goal_deadline", trigger_key=key,
-                trigger_event_id=f"{goal_id}:{deadline}", slot=None,
-                payload={"goal_id": str(goal_id), "status": status, "days_until_deadline": days, "progress": progress},
-                depth=1, origin_automation_id=None, origin_run_id=None, **sk,
-            ) is not None
+            created += (
+                await execution.plan_run(
+                    session,
+                    rev=rev,
+                    trigger_type="goal_deadline",
+                    trigger_key=key,
+                    trigger_event_id=f"{goal_id}:{deadline}",
+                    slot=None,
+                    payload={
+                        "goal_id": str(goal_id),
+                        "status": status,
+                        "days_until_deadline": days,
+                        "progress": progress,
+                    },
+                    depth=1,
+                    origin_automation_id=None,
+                    origin_run_id=None,
+                    **sk,
+                )
+                is not None
+            )
     return created
 
 
 async def sweep(
-    factory: async_sessionmaker[AsyncSession], now: datetime | None = None,
-    *, scope: Scope, multi_workspace_enabled: bool,
+    factory: async_sessionmaker[AsyncSession],
+    now: datetime | None = None,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> int:
     """Run every producer once, each in its own transaction, and return rows created.
 
@@ -295,17 +370,43 @@ async def sweep(
     now = now or datetime.now(UTC)
     total = 0
     sweeps: list[tuple[str, Any]] = [
-        (name, (lambda s, f, n=name, r=reader: _cursor_sweep(
-            s, n, r, now, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=f)))
+        (
+            name,
+            (
+                lambda s, f, n=name, r=reader: _cursor_sweep(
+                    s,
+                    n,
+                    r,
+                    now,
+                    scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                    access_fence=f,
+                )
+            ),
+        )
         for name, reader in _CURSORS.items()
-    ] + [("due", lambda s, f: _due_sweep(s, scope=scope, multi_workspace_enabled=multi_workspace_enabled))]
+    ] + [
+        (
+            "due",
+            lambda s, f: _due_sweep(
+                s, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+            ),
+        )
+    ]
     for name, run in sweeps:
         try:
             async with factory() as session:
-                fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+                fence = await _admit(
+                    session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+                )
                 total += await run(session, fence)
                 await commit_with_replay(
-                    session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
+                    session,
+                    [],
+                    scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                    access_fence=fence,
+                )
         except (HTTPException, DomainError) as exc:
             if error_status(exc) in DENIED_STATUSES:
                 raise

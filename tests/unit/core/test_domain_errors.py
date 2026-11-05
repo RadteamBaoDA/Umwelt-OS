@@ -30,22 +30,33 @@ CASES: list[tuple[type[DomainError], int, Any, dict[str, str] | None]] = [
     (ValidationFailedError, 422, "bad", None),
     (PayloadTooLargeError, 413, "big", None),
     (RateLimitedError, 429, "slow down", {"Retry-After": "7"}),
-    (UnavailableError, 503, {"code": "BUSY", "message": "try later", "details": {"a": 1}}, {"Retry-After": "5"}),
+    (
+        UnavailableError,
+        503,
+        {"code": "BUSY", "message": "try later", "details": {"a": 1}},
+        {"Retry-After": "5"},
+    ),
     (NotFoundError, 404, None, None),
 ]
 
 
 def _http_raiser(status: int, detail: Any, headers: dict[str, str] | None) -> Callable[[], None]:
     """Return a route body raising the HTTPException flavour."""
+
     def raiser() -> None:
         raise HTTPException(status_code=status, detail=detail, headers=headers)
+
     return raiser
 
 
-def _domain_raiser(cls: type[DomainError], detail: Any, headers: dict[str, str] | None) -> Callable[[], None]:
+def _domain_raiser(
+    cls: type[DomainError], detail: Any, headers: dict[str, str] | None
+) -> Callable[[], None]:
     """Return a route body raising the DomainError flavour."""
+
     def raiser() -> None:
         raise cls(detail, headers=headers)
+
     return raiser
 
 
@@ -71,9 +82,9 @@ def test_domain_error_response_is_byte_identical(index: int) -> None:
         k: v for k, v in right.headers.items() if k not in strip
     }
     # Request IDs are generated per request; normalise before comparing bytes.
-    assert left.content.replace(left.headers["x-request-id"].encode(), b"RID") == right.content.replace(
-        right.headers["x-request-id"].encode(), b"RID"
-    )
+    assert left.content.replace(
+        left.headers["x-request-id"].encode(), b"RID"
+    ) == right.content.replace(right.headers["x-request-id"].encode(), b"RID")
 
 
 def test_error_status_and_detail_helpers() -> None:

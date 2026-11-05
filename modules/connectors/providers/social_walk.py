@@ -47,11 +47,18 @@ def decode(raw: str | None, scope: dict[str, str], max_bytes: int) -> Walk:
         value = json.loads(raw)
     except (TypeError, ValueError):
         return Walk()
-    if not isinstance(value, dict) or value.get("v") != 2 or any(value.get(k) != v for k, v in scope.items()):
+    if (
+        not isinstance(value, dict)
+        or value.get("v") != 2
+        or any(value.get(k) != v for k, v in scope.items())
+    ):
         return Walk()
     page, high, top = value.get("page"), _when(value.get("high_water")), _when(value.get("top"))
-    if (page is not None and not isinstance(page, str)) or (value.get("high_water") is not None and high is None) \
-            or (value.get("top") is not None and top is None):
+    if (
+        (page is not None and not isinstance(page, str))
+        or (value.get("high_water") is not None and high is None)
+        or (value.get("top") is not None and top is None)
+    ):
         return Walk()
     return Walk(high, page or None, top)
 
@@ -76,7 +83,9 @@ def encode(walk: Walk, scope: dict[str, str], max_bytes: int) -> str:
 
 
 def step(
-    walk: Walk, records: list[IngestionRecord], next_page: str | None,
+    walk: Walk,
+    records: list[IngestionRecord],
+    next_page: str | None,
 ) -> tuple[list[IngestionRecord], Walk]:
     """Apply one fetched page to the walk.
 
@@ -89,7 +98,9 @@ def step(
     kept = [r for r in records if high is None or r.observed_at >= high]
     reached = high is not None and len(kept) < len(records)
     newest = max((r.observed_at for r in records), default=None)
-    top = walk.top or newest  # fixed at walk start so late pages cannot lower the new high-water mark
+    top = (
+        walk.top or newest
+    )  # fixed at walk start so late pages cannot lower the new high-water mark
     if reached or not next_page:
         done = max((t for t in (high, top) if t is not None), default=None)
         return kept, Walk(done)

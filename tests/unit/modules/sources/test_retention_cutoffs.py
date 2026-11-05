@@ -37,9 +37,7 @@ def _session(rows: list[SimpleNamespace]) -> AsyncMock:
 )
 async def test_retention_days_bounds(monkeypatch, cfg, expected_days):
     """Only real ints in 1..3650 override the provider default."""
-    monkeypatch.setattr(
-        "modules.connectors.public.default_retention_days", lambda provider: 7
-    )
+    monkeypatch.setattr("modules.connectors.public.default_retention_days", lambda provider: 7)
     sid = uuid4()
     session = _session([SimpleNamespace(id=sid, provider="x", configuration=cfg)])
     assert await sources.list_retention_cutoffs(session, now=NOW) == [

@@ -56,9 +56,14 @@ def vietnamworks_requests(keywords: Sequence[str]) -> list[ProviderRequest]:
         raise ProviderPayloadError("vietnamworks_scope_mismatch")
     return [
         ProviderRequest(
-            "POST", VIETNAMWORKS_SEARCH_URL, {"Accept": "application/json"},
-            json.dumps({"query": k, "hitsPerPage": HITS_PER_PAGE, "page": 0}, ensure_ascii=False,
-                       separators=(",", ":")).encode(),
+            "POST",
+            VIETNAMWORKS_SEARCH_URL,
+            {"Accept": "application/json"},
+            json.dumps(
+                {"query": k, "hitsPerPage": HITS_PER_PAGE, "page": 0},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode(),
         )
         for k in keywords
     ]
@@ -81,11 +86,17 @@ def _salary_max_usd(hit: Mapping[str, Any]) -> Decimal | None:
     return None
 
 
-def _kept(hit: Mapping[str, Any], city_ids: set[int], level_ids: set[int], min_salary_usd: int | None) -> bool:
+def _kept(
+    hit: Mapping[str, Any], city_ids: set[int], level_ids: set[int], min_salary_usd: int | None
+) -> bool:
     """Apply the owner's city, level and salary filters; hidden salaries are kept (they cannot be compared)."""
     if city_ids:
         locations = hit.get("workingLocations")
-        found = {loc.get("cityId") for loc in locations if isinstance(loc, dict)} if isinstance(locations, list) else set()
+        found = (
+            {loc.get("cityId") for loc in locations if isinstance(loc, dict)}
+            if isinstance(locations, list)
+            else set()
+        )
         if not found & city_ids:
             return False
     if level_ids and hit.get("jobLevelId") not in level_ids:
@@ -101,7 +112,11 @@ def _names(items: object, key: str, limit: int) -> list[str]:
     """Up to ``limit`` non-empty string values of ``key`` from a provider list of objects."""
     if not isinstance(items, list):
         return []
-    out = [str(i[key]).strip() for i in items if isinstance(i, dict) and isinstance(i.get(key), str) and i[key].strip()]
+    out = [
+        str(i[key]).strip()
+        for i in items
+        if isinstance(i, dict) and isinstance(i.get(key), str) and i[key].strip()
+    ]
     return out[:limit]
 
 
@@ -110,18 +125,39 @@ def _summary(hit: Mapping[str, Any]) -> str:
     raw_function = hit.get("jobFunction")
     function: dict[str, Any] = raw_function if isinstance(raw_function, dict) else {}
     parts = [
-        ("Company", hit.get("companyName")), ("Level", hit.get("jobLevel")),
+        ("Company", hit.get("companyName")),
+        ("Level", hit.get("jobLevel")),
         ("Location", ", ".join(_names(hit.get("workingLocations"), "cityName", 5))),
         ("Salary", hit.get("prettySalary")),
         ("Skills", ", ".join(_names(hit.get("skills"), "skillName", 15))),
-        ("Function", ", ".join([n for n in (function.get("parentName"), *_names(function.get("children"), "name", 5))
-                                 if isinstance(n, str) and n])),
+        (
+            "Function",
+            ", ".join(
+                [
+                    n
+                    for n in (
+                        function.get("parentName"),
+                        *_names(function.get("children"), "name", 5),
+                    )
+                    if isinstance(n, str) and n
+                ]
+            ),
+        ),
     ]
-    return plain_text("; ".join(f"{label}: {value}" for label, value in parts if isinstance(value, str) and value), _BODY_MAX)
+    return plain_text(
+        "; ".join(
+            f"{label}: {value}" for label, value in parts if isinstance(value, str) and value
+        ),
+        _BODY_MAX,
+    )
 
 
 def map_vietnamworks(
-    payload: object, collected_at: datetime, *, cities: Iterable[str] = (), levels: Iterable[str] = (),
+    payload: object,
+    collected_at: datetime,
+    *,
+    cities: Iterable[str] = (),
+    levels: Iterable[str] = (),
     min_salary_usd: int | None = None,
 ) -> list[IngestionRecord]:
     """Map one search response to job records, identity ``vietnamworks:{jobId}``, after the owner filters.
@@ -138,30 +174,59 @@ def map_vietnamworks(
     level_ids = {LEVEL_IDS[v] for v in levels if v in LEVEL_IDS}
     records: list[IngestionRecord] = []
     for hit in payload["data"]:
-        if not isinstance(hit, dict) or isinstance(hit.get("jobId"), bool) or not isinstance(hit.get("jobId"), int):
+        if (
+            not isinstance(hit, dict)
+            or isinstance(hit.get("jobId"), bool)
+            or not isinstance(hit.get("jobId"), int)
+        ):
             continue
         url = https_link(hit.get("jobUrl"))
-        title = plain_text(hit.get("jobTitle") if isinstance(hit.get("jobTitle"), str) else None, _TITLE_MAX)
-        if not title or url is None or (parts := urlsplit(url)).hostname != VIETNAMWORKS_JOB_HOST or not parts.path.strip("/"):
+        title = plain_text(
+            hit.get("jobTitle") if isinstance(hit.get("jobTitle"), str) else None, _TITLE_MAX
+        )
+        if (
+            not title
+            or url is None
+            or (parts := urlsplit(url)).hostname != VIETNAMWORKS_JOB_HOST
+            or not parts.path.strip("/")
+        ):
             continue
         if not _kept(hit, city_ids, level_ids, min_salary_usd):
             continue
         summary = _summary(hit)
-        posted = parse_when(hit.get("approvedOn") if isinstance(hit.get("approvedOn"), str) else None, collected_at)
+        posted = parse_when(
+            hit.get("approvedOn") if isinstance(hit.get("approvedOn"), str) else None, collected_at
+        )
         updated = hit.get("lastUpdatedOn") if isinstance(hit.get("lastUpdatedOn"), str) else None
         identity = f"vietnamworks:{hit['jobId']}"
-        fields: dict[str, Any] = {"title": title, "summary": summary, "canonical_url": url, "publisher": "VietnamWorks"}
+        fields: dict[str, Any] = {
+            "title": title,
+            "summary": summary,
+            "canonical_url": url,
+            "publisher": "VietnamWorks",
+        }
         if posted:
             fields["published_at"] = posted.isoformat()
-        records.append(_record(
-            provider="vietnamworks_jobs", identity=identity, title=title, summary=summary,
-            observed_at=posted or collected_at, collected_at=collected_at,
-            version=content_version("vietnamworks_jobs", hit["jobId"], title, summary, hit.get("expiredOn")),
-            basis="provider_published" if posted else "collection", modified_at=None,
-            coverage="returned_snapshot", source_fields=fields, canonical_url=url,
-            published_at=posted.isoformat() if posted else None,
-            provider_updated_at=updated[:64] if updated else None,
-        ))
+        records.append(
+            _record(
+                provider="vietnamworks_jobs",
+                identity=identity,
+                title=title,
+                summary=summary,
+                observed_at=posted or collected_at,
+                collected_at=collected_at,
+                version=content_version(
+                    "vietnamworks_jobs", hit["jobId"], title, summary, hit.get("expiredOn")
+                ),
+                basis="provider_published" if posted else "collection",
+                modified_at=None,
+                coverage="returned_snapshot",
+                source_fields=fields,
+                canonical_url=url,
+                published_at=posted.isoformat() if posted else None,
+                provider_updated_at=updated[:64] if updated else None,
+            )
+        )
     return records
 
 
@@ -175,11 +240,16 @@ ITVIEC_REQUEST_GAP_SECONDS = 2.0  # minimum spacing between any two ITviec reque
 ITVIEC_CITY_SLUGS = {"ho_chi_minh": "ho-chi-minh-hcm", "ha_noi": "ha-noi", "da_nang": "da-nang"}
 # Best-effort level matching on free-text ``experienceRequirements``; postings without that text are kept.
 _ITVIEC_LEVEL_WORDS = {
-    "intern": ("intern", "thực tập", "thuc tap"), "fresher": ("fresher", "entry", "graduate", "mới tốt nghiệp"),
+    "intern": ("intern", "thực tập", "thuc tap"),
+    "fresher": ("fresher", "entry", "graduate", "mới tốt nghiệp"),
     "experienced": ("experienced", "middle", "mid-level", "senior", "năm kinh nghiệm", "years"),
-    "manager": ("manager", "lead", "quản lý"), "director": ("director", "head of", "cto", "giám đốc"),
+    "manager": ("manager", "lead", "quản lý"),
+    "director": ("director", "head of", "cto", "giám đốc"),
 }
-_LD_JSON = re.compile(r"<script[^>]*type=['\"]application/ld\+json['\"][^>]*>(.*?)</script>", re.DOTALL | re.IGNORECASE)
+_LD_JSON = re.compile(
+    r"<script[^>]*type=['\"]application/ld\+json['\"][^>]*>(.*?)</script>",
+    re.DOTALL | re.IGNORECASE,
+)
 _SLUG_PART = re.compile(r"[^a-z0-9]+")
 
 
@@ -189,14 +259,21 @@ def itviec_keyword_slug(keyword: str) -> str:
     Raises:
         ProviderPayloadError: nothing slug-able remains (``itviec_scope_mismatch``), so no request is built.
     """
-    folded = unicodedata.normalize("NFKD", keyword.replace("đ", "d").replace("Đ", "D")).encode("ascii", "ignore").decode().lower()
+    folded = (
+        unicodedata.normalize("NFKD", keyword.replace("đ", "d").replace("Đ", "D"))
+        .encode("ascii", "ignore")
+        .decode()
+        .lower()
+    )
     slug = _SLUG_PART.sub("-", folded).strip("-")
     if not slug:
         raise ProviderPayloadError("itviec_scope_mismatch")
     return slug
 
 
-def itviec_search_requests(keywords: Sequence[str], cities: Sequence[str] = ()) -> list[ProviderRequest]:
+def itviec_search_requests(
+    keywords: Sequence[str], cities: Sequence[str] = ()
+) -> list[ProviderRequest]:
     """One GET per keyword x city search page (no city = nationwide page), at most ``MAX_ITVIEC_SEARCHES``.
 
     Slugs come from a fixed city table and a sanitised keyword, so nothing owner-typed adds URL syntax.
@@ -206,12 +283,21 @@ def itviec_search_requests(keywords: Sequence[str], cities: Sequence[str] = ()) 
         (``itviec_scope_mismatch``).
     """
     slugs: list[str | None] = [ITVIEC_CITY_SLUGS[c] for c in cities if c in ITVIEC_CITY_SLUGS]
-    if len(slugs) != len(cities) or not keywords or len(keywords) * max(1, len(slugs)) > MAX_ITVIEC_SEARCHES:
+    if (
+        len(slugs) != len(cities)
+        or not keywords
+        or len(keywords) * max(1, len(slugs)) > MAX_ITVIEC_SEARCHES
+    ):
         raise ProviderPayloadError("itviec_scope_mismatch")
     return [
-        ProviderRequest("GET", f"https://{ITVIEC_HOST}{ITVIEC_JOBS_PATH}{itviec_keyword_slug(k)}" + (f"/{c}" if c else ""),
-                        {"Accept": "text/html"})
-        for k in keywords for c in (slugs or [None])
+        ProviderRequest(
+            "GET",
+            f"https://{ITVIEC_HOST}{ITVIEC_JOBS_PATH}{itviec_keyword_slug(k)}"
+            + (f"/{c}" if c else ""),
+            {"Accept": "text/html"},
+        )
+        for k in keywords
+        for c in (slugs or [None])
     ]
 
 
@@ -235,7 +321,7 @@ def itviec_job_url(raw: object) -> str | None:
     if link is None:
         return None
     parts = urlsplit(link)
-    slug = parts.path[len(ITVIEC_JOBS_PATH):] if parts.path.startswith(ITVIEC_JOBS_PATH) else ""
+    slug = parts.path[len(ITVIEC_JOBS_PATH) :] if parts.path.startswith(ITVIEC_JOBS_PATH) else ""
     if parts.hostname != ITVIEC_HOST or parts.port not in (None, 443) or not slug or "/" in slug:
         return None
     return f"https://{ITVIEC_HOST}{ITVIEC_JOBS_PATH}{slug}"
@@ -253,7 +339,9 @@ def _ld_objects(html: str) -> list[dict[str, Any]]:
             if not isinstance(item, dict):
                 continue
             graph = item.get("@graph")
-            found.extend(g for g in graph if isinstance(g, dict)) if isinstance(graph, list) else found.append(item)
+            found.extend(g for g in graph if isinstance(g, dict)) if isinstance(
+                graph, list
+            ) else found.append(item)
     return found
 
 
@@ -272,7 +360,11 @@ def parse_itviec_item_list(html: str) -> list[str]:
 def _level_ok(posting: Mapping[str, Any], levels: set[str]) -> bool:
     """Best-effort level filter: keep a posting without experience text; otherwise any chosen level's word must match."""
     requirement = posting.get("experienceRequirements")
-    text = " ".join(str(v) for v in requirement.values()) if isinstance(requirement, dict) else requirement
+    text = (
+        " ".join(str(v) for v in requirement.values())
+        if isinstance(requirement, dict)
+        else requirement
+    )
     if not levels or not isinstance(text, str) or not text.strip():
         return True
     lowered = text.casefold()
@@ -286,22 +378,31 @@ def _itviec_salary(posting: Mapping[str, Any]) -> tuple[Decimal | None, str | No
         return None, None
     value = base["value"]
     text = value.get("value") if isinstance(value.get("value"), str) else None
-    return _salary_max_usd({"salaryMax": value.get("maxValue"), "salaryCurrency": base.get("currency")}), text
+    return _salary_max_usd(
+        {"salaryMax": value.get("maxValue"), "salaryCurrency": base.get("currency")}
+    ), text
 
 
 def _itviec_city(posting: Mapping[str, Any]) -> str:
     """City only (``addressRegion``): street, district and postal code are never stored."""
     places = posting.get("jobLocation")
     cities = {
-        loc["address"]["addressRegion"].strip() for loc in (places if isinstance(places, list) else [places])
-        if isinstance(loc, dict) and isinstance(loc.get("address"), dict)
-        and isinstance(loc["address"].get("addressRegion"), str) and loc["address"]["addressRegion"].strip()
+        loc["address"]["addressRegion"].strip()
+        for loc in (places if isinstance(places, list) else [places])
+        if isinstance(loc, dict)
+        and isinstance(loc.get("address"), dict)
+        and isinstance(loc["address"].get("addressRegion"), str)
+        and loc["address"]["addressRegion"].strip()
     }
     return ", ".join(sorted(cities)[:3])
 
 
 def map_itviec(
-    pages: Iterable[tuple[str, str]], collected_at: datetime, *, levels: Iterable[str] = (), min_salary_usd: int | None = None,
+    pages: Iterable[tuple[str, str]],
+    collected_at: datetime,
+    *,
+    levels: Iterable[str] = (),
+    min_salary_usd: int | None = None,
 ) -> list[IngestionRecord]:
     """Map fetched posting pages ``(url, html)`` to job records, identity ``itviec:{slug}``, after the owner filters.
 
@@ -313,8 +414,15 @@ def map_itviec(
     records: list[IngestionRecord] = []
     for page_url, html in pages:
         url = itviec_job_url(page_url)
-        posting = next((o for o in _ld_objects(html) if o.get("@type") == "JobPosting"), None) if url else None
-        title = plain_text(posting.get("title") if posting and isinstance(posting.get("title"), str) else None, _TITLE_MAX)
+        posting = (
+            next((o for o in _ld_objects(html) if o.get("@type") == "JobPosting"), None)
+            if url
+            else None
+        )
+        title = plain_text(
+            posting.get("title") if posting and isinstance(posting.get("title"), str) else None,
+            _TITLE_MAX,
+        )
         if url is None or posting is None or not title or not _level_ok(posting, wanted):
             continue
         top, salary_text = _itviec_salary(posting)
@@ -325,27 +433,48 @@ def map_itviec(
         if raw_when and re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_when):
             raw_when += "T00:00:00+07:00"  # date-only in Vietnam local time; parse_when needs an explicit zone
         posted = parse_when(raw_when, collected_at)
-        valid = posting.get("validThrough") if isinstance(posting.get("validThrough"), str) else None
+        valid = (
+            posting.get("validThrough") if isinstance(posting.get("validThrough"), str) else None
+        )
         experience = posting.get("experienceRequirements")
         parts = [
-            ("Company", org.get("name") if isinstance(org, dict) else None), ("Type", posting.get("employmentType")),
-            ("Location", _itviec_city(posting)), ("Salary", salary_text or "not disclosed"),
-            ("Skills", posting.get("skills")), ("Experience", experience if isinstance(experience, str) else None),
+            ("Company", org.get("name") if isinstance(org, dict) else None),
+            ("Type", posting.get("employmentType")),
+            ("Location", _itviec_city(posting)),
+            ("Salary", salary_text or "not disclosed"),
+            ("Skills", posting.get("skills")),
+            ("Experience", experience if isinstance(experience, str) else None),
             ("Valid through", valid[:10] if valid else None),
         ]
-        summary = plain_text("; ".join(f"{k}: {v}" for k, v in parts if isinstance(v, str) and v), _BODY_MAX)
+        summary = plain_text(
+            "; ".join(f"{k}: {v}" for k, v in parts if isinstance(v, str) and v), _BODY_MAX
+        )
         identity = f"itviec:{url.rsplit('/', 1)[1]}"
-        fields: dict[str, Any] = {"title": title, "summary": summary, "canonical_url": url, "publisher": "ITviec"}
+        fields: dict[str, Any] = {
+            "title": title,
+            "summary": summary,
+            "canonical_url": url,
+            "publisher": "ITviec",
+        }
         if posted:
             fields["published_at"] = posted.isoformat()
-        records.append(_record(
-            provider="itviec_jobs", identity=identity, title=title, summary=summary,
-            observed_at=posted or collected_at, collected_at=collected_at,
-            version=content_version("itviec_jobs", identity, title, summary, valid),
-            basis="provider_published" if posted else "collection", modified_at=None,
-            coverage="returned_snapshot", source_fields=fields, canonical_url=url,
-            published_at=posted.isoformat() if posted else None,
-        ))
+        records.append(
+            _record(
+                provider="itviec_jobs",
+                identity=identity,
+                title=title,
+                summary=summary,
+                observed_at=posted or collected_at,
+                collected_at=collected_at,
+                version=content_version("itviec_jobs", identity, title, summary, valid),
+                basis="provider_published" if posted else "collection",
+                modified_at=None,
+                coverage="returned_snapshot",
+                source_fields=fields,
+                canonical_url=url,
+                published_at=posted.isoformat() if posted else None,
+            )
+        )
     return records
 
 
@@ -358,4 +487,6 @@ def merge_keyword_records(batches: Iterable[Sequence[IngestionRecord]]) -> list[
     return list(merged.values())
 
 
-JOBS_ADAPTERS: dict[str, PureAdapter] = {"vietnamworks_jobs": PureAdapter(vietnamworks_request, map_vietnamworks)}  # itviec_jobs: multi-page runner in collection.py
+JOBS_ADAPTERS: dict[str, PureAdapter] = {
+    "vietnamworks_jobs": PureAdapter(vietnamworks_request, map_vietnamworks)
+}  # itviec_jobs: multi-page runner in collection.py

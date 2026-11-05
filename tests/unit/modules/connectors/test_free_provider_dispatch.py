@@ -54,18 +54,28 @@ def make_run(provider, gate, monkeypatch, state=None, connector_revision=2, conf
     monkeypatch.setattr(collection, "_accept_native", accept)
     monkeypatch.setattr(collection, "_state", get_state)
     monkeypatch.setattr(collection.ingestion, "seen_record_keys", no_seen)
-    source = SimpleNamespace(id=uuid4(), generation=1, provider=provider, configuration=configuration or {})
+    source = SimpleNamespace(
+        id=uuid4(), generation=1, provider=provider, configuration=configuration or {}
+    )
     run = SimpleNamespace(
-        attempt=SimpleNamespace(source=source, connector_revision=connector_revision), gate=gate, extras={},
-        factory=session_factory)
+        attempt=SimpleNamespace(source=source, connector_revision=connector_revision),
+        gate=gate,
+        extras={},
+        factory=session_factory,
+    )
     return run, accepted
 
 
 def test_every_dispatchable_provider_has_an_adapter_and_spec():
     from modules.connectors.backends import PROVIDER_SOURCE_TYPES
 
-    assert all(collection._adapter_for(SimpleNamespace(
-        provider=provider, type=PROVIDER_SOURCE_TYPES[provider])) is not None for provider in DISPATCHABLE)
+    assert all(
+        collection._adapter_for(
+            SimpleNamespace(provider=provider, type=PROVIDER_SOURCE_TYPES[provider])
+        )
+        is not None
+        for provider in DISPATCHABLE
+    )
     assert "coingecko" in DISPATCHABLE  # key-bearing: needs the owner credential slot
     assert all(get_provider_spec(p) is not None for p in DISPATCHABLE)
 
@@ -73,7 +83,9 @@ def test_every_dispatchable_provider_has_an_adapter_and_spec():
 async def test_bluesky_dispatch_commits_adapter_cursor_with_the_native_receipt(monkeypatch):
     from modules.connectors.providers import social_feeds
 
-    lease = SimpleNamespace(token=uuid4(), cursor_before='{"v":1,"actor":"alice.bsky.social","page":"old"}')
+    lease = SimpleNamespace(
+        token=uuid4(), cursor_before='{"v":1,"actor":"alice.bsky.social","page":"old"}'
+    )
     page = SimpleNamespace(records=(), coverage="truncated", cursor_after='{"page":"next"}')
     collect = AsyncMock(return_value=page)
     accept = AsyncMock()
@@ -86,10 +98,14 @@ async def test_bluesky_dispatch_commits_adapter_cursor_with_the_native_receipt(m
     async def factory():
         yield object()
 
-    source = SimpleNamespace(provider="bluesky", configuration={"bluesky_actor": "alice.bsky.social"})
+    source = SimpleNamespace(
+        provider="bluesky", configuration={"bluesky_actor": "alice.bsky.social"}
+    )
     run = SimpleNamespace(
         attempt=SimpleNamespace(source=source, connector_revision=2),
-        gate=SimpleNamespace(fetch_bytes=AsyncMock()), extras={}, factory=factory,
+        gate=SimpleNamespace(fetch_bytes=AsyncMock()),
+        extras={},
+        factory=factory,
     )
     await collection._run_native(run)
 
@@ -97,19 +113,26 @@ async def test_bluesky_dispatch_commits_adapter_cursor_with_the_native_receipt(m
     assert accept.await_args.kwargs["cursor_after"] == page.cursor_after
 
 
-@pytest.mark.parametrize("provider, name, max_bytes", [
-    ("world_bank", "world_bank_vn_gdp.json", 2 * 1024 * 1024),
-    ("ecb", "ecb_eurofxref_daily.xml", 256 * 1024),
-    ("alternative_me", "fear_greed.json", 2 * 1024 * 1024),
-    ("cisa_kev", "cisa_kev.json", 4 * 1024 * 1024),
-])
-async def test_pure_provider_one_gated_send_then_typed_measurements(monkeypatch, provider, name, max_bytes):
+@pytest.mark.parametrize(
+    "provider, name, max_bytes",
+    [
+        ("world_bank", "world_bank_vn_gdp.json", 2 * 1024 * 1024),
+        ("ecb", "ecb_eurofxref_daily.xml", 256 * 1024),
+        ("alternative_me", "fear_greed.json", 2 * 1024 * 1024),
+        ("cisa_kev", "cisa_kev.json", 4 * 1024 * 1024),
+    ],
+)
+async def test_pure_provider_one_gated_send_then_typed_measurements(
+    monkeypatch, provider, name, max_bytes
+):
     gate = Gate({"*": rest.Fetched(fixture(name))})
     run, accepted = make_run(provider, gate, monkeypatch)
     await collection._run_pure(run)
     assert len(gate.calls) == 1 and gate.calls[0][1]["max_bytes"] == max_bytes
     records, coverage, _ = accepted[0]
-    assert records and all(r.metadata["provider_record"]["world_data"]["provider"] == provider for r in records)
+    assert records and all(
+        r.metadata["provider_record"]["world_data"]["provider"] == provider for r in records
+    )
     assert coverage == ("truncated" if provider == "world_bank" else "returned_snapshot")
 
 
@@ -121,12 +144,18 @@ async def test_pure_provider_304_is_not_a_page(monkeypatch):
 
 
 async def test_feed_first_fetch_stores_validators_and_carries_no_world_data(monkeypatch):
-    gate = Gate({"*": rest.Fetched(fixture("bbc_world_rss.xml"), '"v1"', "Wed, 07 Oct 2026 08:00:00 GMT")})
+    gate = Gate(
+        {"*": rest.Fetched(fixture("bbc_world_rss.xml"), '"v1"', "Wed, 07 Oct 2026 08:00:00 GMT")}
+    )
     run, accepted = make_run("bbc_world", gate, monkeypatch)
     await collection._run_feed(run)
     records, _, update = accepted[0]
     assert records and all(r.metadata["provider_record"]["world_data"] is None for r in records)
-    assert update.update_validators and update.etag == '"v1"' and update.last_modified.startswith("Wed")
+    assert (
+        update.update_validators
+        and update.etag == '"v1"'
+        and update.last_modified.startswith("Wed")
+    )
     assert "If-None-Match" not in gate.calls[0][1]["headers"]
 
 
@@ -136,7 +165,9 @@ async def test_feed_replays_validators_and_304_keeps_last_good(monkeypatch):
     run, accepted = make_run("bbc_world", gate, monkeypatch, state=state)
     await collection._run_feed(run)
     assert gate.calls[0][1]["headers"]["If-None-Match"] == '"v1"'
-    assert accepted == [((), "returned_snapshot", None)]  # empty acceptance: no records, validators untouched
+    assert accepted == [
+        ((), "returned_snapshot", None)
+    ]  # empty acceptance: no records, validators untouched
 
 
 async def test_feed_ignores_validators_from_another_revision(monkeypatch):
@@ -149,11 +180,15 @@ async def test_feed_ignores_validators_from_another_revision(monkeypatch):
 
 async def test_hn_sends_one_listing_plus_at_most_ten_items_each_gated(monkeypatch):
     story = fixture("hn_item_story.json")
-    gate = Gate({
-        "https://hacker-news.firebaseio.com/v0/topstories.json": rest.Fetched(fixture("hn_topstories.json")),
-        "https://hacker-news.firebaseio.com/v0/item/41000002.json": rest.ProviderHttpError(404),
-        "*": rest.Fetched(story),
-    })
+    gate = Gate(
+        {
+            "https://hacker-news.firebaseio.com/v0/topstories.json": rest.Fetched(
+                fixture("hn_topstories.json")
+            ),
+            "https://hacker-news.firebaseio.com/v0/item/41000002.json": rest.ProviderHttpError(404),
+            "*": rest.Fetched(story),
+        }
+    )
     run, accepted = make_run("hn_top", gate, monkeypatch)
     await collection._run_hn(run)
     assert len(gate.calls) == 11  # 1 listing + 10 items, each a separately debited send
@@ -173,17 +208,26 @@ async def test_gdelt_uses_8_second_timeout_and_timeout_accepts_nothing(monkeypat
     assert collection._classify(TimeoutError())["error_code"] == "provider_timeout"
 
 
-@pytest.mark.parametrize("kind, expected", [
-    ("rate_limited", connectors.ProviderRateLimited), ("incomplete", rest.CollectionIncomplete),
-    ("credential", rest.ProviderHttpError), ("entitlement", rest.ProviderHttpError), ("invalid", ProviderPayloadError),
-])
+@pytest.mark.parametrize(
+    "kind, expected",
+    [
+        ("rate_limited", connectors.ProviderRateLimited),
+        ("incomplete", rest.CollectionIncomplete),
+        ("credential", rest.ProviderHttpError),
+        ("entitlement", rest.ProviderHttpError),
+        ("invalid", ProviderPayloadError),
+    ],
+)
 def test_payload_error_kinds_map_to_executor_signals(kind, expected):
     def boom():
         raise ProviderPayloadError("x", kind)
 
     with pytest.raises(expected):
         collection._payload(boom)
-    assert json.dumps(collection._classify(ProviderPayloadError("x"))["error_code"]) == '"provider_response_invalid"'
+    assert (
+        json.dumps(collection._classify(ProviderPayloadError("x"))["error_code"])
+        == '"provider_response_invalid"'
+    )
 
 
 @pytest.mark.parametrize("provider", sorted(DISPATCHABLE))
@@ -201,13 +245,19 @@ def test_registration_agrees_across_registry_sources_and_scope_validators(provid
     scope = {
         "bluesky": {"bluesky_actor": "example.bsky.social"},
         "reddit": {"reddit_subreddit": "python"},
-        "mastodon": {"mastodon_instance_url": "https://mastodon.social", "mastodon_account": "alice@mastodon.social"},
+        "mastodon": {
+            "mastodon_instance_url": "https://mastodon.social",
+            "mastodon_account": "alice@mastodon.social",
+        },
         "x": {"x_account": "example"},
         "google_mail": {"google_mail_label_ids": ["INBOX"]},
         "google_calendar": {"google_calendar_ids": ["primary"]},
         "google_drive": {"google_drive_ids": ["file-id"]},
         "health": {"fhir_base_url": "http://127.0.0.1:8080/fhir", "fhir_patient_id": "patient-1"},
-        "home_assistant": {"ha_base_url": "http://127.0.0.1:8123", "ha_entity_ids": ["sensor.temperature"]},
+        "home_assistant": {
+            "ha_base_url": "http://127.0.0.1:8123",
+            "ha_entity_ids": ["sensor.temperature"],
+        },
         "notion": {"notion_page_ids": ["a1234567-b123-c123-d123-e123456789ab"]},
         "slack": {"slack_channel_ids": ["C012ABCDEF"]},
         "google_news": {"news_query": "economy", "news_site": "any", "news_locale": "en-US"},
@@ -219,11 +269,22 @@ def test_registration_agrees_across_registry_sources_and_scope_validators(provid
         "nasa_firms": {"firms_country": "VNM"},
         "coingecko": {"coingecko_assets": [{"id": "bitcoin", "symbol": "BTC", "name": "Bitcoin"}]},
     }.get(provider, {})
-    assert native_dispatch_supported(source_type, provider) and PROVIDER_SCOPE_FIELDS[provider] == frozenset(scope)
+    assert native_dispatch_supported(source_type, provider) and PROVIDER_SCOPE_FIELDS[
+        provider
+    ] == frozenset(scope)
     source = SimpleNamespace(
-        id=uuid4(), status="active", type=source_type, provider=provider, generation=1,
-        configuration={"history_mode": "returned_snapshot", **scope})
+        id=uuid4(),
+        status="active",
+        type=source_type,
+        provider=provider,
+        generation=1,
+        configuration={"history_mode": "returned_snapshot", **scope},
+    )
     assert registry.validate(source)["provider"] == provider
-    source.configuration = {"history_mode": "returned_snapshot", **scope, "feed_url": "https://x.example/f"}
+    source.configuration = {
+        "history_mode": "returned_snapshot",
+        **scope,
+        "feed_url": "https://x.example/f",
+    }
     with pytest.raises(ValueError):
         registry.validate(source)  # owner-supplied scope is refused for fixed endpoints

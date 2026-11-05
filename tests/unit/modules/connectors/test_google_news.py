@@ -30,14 +30,26 @@ def test_url_is_fixed_host_path_with_escaped_query():
 def test_control_characters_stripped_and_injection_is_inert():
     url = google_news_url("a\r\nb\x00c&hl=xx#frag", "any", "en-US")
     assert "\n" not in url and "%0A" not in url and "%00" not in url
-    assert url.count("hl=") == 1 and "#" not in url and url.count("&") == 3  # only our own separators
+    assert (
+        url.count("hl=") == 1 and "#" not in url and url.count("&") == 3
+    )  # only our own separators
 
 
-@pytest.mark.parametrize("query, site, locale", [
-    ("", "any", "en-US"), ("   ", "any", "en-US"), ("x" * 201, "any", "en-US"), (None, "any", "en-US"),
-    ("x", "evil.com", "en-US"), ("x", "https://evil.com", "en-US"), ("x", "any", "fr-FR"), ("x", "any", "en-us"),
-    ("x site:evil.com", "any", "en-US"), ("x SITE : evil.com", "reuters.com", "en-US"),
-])
+@pytest.mark.parametrize(
+    "query, site, locale",
+    [
+        ("", "any", "en-US"),
+        ("   ", "any", "en-US"),
+        ("x" * 201, "any", "en-US"),
+        (None, "any", "en-US"),
+        ("x", "evil.com", "en-US"),
+        ("x", "https://evil.com", "en-US"),
+        ("x", "any", "fr-FR"),
+        ("x", "any", "en-us"),
+        ("x site:evil.com", "any", "en-US"),
+        ("x SITE : evil.com", "reuters.com", "en-US"),
+    ],
+)
 def test_rejects_unknown_site_locale_and_bad_query(query, site, locale):
     with pytest.raises(ProviderPayloadError):
         google_news_url(query, site, locale)
@@ -46,22 +58,38 @@ def test_rejects_unknown_site_locale_and_bad_query(query, site, locale):
 def test_config_model_validates_scope_and_strips_controls():
     cfg = ConnectorConfig(news_query="a\x07\n b", news_site="reuters.com", news_locale="vi-VN")
     assert cfg.news_query == "a b"
-    for bad in ({"news_site": "evil.com"}, {"news_locale": "de-DE"}, {"news_query": "x" * 201}, {"news_query": "\x00"},
-                {"news_query": "q site:evil.com"}):
+    for bad in (
+        {"news_site": "evil.com"},
+        {"news_locale": "de-DE"},
+        {"news_query": "x" * 201},
+        {"news_query": "\x00"},
+        {"news_query": "q site:evil.com"},
+    ):
         with pytest.raises(ValidationError):
             ConnectorConfig(**bad)
 
 
 def test_fixture_maps_publisher_license_and_keeps_item_link():
-    records = {r.provider_id: r for r in map_feed("google_news", fixture("google_news_rss.xml"), NOW)}
+    records = {
+        r.provider_id: r for r in map_feed("google_news", fixture("google_news_rss.xml"), NOW)
+    }
     assert set(records) == {"SYNTHETIC0001", "SYNTHETIC0002", "SYNTHETIC0003"}
     first = records["SYNTHETIC0001"].metadata["provider_record"]
     assert first["source_fields"]["publisher"] == "Reuters"
     assert first["license_label"] == GOOGLE_NEWS_LICENSE == "Google News RSS / publisher"
-    assert first["source_fields"]["canonical_url"] == "https://news.google.com/rss/articles/SYNTHETIC0001?oc=5"
-    assert records["SYNTHETIC0002"].metadata["provider_record"]["source_fields"]["publisher"] == "AP News"
+    assert (
+        first["source_fields"]["canonical_url"]
+        == "https://news.google.com/rss/articles/SYNTHETIC0001?oc=5"
+    )
+    assert (
+        records["SYNTHETIC0002"].metadata["provider_record"]["source_fields"]["publisher"]
+        == "AP News"
+    )
     assert "publisher" not in records["SYNTHETIC0003"].metadata["provider_record"]["source_fields"]
-    assert first["world_data"] is None and records["SYNTHETIC0001"].metadata["full_text_available"] is False
+    assert (
+        first["world_data"] is None
+        and records["SYNTHETIC0001"].metadata["full_text_available"] is False
+    )
 
 
 def test_request_uses_supplied_url_and_validators_bind_to_it():
@@ -87,8 +115,14 @@ def _source(**config):
     from types import SimpleNamespace
     from uuid import uuid4
 
-    return SimpleNamespace(id=uuid4(), status="active", type="rss", provider="google_news", generation=1,
-                           configuration={"history_mode": "returned_snapshot", **config})
+    return SimpleNamespace(
+        id=uuid4(),
+        status="active",
+        type="rss",
+        provider="google_news",
+        generation=1,
+        configuration={"history_mode": "returned_snapshot", **config},
+    )
 
 
 def test_registry_requires_full_scope_and_rejects_raw_urls():
@@ -96,8 +130,11 @@ def test_registry_requires_full_scope_and_rejects_raw_urls():
 
     ok = {"news_query": "economy", "news_site": "apnews.com", "news_locale": "vi-VN"}
     assert registry.validate(_source(**ok))["configuration"]["news_site"] == "apnews.com"
-    for bad in ({"news_query": "economy", "news_locale": "vi-VN"}, {**ok, "feed_url": "https://evil.example/rss"},
-                {**ok, "news_site": "evil.com"}):
+    for bad in (
+        {"news_query": "economy", "news_locale": "vi-VN"},
+        {**ok, "feed_url": "https://evil.example/rss"},
+        {**ok, "news_site": "evil.com"},
+    ):
         with pytest.raises(ValueError):
             registry.validate(_source(**bad))
 
@@ -116,12 +153,16 @@ def test_invalid_detail_appends_only_plain_value_errors():
 
     from modules.connectors.provisioning_routes import _invalid_detail
 
-    assert _invalid_detail("Draft connector configuration is invalid", ValueError("Missing required fields: news_site")) == (
-        "Draft connector configuration is invalid: Missing required fields: news_site")
+    assert _invalid_detail(
+        "Draft connector configuration is invalid", ValueError("Missing required fields: news_site")
+    ) == ("Draft connector configuration is invalid: Missing required fields: news_site")
 
     class Probe(BaseModel):
         n: int
 
     with pytest.raises(ValidationError) as caught:
         Probe(n="secret-value")
-    assert _invalid_detail("Draft connector configuration is invalid", caught.value) == "Draft connector configuration is invalid"
+    assert (
+        _invalid_detail("Draft connector configuration is invalid", caught.value)
+        == "Draft connector configuration is invalid"
+    )

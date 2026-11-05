@@ -94,10 +94,16 @@ def _settled_remote_id(envelope: dict[str, Any], *, workflow: bool) -> str | Non
     ):
         raise RuntimeError("Unsettled n8n transport prevents account erasure")
     remote_id = result.get("remote_id") if isinstance(result, dict) else None
-    if (isinstance(result, dict) and result.get("outcome") == "known_success"
-            and step.get("kind") == "create" and not remote_id):
+    if (
+        isinstance(result, dict)
+        and result.get("outcome") == "known_success"
+        and step.get("kind") == "create"
+        and not remote_id
+    ):
         raise RuntimeError("Settled n8n creation requires its exact remote ID")
-    if remote_id is not None and (not isinstance(remote_id, str) or not remote_id or len(remote_id) > 128):
+    if remote_id is not None and (
+        not isinstance(remote_id, str) or not remote_id or len(remote_id) > 128
+    ):
         raise RuntimeError("Invalid n8n cleanup result ID")
     return remote_id
 
@@ -135,7 +141,10 @@ class _RemoteErasurePlan:
 
 
 async def _plan_grant_revoke(
-    session: AsyncSession, scope: AccountErasureScope, settings: Settings, grant: GithubOAuthGrant | None,
+    session: AsyncSession,
+    scope: AccountErasureScope,
+    settings: Settings,
+    grant: GithubOAuthGrant | None,
 ) -> tuple[str | None, tuple[str, str] | None]:
     """Return the GitHub token/identity to revoke for a source's grant, or ``(None, None)``.
 
@@ -145,16 +154,26 @@ async def _plan_grant_revoke(
     """
     if grant is None:
         return None, None
-    if grant.state == "revoked" and grant.encrypted_tokens is None and grant.error_code in {None, "provider_revoked"}:
+    if (
+        grant.state == "revoked"
+        and grant.encrypted_tokens is None
+        and grant.error_code in {None, "provider_revoked"}
+    ):
         return None, None
-    peer = await session.scalar(select(GithubOAuthGrant.source_id).join(
-        Source, Source.id == GithubOAuthGrant.source_id,
-    ).where(
-        GithubOAuthGrant.github_user_id == grant.github_user_id,
-        GithubOAuthGrant.app_id == grant.app_id,
-        Source.workspace_id != scope.workspace_id,
-        GithubOAuthGrant.encrypted_tokens.is_not(None),
-    ).limit(1))
+    peer = await session.scalar(
+        select(GithubOAuthGrant.source_id)
+        .join(
+            Source,
+            Source.id == GithubOAuthGrant.source_id,
+        )
+        .where(
+            GithubOAuthGrant.github_user_id == grant.github_user_id,
+            GithubOAuthGrant.app_id == grant.app_id,
+            Source.workspace_id != scope.workspace_id,
+            GithubOAuthGrant.encrypted_tokens.is_not(None),
+        )
+        .limit(1)
+    )
     if peer is not None:
         return None, None
     from modules.connectors.github import oauth
@@ -163,8 +182,11 @@ async def _plan_grant_revoke(
         raise RuntimeError("GitHub grant revocation requires original app/token proof")
     opened = oauth._open_token_cipher(
         settings.connector_credential_encryption_key.get_secret_value(),
-        grant.encrypted_tokens, grant.source_id, grant.operation_id,
-        grant.source_generation, grant.configuration_revision,
+        grant.encrypted_tokens,
+        grant.source_id,
+        grant.operation_id,
+        grant.source_generation,
+        grant.configuration_revision,
     )
     candidate = opened.get("access_token")
     if not isinstance(candidate, str) or not candidate:
@@ -172,7 +194,9 @@ async def _plan_grant_revoke(
     return candidate, (grant.github_user_id, grant.app_id)
 
 
-def _plan_workflow_targets(provisioning: ConnectorProvisioning | None) -> tuple[set[str], str | None, object]:
+def _plan_workflow_targets(
+    provisioning: ConnectorProvisioning | None,
+) -> tuple[set[str], str | None, object]:
     """Collect exact workflow IDs, the lookup name and request fingerprint from a provisioning row.
 
     The name is dropped for an unclaimed first dispatch (prepared/blocked step with no ID or saved
@@ -183,9 +207,14 @@ def _plan_workflow_targets(provisioning: ConnectorProvisioning | None) -> tuple[
     request = None
     if provisioning is None:
         return workflow_ids, workflow_name, request
-    workflow_ids.update(value for value in (
-        provisioning.workflow_id, provisioning.old_workflow_id,
-    ) if value)
+    workflow_ids.update(
+        value
+        for value in (
+            provisioning.workflow_id,
+            provisioning.old_workflow_id,
+        )
+        if value
+    )
     operation = provisioning.workflow_operation or {}
     settled_id = _settled_remote_id(operation, workflow=True)
     if settled_id is not None:
@@ -198,8 +227,12 @@ def _plan_workflow_targets(provisioning: ConnectorProvisioning | None) -> tuple[
         request = step.get("request")
     workflow_name = operation.get("workflow_name") if isinstance(operation, dict) else None
     workflow_name = workflow_name or provisioning.workflow_name
-    if (not workflow_ids and not provisioning.workflow_name and isinstance(step, dict)
-            and step.get("state") in {"prepared", "blocked"}):
+    if (
+        not workflow_ids
+        and not provisioning.workflow_name
+        and isinstance(step, dict)
+        and step.get("state") in {"prepared", "blocked"}
+    ):
         # An unclaimed first dispatch has never created a remote liability.
         workflow_name = None
     return workflow_ids, workflow_name, request
@@ -222,8 +255,11 @@ def _plan_credential_ids(credentials: list[ConnectorManagedCredential]) -> set[s
 
 
 def _require_endpoint_lineage(
-    provisioning: ConnectorProvisioning | None, credentials: list[ConnectorManagedCredential],
-    endpoint: str, *, has_workflows: bool,
+    provisioning: ConnectorProvisioning | None,
+    credentials: list[ConnectorManagedCredential],
+    endpoint: str,
+    *,
+    has_workflows: bool,
 ) -> None:
     """Fail closed unless every remote liability was created at the current n8n endpoint.
 
@@ -237,13 +273,22 @@ def _require_endpoint_lineage(
             raise RuntimeError("n8n workflow endpoint lineage requires operator reconciliation")
     for row in credentials:
         envelope = row.operation_envelope or {}
-        has_liability = bool(row.credential_id or envelope.get("target_id") or _settled_remote_id(envelope, workflow=False))
-        if has_liability and (not row.n8n_service_url or n8n_service_identity(row.n8n_service_url) != endpoint):
+        has_liability = bool(
+            row.credential_id
+            or envelope.get("target_id")
+            or _settled_remote_id(envelope, workflow=False)
+        )
+        if has_liability and (
+            not row.n8n_service_url or n8n_service_identity(row.n8n_service_url) != endpoint
+        ):
             raise RuntimeError("n8n credential endpoint lineage requires operator reconciliation")
 
 
 async def _plan_remote_erasure(
-    session: AsyncSession, scope: AccountErasureScope, settings: Settings, after: UUID | None,
+    session: AsyncSession,
+    scope: AccountErasureScope,
+    settings: Settings,
+    after: UUID | None,
 ) -> _RemoteErasurePlan | None:
     """Authorize erasure and read the next source's remote liabilities into a detached plan.
 
@@ -258,9 +303,15 @@ async def _plan_remote_erasure(
     if source_id is None:
         return None
     provisioning = await session.get(ConnectorProvisioning, source_id)
-    credentials = list((await session.scalars(select(ConnectorManagedCredential).where(
-        ConnectorManagedCredential.source_id == source_id,
-    ))).all())
+    credentials = list(
+        (
+            await session.scalars(
+                select(ConnectorManagedCredential).where(
+                    ConnectorManagedCredential.source_id == source_id,
+                )
+            )
+        ).all()
+    )
     grant = await session.get(GithubOAuthGrant, source_id)
     grant_token, grant_identity = await _plan_grant_revoke(session, scope, settings, grant)
     workflow_ids, workflow_name, request = _plan_workflow_targets(provisioning)
@@ -268,18 +319,29 @@ async def _plan_remote_erasure(
     n8n = await resolve_n8n(session, settings, workspace_id=scope.workspace_id)
     endpoint = n8n_service_identity(n8n.service_url)
     _require_endpoint_lineage(
-        provisioning, credentials, endpoint, has_workflows=bool(workflow_ids or workflow_name),
+        provisioning,
+        credentials,
+        endpoint,
+        has_workflows=bool(workflow_ids or workflow_name),
     )
     await session.rollback()
     return _RemoteErasurePlan(
-        source_id=source_id, n8n=n8n, endpoint=endpoint, workflow_ids=workflow_ids,
-        workflow_name=workflow_name, request=request, credential_ids=credential_ids,
-        grant_token=grant_token, grant_identity=grant_identity,
+        source_id=source_id,
+        n8n=n8n,
+        endpoint=endpoint,
+        workflow_ids=workflow_ids,
+        workflow_name=workflow_name,
+        request=request,
+        credential_ids=credential_ids,
+        grant_token=grant_token,
+        grant_identity=grant_identity,
     )
 
 
 async def _delete_remote_n8n_objects(
-    factory: async_sessionmaker[AsyncSession], settings: Settings, scope: AccountErasureScope,
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    scope: AccountErasureScope,
     plan: _RemoteErasurePlan,
 ) -> None:
     """Delete the plan's n8n workflows and credentials, skipping those a peer endpoint still uses.
@@ -304,14 +366,31 @@ async def _delete_remote_n8n_objects(
     for identifier in sorted(plan.workflow_ids):
         async with factory() as session:
             await authorize_account_erasure(session, scope)
-            peer_endpoints = list((await session.scalars(select(ConnectorProvisioning.n8n_service_url).join(
-                Source, Source.id == ConnectorProvisioning.source_id,
-            ).where(Source.workspace_id != scope.workspace_id, or_(
-                ConnectorProvisioning.workflow_id == identifier,
-                ConnectorProvisioning.old_workflow_id == identifier,
-                ConnectorProvisioning.workflow_operation["step"]["target"].astext == identifier,
-                ConnectorProvisioning.workflow_operation["retained_effect_result"]["remote_id"].astext == identifier,
-            )).limit(101))).all())
+            peer_endpoints = list(
+                (
+                    await session.scalars(
+                        select(ConnectorProvisioning.n8n_service_url)
+                        .join(
+                            Source,
+                            Source.id == ConnectorProvisioning.source_id,
+                        )
+                        .where(
+                            Source.workspace_id != scope.workspace_id,
+                            or_(
+                                ConnectorProvisioning.workflow_id == identifier,
+                                ConnectorProvisioning.old_workflow_id == identifier,
+                                ConnectorProvisioning.workflow_operation["step"]["target"].astext
+                                == identifier,
+                                ConnectorProvisioning.workflow_operation["retained_effect_result"][
+                                    "remote_id"
+                                ].astext
+                                == identifier,
+                            ),
+                        )
+                        .limit(101)
+                    )
+                ).all()
+            )
             await session.rollback()
         if _same_n8n_peer(peer_endpoints, endpoint):
             continue
@@ -326,13 +405,30 @@ async def _delete_remote_n8n_objects(
     for identifier in sorted(plan.credential_ids):
         async with factory() as session:
             await authorize_account_erasure(session, scope)
-            peer_endpoints = list((await session.scalars(select(ConnectorManagedCredential.n8n_service_url).join(
-                Source, Source.id == ConnectorManagedCredential.source_id,
-            ).where(Source.workspace_id != scope.workspace_id, or_(
-                ConnectorManagedCredential.credential_id == identifier,
-                ConnectorManagedCredential.operation_envelope["target_id"].astext == identifier,
-                ConnectorManagedCredential.operation_envelope["retained_effect_result"]["remote_id"].astext == identifier,
-            )).limit(101))).all())
+            peer_endpoints = list(
+                (
+                    await session.scalars(
+                        select(ConnectorManagedCredential.n8n_service_url)
+                        .join(
+                            Source,
+                            Source.id == ConnectorManagedCredential.source_id,
+                        )
+                        .where(
+                            Source.workspace_id != scope.workspace_id,
+                            or_(
+                                ConnectorManagedCredential.credential_id == identifier,
+                                ConnectorManagedCredential.operation_envelope["target_id"].astext
+                                == identifier,
+                                ConnectorManagedCredential.operation_envelope[
+                                    "retained_effect_result"
+                                ]["remote_id"].astext
+                                == identifier,
+                            ),
+                        )
+                        .limit(101)
+                    )
+                ).all()
+            )
             await session.rollback()
         if _same_n8n_peer(peer_endpoints, endpoint):
             continue
@@ -340,8 +436,11 @@ async def _delete_remote_n8n_objects(
 
 
 async def _revoke_erased_github_grant(
-    factory: async_sessionmaker[AsyncSession], settings: Settings, scope: AccountErasureScope,
-    token: str, identity: tuple[str, str],
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    scope: AccountErasureScope,
+    token: str,
+    identity: tuple[str, str],
 ) -> None:
     """Revoke the GitHub grant remotely, then commit the confirmed outcome for the workspace's grants.
 
@@ -354,16 +453,24 @@ async def _revoke_erased_github_grant(
     await oauth.revoke_github_grant(settings, token)
     async with factory() as session:
         await authorize_account_erasure(session, scope)
-        await session.execute(update(GithubOAuthGrant).where(
-            GithubOAuthGrant.source_id.in_(select(Source.id).where(Source.workspace_id == scope.workspace_id)),
-            GithubOAuthGrant.github_user_id == identity[0],
-            GithubOAuthGrant.app_id == identity[1],
-        ).values(state="revoked", encrypted_tokens=None, error_code="provider_revoked"))
+        await session.execute(
+            update(GithubOAuthGrant)
+            .where(
+                GithubOAuthGrant.source_id.in_(
+                    select(Source.id).where(Source.workspace_id == scope.workspace_id)
+                ),
+                GithubOAuthGrant.github_user_id == identity[0],
+                GithubOAuthGrant.app_id == identity[1],
+            )
+            .values(state="revoked", encrypted_tokens=None, error_code="provider_revoked")
+        )
         await session.commit()
 
 
 async def erase_account_remote_page(
-    ctx: dict[str, Any], scope: AccountErasureScope, cursor: dict[str, Any],
+    ctx: dict[str, Any],
+    scope: AccountErasureScope,
+    cursor: dict[str, Any],
 ) -> tuple[bool, dict[str, Any]]:
     """Delete one source's known n8n workflows/credentials before its SQL references vanish.
 
@@ -387,14 +494,18 @@ async def erase_account_remote_page(
     if plan.grant_token is not None:
         if plan.grant_identity is None:
             raise RuntimeError("invariant violated: plan.grant_identity must not be None")
-        await _revoke_erased_github_grant(factory, settings, scope, plan.grant_token, plan.grant_identity)
+        await _revoke_erased_github_grant(
+            factory, settings, scope, plan.grant_token, plan.grant_identity
+        )
     return False, {"after": str(plan.source_id)}
 
 
 _SharedStep = Callable[[AsyncSession, AccountErasureScope], Awaitable[tuple[bool, dict[str, Any]]]]
 
 
-async def _erase_shared_outbox(session: AsyncSession, scope: AccountErasureScope) -> tuple[bool, dict[str, Any]]:
+async def _erase_shared_outbox(
+    session: AsyncSession, scope: AccountErasureScope
+) -> tuple[bool, dict[str, Any]]:
     """Reset up to 20 outboxes whose fanout page names this workspace so peers re-fan out fresh.
 
     Locks the rows; stays on this step while any were reset, then moves to ``hints``.
@@ -403,9 +514,19 @@ async def _erase_shared_outbox(session: AsyncSession, scope: AccountErasureScope
         {"bindings": [{"workspace_id": str(scope.workspace_id)}]},
         {"admissions": [{"workspace_id": str(scope.workspace_id)}]},
     )
-    outboxes = list((await session.scalars(select(GithubWebhookOutbox).where(or_(
-        *(GithubWebhookOutbox.fanout_page.contains(marker) for marker in markers)
-    )).order_by(GithubWebhookOutbox.id).limit(20).with_for_update())).all())
+    outboxes = list(
+        (
+            await session.scalars(
+                select(GithubWebhookOutbox)
+                .where(
+                    or_(*(GithubWebhookOutbox.fanout_page.contains(marker) for marker in markers))
+                )
+                .order_by(GithubWebhookOutbox.id)
+                .limit(20)
+                .with_for_update()
+            )
+        ).all()
+    )
     for row in outboxes:
         # Rebuild a peer-only page under fresh admission instead of persisting old owner DTOs.
         row.fanout_page = None
@@ -415,15 +536,30 @@ async def _erase_shared_outbox(session: AsyncSession, scope: AccountErasureScope
     return False, {"step": "outbox" if outboxes else "hints"}
 
 
-async def _erase_shared_hints(session: AsyncSession, scope: AccountErasureScope) -> tuple[bool, dict[str, Any]]:
+async def _erase_shared_hints(
+    session: AsyncSession, scope: AccountErasureScope
+) -> tuple[bool, dict[str, Any]]:
     """Release the capacity reservations of up to 100 of this workspace's hints.
 
     Raises ``RuntimeError`` if the singleton capacity row cannot cover the released count.
     """
-    hints = list((await session.scalars(select(GithubSourceHint).join(
-        Source, Source.id == GithubSourceHint.source_id,
-    ).where(Source.workspace_id == scope.workspace_id,
-            GithubSourceHint.capacity_reserved.is_(True)).limit(100).with_for_update())).all())
+    hints = list(
+        (
+            await session.scalars(
+                select(GithubSourceHint)
+                .join(
+                    Source,
+                    Source.id == GithubSourceHint.source_id,
+                )
+                .where(
+                    Source.workspace_id == scope.workspace_id,
+                    GithubSourceHint.capacity_reserved.is_(True),
+                )
+                .limit(100)
+                .with_for_update()
+            )
+        ).all()
+    )
     if hints:
         capacity = await session.get(GithubWebhookCapacity, 1, with_for_update=True)
         if capacity is None or capacity.pending_count < len(hints):
@@ -434,7 +570,9 @@ async def _erase_shared_hints(session: AsyncSession, scope: AccountErasureScope)
     return False, {"step": "hints" if hints else "deliveries"}
 
 
-async def _erase_shared_deliveries(session: AsyncSession, scope: AccountErasureScope) -> tuple[bool, dict[str, Any]]:
+async def _erase_shared_deliveries(
+    session: AsyncSession, scope: AccountErasureScope
+) -> tuple[bool, dict[str, Any]]:
     """Delete one deployment-wide delivery receipt that only this workspace's grants reference.
 
     A receipt is removed only when no peer workspace has a grant on its installation; its digest
@@ -444,23 +582,47 @@ async def _erase_shared_deliveries(session: AsyncSession, scope: AccountErasureS
     peer = grant.__table__.alias("peer_grant")
     own_source = Source.__table__.alias("own_source")
     peer_source = Source.__table__.alias("peer_source")
-    delivery = await session.scalar(select(GithubWebhookDelivery).join(
-        grant, and_(GithubWebhookDelivery.app_id == grant.app_id,
-                    GithubWebhookDelivery.installation_id == grant.installation_id),
-    ).join(own_source, own_source.c.id == grant.source_id).where(
-        own_source.c.workspace_id == scope.workspace_id,
-        grant.installation_id.is_not(None),
-        ~exists(select(1).select_from(peer.join(
-            peer_source, peer_source.c.id == peer.c.source_id,
-        )).where(peer.c.app_id == grant.app_id,
-                peer.c.installation_id == grant.installation_id,
-                peer_source.c.workspace_id != scope.workspace_id)),
-    ).order_by(GithubWebhookDelivery.id).limit(1).with_for_update())
+    delivery = await session.scalar(
+        select(GithubWebhookDelivery)
+        .join(
+            grant,
+            and_(
+                GithubWebhookDelivery.app_id == grant.app_id,
+                GithubWebhookDelivery.installation_id == grant.installation_id,
+            ),
+        )
+        .join(own_source, own_source.c.id == grant.source_id)
+        .where(
+            own_source.c.workspace_id == scope.workspace_id,
+            grant.installation_id.is_not(None),
+            ~exists(
+                select(1)
+                .select_from(
+                    peer.join(
+                        peer_source,
+                        peer_source.c.id == peer.c.source_id,
+                    )
+                )
+                .where(
+                    peer.c.app_id == grant.app_id,
+                    peer.c.installation_id == grant.installation_id,
+                    peer_source.c.workspace_id != scope.workspace_id,
+                )
+            ),
+        )
+        .order_by(GithubWebhookDelivery.id)
+        .limit(1)
+        .with_for_update()
+    )
     if delivery is None:
         return False, {"step": "quota"}
-    outbox = await session.scalar(select(GithubWebhookOutbox).where(
-        GithubWebhookOutbox.delivery_id == delivery.id,
-    ).with_for_update())
+    outbox = await session.scalar(
+        select(GithubWebhookOutbox)
+        .where(
+            GithubWebhookOutbox.delivery_id == delivery.id,
+        )
+        .with_for_update()
+    )
     capacity = await session.get(GithubWebhookCapacity, 1, with_for_update=True)
     if capacity is None or capacity.digest_count < 1:
         raise RuntimeError("GitHub webhook capacity digest is inconsistent")
@@ -473,44 +635,91 @@ async def _erase_shared_deliveries(session: AsyncSession, scope: AccountErasureS
     return False, {"step": "deliveries"}
 
 
-async def _erase_shared_quota(session: AsyncSession, scope: AccountErasureScope) -> tuple[bool, dict[str, Any]]:
+async def _erase_shared_quota(
+    session: AsyncSession, scope: AccountErasureScope
+) -> tuple[bool, dict[str, Any]]:
     """Delete one of this workspace's quota debits and its window when no peer debit shares it."""
-    debit = (await session.execute(select(ConnectorQuotaDebit).join(
-        ConnectorProviderSend, ConnectorProviderSend.send_id == ConnectorQuotaDebit.send_id,
-    ).where(ConnectorProviderSend.workspace_id == scope.workspace_id).limit(1))).scalar_one_or_none()
+    debit = (
+        await session.execute(
+            select(ConnectorQuotaDebit)
+            .join(
+                ConnectorProviderSend,
+                ConnectorProviderSend.send_id == ConnectorQuotaDebit.send_id,
+            )
+            .where(ConnectorProviderSend.workspace_id == scope.workspace_id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
     if debit is None:
         return False, {"step": "slots"}
-    key = (debit.provider_id, debit.budget_kind, debit.subject_hash, debit.policy_key, debit.window_start)
+    key = (
+        debit.provider_id,
+        debit.budget_kind,
+        debit.subject_hash,
+        debit.policy_key,
+        debit.window_start,
+    )
     await session.delete(debit)
     await session.flush()
-    peer_debit = await session.scalar(select(ConnectorQuotaDebit.send_id).where(
-        ConnectorQuotaDebit.provider_id == key[0], ConnectorQuotaDebit.budget_kind == key[1],
-        ConnectorQuotaDebit.subject_hash == key[2], ConnectorQuotaDebit.policy_key == key[3],
-        ConnectorQuotaDebit.window_start == key[4],
-    ).limit(1))
+    peer_debit = await session.scalar(
+        select(ConnectorQuotaDebit.send_id)
+        .where(
+            ConnectorQuotaDebit.provider_id == key[0],
+            ConnectorQuotaDebit.budget_kind == key[1],
+            ConnectorQuotaDebit.subject_hash == key[2],
+            ConnectorQuotaDebit.policy_key == key[3],
+            ConnectorQuotaDebit.window_start == key[4],
+        )
+        .limit(1)
+    )
     if peer_debit is None:
-        await session.execute(delete(ConnectorQuotaWindow).where(
-            ConnectorQuotaWindow.provider_id == key[0], ConnectorQuotaWindow.budget_kind == key[1],
-            ConnectorQuotaWindow.subject_hash == key[2], ConnectorQuotaWindow.policy_key == key[3],
-            ConnectorQuotaWindow.window_start == key[4],
-        ))
+        await session.execute(
+            delete(ConnectorQuotaWindow).where(
+                ConnectorQuotaWindow.provider_id == key[0],
+                ConnectorQuotaWindow.budget_kind == key[1],
+                ConnectorQuotaWindow.subject_hash == key[2],
+                ConnectorQuotaWindow.policy_key == key[3],
+                ConnectorQuotaWindow.window_start == key[4],
+            )
+        )
     return False, {"step": "quota"}
 
 
-async def _erase_shared_slots(session: AsyncSession, scope: AccountErasureScope) -> tuple[bool, dict[str, Any]]:
+async def _erase_shared_slots(
+    session: AsyncSession, scope: AccountErasureScope
+) -> tuple[bool, dict[str, Any]]:
     """Free this workspace's admission slots and detach its operator review from peer terms; final step."""
-    await session.execute(update(ConnectorAdmissionSlot).where(
-        ConnectorAdmissionSlot.workspace_id == scope.workspace_id,
-    ).values(occupied_request_id=None, workspace_id=None, admission_token=None,
-             lease_kind=None, source_owner_id=None, expires_at=None))
+    await session.execute(
+        update(ConnectorAdmissionSlot)
+        .where(
+            ConnectorAdmissionSlot.workspace_id == scope.workspace_id,
+        )
+        .values(
+            occupied_request_id=None,
+            workspace_id=None,
+            admission_token=None,
+            lease_kind=None,
+            source_owner_id=None,
+            expires_at=None,
+        )
+    )
     # A peer workspace's review stays as terms data but cannot retain this operator ID.
-    await session.execute(update(ConnectorProviderTerms).where(
-        ConnectorProviderTerms.workspace_id != scope.workspace_id,
-        ConnectorProviderTerms.reviewer_user_id == scope.account_id,
-    ).values(operator_review_state="pending", reviewer_user_id=None,
-             reviewed_at=None, reviewed_allowed_use=None,
-             review_evidence_ref=None, reviewed_terms_version=None,
-             terms_revision=ConnectorProviderTerms.terms_revision + 1))
+    await session.execute(
+        update(ConnectorProviderTerms)
+        .where(
+            ConnectorProviderTerms.workspace_id != scope.workspace_id,
+            ConnectorProviderTerms.reviewer_user_id == scope.account_id,
+        )
+        .values(
+            operator_review_state="pending",
+            reviewer_user_id=None,
+            reviewed_at=None,
+            reviewed_allowed_use=None,
+            review_evidence_ref=None,
+            reviewed_terms_version=None,
+            terms_revision=ConnectorProviderTerms.terms_revision + 1,
+        )
+    )
     return True, {}
 
 
@@ -525,7 +734,9 @@ _SHARED_ERASURE_STEPS: dict[str, _SharedStep] = {
 
 
 async def erase_account_shared_rows(
-    session: AsyncSession, scope: AccountErasureScope, cursor: dict[str, Any],
+    session: AsyncSession,
+    scope: AccountErasureScope,
+    cursor: dict[str, Any],
 ) -> tuple[bool, dict[str, Any]]:
     """Scrub one bounded page of shared connector state while source/grant anchors remain.
 
@@ -547,12 +758,26 @@ async def erase_account_shared_rows(
 async def verify_account_shared_rows(session: AsyncSession, scope: AccountErasureScope) -> None:
     """Reject success when any explicitly scoped shared connector slot or fanout copy survives."""
     await authorize_account_erasure(session, scope)
-    if await session.scalar(select(ConnectorAdmissionSlot.slot_id).where(
-        ConnectorAdmissionSlot.workspace_id == scope.workspace_id,
-    ).limit(1)):
+    if await session.scalar(
+        select(ConnectorAdmissionSlot.slot_id)
+        .where(
+            ConnectorAdmissionSlot.workspace_id == scope.workspace_id,
+        )
+        .limit(1)
+    ):
         raise RuntimeError("Connector admission slot retains account scope")
-    if await session.scalar(select(GithubWebhookOutbox.id).where(or_(
-        GithubWebhookOutbox.fanout_page.contains({"bindings": [{"workspace_id": str(scope.workspace_id)}]}),
-        GithubWebhookOutbox.fanout_page.contains({"admissions": [{"workspace_id": str(scope.workspace_id)}]}),
-    )).limit(1)):
+    if await session.scalar(
+        select(GithubWebhookOutbox.id)
+        .where(
+            or_(
+                GithubWebhookOutbox.fanout_page.contains(
+                    {"bindings": [{"workspace_id": str(scope.workspace_id)}]}
+                ),
+                GithubWebhookOutbox.fanout_page.contains(
+                    {"admissions": [{"workspace_id": str(scope.workspace_id)}]}
+                ),
+            )
+        )
+        .limit(1)
+    ):
         raise RuntimeError("GitHub fanout retains account scope")

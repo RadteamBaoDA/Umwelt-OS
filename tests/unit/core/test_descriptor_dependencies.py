@@ -45,7 +45,9 @@ def _owner_of(dotted: str, prefixes: dict[str, str]) -> str | None:
     """Return the module id owning ``dotted`` by longest package prefix, or ``None``."""
     best = None
     for prefix, module_id in prefixes.items():
-        if (dotted == prefix or dotted.startswith(prefix + ".")) and (best is None or len(prefix) > len(best[0])):
+        if (dotted == prefix or dotted.startswith(prefix + ".")) and (
+            best is None or len(prefix) > len(best[0])
+        ):
             best = (prefix, module_id)
     return best[1] if best else None
 
@@ -53,14 +55,22 @@ def _owner_of(dotted: str, prefixes: dict[str, str]) -> str | None:
 def scan_imports() -> dict[str, set[str]]:
     """Return, per module id, the other lifecycle modules its non-test sources import."""
     dirs = _package_dirs()
-    prefixes = {"modules." + ".".join(path.relative_to(ROOT / "modules").parts): mid for mid, path in dirs.items()}
+    prefixes = {
+        "modules." + ".".join(path.relative_to(ROOT / "modules").parts): mid
+        for mid, path in dirs.items()
+    }
     found: dict[str, set[str]] = {mid: set() for mid in dirs}
     for module_id, directory in dirs.items():
         for source in directory.rglob("*.py"):
             if source.name == "descriptor.py":
                 continue
             # Nested lifecycle packages (modules/knowledge/documents) belong to their own id.
-            if _owner_of("modules." + ".".join(source.relative_to(ROOT / "modules").parts[:-1]), prefixes) != module_id:
+            if (
+                _owner_of(
+                    "modules." + ".".join(source.relative_to(ROOT / "modules").parts[:-1]), prefixes
+                )
+                != module_id
+            ):
                 continue
             for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
                 names: list[str] = []
@@ -79,13 +89,22 @@ def test_descriptor_dependencies_match_imports_with_ratchet() -> None:
     """Undeclared/unused dependency mismatches may not grow beyond the recorded allow-list."""
     registry = register_modules()
     imports = scan_imports()
-    declared = {mid: set(item.dependencies) | set(item.optional_dependencies) for mid, item in registry.items()}
+    declared = {
+        mid: set(item.dependencies) | set(item.optional_dependencies)
+        for mid, item in registry.items()
+    }
     undeclared = {mid: imports[mid] - declared[mid] for mid, item in registry.items()}
     unused = {mid: declared[mid] - imports[mid] for mid, item in registry.items()}
-    undeclared = {mid: deps - UNDECLARED_ALLOWED.get(mid, set()) for mid, deps in undeclared.items()}
+    undeclared = {
+        mid: deps - UNDECLARED_ALLOWED.get(mid, set()) for mid, deps in undeclared.items()
+    }
     unused = {mid: deps - UNUSED_ALLOWED.get(mid, set()) for mid, deps in unused.items()}
-    assert not {mid: deps for mid, deps in undeclared.items() if deps}, "new undeclared module imports"
-    assert not {mid: deps for mid, deps in unused.items() if deps}, "new unused declared dependencies"
+    assert not {mid: deps for mid, deps in undeclared.items() if deps}, (
+        "new undeclared module imports"
+    )
+    assert not {mid: deps for mid, deps in unused.items() if deps}, (
+        "new unused declared dependencies"
+    )
     assert sum(len(v) for v in UNDECLARED_ALLOWED.values()) <= MAX_UNDECLARED
     assert sum(len(v) for v in UNUSED_ALLOWED.values()) <= MAX_UNUSED
     # Allow-list entries that no longer mismatch must be deleted so the ratchet tightens.

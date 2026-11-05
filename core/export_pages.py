@@ -46,7 +46,10 @@ class _JsonDump(Protocol):
 
 
 def encode_snapshot_cursor(
-    dataset: str, snapshot_at: datetime, position_at: datetime, identifier: UUID,
+    dataset: str,
+    snapshot_at: datetime,
+    position_at: datetime,
+    identifier: UUID,
 ) -> str:
     """Bind a ``(position_at, id)`` keyset position to one dataset and an immutable export cutoff.
 
@@ -61,7 +64,10 @@ def encode_snapshot_cursor(
 
 
 def decode_snapshot_cursor(
-    cursor: str, dataset: str, *, label: str,
+    cursor: str,
+    dataset: str,
+    *,
+    label: str,
 ) -> tuple[datetime, datetime, UUID]:
     """Decode a cursor made by ``encode_snapshot_cursor`` for ``dataset``.
 
@@ -80,13 +86,23 @@ def decode_snapshot_cursor(
         values = json.loads(raw)
         if not isinstance(values, list) or len(values) != 5 or values[:2] != [1, dataset]:
             raise ValueError
-        snapshot_at, position_at = datetime.fromisoformat(values[2]), datetime.fromisoformat(values[3])
+        snapshot_at, position_at = (
+            datetime.fromisoformat(values[2]),
+            datetime.fromisoformat(values[3]),
+        )
         identifier = UUID(values[4])
-        if (any(value.tzinfo is None or value.utcoffset() is None for value in (snapshot_at, position_at))
-                or snapshot_at.isoformat() != values[2] or position_at.isoformat() != values[3]
-                or position_at > snapshot_at or snapshot_at > datetime.now(UTC)
-                or str(identifier) != values[4]
-                or encode_snapshot_cursor(dataset, snapshot_at, position_at, identifier) != cursor):
+        if (
+            any(
+                value.tzinfo is None or value.utcoffset() is None
+                for value in (snapshot_at, position_at)
+            )
+            or snapshot_at.isoformat() != values[2]
+            or position_at.isoformat() != values[3]
+            or position_at > snapshot_at
+            or snapshot_at > datetime.now(UTC)
+            or str(identifier) != values[4]
+            or encode_snapshot_cursor(dataset, snapshot_at, position_at, identifier) != cursor
+        ):
             raise ValueError
         return snapshot_at, position_at, identifier
     except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
@@ -94,7 +110,10 @@ def decode_snapshot_cursor(
 
 
 def serialize_bounded_page(
-    items: Sequence[_JsonDump], *, label: str, max_bytes: int = EXPORT_PAGE_BYTES,
+    items: Sequence[_JsonDump],
+    *,
+    label: str,
+    max_bytes: int = EXPORT_PAGE_BYTES,
 ) -> tuple[list[bytes], int]:
     """Serialize each DTO once and enforce the page byte bound.
 

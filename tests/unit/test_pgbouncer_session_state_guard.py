@@ -5,6 +5,7 @@ transactions, so session advisory locks, non-LOCAL ``SET``, ``LISTEN``, ``WITH H
 objects that outlive their transaction would leak between requests or silently stop protecting anything.
 Transaction-scoped forms (``pg_advisory_xact_lock``, ``SET LOCAL``, ``set_config(.., true)``) are fine.
 """
+
 from __future__ import annotations
 
 import ast
@@ -31,20 +32,35 @@ DIRECT_ENGINE_USERS = SESSION_LOCK_ALLOWLIST - {"modules/agents/harness.py"}
 # * migration_support.py runs only inside Alembic, whose env.py always prefers DATABASE_DIRECT_URL (asserted below).
 SESSION_SET_ALLOWLIST = {"modules/search/indexing.py", "core/migration_support.py"}
 # Cypher (Neo4j) strings start with SET too; they never reach PostgreSQL.
-CYPHER_ALLOWLIST = {"modules/knowledge/temporal/graph_fence.py", "modules/knowledge/temporal/_reconcile.py"}
+CYPHER_ALLOWLIST = {
+    "modules/knowledge/temporal/graph_fence.py",
+    "modules/knowledge/temporal/_reconcile.py",
+}
 # CREATE TEMP VIEW inside a raw SAVEPOINT that is rolled back before the transaction ends (see db_query.py).
 TEMP_OBJECT_ALLOWLIST = {"modules/chat/db_query.py"}
 
-SESSION_LOCK = re.compile(r"pg_(?:try_)?advisory_(?:unlock_all|unlock|lock)(?:_shared)?\b", re.IGNORECASE)
-NON_LOCAL_SET = re.compile(r"^\s*SET\s+(?:SESSION\b|TIME\s+ZONE\b|ROLE\b|[A-Za-z_][\w.]*\s*(?:=|TO\s))", re.IGNORECASE)
-OTHER_SESSION_STATE = re.compile(r"^\s*(?:LISTEN\b|UNLISTEN\b|DISCARD\s+(?:ALL|PLANS|SEQUENCES|TEMP))|\bWITH\s+HOLD\b", re.IGNORECASE)
+SESSION_LOCK = re.compile(
+    r"pg_(?:try_)?advisory_(?:unlock_all|unlock|lock)(?:_shared)?\b", re.IGNORECASE
+)
+NON_LOCAL_SET = re.compile(
+    r"^\s*SET\s+(?:SESSION\b|TIME\s+ZONE\b|ROLE\b|[A-Za-z_][\w.]*\s*(?:=|TO\s))", re.IGNORECASE
+)
+OTHER_SESSION_STATE = re.compile(
+    r"^\s*(?:LISTEN\b|UNLISTEN\b|DISCARD\s+(?:ALL|PLANS|SEQUENCES|TEMP))|\bWITH\s+HOLD\b",
+    re.IGNORECASE,
+)
 TEMP_OBJECT = re.compile(r"\bCREATE\s+(?:GLOBAL\s+|LOCAL\s+)?(?:TEMP|TEMPORARY)\b", re.IGNORECASE)
 SET_CONFIG_SESSION = re.compile(r"set_config\([^)]*,\s*(?:false|'false')\s*\)", re.IGNORECASE)
 
 
 def _production_files() -> list[Path]:
     """Return every production Python file (tests excluded) under the scanned roots."""
-    return sorted(path for name in SCAN_DIRS for path in (ROOT / name).rglob("*.py") if "__pycache__" not in path.parts)
+    return sorted(
+        path
+        for name in SCAN_DIRS
+        for path in (ROOT / name).rglob("*.py")
+        if "__pycache__" not in path.parts
+    )
 
 
 def _violations(path: Path, root: Path = ROOT) -> list[str]:
@@ -100,7 +116,9 @@ def test_session_set_allowlist_runs_only_on_direct_connections() -> None:
     for rel in sorted(SESSION_SET_ALLOWLIST):
         tree = ast.parse((ROOT / rel).read_text(encoding="utf-8"))
         assert any(
-            isinstance(node, ast.Constant) and isinstance(node.value, str) and NON_LOCAL_SET.match(node.value)
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and NON_LOCAL_SET.match(node.value)
             for node in ast.walk(tree)
         ), f"{rel} no longer issues a session SET; drop it from the allowlist"
     assert "modules/search/indexing.py" in DIRECT_ENGINE_USERS
@@ -112,7 +130,9 @@ def test_allowlisted_files_really_use_session_locks() -> None:
     """An allowlist entry that no longer needs the exemption must be removed, keeping the guard tight."""
     for rel in sorted(SESSION_LOCK_ALLOWLIST):
         text = (ROOT / rel).read_text(encoding="utf-8")
-        assert SESSION_LOCK.search(text), f"{rel} no longer uses a session lock; drop it from the allowlist"
+        assert SESSION_LOCK.search(text), (
+            f"{rel} no longer uses a session lock; drop it from the allowlist"
+        )
 
 
 def test_guard_detects_forbidden_patterns(tmp_path: Path) -> None:

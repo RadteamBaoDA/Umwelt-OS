@@ -17,6 +17,7 @@ TranslationStatus = Literal["pending", "ready", "unchanged", "blocked", "failed"
 
 class TranslationItemRequest(BaseModel):
     """Only IDs/revisions are accepted; content is loaded by resource owners."""
+
     model_config = ConfigDict(extra="forbid")
 
     resource_type: ResourceType
@@ -26,6 +27,7 @@ class TranslationItemRequest(BaseModel):
 
 class TranslationBatchRequest(BaseModel):
     """Up to 25 distinct resource references; the target comes from current workspace settings."""
+
     model_config = ConfigDict(extra="forbid")
 
     items: list[TranslationItemRequest] = Field(min_length=1, max_length=25)
@@ -41,6 +43,7 @@ class TranslationBatchRequest(BaseModel):
 
 class TranslationItemStatusRead(BaseModel):
     """Per-item status without content."""
+
     resource_type: ResourceType
     resource_id: UUID
     status: TranslationStatus
@@ -48,6 +51,7 @@ class TranslationItemStatusRead(BaseModel):
 
 class TranslationBatchAccepted(BaseModel):
     """202 body. Disabled workspaces get ``batch_id=None``, blocked items and no enqueue."""
+
     batch_id: UUID | None
     items: list[TranslationItemStatusRead]
     settings: TranslationSettingsRead
@@ -55,6 +59,7 @@ class TranslationBatchAccepted(BaseModel):
 
 class TranslationPayload(BaseModel):
     """Protected translated fields; absent fields are not translated."""
+
     model_config = ConfigDict(extra="forbid")
 
     title: str | None = Field(default=None, max_length=2000)
@@ -64,6 +69,7 @@ class TranslationPayload(BaseModel):
 
 class TranslationItemRead(TranslationItemStatusRead):
     """Result item; ``translation`` is present only for ``ready`` and still-authorized items."""
+
     translation: TranslationPayload | None = None
     target_language: Literal["vi", "en"]
     original_revision: str
@@ -72,6 +78,7 @@ class TranslationItemRead(TranslationItemStatusRead):
 
 class TranslationBatchRead(BaseModel):
     """GET body, bound to the requesting actor and workspace."""
+
     batch_id: UUID
     target_language: Literal["vi", "en"]
     items: list[TranslationItemRead]
@@ -80,6 +87,7 @@ class TranslationBatchRead(BaseModel):
 @dataclass(frozen=True, slots=True)
 class TranslationInput:
     """Immutable, owner-module-supplied snapshot of the exact text to translate plus the revision, visibility hash and source identities that bind it."""
+
     workspace_id: UUID
     actor_user_id: int
     resource_type: ResourceType

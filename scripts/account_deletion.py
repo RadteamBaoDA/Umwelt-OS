@@ -6,6 +6,7 @@ python -m scripts.account_deletion recover-bootstrap --confirm-new-workspace.
 Output never contains receipt hashes,
 account IDs, workspace IDs, content, or provider credentials.
 """
+
 import argparse
 import asyncio
 import json
@@ -37,11 +38,19 @@ async def run(action: str, operation_id: UUID | None, *, password: str | None = 
                     raise ValueError("Recovery requires a terminal password")
                 await recover_bootstrap_account_in_uow(session, password)
                 await session.commit()
-                print("Bootstrap recovered with a new empty private workspace; sign in with the new password.")
+                print(
+                    "Bootstrap recovered with a new empty private workspace; sign in with the new password."
+                )
                 return
-            query = select(AccountDeletionOperation).order_by(AccountDeletionOperation.created_at.desc()).limit(100)
+            query = (
+                select(AccountDeletionOperation)
+                .order_by(AccountDeletionOperation.created_at.desc())
+                .limit(100)
+            )
             if operation_id is not None:
-                query = select(AccountDeletionOperation).where(AccountDeletionOperation.id == operation_id)
+                query = select(AccountDeletionOperation).where(
+                    AccountDeletionOperation.id == operation_id
+                )
             if action == "retry":
                 query = query.with_for_update()
             rows = list((await session.scalars(query)).all())
@@ -50,10 +59,19 @@ async def run(action: str, operation_id: UUID | None, *, password: str | None = 
                     raise SystemExit("Operation not found or not failed")
                 rows[0].next_attempt_at = datetime.now(UTC)
                 await session.commit()
-            print(json.dumps([
-                {"operation": str(row.id), "status": row.status, "phase": row.phase,
-                 "error_code": row.error_code} for row in rows
-            ]))
+            print(
+                json.dumps(
+                    [
+                        {
+                            "operation": str(row.id),
+                            "status": row.status,
+                            "phase": row.phase,
+                            "error_code": row.error_code,
+                        }
+                        for row in rows
+                    ]
+                )
+            )
     finally:
         await engine.dispose()
 
@@ -82,7 +100,9 @@ def main() -> None:
         parser.exit(1, f"{exc}\n")
     except Exception:  # noqa: BLE001 - do not expose SQL/connection credentials in CLI output
         # Database exceptions can include credential hashes/SQL parameters in their text.
-        parser.exit(1, "Host command failed; inspect service availability and redacted cleanup status.\n")
+        parser.exit(
+            1, "Host command failed; inspect service availability and redacted cleanup status.\n"
+        )
 
 
 if __name__ == "__main__":

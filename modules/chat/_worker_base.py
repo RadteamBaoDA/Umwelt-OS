@@ -67,7 +67,9 @@ SHUTDOWN_TIMEOUT_MARGIN = 30.0
 RECOVER_PENDING_AFTER = timedelta(seconds=15)
 
 
-RECOVER_PENDING_MAX_AGE = timedelta(minutes=15)  # (measured from updated_at) pending runs fail instead of re-enqueueing forever
+RECOVER_PENDING_MAX_AGE = timedelta(
+    minutes=15
+)  # (measured from updated_at) pending runs fail instead of re-enqueueing forever
 
 
 CANCEL_CHECK_INTERVAL = 0.25  # per-line Redis cancel check throttle; flushes always check
@@ -79,10 +81,14 @@ RECOVER_STREAMING_AFTER = timedelta(seconds=660)  # arq job_timeout 600 s plus m
 EPHEMERAL_TTL = timedelta(hours=24)
 
 
-SHUTDOWN_RELEASE_TIMEOUT = 5.0  # compose stop_grace_period is 30 s; arq awaits the job task before closing
+SHUTDOWN_RELEASE_TIMEOUT = (
+    5.0  # compose stop_grace_period is 30 s; arq awaits the job task before closing
+)
 
 
-WEB_SEARCH_STOP_SECONDS = 3.0  # search cleanup is a rollback; keeps stop + shutdown release (3 + 5) inside 10 s
+WEB_SEARCH_STOP_SECONDS = (
+    3.0  # search cleanup is a rollback; keeps stop + shutdown release (3 + 5) inside 10 s
+)
 
 
 # Web search egress fence: lock wait + DNS + connect + request body, while the privacy key is held (review P2-1).
@@ -92,9 +98,7 @@ WEB_SEARCH_FENCE_SECONDS = 4.0
 WEB_SEARCH_NO_RESULTS_PROMPT = "Web search returned no results; do not cite the web."
 
 
-WEB_SEARCH_UNAVAILABLE_PROMPT = (
-    "Web search was requested but is unavailable for this answer; do not claim to have searched the web."
-)
+WEB_SEARCH_UNAVAILABLE_PROMPT = "Web search was requested but is unavailable for this answer; do not claim to have searched the web."
 
 
 _WEB_UNAVAILABLE_CODES = frozenset({"timeout", "provider_error", "network_denied"})
@@ -110,7 +114,9 @@ MAX_SKILL_CALLS_PER_ROUND = 2
 MAX_TRIP_IMAGE_CALLS_PER_ROUND = 1  # get_trip_stop_images fans out to 8 lookups; one call per round
 
 
-MAX_USER_INPUT_REQUESTS_PER_TURN = 2  # request_user_input parks the run; bound how often one turn may ask
+MAX_USER_INPUT_REQUESTS_PER_TURN = (
+    2  # request_user_input parks the run; bound how often one turn may ask
+)
 
 
 # A sandbox widget's parameter keys; the first appearance of each is a streaming milestone (css done, html begun, ...).
@@ -125,7 +131,9 @@ class ResponseNoLongerActive(RuntimeError):
     """Another serialized action completed or cancelled this response before publication."""
 
 
-async def _job_scope(session: AsyncSession, workspace_id: UUID, actor_user_id: int) -> InternalJobScope:
+async def _job_scope(
+    session: AsyncSession, workspace_id: UUID, actor_user_id: int
+) -> InternalJobScope:
     """Durable-job subject for a run's stamped workspace; no admission lock is taken.
 
     Raises:
@@ -133,19 +141,25 @@ async def _job_scope(session: AsyncSession, workspace_id: UUID, actor_user_id: i
     """
     try:
         owner = await workspaces.resolve_workspace_owner_context(
-            session, workspace_id, multi_workspace_enabled=multi_workspace_enabled(),
+            session,
+            workspace_id,
+            multi_workspace_enabled=multi_workspace_enabled(),
         )
     except (HTTPException, DomainError) as exc:
         raise PrivacyFenceChanged("Chat owner is unavailable") from exc
     if owner is None or owner.user_id != actor_user_id:
         raise PrivacyFenceChanged("Chat owner is no longer the run actor")
     return InternalJobScope(
-        workspace_id=workspace_id, actor_user_id=actor_user_id, membership_revision=owner.membership_revision,
+        workspace_id=workspace_id,
+        actor_user_id=actor_user_id,
+        membership_revision=owner.membership_revision,
     )
 
 
 async def _admit_job(
-    session_factory: async_sessionmaker[AsyncSession], workspace_id: UUID, actor_user_id: int,
+    session_factory: async_sessionmaker[AsyncSession],
+    workspace_id: UUID,
+    actor_user_id: int,
 ) -> tuple[InternalJobScope, AccessFence]:
     """Admit the run's actor in its stamped workspace and snapshot the access fence (D6).
 
@@ -159,7 +173,9 @@ async def _admit_job(
         scope = await _job_scope(session, workspace_id, actor_user_id)
         try:
             fence = await workspaces.authorize_internal_job(
-                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled(),
+                session,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled(),
             )
         except (HTTPException, DomainError) as exc:
             raise PrivacyFenceChanged("Chat job admission denied") from exc
@@ -168,7 +184,9 @@ async def _admit_job(
 
 
 async def _scope_for_run(
-    session_factory: async_sessionmaker[AsyncSession], workspace_id: UUID, actor_user_id: int,
+    session_factory: async_sessionmaker[AsyncSession],
+    workspace_id: UUID,
+    actor_user_id: int,
 ) -> InternalJobScope | None:
     """Best-effort job scope for terminal/recovery paths; None sends them to the redaction fallback."""
     try:
@@ -211,7 +229,10 @@ async def is_run_cancelled(response_id: UUID, redis: Redis) -> bool:
 
 
 async def is_history_storage_enabled(
-    session: AsyncSession, scope: Scope | None = None, *, owner_id: int = 1,
+    session: AsyncSession,
+    scope: Scope | None = None,
+    *,
+    owner_id: int = 1,
 ) -> bool:
     """Read the owner history choice while serializing absent-row initialization and updates.
 
@@ -228,12 +249,18 @@ async def is_history_storage_enabled(
     """
     resolved = scope or await owner_default_scope(session, owner_id)
     await lock_export_privacy(session, resolved.workspace_id, shared=True)
-    return (await read_export_privacy(
-        session, scope=resolved, multi_workspace_enabled=multi_workspace_enabled(),
-    )).store_conversation_history
+    return (
+        await read_export_privacy(
+            session,
+            scope=resolved,
+            multi_workspace_enabled=multi_workspace_enabled(),
+        )
+    ).store_conversation_history
 
 
-async def _require_privacy_fence(session: AsyncSession, expected: object, *, scope: Scope | None) -> bool:
+async def _require_privacy_fence(
+    session: AsyncSession, expected: object, *, scope: Scope | None
+) -> bool:
     """Lock and compare the public Memory consent version against response admission.
 
     Args:
@@ -251,7 +278,9 @@ async def _require_privacy_fence(session: AsyncSession, expected: object, *, sco
         raise PrivacyFenceChanged("History consent is unavailable")
     await lock_export_privacy(session, scope.workspace_id, shared=True)
     try:
-        current = await read_export_privacy(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled())
+        current = await read_export_privacy(
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled()
+        )
     except Exception as exc:
         raise PrivacyFenceChanged("History consent is unavailable") from exc
     if not isinstance(expected, dict):
@@ -260,9 +289,13 @@ async def _require_privacy_fence(session: AsyncSession, expected: object, *, sco
     expected_persisted = expected.get("persisted")
     expected_time = expected.get("updated_at")
     actual_time = current.updated_at.isoformat() if current.updated_at is not None else None
-    if (type(expected_enabled) is not bool or type(expected_persisted) is not bool
-            or expected_enabled != current.store_conversation_history
-            or expected_persisted != current.persisted or expected_time != actual_time):
+    if (
+        type(expected_enabled) is not bool
+        or type(expected_persisted) is not bool
+        or expected_enabled != current.store_conversation_history
+        or expected_persisted != current.persisted
+        or expected_time != actual_time
+    ):
         raise PrivacyFenceChanged("History consent changed after response admission")
     return current.store_conversation_history
 
@@ -297,23 +330,31 @@ async def _lock_live_response(
         raise PrivacyFenceChanged("Chat job was not admitted")
     try:
         await workspaces.lock_access_fence(
-            session, scope=scope, expected=access_fence, multi_workspace_enabled=multi_workspace_enabled(),
+            session,
+            scope=scope,
+            expected=access_fence,
+            multi_workspace_enabled=multi_workspace_enabled(),
         )
     except (HTTPException, DomainError) as exc:
         raise PrivacyFenceChanged("Chat access changed after response admission") from exc
     history_enabled = await _require_privacy_fence(session, expected_fence, scope=scope)
     conversation = await session.scalar(
-        select(Conversation).where(Conversation.id == conversation_id)
-        .with_for_update().execution_options(populate_existing=True)
+        select(Conversation)
+        .where(Conversation.id == conversation_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     run = await session.scalar(
-        select(ResponseRun).where(ResponseRun.id == response_id)
-        .with_for_update().execution_options(populate_existing=True)
+        select(ResponseRun)
+        .where(ResponseRun.id == response_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if conversation is None or run is None:
         raise PrivacyFenceChanged("Conversation or response no longer exists")
-    if (conversation.ephemeral and (conversation.expires_at is None
-                                    or conversation.expires_at <= datetime.now(UTC))):
+    if conversation.ephemeral and (
+        conversation.expires_at is None or conversation.expires_at <= datetime.now(UTC)
+    ):
         raise PrivacyFenceChanged("Temporary conversation has expired")
     if run.status != "streaming":
         raise ResponseNoLongerActive("Response was cancelled or completed before publication")
@@ -331,7 +372,9 @@ async def _next_event_seq(session: AsyncSession, response_id: UUID, current_seq:
     Returns:
         A sequence strictly greater than both the persisted and local high-water marks.
     """
-    latest = await session.scalar(select(func.coalesce(func.max(StreamEvent.seq), 0)).where(
-        StreamEvent.response_id == response_id,
-    ))
+    latest = await session.scalar(
+        select(func.coalesce(func.max(StreamEvent.seq), 0)).where(
+            StreamEvent.response_id == response_id,
+        )
+    )
     return max(current_seq, latest or 0) + 1

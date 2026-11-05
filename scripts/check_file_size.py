@@ -20,8 +20,14 @@ from pathlib import Path
 
 LIMIT = 1500
 BASELINE = Path(__file__).with_name("file_size_baseline.json")
-ROOTS = (("core", ".py"), ("apps", ".py"), ("modules", ".py"), ("scripts", ".py"),
-         ("apps/web/src", ".ts"), ("apps/web/src", ".tsx"))
+ROOTS = (
+    ("core", ".py"),
+    ("apps", ".py"),
+    ("modules", ".py"),
+    ("scripts", ".py"),
+    ("apps/web/src", ".ts"),
+    ("apps/web/src", ".tsx"),
+)
 EXCLUDED_PARTS = frozenset({"migrations", "tests", "__pycache__", "node_modules"})
 
 
@@ -44,20 +50,26 @@ def count_lines(name: str) -> int | None:
     return len(path.read_text(encoding="utf-8").splitlines()) if path.is_file() else None
 
 
-def evaluate(counts: dict[str, int], baseline: dict[str, int], limit: int = LIMIT) -> tuple[list[str], list[str]]:
+def evaluate(
+    counts: dict[str, int], baseline: dict[str, int], limit: int = LIMIT
+) -> tuple[list[str], list[str]]:
     """Compare current ``counts`` with ``baseline``; return ``(violations, stale_notices)``."""
     violations: list[str] = []
     for name, lines in sorted(counts.items()):
         allowed = baseline.get(name, limit)
         if lines > allowed:
-            violations.append(f"{name}: {lines} lines exceeds {'baseline' if name in baseline else 'limit'} {allowed}")
+            violations.append(
+                f"{name}: {lines} lines exceeds {'baseline' if name in baseline else 'limit'} {allowed}"
+            )
     stale = []
     for name, recorded in sorted(baseline.items()):
         lines = counts.get(name)
         if lines is None or lines <= limit:
             stale.append(f"{name}: no longer oversized or deleted; remove it from the baseline")
         elif lines < recorded:
-            stale.append(f"{name}: shrank to {lines} (baseline {recorded}); lower it (run --update)")
+            stale.append(
+                f"{name}: shrank to {lines} (baseline {recorded}); lower it (run --update)"
+            )
     return violations, stale
 
 
@@ -66,13 +78,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--update", action="store_true", help="lower or drop baseline entries")
     options = parser.parse_args(argv)
-    baseline: dict[str, int] = json.loads(BASELINE.read_text(encoding="utf-8")) if BASELINE.exists() else {}
+    baseline: dict[str, int] = (
+        json.loads(BASELINE.read_text(encoding="utf-8")) if BASELINE.exists() else {}
+    )
     counts = {name: n for name in tracked_files() if (n := count_lines(name)) is not None}
     if options.update:
         # Only lower or drop: a missing baseline file means "create it" from current oversize files.
         base = baseline or {n: c for n, c in counts.items() if c > LIMIT}
         new = {n: min(c, base[n]) for n, c in counts.items() if n in base and c > LIMIT}
-        BASELINE.write_text(json.dumps(dict(sorted(new.items())), indent=2) + "\n", encoding="utf-8")
+        BASELINE.write_text(
+            json.dumps(dict(sorted(new.items())), indent=2) + "\n", encoding="utf-8"
+        )
         print(f"baseline updated: {len(new)} entries")
         return 0
     violations, stale = evaluate(counts, baseline)

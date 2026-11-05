@@ -51,7 +51,9 @@ from modules.chat.generative_ui import (
 )
 
 
-def _round_terminals(ts: _TurnState, round_acc: ToolCallAccumulator) -> list[tuple[str, dict[str, str]]]:
+def _round_terminals(
+    ts: _TurnState, round_acc: ToolCallAccumulator
+) -> list[tuple[str, dict[str, str]]]:
     """Presentation calls of the current round with part ids unique across the whole turn.
 
     The remaining part budget (turn cap minus parts of earlier rounds) bounds the round. Providers may
@@ -71,7 +73,9 @@ def _round_terminals(ts: _TurnState, round_acc: ToolCallAccumulator) -> list[tup
     return out
 
 
-async def _apply_text_delta(c: _RunCtx, st: _StreamState, rs: _RoundState, chunk: _SseChunk) -> None:
+async def _apply_text_delta(
+    c: _RunCtx, st: _StreamState, rs: _RoundState, chunk: _SseChunk
+) -> None:
     """Buffer reasoning/content of one chunk and flush when due; raises ``_RunStopped`` if the flush stopped the run.
 
     Reasoning is capped at REASONING_MAX_CHARS (overflow dropped, ``reasoning_truncated`` set). A later
@@ -83,10 +87,13 @@ async def _apply_text_delta(c: _RunCtx, st: _StreamState, rs: _RoundState, chunk
         room = REASONING_MAX_CHARS - len(st.accumulated_reasoning) - len(st.pending_reasoning)
         if len(chunk.reasoning) > room:
             st.reasoning_truncated = True  # drop the overflow; later chunks are dropped too
-        st.pending_reasoning += chunk.reasoning[:max(room, 0)]
-    if (content_delta and rs.text_start
-            and len(st.accumulated_text) + len(st.pending) == rs.text_start
-            and not (st.accumulated_text + st.pending)[-1:].isspace()):
+        st.pending_reasoning += chunk.reasoning[: max(room, 0)]
+    if (
+        content_delta
+        and rs.text_start
+        and len(st.accumulated_text) + len(st.pending) == rs.text_start
+        and not (st.accumulated_text + st.pending)[-1:].isspace()
+    ):
         content_delta = "\n\n" + content_delta  # "equator.Here's" otherwise
     if content_delta or st.pending_reasoning:
         st.pending += content_delta or ""
@@ -98,7 +105,9 @@ async def _apply_text_delta(c: _RunCtx, st: _StreamState, rs: _RoundState, chunk
             raise _RunStopped("Response stopped during streaming")
 
 
-async def _apply_tool_fragments(c: _RunCtx, st: _StreamState, ts: _TurnState, rs: _RoundState, fragments: Any) -> None:
+async def _apply_tool_fragments(
+    c: _RunCtx, st: _StreamState, ts: _TurnState, rs: _RoundState, fragments: Any
+) -> None:
     """Feed tool-call fragments and publish a streaming UI snapshot for each widget whose arguments advanced.
 
     Milestones are detected on the new argument tail only (re-scanning a 256 KB sandbox per chunk would make
@@ -108,13 +117,19 @@ async def _apply_tool_fragments(c: _RunCtx, st: _StreamState, ts: _TurnState, rs
     loop = asyncio.get_running_loop()
     rs.acc.feed(fragments)
     for part_id, term in _round_terminals(ts, rs.acc):
-        part_st = rs.ui_state.setdefault(part_id, {
-            "len": 0, "seen": set(), "parse": float("-inf"), "snap": None,
-        })
+        part_st = rs.ui_state.setdefault(
+            part_id,
+            {
+                "len": 0,
+                "seen": set(),
+                "parse": float("-inf"),
+                "snap": None,
+            },
+        )
         args_so_far = term["arguments"]
         if len(args_so_far) == part_st["len"]:
             continue  # this chunk belonged to another call
-        tail = args_so_far[max(0, part_st["len"] - 24):]
+        tail = args_so_far[max(0, part_st["len"] - 24) :]
         part_st["len"] = len(args_so_far)
         fresh = {k for k in _UI_MILESTONE_KEYS if k in tail} - part_st["seen"]
         part_st["seen"] |= fresh
@@ -129,7 +144,12 @@ async def _apply_tool_fragments(c: _RunCtx, st: _StreamState, ts: _TurnState, rs
 
 
 async def _apply_sse_line(
-    c: _RunCtx, setup: _ModelSetup, st: _StreamState, ts: _TurnState, rs: _RoundState, line: str,
+    c: _RunCtx,
+    setup: _ModelSetup,
+    st: _StreamState,
+    ts: _TurnState,
+    rs: _RoundState,
+    line: str,
 ) -> None:
     """Apply one stripped SSE line: text/reasoning deltas, the provider's reasoning details and tool fragments.
 
@@ -145,14 +165,22 @@ async def _apply_sse_line(
     details = chunk.details
     # Only the Anthropic translator emits the complete list once; other providers
     # (OpenRouter) stream fragments, and echoing one would fail signature checks.
-    if wire_protocol_for(setup.ai_config.gateway_kind).echoes_reasoning_details and isinstance(details, list) and details:
+    if (
+        wire_protocol_for(setup.ai_config.gateway_kind).echoes_reasoning_details
+        and isinstance(details, list)
+        and details
+    ):
         rs.reasoning_details = [d for d in details[:64] if isinstance(d, dict)]
     if chunk.tool_fragments:
         await _apply_tool_fragments(c, st, ts, rs, chunk.tool_fragments)
 
 
 async def _consume_round(
-    c: _RunCtx, setup: _ModelSetup, st: _StreamState, ts: _TurnState, rs: _RoundState,
+    c: _RunCtx,
+    setup: _ModelSetup,
+    st: _StreamState,
+    ts: _TurnState,
+    rs: _RoundState,
 ) -> None:
     """Stream one model round into the buffers, checking the Redis cancel flag at most every CANCEL_CHECK_INTERVAL.
 
@@ -166,7 +194,9 @@ async def _consume_round(
             if loop.time() - ts.last_cancel_check >= CANCEL_CHECK_INTERVAL:
                 ts.last_cancel_check = loop.time()
                 if await is_run_cancelled(c.response_id, c.redis):
-                    await _mark_cancelled(c.response_id, c.session_factory, c.seq, c.privacy_fence, scope=c.job_scope)
+                    await _mark_cancelled(
+                        c.response_id, c.session_factory, c.seq, c.privacy_fence, scope=c.job_scope
+                    )
                     raise _RunStopped("Response stopped during streaming")
             line = raw_line.strip()
             if not line or line == "data: [DONE]":
@@ -188,7 +218,10 @@ class _RoundCalls:
 
 
 async def _classify_round(
-    env: _ToolEnv, st: _StreamState, rs: _RoundState, calls: list[dict[str, str]],
+    env: _ToolEnv,
+    st: _StreamState,
+    rs: _RoundState,
+    calls: list[dict[str, str]],
 ) -> _RoundCalls:
     """Split a finished round's calls into widgets / invalid widgets / handled data calls.
 
@@ -201,24 +234,38 @@ async def _classify_round(
     available = {n for n, h in _TOOL_HANDLERS.items() if h.available(env)}
     for extra in calls:
         if extra["name"] not in TERMINAL_UI_TOOLS and extra["name"] not in available:
-            logger.warning("Ignoring unknown tool call %r for run %s", extra["name"][:64], c.response_id)
+            logger.warning(
+                "Ignoring unknown tool call %r for run %s", extra["name"][:64], c.response_id
+            )
     round_parts = _round_terminals(ts, rs.acc)
     capped_out = sum(call["name"] in TERMINAL_UI_TOOLS for call in calls) > len(round_parts)
-    invalid_of = {id(x): err for _, x in round_parts if (err := ui_call_error(x["name"], x["arguments"]))}
+    invalid_of = {
+        id(x): err for _, x in round_parts if (err := ui_call_error(x["name"], x["arguments"]))
+    }
     invalid_pids = [pid for pid, x in round_parts if id(x) in invalid_of]
     if invalid_pids and not await _publish_ui_discards(c, invalid_pids):
         raise _RunStopped("Response stopped while discarding invalid widgets")
     round_parts = [(pid, x) for pid, x in round_parts if id(x) not in invalid_of]
     part_of = {id(x): pid for pid, x in round_parts}
     if capped_out:
-        logger.warning("Generative UI part cap (%d) reached for run %s; extra widgets ignored", ts.max_parts, c.response_id)
+        logger.warning(
+            "Generative UI part cap (%d) reached for run %s; extra widgets ignored",
+            ts.max_parts,
+            c.response_id,
+        )
     handled: list[dict[str, str]] = []
-    used: dict[int, int] = {}  # handler identity -> calls taken this round (handlers may share a cap)
+    used: dict[
+        int, int
+    ] = {}  # handler identity -> calls taken this round (handlers may share a cap)
     for call in calls:
         handler = _TOOL_HANDLERS.get(call["name"])
         if id(call) in part_of or id(call) in invalid_of:
             handled.append(call)
-        elif handler is not None and handler.available(env) and used.get(id(handler), 0) < handler.round_cap(env):
+        elif (
+            handler is not None
+            and handler.available(env)
+            and used.get(id(handler), 0) < handler.round_cap(env)
+        ):
             used[id(handler)] = used.get(id(handler), 0) + 1
             handled.append(call)
     return _RoundCalls(handled, round_parts, part_of, invalid_of)
@@ -227,14 +274,18 @@ async def _classify_round(
 def _bounded_continue(ts: _TurnState, rc: _RoundCalls, run_id: UUID) -> bool:
     """Apply the widget/data round caps; False means stop without another model round."""
     data_calls = [
-        x for x in rc.handled
-        if id(x) not in rc.part_of and id(x) not in rc.invalid_of
+        x
+        for x in rc.handled
+        if id(x) not in rc.part_of
+        and id(x) not in rc.invalid_of
         and _TOOL_HANDLERS[x["name"]].data_round
     ]
     if rc.round_parts or rc.invalid_of:
         ts.ui_parts.extend(rc.round_parts)
         ts.ui_rounds += 1
-        return not (len(ts.ui_parts) >= ts.max_parts or ts.ui_rounds >= ts.max_ui_rounds)  # caps reached
+        return not (
+            len(ts.ui_parts) >= ts.max_parts or ts.ui_rounds >= ts.max_ui_rounds
+        )  # caps reached
     if data_calls:
         # Data tools (skills, images, todos) share one extra-round bound; input requests have their own.
         if ts.skill_rounds >= MAX_SKILL_ROUNDS:
@@ -244,7 +295,9 @@ def _bounded_continue(ts: _TurnState, rc: _RoundCalls, run_id: UUID) -> bool:
     return True
 
 
-async def _answer_tool_calls(env: _ToolEnv, st: _StreamState, rs: _RoundState, rc: _RoundCalls) -> None:
+async def _answer_tool_calls(
+    env: _ToolEnv, st: _StreamState, rs: _RoundState, rc: _RoundCalls
+) -> None:
     """Append the assistant tool-call message and one tool result per handled call, in model order.
 
     Widget calls get a ``rendered`` stub (the payload is already on screen), invalid ones their validation
@@ -252,15 +305,22 @@ async def _answer_tool_calls(env: _ToolEnv, st: _StreamState, rs: _RoundState, r
     """
     ts = env.ts
     tool_calls = [
-        {"id": x["id"] or f"call_{i}", "type": "function",
-         "function": {"name": x["name"], "arguments": x["arguments"] or "{}"}}
+        {
+            "id": x["id"] or f"call_{i}",
+            "type": "function",
+            "function": {"name": x["name"], "arguments": x["arguments"] or "{}"},
+        }
         for i, x in enumerate(rc.handled)
     ]
-    ts.messages_payload.append({
-        "role": "assistant", "content": st.accumulated_text[rs.text_start:] or None, "tool_calls": tool_calls,
-        # Absent for providers that send none, so other kinds keep today's message shape.
-        **({"reasoning_details": rs.reasoning_details} if rs.reasoning_details else {}),
-    })
+    ts.messages_payload.append(
+        {
+            "role": "assistant",
+            "content": st.accumulated_text[rs.text_start :] or None,
+            "tool_calls": tool_calls,
+            # Absent for providers that send none, so other kinds keep today's message shape.
+            **({"reasoning_details": rs.reasoning_details} if rs.reasoning_details else {}),
+        }
+    )
     for tc, call in zip(tool_calls, rc.handled, strict=True):
         if id(call) in rc.invalid_of:
             content = rc.invalid_of[id(call)]

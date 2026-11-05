@@ -1,4 +1,5 @@
 """Bare enqueues from non-default workers must reach the default queue; explicit queues stay explicit."""
+
 from __future__ import annotations
 
 import inspect

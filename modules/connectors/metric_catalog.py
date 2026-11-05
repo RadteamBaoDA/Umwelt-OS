@@ -47,6 +47,7 @@ DEFAULT_LOOKBACK_DAYS = 90
 HOURLY = 1 / 24
 QUARTER_HOURLY = 15 / 1440  # the 15-minute default poll interval of provider_specs
 
+
 def _m(*items: tuple[str, str | None]) -> tuple[MetricInfo, ...]:
     """Build a metric tuple from ``(id, unit)`` pairs."""
     return tuple(MetricInfo(i, u) for i, u in items)
@@ -57,52 +58,135 @@ OPEN_ER_PAIRS = tuple(f"USD/{q}" for q in ("VND", "EUR", "JPY", "GBP", "CNY"))
 _SPOT = _m(("spot_price", None))
 _FX = _m(("fx_reference_rate", None))
 
-_CATALOG: Mapping[str, ProviderMetrics] = MappingProxyType({
-    # Unit is the configured market currency (volume: shares).
-    "alpha_vantage": ProviderMetrics(
-        _m(("open", None), ("high", None), ("low", None), ("close", None), ("volume", "shares")), True,
-        cadence_days=1),
-    "open_meteo": ProviderMetrics(_m(
-        ("temperature_2m", None), ("relative_humidity_2m", None), ("precipitation", None), ("wind_speed_10m", None),
-    ), False, cadence_days=HOURLY, default_lookback_days=3),
-    "alternative_me": ProviderMetrics(_m(("fear_greed_index", "index (0-100)")), False, cadence_days=1),
-    "binance": ProviderMetrics(_SPOT, True, ("BTCUSDT",), seed_symbol=False, cadence_days=QUARTER_HOURLY, default_lookback_days=3),  # the pair, as crypto.map_binance writes it
-    # vn_stock writes one daily "close" series per owner-chosen ticker/index (stocks in thousand VND, indices in points).
-    "vn_stock": ProviderMetrics(_m(("close", None)), True, ("VNINDEX", "VN30", "FPT"), seed_symbol=False, cadence_days=1),
-    "coinpaprika": ProviderMetrics(_SPOT, True, ("BTC",), cadence_days=QUARTER_HOURLY, default_lookback_days=3),
-    "coingecko": ProviderMetrics(_SPOT, True, ("BTC",), seed_symbol=False, cadence_days=QUARTER_HOURLY, default_lookback_days=3),  # owner-configured assets
-    "frankfurter": ProviderMetrics(_FX, True, ("USD/VND",), cadence_days=1),
-    "ecb": ProviderMetrics(_FX, True, ("EUR/USD", "EUR/JPY", "EUR/GBP"), cadence_days=1),
-    "open_er_api": ProviderMetrics(_FX, True, OPEN_ER_PAIRS, cadence_days=1),
-    "noaa_kp": ProviderMetrics(_m(("kp_index", "kp")), False, cadence_days=0.125, default_lookback_days=30),
-    # One line per country: map_sdmx_json writes the REF_AREA as symbol for the five requested areas.
-    "oecd_cli": ProviderMetrics(_m(("composite_leading_indicator", "index")), True, ("USA", "CHN", "JPN", "DEU", "GBR"),
-                            cadence_days=31, default_lookback_days=730),
-    "iss_position": ProviderMetrics(_m(("iss_altitude", "km")), False, cadence_days=QUARTER_HOURLY, default_lookback_days=3),
-    # map_usgs writes the quake place as region per event: points, not a series.
-    "usgs": ProviderMetrics(_m(("earthquake_magnitude", "magnitude")), False, charts_as_series=False),
-    # Hotspot rows carry the country as region and each hotspot is a separate point.
-    "nasa_firms": ProviderMetrics(_m(("fire_radiative_power", "MW")), False, charts_as_series=False),
-    "disease_sh": ProviderMetrics(_m(
-        ("covid19_cases", "persons"), ("covid19_deaths", "persons"),
-        ("covid19_recovered", "persons"), ("covid19_active", "persons"),
-    ), False, cadence_days=1),
-    "openweathermap": ProviderMetrics(_m(
-        ("temperature", "degC"), ("humidity", "%"), ("pressure", "hPa"), ("wind_speed", "m/s"),
-    ), False, cadence_days=HOURLY, default_lookback_days=3),
-    # Open-ended: the metric id is the owner-configured indicator name; default only. The adapter fetches one
-    # country (Viet Nam, macro.py), so it is one series, not region keyed.
-    "world_bank": ProviderMetrics(_m(("gdp_current_usd", "current US$")), False, metrics_open=True,
-                              cadence_days=365, default_lookback_days=3650),
-    # keyed.map_fred writes metric "fred_series" with the series id as symbol; suggestions are common series.
-    "fred": ProviderMetrics(_m(("fred_series", "series units")), True, ("DFF", "CPIAUCSL", "DGS10"),
-                            seed_symbol=False, cadence_days=31, default_lookback_days=730),
-    # Open-ended: id is OpenAQ's parameter name (units vary per sensor); common pollutants listed.
-    "openaq": ProviderMetrics(_m(
-        ("pm25", None), ("pm10", None), ("o3", None), ("no2", None), ("so2", None), ("co", None),
-    ), False, metrics_open=True, region_keyed=True,
-       cadence_days=HOURLY, default_lookback_days=3),  # keyed.map_openaq: region = "location <id>" (owner-configured)
-})
+_CATALOG: Mapping[str, ProviderMetrics] = MappingProxyType(
+    {
+        # Unit is the configured market currency (volume: shares).
+        "alpha_vantage": ProviderMetrics(
+            _m(
+                ("open", None), ("high", None), ("low", None), ("close", None), ("volume", "shares")
+            ),
+            True,
+            cadence_days=1,
+        ),
+        "open_meteo": ProviderMetrics(
+            _m(
+                ("temperature_2m", None),
+                ("relative_humidity_2m", None),
+                ("precipitation", None),
+                ("wind_speed_10m", None),
+            ),
+            False,
+            cadence_days=HOURLY,
+            default_lookback_days=3,
+        ),
+        "alternative_me": ProviderMetrics(
+            _m(("fear_greed_index", "index (0-100)")), False, cadence_days=1
+        ),
+        "binance": ProviderMetrics(
+            _SPOT,
+            True,
+            ("BTCUSDT",),
+            seed_symbol=False,
+            cadence_days=QUARTER_HOURLY,
+            default_lookback_days=3,
+        ),  # the pair, as crypto.map_binance writes it
+        # vn_stock writes one daily "close" series per owner-chosen ticker/index (stocks in thousand VND, indices in points).
+        "vn_stock": ProviderMetrics(
+            _m(("close", None)), True, ("VNINDEX", "VN30", "FPT"), seed_symbol=False, cadence_days=1
+        ),
+        "coinpaprika": ProviderMetrics(
+            _SPOT, True, ("BTC",), cadence_days=QUARTER_HOURLY, default_lookback_days=3
+        ),
+        "coingecko": ProviderMetrics(
+            _SPOT,
+            True,
+            ("BTC",),
+            seed_symbol=False,
+            cadence_days=QUARTER_HOURLY,
+            default_lookback_days=3,
+        ),  # owner-configured assets
+        "frankfurter": ProviderMetrics(_FX, True, ("USD/VND",), cadence_days=1),
+        "ecb": ProviderMetrics(_FX, True, ("EUR/USD", "EUR/JPY", "EUR/GBP"), cadence_days=1),
+        "open_er_api": ProviderMetrics(_FX, True, OPEN_ER_PAIRS, cadence_days=1),
+        "noaa_kp": ProviderMetrics(
+            _m(("kp_index", "kp")), False, cadence_days=0.125, default_lookback_days=30
+        ),
+        # One line per country: map_sdmx_json writes the REF_AREA as symbol for the five requested areas.
+        "oecd_cli": ProviderMetrics(
+            _m(("composite_leading_indicator", "index")),
+            True,
+            ("USA", "CHN", "JPN", "DEU", "GBR"),
+            cadence_days=31,
+            default_lookback_days=730,
+        ),
+        "iss_position": ProviderMetrics(
+            _m(("iss_altitude", "km")), False, cadence_days=QUARTER_HOURLY, default_lookback_days=3
+        ),
+        # map_usgs writes the quake place as region per event: points, not a series.
+        "usgs": ProviderMetrics(
+            _m(("earthquake_magnitude", "magnitude")), False, charts_as_series=False
+        ),
+        # Hotspot rows carry the country as region and each hotspot is a separate point.
+        "nasa_firms": ProviderMetrics(
+            _m(("fire_radiative_power", "MW")), False, charts_as_series=False
+        ),
+        "disease_sh": ProviderMetrics(
+            _m(
+                ("covid19_cases", "persons"),
+                ("covid19_deaths", "persons"),
+                ("covid19_recovered", "persons"),
+                ("covid19_active", "persons"),
+            ),
+            False,
+            cadence_days=1,
+        ),
+        "openweathermap": ProviderMetrics(
+            _m(
+                ("temperature", "degC"),
+                ("humidity", "%"),
+                ("pressure", "hPa"),
+                ("wind_speed", "m/s"),
+            ),
+            False,
+            cadence_days=HOURLY,
+            default_lookback_days=3,
+        ),
+        # Open-ended: the metric id is the owner-configured indicator name; default only. The adapter fetches one
+        # country (Viet Nam, macro.py), so it is one series, not region keyed.
+        "world_bank": ProviderMetrics(
+            _m(("gdp_current_usd", "current US$")),
+            False,
+            metrics_open=True,
+            cadence_days=365,
+            default_lookback_days=3650,
+        ),
+        # keyed.map_fred writes metric "fred_series" with the series id as symbol; suggestions are common series.
+        "fred": ProviderMetrics(
+            _m(("fred_series", "series units")),
+            True,
+            ("DFF", "CPIAUCSL", "DGS10"),
+            seed_symbol=False,
+            cadence_days=31,
+            default_lookback_days=730,
+        ),
+        # Open-ended: id is OpenAQ's parameter name (units vary per sensor); common pollutants listed.
+        "openaq": ProviderMetrics(
+            _m(
+                ("pm25", None),
+                ("pm10", None),
+                ("o3", None),
+                ("no2", None),
+                ("so2", None),
+                ("co", None),
+            ),
+            False,
+            metrics_open=True,
+            region_keyed=True,
+            cadence_days=HOURLY,
+            default_lookback_days=3,
+        ),  # keyed.map_openaq: region = "location <id>" (owner-configured)
+    }
+)
 
 
 def provider_metrics(provider: str | None) -> ProviderMetrics | None:

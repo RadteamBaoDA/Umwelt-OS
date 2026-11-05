@@ -13,7 +13,15 @@ def test_every_known_provider_has_shapes() -> None:
 def test_location_is_separate_from_event() -> None:
     """Location is declared only for adapters that write coordinates."""
     assert {"event", "located", "measurement"} <= source_data_shapes("usgs", "api")
-    for provider in ("cisa_kev", "nvd", "launch_library", "ioda", "us_travel_advisories", "sec_edgar", "openalex"):
+    for provider in (
+        "cisa_kev",
+        "nvd",
+        "launch_library",
+        "ioda",
+        "us_travel_advisories",
+        "sec_edgar",
+        "openalex",
+    ):
         assert "located" not in source_data_shapes(provider, "api")
 
 
@@ -36,8 +44,17 @@ def test_catalog_entries_carry_shapes() -> None:
 
 
 SERIES_PROVIDERS = (
-    "noaa_kp", "binance", "oecd_cli", "frankfurter", "world_bank", "ecb", "coinpaprika", "open_er_api",
-    "alternative_me", "disease_sh", "iss_position",
+    "noaa_kp",
+    "binance",
+    "oecd_cli",
+    "frankfurter",
+    "world_bank",
+    "ecb",
+    "coinpaprika",
+    "open_er_api",
+    "alternative_me",
+    "disease_sh",
+    "iss_position",
 )
 POINT_PROVIDERS = ("usgs", "nasa_firms")
 

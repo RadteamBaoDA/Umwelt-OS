@@ -63,7 +63,9 @@ class TestMilestoneAndGoalCreateSchemas:
         milestones = [MilestoneSchema(title=f"M {i}") for i in range(60)]
         entity_ids = [uuid4() for _ in range(45)]  # 60 + 45 = 105 > 100
 
-        with pytest.raises(ValidationError, match="A goal may contain at most 100 milestone and entity references"):
+        with pytest.raises(
+            ValidationError, match="A goal may contain at most 100 milestone and entity references"
+        ):
             GoalCreate(title="Big Goal", milestones=milestones, entity_ids=entity_ids)
 
     def test_goal_create_duplicate_entity_ids_rejected(self) -> None:
@@ -89,7 +91,9 @@ class TestGoalUpdateSchemas:
 
     def test_goal_update_empty_patch_rejected(self) -> None:
         """Patch containing only expected_revision must be rejected."""
-        with pytest.raises(ValidationError, match="goal patch must contain at least one mutation field"):
+        with pytest.raises(
+            ValidationError, match="goal patch must contain at least one mutation field"
+        ):
             GoalUpdate(expected_revision=1)
 
     def test_goal_update_clearing_title_rejected(self) -> None:
@@ -147,7 +151,9 @@ class TestPlanProposalSchemas:
         aware = datetime(2026, 11, 1, 10, 0, tzinfo=UTC)
         task = TaskProposal(title="Implement feature", due_date=date(2026, 11, 1), due_at=aware)
 
-        with pytest.raises(ValidationError, match="proposal due_date and due_at are mutually exclusive"):
+        with pytest.raises(
+            ValidationError, match="proposal due_date and due_at are mutually exclusive"
+        ):
             PlanProposal(
                 proposal_id="prop-1",
                 expected_revision=1,

@@ -90,7 +90,8 @@ class InternalJobScope:
             raise ValueError("Source identity and generation must be supplied together")
         if self.source_id is not None and (
             not isinstance(self.source_id, UUID)
-            or type(self.source_generation) is not int or self.source_generation <= 0
+            or type(self.source_generation) is not int
+            or self.source_generation <= 0
         ):
             raise ValueError("A valid source ID and positive generation are required")
 
@@ -112,9 +113,14 @@ class AccessFence:
         """Reject malformed revision snapshots; a valid snapshot is still not permission."""
         if not isinstance(self.workspace_id, UUID):
             raise ValueError("A valid workspace ID is required")
-        if any(type(value) is not int or value <= 0 for value in (
-            self.user_id, self.membership_revision, self.configuration_revision,
-        )):
+        if any(
+            type(value) is not int or value <= 0
+            for value in (
+                self.user_id,
+                self.membership_revision,
+                self.configuration_revision,
+            )
+        ):
             raise ValueError("Positive actor and fence revisions are required")
         if self.workspace_owner_user_id is not None and (
             type(self.workspace_owner_user_id) is not int or self.workspace_owner_user_id <= 0

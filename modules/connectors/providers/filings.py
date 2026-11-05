@@ -23,7 +23,9 @@ from modules.ingestion.public import IngestionRecord
 
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 ARCHIVES_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{document}"
-MAX_FILINGS = 100  # `filings.recent` holds up to ~1000 rows, newest first; more is reported as truncated
+MAX_FILINGS = (
+    100  # `filings.recent` holds up to ~1000 rows, newest first; more is reported as truncated
+)
 CIK_RE = re.compile(r"^[0-9]{10}$")
 _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$")
 _ACCESSION_RE = re.compile(r"^[0-9]{10}-[0-9]{2}-[0-9]{6}$")
@@ -38,7 +40,8 @@ def sec_edgar_request(cik: object, contact_email: object) -> ProviderRequest:
     if not isinstance(contact_email, str) or not _EMAIL_RE.fullmatch(contact_email):
         raise ProviderPayloadError("provider_scope_invalid")
     return ProviderRequest(
-        "GET", SUBMISSIONS_URL.format(cik=cik),
+        "GET",
+        SUBMISSIONS_URL.format(cik=cik),
         {"User-Agent": f"Umwelt-OS {contact_email}", "Accept": "application/json"},
     )
 
@@ -74,19 +77,34 @@ def map_sec_edgar(payload: object, collected_at: datetime, cik: str) -> list[Ing
     accessions = _column(recent, "accessionNumber", None)
     size = len(accessions)
     forms, dates = _column(recent, "form", size), _column(recent, "filingDate", size)
-    documents, descriptions = _column(recent, "primaryDocument", size), _column(recent, "primaryDocDescription", size)
+    documents, descriptions = (
+        _column(recent, "primaryDocument", size),
+        _column(recent, "primaryDocDescription", size),
+    )
     if size == 0:
         raise ProviderPayloadError("sec_edgar_no_filings", "incomplete")
-    coverage: Literal["returned_snapshot", "truncated"] = "truncated" if size > MAX_FILINGS else "returned_snapshot"
+    coverage: Literal["returned_snapshot", "truncated"] = (
+        "truncated" if size > MAX_FILINGS else "returned_snapshot"
+    )
     cik_number = str(int(cik))  # Archives paths use the CIK without leading zeros
     records: dict[str, IngestionRecord] = {}
     skipped = 0
-    for accession, form, filed, document, description in list(zip(
-        accessions, forms, dates, documents, descriptions, strict=True,
-    ))[:MAX_FILINGS]:
+    for accession, form, filed, document, description in list(
+        zip(
+            accessions,
+            forms,
+            dates,
+            documents,
+            descriptions,
+            strict=True,
+        )
+    )[:MAX_FILINGS]:
         if (
-            not isinstance(accession, str) or not _ACCESSION_RE.fullmatch(accession) or accession in records
-            or not isinstance(form, str) or not _FORM_RE.fullmatch(form)
+            not isinstance(accession, str)
+            or not _ACCESSION_RE.fullmatch(accession)
+            or accession in records
+            or not isinstance(form, str)
+            or not _FORM_RE.fullmatch(form)
         ):
             skipped += 1  # one malformed row must not discard the other filings
             continue
@@ -99,22 +117,41 @@ def map_sec_edgar(payload: object, collected_at: datetime, cik: str) -> list[Ing
             skipped += 1
             continue
         summary = plain_text(description if isinstance(description, str) else None, 500)
-        url = ARCHIVES_URL.format(
-            cik=cik_number, accession=accession.replace("-", ""), document=document,
-        ) if isinstance(document, str) and _DOCUMENT_RE.fullmatch(document) else None
+        url = (
+            ARCHIVES_URL.format(
+                cik=cik_number,
+                accession=accession.replace("-", ""),
+                document=document,
+            )
+            if isinstance(document, str) and _DOCUMENT_RE.fullmatch(document)
+            else None
+        )
         filed_iso = filed_on.astimezone(UTC).isoformat()
         fields: dict[str, Any] = {
-            "title": form, "guid": accession, "form": form, "cik": cik, "published_at": filed_iso,
+            "title": form,
+            "guid": accession,
+            "form": form,
+            "cik": cik,
+            "published_at": filed_iso,
         }
         if summary:
             fields["summary"] = summary
         if url:
             fields["canonical_url"] = url
         records[accession] = _record(
-            provider="sec_edgar", identity=accession, title=form, summary=summary, observed_at=filed_on,
-            collected_at=collected_at, version=content_version("sec_edgar", cik, accession, form, filed, summary, url),
-            basis="provider_published", modified_at=None, coverage=coverage, source_fields=fields,
-            canonical_url=url, published_at=filed_iso,
+            provider="sec_edgar",
+            identity=accession,
+            title=form,
+            summary=summary,
+            observed_at=filed_on,
+            collected_at=collected_at,
+            version=content_version("sec_edgar", cik, accession, form, filed, summary, url),
+            basis="provider_published",
+            modified_at=None,
+            coverage=coverage,
+            source_fields=fields,
+            canonical_url=url,
+            published_at=filed_iso,
         )
     if not records:
         raise ProviderPayloadError("sec_edgar_no_filings", "incomplete")

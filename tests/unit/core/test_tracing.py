@@ -68,7 +68,8 @@ async def test_disabled_worker_still_strips_carrier() -> None:
 
 
 async def test_trace_context_propagates_through_fake_arq(
-    monkeypatch: pytest.MonkeyPatch, exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+    exporter: InMemorySpanExporter,
 ) -> None:
     """A request span and the worker job span it enqueued share one trace; the job never sees the carrier."""
     sent = _fake_enqueue(monkeypatch)
@@ -95,7 +96,8 @@ async def test_trace_context_propagates_through_fake_arq(
 
 
 async def test_enqueue_without_active_span_adds_nothing(
-    monkeypatch: pytest.MonkeyPatch, exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+    exporter: InMemorySpanExporter,
 ) -> None:
     """No current span means nothing to propagate."""
     sent = _fake_enqueue(monkeypatch)
@@ -104,9 +106,11 @@ async def test_enqueue_without_active_span_adds_nothing(
 
 
 async def test_job_failure_is_reraised_and_span_recorded(
-    monkeypatch: pytest.MonkeyPatch, exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+    exporter: InMemorySpanExporter,
 ) -> None:
     """Exceptions pass through the traced wrapper unchanged."""
+
     async def boom(ctx: dict[str, Any]) -> None:
         """Always fail."""
         raise ValueError("nope")
@@ -118,35 +122,46 @@ async def test_job_failure_is_reraised_and_span_recorded(
 
 def test_scrub_attributes_removes_sensitive_data() -> None:
     """Bodies, headers, query strings, userinfo, SQL literals and Redis arguments never survive."""
-    cleaned = tracing.scrub_attributes({
-        "http.url": "https://user:pw@host.example/path?token=secret#frag",
-        "http.request.header.authorization": "Bearer x",
-        "http.request.body": "{...}",
-        "db.system": "postgresql",
-        "db.statement": "SELECT * FROM t WHERE email = 'a@b.c' AND id = 42",
-        "db.statement.parameters": "('a@b.c',)",
-        "http.status_code": 200,
-    })
+    cleaned = tracing.scrub_attributes(
+        {
+            "http.url": "https://user:pw@host.example/path?token=secret#frag",
+            "http.request.header.authorization": "Bearer x",
+            "http.request.body": "{...}",
+            "db.system": "postgresql",
+            "db.statement": "SELECT * FROM t WHERE email = 'a@b.c' AND id = 42",
+            "db.statement.parameters": "('a@b.c',)",
+            "http.status_code": 200,
+        }
+    )
     assert cleaned == {
         "http.url": "https://host.example/path",
         "db.system": "postgresql",
         "db.statement": "SELECT * FROM t WHERE email = ? AND id = ?",
         "http.status_code": 200,
     }
-    redis_attrs = tracing.scrub_attributes({"db.system": "redis", "db.statement": "SET session:abc secret-value"})
+    redis_attrs = tracing.scrub_attributes(
+        {"db.system": "redis", "db.statement": "SET session:abc secret-value"}
+    )
     assert redis_attrs["db.statement"] == "SET"
 
 
 def test_exported_spans_are_scrubbed(exporter: InMemorySpanExporter) -> None:
     """The processor rewrites attributes of finished spans before export."""
     tracer = trace.get_tracer("t")
-    with tracer.start_as_current_span("db", attributes={
-        "db.system": "postgresql", "db.statement": "UPDATE u SET pw = 'hunter2'", "http.request.body": "secret",
-    }):
+    with tracer.start_as_current_span(
+        "db",
+        attributes={
+            "db.system": "postgresql",
+            "db.statement": "UPDATE u SET pw = 'hunter2'",
+            "http.request.body": "secret",
+        },
+    ):
         pass
     (span,) = exporter.get_finished_spans()
-    assert dict(span.attributes or {}) == {"db.system": "postgresql", "db.statement": "UPDATE u SET pw = ?"}
-
+    assert dict(span.attributes or {}) == {
+        "db.system": "postgresql",
+        "db.statement": "UPDATE u SET pw = ?",
+    }
 
 
 async def test_failed_job_exports_no_sql_parameters(exporter: InMemorySpanExporter) -> None:
@@ -155,7 +170,11 @@ async def test_failed_job_exports_no_sql_parameters(exporter: InMemorySpanExport
 
     async def boom(ctx: dict[str, Any]) -> None:
         """Fail like a database driver echoing bound parameters."""
-        raise DBAPIError("UPDATE users SET email=$1", ("secret@example.com",), Exception("bad secret@example.com"))
+        raise DBAPIError(
+            "UPDATE users SET email=$1",
+            ("secret@example.com",),
+            Exception("bad secret@example.com"),
+        )
 
     with pytest.raises(DBAPIError):
         await tracing.traced_job(boom)({})

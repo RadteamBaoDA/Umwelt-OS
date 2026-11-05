@@ -12,7 +12,11 @@ from modules.sources import routes
 from modules.sources.schemas import SourceCreate
 
 SCOPE = WorkspaceContext(user_id=7, workspace_id=uuid4(), role="owner", membership_revision=3)
-REQUEST = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=SimpleNamespace(multi_workspace_enabled=False))))
+REQUEST = SimpleNamespace(
+    app=SimpleNamespace(
+        state=SimpleNamespace(settings=SimpleNamespace(multi_workspace_enabled=False))
+    )
+)
 BUILTIN = SourceCreate(type="rss", name="Lobsters", provider="lobsters")
 PLAIN = SourceCreate(type="rss", name="My feed")
 
@@ -22,8 +26,19 @@ def _created() -> MagicMock:
     from datetime import UTC, datetime
 
     return SimpleNamespace(
-        id=uuid4(), workspace_id=SCOPE.workspace_id, type="rss", name="x", provider="lobsters", status="active",
-        generation=1, local_only=False, graph_enabled=True, rag_index_enabled=True, configuration={}, created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
+        id=uuid4(),
+        workspace_id=SCOPE.workspace_id,
+        type="rss",
+        name="x",
+        provider="lobsters",
+        status="active",
+        generation=1,
+        local_only=False,
+        graph_enabled=True,
+        rag_index_enabled=True,
+        configuration={},
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
     )
 
 
@@ -31,8 +46,11 @@ async def _call(payload: SourceCreate, existing: list, read: AsyncMock | None = 
     """Invoke the route with patched sources.public; returns (result, list mock, create mock)."""
     lister = AsyncMock(return_value=existing)
     creator = AsyncMock(return_value=_created())
-    with patch.object(routes.public, "list_provider_sources", lister), patch.object(routes.public, "create_source", creator), \
-            patch.object(routes, "SourceRead", MagicMock()):
+    with (
+        patch.object(routes.public, "list_provider_sources", lister),
+        patch.object(routes.public, "create_source", creator),
+        patch.object(routes, "SourceRead", MagicMock()),
+    ):
         result = await routes.create_source(payload, AsyncMock(), REQUEST, SCOPE)
     return result, lister, creator
 

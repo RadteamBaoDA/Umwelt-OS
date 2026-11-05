@@ -157,15 +157,21 @@ def streaming_snapshot(name: str, raw_args: str) -> dict[str, Any] | None:
     else:
         body = {k: v for k, v in obj.items() if k != "citations"}
         kind = {
-            TOOL_TABLE: "table", TOOL_PLAN: "plan", TOOL_TIME_PICKER: "meeting_time_picker", TOOL_FORM: "form",
+            TOOL_TABLE: "table",
+            TOOL_PLAN: "plan",
+            TOOL_TIME_PICKER: "meeting_time_picker",
+            TOOL_FORM: "form",
         }.get(name) or _chart_kind(obj.get("chart_type"))
         if name == TOOL_PLAN and isinstance(body.get("steps"), list):
             body["steps"] = [
-                {"id": f"step-{i}", **s} for i, s in enumerate(body["steps"], 1) if isinstance(s, dict)
+                {"id": f"step-{i}", **s}
+                for i, s in enumerate(body["steps"], 1)
+                if isinstance(s, dict)
             ]
     title = obj.get("title")
     return {
-        "kind": kind, "status": "streaming",
+        "kind": kind,
+        "status": "streaming",
         "title": title if isinstance(title, str) else "",
         slot: body,
     }
@@ -176,7 +182,9 @@ def _cite_field(c: Mapping[str, Any], camel: str, snake: str) -> Any:
     return c.get(camel) or c.get(snake)
 
 
-def _resolve_citations(numbers: Sequence[int], citations: Mapping[int, Mapping[str, Any]]) -> list[CitationRef]:
+def _resolve_citations(
+    numbers: Sequence[int], citations: Mapping[int, Mapping[str, Any]]
+) -> list[CitationRef]:
     """Resolve model-written citation numbers to server-validated document citations.
 
     Unknown numbers and web citations (which carry no document identifiers) are dropped; the model
@@ -190,27 +198,52 @@ def _resolve_citations(numbers: Sequence[int], citations: Mapping[int, Mapping[s
             continue
         # The worker passes `Citation.model_dump(by_alias=True)`, whose aliases are snake_case; camelCase
         # is the wire/schema spelling. Accept both so a validated citation is never silently dropped.
-        source_id, document_id, chunk_id = _cite_field(c, "sourceId", "source_id"), _cite_field(c, "documentId", "document_id"), _cite_field(c, "chunkId", "chunk_id")
-        version_id, title = _cite_field(c, "documentVersionId", "document_version_id"), _cite_field(c, "title", "title")
+        source_id, document_id, chunk_id = (
+            _cite_field(c, "sourceId", "source_id"),
+            _cite_field(c, "documentId", "document_id"),
+            _cite_field(c, "chunkId", "chunk_id"),
+        )
+        version_id, title = (
+            _cite_field(c, "documentVersionId", "document_version_id"),
+            _cite_field(c, "title", "title"),
+        )
         if not (source_id and document_id and chunk_id) or str(chunk_id) in seen:
             continue
         seen.add(str(chunk_id))
-        refs.append(CitationRef(
-            source_id=str(source_id), document_id=str(document_id), chunk_id=str(chunk_id),
-            document_version_id=str(version_id) if version_id else None,
-            title=str(title) if title else None,
-        ))
+        refs.append(
+            CitationRef(
+                source_id=str(source_id),
+                document_id=str(document_id),
+                chunk_id=str(chunk_id),
+                document_version_id=str(version_id) if version_id else None,
+                title=str(title) if title else None,
+            )
+        )
     return refs
 
 
 def _envelope(
-    kind: str, visualization: str, renderer: str, title: str, local_only: bool, slot: str, body: Mapping[str, Any],
+    kind: str,
+    visualization: str,
+    renderer: str,
+    title: str,
+    local_only: bool,
+    slot: str,
+    body: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Assemble the persisted payload shape with every slot present and only `slot` filled."""
     payload: dict[str, Any] = {
-        "kind": kind, "status": "completed", "visualization": visualization, "renderer": renderer,
-        "title": title, "local_only": local_only,
-        "sandbox": None, "plan": None, "table": None, "chart": None, "form": None,
+        "kind": kind,
+        "status": "completed",
+        "visualization": visualization,
+        "renderer": renderer,
+        "title": title,
+        "local_only": local_only,
+        "sandbox": None,
+        "plan": None,
+        "table": None,
+        "chart": None,
+        "form": None,
     }
     payload[slot] = dict(body)
     return payload
@@ -219,7 +252,10 @@ def _envelope(
 def _error_paths(exc: ValueError) -> str:
     """Summarize a validation failure as ``path: message`` lines; never echoes the offending input values."""
     if isinstance(exc, ValidationError):
-        lines = [f"{'.'.join(str(p) for p in e['loc']) or '(root)'}: {e['msg']}" for e in exc.errors(include_input=False)]
+        lines = [
+            f"{'.'.join(str(p) for p in e['loc']) or '(root)'}: {e['msg']}"
+            for e in exc.errors(include_input=False)
+        ]
         return "; ".join(lines)[:MAX_UI_ERROR_CHARS]
     return "arguments are not valid JSON" if "json" in str(exc).lower() else type(exc).__name__
 
@@ -240,7 +276,12 @@ def ui_call_error(tool_name: str, raw_args: str) -> str | None:
     except ValueError as exc:
         detail = _error_paths(exc)
         logger.warning("Invalid generative UI call %s: %s", tool_name, detail)
-        return json.dumps({"status": "error", "error": f"invalid {tool_name} arguments; fix and call again. {detail}"})
+        return json.dumps(
+            {
+                "status": "error",
+                "error": f"invalid {tool_name} arguments; fix and call again. {detail}",
+            }
+        )
     return None
 
 
@@ -274,43 +315,107 @@ def finalize_generative_ui(
         return None
     try:
         if isinstance(args, SandboxedUiArgs):
-            title = title_hint.strip()[:72] or _FALLBACK_TITLES.get(locale, _FALLBACK_TITLES["en-US"])
-            return _envelope("sandboxed_ui", "custom_ui", "open_generative_ui", title, local_only,
-                             "sandbox", args.to_ordered_dict())
+            title = title_hint.strip()[:72] or _FALLBACK_TITLES.get(
+                locale, _FALLBACK_TITLES["en-US"]
+            )
+            return _envelope(
+                "sandboxed_ui",
+                "custom_ui",
+                "open_generative_ui",
+                title,
+                local_only,
+                "sandbox",
+                args.to_ordered_dict(),
+            )
         if isinstance(args, TableToolArgs):
             table = TablePayload(
-                title=args.title, columns=args.columns, rows=args.rows,
-                records=[dict(zip((c.key for c in args.columns), row, strict=False)) for row in args.rows],
+                title=args.title,
+                columns=args.columns,
+                rows=args.rows,
+                records=[
+                    dict(zip((c.key for c in args.columns), row, strict=False)) for row in args.rows
+                ],
                 citations=_resolve_citations(args.citations, citations),
-                source=args.source, is_sample=args.is_sample,
+                source=args.source,
+                is_sample=args.is_sample,
             )
-            return _envelope("table", "table", "a2ui", args.title, local_only, "table", table.model_dump(mode="json"))
+            return _envelope(
+                "table",
+                "table",
+                "a2ui",
+                args.title,
+                local_only,
+                "table",
+                table.model_dump(mode="json"),
+            )
         if isinstance(args, ChartToolArgs):
             chart = ChartPayload(
-                chart_type=args.chart_type, title=args.title, subtitle=args.subtitle, x_key=args.x_key,
-                series=args.series, data=args.data, citations=_resolve_citations(args.citations, citations),
-                source=args.source, unit=args.unit, is_sample=args.is_sample,
+                chart_type=args.chart_type,
+                title=args.title,
+                subtitle=args.subtitle,
+                x_key=args.x_key,
+                series=args.series,
+                data=args.data,
+                citations=_resolve_citations(args.citations, citations),
+                source=args.source,
+                unit=args.unit,
+                is_sample=args.is_sample,
             )
-            return _envelope(_chart_kind(args.chart_type), args.chart_type, "open_generative_ui", args.title,
-                             local_only, "chart", chart.model_dump(mode="json"))
+            return _envelope(
+                _chart_kind(args.chart_type),
+                args.chart_type,
+                "open_generative_ui",
+                args.title,
+                local_only,
+                "chart",
+                chart.model_dump(mode="json"),
+            )
         if isinstance(args, PlanToolArgs):
-            steps = [PlanStep(id=f"step-{i}", **s.model_dump()) for i, s in enumerate(args.steps, 1)]
+            steps = [
+                PlanStep(id=f"step-{i}", **s.model_dump()) for i, s in enumerate(args.steps, 1)
+            ]
             plan = PlanPayload(
-                title=args.title, approach=args.approach, technology=args.technology,
-                key_elements=args.key_elements, steps=steps, source=args.source,
-                todos=[{"id": s.id, "title": s.title, "description": s.description, "emoji": s.emoji,
-                        "status": "completed" if s.status == "completed" else "pending"} for s in steps],
+                title=args.title,
+                approach=args.approach,
+                technology=args.technology,
+                key_elements=args.key_elements,
+                steps=steps,
+                source=args.source,
+                todos=[
+                    {
+                        "id": s.id,
+                        "title": s.title,
+                        "description": s.description,
+                        "emoji": s.emoji,
+                        "status": "completed" if s.status == "completed" else "pending",
+                    }
+                    for s in steps
+                ],
             )
-            return _envelope("plan", "plan", "a2ui", args.title, local_only, "plan", plan.model_dump(mode="json"))
+            return _envelope(
+                "plan", "plan", "a2ui", args.title, local_only, "plan", plan.model_dump(mode="json")
+            )
         if isinstance(args, FormPayload):
-            return _envelope("form", "form", "a2ui", args.title, local_only, "form", build_form_payload(args))
+            return _envelope(
+                "form", "form", "a2ui", args.title, local_only, "form", build_form_payload(args)
+            )
         if isinstance(args, TimePickerToolArgs):
             picker = build_meeting_time_picker_payload(
-                args.title, slots=args.slots, duration_minutes=args.duration_minutes,
-                timezone=args.timezone, subtitle=args.subtitle,
+                args.title,
+                slots=args.slots,
+                duration_minutes=args.duration_minutes,
+                timezone=args.timezone,
+                subtitle=args.subtitle,
             )
-            return _envelope("meeting_time_picker", "meeting_time_picker", "a2ui", args.title, local_only,
-                             "form", picker.model_dump(mode="json"))
+            return _envelope(
+                "meeting_time_picker",
+                "meeting_time_picker",
+                "a2ui",
+                args.title,
+                local_only,
+                "form",
+                picker.model_dump(mode="json"),
+            )
     except ValueError as exc:  # server-side model construction (limits) rejected the data
         logger.warning("Dropping generative UI payload %s (%s)", tool_name, type(exc).__name__)
     return None
@@ -335,7 +440,11 @@ def skill_tool_result(raw_args: str) -> str:
 
 
 def fallback_generative_ui(
-    prompt: str, answer: str, evidence: Sequence[Any], *, local_only: bool,
+    prompt: str,
+    answer: str,
+    evidence: Sequence[Any],
+    *,
+    local_only: bool,
     decision: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Build an evidence-derived native widget for models without tool calling.
@@ -353,23 +462,46 @@ def fallback_generative_ui(
     Returns:
         Persisted payload dict or None.
     """
-    decision = decision or route_visualization(prompt, evidence_count=len(evidence), local_only=local_only)
+    decision = decision or route_visualization(
+        prompt, evidence_count=len(evidence), local_only=local_only
+    )
     kind = decision.get("kind")
     title = " ".join(prompt.split())[:72] or "Visualization"
     if kind == "plan":
         plan = build_plan_payload(prompt, answer, evidence=evidence)
-        return _envelope("plan", "plan", "a2ui", plan.title, local_only, "plan", plan.model_dump(mode="json"))
+        return _envelope(
+            "plan", "plan", "a2ui", plan.title, local_only, "plan", plan.model_dump(mode="json")
+        )
     if kind == "table":
         table = build_table_payload(title, evidence, prompt=prompt, answer_text=answer)
         if not table.rows:
             return None
-        return _envelope("table", "table", "a2ui", table.title, local_only, "table", table.model_dump(mode="json"))
+        return _envelope(
+            "table",
+            "table",
+            "a2ui",
+            table.title,
+            local_only,
+            "table",
+            table.model_dump(mode="json"),
+        )
     if kind in {"bar_chart", "pie_chart"}:
         chart = build_chart_payload(
-            title, "pie" if kind == "pie_chart" else "bar", evidence, prompt=prompt, answer_text=answer,
+            title,
+            "pie" if kind == "pie_chart" else "bar",
+            evidence,
+            prompt=prompt,
+            answer_text=answer,
         )
         if not chart.data:
             return None
-        return _envelope(kind, chart.chart_type, "open_generative_ui", chart.title, local_only, "chart",
-                         chart.model_dump(mode="json"))
+        return _envelope(
+            kind,
+            chart.chart_type,
+            "open_generative_ui",
+            chart.title,
+            local_only,
+            "chart",
+            chart.model_dump(mode="json"),
+        )
     return None

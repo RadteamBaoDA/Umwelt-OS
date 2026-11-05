@@ -62,10 +62,14 @@ class TestGitHubSourceConfig:
 
     def test_github_source_config_invalid_repo_names(self) -> None:
         """Repositories named '.', '..', or ending in '.git' must be rejected."""
-        with pytest.raises(ValidationError, match="GitHub repository must be a single repository name"):
+        with pytest.raises(
+            ValidationError, match="GitHub repository must be a single repository name"
+        ):
             GitHubSourceConfig(github_owner="octocat", github_repository="repo.git")
 
-        with pytest.raises(ValidationError, match="GitHub repository must be a single repository name"):
+        with pytest.raises(
+            ValidationError, match="GitHub repository must be a single repository name"
+        ):
             GitHubSourceConfig(github_owner="octocat", github_repository=".")
 
 
@@ -151,7 +155,9 @@ class TestGitHubWebhookDeliverySchemas:
     def test_verified_github_delivery_naive_time_rejected(self) -> None:
         """Naive receipt timestamps without timezone must be rejected."""
         naive = datetime(2026, 10, 5, 12, 0)
-        with pytest.raises(ValidationError, match="GitHub receipt timestamp must be timezone-aware"):
+        with pytest.raises(
+            ValidationError, match="GitHub receipt timestamp must be timezone-aware"
+        ):
             VerifiedGitHubDelivery(
                 receiver_revision="rev-1",
                 delivery_id="del-1",
@@ -174,13 +180,20 @@ class TestGitHubTimelineMapping:
 
     def test_repository_name_fallback_to_url(self) -> None:
         """When configuration lacks owner/repo, falls back to parsing canonical URL."""
-        assert _repository_name({}, "https://github.com/torvalds/linux/commit/123") == "torvalds/linux"
+        assert (
+            _repository_name({}, "https://github.com/torvalds/linux/commit/123") == "torvalds/linux"
+        )
         assert _repository_name({}, None) is None
 
     def test_display_title_for_issues_and_pulls(self) -> None:
         """Non-commit records preserve their original title."""
-        assert _display_title("issue", "Fix memory leak in parser", "") == "Fix memory leak in parser"
-        assert _display_title("pull", "Add support for Postgres 17", "") == "Add support for Postgres 17"
+        assert (
+            _display_title("issue", "Fix memory leak in parser", "") == "Fix memory leak in parser"
+        )
+        assert (
+            _display_title("pull", "Add support for Postgres 17", "")
+            == "Add support for Postgres 17"
+        )
 
     def test_display_title_for_commits(self) -> None:
         """Commit records use the first 7 characters of SHA and the first commit message body line."""

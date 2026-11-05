@@ -42,7 +42,9 @@ class GitHubValidatedSegment(BaseModel):
 
 def _canonical_json(value: object) -> str:
     """Serialize an owner-generated cursor or proof identity using stable compact UTF-8 JSON."""
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    )
 
 
 def encode_github_cursor(cursor: GitHubCursor) -> str:
@@ -126,7 +128,9 @@ def _initial_cursor(fence: GitHubBindingFence, collected_at: datetime) -> GitHub
     )
 
 
-def decode_github_cursor(value: str | None, fence: GitHubBindingFence, collected_at: datetime) -> GitHubCursor:
+def decode_github_cursor(
+    value: str | None, fence: GitHubBindingFence, collected_at: datetime
+) -> GitHubCursor:
     """Decode only canonical, scope-matching state; initialize a first scan from server time when absent."""
     if value is None:
         return _initial_cursor(fence, collected_at)
@@ -139,7 +143,9 @@ def decode_github_cursor(value: str | None, fence: GitHubBindingFence, collected
         raise ValueError("github_cursor_invalid") from exc
 
 
-def _next_segment(cursor: GitHubCursor, collected_at: datetime) -> tuple[GitHubCursor, int, GitHubResourceCursor, int] | None:
+def _next_segment(
+    cursor: GitHubCursor, collected_at: datetime
+) -> tuple[GitHubCursor, int, GitHubResourceCursor, int] | None:
     """Select the next enabled non-exhausted resource and open a bounded sweep only after prior acknowledgement."""
     count = len(cursor.resources)
     for offset in range(count):
@@ -155,33 +161,49 @@ def _next_segment(cursor: GitHubCursor, collected_at: datetime) -> tuple[GitHubC
                 else state.floor
             )
             phase = "reconcile" if state.resource == "release" else "incremental"
-            state = state.model_copy(update={
-                "phase": phase,
-                "sweep_revision": state.sweep_revision + 1,
-                "page": 1,
-                "examined": 0,
-                "floor": floor,
-                "upper": collected_at.astimezone(UTC),
-                "next_page": None,
-                "last_outcome": "pending",
-            })
+            state = state.model_copy(
+                update={
+                    "phase": phase,
+                    "sweep_revision": state.sweep_revision + 1,
+                    "page": 1,
+                    "examined": 0,
+                    "floor": floor,
+                    "upper": collected_at.astimezone(UTC),
+                    "next_page": None,
+                    "last_outcome": "pending",
+                }
+            )
             page = 1
         return cursor, index, state, page or 1
     return None
 
 
-def github_segment_path(fence: GitHubBindingFence, resource: GitHubResource, state: GitHubResourceCursor, page: int) -> str:
+def github_segment_path(
+    fence: GitHubBindingFence, resource: GitHubResource, state: GitHubResourceCursor, page: int
+) -> str:
     """Construct an allowlisted numeric repository endpoint and its fixed bounded page parameters."""
     repository_id = int(fence.repository_id)
     parameters: dict[str, str | int] = {"per_page": 100, "page": page}
     if resource == "issue":
-        parameters.update({"state": "all", "sort": "updated", "direction": "desc", "since": state.floor.isoformat().replace("+00:00", "Z")})
+        parameters.update(
+            {
+                "state": "all",
+                "sort": "updated",
+                "direction": "desc",
+                "since": state.floor.isoformat().replace("+00:00", "Z"),
+            }
+        )
         path = f"/repositories/{repository_id}/issues"
     elif resource == "pull":
         parameters.update({"state": "all", "sort": "updated", "direction": "desc"})
         path = f"/repositories/{repository_id}/pulls"
     elif resource == "commit":
-        parameters.update({"since": state.floor.isoformat().replace("+00:00", "Z"), "until": state.upper.isoformat().replace("+00:00", "Z")})
+        parameters.update(
+            {
+                "since": state.floor.isoformat().replace("+00:00", "Z"),
+                "until": state.upper.isoformat().replace("+00:00", "Z"),
+            }
+        )
         path = f"/repositories/{repository_id}/commits"
     else:
         path = f"/repositories/{repository_id}/releases"
@@ -189,7 +211,10 @@ def github_segment_path(fence: GitHubBindingFence, resource: GitHubResource, sta
 
 
 def _require_fresh_hint_claim(
-    claim: GitHubHintClaimProof, fence: GitHubBindingFence, proof: GitHubSegmentProof, collected_at: datetime,
+    claim: GitHubHintClaimProof,
+    fence: GitHubBindingFence,
+    proof: GitHubSegmentProof,
+    collected_at: datetime,
 ) -> None:
     """Reject a hint claim that no longer matches the binding fence, resource, expiry or reconcile page.
 
@@ -205,13 +230,17 @@ def _require_fresh_hint_claim(
         or claim.binding_revision != fence.binding_revision
         or claim.resource != proof.resource
         or claim.expires_at <= collected_at
-        or claim.intent == "reconcile" and proof.page != claim.reconcile_page
+        or claim.intent == "reconcile"
+        and proof.page != claim.reconcile_page
     ):
         raise ValueError("github_hint_claim_stale")
 
 
 def _validate_repository_reconcile(
-    claim: GitHubHintClaimProof, fence: GitHubBindingFence, cursor_before: str | None, proof: GitHubSegmentProof,
+    claim: GitHubHintClaimProof,
+    fence: GitHubBindingFence,
+    cursor_before: str | None,
+    proof: GitHubSegmentProof,
 ) -> GitHubValidatedSegment:
     """Validate one repository-wide reconcile page and normalize its items with truncated coverage.
 
@@ -222,9 +251,14 @@ def _validate_repository_reconcile(
         if proof.has_next or proof.raw_items:
             raise ValueError("github_reconcile_page_invalid")
         return GitHubValidatedSegment(
-            records=(), cursor_after=cursor_before, coverage="truncated",
-            resource=claim.resource, sweep_revision=claim.dirty_revision,
-            outcome="complete", examined_count=0, hint_claim=claim,
+            records=(),
+            cursor_after=cursor_before,
+            coverage="truncated",
+            resource=claim.resource,
+            sweep_revision=claim.dirty_revision,
+            outcome="complete",
+            examined_count=0,
+            hint_claim=claim,
         )
     if proof.target_outcome != "found" or proof.has_next != (proof.next_page is not None):
         raise ValueError("github_reconcile_page_invalid")
@@ -234,16 +268,23 @@ def _validate_repository_reconcile(
         _validate_returned_repository_identity(raw, fence.repository_id)
     records = tuple(
         normalize_github_record(
-            claim.resource, raw, coverage="truncated", collected_at=proof.collected_at,
+            claim.resource,
+            raw,
+            coverage="truncated",
+            collected_at=proof.collected_at,
         )
         for raw in proof.raw_items
         if not (claim.resource == "issue" and "pull_request" in raw)
     )
     return GitHubValidatedSegment(
-        records=records, cursor_after=cursor_before, coverage="truncated",
-        resource=claim.resource, sweep_revision=claim.dirty_revision,
+        records=records,
+        cursor_after=cursor_before,
+        coverage="truncated",
+        resource=claim.resource,
+        sweep_revision=claim.dirty_revision,
         outcome="continued" if proof.has_next else "complete",
-        examined_count=len(proof.raw_items), hint_claim=claim,
+        examined_count=len(proof.raw_items),
+        hint_claim=claim,
     )
 
 
@@ -267,7 +308,9 @@ def _check_targeted_identity(claim: GitHubHintClaimProof, raw: dict[str, object]
 
 
 def _targeted_records(
-    claim: GitHubHintClaimProof, fence: GitHubBindingFence, proof: GitHubSegmentProof,
+    claim: GitHubHintClaimProof,
+    fence: GitHubBindingFence,
+    proof: GitHubSegmentProof,
 ) -> tuple[IngestionRecord, ...]:
     """Validate targeted-hint proof items and return the records to ingest (possibly empty).
 
@@ -275,31 +318,52 @@ def _targeted_records(
         ValueError: identity mismatch, result-count violation or missing/unknown outcome.
     """
     records: tuple[IngestionRecord, ...] = ()
-    if proof.target_outcome == "found" and claim.locator_kind == "repository" and claim.intent == "visibility_check":
+    if (
+        proof.target_outcome == "found"
+        and claim.locator_kind == "repository"
+        and claim.intent == "visibility_check"
+    ):
         if len(proof.raw_items) != 1 or str(proof.raw_items[0].get("id")) != claim.locator:
             raise ValueError("github_targeted_identity_mismatch")
-    if proof.target_outcome == "found" and proof.raw_items and claim.intent not in {"visibility_check", "visibility_lost"}:
+    if (
+        proof.target_outcome == "found"
+        and proof.raw_items
+        and claim.intent not in {"visibility_check", "visibility_lost"}
+    ):
         if len(proof.raw_items) != 1:
             raise ValueError("github_targeted_result_invalid")
         raw = proof.raw_items[0]
         _validate_returned_repository_identity(raw, fence.repository_id)
         _check_targeted_identity(claim, raw)
-        records = (normalize_github_record(
-            claim.resource, raw, coverage="returned_snapshot", collected_at=proof.collected_at,
-        ),)
+        records = (
+            normalize_github_record(
+                claim.resource,
+                raw,
+                coverage="returned_snapshot",
+                collected_at=proof.collected_at,
+            ),
+        )
     elif proof.target_outcome == "found" and claim.locator_kind == "ref" and proof.raw_items:
         raw = proof.raw_items[0]
-        records = (normalize_github_record(
-            "commit", raw, coverage="truncated", collected_at=proof.collected_at,
-        ),)
+        records = (
+            normalize_github_record(
+                "commit",
+                raw,
+                coverage="truncated",
+                collected_at=proof.collected_at,
+            ),
+        )
     if proof.target_outcome not in {"found", "not_found", "forbidden", "partial"}:
         raise ValueError("github_targeted_outcome_missing")
     return records
 
 
 def _validate_hint_segment(
-    fence: GitHubBindingFence, cursor_before: str | None, proof: GitHubSegmentProof,
-    claim: GitHubHintClaimProof, collected_at: datetime,
+    fence: GitHubBindingFence,
+    cursor_before: str | None,
+    proof: GitHubSegmentProof,
+    claim: GitHubHintClaimProof,
+    collected_at: datetime,
 ) -> GitHubValidatedSegment:
     """Validate a targeted/overflow hint proof; the leased polling cursor is retained unchanged."""
     _require_fresh_hint_claim(claim, fence, proof, collected_at)
@@ -307,16 +371,22 @@ def _validate_hint_segment(
         return _validate_repository_reconcile(claim, fence, cursor_before, proof)
     records = _targeted_records(claim, fence, proof)
     return GitHubValidatedSegment(
-        records=records, cursor_after=cursor_before,
-        coverage="truncated" if claim.intent in {"reconcile", "delete_candidate"} else "returned_snapshot",
-        resource=claim.resource, sweep_revision=claim.dirty_revision,
-        outcome="complete", examined_count=len(proof.raw_items),
+        records=records,
+        cursor_after=cursor_before,
+        coverage="truncated"
+        if claim.intent in {"reconcile", "delete_candidate"}
+        else "returned_snapshot",
+        resource=claim.resource,
+        sweep_revision=claim.dirty_revision,
+        outcome="complete",
+        examined_count=len(proof.raw_items),
         hint_claim=claim,
     )
 
 
 def _in_scope_items(
-    state: GitHubResourceCursor, proof: GitHubSegmentProof,
+    state: GitHubResourceCursor,
+    proof: GitHubSegmentProof,
 ) -> tuple[list[dict[str, object]], list[datetime]]:
     """Filter proof items to the sweep window and collect pull update times for order checking.
 
@@ -331,18 +401,26 @@ def _in_scope_items(
             if timestamp is None:
                 raise ValueError("github_pull_update_time_invalid")
             pull_order.append(timestamp)
-        if state.resource != "release" and timestamp is not None and state.floor <= timestamp <= state.upper:
+        if (
+            state.resource != "release"
+            and timestamp is not None
+            and state.floor <= timestamp <= state.upper
+        ):
             if state.resource != "issue" or "pull_request" not in item:
                 in_scope.append(item)
         elif state.resource == "release":
             in_scope.append(item)
-    if state.resource == "pull" and any(left < right for left, right in zip(pull_order, pull_order[1:], strict=False)):
+    if state.resource == "pull" and any(
+        left < right for left, right in zip(pull_order, pull_order[1:], strict=False)
+    ):
         raise ValueError("github_pull_page_order_invalid")
     return in_scope, pull_order
 
 
 def _validate_polling_segment(
-    fence: GitHubBindingFence, cursor_before: str | None, proof: GitHubSegmentProof,
+    fence: GitHubBindingFence,
+    cursor_before: str | None,
+    proof: GitHubSegmentProof,
     collected_at: datetime,
 ) -> GitHubValidatedSegment:
     """Rebuild the next polling transition from raw proof and advance the round-robin cursor.
@@ -365,9 +443,7 @@ def _validate_polling_segment(
         raise ValueError("github_segment_transition_stale")
 
     in_scope, pull_order = _in_scope_items(state, proof)
-    stop_at_floor = bool(
-        state.resource == "pull" and pull_order and pull_order[-1] < state.floor
-    )
+    stop_at_floor = bool(state.resource == "pull" and pull_order and pull_order[-1] < state.floor)
     examined = state.examined + len(proof.raw_items)
     if examined > MAX_SWEEP_OBJECTS:
         raise ValueError("github_sweep_examined_bound_invalid")
@@ -377,26 +453,40 @@ def _validate_polling_segment(
     outcome: Literal["continued", "complete", "exhausted"] = (
         "exhausted" if exhausted else "complete" if complete else "continued"
     )
-    coverage: Literal["returned_snapshot", "truncated"] = "truncated" if outcome != "complete" else "returned_snapshot"
+    coverage: Literal["returned_snapshot", "truncated"] = (
+        "truncated" if outcome != "complete" else "returned_snapshot"
+    )
     records = tuple(
-        normalize_github_record(state.resource, raw, coverage=coverage, collected_at=proof.collected_at)
+        normalize_github_record(
+            state.resource, raw, coverage=coverage, collected_at=proof.collected_at
+        )
         for raw in in_scope
     )
 
-    updated_state = state.model_copy(update={
-        "phase": "exhausted" if exhausted else (
-            "reconcile" if state.resource == "release" else "incremental"
-        ) if complete else state.phase,
-        "page": proof.page,
-        "examined": examined,
-        "completed_upper": state.upper if complete and state.resource != "release" else state.completed_upper,
-        "completed_sweep_revision": state.sweep_revision if complete else state.completed_sweep_revision,
-        "next_page": proof.next_page if outcome == "continued" else 101 if exhausted else None,
-        "last_outcome": outcome,
-    })
+    updated_state = state.model_copy(
+        update={
+            "phase": "exhausted"
+            if exhausted
+            else ("reconcile" if state.resource == "release" else "incremental")
+            if complete
+            else state.phase,
+            "page": proof.page,
+            "examined": examined,
+            "completed_upper": state.upper
+            if complete and state.resource != "release"
+            else state.completed_upper,
+            "completed_sweep_revision": state.sweep_revision
+            if complete
+            else state.completed_sweep_revision,
+            "next_page": proof.next_page if outcome == "continued" else 101 if exhausted else None,
+            "last_outcome": outcome,
+        }
+    )
     resources = list(cursor.resources)
     resources[index] = updated_state
-    advanced = cursor.model_copy(update={"turn": (index + 1) % len(resources), "resources": tuple(resources)})
+    advanced = cursor.model_copy(
+        update={"turn": (index + 1) % len(resources), "resources": tuple(resources)}
+    )
     return GitHubValidatedSegment(
         records=records,
         cursor_after=encode_github_cursor(advanced),

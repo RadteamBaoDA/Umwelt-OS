@@ -64,6 +64,7 @@ GITHUB_RECONNECT_DETAIL = "GitHub grant is expired or requires reconnection"
 
 class ProviderFetchRequest(BaseModel):
     """Accept only source-generation and connector-revision fences plus the admission from n8n."""
+
     model_config = ConfigDict(extra="forbid")
 
     source_generation: int = Field(ge=1)
@@ -75,6 +76,7 @@ class ProviderFetchRequest(BaseModel):
 
 class ProviderFetchRead(BaseModel):
     """Expose verified receipt workspace/status without content, cursor or credential material."""
+
     model_config = ConfigDict(extra="forbid")
 
     workspace_id: UUID
@@ -103,6 +105,7 @@ class ProviderAdmissionBusy(RuntimeError):
 # Shared Redis cooldown / permit helpers
 # ---------------------------------------------------------------------------
 
+
 async def extend_provider_cooldown(request: Request, provider: str, deadline: datetime) -> datetime:
     """Atomically retain the later UTC deadline across all sources using one fixed provider."""
     if deadline.tzinfo is None or deadline.utcoffset() is None:
@@ -121,9 +124,11 @@ end
 return current
 """
     try:
-        stored = int(await request.app.state.redis.eval(
-            script, 1, f"connectors:provider:cooldown:{provider}", deadline_ms, now_ms
-        ))
+        stored = int(
+            await request.app.state.redis.eval(
+                script, 1, f"connectors:provider:cooldown:{provider}", deadline_ms, now_ms
+            )
+        )
     except Exception as exc:
         raise UnavailableError("provider_rate_state_unavailable") from exc
     return datetime.fromtimestamp(stored / 1000, UTC)
@@ -145,7 +150,9 @@ async def acquire_github_network_permit(request: Request) -> str | None:
     """Acquire one cluster-shared GitHub network slot with an expiry beyond the segment deadline."""
     token = secrets.token_urlsafe(24)
     try:
-        acquired = await request.app.state.redis.set("connectors:provider:active:github", token, nx=True, ex=75)
+        acquired = await request.app.state.redis.set(
+            "connectors:provider:active:github", token, nx=True, ex=75
+        )
     except Exception as exc:
         raise UnavailableError("provider_admission_unavailable") from exc
     return token if acquired else None
@@ -161,7 +168,9 @@ async def release_github_network_permit(request: Request, token: str) -> None:
         return
 
 
-async def await_with_github_segment_deadline[T](operation: Awaitable[T], *, deadline: float | None) -> T:
+async def await_with_github_segment_deadline[T](
+    operation: Awaitable[T], *, deadline: float | None
+) -> T:
     """Bound one pre-lease await by the shared GitHub segment deadline.
 
     A missing deadline leaves other providers' admission behavior unchanged. When the
@@ -179,6 +188,7 @@ async def await_with_github_segment_deadline[T](operation: Awaitable[T], *, dead
 # ---------------------------------------------------------------------------
 # Error classification and best-effort settle/release
 # ---------------------------------------------------------------------------
+
 
 def collection_error_code(exc: BaseException) -> str:
     """Map auth-type failures (HTTP 401/403, Telegram credentials rejected, GitHub reconnect) to a reconnect-needed code."""
@@ -207,16 +217,26 @@ def request_failure(exc: BaseException) -> tuple[str, bool]:
 
 
 async def settle_request_exit(
-    session: AsyncSession, ref: CollectionRequestRef, *, outcome: Literal["no_changes", "failed"],
-    error_code: str | None = None, retryable: bool = False, provider_deadline: datetime | None = None,
+    session: AsyncSession,
+    ref: CollectionRequestRef,
+    *,
+    outcome: Literal["no_changes", "failed"],
+    error_code: str | None = None,
+    retryable: bool = False,
+    provider_deadline: datetime | None = None,
 ) -> None:
     """Best-effort immediate settle of a non-accepted exit so the slot frees without waiting for expiry."""
     try:
         async with asyncio.timeout(3):
             await session.rollback()
             await connectors_public.settle_collection_exit(
-                session, ref, outcome=outcome, error_code=error_code, retryable=retryable,
-                provider_deadline=provider_deadline)
+                session,
+                ref,
+                outcome=outcome,
+                error_code=error_code,
+                retryable=retryable,
+                provider_deadline=provider_deadline,
+            )
     except BaseException:  # noqa: BLE001  # deliberate boundary: the expiry sweeper still settles it
         return
 
@@ -225,7 +245,9 @@ async def release_failed_collection(
     session: AsyncSession,
     lease: ConnectorCollectionLease,
     *,
-    error_code: str, scope: Scope, multi_workspace_enabled: bool,
+    error_code: str,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> None:
     """Best-effort release after failure without masking the original outcome.
 
@@ -239,12 +261,20 @@ async def release_failed_collection(
     try:
         async with asyncio.timeout(3):
             await session.rollback()
-            await ingestion.release_connector_collection(session, lease, error_code=error_code, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+            await ingestion.release_connector_collection(
+                session,
+                lease,
+                error_code=error_code,
+                multi_workspace_enabled=multi_workspace_enabled,
+                scope=scope,
+            )
     except BaseException:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         return
 
 
-def provider_fetch_read(receipt: NativeCollectionReceipt, next_eligible_at: datetime | None = None) -> ProviderFetchRead:
+def provider_fetch_read(
+    receipt: NativeCollectionReceipt, next_eligible_at: datetime | None = None
+) -> ProviderFetchRead:
     """Expose actual original receipt workspace/status without private cursor/content."""
     return ProviderFetchRead(
         workspace_id=receipt.workspace_id,
@@ -262,9 +292,13 @@ def rate_limited_read(scope: Scope, coverage: Coverage, deadline: datetime) -> P
     """Build the deterministic ``rate_limited`` response: no batch, run, updates or records."""
     return ProviderFetchRead(
         workspace_id=scope.workspace_id,
-        status="rate_limited", batch_id=None, run_id=None,
-        received_update_count=0, record_count=0,
-        coverage=coverage, next_eligible_at=deadline,
+        status="rate_limited",
+        batch_id=None,
+        run_id=None,
+        received_update_count=0,
+        record_count=0,
+        coverage=coverage,
+        next_eligible_at=deadline,
     )
 
 
@@ -272,12 +306,20 @@ def rate_limited_read(scope: Scope, coverage: Coverage, deadline: datetime) -> P
 # Send fence
 # ---------------------------------------------------------------------------
 
+
 async def native_send_fence(
-    session: AsyncSession, source: ConnectorSource, lease: ConnectorCollectionLease,
-    collector_token: str, *, scope: Scope, multi_workspace_enabled: bool,
-    access_fence: AccessFence, source_fence: SourceFence,
+    session: AsyncSession,
+    source: ConnectorSource,
+    lease: ConnectorCollectionLease,
+    collector_token: str,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    source_fence: SourceFence,
     native_snapshot: NativeCredentialSnapshot | None = None,
-    world_operation_id: UUID | None = None, github_fence: object = None,
+    world_operation_id: UUID | None = None,
+    github_fence: object = None,
     github_binding: tuple[UUID, int] | None = None,
     request_ref: CollectionRequestRef | None = None,
 ) -> None:
@@ -291,19 +333,33 @@ async def native_send_fence(
     """
     try:
         current_source, row, _slots = await provisioning.lock_connector(
-            session, source.id, provisioning._ALL_CREDENTIAL_SLOTS, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence,
+            session,
+            source.id,
+            provisioning._ALL_CREDENTIAL_SLOTS,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=access_fence,
         )
-        if (current_source != source_fence or row is None
-                or not await provisioning.require_collection_fence(
-                    session, source, lease.source_generation, lease.connector_revision,
-                    scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-                )):
+        if (
+            current_source != source_fence
+            or row is None
+            or not await provisioning.require_collection_fence(
+                session,
+                source,
+                lease.source_generation,
+                lease.connector_revision,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+        ):
             raise ConflictError("Original provider Source/configuration changed")
         if native_snapshot is not None:
             current_native = await get_native_credential_snapshot(
-                session, source.id, source_generation=lease.source_generation,
-                connector_revision=lease.connector_revision, scope=scope,
+                session,
+                source.id,
+                source_generation=lease.source_generation,
+                connector_revision=lease.connector_revision,
+                scope=scope,
                 multi_workspace_enabled=multi_workspace_enabled,
             )
             if current_native != native_snapshot or native_snapshot.access_fence != access_fence:
@@ -311,11 +367,15 @@ async def native_send_fence(
         if source.provider == "alpha_vantage" and (
             not isinstance(world_operation_id, UUID)
             or not await connectors_public.validate_world_credential_operation_in_uow(
-                session, source.id, source_generation=lease.source_generation,
+                session,
+                source.id,
+                source_generation=lease.source_generation,
                 connector_revision=lease.connector_revision,
                 expected_operation_id=world_operation_id,
-                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-                access_fence=access_fence, source_fence=source_fence,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+                access_fence=access_fence,
+                source_fence=source_fence,
             )
         ):
             raise ConflictError("Original world credential changed")
@@ -323,24 +383,40 @@ async def native_send_fence(
         # must precede the GitHub grant. The held validator below then acquires only
         # SourceIngestionState, preserving the accepted token -> grant -> state order.
         await ingestion.lock_source_credentials_in_uow(
-            session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            access_fence=access_fence, source_fence=source_fence,
+            session,
+            source.id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+            source_fence=source_fence,
         )
         if github_fence is not None:
             current_binding = await connectors_public.lock_github_binding_fence_in_uow(
-                session, source.id, source_generation=lease.source_generation,
-                connector_revision=lease.connector_revision, scope=scope,
+                session,
+                source.id,
+                source_generation=lease.source_generation,
+                connector_revision=lease.connector_revision,
+                scope=scope,
                 multi_workspace_enabled=multi_workspace_enabled,
-                access_fence=access_fence, source_fence=source_fence,
+                access_fence=access_fence,
+                source_fence=source_fence,
             )
             grant = await session.get(GithubOAuthGrant, source.id, populate_existing=True)
-            if (current_binding != github_fence or grant is None
-                    or github_binding != (grant.operation_id, grant.token_revision)):
+            if (
+                current_binding != github_fence
+                or grant is None
+                or github_binding != (grant.operation_id, grant.token_revision)
+            ):
                 raise ConflictError("Original GitHub grant changed")
         if not await ingestion.validate_connector_collection_in_uow(
-            session, lease, collector_token=collector_token, scope=scope,
+            session,
+            lease,
+            collector_token=collector_token,
+            scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
-            access_fence=access_fence, source_fence=source_fence, request_ref=request_ref,
+            access_fence=access_fence,
+            source_fence=source_fence,
+            request_ref=request_ref,
         ):
             raise ConflictError("Original collection reservation changed")
     finally:
@@ -350,6 +426,7 @@ async def native_send_fence(
 # ---------------------------------------------------------------------------
 # Collector protocol, context and registry
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class FetchContext:
@@ -377,17 +454,25 @@ class FetchContext:
     github_permit_token: str | None = None
     prepared: Any = None
 
-    async def send_fence(self, *, lease: ConnectorCollectionLease | None = None, **extra: Any) -> None:
+    async def send_fence(
+        self, *, lease: ConnectorCollectionLease | None = None, **extra: Any
+    ) -> None:
         """Run ``native_send_fence`` for ``lease`` (default: the admitted lease) with this request's fences.
 
         ``extra`` forwards the provider-specific proofs (native snapshot, world operation id,
         GitHub fence/binding). Releases SQL in ``native_send_fence``'s ``finally``.
         """
         await native_send_fence(
-            self.session, self.source, self.lease if lease is None else lease, self.collector_token,
-            request_ref=self.request_ref, scope=self.scope,
+            self.session,
+            self.source,
+            self.lease if lease is None else lease,
+            self.collector_token,
+            request_ref=self.request_ref,
+            scope=self.scope,
             multi_workspace_enabled=self.multi_workspace_enabled,
-            access_fence=self.access_fence, source_fence=self.source_fence, **extra,
+            access_fence=self.access_fence,
+            source_fence=self.source_fence,
+            **extra,
         )
 
     def before_request(self) -> Callable[[], Awaitable[None]]:
@@ -488,6 +573,7 @@ def resolve_collector(provider: str | None) -> ProviderCollector:
 # Dispatcher
 # ---------------------------------------------------------------------------
 
+
 def validate_native_source(source: ConnectorSource) -> None:
     """Reject sources that are not natively collectable through this endpoint.
 
@@ -496,7 +582,9 @@ def validate_native_source(source: ConnectorSource) -> None:
     """
     if not is_native_provider(source.provider):
         raise ConflictError("Native provider is not configured")
-    if source.provider in GATED_EXECUTOR_PROVIDERS:  # free providers run only through the gated shared executor
+    if (
+        source.provider in GATED_EXECUTOR_PROVIDERS
+    ):  # free providers run only through the gated shared executor
         raise ConflictError("Provider is collected by the scheduler only")
     try:
         registry.validate(source)
@@ -513,9 +601,17 @@ class _Admitted:
 
 
 async def _admit_collection(
-    session: AsyncSession, request: Request, source: ConnectorSource, payload: ProviderFetchRequest,
-    *, collector_token: str, request_ref: CollectionRequestRef, scope: Scope,
-    access_fence: AccessFence, multi_workspace_enabled: bool, segment_deadline: float | None,
+    session: AsyncSession,
+    request: Request,
+    source: ConnectorSource,
+    payload: ProviderFetchRequest,
+    *,
+    collector_token: str,
+    request_ref: CollectionRequestRef,
+    scope: Scope,
+    access_fence: AccessFence,
+    multi_workspace_enabled: bool,
+    segment_deadline: float | None,
 ) -> _Admitted | ProviderFetchRead:
     """Fence the connector, honour the shared cooldown and acquire the durable lease.
 
@@ -528,9 +624,14 @@ async def _admit_collection(
     try:
         if not await await_with_github_segment_deadline(
             provisioning.require_collection_fence(
-                session, source, payload.source_generation,
-                payload.connector_revision, lock=True, backend_revision=payload.backend_revision,
-                multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+                session,
+                source,
+                payload.source_generation,
+                payload.connector_revision,
+                lock=True,
+                backend_revision=payload.backend_revision,
+                multi_workspace_enabled=multi_workspace_enabled,
+                scope=scope,
             ),
             deadline=deadline,
         ):
@@ -542,10 +643,17 @@ async def _admit_collection(
         )
         if cooldown is not None and cooldown > now:
             await settle_request_exit(
-                session, request_ref, outcome="failed", error_code="provider_rate_limited",
-                retryable=True, provider_deadline=cooldown)
+                session,
+                request_ref,
+                outcome="failed",
+                error_code="provider_rate_limited",
+                retryable=True,
+                provider_deadline=cooldown,
+            )
             return rate_limited_read(
-                scope, "pending_updates_only" if source.provider == "telegram" else "returned_snapshot", cooldown,
+                scope,
+                "pending_updates_only" if source.provider == "telegram" else "returned_snapshot",
+                cooldown,
             )
         lease = await await_with_github_segment_deadline(
             ingestion.acquire_connector_collection(
@@ -553,8 +661,10 @@ async def _admit_collection(
                 source_id=source.id,
                 source_generation=payload.source_generation,
                 connector_revision=payload.connector_revision,
-                collector_token=collector_token, request_ref=request_ref,
-                multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+                collector_token=collector_token,
+                request_ref=request_ref,
+                multi_workspace_enabled=multi_workspace_enabled,
+                scope=scope,
             ),
             deadline=deadline,
         )
@@ -562,11 +672,17 @@ async def _admit_collection(
         await session.rollback()
         raise UnavailableError("Provider collection admission exceeded its deadline") from exc
     source_fence = await sources.get_source_fence(
-        session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source.id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
-    if (source_fence is None or source_fence.generation != lease.source_generation
-            or source_fence.workspace_id != lease.workspace_id
-            or access_fence.configuration_revision != lease.configuration_revision):
+    if (
+        source_fence is None
+        or source_fence.generation != lease.source_generation
+        or source_fence.workspace_id != lease.workspace_id
+        or access_fence.configuration_revision != lease.configuration_revision
+    ):
         await session.rollback()
         raise ConflictError("Original collection reservation changed")
     await session.rollback()
@@ -583,15 +699,25 @@ async def _accept_page(ctx: FetchContext, page: CollectedPage) -> ProviderFetchR
     if page.post_collect is not None:
         await page.post_collect()
     if page.next_eligible_at is not None:
-        eligible = await extend_provider_cooldown(ctx.request, cast("str", ctx.source.provider), page.next_eligible_at)
+        eligible = await extend_provider_cooldown(
+            ctx.request, cast("str", ctx.source.provider), page.next_eligible_at
+        )
         # Rate limited pages never publish an ingestion receipt, cursor, or success health.
         await ingestion.release_connector_collection(
-            ctx.session, ctx.lease, error_code="provider_rate_limited",
-            multi_workspace_enabled=ctx.multi_workspace_enabled, scope=ctx.scope,
+            ctx.session,
+            ctx.lease,
+            error_code="provider_rate_limited",
+            multi_workspace_enabled=ctx.multi_workspace_enabled,
+            scope=ctx.scope,
         )
         await settle_request_exit(
-            ctx.session, ctx.request_ref, outcome="failed", error_code="provider_rate_limited",
-            retryable=True, provider_deadline=eligible)
+            ctx.session,
+            ctx.request_ref,
+            outcome="failed",
+            error_code="provider_rate_limited",
+            retryable=True,
+            provider_deadline=eligible,
+        )
         return rate_limited_read(ctx.scope, page.coverage, eligible)
     if page.pre_accept is not None:
         await page.pre_accept()
@@ -603,15 +729,22 @@ async def _accept_page(ctx: FetchContext, page: CollectedPage) -> ProviderFetchR
         lease_token=lease.token,
         cursor_before=lease.cursor_before,
         cursor_after=page.cursor_after if page.has_cursor_after else lease.cursor_before,
-        records=list(page.records), telegram_deliveries=(),
-        telegram_raw_deliveries=(), coverage=page.coverage,
+        records=list(page.records),
+        telegram_deliveries=(),
+        telegram_raw_deliveries=(),
+        coverage=page.coverage,
         github_segment=page.github_segment,
         collected_at=page.collected_at,
     )
     receipt = await ingestion.accept_native_collection(
-        ctx.session, native_batch, collector_token=ctx.collector_token, lease=lease,
-        multi_workspace_enabled=ctx.multi_workspace_enabled, scope=ctx.scope,
-        expected_native_operation_id=None, request_ref=ctx.request_ref,
+        ctx.session,
+        native_batch,
+        collector_token=ctx.collector_token,
+        lease=lease,
+        multi_workspace_enabled=ctx.multi_workspace_enabled,
+        scope=ctx.scope,
+        expected_native_operation_id=None,
+        request_ref=ctx.request_ref,
         expected_world_credential_operation_id=page.world_operation_id,
     )
     return provider_fetch_read(receipt, None)
@@ -619,7 +752,11 @@ async def _accept_page(ctx: FetchContext, page: CollectedPage) -> ProviderFetchR
 
 def _collection_window(segment_deadline: float | None) -> AbstractAsyncContextManager[Any]:
     """Return the collection timeout: the GitHub segment deadline, else a flat 60 seconds."""
-    return asyncio.timeout_at(segment_deadline) if segment_deadline is not None else asyncio.timeout(60)
+    return (
+        asyncio.timeout_at(segment_deadline)
+        if segment_deadline is not None
+        else asyncio.timeout(60)
+    )
 
 
 async def _run_collection(ctx: FetchContext, collector: ProviderCollector) -> ProviderFetchRead:
@@ -635,19 +772,30 @@ async def _run_collection(ctx: FetchContext, collector: ProviderCollector) -> Pr
             return await _accept_page(ctx, outcome)
         if outcome.rate_limited is not None:
             await settle_request_exit(
-                ctx.session, ctx.request_ref, outcome="failed", error_code="provider_rate_limited",
-                retryable=True, provider_deadline=outcome.rate_limited.next_eligible_at)
+                ctx.session,
+                ctx.request_ref,
+                outcome="failed",
+                error_code="provider_rate_limited",
+                retryable=True,
+                provider_deadline=outcome.rate_limited.next_eligible_at,
+            )
             return outcome.rate_limited
     receipt = outcome.receipt
     if receipt is None:
         raise RuntimeError("invariant violated: receipt must not be None")
-    if receipt.batch_id is None:  # replay-only Telegram page: nothing accepted, so nothing settled it
+    if (
+        receipt.batch_id is None
+    ):  # replay-only Telegram page: nothing accepted, so nothing settled it
         await settle_request_exit(ctx.session, ctx.request_ref, outcome="no_changes")
     return provider_fetch_read(receipt, outcome.eligible)
 
 
 async def _release_and_settle(
-    ctx: FetchContext, release_code: str, *, outcome_code: str, retryable: bool,
+    ctx: FetchContext,
+    release_code: str,
+    *,
+    outcome_code: str,
+    retryable: bool,
     provider_deadline: datetime | None = None,
 ) -> None:
     """Release the currently active lease, then settle the admission as failed.
@@ -656,17 +804,32 @@ async def _release_and_settle(
     the original outcome.
     """
     await release_failed_collection(
-        ctx.session, ctx.active_lease[0], error_code=release_code,
-        multi_workspace_enabled=ctx.multi_workspace_enabled, scope=ctx.scope,
+        ctx.session,
+        ctx.active_lease[0],
+        error_code=release_code,
+        multi_workspace_enabled=ctx.multi_workspace_enabled,
+        scope=ctx.scope,
     )
     await settle_request_exit(
-        ctx.session, ctx.request_ref, outcome="failed", error_code=outcome_code,
-        retryable=retryable, provider_deadline=provider_deadline)
+        ctx.session,
+        ctx.request_ref,
+        outcome="failed",
+        error_code=outcome_code,
+        retryable=retryable,
+        provider_deadline=provider_deadline,
+    )
 
 
 async def run_provider_fetch(
-    session: AsyncSession, request: Request, source: ConnectorSource, payload: ProviderFetchRequest,
-    *, collector_token: str, request_ref: CollectionRequestRef, scope: Scope, access_fence: AccessFence,
+    session: AsyncSession,
+    request: Request,
+    source: ConnectorSource,
+    payload: ProviderFetchRequest,
+    *,
+    collector_token: str,
+    request_ref: CollectionRequestRef,
+    scope: Scope,
+    access_fence: AccessFence,
 ) -> ProviderFetchRead:
     """Collect one bounded native page for an already authorized Source.
 
@@ -678,20 +841,37 @@ async def run_provider_fetch(
     unchanged after cleanup; transport errors become 503 "Provider collection failed".
     """
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
-    segment_deadline = asyncio.get_running_loop().time() + 60 if source.provider == "github" else None
+    segment_deadline = (
+        asyncio.get_running_loop().time() + 60 if source.provider == "github" else None
+    )
     validate_native_source(source)
     admitted = await _admit_collection(
-        session, request, source, payload, collector_token=collector_token, request_ref=request_ref,
-        scope=scope, access_fence=access_fence, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        request,
+        source,
+        payload,
+        collector_token=collector_token,
+        request_ref=request_ref,
+        scope=scope,
+        access_fence=access_fence,
+        multi_workspace_enabled=multi_workspace_enabled,
         segment_deadline=segment_deadline,
     )
     if isinstance(admitted, ProviderFetchRead):
         return admitted
     ctx = FetchContext(
-        session=session, request=request, source=source, payload=payload,
-        collector_token=collector_token, request_ref=request_ref, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
-        source_fence=admitted.source_fence, lease=admitted.lease, active_lease=[admitted.lease],
+        session=session,
+        request=request,
+        source=source,
+        payload=payload,
+        collector_token=collector_token,
+        request_ref=request_ref,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        source_fence=admitted.source_fence,
+        lease=admitted.lease,
+        active_lease=[admitted.lease],
         segment_deadline=segment_deadline,
     )
     collector = resolve_collector(source.provider)
@@ -699,8 +879,11 @@ async def run_provider_fetch(
         await collector.prepare(ctx)
     except BaseException:
         await release_failed_collection(
-            session, ctx.active_lease[0], error_code="provider_collection_failed",
-            multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+            session,
+            ctx.active_lease[0],
+            error_code="provider_collection_failed",
+            multi_workspace_enabled=multi_workspace_enabled,
+            scope=scope,
         )
         raise
     try:
@@ -708,36 +891,62 @@ async def run_provider_fetch(
     except ProviderAdmissionBusy:
         eligible = datetime.now(UTC) + timedelta(seconds=1)
         await _release_and_settle(
-            ctx, "provider_admission_busy", outcome_code="provider_admission_busy",
-            retryable=True, provider_deadline=eligible)
+            ctx,
+            "provider_admission_busy",
+            outcome_code="provider_admission_busy",
+            retryable=True,
+            provider_deadline=eligible,
+        )
         return rate_limited_read(scope, "returned_snapshot", eligible)
     except ProviderRateLimited as exc:
-        deadline = await extend_provider_cooldown(request, cast("str", source.provider), exc.next_eligible_at)
+        deadline = await extend_provider_cooldown(
+            request, cast("str", source.provider), exc.next_eligible_at
+        )
         await _release_and_settle(
-            ctx, "provider_rate_limited", outcome_code="provider_rate_limited",
-            retryable=True, provider_deadline=deadline)
+            ctx,
+            "provider_rate_limited",
+            outcome_code="provider_rate_limited",
+            retryable=True,
+            provider_deadline=deadline,
+        )
         return rate_limited_read(
-            scope, "pending_updates_only" if source.provider == "telegram" else "returned_snapshot", deadline,
+            scope,
+            "pending_updates_only" if source.provider == "telegram" else "returned_snapshot",
+            deadline,
         )
     except (HTTPException, DomainError) as exc:
         code, retryable = request_failure(exc)
         await release_failed_collection(
-            session, ctx.active_lease[0], error_code=collection_error_code(exc),
-            multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+            session,
+            ctx.active_lease[0],
+            error_code=collection_error_code(exc),
+            multi_workspace_enabled=multi_workspace_enabled,
+            scope=scope,
         )
-        await settle_request_exit(session, ctx.request_ref, outcome="failed", error_code=code, retryable=retryable)
+        await settle_request_exit(
+            session, ctx.request_ref, outcome="failed", error_code=code, retryable=retryable
+        )
         raise
     except (TimeoutError, httpx.HTTPError, ValueError) as exc:
         code, retryable = request_failure(exc)
         await release_failed_collection(
-            session, ctx.active_lease[0], error_code=collection_error_code(exc),
-            multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+            session,
+            ctx.active_lease[0],
+            error_code=collection_error_code(exc),
+            multi_workspace_enabled=multi_workspace_enabled,
+            scope=scope,
         )
-        await settle_request_exit(session, ctx.request_ref, outcome="failed", error_code=code, retryable=retryable)
+        await settle_request_exit(
+            session, ctx.request_ref, outcome="failed", error_code=code, retryable=retryable
+        )
         raise UnavailableError("Provider collection failed") from exc
     except BaseException:
         await _release_and_settle(
-            ctx, "provider_collection_failed", outcome_code="provider_collection_failed", retryable=True)
+            ctx,
+            "provider_collection_failed",
+            outcome_code="provider_collection_failed",
+            retryable=True,
+        )
         raise
     finally:
         if ctx.github_permit_token is not None:

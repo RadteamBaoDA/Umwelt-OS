@@ -43,7 +43,9 @@ def _field(**over: object) -> str:
 def test_tool_registered_and_terminal() -> None:
     """render_form is exposed with a valid schema and is terminal."""
     assert "render_form" in TERMINAL_UI_TOOLS
-    assert "render_form" in {s["function"]["name"] for s in build_chat_tool_specs(include_read_skill=False)}
+    assert "render_form" in {
+        s["function"]["name"] for s in build_chat_tool_specs(include_read_skill=False)
+    }
 
 
 @pytest.mark.parametrize(

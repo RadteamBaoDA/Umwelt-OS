@@ -44,8 +44,18 @@ def test_flag_must_be_bool():
 async def test_simple_methods_forward_scope(monkeypatch, flag):
     calls: list = []
     for mod, names in (
-        (svc.entities, ["list_entities", "get_entity", "list_entity_evidence", "list_review_candidates",
-                        "assign_review_candidate", "resolve_relationship_review", "list_entity_history"]),
+        (
+            svc.entities,
+            [
+                "list_entities",
+                "get_entity",
+                "list_entity_evidence",
+                "list_review_candidates",
+                "assign_review_candidate",
+                "resolve_relationship_review",
+                "list_entity_history",
+            ],
+        ),
         (svc.relationships, ["get_neighbors"]),
         (svc.timeline, ["list_events", "list_timeline"]),
         (svc.temporal, ["find_changes"]),
@@ -104,8 +114,15 @@ async def test_entity_timeline_batches_carry_scope(monkeypatch):
     calls: list = []
     ids = [uuid4() for _ in range(101)]
     _record(monkeypatch, svc.entities, "resolve_canonical_entity_id", calls, result=uuid4())
-    _record(monkeypatch, svc.timeline, "list_timeline", calls,
-            result=SimpleNamespace(items=[SimpleNamespace(evidence=[{"document_version_id": str(i)} for i in ids])]))
+    _record(
+        monkeypatch,
+        svc.timeline,
+        "list_timeline",
+        calls,
+        result=SimpleNamespace(
+            items=[SimpleNamespace(evidence=[{"document_version_id": str(i)} for i in ids])]
+        ),
+    )
     _record(monkeypatch, svc.temporal, "mapping_statuses", calls, result=[])
     query = SimpleNamespace(model_copy=lambda update: query)
     await _facade().get_entity_timeline(uuid4(), query, graph_enabled=True)  # type: ignore[arg-type]

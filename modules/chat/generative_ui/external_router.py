@@ -45,7 +45,9 @@ TYPESAFE_URL = "https://api.typesafe.ai/v1/systemone"
 TYPESAFE_TIMEOUT_SECONDS = 15.0
 MAX_RESPONSE_BYTES = 64 * 1024
 ROUTER_ROLE = "viz-router"
-DECISION_STATE_CHARS = 8000  # Clef models read ~2000 text tokens; keep the newest text inside that bound
+DECISION_STATE_CHARS = (
+    8000  # Clef models read ~2000 text tokens; keep the newest text inside that bound
+)
 DECISION_QUESTION = "visualization"
 MAX_DECISION_MODELS = 200
 _MODEL_ID = re.compile(r"[A-Za-z0-9@][A-Za-z0-9._:/@+-]{0,199}")
@@ -77,7 +79,9 @@ CRITERIA: dict[str, str] = {
 
 
 # Presentation tool the decision allows, per category. Everything not listed here is removed (text allows none).
-_CHART_CATEGORIES = frozenset({"bar_chart", "line_chart", "scatter_plot", "distribution", "part_to_whole"})
+_CHART_CATEGORIES = frozenset(
+    {"bar_chart", "line_chart", "scatter_plot", "distribution", "part_to_whole"}
+)
 _PRESENTATION_TOOLS = frozenset({TOOL_SANDBOXED_UI, TOOL_TABLE, TOOL_CHART})
 # Routing never removes these. Interaction tools collect input from the user rather than present an answer
 # (documented deviation: upstream only removes render tools; forms are kept for the same reason). The plan
@@ -119,7 +123,9 @@ def bounded_window(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
     kept = [
         {"role": m["role"], "content": m["content"][:WINDOW_CHARS]}
         for m in messages
-        if m.get("role") in {"user", "assistant"} and isinstance(m.get("content"), str) and m["content"].strip()
+        if m.get("role") in {"user", "assistant"}
+        and isinstance(m.get("content"), str)
+        and m["content"].strip()
     ]
     return kept[-WINDOW_MESSAGES:]
 
@@ -158,9 +164,16 @@ def error_from_gateway(exc: Exception) -> VisualizationRouterError:
 
 
 async def classify_llm(
-    gateway: ModelGateway, mapping: ModelMapping, policy: RequestPolicy, window: list[dict[str, str]], *,
-    mode: str = "json_schema", base_url: str | None = None, probe: bool = False,
-    before_send: Callable[[], Awaitable[None]] | None = None, role: str = ROUTER_ROLE,
+    gateway: ModelGateway,
+    mapping: ModelMapping,
+    policy: RequestPolicy,
+    window: list[dict[str, str]],
+    *,
+    mode: str = "json_schema",
+    base_url: str | None = None,
+    probe: bool = False,
+    before_send: Callable[[], Awaitable[None]] | None = None,
+    role: str = ROUTER_ROLE,
 ) -> str:
     """Adapter 1: classify through the configured model gateway with an enum-constrained answer.
 
@@ -171,27 +184,59 @@ async def classify_llm(
     Raises:
         VisualizationRouterError: invalid answer, provider/timeout/auth failure, unsupported mode or denial.
     """
-    messages = [{"role": "system", "content": INSTRUCTIONS + " Categories: " + json.dumps(CRITERIA)}, *window]
+    messages = [
+        {"role": "system", "content": INSTRUCTIONS + " Categories: " + json.dumps(CRITERIA)},
+        *window,
+    ]
     extra = {"provider": {"require_parameters": True}} if _is_openrouter(base_url) else None
-    schema = {"type": "object", "properties": {"category": {"type": "string", "enum": list(CATEGORIES)}},
-              "required": ["category"], "additionalProperties": False}
+    schema = {
+        "type": "object",
+        "properties": {"category": {"type": "string", "enum": list(CATEGORIES)}},
+        "required": ["category"],
+        "additionalProperties": False,
+    }
     try:
         if mode == "forced_tool":
-            tool = {"type": "function", "function": {"name": _TOOL_NAME, "description": INSTRUCTIONS, "parameters": schema}}
+            tool = {
+                "type": "function",
+                "function": {"name": _TOOL_NAME, "description": INSTRUCTIONS, "parameters": schema},
+            }
             response = await gateway.tools(
-                role, mapping, policy, messages, [tool], probe, max_tokens=64, before_send=before_send,
-                tool_choice={"type": "function", "function": {"name": _TOOL_NAME}}, extra_body=extra)
+                role,
+                mapping,
+                policy,
+                messages,
+                [tool],
+                probe,
+                max_tokens=64,
+                before_send=before_send,
+                tool_choice={"type": "function", "function": {"name": _TOOL_NAME}},
+                extra_body=extra,
+            )
         elif mode == "json_schema":
             response = await gateway.structured(
-                role, mapping, policy, messages, {"name": "visualization_route", "strict": True, "schema": schema},
-                probe, max_tokens=64, temperature=0, before_send=before_send, extra_body=extra)
+                role,
+                mapping,
+                policy,
+                messages,
+                {"name": "visualization_route", "strict": True, "schema": schema},
+                probe,
+                max_tokens=64,
+                temperature=0,
+                before_send=before_send,
+                extra_body=extra,
+            )
         else:
             raise VisualizationRouterError("invalid_mode", retryable=False)
     except (ModelGatewayError, ValueError) as exc:
         raise error_from_gateway(exc) from exc
     try:
         message = response["choices"][0]["message"]
-        raw = message["tool_calls"][0]["function"]["arguments"] if mode == "forced_tool" else message["content"]
+        raw = (
+            message["tool_calls"][0]["function"]["arguments"]
+            if mode == "forced_tool"
+            else message["content"]
+        )
         return _valid(json.loads(raw)["category"])
     except (KeyError, IndexError, TypeError, ValueError) as exc:
         raise VisualizationRouterError("invalid_category") from exc
@@ -199,14 +244,24 @@ async def classify_llm(
 
 def decision_questions() -> dict[str, Any]:
     """The single OpenRouter ``choice`` question: criteria keys are the 13 categories (values null), prompt is the LLM's."""
-    return {DECISION_QUESTION: {
-        "type": "choice", "instructions": INSTRUCTIONS + " Categories: " + json.dumps(CRITERIA),
-        "criteria": dict.fromkeys(CATEGORIES)}}
+    return {
+        DECISION_QUESTION: {
+            "type": "choice",
+            "instructions": INSTRUCTIONS + " Categories: " + json.dumps(CRITERIA),
+            "criteria": dict.fromkeys(CATEGORIES),
+        }
+    }
 
 
 async def classify_decisions(
-    gateway: ModelGateway, mapping: ModelMapping, policy: RequestPolicy, window: list[dict[str, str]], *,
-    probe: bool = False, before_send: Callable[[], Awaitable[None]] | None = None, role: str = ROUTER_ROLE,
+    gateway: ModelGateway,
+    mapping: ModelMapping,
+    policy: RequestPolicy,
+    window: list[dict[str, str]],
+    *,
+    probe: bool = False,
+    before_send: Callable[[], Awaitable[None]] | None = None,
+    role: str = ROUTER_ROLE,
 ) -> str:
     """Adapter 3: OpenRouter Decisions API (alpha) ``choice`` question over the bounded window as one text item.
 
@@ -219,7 +274,9 @@ async def classify_decisions(
     """
     text = "\n".join(f"{m['role']}: {m['content']}" for m in window)[-DECISION_STATE_CHARS:]
     try:
-        response = await gateway.decisions(role, mapping, policy, [text], decision_questions(), probe, before_send=before_send)
+        response = await gateway.decisions(
+            role, mapping, policy, [text], decision_questions(), probe, before_send=before_send
+        )
     except (ModelGatewayError, ValueError) as exc:
         raise error_from_gateway(exc) from exc
     try:
@@ -246,7 +303,11 @@ def parse_decision_models(payload: Any) -> list[dict[str, Any]]:
             continue
         arch = item.get("architecture")
         raw = arch.get("input_modalities") if isinstance(arch, dict) else None
-        modalities = sorted({m for m in raw if isinstance(m, str) and m in _INPUT_MODALITIES}) if isinstance(raw, list) else []
+        modalities = (
+            sorted({m for m in raw if isinstance(m, str) and m in _INPUT_MODALITIES})
+            if isinstance(raw, list)
+            else []
+        )
         seen.add(model_id)
         models.append({"id": model_id, "input_modalities": modalities})
         if len(models) >= MAX_DECISION_MODELS:
@@ -255,7 +316,9 @@ def parse_decision_models(payload: Any) -> list[dict[str, Any]]:
 
 
 async def classify_typesafe(
-    api_key: str, window: list[dict[str, str]], transport: httpx.AsyncBaseTransport,
+    api_key: str,
+    window: list[dict[str, str]],
+    transport: httpx.AsyncBaseTransport,
 ) -> tuple[str, dict[str, float]]:
     """Adapter 2: TypeSafe System One ``visualization`` choice question; returns (category, probabilities).
 
@@ -269,15 +332,26 @@ async def classify_typesafe(
     body = {
         "model": "jev-latest",
         "state": {"conversation": window},
-        "questions": {"visualization": {"type": "choice", "instructions": INSTRUCTIONS, "criteria": CRITERIA}},
+        "questions": {
+            "visualization": {"type": "choice", "instructions": INSTRUCTIONS, "criteria": CRITERIA}
+        },
     }
     try:
         # Stream so an oversized body is aborted as soon as it passes the cap instead of being read whole.
-        async with httpx.AsyncClient(
-            transport=transport, timeout=TYPESAFE_TIMEOUT_SECONDS, follow_redirects=False, trust_env=False,
-        ) as client, client.stream(
-            "POST", TYPESAFE_URL, json=body, headers={"Authorization": f"Bearer {api_key}"},
-        ) as response:
+        async with (
+            httpx.AsyncClient(
+                transport=transport,
+                timeout=TYPESAFE_TIMEOUT_SECONDS,
+                follow_redirects=False,
+                trust_env=False,
+            ) as client,
+            client.stream(
+                "POST",
+                TYPESAFE_URL,
+                json=body,
+                headers={"Authorization": f"Bearer {api_key}"},
+            ) as response,
+        ):
             status_code, is_success = response.status_code, response.is_success
             content = b""
             if status_code not in {401, 403} and is_success:
@@ -302,10 +376,13 @@ async def classify_typesafe(
         category = _valid(answer["choice"])
         raw = answer.get("probabilities") or {}
         probabilities = {
-            _valid(name): float(value) for name, value in raw.items()
+            _valid(name): float(value)
+            for name, value in raw.items()
             if isinstance(value, (int, float)) and not isinstance(value, bool)
         }
-        if len(probabilities) != len(raw) or any(not math.isfinite(v) or not 0 <= v <= 1 for v in probabilities.values()):
+        if len(probabilities) != len(raw) or any(
+            not math.isfinite(v) or not 0 <= v <= 1 for v in probabilities.values()
+        ):
             raise VisualizationRouterError("invalid_category")
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         raise VisualizationRouterError("invalid_category") from exc
@@ -323,7 +400,9 @@ def allowed_presentation_tools(category: str) -> frozenset[str]:
     return frozenset({TOOL_SANDBOXED_UI})
 
 
-def filter_tool_specs(specs: list[dict[str, Any]], decision: dict[str, Any]) -> list[dict[str, Any]]:
+def filter_tool_specs(
+    specs: list[dict[str, Any]], decision: dict[str, Any]
+) -> list[dict[str, Any]]:
     """Drop the presentation tools the decision does not allow; data and interaction tools always stay.
 
     Pure: returns a new list, ``specs`` is untouched. ``plan`` is a presentation tool with no router category, so
@@ -364,8 +443,8 @@ def decision_note(decision: dict[str, Any], *, remote_media: bool) -> str:
             "\nMap: build it inside the sandbox. "
             + (
                 "Load tiles only through `await loadImage(url)` and show the tile provider's attribution. "
-                if remote_media else
-                "Remote tiles are not permitted this turn: draw a self-contained inline SVG schematic and say it is "
+                if remote_media
+                else "Remote tiles are not permitted this turn: draw a self-contained inline SVG schematic and say it is "
                 "not a live map. "
             )
             + "Never invent distances, closures or travel times."
@@ -375,10 +454,16 @@ def decision_note(decision: dict[str, Any], *, remote_media: bool) -> str:
             "\nUse window.createTripAnimator: numbered stops pinned in sequence, connections revealed behind the "
             "pins, synchronized destination cards, Pause/Resume and Replay; no automatic page scrolling. Label route "
             "connections illustrative. "
-            + ("Photos only via get_trip_stop_images; keep credits." if remote_media else "No remote photos.")
+            + (
+                "Photos only via get_trip_stop_images; keep credits."
+                if remote_media
+                else "No remote photos."
+            )
         )
     if category == "calculator":
-        note += "\nShow inputs with units and defaults, the formula, and live outputs; validate inputs."
+        note += (
+            "\nShow inputs with units and defaults, the formula, and live outputs; validate inputs."
+        )
     elif category == "interactive_diagram":
         note += "\nExpose only the few variables that change understanding, with labelled controls."
     return note

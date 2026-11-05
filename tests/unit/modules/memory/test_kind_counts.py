@@ -26,13 +26,15 @@ def _rows(kinds: list[str]) -> list[SimpleNamespace]:
     ]
 
 
-async def _page(rows: list[SimpleNamespace], hidden: set[int] | None = None, **kwargs: object) -> MemoryPage:
+async def _page(
+    rows: list[SimpleNamespace], hidden: set[int] | None = None, **kwargs: object
+) -> MemoryPage:
     """Run get_memories with `rows` served in batches; rows whose index is in `hidden` fail verification."""
     hidden_ids = {rows[i].id for i in (hidden or set())}
     pending = list(rows)
 
     async def scalars(_stmt: object) -> MagicMock:
-        batch, pending[:] = pending[:public._COUNT_BATCH], pending[public._COUNT_BATCH:]
+        batch, pending[:] = pending[: public._COUNT_BATCH], pending[public._COUNT_BATCH :]
         return MagicMock(all=lambda: batch)
 
     async def verified(_session: object, row: SimpleNamespace, **_kw: object) -> object | None:
@@ -63,7 +65,9 @@ async def test_counts_never_exceed_visible_list() -> None:
 
 
 async def test_type_filter_skips_counts() -> None:
-    page = await _page(_rows(["fact", "preference", "fact"]), memory_type="preference", hidden={0, 1, 2})
+    page = await _page(
+        _rows(["fact", "preference", "fact"]), memory_type="preference", hidden={0, 1, 2}
+    )
     assert page.kind_counts is None and page.total_count is None and page.counts_capped is False
 
 
@@ -74,7 +78,9 @@ async def test_scan_cap_looks_identical_to_verified_cap() -> None:
     over = await _page(_rows(["fact"] * (public.COUNT_VERIFIED_CAP + 1)))
     assert (page.counts_capped, page.kind_counts, page.total_count) == (True, None, None)
     assert (page.counts_capped, page.kind_counts, page.total_count) == (
-        over.counts_capped, over.kind_counts, over.total_count,
+        over.counts_capped,
+        over.kind_counts,
+        over.total_count,
     )
 
 
@@ -90,15 +96,20 @@ async def test_exactly_at_cap_is_not_capped() -> None:
 
 
 async def test_cursor_pages_omit_counts() -> None:
-    binding = public.page_cursor_binding(OWNER, kind="memories", status="active", memory_type=None, query=None)
-    page = await _page([], cursor=public.bind_page_cursor(encode_cursor(datetime.now(UTC), uuid4()), binding))
+    binding = public.page_cursor_binding(
+        OWNER, kind="memories", status="active", memory_type=None, query=None
+    )
+    page = await _page(
+        [], cursor=public.bind_page_cursor(encode_cursor(datetime.now(UTC), uuid4()), binding)
+    )
     assert page.total_count is None and page.kind_counts is None and page.counts_capped is False
 
 
 def test_counts_share_the_list_visibility_filters() -> None:
     """Deleted/forgotten rows are excluded by status; the search filter is shared with the list."""
     sql = " ".join(
-        str(c.compile(dialect=postgresql.dialect())) for c in public._list_filters("active", " tea ", scope=OWNER)
+        str(c.compile(dialect=postgresql.dialect()))
+        for c in public._list_filters("active", " tea ", scope=OWNER)
     )
     assert "memories.status =" in sql and "ILIKE" in sql.upper()
     assert len(public._list_filters("forgotten", None, scope=OWNER)) == 2  # workspace + status
@@ -117,7 +128,11 @@ async def test_search_skips_counts_and_scan_under_privacy_lock() -> None:
         page = await MemoryService(session).get_memories(query="50%_off", **CTX)
     assert session.scalars.await_count == 1  # list only; counts would add a second scan
     assert page.kind_counts is None and page.total_count is None and page.counts_capped is False
-    sql = str(public.select(public.Memory).where(*public._list_filters("active", "50%_off", scope=OWNER)).compile(dialect=postgresql.dialect()))
+    sql = str(
+        public.select(public.Memory)
+        .where(*public._list_filters("active", "50%_off", scope=OWNER))
+        .compile(dialect=postgresql.dialect())
+    )
     assert "ESCAPE" in sql
 
 

@@ -40,14 +40,20 @@ TITLE_MAX = 200
 SNIPPET_MAX = 4000
 URL_MAX = 2048
 
-FailureCode = Literal["query_too_long", "empty_query", "timeout", "provider_error", "network_denied"]
+FailureCode = Literal[
+    "query_too_long", "empty_query", "timeout", "provider_error", "network_denied"
+]
 _TAG = re.compile(r"<[^>]*>")
 _BAD_URL_CHARS = re.compile(r"[\s<>\"'`\\]")
 _HOST_OK = re.compile(r"[a-z0-9.-]{1,253}")
 # NFKC does not fold these CJK/math brackets to ASCII
 _BRACKETS = {
-    0x3C: "‹", 0x3E: "›", 0x5B: "(", 0x5D: ")",
-    **{ord(c): "(" for c in "【〔⟦〖「『"}, **{ord(c): ")" for c in "】〕⟧〗」』"},
+    0x3C: "‹",
+    0x3E: "›",
+    0x5B: "(",
+    0x5D: ")",
+    **{ord(c): "(" for c in "【〔⟦〖「『"},
+    **{ord(c): ")" for c in "】〕⟧〗」』"},
 }
 
 
@@ -98,7 +104,11 @@ def sanitize_text(text: str, limit: int) -> str:
 
 def sanitize_url(raw: str) -> tuple[str, str] | None:
     """Return (url without fragment, host) or None when the URL must be dropped."""
-    if len(raw) > URL_MAX or _BAD_URL_CHARS.search(raw) or any(unicodedata.category(c) in ("Cc", "Cf") for c in raw):
+    if (
+        len(raw) > URL_MAX
+        or _BAD_URL_CHARS.search(raw)
+        or any(unicodedata.category(c) in ("Cc", "Cf") for c in raw)
+    ):
         return None
     try:
         parts = urlsplit(raw)
@@ -109,12 +119,16 @@ def sanitize_url(raw: str) -> tuple[str, str] | None:
     if parts.scheme not in ("http", "https") or not host or "@" in parts.netloc:
         return None
     try:
-        host = host.encode("idna").decode("ascii").lower()  # punycode A-label; homographs show as xn--
+        host = (
+            host.encode("idna").decode("ascii").lower()
+        )  # punycode A-label; homographs show as xn--
     except UnicodeError:
         return None
     if not _HOST_OK.fullmatch(host):
         return None
-    return urlunsplit(parts._replace(netloc=parts.netloc.lower(), fragment="")), host  # no userinfo here, so netloc is host[:port]
+    return urlunsplit(
+        parts._replace(netloc=parts.netloc.lower(), fragment="")
+    ), host  # no userinfo here, so netloc is host[:port]
 
 
 def _result(title: Any, url: Any, snippet: Any) -> WebSearchResult | None:
@@ -139,7 +153,11 @@ def parse_results(provider: str, payload: Any) -> list[WebSearchResult]:
         items, snippet_key = (web.get("results") if isinstance(web, dict) else None), "description"
     if not isinstance(items, list):
         raise WebSearchError("provider_error", "unexpected_shape")
-    parsed = (_result(i.get("title"), i.get("url"), i.get(snippet_key)) for i in items if isinstance(i, dict))
+    parsed = (
+        _result(i.get("title"), i.get("url"), i.get(snippet_key))
+        for i in items
+        if isinstance(i, dict)
+    )
     return [r for r in parsed if r is not None][:MAX_RESULTS]
 
 
@@ -165,7 +183,8 @@ def format_web_results(results: list[WebSearchResult], start: int) -> str:
 def web_search_permitted(config: AIExecutionConfig) -> bool:
     """Config/consent gate. Callers must evaluate it inside the fence (review P1-1)."""
     keyed = config.web_search_provider in ("tavily", "brave", "omniroute") and (
-        config.web_search_credential_configured and bool(config.web_search_api_key))
+        config.web_search_credential_configured and bool(config.web_search_api_key)
+    )
     return (
         (keyed or config.web_search_provider == "searxng")  # SearXNG is keyless
         and bool(config.web_search_endpoint)
@@ -179,23 +198,44 @@ async def _fetch(
     """Send one bounded JSON request over the caller-supplied approved transport."""
     base = endpoint.rstrip("/")
     if provider == "searxng":
-        request = httpx.Request("GET", f"{base}/search", headers={"Accept": "application/json"},
-                                params={"q": query, "format": "json", "safesearch": 1})
+        request = httpx.Request(
+            "GET",
+            f"{base}/search",
+            headers={"Accept": "application/json"},
+            params={"q": query, "format": "json", "safesearch": 1},
+        )
     elif provider == "tavily":
         request = httpx.Request(
-            "POST", f"{base}/search", headers={"Authorization": f"Bearer {api_key}"},
-            json={"query": query, "max_results": MAX_RESULTS, "search_depth": "basic",
-                  "include_answer": False, "include_raw_content": False, "include_images": False},
+            "POST",
+            f"{base}/search",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "query": query,
+                "max_results": MAX_RESULTS,
+                "search_depth": "basic",
+                "include_answer": False,
+                "include_raw_content": False,
+                "include_images": False,
+            },
         )
     elif provider == "omniroute":
         request = httpx.Request(
-            "POST", f"{base}/search", headers={"Authorization": f"Bearer {api_key}"},
+            "POST",
+            f"{base}/search",
+            headers={"Authorization": f"Bearer {api_key}"},
             json={"query": query, "max_results": MAX_RESULTS, "search_type": "web"},
         )
     else:
         request = httpx.Request(
-            "GET", f"{base}/res/v1/web/search", headers={"X-Subscription-Token": api_key, "Accept": "application/json"},
-            params={"q": query, "count": MAX_RESULTS, "safesearch": "moderate", "text_decorations": 0},
+            "GET",
+            f"{base}/res/v1/web/search",
+            headers={"X-Subscription-Token": api_key, "Accept": "application/json"},
+            params={
+                "q": query,
+                "count": MAX_RESULTS,
+                "safesearch": "moderate",
+                "text_decorations": 0,
+            },
         )
     timeout = httpx.Timeout(connect=3, read=6, write=3, pool=1)
     body = bytearray()
@@ -210,7 +250,9 @@ async def _fetch(
             mime = content_type.split(";")[0].strip()
             if mime != "application/json":
                 # Only [a-z0-9.+/-] survives so a hostile header cannot inject text into logs or the UI.
-                raise WebSearchError("provider_error", "content_type:" + re.sub(r"[^a-z0-9.+/-]", "", mime)[:40])
+                raise WebSearchError(
+                    "provider_error", "content_type:" + re.sub(r"[^a-z0-9.+/-]", "", mime)[:40]
+                )
             async for chunk in response.aiter_bytes():  # decoded bytes: defeats gzip bombs
                 body += chunk
                 if len(body) > MAX_RESPONSE_BYTES:
@@ -234,27 +276,39 @@ async def search(
     is built (``provider_error``: a bad credential, and no new failure code is needed).
     """
     query = normalize_query(message)
-    if provider not in ("tavily", "brave", "searxng", "omniroute") or not (api_key.isascii() and api_key.isprintable()):
+    if provider not in ("tavily", "brave", "searxng", "omniroute") or not (
+        api_key.isascii() and api_key.isprintable()
+    ):
         raise WebSearchError("provider_error")
     loop = asyncio.get_running_loop()
     started, code, reason = loop.time(), "ok", "-"
     try:
         async with asyncio.timeout(WEB_SEARCH_TIMEOUT_SECONDS):
-            return parse_results(provider, await _fetch(provider, endpoint, api_key, query, transport))
+            return parse_results(
+                provider, await _fetch(provider, endpoint, api_key, query, transport)
+            )
     except WebSearchError as exc:
         code, reason = exc.code, exc.reason or "-"
         raise
     except (TimeoutError, httpx.TimeoutException):
         code = "timeout"
         raise WebSearchError("timeout") from None
-    except EndpointNetworkPolicyError:  # DNS answer/origin denied by the approved transport (SSRF guard)
+    except (
+        EndpointNetworkPolicyError
+    ):  # DNS answer/origin denied by the approved transport (SSRF guard)
         code = "network_denied"
         raise WebSearchError("network_denied") from None
     except Exception as exc:  # noqa: BLE001 - deliberate catch-all; never log str(exc)/chain: it can embed the key, URL or query
         code = f"provider_error:{type(exc).__name__}"
         raise WebSearchError("provider_error") from None
     finally:
-        logger.info("web_search provider=%s outcome=%s reason=%s ms=%d", provider, code, reason, int((loop.time() - started) * 1000))
+        logger.info(
+            "web_search provider=%s outcome=%s reason=%s ms=%d",
+            provider,
+            code,
+            reason,
+            int((loop.time() - started) * 1000),
+        )
 
 
 def target_permitted(target: WebSearchTarget, privacy: PrivacySettings) -> bool:
@@ -263,12 +317,19 @@ def target_permitted(target: WebSearchTarget, privacy: PrivacySettings) -> bool:
         return False
     # Destination identity matches the settings-owned consent record; never derive it from credentials.
     destination = f"web-search:{hashlib.sha256(target.endpoint.encode()).hexdigest()[:32]}"
-    keyed = target.provider in ("tavily", "brave", "omniroute") and target.credential_configured and bool(target.api_key)
-    return destination in privacy.web_search_destinations and (keyed or target.provider == "searxng")
+    keyed = (
+        target.provider in ("tavily", "brave", "omniroute")
+        and target.credential_configured
+        and bool(target.api_key)
+    )
+    return destination in privacy.web_search_destinations and (
+        keyed or target.provider == "searxng"
+    )
 
 
 async def search_with_fallback(
-    targets: Sequence[WebSearchTarget], message: str,
+    targets: Sequence[WebSearchTarget],
+    message: str,
     make_transport: Callable[[WebSearchTarget], httpx.AsyncBaseTransport],
 ) -> tuple[list[WebSearchResult], str]:
     """Try approved targets in order; empty results succeed and only provider failures retry.
@@ -288,7 +349,9 @@ async def search_with_fallback(
             # targets must be filtered by target_permitted
             if target.endpoint is None:
                 raise RuntimeError("invariant violated: target.endpoint must not be None")
-            return await search(target.provider, target.endpoint, target.api_key, message, transport=transport), target.provider
+            return await search(
+                target.provider, target.endpoint, target.api_key, message, transport=transport
+            ), target.provider
         except WebSearchError as exc:
             if exc.code not in ("timeout", "provider_error", "network_denied"):
                 raise
@@ -298,7 +361,9 @@ async def search_with_fallback(
     raise last
 
 
-async def consume_daily_quota(redis: Redis, owner_id: object, limit: int, now: datetime | None = None) -> bool:
+async def consume_daily_quota(
+    redis: Redis, owner_id: object, limit: int, now: datetime | None = None
+) -> bool:
     """Increment before egress (failures count). Limit 0 disables; a Redis error fails closed."""
     if limit <= 0:
         return False

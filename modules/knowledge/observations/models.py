@@ -26,22 +26,54 @@ class Observation(Base):
 
     Workspace identity is mandatory and survives nullable or detached canonical references.
     """
+
     __tablename__ = "observations"
     __table_args__ = (
-        UniqueConstraint("source_id", "external_id", "revision", name="uq_observations_series_revision"),
-        UniqueConstraint("source_id", "external_id", "ingestion_observation_id", name="uq_observations_ingestion_acceptance"),
-        Index("ix_observations_owner_series_current", "source_id", "provider", "metric", "symbol", "region", "is_current", "observed_at", "id"),
+        UniqueConstraint(
+            "source_id", "external_id", "revision", name="uq_observations_series_revision"
+        ),
+        UniqueConstraint(
+            "source_id",
+            "external_id",
+            "ingestion_observation_id",
+            name="uq_observations_ingestion_acceptance",
+        ),
+        Index(
+            "ix_observations_owner_series_current",
+            "source_id",
+            "provider",
+            "metric",
+            "symbol",
+            "region",
+            "is_current",
+            "observed_at",
+            "id",
+        ),
         Index("ix_observations_document_version", "document_version_id"),
         Index("ix_observations_ingestion_observation_id", "ingestion_observation_id"),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_observations_workspace", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["workspace_id", "source_id"], ["sources.workspace_id", "sources.id"], name="fk_w2_observations_source_id", ondelete="CASCADE"),
-        ForeignKeyConstraint(["workspace_id", "document_id"], ["documents.workspace_id", "documents.id"], name="fk_w2_observations_document_id", ondelete="CASCADE"),
-        Index("ix_w2_observations_scope", 'workspace_id', 'id'),
-        Index("ix_w2_observations_work", 'workspace_id', 'created_at', 'id'),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_observations_workspace",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "source_id"],
+            ["sources.workspace_id", "sources.id"],
+            name="fk_w2_observations_source_id",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "document_id"],
+            ["documents.workspace_id", "documents.id"],
+            name="fk_w2_observations_document_id",
+            ondelete="CASCADE",
+        ),
+        Index("ix_w2_observations_scope", "workspace_id", "id"),
+        Index("ix_w2_observations_work", "workspace_id", "created_at", "id"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
@@ -69,8 +101,13 @@ class Observation(Base):
     is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     document_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-    document_version_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("document_versions.id", ondelete="CASCADE"), nullable=False)
-    ingestion_observation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("source_observations.id", ondelete="CASCADE"), nullable=False)
+    document_version_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("document_versions.id", ondelete="CASCADE"), nullable=False
+    )
+    ingestion_observation_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("source_observations.id", ondelete="CASCADE"), nullable=False
+    )
     source_generation: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

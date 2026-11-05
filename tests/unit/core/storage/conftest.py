@@ -67,8 +67,11 @@ def s3_bucket(moto_endpoint: str) -> str:
     """Create and return a fresh uniquely named bucket on the moto server."""
     name = f"test-{uuid4().hex[:16]}"
     get_session().create_client(
-        "s3", endpoint_url=moto_endpoint, region_name="us-east-1",
-        aws_access_key_id=ACCESS_KEY, aws_secret_access_key=SECRET_KEY,
+        "s3",
+        endpoint_url=moto_endpoint,
+        region_name="us-east-1",
+        aws_access_key_id=ACCESS_KEY,
+        aws_secret_access_key=SECRET_KEY,
     ).create_bucket(Bucket=name)
     return name
 
@@ -80,7 +83,10 @@ def make_s3(moto_endpoint: str, s3_bucket: str) -> Any:
     def build(fence: MemoryFence | None = None, **overrides: Any) -> S3StorageBackend:
         """Build a backend (default: new ``MemoryFence``) against the moto bucket."""
         config = S3Config(
-            bucket=s3_bucket, endpoint_url=moto_endpoint, access_key_id=ACCESS_KEY, secret_access_key=SECRET_KEY,
+            bucket=s3_bucket,
+            endpoint_url=moto_endpoint,
+            access_key_id=ACCESS_KEY,
+            secret_access_key=SECRET_KEY,
             **overrides,
         )
         return S3StorageBackend(config, fence or MemoryFence())

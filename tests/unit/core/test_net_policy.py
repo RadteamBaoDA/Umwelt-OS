@@ -11,9 +11,22 @@ import pytest
 from core.net_policy import embedded_ipv4, is_public_address
 
 NOT_PUBLIC = [
-    "169.254.169.254", "::ffff:169.254.169.254", "::a9fe:a9fe", "64:ff9b::a9fe:a9fe", "64:ff9b:1::a9fe:a9fe",
-    "2002:a9fe:a9fe::1", "2001:0:4136:e378:8000:63bf:3fff:fdd2", "64:ff9b::a00:1", "100.64.0.1",
-    "fd00:ec2::254", "::1", "::", "0.0.0.0", "100::1", "10.0.0.1", "ff02::1",
+    "169.254.169.254",
+    "::ffff:169.254.169.254",
+    "::a9fe:a9fe",
+    "64:ff9b::a9fe:a9fe",
+    "64:ff9b:1::a9fe:a9fe",
+    "2002:a9fe:a9fe::1",
+    "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+    "64:ff9b::a00:1",
+    "100.64.0.1",
+    "fd00:ec2::254",
+    "::1",
+    "::",
+    "0.0.0.0",
+    "100::1",
+    "10.0.0.1",
+    "ff02::1",
 ]
 # NAT64 well-known prefix is public only when the embedded IPv4 is public (documented decision).
 PUBLIC = ["8.8.8.8", "2606:4700:4700::1111", "64:ff9b::808:808"]

@@ -56,9 +56,13 @@ def resolve_capability(name: str) -> Any:
     raise CapabilityUnavailable(f"No module registers capability {name!r}")
 
 
-async def set_initial_owner_display_name(session: AsyncSession, *, owner_id: int, display_name: str | None) -> None:
+async def set_initial_owner_display_name(
+    session: AsyncSession, *, owner_id: int, display_name: str | None
+) -> None:
     """Store the first-run display name in the caller's transaction (no commit); blank/None is a no-op."""
-    await resolve_capability(SET_INITIAL_OWNER_DISPLAY_NAME)(session, owner_id=owner_id, display_name=display_name)
+    await resolve_capability(SET_INITIAL_OWNER_DISPLAY_NAME)(
+        session, owner_id=owner_id, display_name=display_name
+    )
 
 
 def normalize_display_name(value: str | None) -> str | None:
@@ -67,66 +71,112 @@ def normalize_display_name(value: str | None) -> str | None:
     return result
 
 
-async def read_module_availability(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> Any:
+async def read_module_availability(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool
+) -> Any:
     """Return the owner-only scoped module lifecycle DTO (``.modules`` items expose ``id``/``explicitly_disabled``)."""
     return await resolve_capability(READ_MODULE_AVAILABILITY)(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
 
 
 async def erase_account_checkpoints_page(
-    session: AsyncSession, scope: AccountErasureScope, *, limit: int = 25,
+    session: AsyncSession,
+    scope: AccountErasureScope,
+    *,
+    limit: int = 25,
 ) -> bool:
     """Run one bounded page of agent checkpoint erasure; True when no work remains for the account."""
-    done: bool = await resolve_capability(ERASE_ACCOUNT_CHECKPOINTS_PAGE)(session, scope, limit=limit)
+    done: bool = await resolve_capability(ERASE_ACCOUNT_CHECKPOINTS_PAGE)(
+        session, scope, limit=limit
+    )
     return done
 
 
 async def lock_document_ids(
-    session: AsyncSession, document_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    document_ids: list[UUID],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> list[UUID]:
     """Lock a bounded, sorted set of retained document rows for owner transactions (Documents owns the rule)."""
     locked: list[UUID] = await resolve_capability(LOCK_DOCUMENT_IDS)(
-        session, document_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        document_ids,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     return locked
 
 
 async def read_document_access_projection(
-    session: AsyncSession, resource_id: UUID, *, scope: Scope,
+    session: AsyncSession,
+    resource_id: UUID,
+    *,
+    scope: Scope,
 ) -> ResourceAccessProjection | None:
     """Return the share-binding projection of one in-scope document, or None when it is not visible."""
-    projection: ResourceAccessProjection | None = await resolve_capability(READ_DOCUMENT_ACCESS_PROJECTION)(
-        session, resource_id, scope=scope,
+    projection: ResourceAccessProjection | None = await resolve_capability(
+        READ_DOCUMENT_ACCESS_PROJECTION
+    )(
+        session,
+        resource_id,
+        scope=scope,
     )
     return projection
 
 
 async def check_brief_shareable(
-    session: AsyncSession, brief_id: UUID, *, scope: WorkspaceContext, member_user_id: int,
+    session: AsyncSession,
+    brief_id: UUID,
+    *,
+    scope: WorkspaceContext,
+    member_user_id: int,
     multi_workspace_enabled: bool = False,
 ) -> None:
     """Raise the Dashboard 404/409 shareability errors for one brief; return when it may be shared."""
     await resolve_capability(CHECK_BRIEF_SHAREABLE)(
-        session, brief_id, scope=scope, member_user_id=member_user_id, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        brief_id,
+        scope=scope,
+        member_user_id=member_user_id,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
 
 
 async def read_brief_access_projection(
-    session: AsyncSession, resource_id: UUID, *, scope: Scope, multi_workspace_enabled: bool = False,
+    session: AsyncSession,
+    resource_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool = False,
 ) -> ResourceAccessProjection | None:
     """Return the brief's revision and shareability projection, or None when it is not visible."""
-    projection: ResourceAccessProjection | None = await resolve_capability(READ_BRIEF_ACCESS_PROJECTION)(
-        session, resource_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    projection: ResourceAccessProjection | None = await resolve_capability(
+        READ_BRIEF_ACCESS_PROJECTION
+    )(
+        session,
+        resource_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     return projection
 
 
 async def purge_resource_translations(
-    session: AsyncSession, workspace_id: UUID, resource_type: str, resource_id: UUID,
+    session: AsyncSession,
+    workspace_id: UUID,
+    resource_type: str,
+    resource_id: UUID,
 ) -> int:
     """Delete every actor's derived translations of one resource (flush-only); returns the removed row count."""
     removed: int = await resolve_capability(PURGE_RESOURCE_TRANSLATIONS)(
-        session, workspace_id, resource_type, resource_id,
+        session,
+        workspace_id,
+        resource_type,
+        resource_id,
     )
     return removed

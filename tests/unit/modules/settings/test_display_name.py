@@ -1,17 +1,21 @@
 """Tests for the owner display-name derivation and normalization helpers."""
+
 import pytest
 
 from modules.settings.display_name import derive_display_name, normalize_display_name
 
 
-@pytest.mark.parametrize(("email", "expected"), [
-    ("vpacs.demo@x.com", "Vpacs Demo"),
-    ("jo_ann-lee+tag@x.com", "Jo Ann Lee Tag"),
-    ("..a@x.com", "A"),
-    (None, "Owner"),
-    ("", "Owner"),
-    ("@x.com", "Owner"),
-])
+@pytest.mark.parametrize(
+    ("email", "expected"),
+    [
+        ("vpacs.demo@x.com", "Vpacs Demo"),
+        ("jo_ann-lee+tag@x.com", "Jo Ann Lee Tag"),
+        ("..a@x.com", "A"),
+        (None, "Owner"),
+        ("", "Owner"),
+        ("@x.com", "Owner"),
+    ],
+)
 def test_derive_display_name(email: str | None, expected: str) -> None:
     """Derivation splits on . _ - +, capitalises, and never returns empty."""
     assert derive_display_name(email) == expected

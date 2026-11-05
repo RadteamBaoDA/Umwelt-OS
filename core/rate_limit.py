@@ -33,7 +33,11 @@ def _identity(request: Request, *, anonymous: bool = False) -> str:
 
 
 def require_budget(
-    name: str, limit: int, window: int, *, anonymous: bool = False,
+    name: str,
+    limit: int,
+    window: int,
+    *,
+    anonymous: bool = False,
 ) -> Callable[[Request], Awaitable[None]]:
     """Build a FastAPI dependency allowing `limit` requests per `window` seconds per session for `name`.
 
@@ -62,12 +66,19 @@ def require_budget(
                 return
             raise HTTPException(
                 status_code=503,
-                detail={"message": "Request budget is temporarily unavailable", "code": "TEMPORARILY_UNAVAILABLE"},
+                detail={
+                    "message": "Request budget is temporarily unavailable",
+                    "code": "TEMPORARILY_UNAVAILABLE",
+                },
             ) from exc
         if count > lim:
             raise HTTPException(
                 status_code=429,
-                detail={"message": "Request budget exceeded", "code": "RATE_LIMITED", "details": {"budget": name}},
+                detail={
+                    "message": "Request budget exceeded",
+                    "code": "RATE_LIMITED",
+                    "details": {"budget": name},
+                },
                 headers={"Retry-After": str(win - now % win)},
             )
 

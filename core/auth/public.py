@@ -26,7 +26,11 @@ def normalize_account_email(value: str) -> str:
     addresses. This is syntax normalization only, never mailbox ownership verification.
     """
     normalized = value.strip().lower()
-    if len(normalized) > 320 or normalized.count("@") != 1 or any(char.isspace() for char in normalized):
+    if (
+        len(normalized) > 320
+        or normalized.count("@") != 1
+        or any(char.isspace() for char in normalized)
+    ):
         raise ValueError("Invalid email identifier")
     local, domain = normalized.split("@")
     if not local or not domain or len(local) > 64:
@@ -51,7 +55,10 @@ async def provision_bootstrap_account_in_uow(session: AsyncSession, password_has
 
 
 async def get_active_account(
-    session: AsyncSession, account_id: int, *, multi_workspace_enabled: bool = False,
+    session: AsyncSession,
+    account_id: int,
+    *,
+    multi_workspace_enabled: bool = False,
 ) -> AccountRead | None:
     """Return a complete active identity or fail closed on disabled/incomplete accounts.
 
@@ -64,7 +71,12 @@ async def get_active_account(
     owner = await session.scalar(
         select(Owner).where(Owner.id == account_id).execution_options(populate_existing=True)
     )
-    if owner is None or owner.account_state != "active" or not owner.password_hash or owner.default_workspace_id is None:
+    if (
+        owner is None
+        or owner.account_state != "active"
+        or not owner.password_hash
+        or owner.default_workspace_id is None
+    ):
         return None
     if owner.id != 1 and owner.email is None:
         return None
@@ -81,11 +93,19 @@ async def get_active_account(
     if owner.email_verified_at is not None and owner.email is None:
         return None
     workspace = await resolve_workspace_context(session, owner.id, owner.default_workspace_id)
-    if workspace is None or workspace.role != "owner" or workspace.user_id != owner.id or workspace.workspace_id != owner.default_workspace_id:
+    if (
+        workspace is None
+        or workspace.role != "owner"
+        or workspace.user_id != owner.id
+        or workspace.workspace_id != owner.default_workspace_id
+    ):
         return None
     return AccountRead(
-        id=owner.id, email=owner.email, default_workspace_id=owner.default_workspace_id,
-        email_verified_at=owner.email_verified_at, email_verification_source=owner.email_verification_source,
+        id=owner.id,
+        email=owner.email,
+        default_workspace_id=owner.default_workspace_id,
+        email_verified_at=owner.email_verified_at,
+        email_verification_source=owner.email_verification_source,
     )
 
 
@@ -107,7 +127,11 @@ async def revalidate_owner_session(
 
 
 async def revalidate_account_session(
-    session: AsyncSession, token_hash: str, account_id: int, *, multi_workspace_enabled: bool = False,
+    session: AsyncSession,
+    token_hash: str,
+    account_id: int,
+    *,
+    multi_workspace_enabled: bool = False,
 ) -> bool:
     """Revalidate a detached account token, expiry, rollout gate and complete active identity.
 
@@ -121,9 +145,15 @@ async def revalidate_account_session(
             AuthSession.expires_at > datetime.now(UTC),
         )
     )
-    return current is not None and await get_active_account(
-        session, account_id, multi_workspace_enabled=multi_workspace_enabled,
-    ) is not None
+    return (
+        current is not None
+        and await get_active_account(
+            session,
+            account_id,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        is not None
+    )
 
 
 async def get_demo_owner_id(session: AsyncSession) -> int:
@@ -164,14 +194,23 @@ def authenticated_session_ref(request: Request) -> AccountSessionRef:
     ids = getattr(request.state, "auth_session_ids", None)
     if ids is None and isinstance(current, AuthSession):
         ids = (current.owner_id, current.token_hash)
-    if not isinstance(current, AuthSession) or not isinstance(account, AccountRead) or ids is None or ids[0] != account.id:
+    if (
+        not isinstance(current, AuthSession)
+        or not isinstance(account, AccountRead)
+        or ids is None
+        or ids[0] != account.id
+    ):
         raise HTTPException(status_code=401, detail="Authentication required")
     return AccountSessionRef(account_id=account.id, token_hash=ids[1])
 
 
 async def lock_account_admission(
-    session: AsyncSession, account_ids: tuple[int, ...], *, actor_user_id: int,
-    multi_workspace_enabled: bool = False, auth_sessions: tuple[AccountSessionRef, ...] = (),
+    session: AsyncSession,
+    account_ids: tuple[int, ...],
+    *,
+    actor_user_id: int,
+    multi_workspace_enabled: bool = False,
+    auth_sessions: tuple[AccountSessionRef, ...] = (),
 ) -> dict[int, AccountRead | None]:
     """Lock a complete runtime account set, then exact sessions, and return detached identities.
 
@@ -190,28 +229,52 @@ async def lock_account_admission(
     ids = tuple(sorted(set(account_ids)))
     if type(multi_workspace_enabled) is not bool:
         raise ValueError("Explicit boolean multi-workspace gate is required")
-    if (type(actor_user_id) is not int or actor_user_id <= 0
-            or not ids or len(ids) > 2 or actor_user_id not in ids
-            or any(type(account_id) is not int or account_id <= 0 for account_id in ids)):
+    if (
+        type(actor_user_id) is not int
+        or actor_user_id <= 0
+        or not ids
+        or len(ids) > 2
+        or actor_user_id not in ids
+        or any(type(account_id) is not int or account_id <= 0 for account_id in ids)
+    ):
         raise ValueError("Discover actor and workspace owner before account admission")
-    if (len(auth_sessions) > 2 or any(
-        not isinstance(ref, AccountSessionRef) or ref.account_id not in ids for ref in auth_sessions
-    ) or (auth_sessions and not any(ref.account_id == actor_user_id for ref in auth_sessions))):
+    if (
+        len(auth_sessions) > 2
+        or any(
+            not isinstance(ref, AccountSessionRef) or ref.account_id not in ids
+            for ref in auth_sessions
+        )
+        or (auth_sessions and not any(ref.account_id == actor_user_id for ref in auth_sessions))
+    ):
         raise ValueError("Exact actor session must belong to the initial account set")
     await session.execute(
-        select(Owner).where(Owner.id.in_(ids)).order_by(Owner.id).with_for_update(read=True)
+        select(Owner)
+        .where(Owner.id.in_(ids))
+        .order_by(Owner.id)
+        .with_for_update(read=True)
         .execution_options(populate_existing=True)
     )
     for ref in sorted(auth_sessions, key=lambda item: item.token_hash):
         current = await session.scalar(
-            select(AuthSession).where(AuthSession.token_hash == ref.token_hash)
-            .with_for_update(read=True).execution_options(populate_existing=True)
+            select(AuthSession)
+            .where(AuthSession.token_hash == ref.token_hash)
+            .with_for_update(read=True)
+            .execution_options(populate_existing=True)
         )
-        if current is None or current.owner_id != ref.account_id or current.expires_at <= datetime.now(UTC):
+        if (
+            current is None
+            or current.owner_id != ref.account_id
+            or current.expires_at <= datetime.now(UTC)
+        ):
             raise HTTPException(status_code=401, detail="Authentication required")
-    accounts = {account_id: await get_active_account(
-        session, account_id, multi_workspace_enabled=multi_workspace_enabled,
-    ) for account_id in ids}
+    accounts = {
+        account_id: await get_active_account(
+            session,
+            account_id,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        for account_id in ids
+    }
     if accounts[actor_user_id] is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     return accounts
@@ -219,18 +282,29 @@ async def lock_account_admission(
 
 async def account_id_for_email(session: AsyncSession, email: str) -> int | None:
     """Resolve one normalized identifier without locks or credential/account-state disclosure."""
-    return await session.scalar(select(Owner.id).where(Owner.email == normalize_account_email(email)))
+    return await session.scalar(
+        select(Owner.id).where(Owner.email == normalize_account_email(email))
+    )
 
 
-async def account_emails(session: AsyncSession, account_ids: Iterable[int]) -> dict[int, str | None]:
+async def account_emails(
+    session: AsyncSession, account_ids: Iterable[int]
+) -> dict[int, str | None]:
     """Return detached emails for already owner-authorized membership management projections."""
-    rows = await session.execute(select(Owner.id, Owner.email).where(Owner.id.in_(tuple(account_ids))))
+    rows = await session.execute(
+        select(Owner.id, Owner.email).where(Owner.id.in_(tuple(account_ids)))
+    )
     return {row.id: row.email for row in rows}
 
 
 async def lock_account_lifecycle(
-    session: AsyncSession, account_ids: Iterable[int], *, actor_user_id: int | None = None,
-    token_hash: str | None = None, csrf_hash: str | None = None, multi_workspace_enabled: bool = False,
+    session: AsyncSession,
+    account_ids: Iterable[int],
+    *,
+    actor_user_id: int | None = None,
+    token_hash: str | None = None,
+    csrf_hash: str | None = None,
+    multi_workspace_enabled: bool = False,
 ) -> AccountRead | None:
     """Lock existing accounts ascending, then actor session, before any workspace lifecycle lock.
 
@@ -243,27 +317,44 @@ async def lock_account_lifecycle(
     if actor_user_id is not None and actor_user_id not in ids:
         raise ValueError("Actor must be included in the initial account lock set")
     await session.execute(
-        select(Owner).where(Owner.id.in_(ids)).order_by(Owner.id).with_for_update()
+        select(Owner)
+        .where(Owner.id.in_(ids))
+        .order_by(Owner.id)
+        .with_for_update()
         .execution_options(populate_existing=True)
     )
     if actor_user_id is None:
         return None
     auth_session = await session.scalar(
-        select(AuthSession).where(AuthSession.token_hash == token_hash).with_for_update()
+        select(AuthSession)
+        .where(AuthSession.token_hash == token_hash)
+        .with_for_update()
         .execution_options(populate_existing=True)
     )
-    if auth_session is None or auth_session.owner_id != actor_user_id or auth_session.expires_at <= datetime.now(UTC):
+    if (
+        auth_session is None
+        or auth_session.owner_id != actor_user_id
+        or auth_session.expires_at <= datetime.now(UTC)
+    ):
         raise HTTPException(status_code=401, detail="Authentication required")
     if csrf_hash is not None and not compare_digest(auth_session.csrf_hash, csrf_hash):
-        raise HTTPException(status_code=403, detail="CSRF token is invalid", headers={"X-CSRF-Error": "invalid"})
-    actor = await get_active_account(session, actor_user_id, multi_workspace_enabled=multi_workspace_enabled)
+        raise HTTPException(
+            status_code=403, detail="CSRF token is invalid", headers={"X-CSRF-Error": "invalid"}
+        )
+    actor = await get_active_account(
+        session, actor_user_id, multi_workspace_enabled=multi_workspace_enabled
+    )
     if actor is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     return actor
 
 
 async def provision_invited_account_in_uow(
-    session: AsyncSession, email: str, password: str, *, google_subject: str | None = None,
+    session: AsyncSession,
+    email: str,
+    password: str,
+    *,
+    google_subject: str | None = None,
     google_issuer: str | None = None,
 ) -> AccountRead:
     """Stage a real-password invited identity/default in the caller's uncommitted transaction.
@@ -280,7 +371,11 @@ async def provision_invited_account_in_uow(
     if (google_subject is None) != (google_issuer is None):
         raise ValueError("Incomplete Google identity")
     normalized = normalize_account_email(email)
-    owner = Owner(email=normalized, password_hash=await asyncio.to_thread(hash_password, password), account_state="active")
+    owner = Owner(
+        email=normalized,
+        password_hash=await asyncio.to_thread(hash_password, password),
+        account_state="active",
+    )
     if google_subject is not None:
         from core.auth.google import GOOGLE_ISSUER
 
@@ -292,11 +387,19 @@ async def provision_invited_account_in_uow(
     await session.flush()
     owner.default_workspace_id = await provision_default_workspace_in_uow(session, owner.id)
     if google_subject is not None:
-        session.add(GoogleIdentity(
-            owner_id=owner.id, issuer=google_issuer, subject=google_subject, email=normalized,
-        ))
+        session.add(
+            GoogleIdentity(
+                owner_id=owner.id,
+                issuer=google_issuer,
+                subject=google_subject,
+                email=normalized,
+            )
+        )
     await session.flush()
     return AccountRead(
-        id=owner.id, email=owner.email, default_workspace_id=owner.default_workspace_id,
-        email_verified_at=owner.email_verified_at, email_verification_source=owner.email_verification_source,
+        id=owner.id,
+        email=owner.email,
+        default_workspace_id=owner.default_workspace_id,
+        email_verified_at=owner.email_verified_at,
+        email_verification_source=owner.email_verification_source,
     )

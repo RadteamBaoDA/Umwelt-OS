@@ -22,7 +22,11 @@ from modules.observability.schemas import (
 )
 from modules.settings.public import MaintenanceSummaryRead, module_dependency
 
-router = APIRouter(prefix="/api/v1/system", tags=["system"], dependencies=[Depends(module_dependency("observability"))])
+router = APIRouter(
+    prefix="/api/v1/system",
+    tags=["system"],
+    dependencies=[Depends(module_dependency("observability"))],
+)
 
 
 @router.get("/metrics", response_model=MetricsRead)
@@ -81,8 +85,11 @@ async def patch_history_settings(
 ) -> HistorySettingsRead:
     """Save retention and/or collection interval under origin/CSRF checks; 409 when the revision is stale."""
     result = await history.save_history_settings(
-        session, expected_revision=value.expected_revision, retention_days=value.retention_days,
-        sample_interval_minutes=value.sample_interval_minutes)
+        session,
+        expected_revision=value.expected_revision,
+        retention_days=value.retention_days,
+        sample_interval_minutes=value.sample_interval_minutes,
+    )
     await session.commit()
     return result
 
@@ -94,4 +101,6 @@ async def read_database_stats(
     redis: Annotated[Any, Depends(get_auth_redis)],
 ) -> DatabaseStatsRead:
     """Return read-only Postgres/Redis aggregates (no query text, users, addresses or key names); failed probes are null."""
-    return DatabaseStatsRead.model_validate(await database_stats.read_database_stats(session, redis))
+    return DatabaseStatsRead.model_validate(
+        await database_stats.read_database_stats(session, redis)
+    )

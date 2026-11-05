@@ -27,7 +27,10 @@ class ObservabilityDescriptor(ModuleDescriptor):
     provides: tuple[str, ...] = ("metrics", "run_inspection")
     requires: tuple[str, ...] = ()
     routes: tuple[str, ...] = (
-        "/api/v1/system/metrics", "/api/v1/system/runs", "/api/v1/system/history", "/api/v1/system/history/settings",
+        "/api/v1/system/metrics",
+        "/api/v1/system/runs",
+        "/api/v1/system/history",
+        "/api/v1/system/history/settings",
     )
     emitted_events: tuple[str, ...] = ()
     consumed_events: tuple[str, ...] = ()

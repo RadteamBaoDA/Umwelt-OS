@@ -38,11 +38,17 @@ class McpSdkClient:
         self,
         *,
         load_connection: Callable[[Scope, UUID], Awaitable[tuple[ConnectionRead, str | None]]],
-        record_draft_check: Callable[[Scope, UUID, int, str, str | None], Awaitable[ConnectionRead]],
+        record_draft_check: Callable[
+            [Scope, UUID, int, str, str | None], Awaitable[ConnectionRead]
+        ],
         persist_discovery: Callable[[Scope, UUID, DiscoveryPersist], Awaitable[DiscoveryRead]],
         connection_is_current: Callable[[Scope, UUID, int, str | None], Awaitable[bool]],
         operation_slot: Callable[[UUID, float], AbstractAsyncContextManager[None]],
-        resolve_stdio_profile: Callable[[Scope, ConnectionRead, str, Literal["ordinary", "discovery"]], Awaitable[StdioDeploymentProfile]] | None = None,
+        resolve_stdio_profile: Callable[
+            [Scope, ConnectionRead, str, Literal["ordinary", "discovery"]],
+            Awaitable[StdioDeploymentProfile],
+        ]
+        | None = None,
         approved_destination_cidrs: Mapping[tuple[str, str, int], tuple[str, ...]] | None = None,
     ) -> None:
         """Install owner-scoped persistence, fresh identity resolvers and shared admission callbacks.
@@ -77,7 +83,10 @@ class McpSdkClient:
         persistence call, without claiming atomicity with later socket or database effects.
         """
         if expected_revision is not None and not await self._connection_is_current(
-            scope, connection_id, expected_revision, expected_profile_hash,
+            scope,
+            connection_id,
+            expected_revision,
+            expected_profile_hash,
         ):
             return False
         try:
@@ -98,7 +107,9 @@ class McpSdkClient:
         if connection.auth_method == "bearer" and not bearer_token:
             raise mcp_repository.McpUnavailable("MCP bearer credential is unavailable")
         if connection.auth_method == "none" and bearer_token is not None:
-            raise McpTransportError("Unauthenticated MCP connection unexpectedly supplied a credential")
+            raise McpTransportError(
+                "Unauthenticated MCP connection unexpectedly supplied a credential"
+            )
         http_client = create_mcp_http_client(
             connection.endpoint,
             bearer_token,
@@ -165,7 +176,9 @@ class McpSdkClient:
         """
         if connection.transport == McpTransport.STREAMABLE_HTTP:
             if connection.deployment_profile_hash is not None:
-                raise McpTransportError("HTTP connection unexpectedly carries a stdio profile identity")
+                raise McpTransportError(
+                    "HTTP connection unexpectedly carries a stdio profile identity"
+                )
             async with self._open_http_client(connection, bearer_token, budget) as client:
                 yield client
             return
@@ -174,22 +187,33 @@ class McpSdkClient:
         if connection.auth_method != "none" or bearer_token is not None:
             raise mcp_repository.McpUnavailable("MCP stdio cannot use bearer credentials")
         profile_hash = connection.deployment_profile_hash
-        if profile_hash is None or self._resolve_stdio_profile is None or budget.before_request is None:
+        if (
+            profile_hash is None
+            or self._resolve_stdio_profile is None
+            or budget.before_request is None
+        ):
             raise mcp_repository.McpUnavailable("MCP stdio profile resolution is unavailable")
         profile = await self._resolve_stdio_profile(scope, connection, profile_hash, operation_kind)
-        if (profile.profile_id != connection.deployment_profile_id
-                or profile.profile_hash != profile_hash
-                or profile.reviewed_profile_hash != profile_hash
-                or profile.operation_kind != operation_kind):
-            raise mcp_repository.McpUnavailable("MCP stdio profile resolution did not match durable review")
+        if (
+            profile.profile_id != connection.deployment_profile_id
+            or profile.profile_hash != profile_hash
+            or profile.reviewed_profile_hash != profile_hash
+            or profile.operation_kind != operation_kind
+        ):
+            raise mcp_repository.McpUnavailable(
+                "MCP stdio profile resolution did not match durable review"
+            )
         async with self._open_stdio_client(
-            profile, budget.before_request,
+            profile,
+            budget.before_request,
             min(float(connection.timeout_seconds), budget.remaining_seconds()),
         ) as client:
             yield client
 
     @staticmethod
-    def _require_usable_connection(connection: Any, connection_id: UUID, bearer_token: str | None) -> None:
+    def _require_usable_connection(
+        connection: Any, connection_id: UUID, bearer_token: str | None
+    ) -> None:
         """Reject a mismatched loader result, stdio with bearer credentials and unsupported transports.
 
         Raises ``McpTransportError`` for a record that is not the requested connection and
@@ -205,7 +229,11 @@ class McpSdkClient:
             raise mcp_repository.McpUnavailable("MCP transport is unavailable")
 
     async def _probe_outcome(
-        self, scope: Scope, connection: Any, bearer_token: str | None, budget: McpOperationNetworkBudget,
+        self,
+        scope: Scope,
+        connection: Any,
+        bearer_token: str | None,
+        budget: McpOperationNetworkBudget,
     ) -> str:
         """Open one ordinary client and classify the negotiation as a persisted draft-check outcome.
 
@@ -216,7 +244,11 @@ class McpSdkClient:
         """
         try:
             async with self._open_client(
-                scope, connection, bearer_token, budget, "ordinary",
+                scope,
+                connection,
+                bearer_token,
+                budget,
+                "ordinary",
             ) as client:
                 # __aenter__ negotiates the protocol and assigns the session only on success.
                 if not client.protocol_version:
@@ -255,24 +287,40 @@ class McpSdkClient:
         deadline = time.monotonic() + 60.0
         async with asyncio.timeout(max(0.001, deadline - time.monotonic())):
             if not await self._management_request_is_current(
-                scope, connection_id, None, management_revalidator,
+                scope,
+                connection_id,
+                None,
+                management_revalidator,
             ):
                 raise mcp_repository.McpConflict("MCP management authority is no longer current")
             async with self._operation_slot(connection_id, deadline):
                 if not await self._management_request_is_current(
-                    scope, connection_id, None, management_revalidator,
+                    scope,
+                    connection_id,
+                    None,
+                    management_revalidator,
                 ):
-                    raise mcp_repository.McpConflict("MCP management authority changed while queued")
+                    raise mcp_repository.McpConflict(
+                        "MCP management authority changed while queued"
+                    )
                 connection, bearer_token = await self._load_connection(scope, connection_id)
                 self._require_usable_connection(connection, connection_id, bearer_token)
                 if not await self._management_request_is_current(
-                    scope, connection_id, connection.revision, management_revalidator,
+                    scope,
+                    connection_id,
+                    connection.revision,
+                    management_revalidator,
                     connection.deployment_profile_hash,
                 ):
-                    raise mcp_repository.McpConflict("MCP connection or management authority changed before draft check")
+                    raise mcp_repository.McpConflict(
+                        "MCP connection or management authority changed before draft check"
+                    )
                 before_request = partial(
                     self._management_request_is_current,
-                    scope, connection_id, connection.revision, management_revalidator,
+                    scope,
+                    connection_id,
+                    connection.revision,
+                    management_revalidator,
                     connection.deployment_profile_hash,
                 )
                 budget = McpOperationNetworkBudget(
@@ -284,12 +332,20 @@ class McpSdkClient:
                 )
                 outcome = await self._probe_outcome(scope, connection, bearer_token, budget)
                 if not await self._management_request_is_current(
-                    scope, connection_id, connection.revision, management_revalidator,
+                    scope,
+                    connection_id,
+                    connection.revision,
+                    management_revalidator,
                     connection.deployment_profile_hash,
                 ):
-                    raise mcp_repository.McpConflict("MCP connection or management authority changed before draft persistence")
+                    raise mcp_repository.McpConflict(
+                        "MCP connection or management authority changed before draft persistence"
+                    )
                 return await self._record_draft_check(
-                    scope, connection_id, connection.revision, outcome,
+                    scope,
+                    connection_id,
+                    connection.revision,
+                    outcome,
                     connection.deployment_profile_hash,
                 )
 
@@ -310,14 +366,22 @@ class McpSdkClient:
         deadline = time.monotonic() + 60.0
         async with asyncio.timeout(max(0.001, deadline - time.monotonic())):
             if not await self._management_request_is_current(
-                scope, connection_id, None, management_revalidator,
+                scope,
+                connection_id,
+                None,
+                management_revalidator,
             ):
                 raise mcp_repository.McpConflict("MCP management authority is no longer current")
             async with self._operation_slot(connection_id, deadline):
                 if not await self._management_request_is_current(
-                    scope, connection_id, None, management_revalidator,
+                    scope,
+                    connection_id,
+                    None,
+                    management_revalidator,
                 ):
-                    raise mcp_repository.McpConflict("MCP management authority changed while queued")
+                    raise mcp_repository.McpConflict(
+                        "MCP management authority changed while queued"
+                    )
                 connection, bearer_token = await self._load_connection(scope, connection_id)
                 if connection.id != connection_id:
                     raise McpTransportError("MCP connection loader returned a mismatched record")
@@ -328,13 +392,21 @@ class McpSdkClient:
                 if connection.transport not in {McpTransport.STREAMABLE_HTTP, McpTransport.STDIO}:
                     raise mcp_repository.McpUnavailable("MCP transport is unavailable")
                 if not await self._management_request_is_current(
-                    scope, connection_id, connection.revision, management_revalidator,
+                    scope,
+                    connection_id,
+                    connection.revision,
+                    management_revalidator,
                     connection.deployment_profile_hash,
                 ):
-                    raise mcp_repository.McpConflict("MCP connection or management authority changed before discovery")
+                    raise mcp_repository.McpConflict(
+                        "MCP connection or management authority changed before discovery"
+                    )
                 before_request = partial(
                     self._management_request_is_current,
-                    scope, connection_id, connection.revision, management_revalidator,
+                    scope,
+                    connection_id,
+                    connection.revision,
+                    management_revalidator,
                     connection.deployment_profile_hash,
                 )
                 budget = McpOperationNetworkBudget(
@@ -345,7 +417,11 @@ class McpSdkClient:
                     before_request=before_request,
                 )
                 async with self._open_client(
-                    scope, connection, bearer_token, budget, "discovery",
+                    scope,
+                    connection,
+                    bearer_token,
+                    budget,
+                    "discovery",
                 ) as client:
                     page_count = 0
                     capability_count = 0
@@ -359,20 +435,33 @@ class McpSdkClient:
                         if getattr(server_capabilities, capability_name, None) is None:
                             continue
                         items, page_count, capability_count = await self._list_capability_pages(
-                            client, kind, page_count, capability_count,
+                            client,
+                            kind,
+                            page_count,
+                            capability_count,
                         )
                         capabilities.extend(items)
-                    ordered = tuple(sorted(capabilities, key=lambda item: (item.kind, item.remote_key)))
+                    ordered = tuple(
+                        sorted(capabilities, key=lambda item: (item.kind, item.remote_key))
+                    )
                     identity = [
                         {"kind": item.kind, "key": item.remote_key, "hash": item.descriptor_hash}
                         for item in ordered
                     ]
                     schema_set_hash = hashlib.sha256(
-                        json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+                        json.dumps(
+                            identity, sort_keys=True, separators=(",", ":"), allow_nan=False
+                        ).encode("utf-8")
                     ).hexdigest()
-                    server_info = client.server_info.model_dump(
-                        by_alias=True, mode="json", exclude_none=True,
-                    ) if client.server_info is not None else {}
+                    server_info = (
+                        client.server_info.model_dump(
+                            by_alias=True,
+                            mode="json",
+                            exclude_none=True,
+                        )
+                        if client.server_info is not None
+                        else {}
+                    )
                     payload = DiscoveryPersist(
                         connection_revision=connection.revision,
                         deployment_profile_hash=connection.deployment_profile_hash,
@@ -382,10 +471,15 @@ class McpSdkClient:
                         capabilities=ordered,
                     )
                 if not await self._management_request_is_current(
-                    scope, connection_id, connection.revision, management_revalidator,
+                    scope,
+                    connection_id,
+                    connection.revision,
+                    management_revalidator,
                     connection.deployment_profile_hash,
                 ):
-                    raise mcp_repository.McpConflict("MCP connection or management authority changed before discovery persistence")
+                    raise mcp_repository.McpConflict(
+                        "MCP connection or management authority changed before discovery persistence"
+                    )
                 return await self._persist_discovery(scope, connection_id, payload)
 
     async def _list_capability_pages(
@@ -416,7 +510,9 @@ class McpSdkClient:
                 raise McpTransportError("MCP discovery exceeds the ten-page aggregate limit")
             if cursor is not None:
                 if not cursor or cursor in seen_cursors:
-                    raise McpTransportError("MCP discovery returned a repeated or empty page cursor")
+                    raise McpTransportError(
+                        "MCP discovery returned a repeated or empty page cursor"
+                    )
                 seen_cursors.add(cursor)
             page = await list_page(cursor=cursor, cache_mode="bypass")
             page_count += 1
@@ -425,7 +521,9 @@ class McpSdkClient:
                 raise McpTransportError("MCP discovery page has an invalid capability collection")
             for item in items:
                 if capability_count >= 200:
-                    raise McpTransportError("MCP discovery exceeds the 200-capability aggregate limit")
+                    raise McpTransportError(
+                        "MCP discovery exceeds the 200-capability aggregate limit"
+                    )
                 descriptors.append(self._normalize_capability(kind, item))
                 capability_count += 1
             next_cursor = getattr(page, "next_cursor", None)
@@ -452,7 +550,10 @@ class McpSdkClient:
         self._validate_descriptor(descriptor)
         canonical = json.dumps(
             {"kind": kind, "remote_key": remote_key, "descriptor": descriptor},
-            ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
         ).encode("utf-8")
         return CapabilityDescriptor(
             kind=kind,
@@ -465,7 +566,10 @@ class McpSdkClient:
         """Reject non-JSON or oversized server metadata before hashing or persisting it."""
         try:
             encoded = json.dumps(
-                descriptor, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+                descriptor,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
             ).encode("utf-8")
         except (TypeError, ValueError, RecursionError) as exc:
             raise McpTransportError("MCP capability descriptor is not bounded JSON data") from exc
@@ -487,7 +591,10 @@ class McpSdkClient:
         teardown raises and the result is never returned as success.
         """
         encoded_arguments = json.dumps(
-            arguments, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+            arguments,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
         ).encode("utf-8")
         argument_limit = min(fence.limits.get("argument_bytes", 64_000), 64_000)
         if len(encoded_arguments) > argument_limit:
@@ -498,9 +605,13 @@ class McpSdkClient:
         async with asyncio.timeout(max(0.001, deadline - time.monotonic())):
             async with self._operation_slot(fence.connection_id, deadline):
                 connection, bearer_token = await self._load_connection(scope, fence.connection_id)
-                if (not connection.enabled or connection.revision != fence.connection_revision
-                        or connection.transport not in {McpTransport.STREAMABLE_HTTP, McpTransport.STDIO}
-                        or connection.deployment_profile_hash != fence.deployment_profile_hash):
+                if (
+                    not connection.enabled
+                    or connection.revision != fence.connection_revision
+                    or connection.transport
+                    not in {McpTransport.STREAMABLE_HTTP, McpTransport.STDIO}
+                    or connection.deployment_profile_hash != fence.deployment_profile_hash
+                ):
                     raise mcp_repository.McpConflict("MCP connection changed or is disabled")
                 if connection.transport == McpTransport.STDIO and (
                     connection.auth_method != "none" or bearer_token is not None
@@ -515,12 +626,27 @@ class McpSdkClient:
                     before_request=before_request,
                 )
                 async with self._open_client(
-                    scope, connection, bearer_token, budget, "ordinary",
+                    scope,
+                    connection,
+                    bearer_token,
+                    budget,
+                    "ordinary",
                 ) as client:
-                    current, _pages, _count = await self._list_capability_pages(client, "tool", 0, 0)
-                    matched = next((item for item in current if item.remote_key == fence.remote_capability_key), None)
+                    current, _pages, _count = await self._list_capability_pages(
+                        client, "tool", 0, 0
+                    )
+                    matched = next(
+                        (
+                            item
+                            for item in current
+                            if item.remote_key == fence.remote_capability_key
+                        ),
+                        None,
+                    )
                     if matched is None or matched.descriptor_hash != fence.descriptor_hash:
-                        raise mcp_repository.McpConflict("MCP tool descriptor changed; renewed owner review is required")
+                        raise mcp_repository.McpConflict(
+                            "MCP tool descriptor changed; renewed owner review is required"
+                        )
                     # ClientSession is the SDK's public protocol API; it rejects InputRequiredResult
                     # instead of running the high-level Client convenience driver's callbacks/retries.
                     result = await client.session.call_tool(
@@ -532,7 +658,9 @@ class McpSdkClient:
                     )
                     payload = self._validate_result(result, response_limit)
                 if not await before_request():
-                    raise mcp_repository.McpConflict("MCP authorization changed before result return")
+                    raise mcp_repository.McpConflict(
+                        "MCP authorization changed before result return"
+                    )
                 return payload
 
     async def read_resource(
@@ -549,16 +677,22 @@ class McpSdkClient:
         transport teardown and the final current-authority check.
         """
         if capability_kind != "resource":
-            raise mcp_repository.McpUnavailable("MCP resource-template reads require an owner-reviewed parameter binding")
+            raise mcp_repository.McpUnavailable(
+                "MCP resource-template reads require an owner-reviewed parameter binding"
+            )
         if not callable(before_request):
             raise McpTransportError("MCP selected-resource fence callback is unavailable")
         deadline = time.monotonic() + min(60.0, float(fence.timeout_seconds))
         async with asyncio.timeout(max(0.001, deadline - time.monotonic())):
             async with self._operation_slot(fence.connection_id, deadline):
                 connection, bearer_token = await self._load_connection(scope, fence.connection_id)
-                if (not connection.enabled or connection.revision != fence.connection_revision
-                        or connection.transport not in {McpTransport.STREAMABLE_HTTP, McpTransport.STDIO}
-                        or connection.deployment_profile_hash != fence.deployment_profile_hash):
+                if (
+                    not connection.enabled
+                    or connection.revision != fence.connection_revision
+                    or connection.transport
+                    not in {McpTransport.STREAMABLE_HTTP, McpTransport.STDIO}
+                    or connection.deployment_profile_hash != fence.deployment_profile_hash
+                ):
                     raise mcp_repository.McpConflict("MCP connection changed or is disabled")
                 if connection.transport == McpTransport.STDIO and (
                     connection.auth_method != "none" or bearer_token is not None
@@ -573,15 +707,26 @@ class McpSdkClient:
                     before_request=before_request,
                 )
                 async with self._open_client(
-                    scope, connection, bearer_token, budget, "ordinary",
+                    scope,
+                    connection,
+                    bearer_token,
+                    budget,
+                    "ordinary",
                 ) as client:
                     current_resources, _pages, _count = await self._list_capability_pages(
-                        client, "resource", 0, 0,
+                        client,
+                        "resource",
+                        0,
+                        0,
                     )
-                    matched = next((
-                        item for item in current_resources
-                        if item.remote_key == fence.remote_capability_key
-                    ), None)
+                    matched = next(
+                        (
+                            item
+                            for item in current_resources
+                            if item.remote_key == fence.remote_capability_key
+                        ),
+                        None,
+                    )
                     if matched is None or matched.descriptor_hash != fence.descriptor_hash:
                         raise mcp_repository.McpConflict(
                             "MCP resource descriptor changed; renewed owner review is required"
@@ -592,7 +737,9 @@ class McpSdkClient:
                     )
                     payload = self._validate_result(result, response_limit)
                 if not await before_request():
-                    raise mcp_repository.McpConflict("MCP authorization changed before result return")
+                    raise mcp_repository.McpConflict(
+                        "MCP authorization changed before result return"
+                    )
                 return payload
 
     def _validate_result(self, result: Any, max_bytes: int) -> dict[str, Any]:
@@ -604,7 +751,10 @@ class McpSdkClient:
         payload = result.model_dump(by_alias=True, mode="json", exclude_none=True)
         try:
             encoded = json.dumps(
-                payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+                payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
             ).encode("utf-8")
         except (TypeError, ValueError, RecursionError) as exc:
             raise McpTransportError("MCP result is not bounded JSON data") from exc

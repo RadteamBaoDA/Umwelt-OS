@@ -36,7 +36,9 @@ def configure_default_executor() -> ThreadPoolExecutor:
     Must be called from a running event loop (API lifespan, arq worker startup). Idempotence is not
     required: each loop owns its executor and ``loop.close()`` shuts it down.
     """
-    executor = ThreadPoolExecutor(max_workers=default_executor_workers(), thread_name_prefix="umwelt-default")
+    executor = ThreadPoolExecutor(
+        max_workers=default_executor_workers(), thread_name_prefix="umwelt-default"
+    )
     asyncio.get_running_loop().set_default_executor(executor)
     return executor
 
@@ -46,7 +48,9 @@ def _get_dns_executor() -> ThreadPoolExecutor:
     global _dns_executor
     with _dns_lock:
         if _dns_executor is None:
-            _dns_executor = ThreadPoolExecutor(max_workers=DNS_EXECUTOR_WORKERS, thread_name_prefix="umwelt-dns")
+            _dns_executor = ThreadPoolExecutor(
+                max_workers=DNS_EXECUTOR_WORKERS, thread_name_prefix="umwelt-dns"
+            )
         return _dns_executor
 
 

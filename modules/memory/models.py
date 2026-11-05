@@ -57,26 +57,47 @@ class Memory(Base):
             "confidence >= 0.0 AND confidence <= 1.0",
             name="ck_memories_confidence_range",
         ),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_memories_workspace", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["workspace_id", "actor_user_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_memories_principal", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_memories_workspace",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "actor_user_id"],
+            ["workspaces.id", "workspaces.owner_user_id"],
+            name="fk_w2_memories_principal",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint("workspace_id", "id", name="uq_w2_memories_id"),
         # Scalar SET NULL clears only the parent ID; this deferred FK retains workspace.
-        ForeignKeyConstraint(["workspace_id", "superseded_by_id"], ["memories.workspace_id", "memories.id"], name="fk_w2_memories_superseded_by_id", ondelete="NO ACTION", deferrable=True, initially="DEFERRED"),
-        ForeignKeyConstraint(["workspace_id", "candidate_id"], ["memory_candidates.workspace_id", "memory_candidates.id"], name="fk_w2_memories_candidate_id", ondelete="NO ACTION", deferrable=True, initially="DEFERRED"),
-        Index("ix_w2_memories_scope", 'workspace_id', 'id'),
-        Index("ix_w2_memories_work", 'workspace_id', 'created_at', 'id'),
+        ForeignKeyConstraint(
+            ["workspace_id", "superseded_by_id"],
+            ["memories.workspace_id", "memories.id"],
+            name="fk_w2_memories_superseded_by_id",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "candidate_id"],
+            ["memory_candidates.workspace_id", "memory_candidates.id"],
+            name="fk_w2_memories_candidate_id",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        Index("ix_w2_memories_scope", "workspace_id", "id"),
+        Index("ix_w2_memories_work", "workspace_id", "created_at", "id"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
 
-
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     memory_type: Mapped[str] = mapped_column(String(32), nullable=False, default="fact")
-    provenance: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, server_default="{}"
-    )
+    provenance: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
@@ -98,17 +119,12 @@ class Memory(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
-    invalidated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    forgotten_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    invalidated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    forgotten_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     candidate: Mapped["MemoryCandidate | None"] = relationship(
         "MemoryCandidate", foreign_keys=[candidate_id], back_populates="accepted_memory"
     )
-
 
 
 class MemoryCandidate(Base):
@@ -121,7 +137,9 @@ class MemoryCandidate(Base):
     __table_args__ = (
         Index("ix_memory_candidates_status", "status"),
         Index("ix_memory_candidates_created_at", "created_at"),
-        Index("ix_memory_candidates_provenance_source_id", text("(provenance ->> 'source_id')"), "id"),
+        Index(
+            "ix_memory_candidates_provenance_source_id", text("(provenance ->> 'source_id')"), "id"
+        ),
         CheckConstraint(
             "status IN ('pending', 'accepted', 'rejected', 'superseded', 'expired')",
             name="ck_memory_candidates_status",
@@ -142,23 +160,30 @@ class MemoryCandidate(Base):
             "usefulness_score >= 0.0 AND usefulness_score <= 1.0",
             name="ck_memory_candidates_usefulness_range",
         ),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_memory_candidates_workspace", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["workspace_id", "actor_user_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_memory_candidates_principal", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_memory_candidates_workspace",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "actor_user_id"],
+            ["workspaces.id", "workspaces.owner_user_id"],
+            name="fk_w2_memory_candidates_principal",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint("workspace_id", "id", name="uq_w2_memory_candidates_id"),
-        Index("ix_w2_memory_candidates_scope", 'workspace_id', 'id'),
-        Index("ix_w2_memory_candidates_work", 'workspace_id', 'created_at', 'id'),
+        Index("ix_w2_memory_candidates_scope", "workspace_id", "id"),
+        Index("ix_w2_memory_candidates_work", "workspace_id", "created_at", "id"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
 
-
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     memory_type: Mapped[str] = mapped_column(String(32), nullable=False, default="fact")
-    provenance: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, server_default="{}"
-    )
+    provenance: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
     novelty_score: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
     usefulness_score: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
@@ -174,14 +199,11 @@ class MemoryCandidate(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
-    evaluated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     accepted_memory: Mapped["Memory | None"] = relationship(
         "Memory", foreign_keys=[Memory.candidate_id], back_populates="candidate", uselist=False
     )
-
 
 
 class MemoryPrivacyRecord(Base):
@@ -193,14 +215,23 @@ class MemoryPrivacyRecord(Base):
 
     __tablename__ = "memory_privacy_settings"
     __table_args__ = (
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_memory_privacy_settings_workspace", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_memory_privacy_settings_principal", ondelete="RESTRICT"),
-        Index("ix_w2_memory_privacy_settings_scope", 'workspace_id', 'owner_id'),
-        Index("ix_w2_memory_privacy_settings_work", 'workspace_id', 'created_at', 'owner_id'),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_memory_privacy_settings_workspace",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "owner_id"],
+            ["workspaces.id", "workspaces.owner_user_id"],
+            name="fk_w2_memory_privacy_settings_principal",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_w2_memory_privacy_settings_scope", "workspace_id", "owner_id"),
+        Index("ix_w2_memory_privacy_settings_work", "workspace_id", "created_at", "owner_id"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-
 
     owner_id: Mapped[int] = mapped_column(
         ForeignKey("owner.id", ondelete="CASCADE"), primary_key=True
@@ -223,4 +254,3 @@ class MemoryPrivacyRecord(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
-

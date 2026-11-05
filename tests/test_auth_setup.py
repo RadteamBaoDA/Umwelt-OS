@@ -43,7 +43,9 @@ class MemorySession:
     async def commit(self) -> None:
         async with self.store.lock:
             if self.store.owner_exists or self.store.other_unique_conflict:
-                conflict = OtherUniqueConflict if self.store.other_unique_conflict else OwnerKeyConflict
+                conflict = (
+                    OtherUniqueConflict if self.store.other_unique_conflict else OwnerKeyConflict
+                )
                 raise IntegrityError("insert", {}, conflict())
             self.store.owner_exists = True
 
@@ -74,7 +76,11 @@ class MemoryPipeline:
 @pytest.mark.asyncio
 async def test_only_one_simultaneous_setup_request_creates_the_owner() -> None:
     store = MemoryOwnerStore()
-    settings = Settings(public_origin="http://localhost:3000", setup_token="test-setup-token", csrf_signing_secret="test-csrf-key")
+    settings = Settings(
+        public_origin="http://localhost:3000",
+        setup_token="test-setup-token",
+        csrf_signing_secret="test-csrf-key",
+    )
     app = create_app(settings)
 
     async def session_override():
@@ -91,9 +97,11 @@ async def test_only_one_simultaneous_setup_request_creates_the_owner() -> None:
             "X-CSRF-Token": csrf_token,
             "Origin": "http://localhost:3000",
         }
+
         async def setup():
             return await client.post(
-                "/api/v1/auth/setup", headers=headers,
+                "/api/v1/auth/setup",
+                headers=headers,
                 json={"password": "test-owner-password-42"},
             )
 
@@ -106,7 +114,11 @@ async def test_only_one_simultaneous_setup_request_creates_the_owner() -> None:
 async def test_unrelated_integrity_error_is_not_reported_as_owner_conflict() -> None:
     store = MemoryOwnerStore()
     store.other_unique_conflict = True
-    settings = Settings(public_origin="http://localhost:3000", setup_token="test-setup-token", csrf_signing_secret="test-csrf-key")
+    settings = Settings(
+        public_origin="http://localhost:3000",
+        setup_token="test-setup-token",
+        csrf_signing_secret="test-csrf-key",
+    )
     app = create_app(settings)
 
     async def session_override():

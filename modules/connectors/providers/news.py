@@ -63,12 +63,21 @@ FEED_URLS: dict[str, str] = {
     "jma_eqvol": "https://www.data.jma.go.jp/developer/xml/feed/eqvol.xml",
 }
 PUBLISHERS: dict[str, str] = {
-    "bbc_world": "BBC News", "vnexpress_business": "VnExpress", "tuoitre_news": "Tuổi Trẻ",
-    "thanhnien_news": "Báo Thanh Niên", "dantri_news": "Dân trí",
-    "aljazeera_world": "Al Jazeera", "npr_news": "NPR", "fed_press": "Federal Reserve Board",
-    "gdacs_rss": "GDACS", "lobsters": "Lobsters", "github_trending": "GitHub Trending",
-    "wwr_jobs": "We Work Remotely", "us_travel_advisories": "U.S. Department of State",
-    "noaa_tsunami": "NOAA Tsunami Warning Centers", "jma_eqvol": "Japan Meteorological Agency",
+    "bbc_world": "BBC News",
+    "vnexpress_business": "VnExpress",
+    "tuoitre_news": "Tuổi Trẻ",
+    "thanhnien_news": "Báo Thanh Niên",
+    "dantri_news": "Dân trí",
+    "aljazeera_world": "Al Jazeera",
+    "npr_news": "NPR",
+    "fed_press": "Federal Reserve Board",
+    "gdacs_rss": "GDACS",
+    "lobsters": "Lobsters",
+    "github_trending": "GitHub Trending",
+    "wwr_jobs": "We Work Remotely",
+    "us_travel_advisories": "U.S. Department of State",
+    "noaa_tsunami": "NOAA Tsunami Warning Centers",
+    "jma_eqvol": "Japan Meteorological Agency",
 }
 
 # Google News RSS search: unofficial endpoint, no API contract. The URL is built here from validated scope only.
@@ -76,21 +85,30 @@ GOOGLE_NEWS_URL = "https://news.google.com/rss/search"
 GOOGLE_NEWS_LICENSE = "Google News RSS / publisher"
 GOOGLE_NEWS_SITES = ("any", "reuters.com", "apnews.com", "bbc.com", "vnexpress.net")
 # Google 302-redirects (and fetch_bounded refuses redirects) unless hl is its canonical form: "en-US" for English, bare "vi" for Vietnamese.
-GOOGLE_NEWS_LOCALES: dict[str, tuple[str, str, str]] = {"vi-VN": ("vi", "VN", "VN:vi"), "en-US": ("en-US", "US", "US:en")}
+GOOGLE_NEWS_LOCALES: dict[str, tuple[str, str, str]] = {
+    "vi-VN": ("vi", "VN", "VN:vi"),
+    "en-US": ("en-US", "US", "US:en"),
+}
 _QUERY_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _SITE_OPERATOR_RE = re.compile(r"(?i)\bsite\s*:")
 
 
 def google_news_url(query: object, site: object, locale: object) -> str:
     """Escaped Google News RSS search URL from allowlisted scope; any other value is ``provider_scope_invalid``."""
-    if not isinstance(query, str) or site not in GOOGLE_NEWS_SITES or locale not in GOOGLE_NEWS_LOCALES:
+    if (
+        not isinstance(query, str)
+        or site not in GOOGLE_NEWS_SITES
+        or locale not in GOOGLE_NEWS_LOCALES
+    ):
         raise ProviderPayloadError("provider_scope_invalid")
     cleaned = " ".join(_QUERY_CONTROL_RE.sub(" ", query).split())
     if not 1 <= len(cleaned) <= 200 or _SITE_OPERATOR_RE.search(cleaned):
         raise ProviderPayloadError("provider_scope_invalid")
     hl, gl, ceid = GOOGLE_NEWS_LOCALES[str(locale)]
     q = cleaned if site == "any" else f"{cleaned} site:{site}"
-    return f"{GOOGLE_NEWS_URL}?" + urlencode({"q": q, "hl": hl, "gl": gl, "ceid": ceid}, quote_via=quote)
+    return f"{GOOGLE_NEWS_URL}?" + urlencode(
+        {"q": q, "hl": hl, "gl": gl, "ceid": ceid}, quote_via=quote
+    )
 
 
 def preset_url(provider: str, configuration: Mapping[str, Any] | None = None) -> str:
@@ -104,7 +122,9 @@ def preset_url(provider: str, configuration: Mapping[str, Any] | None = None) ->
     return url
 
 
-def section_urls(provider: str, configuration: Mapping[str, Any] | None = None) -> list[tuple[str, str]]:
+def section_urls(
+    provider: str, configuration: Mapping[str, Any] | None = None
+) -> list[tuple[str, str]]:
     """Return ``(slug, url)`` for each feed to GET this sync, in the owner's order.
 
     A catalog provider with no saved ``feed_sections`` yields only its default section, whose URL is the
@@ -125,11 +145,14 @@ def section_urls(provider: str, configuration: Mapping[str, Any] | None = None) 
 HN_TOP_URL = "https://hacker-news.firebaseio.com/v0/topstories.json"
 HN_ITEM_URL = "https://hacker-news.firebaseio.com/v0/item/{id}.json"
 HN_MAX_ITEMS = 10  # items fetched per run by default; one extra call lists the ids (11 sends total)
-HN_HARD_MAX_ITEMS = 30  # owner ``max_items`` fan-out ceiling (quota-bound; parser and mapper refuse more)
+HN_HARD_MAX_ITEMS = (
+    30  # owner ``max_items`` fan-out ceiling (quota-bound; parser and mapper refuse more)
+)
 _HN_MAX_BODY = 64 * 1024
 
 
 # --------------------------------------------------------------------------- shared text/url/time policy
+
 
 class _TextExtractor(HTMLParser):
     def __init__(self) -> None:
@@ -188,7 +211,11 @@ def parse_when(raw: str | None, collected_at: datetime) -> datetime | None:
         return None
     raw = raw.strip()
     try:
-        moment = datetime.fromisoformat(raw) if re.match(r"\d{4}-\d{2}-\d{2}", raw) else parsedate_to_datetime(raw)
+        moment = (
+            datetime.fromisoformat(raw)
+            if re.match(r"\d{4}-\d{2}-\d{2}", raw)
+            else parsedate_to_datetime(raw)
+        )
     except (ValueError, TypeError, IndexError, OverflowError):
         return None
     if moment.tzinfo is None or moment.utcoffset() is None:
@@ -213,23 +240,41 @@ def _license_label(provider: str) -> str | None:
 
 
 def _record(
-    *, provider: str, identity: str, title: str, summary: str, observed_at: datetime, collected_at: datetime,
-    version: str, basis: Literal["provider_modified", "provider_published", "collection"],
-    modified_at: datetime | None, coverage: Literal["returned_snapshot", "truncated"],
-    source_fields: dict[str, Any], canonical_url: str | None, published_at: str | None = None,
+    *,
+    provider: str,
+    identity: str,
+    title: str,
+    summary: str,
+    observed_at: datetime,
+    collected_at: datetime,
+    version: str,
+    basis: Literal["provider_modified", "provider_published", "collection"],
+    modified_at: datetime | None,
+    coverage: Literal["returned_snapshot", "truncated"],
+    source_fields: dict[str, Any],
+    canonical_url: str | None,
+    published_at: str | None = None,
     provider_updated_at: str | None = None,
 ) -> IngestionRecord:
     """Assemble a news ingestion record with typed provider provenance and optional canonical link."""
     from modules.knowledge.documents.public import ProviderRecordMetadata
 
     envelope = ProviderRecordMetadata(
-        provider=provider, identity=identity, provider_version=version,
-        timestamp_basis=basis, coverage=coverage, content_truncated=False,
-        provider_modified_at=modified_at, license_label=_license_label(provider), source_fields=source_fields,
+        provider=provider,
+        identity=identity,
+        provider_version=version,
+        timestamp_basis=basis,
+        coverage=coverage,
+        content_truncated=False,
+        provider_modified_at=modified_at,
+        license_label=_license_label(provider),
+        source_fields=source_fields,
     )
     metadata: dict[str, Any] = {
-        "title": title, "provider_record": envelope.model_dump(mode="json"),
-        "content_scope": "feed_summary", "full_text_available": False,
+        "title": title,
+        "provider_record": envelope.model_dump(mode="json"),
+        "content_scope": "feed_summary",
+        "full_text_available": False,
     }
     if canonical_url:
         metadata["canonical_url"] = canonical_url
@@ -238,12 +283,17 @@ def _record(
     if provider_updated_at:
         metadata["provider_updated_at"] = provider_updated_at
     return IngestionRecord(
-        provider_id=identity, content=(title + (f"\n\n{summary}" if summary else ""))[:_MAX_SUMMARY + _MAX_TITLE],
-        observed_at=observed_at, collected_at=collected_at, version=version, metadata=metadata,
+        provider_id=identity,
+        content=(title + (f"\n\n{summary}" if summary else ""))[: _MAX_SUMMARY + _MAX_TITLE],
+        observed_at=observed_at,
+        collected_at=collected_at,
+        version=version,
+        metadata=metadata,
     )
 
 
 # --------------------------------------------------------------------------- RSS / Atom
+
 
 def safe_xml_root(body: object, max_bytes: int = MAX_FEED_BYTES) -> ET.Element:
     """Parse bounded (``max_bytes``), strictly UTF-8 XML; DOCTYPE/ENTITY (and other encodings that could hide them) are refused."""
@@ -262,7 +312,9 @@ def safe_xml_root(body: object, max_bytes: int = MAX_FEED_BYTES) -> ET.Element:
     if "<!doctype" in lowered or "<!entity" in lowered:
         raise ProviderPayloadError("news_feed_forbidden_xml_construct")
     try:
-        return ET.fromstring(text.encode("utf-8"))  # hostile constructs rejected above  # noqa: S314  # DOCTYPE/ENTITY rejected before parsing; defusedxml not installed
+        return ET.fromstring(
+            text.encode("utf-8")
+        )  # hostile constructs rejected above  # noqa: S314  # DOCTYPE/ENTITY rejected before parsing; defusedxml not installed
     except ET.ParseError as exc:
         raise ProviderPayloadError("news_feed_xml_malformed") from exc
 
@@ -326,14 +378,27 @@ def map_feed(provider: str, body: bytes, collected_at: datetime) -> list[Ingesti
         if raw_id is None or not title:
             continue  # nothing stable to key on, or nothing to show
         identity = _stable_id(raw_id)
-        published = parse_when(_child_text(item, "published" if atom else "pubDate", "date"), collected_at)
+        published = parse_when(
+            _child_text(item, "published" if atom else "pubDate", "date"), collected_at
+        )
         updated = parse_when(_child_text(item, "updated") if atom else None, collected_at)
-        summary = plain_text(_child_text(item, "summary", "content") if atom else _child_text(item, "description"), _MAX_SUMMARY)
+        summary = plain_text(
+            _child_text(item, "summary", "content") if atom else _child_text(item, "description"),
+            _MAX_SUMMARY,
+        )
         # Google News items name the original publisher in <source>; the item link is kept as the citation.
-        publisher = plain_text(_child_text(item, "source"), 200) or None if provider == "google_news" else PUBLISHERS[provider]
+        publisher = (
+            plain_text(_child_text(item, "source"), 200) or None
+            if provider == "google_news"
+            else PUBLISHERS[provider]
+        )
         pub_iso = published.isoformat() if published else None
         upd_iso = updated.isoformat() if updated else None
-        fields: dict[str, Any] = {"title": title, "guid": identity if guid else None, "publisher": publisher}
+        fields: dict[str, Any] = {
+            "title": title,
+            "guid": identity if guid else None,
+            "publisher": publisher,
+        }
         if summary:
             fields["summary"] = summary
         if link:
@@ -349,14 +414,26 @@ def map_feed(provider: str, body: bytes, collected_at: datetime) -> list[Ingesti
         )
         version = content_version(provider, identity, title, summary, link, pub_iso, upd_iso)
         record = _record(
-            provider=provider, identity=identity, title=title, summary=summary, observed_at=observed,
-            collected_at=collected_at, version=version, basis=basis, modified_at=updated,
-            coverage="returned_snapshot", source_fields=fields, canonical_url=link,
-            published_at=pub_iso, provider_updated_at=upd_iso,
+            provider=provider,
+            identity=identity,
+            title=title,
+            summary=summary,
+            observed_at=observed,
+            collected_at=collected_at,
+            version=version,
+            basis=basis,
+            modified_at=updated,
+            coverage="returned_snapshot",
+            source_fields=fields,
+            canonical_url=link,
+            published_at=pub_iso,
+            provider_updated_at=upd_iso,
         )
         key = (published or updated or datetime.min.replace(tzinfo=UTC), identity)
         old = by_id.get(identity)
-        if old is None or (record.version or "") < (old[1].version or ""):  # reorder-proof duplicate pick
+        if old is None or (record.version or "") < (
+            old[1].version or ""
+        ):  # reorder-proof duplicate pick
             by_id[identity] = (key, record)
     ranked = sorted(by_id.values(), key=lambda pair: (pair[0][0], pair[0][1]), reverse=True)
     if not ranked:
@@ -368,9 +445,11 @@ def map_feed(provider: str, body: bytes, collected_at: datetime) -> list[Ingesti
 
 # --------------------------------------------------------------------------- conditional GET
 
+
 @dataclass(frozen=True)
 class FeedValidators:
     """ETag/Last-Modified bound to the exact URL and config revision they were learned for."""
+
     url: str
     config_revision: str
     etag: str | None = None
@@ -385,11 +464,16 @@ def _header_value(raw: str | None) -> str | None:
 
 
 def feed_request(
-    provider: str, stored: FeedValidators | None = None, config_revision: str = "", url: str | None = None,
+    provider: str,
+    stored: FeedValidators | None = None,
+    config_revision: str = "",
+    url: str | None = None,
 ) -> ProviderRequest:
     """Preset GET (``url`` is the server-built Google News URL); validators replay only when URL and revision match."""
     url = url or preset_url(provider)
-    headers: dict[str, str] = {"Accept": "application/rss+xml, application/atom+xml, application/xml;q=0.9"}
+    headers: dict[str, str] = {
+        "Accept": "application/rss+xml, application/atom+xml, application/xml;q=0.9"
+    }
     if stored is not None and stored.url == url and stored.config_revision == config_revision:
         if _header_value(stored.etag):
             headers["If-None-Match"] = str(_header_value(stored.etag))
@@ -399,7 +483,10 @@ def feed_request(
 
 
 def capture_validators(
-    provider: str, headers: Mapping[str, str], config_revision: str = "", url: str | None = None,
+    provider: str,
+    headers: Mapping[str, str],
+    config_revision: str = "",
+    url: str | None = None,
 ) -> FeedValidators | None:
     """Validators from a 200 response, tied to this preset URL and revision; None when the feed offers none."""
     lowered = {k.lower(): v for k, v in headers.items()}
@@ -415,7 +502,9 @@ class FeedResult:
     not_modified: bool = False
 
 
-def map_feed_response(provider: str, status: int, body: bytes, collected_at: datetime) -> FeedResult:
+def map_feed_response(
+    provider: str, status: int, body: bytes, collected_at: datetime
+) -> FeedResult:
     """304 keeps the last good records (no empty batch); 200 maps; anything else is not a feed."""
     if status == 304:
         return FeedResult((), not_modified=True)
@@ -425,6 +514,7 @@ def map_feed_response(provider: str, status: int, body: bytes, collected_at: dat
 
 
 # --------------------------------------------------------------------------- Hacker News seam
+
 
 def hn_top_request(url: str = HN_TOP_URL) -> ProviderRequest:
     """Id-listing request; ``url`` is a server-built ``<list>stories.json`` URL (default: top stories)."""
@@ -477,14 +567,19 @@ def _hn_skip_reason(item: object) -> str | None:
 
 
 def map_hn_stories(
-    ids: tuple[int, ...], bodies: Mapping[int, bytes | None], collected_at: datetime, limit: int = HN_MAX_ITEMS,
+    ids: tuple[int, ...],
+    bodies: Mapping[int, bytes | None],
+    collected_at: datetime,
+    limit: int = HN_MAX_ITEMS,
 ) -> HnResult:
     """Map fetched items (``None`` body = not fetched/404). Removed/dead/non-story items are skipped and counted.
 
     The article ``url`` is kept as a citation only; Ask-HN style stories without one keep their own text.
     Score/comment counts are volatile and excluded from the version.
     """
-    if len(ids) > min(limit, HN_HARD_MAX_ITEMS):  # fan-out above the owner's (or default) count is refused
+    if len(ids) > min(
+        limit, HN_HARD_MAX_ITEMS
+    ):  # fan-out above the owner's (or default) count is refused
         raise ProviderPayloadError("hn_fanout_exceeded")
     skipped: dict[str, int] = {}
     records: list[IngestionRecord] = []
@@ -497,32 +592,55 @@ def map_hn_stories(
         if reason is not None or not isinstance(item, dict):
             skipped[reason or "missing"] = skipped.get(reason or "missing", 0) + 1
             continue
-        title = plain_text(item.get("title") if isinstance(item.get("title"), str) else None, _MAX_TITLE)
+        title = plain_text(
+            item.get("title") if isinstance(item.get("title"), str) else None, _MAX_TITLE
+        )
         if not title:
             skipped["no_title"] = skipped.get("no_title", 0) + 1
             continue
         url = https_link(item.get("url"))
-        text = plain_text(item.get("text") if isinstance(item.get("text"), str) else None, _MAX_SUMMARY)
+        text = plain_text(
+            item.get("text") if isinstance(item.get("text"), str) else None, _MAX_SUMMARY
+        )
         by = item.get("by") if isinstance(item.get("by"), str) and len(item["by"]) <= 128 else None
         when = item.get("time")
-        posted = datetime.fromtimestamp(when, UTC) if type(when) is int and 946684800 <= when <= collected_at.timestamp() + 600 else None
+        posted = (
+            datetime.fromtimestamp(when, UTC)
+            if type(when) is int and 946684800 <= when <= collected_at.timestamp() + 600
+            else None
+        )
         fields: dict[str, Any] = {"title": title, "id": item_id, "type": "story"}
-        for key, value in (("url", url), ("text", text or None), ("by", by),
-                           ("time", int(posted.timestamp()) if posted else None)):
+        for key, value in (
+            ("url", url),
+            ("text", text or None),
+            ("by", by),
+            ("time", int(posted.timestamp()) if posted else None),
+        ):
             if value is not None:
                 fields[key] = value
         identity = f"hn:{item_id}"
-        records.append(_record(
-            provider="hn_top", identity=identity, title=title, summary=text, observed_at=posted or collected_at,
-            collected_at=collected_at, version=content_version("hn_top", item_id, title, url, text, by),
-            basis="provider_published" if posted else "collection", modified_at=None,
-            coverage="returned_snapshot", source_fields=fields, canonical_url=url,
-            published_at=posted.isoformat() if posted else None,
-        ))
+        records.append(
+            _record(
+                provider="hn_top",
+                identity=identity,
+                title=title,
+                summary=text,
+                observed_at=posted or collected_at,
+                collected_at=collected_at,
+                version=content_version("hn_top", item_id, title, url, text, by),
+                basis="provider_published" if posted else "collection",
+                modified_at=None,
+                coverage="returned_snapshot",
+                source_fields=fields,
+                canonical_url=url,
+                published_at=posted.isoformat() if posted else None,
+            )
+        )
     return HnResult(tuple(records), skipped)
 
 
 # --------------------------------------------------------------------------- registry
+
 
 def _feed_mapper(provider: str) -> Callable[[Any, datetime], list[IngestionRecord]]:
     """Bind a provider name into a ``(body, collected_at)`` feed mapper."""
@@ -534,7 +652,10 @@ def news_adapters() -> dict[str, PureAdapter]:
     from modules.connectors.providers.gdelt import GDELT_ADAPTER
 
     return {
-        **{p: PureAdapter(lambda p=p: feed_request(p), _feed_mapper(p), binary=True) for p in FEED_URLS},
+        **{
+            p: PureAdapter(lambda p=p: feed_request(p), _feed_mapper(p), binary=True)
+            for p in FEED_URLS
+        },
         "gdelt_economy": GDELT_ADAPTER,
     }
 

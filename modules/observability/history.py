@@ -30,8 +30,11 @@ from modules.observability.schemas import (
 
 BUCKET_SECONDS: dict[str, int] = {"1h": 60, "24h": 900, "7d": 7200, "30d": 21600, "90d": 86400}
 RANGE_WINDOW: dict[str, timedelta] = {
-    "1h": timedelta(hours=1), "24h": timedelta(hours=24), "7d": timedelta(days=7),
-    "30d": timedelta(days=30), "90d": timedelta(days=90),
+    "1h": timedelta(hours=1),
+    "24h": timedelta(hours=24),
+    "7d": timedelta(days=7),
+    "30d": timedelta(days=30),
+    "90d": timedelta(days=90),
 }
 PURGE_BATCH = 5000
 _ACTIVE_STAGES = ("pending", "queued", "running", "retrying")
@@ -48,20 +51,30 @@ async def read_history_settings(session: AsyncSession) -> HistorySettingsRead:
 
 
 async def save_history_settings(
-    session: AsyncSession, *, expected_revision: int, retention_days: int | None = None,
+    session: AsyncSession,
+    *,
+    expected_revision: int,
+    retention_days: int | None = None,
     sample_interval_minutes: int | None = None,
 ) -> HistorySettingsRead:
     """Compare-and-set the given fields (None = keep); raises 409 when ``expected_revision`` is stale. Caller commits."""
     changes: dict[str, Any] = {
-        k: v for k, v in (("retention_days", retention_days), ("sample_interval_minutes", sample_interval_minutes))
+        k: v
+        for k, v in (
+            ("retention_days", retention_days),
+            ("sample_interval_minutes", sample_interval_minutes),
+        )
         if v is not None
     }
     result = await session.execute(
         update(SystemHistorySettings)
         .where(SystemHistorySettings.id == 1, SystemHistorySettings.revision == expected_revision)
-        .values(**changes, revision=SystemHistorySettings.revision + 1, updated_at=datetime.now(UTC))
+        .values(
+            **changes, revision=SystemHistorySettings.revision + 1, updated_at=datetime.now(UTC)
+        )
         .returning(
-            SystemHistorySettings.retention_days, SystemHistorySettings.sample_interval_minutes,
+            SystemHistorySettings.retention_days,
+            SystemHistorySettings.sample_interval_minutes,
             SystemHistorySettings.revision,
         )
     )
@@ -69,12 +82,18 @@ async def save_history_settings(
     if row is None:
         raise ConflictError(detail="History settings changed; reload and retry")
     return HistorySettingsRead(
-        retention_days=row.retention_days, sample_interval_minutes=row.sample_interval_minutes, revision=row.revision,
+        retention_days=row.retention_days,
+        sample_interval_minutes=row.sample_interval_minutes,
+        revision=row.revision,
     )
 
 
 async def purge_expired_samples(
-    session: AsyncSession, *, now: datetime, retention_days: int, limit: int = PURGE_BATCH,
+    session: AsyncSession,
+    *,
+    now: datetime,
+    retention_days: int,
+    limit: int = PURGE_BATCH,
 ) -> int:
     """Delete at most ``limit`` samples older than the retention window; the rest go on later minutes."""
     oldest = (
@@ -82,7 +101,9 @@ async def purge_expired_samples(
         .where(SystemHealthSample.sampled_at < now - timedelta(days=retention_days))
         .limit(limit)
     )
-    result = await session.execute(delete(SystemHealthSample).where(SystemHealthSample.id.in_(oldest)))
+    result = await session.execute(
+        delete(SystemHealthSample).where(SystemHealthSample.id.in_(oldest))
+    )
     return int(cast(Any, result).rowcount)
 
 
@@ -94,8 +115,10 @@ def compact_db_stats(stats: dict[str, Any]) -> dict[str, Any]:
         "pg_size_bytes": pg.get("database_size_bytes"),
         "pg_connections_total": (pg.get("connections") or {}).get("total"),
         "pg_cache_hit_ratio": pg.get("cache_hit_ratio"),
-        "pg_xact_commit": tx.get("commit"), "pg_xact_rollback": tx.get("rollback"),
-        "redis_used_memory_bytes": rd.get("used_memory_bytes"), "redis_ops_per_sec": rd.get("ops_per_sec"),
+        "pg_xact_commit": tx.get("commit"),
+        "pg_xact_rollback": tx.get("rollback"),
+        "redis_used_memory_bytes": rd.get("used_memory_bytes"),
+        "redis_ops_per_sec": rd.get("ops_per_sec"),
         "redis_keyspace_hit_ratio": rd.get("keyspace_hit_ratio"),
     }
     return {k: v for k, v in compact.items() if v is not None}
@@ -117,31 +140,51 @@ async def sample_system_health(ctx: dict[str, object]) -> int:
     async with factory() as session:
         cfg = await read_history_settings(session)
         if cfg.sample_interval_minutes == 0:
-            purged = await purge_expired_samples(session, now=now, retention_days=cfg.retention_days)
+            purged = await purge_expired_samples(
+                session, now=now, retention_days=cfg.retention_days
+            )
             await session.commit()
             return purged
         newest = await session.scalar(select(func.max(SystemHealthSample.sampled_at)))
-        if newest is not None and newest > now - timedelta(minutes=cfg.sample_interval_minutes) + timedelta(seconds=30):
+        if newest is not None and newest > now - timedelta(
+            minutes=cfg.sample_interval_minutes
+        ) + timedelta(seconds=30):
             return 0
-        health = await system_health(session, cast(Redis, ctx["redis"]), cast(Settings, ctx["settings"]))
+        health = await system_health(
+            session, cast(Redis, ctx["redis"]), cast(Settings, ctx["settings"])
+        )
         backlog = 0
         try:
-            stages = (await queue_summary(session, instance_operator=True)).get("ingestion_stages") or {}
-            backlog = sum(int(n) for status, n in cast(dict[str, int], stages).items() if status in _ACTIVE_STAGES)
+            stages = (await queue_summary(session, instance_operator=True)).get(
+                "ingestion_stages"
+            ) or {}
+            backlog = sum(
+                int(n)
+                for status, n in cast(dict[str, int], stages).items()
+                if status in _ACTIVE_STAGES
+            )
         except Exception:  # noqa: BLE001 - telemetry must not fail because the queue read did
             await session.rollback()
         db_stats: dict[str, Any] = {}
         try:
-            db_stats = compact_db_stats(await read_database_stats(session, cast(Redis, ctx["redis"])))
+            db_stats = compact_db_stats(
+                await read_database_stats(session, cast(Redis, ctx["redis"]))
+            )
         except Exception:  # noqa: BLE001 - the sample must still be written without db stats
             await session.rollback()
         components = {
             name: {"status": c["status"], "latency_ms": c.get("latency_ms")}
             for name, c in health["components"].items()
         }
-        session.add(SystemHealthSample(
-            sampled_at=now, overall=health["overall"], components=components, queue_backlog=backlog, db_stats=db_stats,
-        ))
+        session.add(
+            SystemHealthSample(
+                sampled_at=now,
+                overall=health["overall"],
+                components=components,
+                queue_backlog=backlog,
+                db_stats=db_stats,
+            )
+        )
         await session.flush()
         purged = await purge_expired_samples(session, now=now, retention_days=cfg.retention_days)
         await session.commit()
@@ -185,15 +228,22 @@ def _round(value: Any, digits: int) -> float | None:
 def _db_bucket(r: Any) -> HistoryDbRead:
     """Map one bucket row to DB aggregates; TPS needs >=2 sampled counters and a non-reset (non-decreasing) delta."""
     tps = None
-    if r.xact_first is not None and r.xact_last is not None and r.xact_t_last > r.xact_t_first and r.xact_last >= r.xact_first:
+    if (
+        r.xact_first is not None
+        and r.xact_last is not None
+        and r.xact_t_last > r.xact_t_first
+        and r.xact_last >= r.xact_first
+    ):
         tps = round(float(r.xact_last - r.xact_first) / float(r.xact_t_last - r.xact_t_first), 2)
     return HistoryDbRead(
         pg_size_bytes_max=None if r.pg_size_max is None else int(r.pg_size_max),
         pg_connections_avg=_round(r.pg_conn_avg, 1),
         pg_connections_max=None if r.pg_conn_max is None else int(r.pg_conn_max),
-        pg_cache_hit_ratio_avg=_round(r.pg_hit_avg, 4), pg_tps_avg=tps,
+        pg_cache_hit_ratio_avg=_round(r.pg_hit_avg, 4),
+        pg_tps_avg=tps,
         redis_memory_bytes_max=None if r.redis_mem_max is None else int(r.redis_mem_max),
-        redis_ops_per_sec_avg=_round(r.redis_ops_avg, 1), redis_hit_ratio_avg=_round(r.redis_hit_avg, 4),
+        redis_ops_per_sec_avg=_round(r.redis_ops_avg, 1),
+        redis_hit_ratio_avg=_round(r.redis_hit_avg, 4),
     )
 
 
@@ -206,7 +256,8 @@ async def read_history(session: AsyncSession, range_: HistoryRange) -> HistoryRe
     comps: dict[datetime, dict[str, HistoryComponentRead]] = {}
     for r in (await session.execute(_COMPONENTS_SQL, params)).all():
         comps.setdefault(r.start, {})[r.name] = HistoryComponentRead(
-            up=r.up, total=r.total,
+            up=r.up,
+            total=r.total,
             latency_ms_avg=None if r.lat_avg is None else round(float(r.lat_avg), 1),
             latency_ms_max=None if r.lat_max is None else int(r.lat_max),
         )
@@ -214,12 +265,19 @@ async def read_history(session: AsyncSession, range_: HistoryRange) -> HistoryRe
         select(SystemHealthSample.sampled_at).order_by(SystemHealthSample.sampled_at).limit(1)
     )
     return HistoryRead(
-        range=range_, bucket_seconds=size, retention_days=(await read_history_settings(session)).retention_days,
-        generated_at=now, oldest_sample_at=oldest,
+        range=range_,
+        bucket_seconds=size,
+        retention_days=(await read_history_settings(session)).retention_days,
+        generated_at=now,
+        oldest_sample_at=oldest,
         buckets=[
             HistoryBucketRead(
-                start=r.start, samples=r.samples, overall_healthy=r.overall_healthy,
-                queue_backlog_max=r.queue_backlog_max or 0, components=comps.get(r.start, {}), db=_db_bucket(r),
+                start=r.start,
+                samples=r.samples,
+                overall_healthy=r.overall_healthy,
+                queue_backlog_max=r.queue_backlog_max or 0,
+                components=comps.get(r.start, {}),
+                db=_db_bucket(r),
             )
             for r in rows
         ],

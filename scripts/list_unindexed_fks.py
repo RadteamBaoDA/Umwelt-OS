@@ -30,13 +30,20 @@ class TableState:
 
 
 _IDENT = r'"?([A-Za-z_][A-Za-z0-9_]*)"?'
-_CREATE_TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?" + _IDENT + r"\s*\((.*)\)\s*$", re.DOTALL)
+_CREATE_TABLE = re.compile(
+    r"CREATE TABLE (?:IF NOT EXISTS )?" + _IDENT + r"\s*\((.*)\)\s*$", re.DOTALL
+)
 _ALTER = re.compile(r"ALTER TABLE (?:ONLY )?(?:IF EXISTS )?" + _IDENT + r"\s+(.*)$", re.DOTALL)
 _ADD_CONSTRAINT = re.compile(r"ADD CONSTRAINT " + _IDENT + r"\s+(.*)$", re.DOTALL)
 _DROP_CONSTRAINT = re.compile(r"DROP CONSTRAINT (?:IF EXISTS )?" + _IDENT, re.DOTALL)
 _CREATE_INDEX = re.compile(
-    r"CREATE (?:UNIQUE )?INDEX (?:CONCURRENTLY )?(?:IF NOT EXISTS )?" + _IDENT + r" ON (?:ONLY )?" + _IDENT
-    + r"(?: USING \w+)?\s*\((.*?)\)(\s+WHERE\s+.*)?$", re.DOTALL)
+    r"CREATE (?:UNIQUE )?INDEX (?:CONCURRENTLY )?(?:IF NOT EXISTS )?"
+    + _IDENT
+    + r" ON (?:ONLY )?"
+    + _IDENT
+    + r"(?: USING \w+)?\s*\((.*?)\)(\s+WHERE\s+.*)?$",
+    re.DOTALL,
+)
 _DROP_INDEX = re.compile(r"DROP INDEX (?:CONCURRENTLY )?(?:IF EXISTS )?" + _IDENT, re.DOTALL)
 _DROP_TABLE = re.compile(r"DROP TABLE (?:IF EXISTS )?" + _IDENT, re.DOTALL)
 _FK = re.compile(r"FOREIGN KEY\s*\(([^)]*)\)\s*REFERENCES\s+" + _IDENT, re.DOTALL)
@@ -114,7 +121,9 @@ def _apply_constraint(table: TableState, name: str, text: str) -> None:
         table.constraint_indexes[name] = _columns(key.group(2))
 
 
-def _replay_create_table(tables: dict[str, TableState], match: re.Match[str], position: int) -> None:
+def _replay_create_table(
+    tables: dict[str, TableState], match: re.Match[str], position: int
+) -> None:
     """Apply one ``CREATE TABLE`` statement (named/anonymous constraints and inline PK/UNIQUE)."""
     table = tables.setdefault(match.group(1), TableState())
     for item in _top_level_items(match.group(2)):
@@ -124,14 +133,17 @@ def _replay_create_table(tables: dict[str, TableState], match: re.Match[str], po
         elif re.match(r"(PRIMARY KEY|UNIQUE|FOREIGN KEY)\b", item):
             # PostgreSQL names an anonymous primary key ``<table>_pkey``; later migrations drop it by that name.
             anonymous = (
-                f"{match.group(1)}_pkey" if item.startswith("PRIMARY KEY")
+                f"{match.group(1)}_pkey"
+                if item.startswith("PRIMARY KEY")
                 else f"anon_{position}_{len(table.constraint_indexes)}_{len(table.foreign_keys)}"
             )
             _apply_constraint(table, anonymous, item)
         else:
             column = re.match(_IDENT + r"\s", item)
             if column and re.search(r"\bPRIMARY KEY\b|\bUNIQUE\b", item):
-                key_name = f"{match.group(1)}_pkey" if "PRIMARY KEY" in item else f"col_{column.group(1)}"
+                key_name = (
+                    f"{match.group(1)}_pkey" if "PRIMARY KEY" in item else f"col_{column.group(1)}"
+                )
                 table.constraint_indexes[key_name] = (column.group(1),)
 
 
@@ -162,8 +174,12 @@ def replay(sql: str) -> dict[str, TableState]:
             index_owner[match.group(1)] = match.group(2)
             # A partial index only serves FK lookups when its predicate is just "<indexed column> IS NOT NULL"
             # (an equality lookup implies it); any other predicate cannot serve an unrestricted FK lookup.
-            not_null = re.fullmatch(r"\s*WHERE\s+\"?(\w+)\"?\s+IS\s+NOT\s+NULL\s*", match.group(4) or "", re.IGNORECASE)
-            if match.group(4) and not (not_null and (not_null.group(1),) == _columns(match.group(3))):
+            not_null = re.fullmatch(
+                r"\s*WHERE\s+\"?(\w+)\"?\s+IS\s+NOT\s+NULL\s*", match.group(4) or "", re.IGNORECASE
+            )
+            if match.group(4) and not (
+                not_null and (not_null.group(1),) == _columns(match.group(3))
+            ):
                 owner.indexes.pop(match.group(1), None)
             else:
                 owner.indexes[match.group(1)] = _columns(match.group(3))
@@ -177,7 +193,9 @@ def replay(sql: str) -> dict[str, TableState]:
 
 
 def unindexed_foreign_keys(
-    sql: str, *, ignore_referenced: frozenset[str] = frozenset({"workspaces", "owner"}),
+    sql: str,
+    *,
+    ignore_referenced: frozenset[str] = frozenset({"workspaces", "owner"}),
 ) -> list[tuple[str, tuple[str, ...], str]]:
     """Return ``(table, fk_columns, referenced_table)`` for every FK without a usable leading index.
 
@@ -194,7 +212,10 @@ def unindexed_foreign_keys(
                 continue
             reduced = tuple(c for c in columns if c != "workspace_id") or columns
             full = set(columns)
-            if not any(index and (index[0] in reduced or set(index[:len(columns)]) == full) for index in usable):
+            if not any(
+                index and (index[0] in reduced or set(index[: len(columns)]) == full)
+                for index in usable
+            ):
                 missing.append((name, columns, referenced))
     return sorted(set(missing))
 
@@ -209,7 +230,10 @@ def render_upgrade_sql() -> str:
     }
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "base:head", "--sql"],
-        check=True, capture_output=True, text=True, env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
     )
     return result.stdout
 
@@ -217,7 +241,9 @@ def render_upgrade_sql() -> str:
 def main() -> int:
     """CLI entry point: print uncovered foreign keys; always exits 0 (informational report)."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sql", help="Analyse this rendered SQL file instead of rendering migrations")
+    parser.add_argument(
+        "--sql", help="Analyse this rendered SQL file instead of rendering migrations"
+    )
     args = parser.parse_args()
     if args.sql:
         with open(args.sql, encoding="utf-8") as handle:

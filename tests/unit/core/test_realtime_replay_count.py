@@ -38,5 +38,4 @@ async def test_negative_window_raises():
 @pytest.mark.asyncio
 async def test_over_cap_raises():
     with pytest.raises(realtime._ReplayStorageError):
-        await realtime._bounded_replay_count(
-            _Session((realtime.MAX_INSTANCE_REPLAY_EVENTS + 1, 1)))  # type: ignore[arg-type]
+        await realtime._bounded_replay_count(_Session((realtime.MAX_INSTANCE_REPLAY_EVENTS + 1, 1)))  # type: ignore[arg-type]

@@ -57,7 +57,9 @@ class LocalWeather(BaseModel):
 
 async def _get_json(client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> dict[str, Any]:
     """GET one fixed-host JSON document without redirects, rejecting oversized or non-object bodies."""
-    response = await client.get(url, params=params, headers={"Accept": "application/json", "User-Agent": _USER_AGENT})
+    response = await client.get(
+        url, params=params, headers={"Accept": "application/json", "User-Agent": _USER_AGENT}
+    )
     if response.is_redirect or response.status_code >= 400 or len(response.content) > _MAX_BYTES:
         raise LocalWeatherUnavailable("local_weather_unavailable")
     decoded = response.json()
@@ -69,9 +71,17 @@ async def _get_json(client: httpx.AsyncClient, url: str, params: dict[str, Any])
 async def _place(client: httpx.AsyncClient, lat: float, lon: float, locale: str) -> str | None:
     """Reverse-geocode a place name; any failure yields None so weather is still returned."""
     try:
-        data = await _get_json(client, _REVERSE_URL, {
-            "format": "jsonv2", "lat": lat, "lon": lon, "zoom": 10, "accept-language": locale,
-        })
+        data = await _get_json(
+            client,
+            _REVERSE_URL,
+            {
+                "format": "jsonv2",
+                "lat": lat,
+                "lon": lon,
+                "zoom": 10,
+                "accept-language": locale,
+            },
+        )
     except (httpx.HTTPError, ValueError, LocalWeatherUnavailable):
         return None
     address = data.get("address")
@@ -82,19 +92,32 @@ async def _place(client: httpx.AsyncClient, lat: float, lon: float, locale: str)
     if not names:
         return None
     # "Locality, Region" like a weather card; a city that is itself the region (e.g. Hanoi) shows once.
-    region = str(address["state"]) if isinstance(address.get("state"), str) and address["state"] else None
+    region = (
+        str(address["state"])
+        if isinstance(address.get("state"), str) and address["state"]
+        else None
+    )
     return names[0] if region is None or region == names[0] else f"{names[0]}, {region}"
 
 
 async def _fetch(lat: float, lon: float, locale: str) -> LocalWeather:
     """Call Open-Meteo and Nominatim concurrently; only the weather call is mandatory."""
-    async with httpx.AsyncClient(timeout=httpx.Timeout(8), trust_env=False, follow_redirects=False, verify=True) as client:
-        weather_task = _get_json(client, _FORECAST_URL, {
-            "latitude": lat, "longitude": lon, "current": "temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m,precipitation_probability,is_day",
-            "hourly": "temperature_2m,precipitation_probability,wind_speed_10m", "forecast_hours": _HOURS,
-            "timeformat": "unixtime",
-            "timezone": "auto",
-        })
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(8), trust_env=False, follow_redirects=False, verify=True
+    ) as client:
+        weather_task = _get_json(
+            client,
+            _FORECAST_URL,
+            {
+                "latitude": lat,
+                "longitude": lon,
+                "current": "temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m,precipitation_probability,is_day",
+                "hourly": "temperature_2m,precipitation_probability,wind_speed_10m",
+                "forecast_hours": _HOURS,
+                "timeformat": "unixtime",
+                "timezone": "auto",
+            },
+        )
         try:
             data, place = await asyncio.gather(weather_task, _place(client, lat, lon, locale))
         except (httpx.HTTPError, ValueError) as exc:
@@ -106,7 +129,10 @@ async def _fetch(lat: float, lon: float, locale: str) -> LocalWeather:
     if not isinstance(temp, int | float) or not isinstance(code, int):
         raise LocalWeatherUnavailable("local_weather_unavailable")
     return LocalWeather(
-        temperature_c=float(temp), weather_code=code, place=place, observed_at=datetime.now(UTC),
+        temperature_c=float(temp),
+        weather_code=code,
+        place=place,
+        observed_at=datetime.now(UTC),
         humidity_pct=_number(current.get("relative_humidity_2m")),
         wind_kmh=_number(current.get("wind_speed_10m")),
         precipitation_probability_pct=_number(current.get("precipitation_probability")),
@@ -128,23 +154,33 @@ def _hourly(block: object) -> list[HourlyPoint]:
         values = block.get(name)
         return values if isinstance(values, list) else []
 
-    temps, rain, wind = column("temperature_2m"), column("precipitation_probability"), column("wind_speed_10m")
+    temps, rain, wind = (
+        column("temperature_2m"),
+        column("precipitation_probability"),
+        column("wind_speed_10m"),
+    )
     points: list[HourlyPoint] = []
     for index, stamp in enumerate(block["time"][:_HOURS]):
         if not isinstance(stamp, int) or isinstance(stamp, bool):
             continue
-        points.append(HourlyPoint(
-            at=datetime.fromtimestamp(stamp, UTC),
-            temperature_c=_number(temps[index]) if index < len(temps) else None,
-            precipitation_probability_pct=_number(rain[index]) if index < len(rain) else None,
-            wind_kmh=_number(wind[index]) if index < len(wind) else None,
-        ))
+        points.append(
+            HourlyPoint(
+                at=datetime.fromtimestamp(stamp, UTC),
+                temperature_c=_number(temps[index]) if index < len(temps) else None,
+                precipitation_probability_pct=_number(rain[index]) if index < len(rain) else None,
+                wind_kmh=_number(wind[index]) if index < len(wind) else None,
+            )
+        )
     return points
 
 
 def _number(value: object) -> float | None:
     """Return a finite numeric reading as float; anything else (missing, null, text) is None."""
-    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value) else None
+    return (
+        float(value)
+        if isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+        else None
+    )
 
 
 async def local_weather(lat: float, lon: float, locale: str) -> LocalWeather:

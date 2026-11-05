@@ -18,7 +18,11 @@ from modules.knowledge.relationships.schemas import (
 )
 from modules.settings.public import module_dependency
 
-router = APIRouter(prefix="/api/v1/relationships", tags=["knowledge"], dependencies=[Depends(module_dependency("knowledge.relationships"))])
+router = APIRouter(
+    prefix="/api/v1/relationships",
+    tags=["knowledge"],
+    dependencies=[Depends(module_dependency("knowledge.relationships"))],
+)
 Session = Annotated[AsyncSession, Depends(get_session)]
 WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
@@ -43,9 +47,15 @@ async def list_relationships(
     """
     try:
         return await public.list_relationships(
-            session, limit, cursor, entity_id, valid_at=valid_at,
-            include_unknown_validity=include_unknown_validity, knowledge_as_of=knowledge_as_of,
-            scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+            session,
+            limit,
+            cursor,
+            entity_id,
+            valid_at=valid_at,
+            include_unknown_validity=include_unknown_validity,
+            knowledge_as_of=knowledge_as_of,
+            scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -54,8 +64,9 @@ async def list_relationships(
 
 
 @router.post("", response_model=RelationshipRead, status_code=201)
-async def create_relationship(payload: RelationshipCreate, session: Session,
-                              scope: WorkspaceWrite, request: Request) -> RelationshipRead:
+async def create_relationship(
+    payload: RelationshipCreate, session: Session, scope: WorkspaceWrite, request: Request
+) -> RelationshipRead:
     """Create an authorized relationship using the requested owner or derived origin.
 
     Public validation checks endpoint/evidence membership and derives confidence
@@ -63,10 +74,17 @@ async def create_relationship(payload: RelationshipCreate, session: Session,
     errors. Route authorization does not rewrite the supplied origin.
     """
     try:
-        return await public.create_relationship(session, payload, scope=scope,
-                                                multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+        return await public.create_relationship(
+            session,
+            payload,
+            scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        )
     except RedirectedEntityConflict as exc:
-        raise HTTPException(status_code=409, detail={"code": "ENTITY_REDIRECTED", "message": str(exc), "details": {}}) from exc
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "ENTITY_REDIRECTED", "message": str(exc), "details": {}},
+        ) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -75,16 +93,27 @@ async def create_relationship(payload: RelationshipCreate, session: Session,
 
 @router.delete("/{relationship_id}", status_code=204)
 async def delete_relationship(
-    relationship_id: UUID, session: Session, scope: WorkspaceWrite, request: Request,
+    relationship_id: UUID,
+    session: Session,
+    scope: WorkspaceWrite,
+    request: Request,
     reason: Annotated[str, Query(min_length=1, max_length=300)] = "owner_relationship_delete",
 ) -> None:
     """Delete a relationship using the authenticated owner and bounded audit reason."""
     try:
-        if not await public.remove_relationship(session, relationship_id, reason=reason,
-                                                scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled):
+        if not await public.remove_relationship(
+            session,
+            relationship_id,
+            reason=reason,
+            scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        ):
             raise HTTPException(status_code=404, detail="Relationship not found")
     except RedirectedEntityConflict as exc:
-        raise HTTPException(status_code=409, detail={"code": "ENTITY_REDIRECTED", "message": str(exc), "details": {}}) from exc
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "ENTITY_REDIRECTED", "message": str(exc), "details": {}},
+        ) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -102,8 +131,13 @@ async def list_evidence(
     """Return permitted retained observations, separately from historical fact values."""
     try:
         rows, next_cursor = await public.list_relationship_evidence(
-            session, relationship_id, limit, cursor, knowledge_as_of=knowledge_as_of,
-            scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+            session,
+            relationship_id,
+            limit,
+            cursor,
+            knowledge_as_of=knowledge_as_of,
+            scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

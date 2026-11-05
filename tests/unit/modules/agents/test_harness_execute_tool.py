@@ -26,8 +26,11 @@ RUN_ID = uuid4()
 EMPTY_SINK: dict[str, Any] = {"source_generations": {}, "records": []}
 SOURCE_ID = uuid4()
 FENCE_RECORD = {
-    "document_id": str(uuid4()), "document_version_id": str(uuid4()), "source_id": str(SOURCE_ID),
-    "source_generation": 1, "chunk_id": None,
+    "document_id": str(uuid4()),
+    "document_version_id": str(uuid4()),
+    "source_id": str(SOURCE_ID),
+    "source_generation": 1,
+    "chunk_id": None,
 }
 
 
@@ -62,10 +65,19 @@ class Harness:
         """Create empty recorders and the default queued durable rows."""
         self.events: list[str] = []
         self.call = SimpleNamespace(arguments={}, tool_name="docs.search", status="started")
-        self.stored_call = SimpleNamespace(status="started", error_code=None, evidence_refs=None, completed_at=None)
+        self.stored_call = SimpleNamespace(
+            status="started", error_code=None, evidence_refs=None, completed_at=None
+        )
         self.run = SimpleNamespace(
-            id=RUN_ID, owner_id=1, status="running", claim_generation=1, cancel_requested=False,
-            evidence_revoked=False, chat_link_required=False, auth_session_hash="h", activities=[],
+            id=RUN_ID,
+            owner_id=1,
+            status="running",
+            claim_generation=1,
+            cancel_requested=False,
+            evidence_revoked=False,
+            chat_link_required=False,
+            auth_session_hash="h",
+            activities=[],
             source_fences=None,
         )
         self.scalars: list[Any] = []
@@ -76,15 +88,23 @@ class Harness:
 def _definition(name: str = "docs.search", *, write: bool = False) -> SimpleNamespace:
     """Build a registry definition double for a read tool or the approval-gated webhook."""
     return SimpleNamespace(
-        name=name, version="1", schema_fingerprint="f", input_schema={"type": "object"},
-        risk=ToolRisk.EXTERNAL_WRITE if write else ToolRisk.READ_ONLY, confirmation_required=write,
+        name=name,
+        version="1",
+        schema_fingerprint="f",
+        input_schema={"type": "object"},
+        risk=ToolRisk.EXTERNAL_WRITE if write else ToolRisk.READ_ONLY,
+        confirmation_required=write,
         permissions=("webhook.send",) if write else (),
     )
 
 
 def _build(
-    monkeypatch: pytest.MonkeyPatch, *, name: str = "docs.search", arguments: dict[str, Any] | None = None,
-    invoke: Any = None, write: bool = False,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    name: str = "docs.search",
+    arguments: dict[str, Any] | None = None,
+    invoke: Any = None,
+    write: bool = False,
 ) -> tuple[Harness, Any, dict[str, Any]]:
     """Wire a fake context and spies, returning the recorder, node and a default graph state."""
     h = Harness()
@@ -94,7 +114,10 @@ def _build(
     context = MagicMock()
     context.remaining_active.return_value = 100.0
     context.run_id, context.owner_id, context.claim_generation = RUN_ID, 1, 1
-    context.workflow_version, context.prompt_version = harness.WORKFLOW_VERSION, harness.PROMPT_VERSION
+    context.workflow_version, context.prompt_version = (
+        harness.WORKFLOW_VERSION,
+        harness.PROMPT_VERSION,
+    )
     context.multi_workspace_enabled = False
     context.allowed_tools = frozenset({name})
     context.tool_contracts = {name: {"version": "1", "fingerprint": "f"}}
@@ -103,10 +126,17 @@ def _build(
     context.decode_fences = HarnessContext.decode_fences
     context.encode_fences = HarnessContext.encode_fences
     context.session_factory = lambda: FakeSession(h)
-    context._run_snapshot = AsyncMock(return_value=SimpleNamespace(
-        owner_id=1, auth_session_hash="h", tool_calls=1, profile_revision_hash=None,
-    ))
-    context.read_gateway_config = AsyncMock(return_value=SimpleNamespace(endpoint_destination_id="dest"))
+    context._run_snapshot = AsyncMock(
+        return_value=SimpleNamespace(
+            owner_id=1,
+            auth_session_hash="h",
+            tool_calls=1,
+            profile_revision_hash=None,
+        )
+    )
+    context.read_gateway_config = AsyncMock(
+        return_value=SimpleNamespace(endpoint_destination_id="dest")
+    )
     context.owner_principal.return_value = SimpleNamespace(scope="scope")
     context.settings = SimpleNamespace(approval_expiry_hours=24, webhook_profiles_json="")
     context.assert_lease = AsyncMock(side_effect=lambda: h.events.append("assert_lease"))
@@ -122,7 +152,9 @@ def _build(
         """Record the invocation and answer with a plain success."""
         h.events.append("invoke")
         h.invoke_kwargs = kwargs
-        return SimpleNamespace(success=True, data={"hits": 1}, error_code=None, evidence_refs=("ref",))
+        return SimpleNamespace(
+            success=True, data={"hits": 1}, error_code=None, evidence_refs=("ref",)
+        )
 
     context.registry.invoke_tool = invoke or default_invoke
     h.scalars = [h.call, h.run, h.stored_call]
@@ -140,7 +172,9 @@ def _build(
     async def commit(*_a: Any, **_k: Any) -> None:
         """Record the replay-aware publication commit."""
         h.events.append("commit_with_replay")
-        h.events.append(f"run.source_fences={'set' if h.run.source_fences is not None else 'unset'}")
+        h.events.append(
+            f"run.source_fences={'set' if h.run.source_fences is not None else 'unset'}"
+        )
 
     monkeypatch.setattr(harness, "_reserve_step", reserve)
     monkeypatch.setattr(harness, "_lock_native_output_fences_for_publication", lock_fences)
@@ -152,12 +186,19 @@ def _build(
     monkeypatch.setattr(chat_public, "has_live_agent_run_link", AsyncMock(return_value=True))
     node = harness.build_workflow(context, None).nodes["execute_tool"].bound
     state: dict[str, Any] = {
-        "prompt": "p", "messages": [], "pending_tool_calls": [
+        "prompt": "p",
+        "messages": [],
+        "pending_tool_calls": [
             {"name": name, "arguments": json.dumps(arguments), "call_id": "c1"},
         ],
-        "tool_slots": [1], "tool_index": 0, "source_fences": dict(EMPTY_SINK),
-        "pending_source_fences": dict(EMPTY_SINK), "segment_steps": 0,
-        "answer": None, "token_usage": None, "token_usage_unknown": False,
+        "tool_slots": [1],
+        "tool_index": 0,
+        "source_fences": dict(EMPTY_SINK),
+        "pending_source_fences": dict(EMPTY_SINK),
+        "segment_steps": 0,
+        "answer": None,
+        "token_usage": None,
+        "token_usage_unknown": False,
     }
     h.context = context  # type: ignore[attr-defined]
     return h, node, state
@@ -169,20 +210,37 @@ async def _run(node: Any, state: dict[str, Any]) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_read_tool_publishes_in_lock_order_and_provenance_before_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_read_tool_publishes_in_lock_order_and_provenance_before_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Fence lock precedes native fences, run row, call row, lease, then provenance is set before the commit."""
     h, node, state = _build(monkeypatch)
     result = await _run(node, state)
     assert h.events == [
-        "reserve_step", "scalar", "invoke", "admit_original(lock=True)", "lock_native_fences",
-        "scalar", "scalar", "assert_lease", "commit_with_replay", "run.source_fences=set",
+        "reserve_step",
+        "scalar",
+        "invoke",
+        "admit_original(lock=True)",
+        "lock_native_fences",
+        "scalar",
+        "scalar",
+        "assert_lease",
+        "commit_with_replay",
+        "run.source_fences=set",
     ]
     assert result["tool_index"] == 1 and result["waiting_approval"] is False
     assert result["segment_steps"] == 1 and result["source_fences"] == EMPTY_SINK
     assert json.loads(result["messages"][-1]["content"]) == {"ok": {"hits": 1}}
     assert result["messages"][-1]["tool_call_id"] == "c1"
-    assert (h.stored_call.status, h.stored_call.error_code, h.stored_call.evidence_refs) == ("succeeded", None, ["ref"])
-    assert h.run.activities[-1]["status"] == "succeeded" and h.run.activities[-1]["tool_name"] == "docs.search"
+    assert (h.stored_call.status, h.stored_call.error_code, h.stored_call.evidence_refs) == (
+        "succeeded",
+        None,
+        ["ref"],
+    )
+    assert (
+        h.run.activities[-1]["status"] == "succeeded"
+        and h.run.activities[-1]["tool_name"] == "docs.search"
+    )
     harness.publish_agent_activity_safely.assert_awaited_once()
 
 
@@ -206,7 +264,9 @@ async def test_exhausted_active_budget_raises_before_work(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
-async def test_invalid_arguments_are_denied_without_invocation(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_invalid_arguments_are_denied_without_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Non-object arguments produce a denied ``invalid_arguments`` call and keep the prior sink."""
     h, node, state = _build(monkeypatch)
     state["pending_tool_calls"][0]["arguments"] = "[1]"
@@ -229,12 +289,17 @@ async def test_oversized_arguments_are_denied(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.asyncio
-async def test_oversized_result_is_replaced_and_sink_not_published(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_oversized_result_is_replaced_and_sink_not_published(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A result above the response cap becomes ``invalid_result`` and the frozen sink is retained."""
+
     async def big(*_a: Any, **_k: Any) -> Any:
         """Return a payload over the response byte cap."""
         return SimpleNamespace(
-            success=True, data={"blob": "x" * (harness.MAX_TOOL_RESPONSE_BYTES + 1)}, error_code=None,
+            success=True,
+            data={"blob": "x" * (harness.MAX_TOOL_RESPONSE_BYTES + 1)},
+            error_code=None,
             evidence_refs=(),
         )
 
@@ -248,14 +313,23 @@ async def test_oversized_result_is_replaced_and_sink_not_published(monkeypatch: 
 @pytest.mark.asyncio
 async def test_tool_sink_is_encoded_into_run_and_state(monkeypatch: pytest.MonkeyPatch) -> None:
     """Fences written by the tool into the sink are JSON-encoded onto the run row and the next state."""
+
     async def with_fence(*_a: Any, **kwargs: Any) -> Any:
         """Append one typed fence to the output sink like a source-reading tool."""
         from core.tools.schemas import ToolOutputFence
 
         sink = kwargs["context"]["output_fence_sink"]
-        sink["records"].append(ToolOutputFence.model_validate({
-            **FENCE_RECORD, **{k: UUID(FENCE_RECORD[k]) for k in ("document_id", "document_version_id", "source_id")},
-        }))
+        sink["records"].append(
+            ToolOutputFence.model_validate(
+                {
+                    **FENCE_RECORD,
+                    **{
+                        k: UUID(FENCE_RECORD[k])
+                        for k in ("document_id", "document_version_id", "source_id")
+                    },
+                }
+            )
+        )
         sink["source_generations"][SOURCE_ID] = 1
         return SimpleNamespace(success=True, data={}, error_code=None, evidence_refs=())
 
@@ -268,6 +342,7 @@ async def test_tool_sink_is_encoded_into_run_and_state(monkeypatch: pytest.Monke
 @pytest.mark.asyncio
 async def test_tool_timeout_propagates_before_publication(monkeypatch: pytest.MonkeyPatch) -> None:
     """The tool runs under ``asyncio.timeout(remaining)``; expiry aborts without publishing."""
+
     async def slow(*_a: Any, **_k: Any) -> Any:
         """Never finish within the tiny remaining budget."""
         await asyncio.sleep(5)
@@ -280,15 +355,24 @@ async def test_tool_timeout_propagates_before_publication(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
-async def test_stale_native_fences_turn_result_into_forbidden(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stale_native_fences_turn_result_into_forbidden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A failed final fence check denies the call, rewrites the tool message and keeps the old sink."""
     h, node, state = _build(monkeypatch)
     h.fences_current = False
     result = await _run(node, state)
-    assert (h.stored_call.status, h.stored_call.error_code, h.stored_call.evidence_refs) == ("denied", "forbidden", [])
+    assert (h.stored_call.status, h.stored_call.error_code, h.stored_call.evidence_refs) == (
+        "denied",
+        "forbidden",
+        [],
+    )
     assert json.loads(result["messages"][-1]["content"]) == {"error": "forbidden"}
     # The previous frozen sink (not the tool's) is what gets published.
-    assert h.run.source_fences == state["source_fences"] and result["source_fences"] == state["source_fences"]
+    assert (
+        h.run.source_fences == state["source_fences"]
+        and result["source_fences"] == state["source_fences"]
+    )
 
 
 @pytest.mark.asyncio
@@ -321,7 +405,9 @@ async def test_bad_tool_slots_are_incompatible(monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.mark.asyncio
-async def test_legacy_checkpoint_recovers_ordinal_from_assistant_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_legacy_checkpoint_recovers_ordinal_from_assistant_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Without ``tool_slots`` the ordinal is derived from earlier assistant call groups."""
     _h, node, state = _build(monkeypatch, name="search.query")
     del state["tool_slots"]
@@ -339,7 +425,9 @@ async def test_legacy_checkpoint_recovers_ordinal_from_assistant_messages(monkey
 
 
 @pytest.mark.asyncio
-async def test_legacy_checkpoint_with_mismatched_pending_ids_is_incompatible(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_legacy_checkpoint_with_mismatched_pending_ids_is_incompatible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Pending call ids must equal the last assistant group on legacy checkpoints."""
     h, node, state = _build(monkeypatch, name="search.query")
     del state["tool_slots"]
@@ -349,13 +437,23 @@ async def test_legacy_checkpoint_with_mismatched_pending_ids_is_incompatible(mon
     assert "reserve_step" not in h.events
 
 
-def _approval_env(monkeypatch: pytest.MonkeyPatch, h: Harness, *, status: str | None, outcome: Any = None,
-                  effect_state: str | None = None) -> dict[str, AsyncMock]:
+def _approval_env(
+    monkeypatch: pytest.MonkeyPatch,
+    h: Harness,
+    *,
+    status: str | None,
+    outcome: Any = None,
+    effect_state: str | None = None,
+) -> dict[str, AsyncMock]:
     """Patch approvals and webhook profile lookups, returning the spies."""
     spies = {
-        "approval_for_slot": AsyncMock(return_value=None if status is None else SimpleNamespace(status=status)),
+        "approval_for_slot": AsyncMock(
+            return_value=None if status is None else SimpleNamespace(status=status)
+        ),
         "create_pending_approval": AsyncMock(
-            side_effect=lambda *a, **k: h.events.append("create_pending_approval") or SimpleNamespace(status="pending"),
+            side_effect=lambda *a, **k: (
+                h.events.append("create_pending_approval") or SimpleNamespace(status="pending")
+            ),
         ),
         "get_effect_outcome": AsyncMock(return_value=outcome),
         "get_effect_state": AsyncMock(return_value=effect_state),
@@ -370,14 +468,24 @@ def _approval_env(monkeypatch: pytest.MonkeyPatch, h: Harness, *, status: str | 
 
 
 @pytest.mark.asyncio
-async def test_new_approval_is_created_and_committed_before_any_invocation(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_new_approval_is_created_and_committed_before_any_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A fresh write creates the pending approval, flips the call to approval_pending, commits, then yields."""
-    h, node, state = _build(monkeypatch, name="webhook.send", arguments={"profile": "hook"}, write=True)
+    h, node, state = _build(
+        monkeypatch, name="webhook.send", arguments={"profile": "hook"}, write=True
+    )
     spies = _approval_env(monkeypatch, h, status=None)
     h.scalars = [h.call, h.stored_call]
     result = await _run(node, state)
     assert result == {"waiting_approval": True, "segment_done": True}
-    assert h.events == ["reserve_step", "scalar", "create_pending_approval", "scalar", "session.commit"]
+    assert h.events == [
+        "reserve_step",
+        "scalar",
+        "create_pending_approval",
+        "scalar",
+        "session.commit",
+    ]
     assert h.stored_call.status == "approval_pending"
     kwargs = spies["create_pending_approval"].await_args.kwargs
     assert kwargs["destination_id"] == "hook" and kwargs["destination_revision"] == "r1"
@@ -385,9 +493,13 @@ async def test_new_approval_is_created_and_committed_before_any_invocation(monke
 
 
 @pytest.mark.asyncio
-async def test_pending_or_review_approval_yields_without_creating(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_pending_or_review_approval_yields_without_creating(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """An existing pending approval pauses the run and never creates a second one."""
-    h, node, state = _build(monkeypatch, name="webhook.send", arguments={"profile": "hook"}, write=True)
+    h, node, state = _build(
+        monkeypatch, name="webhook.send", arguments={"profile": "hook"}, write=True
+    )
     spies = _approval_env(monkeypatch, h, status="requires_review")
     assert await _run(node, state) == {"waiting_approval": True, "segment_done": True}
     spies["create_pending_approval"].assert_not_awaited()
@@ -397,7 +509,9 @@ async def test_pending_or_review_approval_yields_without_creating(monkeypatch: p
 @pytest.mark.asyncio
 async def test_expired_approval_is_denied_with_status_code(monkeypatch: pytest.MonkeyPatch) -> None:
     """A non-approved terminal status becomes a denied ``approval_<status>`` result without invoking."""
-    h, node, state = _build(monkeypatch, name="webhook.send", arguments={"profile": "hook"}, write=True)
+    h, node, state = _build(
+        monkeypatch, name="webhook.send", arguments={"profile": "hook"}, write=True
+    )
     _approval_env(monkeypatch, h, status="expired")
     result = await _run(node, state)
     assert "invoke" not in h.events
@@ -410,7 +524,9 @@ async def test_expired_approval_is_denied_with_status_code(monkeypatch: pytest.M
 @pytest.mark.asyncio
 async def test_unknown_webhook_profile_is_tool_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     """An unconfigured profile alias has no approval destination and is denied immediately."""
-    h, node, state = _build(monkeypatch, name="webhook.send", arguments={"profile": "nope"}, write=True)
+    h, node, state = _build(
+        monkeypatch, name="webhook.send", arguments={"profile": "nope"}, write=True
+    )
     spies = _approval_env(monkeypatch, h, status="approved")
     result = await _run(node, state)
     spies["approval_for_slot"].assert_not_awaited()
@@ -419,9 +535,13 @@ async def test_unknown_webhook_profile_is_tool_unavailable(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
-async def test_approved_write_invokes_with_hooks_and_settles_effect(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_approved_write_invokes_with_hooks_and_settles_effect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """An approved action passes verifier and send hooks, and an untouched effect leaves the result as is."""
-    h, node, state = _build(monkeypatch, name="webhook.send", arguments={"profile": "hook"}, write=True)
+    h, node, state = _build(
+        monkeypatch, name="webhook.send", arguments={"profile": "hook"}, write=True
+    )
     spies = _approval_env(monkeypatch, h, status="approved", effect_state="succeeded")
     result = await _run(node, state)
     ctx = h.invoke_kwargs["context"]
@@ -433,9 +553,13 @@ async def test_approved_write_invokes_with_hooks_and_settles_effect(monkeypatch:
 
 
 @pytest.mark.asyncio
-async def test_in_flight_effect_is_closed_as_requires_review(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_in_flight_effect_is_closed_as_requires_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """An effect still in flight after the tool returned is marked review-only and pauses the run."""
-    h, node, state = _build(monkeypatch, name="webhook.send", arguments={"profile": "hook"}, write=True)
+    h, node, state = _build(
+        monkeypatch, name="webhook.send", arguments={"profile": "hook"}, write=True
+    )
     spies = _approval_env(monkeypatch, h, status="approved", effect_state="in_flight")
     result = await _run(node, state)
     assert result == {"waiting_approval": True, "segment_done": True}
@@ -446,10 +570,20 @@ async def test_in_flight_effect_is_closed_as_requires_review(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
-async def test_prior_succeeded_outcome_is_replayed_without_invoking(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_prior_succeeded_outcome_is_replayed_without_invoking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A recorded successful send is returned from the ledger rather than sent twice."""
-    h, node, state = _build(monkeypatch, name="webhook.send", arguments={"profile": "hook"}, write=True)
-    _approval_env(monkeypatch, h, status="approved", outcome=("succeeded", 202, "ref-1"), effect_state="succeeded")
+    h, node, state = _build(
+        monkeypatch, name="webhook.send", arguments={"profile": "hook"}, write=True
+    )
+    _approval_env(
+        monkeypatch,
+        h,
+        status="approved",
+        outcome=("succeeded", 202, "ref-1"),
+        effect_state="succeeded",
+    )
     result = await _run(node, state)
     assert "invoke" not in h.events
     assert json.loads(result["messages"][-1]["content"]) == {
@@ -461,7 +595,9 @@ async def test_prior_succeeded_outcome_is_replayed_without_invoking(monkeypatch:
 async def test_prior_in_flight_outcome_waits(monkeypatch: pytest.MonkeyPatch) -> None:
     """An in-flight ledger entry pauses for review and malformed success data waits too."""
     for outcome in (("in_flight", None, None), ("succeeded", "bad", None)):
-        h, node, state = _build(monkeypatch, name="webhook.send", arguments={"profile": "hook"}, write=True)
+        h, node, state = _build(
+            monkeypatch, name="webhook.send", arguments={"profile": "hook"}, write=True
+        )
         _approval_env(monkeypatch, h, status="approved", outcome=outcome)
         assert await _run(node, state) == {"waiting_approval": True, "segment_done": True}
         assert "invoke" not in h.events
@@ -470,7 +606,9 @@ async def test_prior_in_flight_outcome_waits(monkeypatch: pytest.MonkeyPatch) ->
 @pytest.mark.asyncio
 async def test_prior_failed_outcome_is_replayed(monkeypatch: pytest.MonkeyPatch) -> None:
     """A recorded failed send is replayed as ``execution_failed`` without invoking."""
-    h, node, state = _build(monkeypatch, name="webhook.send", arguments={"profile": "hook"}, write=True)
+    h, node, state = _build(
+        monkeypatch, name="webhook.send", arguments={"profile": "hook"}, write=True
+    )
     _approval_env(monkeypatch, h, status="approved", outcome=("failed", None, None))
     await _run(node, state)
     assert (h.stored_call.status, h.stored_call.error_code) == ("failed", "execution_failed")
@@ -480,7 +618,10 @@ async def test_prior_failed_outcome_is_replayed(monkeypatch: pytest.MonkeyPatch)
 @pytest.mark.asyncio
 async def test_handoff_usage_is_folded_into_parent_total(monkeypatch: pytest.MonkeyPatch) -> None:
     """Specialist token usage is added to the parent's and the unknown flag is OR-ed."""
-    async def fake_handoff(_ctx: Any, _state: Any, _args: Any, _ordinal: Any, _sink: Any, usage: dict[str, Any]) -> dict[str, Any]:
+
+    async def fake_handoff(
+        _ctx: Any, _state: Any, _args: Any, _ordinal: Any, _sink: Any, usage: dict[str, Any]
+    ) -> dict[str, Any]:
         """Report specialist usage."""
         usage.update({"tokens": 7, "unknown": True})
         return {}
@@ -488,7 +629,9 @@ async def test_handoff_usage_is_folded_into_parent_total(monkeypatch: pytest.Mon
     async def handoff(*_a: Any, **kwargs: Any) -> Any:
         """Drive the supplied handoff runner like the real delegation tool."""
         await kwargs["context"]["handoff_runner"]({"specialist": "x", "request": "y"})
-        return SimpleNamespace(success=True, data={"answer": "a"}, error_code=None, evidence_refs=())
+        return SimpleNamespace(
+            success=True, data={"answer": "a"}, error_code=None, evidence_refs=()
+        )
 
     monkeypatch.setattr(harness, "run_specialist_handoff", fake_handoff)
     _h, node, state = _build(monkeypatch, name=harness.HANDOFF_TOOL, invoke=handoff)

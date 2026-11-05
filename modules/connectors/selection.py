@@ -24,7 +24,9 @@ SKEW = timedelta(minutes=10)  # clock-skew margin below a stored cursor; dedup a
 def fold(text: str) -> tuple[str, ...]:
     """Return lowercase, diacritic-free alphanumeric tokens (NFKD, combining marks dropped, ``đ`` -> ``d``)."""
     lowered = text.lower().replace("đ", "d")
-    stripped = "".join(c for c in unicodedata.normalize("NFKD", lowered) if not unicodedata.combining(c))
+    stripped = "".join(
+        c for c in unicodedata.normalize("NFKD", lowered) if not unicodedata.combining(c)
+    )
     tokens: list[str] = []
     current: list[str] = []
     for char in stripped:
@@ -41,10 +43,12 @@ def fold(text: str) -> tuple[str, ...]:
 def _contains_phrase(tokens: tuple[str, ...], phrase: tuple[str, ...]) -> bool:
     """Return whether ``phrase`` occurs as a contiguous token run inside ``tokens``."""
     n = len(phrase)
-    return n > 0 and any(tokens[i:i + n] == phrase for i in range(len(tokens) - n + 1))
+    return n > 0 and any(tokens[i : i + n] == phrase for i in range(len(tokens) - n + 1))
 
 
-def matches_keywords(text: str, include: Sequence[str] | None, exclude: Sequence[str] | None) -> bool:
+def matches_keywords(
+    text: str, include: Sequence[str] | None, exclude: Sequence[str] | None
+) -> bool:
     """Whole-word/phrase match on folded tokens: any-of ``include`` (none = all pass); any ``exclude`` hit rejects."""
     tokens = fold(text)
     if any(_contains_phrase(tokens, fold(term)) for term in exclude or ()):
@@ -118,8 +122,13 @@ def selection_filters(configuration: Mapping[str, Any]) -> SelectionFilters:
 
 
 def select_incremental(
-    records: Sequence[IngestionRecord], *, cursor: str | None, seen: Callable[[IngestionRecord], bool],
-    filters: SelectionFilters, now: datetime, skew: timedelta = SKEW,
+    records: Sequence[IngestionRecord],
+    *,
+    cursor: str | None,
+    seen: Callable[[IngestionRecord], bool],
+    filters: SelectionFilters,
+    now: datetime,
+    skew: timedelta = SKEW,
 ) -> Selection:
     """Pick the records to accept this sync.
 
@@ -139,7 +148,9 @@ def select_incremental(
     age_floor = now - timedelta(days=filters.max_age_days) if filters.max_age_days else None
     duplicates = 0
     kept: list[tuple[IngestionRecord, datetime | None]] = []
-    newest_passed: datetime | None = None  # newest dated record past floor+dedup, even if a filter drops it
+    newest_passed: datetime | None = (
+        None  # newest dated record past floor+dedup, even if a filter drops it
+    )
     for rec, when in timed:
         if when is not None and floor is not None and when < floor:
             continue
@@ -151,13 +162,15 @@ def select_incremental(
         if when is not None and (newest_passed is None or when > newest_passed):
             newest_passed = when
         if (filters.include or filters.exclude) and not matches_keywords(
-            f"{rec.metadata.get('title', '')} {rec.content}", filters.include, filters.exclude,
+            f"{rec.metadata.get('title', '')} {rec.content}",
+            filters.include,
+            filters.exclude,
         ):
             continue
         kept.append((rec, when))
     dated = sorted((p for p in kept if p[1] is not None), key=lambda p: (p[1], p[0].provider_id))
     ordered = dated + [p for p in kept if p[1] is None]
-    taken = ordered[:filters.max_items]
+    taken = ordered[: filters.max_items]
     backlog = len(ordered) - len(taken)
     # With a backlog the cursor stops at the last taken item so the rest drains next sync; with none, filter-
     # rejected items are not "missed", so the cursor may pass them (clears gap warnings). Never regress.
@@ -170,5 +183,9 @@ def select_incremental(
     if cursor_dt is not None and cursor_after == cursor_dt.isoformat():
         cursor_after = cursor  # unchanged: keep the stored string verbatim
     return Selection(
-        taken=tuple(r for r, _ in taken), backlog=backlog, cursor_after=cursor_after, gap=gap, duplicates=duplicates,
+        taken=tuple(r for r, _ in taken),
+        backlog=backlog,
+        cursor_after=cursor_after,
+        gap=gap,
+        duplicates=duplicates,
     )

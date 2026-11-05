@@ -41,20 +41,25 @@ class _Factory:
 
     def __call__(self) -> Any:
         """Return an async context manager over the shared session."""
+
         @contextlib.asynccontextmanager
         async def manager() -> AsyncIterator[Any]:
             yield self.session
+
         return manager()
 
 
 class Env:
     """Wire fake owner state and patch every database-bound collaborator of ``worker._context``."""
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, *, cleanup: bool = False, source_ok: bool = True) -> None:
+    def __init__(
+        self, monkeypatch: pytest.MonkeyPatch, *, cleanup: bool = False, source_ok: bool = True
+    ) -> None:
         workspace = uuid4()
         self.adm = worker._Admission(
             scope=SimpleNamespace(workspace_id=workspace, actor_user_id=1, membership_revision=1),
-            multi=False, fence=SimpleNamespace(),
+            multi=False,
+            fence=SimpleNamespace(),
         )
         self.cleanup = cleanup
         self.partition_id = uuid4()
@@ -63,28 +68,47 @@ class Env:
         self.other = self._row(status="synchronized", external_state="present")
         self.rows = [self.mapping, self.other]
         self.support = SimpleNamespace(
-            removed=False, document_version_id=self.mapping.document_version_id, chunk_id=uuid4(),
-            source_id=self.source_id, source_generation=1, document_id=self.mapping.document_id,
+            removed=False,
+            document_version_id=self.mapping.document_version_id,
+            chunk_id=uuid4(),
+            source_id=self.source_id,
+            source_generation=1,
+            document_id=self.mapping.document_id,
         )
         self.operation = SimpleNamespace(id=uuid4(), desired_revision=3, receipt_token=uuid4())
         self.token = uuid4()
-        self.source = SimpleNamespace(status="active" if source_ok else "deleted", generation=1, local_only=False)
+        self.source = SimpleNamespace(
+            status="active" if source_ok else "deleted", generation=1, local_only=False
+        )
         self.bindings: tuple[Any, ...] = ()
         self.factory = _Factory()
         self.session = MagicMock()
         self.config = SimpleNamespace(
             defaults=SimpleNamespace(
-                resolve=lambda role: SimpleNamespace(model="m", version="v", dimensions=3)
-                if role in {"background", "embedding"} else None,
+                resolve=lambda role: (
+                    SimpleNamespace(model="m", version="v", dimensions=3)
+                    if role in {"background", "embedding"}
+                    else None
+                ),
                 model_dump=lambda mode: {},
             ),
             privacy=SimpleNamespace(
-                allow_remote_reasoning=True, allow_remote_embeddings=True, reasoning_destinations=[],
-                embedding_destinations=[], model_dump=lambda mode: {},
+                allow_remote_reasoning=True,
+                allow_remote_embeddings=True,
+                reasoning_destinations=[],
+                embedding_destinations=[],
+                model_dump=lambda mode: {},
             ),
-            configuration_revision=1, gateway_identity="a" * 64, endpoint_destination_id="dest", model_identity="b" * 64,
-            gateway_base_url="http://gw", gateway_api_key="k", request_timeout_seconds=10,
-            endpoint_allowed_cidrs=(), allow_public_providers=False, gateway_kind="openai",
+            configuration_revision=1,
+            gateway_identity="a" * 64,
+            endpoint_destination_id="dest",
+            model_identity="b" * 64,
+            gateway_base_url="http://gw",
+            gateway_api_key="k",
+            request_timeout_seconds=10,
+            endpoint_allowed_cidrs=(),
+            allow_public_providers=False,
+            gateway_kind="openai",
         )
         self.calls: dict[str, AsyncMock] = {}
         self._patch(monkeypatch)
@@ -92,11 +116,22 @@ class Env:
     def _row(self, **extra: Any) -> Any:
         """Return a fake mapping row."""
         values: dict[str, Any] = {
-            "id": uuid4(), "document_id": uuid4(), "document_version_id": uuid4(), "episode_id": uuid4(),
-            "tombstoned": False, "desired_revision": 3, "embedding_identity": None,
-            "created_at": datetime(2026, 1, 1, tzinfo=UTC), "source_id": self.source_id,
-            "source_generation": 1, "partition_id": self.partition_id, "workspace_id": uuid4(),
-            "applied_revision": 3, "desired_digest": "d", "applied_digest": "d", "error_code": None,
+            "id": uuid4(),
+            "document_id": uuid4(),
+            "document_version_id": uuid4(),
+            "episode_id": uuid4(),
+            "tombstoned": False,
+            "desired_revision": 3,
+            "embedding_identity": None,
+            "created_at": datetime(2026, 1, 1, tzinfo=UTC),
+            "source_id": self.source_id,
+            "source_generation": 1,
+            "partition_id": self.partition_id,
+            "workspace_id": uuid4(),
+            "applied_revision": 3,
+            "desired_digest": "d",
+            "applied_digest": "d",
+            "error_code": None,
         }
         values.update(extra)
         return SimpleNamespace(**values)
@@ -107,7 +142,10 @@ class Env:
         self.mapping.tombstoned = False
         self.mapping.embedding_identity = {}
         names = {
-            "_admit": None, "_lease": None, "_commit": None, "_get": SimpleNamespace(id=self.operation.id),
+            "_admit": None,
+            "_lease": None,
+            "_commit": None,
+            "_get": SimpleNamespace(id=self.operation.id),
             "_receipt_inventory": ((), None),
         }
         for name, value in names.items():
@@ -119,39 +157,62 @@ class Env:
         monkeypatch.setattr(worker, "_bindings", self.calls["_bindings"])
         monkeypatch.setattr(worker.sources, "lock_source", AsyncMock(return_value=self.source))
         monkeypatch.setattr(worker.documents, "lock_document_ids", AsyncMock())
-        monkeypatch.setattr(worker.documents, "read_evidence_refs",
-                            AsyncMock(return_value=[SimpleNamespace(source_id=self.source_id)]))
+        monkeypatch.setattr(
+            worker.documents,
+            "read_evidence_refs",
+            AsyncMock(return_value=[SimpleNamespace(source_id=self.source_id)]),
+        )
         monkeypatch.setattr(worker.entities, "lock_entity_ids", AsyncMock())
-        monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=self.config))
+        monkeypatch.setattr(
+            worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=self.config)
+        )
         monkeypatch.setattr(worker.settings_public, "derive_for_role", lambda config, role: config)
         self.gateway_type = MagicMock()
         monkeypatch.setattr(worker, "ModelGateway", self.gateway_type)
         self.calls["_recovery_authorization"] = AsyncMock()
-        monkeypatch.setattr(worker, "_recovery_authorization", self.calls["_recovery_authorization"])
+        monkeypatch.setattr(
+            worker, "_recovery_authorization", self.calls["_recovery_authorization"]
+        )
         self.calls["_authorize_scheduled_rebuild"] = AsyncMock()
-        monkeypatch.setattr(worker, "_authorize_scheduled_rebuild", self.calls["_authorize_scheduled_rebuild"])
+        monkeypatch.setattr(
+            worker, "_authorize_scheduled_rebuild", self.calls["_authorize_scheduled_rebuild"]
+        )
 
     async def build(self) -> tuple[Any, Any, list[Any]]:
         """Call worker._context with the fake owner state."""
         ctx = {"settings": SimpleNamespace(graph_embedding_dimensions=3), "redis": object()}
         return await worker._context(
-            self.factory, self.adm, self.session, ctx, self.operation, self.mapping, self.token,
+            self.factory,
+            self.adm,
+            self.session,
+            ctx,
+            self.operation,
+            self.mapping,
+            self.token,
             cleanup=self.cleanup,
         )
 
 
 @pytest.mark.asyncio
-async def test_context_exposes_partition_inventory_and_policies(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_context_exposes_partition_inventory_and_policies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The authorization closure mirrors the owner inventory, bindings and resolved model roles."""
     env = Env(monkeypatch)
     context, gateway, rows = await env.build()
     assert rows is env.rows and gateway is env.gateway_type.return_value
     assert context.group_id == str(env.partition_id) and context.operation_id == env.operation.id
     assert context.lease_token == env.operation.receipt_token and context.mapping_revision == 3
-    assert set(context.partition_episode_ids) == {str(env.mapping.episode_id), str(env.other.episode_id)}
+    assert set(context.partition_episode_ids) == {
+        str(env.mapping.episode_id),
+        str(env.other.episode_id),
+    }
     assert set(context.history_episode_ids) == set(context.partition_episode_ids)
     assert (context.reasoning.role, context.small_reasoning.role, context.embedding.role) == (
-        "background", "background", "embedding")
+        "background",
+        "background",
+        "embedding",
+    )
     assert context.reranking is None and context.embedding.dimensions == 3
     assert context.evidence[0].chunk_id == env.support.chunk_id
     assert env.mapping.embedding_identity == {"model": "m", "version": "v", "dimensions": 3}
@@ -174,8 +235,11 @@ async def test_inactive_source_generation_is_terminal(monkeypatch: pytest.Monkey
 async def test_support_from_another_source_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     """Evidence references that resolve to a different source abort context construction."""
     env = Env(monkeypatch)
-    monkeypatch.setattr(worker.documents, "read_evidence_refs",
-                        AsyncMock(return_value=[SimpleNamespace(source_id=uuid4())]))
+    monkeypatch.setattr(
+        worker.documents,
+        "read_evidence_refs",
+        AsyncMock(return_value=[SimpleNamespace(source_id=uuid4())]),
+    )
     with pytest.raises(GraphOperationError, match="graph_support_source_changed"):
         await env.build()
 
@@ -190,12 +254,16 @@ async def test_embedding_identity_unconfigured_and_changed(monkeypatch: pytest.M
     changed = Env(monkeypatch)
     changed.other.external_state = "present"
     changed.other.embedding_identity = {"model": "old", "version": "v", "dimensions": 3}
-    with pytest.raises(GraphOperationError, match="graph_embedding_identity_changed_requires_rebuild"):
+    with pytest.raises(
+        GraphOperationError, match="graph_embedding_identity_changed_requires_rebuild"
+    ):
         await changed.build()
 
 
 @pytest.mark.asyncio
-async def test_cleanup_context_cannot_infer_and_uses_disabled_mappings(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_cleanup_context_cannot_infer_and_uses_disabled_mappings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Identifier cleanup denies authorize(); unresolved roles become an empty disabled mapping."""
     env = Env(monkeypatch, cleanup=True)
     env.config.defaults.resolve = lambda role: None
@@ -210,13 +278,17 @@ async def test_cleanup_context_cannot_infer_and_uses_disabled_mappings(monkeypat
 async def test_required_role_unconfigured_blocks_egress(monkeypatch: pytest.MonkeyPatch) -> None:
     """A non-cleanup context without the background role fails with the stable error."""
     env = Env(monkeypatch)
-    env.config.defaults.resolve = lambda role: SimpleNamespace(model="m", version="v", dimensions=3) if role == "embedding" else None
+    env.config.defaults.resolve = lambda role: (
+        SimpleNamespace(model="m", version="v", dimensions=3) if role == "embedding" else None
+    )
     with pytest.raises(GraphOperationError, match="graph_model_role_unconfigured"):
         await env.build()
 
 
 @pytest.mark.asyncio
-async def test_validate_partition_checks_lease_inventory_and_generation(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_validate_partition_checks_lease_inventory_and_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """validate_partition renews the lease, compares the inventory and enforces terminal rules by mode."""
     env = Env(monkeypatch)
     context, _, _ = await env.build()
@@ -265,7 +337,9 @@ async def test_fence_and_record_renew_lease(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_dispatch_journal_rejects_foreign_and_uncertain_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_dispatch_journal_rejects_foreign_and_uncertain_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Dispatch ownership must match the operation/partition and no unfinished dispatch may exist."""
     env = Env(monkeypatch)
     current = SimpleNamespace(id=env.operation.id)
@@ -310,28 +384,47 @@ def _binding(env: Env) -> CanonicalEntityBinding:
     import hashlib
 
     membership = uuid4()
-    evidence = EvidenceIdentity(env.source_id, 1, env.mapping.document_id, env.mapping.document_version_id,
-                                env.support.chunk_id)
+    evidence = EvidenceIdentity(
+        env.source_id,
+        1,
+        env.mapping.document_id,
+        env.mapping.document_version_id,
+        env.support.chunk_id,
+    )
     return CanonicalEntityBinding(
-        canonical_entity_id=uuid4(), canonical_revision=1, membership_ids=(membership,), evidence=(evidence,),
-        graph_entity_uuid=str(uuid4()), group_id=str(env.partition_id), mapping_revision=3, node_name="n",
+        canonical_entity_id=uuid4(),
+        canonical_revision=1,
+        membership_ids=(membership,),
+        evidence=(evidence,),
+        graph_entity_uuid=str(uuid4()),
+        group_id=str(env.partition_id),
+        mapping_revision=3,
+        node_name="n",
         field_support=(("name", hashlib.sha256(b"n").hexdigest(), (membership,)),),
     )
 
 
 @pytest.mark.asyncio
-async def test_canonicalize_publishes_only_bound_synchronized_facts(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_canonicalize_publishes_only_bound_synchronized_facts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Facts need both endpoints bound, all supporting rows synchronized and live evidence."""
     env = Env(monkeypatch)
     left, right = _binding(env), _binding(env)
     env.bindings = (left, right)
     context, _, _ = await env.build()
     edge = SimpleNamespace(
-        source_node_uuid=left.graph_entity_uuid, target_node_uuid=right.graph_entity_uuid, fact="f",
-        valid_at=None, invalid_at=None, episodes=[str(env.mapping.episode_id)],
+        source_node_uuid=left.graph_entity_uuid,
+        target_node_uuid=right.graph_entity_uuid,
+        fact="f",
+        valid_at=None,
+        invalid_at=None,
+        episodes=[str(env.mapping.episode_id)],
     )
     unbound = SimpleNamespace(**{**vars(edge), "target_node_uuid": str(uuid4())})
-    unsynced = SimpleNamespace(**{**vars(edge), "episodes": [str(env.mapping.episode_id), str(uuid4())]})
+    unsynced = SimpleNamespace(
+        **{**vars(edge), "episodes": [str(env.mapping.episode_id), str(uuid4())]}
+    )
     result = await context.canonicalize([edge, unbound, unsynced])
     assert len(result) == 1 and result[0].fact == "f"
     assert result[0].entity_ids == (left.canonical_entity_id, right.canonical_entity_id)
@@ -343,8 +436,11 @@ async def test_canonicalize_publishes_only_bound_synchronized_facts(monkeypatch:
 def _action(node_id: str, kind: str, **extra: Any) -> CanonicalNodeRecoveryAction:
     """Build a node recovery action."""
     return CanonicalNodeRecoveryAction(
-        graph_entity_uuid=node_id, expected_current_state_fingerprint=extra.pop("fingerprint", None),
-        action=kind, **extra)  # type: ignore[arg-type]
+        graph_entity_uuid=node_id,
+        expected_current_state_fingerprint=extra.pop("fingerprint", None),
+        action=kind,
+        **extra,
+    )  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -357,25 +453,38 @@ async def test_node_authorization_branches(monkeypatch: pytest.MonkeyPatch) -> N
     node = binding.graph_entity_uuid
     intended = "e" * 64
     receipt = GraphWriteReceipt(
-        operation_id=env.operation.id, lease_token=env.operation.receipt_token,
-        episode_id=env.mapping.episode_id, group_id=str(env.partition_id), mapping_revision=3,
-        desired_support_digest="a" * 64, phase="canonical_node_write_intent", entity_ids=(node,),
+        operation_id=env.operation.id,
+        lease_token=env.operation.receipt_token,
+        episode_id=env.mapping.episode_id,
+        group_id=str(env.partition_id),
+        mapping_revision=3,
+        desired_support_digest="a" * 64,
+        phase="canonical_node_write_intent",
+        entity_ids=(node,),
         prior_entity_state_fingerprints=((node, False, None),),
         intended_entity_state_fingerprints=((node, intended),),
     )
-    await context.authorize_node_recovery((receipt,), (_action(node, "retain", fingerprint=intended),))
+    await context.authorize_node_recovery(
+        (receipt,), (_action(node, "retain", fingerprint=intended),)
+    )
     env.calls["_recovery_authorization"].assert_awaited()
     with pytest.raises(GraphOperationError, match="graph_node_retained_fields_unproved"):
-        await context.authorize_node_recovery((receipt,), (_action(node, "retain", fingerprint="f" * 64),))
+        await context.authorize_node_recovery(
+            (receipt,), (_action(node, "retain", fingerprint="f" * 64),)
+        )
     other = str(uuid4())
     with pytest.raises(GraphOperationError, match="graph_node_retained_fields_unproved"):
-        await context.authorize_node_recovery((receipt,), (_action(other, "retain", fingerprint=intended),))
+        await context.authorize_node_recovery(
+            (receipt,), (_action(other, "retain", fingerprint=intended),)
+        )
     await context.authorize_node_recovery((receipt,), (_action(other, "delete_orphan"),))
     with pytest.raises(GraphOperationError, match="graph_node_independent_support"):
         await context.authorize_node_recovery((receipt,), (_action(node, "delete_orphan"),))
     env.mapping.tombstoned = True
     with pytest.raises(GraphOperationError, match="graph_node_retained_fields_unproved"):
-        await context.authorize_node_recovery((receipt,), (_action(node, "retain", fingerprint=intended),))
+        await context.authorize_node_recovery(
+            (receipt,), (_action(node, "retain", fingerprint=intended),)
+        )
 
 
 @pytest.mark.asyncio
@@ -387,22 +496,42 @@ async def test_fact_authorization_branches(monkeypatch: pytest.MonkeyPatch) -> N
     from modules.knowledge.temporal.adapter import ExactFactState, ExactFactSupport
 
     remaining = str(env.other.episode_id)
-    state = ExactFactState(fact_id, source, target, (str(env.mapping.episode_id), remaining), "a" * 64, True)
-    support = ExactFactSupport(fact_id=fact_id, episode_ids=(str(env.mapping.episode_id), remaining),
-                               source_node_id=source, target_node_id=target, state_fingerprint="a" * 64)
+    state = ExactFactState(
+        fact_id, source, target, (str(env.mapping.episode_id), remaining), "a" * 64, True
+    )
+    support = ExactFactSupport(
+        fact_id=fact_id,
+        episode_ids=(str(env.mapping.episode_id), remaining),
+        source_node_id=source,
+        target_node_id=target,
+        state_fingerprint="a" * 64,
+    )
     receipt = GraphWriteReceipt(
-        operation_id=env.operation.id, lease_token=env.operation.receipt_token,
-        episode_id=env.mapping.episode_id, group_id=str(env.partition_id), mapping_revision=3,
-        desired_support_digest="a" * 64, phase="bulk_write_intent", episode_state_fingerprint="b" * 64,
-        prior_episode_state_fingerprint="c" * 64, fact_ids=(fact_id,), existing_fact_states=(state,),
+        operation_id=env.operation.id,
+        lease_token=env.operation.receipt_token,
+        episode_id=env.mapping.episode_id,
+        group_id=str(env.partition_id),
+        mapping_revision=3,
+        desired_support_digest="a" * 64,
+        phase="bulk_write_intent",
+        episode_state_fingerprint="b" * 64,
+        prior_episode_state_fingerprint="c" * 64,
+        fact_ids=(fact_id,),
+        existing_fact_states=(state,),
         intended_fact_support=(support,),
     )
     action = ExactFactRecoveryAction(
-        fact_id=fact_id, source_node_id=source, target_node_id=target,
-        expected_current_state_fingerprint="a" * 64, action="delete_unsupported")
+        fact_id=fact_id,
+        source_node_id=source,
+        target_node_id=target,
+        expected_current_state_fingerprint="a" * 64,
+        action="delete_unsupported",
+    )
     with pytest.raises(GraphOperationError, match="graph_fact_surviving_support"):
         await context.authorize_fact_recovery((receipt,), (action,))
     env.other.tombstoned, env.other.external_state = True, "absent"
-    env.calls["_get"].return_value = SimpleNamespace(partition_id=uuid4(), cleanup_completed_at=None)
+    env.calls["_get"].return_value = SimpleNamespace(
+        partition_id=uuid4(), cleanup_completed_at=None
+    )
     with pytest.raises(GraphOperationError, match="graph_rebuild_absence_proof_missing"):
         await context.authorize_fact_recovery((receipt,), (action,))

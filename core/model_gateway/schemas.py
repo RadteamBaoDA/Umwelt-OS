@@ -4,16 +4,36 @@ from uuid import UUID
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
 
 Capability = Literal["chat", "streaming", "embeddings", "structured", "tools", "reranking"]
-ProviderKind = Literal["openai", "openrouter", "groq", "gemini", "anthropic", "ollama", "lmstudio", "custom"]
+ProviderKind = Literal[
+    "openai", "openrouter", "groq", "gemini", "anthropic", "ollama", "lmstudio", "custom"
+]
 # "background" tags models for entity extraction, timeline, translation and graph work; vision/asr/tts are
 # legacy tags still accepted when reading stored provider rows.
 # image/video/speech/audio/transcription are OpenRouter output types stored for later features; they serve no role.
 ModelType = Literal[
-    "llm", "embedding", "reranker", "decision", "background", "vision", "asr", "tts",
-    "image", "video", "speech", "audio", "transcription",
+    "llm",
+    "embedding",
+    "reranker",
+    "decision",
+    "background",
+    "vision",
+    "asr",
+    "tts",
+    "image",
+    "video",
+    "speech",
+    "audio",
+    "transcription",
 ]
 ModelRole = Literal["chat", "brief", "background", "embedding", "reranker", "vision"]
-MODEL_ROLES: tuple[ModelRole, ...] = ("chat", "brief", "background", "embedding", "reranker", "vision")
+MODEL_ROLES: tuple[ModelRole, ...] = (
+    "chat",
+    "brief",
+    "background",
+    "embedding",
+    "reranker",
+    "vision",
+)
 ReasoningEffort = Literal["off", "low", "medium", "high"]
 WebSearchProvider = Literal["none", "tavily", "brave", "searxng", "omniroute"]
 LOCAL_PROVIDER_KINDS = frozenset({"ollama", "lmstudio"})
@@ -40,6 +60,7 @@ class RequestPolicy(BaseModel):
     Snapshot alone is not authorization: the client's mandatory before_send rechecks
     current account/session, workspace, configuration and resource policy each attempt.
     """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
     workspace_id: UUID
     actor_user_id: int = Field(gt=0)
@@ -58,12 +79,15 @@ class RequestPolicy(BaseModel):
 
 class ModelMapping(BaseModel):
     """Validated configured model name, optional version, and known remote destination marker."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
     model: str = Field(default="", max_length=200)
     version: str | None = Field(default=None, max_length=200)
     destination: Literal["unknown", "remote"] = "unknown"
     provider_id: ProviderId | None = None  # None resolves to the "default" provider
-    dimensions: int | None = Field(default=None, ge=1, le=4096)  # embedding role only; set from the embeddings probe
+    dimensions: int | None = Field(
+        default=None, ge=1, le=4096
+    )  # embedding role only; set from the embeddings probe
     # Chat role only. "off" sends nothing (providers that reject unknown params keep working); otherwise the
     # gateway adds ``reasoning_effort`` to streamed chat requests so request-gated models emit reasoning.
     reasoning_effort: ReasoningEffort = "off"
@@ -77,6 +101,7 @@ class ModelDefaults(BaseModel):
 
     ``background`` falls back to ``brief`` then ``chat`` at resolution time when unset.
     """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
     chat: ModelMapping | None = None
     brief: ModelMapping | None = None
@@ -100,11 +125,14 @@ class ModelDefaults(BaseModel):
 
 class PrivacySettings(BaseModel):
     """Owner-controlled remote capability flags and destination allowlists."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
     allow_remote_reasoning: bool = False
     allow_remote_embeddings: bool = False
     allow_remote_web_search: bool = False
-    allow_widget_remote_media: bool = False  # owner opt-in: widget images/map tiles via the same-origin media proxy
+    allow_widget_remote_media: bool = (
+        False  # owner opt-in: widget images/map tiles via the same-origin media proxy
+    )
     reasoning_destinations: list[str] = Field(default_factory=list, max_length=8)
     embedding_destinations: list[str] = Field(default_factory=list, max_length=8)
     web_search_destinations: list[str] = Field(default_factory=list, max_length=8)
@@ -112,6 +140,7 @@ class PrivacySettings(BaseModel):
 
 class ProviderModel(BaseModel):
     """One model id exposed by a provider, tagged with what it is for."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
     id: str = Field(min_length=1, max_length=200)
     type: ModelType = "llm"
@@ -121,6 +150,7 @@ class ProviderModel(BaseModel):
 
 class ProviderUpdate(BaseModel):
     """One provider in a full-replace provider list; the key is write-only."""
+
     model_config = ConfigDict(extra="forbid")
     id: ProviderId
     kind: ProviderKind
@@ -133,6 +163,7 @@ class ProviderUpdate(BaseModel):
 
 class ProviderRead(BaseModel):
     """Safe provider projection: credential presence only, never the key."""
+
     id: str
     kind: ProviderKind
     label: str
@@ -146,6 +177,7 @@ class ProviderRead(BaseModel):
 
 class ProviderConfig(BaseModel):
     """Resolved provider inside an execution snapshot; the plaintext key is excluded from repr/serialization."""
+
     model_config = ConfigDict(frozen=True)
     kind: ProviderKind
     label: str = ""
@@ -160,6 +192,7 @@ class ProviderConfig(BaseModel):
 
 class AISettingsUpdate(BaseModel):
     """Validated update payload with expected revision, provider credentials/actions, role defaults, privacy, and timeout bounds."""
+
     model_config = ConfigDict(extra="forbid")
     # None keeps the stored providers; a list replaces them all.
     providers: list[ProviderUpdate] | None = None
@@ -175,8 +208,11 @@ class AISettingsUpdate(BaseModel):
 
 class ConnectionDraft(BaseModel):
     """Temporary endpoint and credential input for a gateway probe."""
+
     model_config = ConfigDict(extra="forbid")
-    base_url: AnyHttpUrl | None = None  # ignored for hosted kinds; the server derives it from ``kind``
+    base_url: AnyHttpUrl | None = (
+        None  # ignored for hosted kinds; the server derives it from ``kind``
+    )
     api_key: str = Field(default="", max_length=4096, repr=False)
     provider_id: ProviderId | None = None  # empty api_key falls back to this stored provider's key
     kind: ProviderKind | None = None  # lets an unsaved local provider (no key) be tried
@@ -184,8 +220,11 @@ class ConnectionDraft(BaseModel):
 
 class DraftProbeRequest(BaseModel):
     """Temporary endpoint/model/capability input for an unpersisted connection probe."""
+
     model_config = ConfigDict(extra="forbid")
-    base_url: AnyHttpUrl | None = None  # ignored for hosted kinds; the server derives it from ``kind``
+    base_url: AnyHttpUrl | None = (
+        None  # ignored for hosted kinds; the server derives it from ``kind``
+    )
     api_key: str = Field(default="", max_length=4096, repr=False)
     model: str = Field(min_length=1, max_length=200)
     version: str | None = Field(default=None, max_length=200)
@@ -197,12 +236,14 @@ class DraftProbeRequest(BaseModel):
 
 class ConnectionCheck(BaseModel):
     """Connection probe result and discovered model identifiers."""
+
     connected: bool
     model_ids: list[str]
 
 
 class WebSearchTarget(BaseModel):
     """A detached search destination with a write-only credential for one egress attempt."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
     provider: WebSearchProvider
     endpoint: str | None
@@ -217,6 +258,7 @@ class AIExecutionConfig(BaseModel):
     request policy. Frozen scalar configuration is preparation, never current authorization;
     use the fresh locked Settings check and caller's resource fence before each send/publish.
     """
+
     model_config = ConfigDict(frozen=True)
 
     @model_validator(mode="before")
@@ -244,7 +286,9 @@ class AIExecutionConfig(BaseModel):
     allow_public_providers: bool = False
     gateway_base_url: str | None
     gateway_api_key: str = Field(repr=False, exclude=True)
-    gateway_kind: ProviderKind = "custom"  # transport selector for ModelGateway (anthropic uses the native Messages API)
+    gateway_kind: ProviderKind = (
+        "custom"  # transport selector for ModelGateway (anthropic uses the native Messages API)
+    )
     gateway_credential_configured: bool = False
     defaults: ModelDefaults
     privacy: PrivacySettings
@@ -260,6 +304,7 @@ class AIExecutionConfig(BaseModel):
 
 class CapabilityResult(BaseModel):
     """Capability evidence for exact workspace/actor/membership/model identity/model and expiry; no secrets."""
+
     workspace_id: UUID
     actor_user_id: int = Field(gt=0)
     membership_revision: int = Field(gt=0)
@@ -277,6 +322,7 @@ class CapabilityResult(BaseModel):
 
 class AISettingsRead(BaseModel):
     """Safe AI settings response exposing credential presence but not credential values."""
+
     configuration_revision: int
     endpoint_destination_id: str | None = None
     endpoint_policy_denied: bool = False
@@ -297,6 +343,7 @@ class ProbeRequest(BaseModel):
     ``provider_id`` and ``model`` together select a non-default model configured on a saved provider
     (chat role only); both or neither must be given.
     """
+
     model_config = ConfigDict(extra="forbid")
     capability: Capability
     provider_id: ProviderId | None = None
@@ -312,6 +359,7 @@ class ProbeRequest(BaseModel):
 
 class ModelSettingsRead(BaseModel):
     """Safe model configuration and capability response without returning credential material."""
+
     defaults: ModelDefaults
     capabilities: list[CapabilityResult]
     credential_configured: bool

@@ -53,20 +53,27 @@ def _operator_actor(scope: Scope) -> int:
     return scope.user_id if isinstance(scope, WorkspaceContext) else scope.actor_user_id
 
 
-async def _admit(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> AccessFence:
+async def _admit(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool
+) -> AccessFence:
     """Require current owner workspace access before Temporal owner queries or writes; return the admitted fence.
 
     Delegates to the canonical ``admit_scope`` (owner only, read only, no feature-flag type
     check) so the member 403 and the non-locking fence read stay shared with other modules.
     """
     return await admit_scope(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, check_flag=False,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        check_flag=False,
     )
 
 
 def digest(value: object) -> str:
     """Hash deterministically serialized detached IDs/revisions; never use this as authorization."""
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
+    ).hexdigest()
 
 
 def _cursor(value: int, fingerprint: str) -> str:
@@ -90,8 +97,11 @@ def _after(cursor: str | None, fingerprint: str) -> int:
 
 
 async def schedule_version(
-    session: AsyncSession, ready: documents.ReadyVersionRef, *,
-    scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    ready: documents.ReadyVersionRef,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> UUID:
     """Reserve one immutable bounded bucket/episode and durable intent under the caller's source/document fence.
 
@@ -101,17 +111,23 @@ async def schedule_version(
     rolling back canonical readiness or truncating evidence for graph inference.
     """
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    mapping = await session.scalar(select(GraphMapping).where(
-        GraphMapping.workspace_id == scope.workspace_id,
-        GraphMapping.document_version_id == ready.document_version_id,
-        GraphMapping.source_generation == ready.source_generation,
-    ).with_for_update())
+    mapping = await session.scalar(
+        select(GraphMapping)
+        .where(
+            GraphMapping.workspace_id == scope.workspace_id,
+            GraphMapping.document_version_id == ready.document_version_id,
+            GraphMapping.source_generation == ready.source_generation,
+        )
+        .with_for_update()
+    )
     if mapping is not None:
         return mapping.id
     input_error = None
     try:
         data = await documents.read_extraction_input(
-            session, ready.document_version_id, scope=scope,
+            session,
+            ready.document_version_id,
+            scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
         )
     except documents.ExtractionInputLimitError:
@@ -120,47 +136,89 @@ async def schedule_version(
         data = None
         input_error = "graph_extraction_input_limit"
     chunk_count = len(data.chunks) if data is not None else 0
-    await session.execute(insert(GraphAllocation).values(
-        workspace_id=scope.workspace_id, source_id=ready.source_id,
-        generation=ready.source_generation, next_bucket=0,
-    ).on_conflict_do_nothing())
-    allocation = await session.scalar(select(GraphAllocation).where(
-        GraphAllocation.workspace_id == scope.workspace_id, GraphAllocation.source_id == ready.source_id,
-        GraphAllocation.generation == ready.source_generation,
-    ).with_for_update().execution_options(populate_existing=True))
+    await session.execute(
+        insert(GraphAllocation)
+        .values(
+            workspace_id=scope.workspace_id,
+            source_id=ready.source_id,
+            generation=ready.source_generation,
+            next_bucket=0,
+        )
+        .on_conflict_do_nothing()
+    )
+    allocation = await session.scalar(
+        select(GraphAllocation)
+        .where(
+            GraphAllocation.workspace_id == scope.workspace_id,
+            GraphAllocation.source_id == ready.source_id,
+            GraphAllocation.generation == ready.source_generation,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if allocation is None:
         # Another workspace owns this (source, generation) key; never share its allocator.
         raise ValueError("Graph allocation is unavailable")
-    partition = await session.scalar(select(GraphPartition).where(
-        GraphPartition.workspace_id == scope.workspace_id,
-        GraphPartition.source_id == ready.source_id, GraphPartition.generation == ready.source_generation,
-        GraphPartition.sealed.is_(False),
-    ).order_by(GraphPartition.ordinal.desc()).limit(1).with_for_update())
-    if partition is None or partition.reservations >= 100 or partition.evidence_reservations + chunk_count > 100:
+    partition = await session.scalar(
+        select(GraphPartition)
+        .where(
+            GraphPartition.workspace_id == scope.workspace_id,
+            GraphPartition.source_id == ready.source_id,
+            GraphPartition.generation == ready.source_generation,
+            GraphPartition.sealed.is_(False),
+        )
+        .order_by(GraphPartition.ordinal.desc())
+        .limit(1)
+        .with_for_update()
+    )
+    if (
+        partition is None
+        or partition.reservations >= 100
+        or partition.evidence_reservations + chunk_count > 100
+    ):
         if partition is not None:
             partition.sealed = True
         if allocation is None:
             raise RuntimeError("invariant violated: allocation must not be None")
-        partition = GraphPartition(workspace_id=scope.workspace_id, source_id=ready.source_id,
-                                   generation=ready.source_generation,
-                                   ordinal=allocation.next_bucket, reservations=0)
+        partition = GraphPartition(
+            workspace_id=scope.workspace_id,
+            source_id=ready.source_id,
+            generation=ready.source_generation,
+            ordinal=allocation.next_bucket,
+            reservations=0,
+        )
         allocation.next_bucket += 1
         session.add(partition)
         await session.flush()
     partition.reservations += 1
     partition.evidence_reservations += chunk_count
     state = {"version_id": str(ready.document_version_id), "generation": ready.source_generation}
-    mapping = GraphMapping(workspace_id=scope.workspace_id, partition_id=partition.id, source_id=ready.source_id,
-                           source_generation=ready.source_generation, document_id=ready.document_id,
-                           document_version_id=ready.document_version_id, local_only=ready.local_only,
-                           desired_digest=digest(state), canonical_state=state)
+    mapping = GraphMapping(
+        workspace_id=scope.workspace_id,
+        partition_id=partition.id,
+        source_id=ready.source_id,
+        source_generation=ready.source_generation,
+        document_id=ready.document_id,
+        document_version_id=ready.document_version_id,
+        local_only=ready.local_only,
+        desired_digest=digest(state),
+        canonical_state=state,
+    )
     session.add(mapping)
     await session.flush()
     if data is not None:
         for chunk in data.chunks:
-            session.add(GraphSupport(workspace_id=scope.workspace_id, mapping_id=mapping.id, document_version_id=ready.document_version_id,
-                                     chunk_id=chunk.id, document_id=ready.document_id,
-                                     source_id=ready.source_id, source_generation=ready.source_generation))
+            session.add(
+                GraphSupport(
+                    workspace_id=scope.workspace_id,
+                    mapping_id=mapping.id,
+                    document_version_id=ready.document_version_id,
+                    chunk_id=chunk.id,
+                    document_id=ready.document_id,
+                    source_id=ready.source_id,
+                    source_generation=ready.source_generation,
+                )
+            )
     operation_id = await _queue(session, mapping, "upsert")
     if input_error is not None:
         mapping.status, mapping.error_code = "blocked", input_error
@@ -176,25 +234,47 @@ async def schedule_version(
 
 async def _queue(session: AsyncSession, mapping: GraphMapping, kind: str) -> UUID:
     """Flush one idempotent current revision intent; historical receipts remain on the original attempt."""
-    operation = await session.scalar(select(GraphOperation).where(
-        GraphOperation.workspace_id == mapping.workspace_id,
-        GraphOperation.mapping_id == mapping.id, GraphOperation.desired_revision == mapping.desired_revision,
-        GraphOperation.kind == kind, GraphOperation.status.in_(["pending", "running", "blocked", "reconcile_needed"]),
-    ).order_by(GraphOperation.created_at.desc()).limit(1))
+    operation = await session.scalar(
+        select(GraphOperation)
+        .where(
+            GraphOperation.workspace_id == mapping.workspace_id,
+            GraphOperation.mapping_id == mapping.id,
+            GraphOperation.desired_revision == mapping.desired_revision,
+            GraphOperation.kind == kind,
+            GraphOperation.status.in_(["pending", "running", "blocked", "reconcile_needed"]),
+        )
+        .order_by(GraphOperation.created_at.desc())
+        .limit(1)
+    )
     if operation is None:
-        operation = GraphOperation(workspace_id=mapping.workspace_id, mapping_id=mapping.id,
-                                   partition_id=mapping.partition_id, kind=kind,
-                                   desired_revision=mapping.desired_revision, desired_digest=mapping.desired_digest,
-                                   next_attempt_at=datetime.now(UTC), replacement_created_at=datetime.now(UTC))
+        operation = GraphOperation(
+            workspace_id=mapping.workspace_id,
+            mapping_id=mapping.id,
+            partition_id=mapping.partition_id,
+            kind=kind,
+            desired_revision=mapping.desired_revision,
+            desired_digest=mapping.desired_digest,
+            next_attempt_at=datetime.now(UTC),
+            replacement_created_at=datetime.now(UTC),
+        )
         session.add(operation)
         await session.flush()
     return operation.id
 
 
-async def schedule_canonical_change(session: AsyncSession, *, kind: str, canonical_id: UUID,
-                                    revision: int | None, fields: list[str], support: list[tuple[UUID, UUID]],
-                                    origin: str, deleted: bool = False,
-                                    scope: Scope, multi_workspace_enabled: bool) -> None:
+async def schedule_canonical_change(
+    session: AsyncSession,
+    *,
+    kind: str,
+    canonical_id: UUID,
+    revision: int | None,
+    fields: list[str],
+    support: list[tuple[UUID, UUID]],
+    origin: str,
+    deleted: bool = False,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> None:
     """Atomically capture identifier-only canonical change and refresh every affected temporal desired state.
 
     Call after owner mutations while their locks are held, before owner commit/replay.
@@ -204,17 +284,33 @@ async def schedule_canonical_change(session: AsyncSession, *, kind: str, canonic
     if kind not in {"entity", "relationship", "event"} or len(fields) > 100:
         raise ValueError("Invalid canonical change identity")
     pairs = sorted(set(support), key=lambda item: (str(item[0]), str(item[1])))
-    session.add(GraphChange(workspace_id=scope.workspace_id, kind=kind, canonical_id=canonical_id, revision=revision,
-                            fingerprint=digest([kind, str(canonical_id), revision, fields, pairs, deleted]),
-                            changed_fields=sorted(set(fields)), origin=origin, deleted=deleted,
-                            support=[[str(version), str(chunk)] for version, chunk in pairs]))
+    session.add(
+        GraphChange(
+            workspace_id=scope.workspace_id,
+            kind=kind,
+            canonical_id=canonical_id,
+            revision=revision,
+            fingerprint=digest([kind, str(canonical_id), revision, fields, pairs, deleted]),
+            changed_fields=sorted(set(fields)),
+            origin=origin,
+            deleted=deleted,
+            support=[[str(version), str(chunk)] for version, chunk in pairs],
+        )
+    )
     version_ids = {item[0] for item in pairs}
     # Existing identity linkage also covers edits/deletion whose current evidence is empty.
-    rows = (await session.scalars(select(GraphMapping).where(
-        GraphMapping.workspace_id == scope.workspace_id,
-        (GraphMapping.document_version_id.in_(version_ids)) |
-        (GraphMapping.canonical_state.contains({kind + "_ids": [str(canonical_id)]})),
-    ).order_by(GraphMapping.id).with_for_update())).all()
+    rows = (
+        await session.scalars(
+            select(GraphMapping)
+            .where(
+                GraphMapping.workspace_id == scope.workspace_id,
+                (GraphMapping.document_version_id.in_(version_ids))
+                | (GraphMapping.canonical_state.contains({kind + "_ids": [str(canonical_id)]})),
+            )
+            .order_by(GraphMapping.id)
+            .with_for_update()
+        )
+    ).all()
     for mapping in rows:
         if mapping.tombstoned:
             continue
@@ -251,8 +347,12 @@ _OPEN_OPERATION_STATUSES = ("pending", "running", "blocked", "reconcile_needed")
 
 
 def _require_cleanup_fences(
-    actual: AccessFence, *, closure: TemporalCleanupClosure, scope: Scope,
-    access_fence: AccessFence, source_fence: SourceFence,
+    actual: AccessFence,
+    *,
+    closure: TemporalCleanupClosure,
+    scope: Scope,
+    access_fence: AccessFence,
+    source_fence: SourceFence,
 ) -> None:
     """Require the caller-held access and source fences to equal the freshly admitted ones.
 
@@ -260,15 +360,20 @@ def _require_cleanup_fences(
     or the held source fence is for another source/workspace than the cleanup closure; no I/O.
     """
     if (
-        actual != access_fence or source_fence.id != closure.source_id
+        actual != access_fence
+        or source_fence.id != closure.source_id
         or source_fence.workspace_id != scope.workspace_id
     ):
         raise ConflictError("Cleanup authority changed")
 
 
 async def tombstone_cleanup_ids(
-    session: AsyncSession, *, source_id: UUID, document_id: UUID | None = None,
-    scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    *,
+    source_id: UUID,
+    document_id: UUID | None = None,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> TemporalCleanupClosure:
     """Discover (nonlocking, ID-only) the graph mappings, supports and open operations to tombstone."""
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
@@ -276,44 +381,86 @@ async def tombstone_cleanup_ids(
     where = [GraphMapping.workspace_id == workspace_id, GraphMapping.source_id == source_id]
     if document_id is not None:
         where.append(GraphMapping.document_id == document_id)
-    mapping_ids = list((await session.scalars(
-        select(GraphMapping.id).where(*where).order_by(GraphMapping.id).limit(_CLEANUP_LIMIT + 1)
-    )).all())
+    mapping_ids = list(
+        (
+            await session.scalars(
+                select(GraphMapping.id)
+                .where(*where)
+                .order_by(GraphMapping.id)
+                .limit(_CLEANUP_LIMIT + 1)
+            )
+        ).all()
+    )
     overflow = len(mapping_ids) > _CLEANUP_LIMIT
     mapping_ids = mapping_ids[:_CLEANUP_LIMIT]
     support_ids: list[tuple[UUID, UUID, UUID]] = []
     operation_ids: list[UUID] = []
     if mapping_ids:
-        support_rows = list((await session.execute(
-            select(GraphSupport.mapping_id, GraphSupport.document_version_id, GraphSupport.chunk_id).where(
-                GraphSupport.workspace_id == workspace_id, GraphSupport.mapping_id.in_(mapping_ids),
-            ).order_by(GraphSupport.mapping_id, GraphSupport.document_version_id, GraphSupport.chunk_id)
-            .limit(_CLEANUP_LIMIT + 1)
-        )).all())
+        support_rows = list(
+            (
+                await session.execute(
+                    select(
+                        GraphSupport.mapping_id,
+                        GraphSupport.document_version_id,
+                        GraphSupport.chunk_id,
+                    )
+                    .where(
+                        GraphSupport.workspace_id == workspace_id,
+                        GraphSupport.mapping_id.in_(mapping_ids),
+                    )
+                    .order_by(
+                        GraphSupport.mapping_id,
+                        GraphSupport.document_version_id,
+                        GraphSupport.chunk_id,
+                    )
+                    .limit(_CLEANUP_LIMIT + 1)
+                )
+            ).all()
+        )
         overflow |= len(support_rows) > _CLEANUP_LIMIT
         support_ids = [(row[0], row[1], row[2]) for row in support_rows[:_CLEANUP_LIMIT]]
-        operation_ids = list((await session.scalars(
-            select(GraphOperation.id).where(
-                GraphOperation.workspace_id == workspace_id, GraphOperation.mapping_id.in_(mapping_ids),
-                GraphOperation.status.in_(_OPEN_OPERATION_STATUSES),
-            ).order_by(GraphOperation.id).limit(_CLEANUP_LIMIT + 1)
-        )).all())
+        operation_ids = list(
+            (
+                await session.scalars(
+                    select(GraphOperation.id)
+                    .where(
+                        GraphOperation.workspace_id == workspace_id,
+                        GraphOperation.mapping_id.in_(mapping_ids),
+                        GraphOperation.status.in_(_OPEN_OPERATION_STATUSES),
+                    )
+                    .order_by(GraphOperation.id)
+                    .limit(_CLEANUP_LIMIT + 1)
+                )
+            ).all()
+        )
         overflow |= len(operation_ids) > _CLEANUP_LIMIT
         operation_ids = operation_ids[:_CLEANUP_LIMIT]
     return TemporalCleanupClosure(
-        source_id=source_id, document_id=document_id, mapping_ids=tuple(mapping_ids),
-        support_ids=tuple(support_ids), operation_ids=tuple(operation_ids), overflow=overflow,
+        source_id=source_id,
+        document_id=document_id,
+        mapping_ids=tuple(mapping_ids),
+        support_ids=tuple(support_ids),
+        operation_ids=tuple(operation_ids),
+        overflow=overflow,
     )
 
 
 async def prepare_tombstone_scope_in_uow(
-    session: AsyncSession, closure: TemporalCleanupClosure, *, scope: Scope,
-    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+    session: AsyncSession,
+    closure: TemporalCleanupClosure,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    source_fence: SourceFence,
 ) -> None:
     """Lock open operations, then mappings, then supports (worker order); no mutation."""
     _require_cleanup_fences(
         await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
-        closure=closure, scope=scope, access_fence=access_fence, source_fence=source_fence,
+        closure=closure,
+        scope=scope,
+        access_fence=access_fence,
+        source_fence=source_fence,
     )
     if closure.overflow:
         raise ValueError("Temporal cleanup exceeds its atomic limit")
@@ -321,51 +468,91 @@ async def prepare_tombstone_scope_in_uow(
     # Worker order is partition -> operation -> mapping; cleanup (approved deviation) locks operations first.
     if closure.operation_ids:
         await session.scalars(
-            select(GraphOperation.id).where(
-                GraphOperation.workspace_id == workspace_id, GraphOperation.id.in_(closure.operation_ids),
-            ).order_by(GraphOperation.id).with_for_update()
+            select(GraphOperation.id)
+            .where(
+                GraphOperation.workspace_id == workspace_id,
+                GraphOperation.id.in_(closure.operation_ids),
+            )
+            .order_by(GraphOperation.id)
+            .with_for_update()
         )
     if closure.mapping_ids:
         await session.scalars(
-            select(GraphMapping.id).where(
-                GraphMapping.workspace_id == workspace_id, GraphMapping.id.in_(closure.mapping_ids),
-            ).order_by(GraphMapping.id).with_for_update()
+            select(GraphMapping.id)
+            .where(
+                GraphMapping.workspace_id == workspace_id,
+                GraphMapping.id.in_(closure.mapping_ids),
+            )
+            .order_by(GraphMapping.id)
+            .with_for_update()
         )
         await session.execute(
-            select(GraphSupport.mapping_id).where(
-                GraphSupport.workspace_id == workspace_id, GraphSupport.mapping_id.in_(closure.mapping_ids),
-            ).order_by(GraphSupport.mapping_id, GraphSupport.document_version_id, GraphSupport.chunk_id)
+            select(GraphSupport.mapping_id)
+            .where(
+                GraphSupport.workspace_id == workspace_id,
+                GraphSupport.mapping_id.in_(closure.mapping_ids),
+            )
+            .order_by(
+                GraphSupport.mapping_id, GraphSupport.document_version_id, GraphSupport.chunk_id
+            )
             .with_for_update()
         )
 
 
 async def tombstone_scope_in_uow(
-    session: AsyncSession, closure: TemporalCleanupClosure, *, scope: Scope,
-    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+    session: AsyncSession,
+    closure: TemporalCleanupClosure,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    source_fence: SourceFence,
 ) -> None:
     """Capture exact detached cleanup identity before cascades; never locks or calls Graphiti."""
     _require_cleanup_fences(
         await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
-        closure=closure, scope=scope, access_fence=access_fence, source_fence=source_fence,
+        closure=closure,
+        scope=scope,
+        access_fence=access_fence,
+        source_fence=source_fence,
     )
     current = await tombstone_cleanup_ids(
-        session, source_id=closure.source_id, document_id=closure.document_id,
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id=closure.source_id,
+        document_id=closure.document_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if current.overflow or current != closure:
         raise RuntimeError("cleanup closure changed")
     workspace_id = scope.workspace_id
-    mappings = (await session.scalars(select(GraphMapping).where(
-        GraphMapping.workspace_id == workspace_id, GraphMapping.id.in_(closure.mapping_ids),
-    ).order_by(GraphMapping.id))).all() if closure.mapping_ids else []
+    mappings = (
+        (
+            await session.scalars(
+                select(GraphMapping)
+                .where(
+                    GraphMapping.workspace_id == workspace_id,
+                    GraphMapping.id.in_(closure.mapping_ids),
+                )
+                .order_by(GraphMapping.id)
+            )
+        ).all()
+        if closure.mapping_ids
+        else []
+    )
     for mapping in mappings:
         mapping.tombstoned, mapping.status = True, "tombstoned"
         mapping.desired_revision += 1
         mapping.canonical_state = {}  # Purge former derived identities without removing the exact cleanup ledger.
         mapping.desired_digest = digest([str(mapping.id), "deleted", mapping.desired_revision])
-        supports = (await session.scalars(select(GraphSupport).where(
-            GraphSupport.workspace_id == workspace_id, GraphSupport.mapping_id == mapping.id,
-        ))).all()
+        supports = (
+            await session.scalars(
+                select(GraphSupport).where(
+                    GraphSupport.workspace_id == workspace_id,
+                    GraphSupport.mapping_id == mapping.id,
+                )
+            )
+        ).all()
         for item in supports:
             item.removed = True
         await _queue(session, mapping, "delete")
@@ -373,8 +560,12 @@ async def tombstone_scope_in_uow(
 
 
 async def mapping_statuses(
-    session: AsyncSession, version_ids: list[UUID], *, graph_enabled: bool = False,
-    scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    version_ids: list[UUID],
+    *,
+    graph_enabled: bool = False,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> list[GraphStatus]:
     """Read retained owner-version graph status under the current source-generation fence.
 
@@ -385,33 +576,64 @@ async def mapping_statuses(
         raise ValueError("Status batch exceeds100 versions")
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     fences = await documents.review_version_fences(
-        session, version_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        version_ids,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if not fences:
         return []
     # Apply the owner fence in SQL: filtering after .all() would load every
     # historical generation for each requested version without a memory bound.
-    retained = or_(*(and_(GraphMapping.document_version_id == version_id,
-                         GraphMapping.document_id == fence.document_id,
-                         GraphMapping.source_id == fence.source_id,
-                         GraphMapping.source_generation == fence.current_source_generation)
-                     for version_id, fence in fences.items()))
-    rows = (await session.scalars(select(GraphMapping).where(
-        GraphMapping.workspace_id == scope.workspace_id,
-        retained, GraphMapping.tombstoned.is_(False),
-    ).order_by(GraphMapping.created_at.desc()))).all()
-    return [GraphStatus(mapping_id=row.id, document_version_id=row.document_version_id,
-                        episode_id=row.episode_id, partition_id=row.partition_id, status=row.status,
-                        desired_revision=row.desired_revision, applied_revision=row.applied_revision,
-                        error_code=row.error_code, graph_enabled=graph_enabled, applied_at=row.applied_at)
-            for row in rows
-            if (fence := fences.get(row.document_version_id)) is not None
-            and fence.document_id == row.document_id and fence.source_id == row.source_id
-            and fence.current_source_generation == row.source_generation]
+    retained = or_(
+        *(
+            and_(
+                GraphMapping.document_version_id == version_id,
+                GraphMapping.document_id == fence.document_id,
+                GraphMapping.source_id == fence.source_id,
+                GraphMapping.source_generation == fence.current_source_generation,
+            )
+            for version_id, fence in fences.items()
+        )
+    )
+    rows = (
+        await session.scalars(
+            select(GraphMapping)
+            .where(
+                GraphMapping.workspace_id == scope.workspace_id,
+                retained,
+                GraphMapping.tombstoned.is_(False),
+            )
+            .order_by(GraphMapping.created_at.desc())
+        )
+    ).all()
+    return [
+        GraphStatus(
+            mapping_id=row.id,
+            document_version_id=row.document_version_id,
+            episode_id=row.episode_id,
+            partition_id=row.partition_id,
+            status=row.status,
+            desired_revision=row.desired_revision,
+            applied_revision=row.applied_revision,
+            error_code=row.error_code,
+            graph_enabled=graph_enabled,
+            applied_at=row.applied_at,
+        )
+        for row in rows
+        if (fence := fences.get(row.document_version_id)) is not None
+        and fence.document_id == row.document_id
+        and fence.source_id == row.source_id
+        and fence.current_source_generation == row.source_generation
+    ]
 
 
 async def select_search_partitions(
-    session: AsyncSession, partition_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    partition_ids: list[UUID],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> dict[UUID, tuple[UUID, ...]]:
     """Snapshot complete synchronized episode inventories for 1..10 explicit buckets.
 
@@ -428,69 +650,116 @@ async def select_search_partitions(
     result = {}
     now = datetime.now(UTC)
     for partition_id in partition_ids:
-        partition = await session.scalar(select(GraphPartition).where(
-            GraphPartition.id == partition_id, GraphPartition.workspace_id == scope.workspace_id,
-        ))
-        if (partition is None or partition.uncertain_operation_id is not None
-                or (partition.lease_expires_at is not None and partition.lease_expires_at > now)):
+        partition = await session.scalar(
+            select(GraphPartition).where(
+                GraphPartition.id == partition_id,
+                GraphPartition.workspace_id == scope.workspace_id,
+            )
+        )
+        if (
+            partition is None
+            or partition.uncertain_operation_id is not None
+            or (partition.lease_expires_at is not None and partition.lease_expires_at > now)
+        ):
             raise ValueError("Graph partition requires recovery or is busy")
         source = await sources.get_connector_source(
-            session, partition.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            partition.source_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
         if source is None or source.status != "active" or source.generation != partition.generation:
             raise ValueError("Graph partition source generation is unavailable")
-        unresolved = await session.scalar(select(GraphDispatch.id).join(
-            GraphOperation, GraphOperation.id == GraphDispatch.operation_id,
-        ).where(GraphOperation.workspace_id == scope.workspace_id, GraphDispatch.workspace_id == scope.workspace_id,
-                GraphOperation.partition_id == partition_id, GraphDispatch.completed_at.is_(None),
-                GraphDispatch.cessation_verified_at.is_(None)).limit(1))
+        unresolved = await session.scalar(
+            select(GraphDispatch.id)
+            .join(
+                GraphOperation,
+                GraphOperation.id == GraphDispatch.operation_id,
+            )
+            .where(
+                GraphOperation.workspace_id == scope.workspace_id,
+                GraphDispatch.workspace_id == scope.workspace_id,
+                GraphOperation.partition_id == partition_id,
+                GraphDispatch.completed_at.is_(None),
+                GraphDispatch.cessation_verified_at.is_(None),
+            )
+            .limit(1)
+        )
         if unresolved is not None:
             raise ValueError("Graph partition dispatch has not ceased")
-        rows = (await session.scalars(select(GraphMapping).where(
-            GraphMapping.workspace_id == scope.workspace_id, GraphMapping.partition_id == partition_id,
-        ).order_by(GraphMapping.id).limit(101))).all()
+        rows = (
+            await session.scalars(
+                select(GraphMapping)
+                .where(
+                    GraphMapping.workspace_id == scope.workspace_id,
+                    GraphMapping.partition_id == partition_id,
+                )
+                .order_by(GraphMapping.id)
+                .limit(101)
+            )
+        ).all()
         if len(rows) > 100:
             raise ValueError("Graph partition exceeds its lifetime mapping bound")
         active = [row for row in rows if not row.tombstoned]
         fences = await documents.review_version_fences(
-            session, [row.document_version_id for row in active],
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            [row.document_version_id for row in active],
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
         for row in rows:
-            if (row.source_id != partition.source_id or row.source_generation != partition.generation
-                    or row.applied_revision != row.desired_revision or row.applied_digest != row.desired_digest
-                    or row.error_code is not None):
+            if (
+                row.source_id != partition.source_id
+                or row.source_generation != partition.generation
+                or row.applied_revision != row.desired_revision
+                or row.applied_digest != row.desired_digest
+                or row.error_code is not None
+            ):
                 raise ValueError("Graph partition contains unconverged mappings")
             if row.tombstoned:
                 if row.external_state != "absent":
                     raise ValueError("Graph partition deletion is not proven")
             else:
                 fence = fences.get(row.document_version_id)
-                if (row.status != "synchronized" or row.external_state != "present" or fence is None
-                        or fence.document_id != row.document_id or fence.source_id != row.source_id
-                        or fence.current_source_generation != row.source_generation):
+                if (
+                    row.status != "synchronized"
+                    or row.external_state != "present"
+                    or fence is None
+                    or fence.document_id != row.document_id
+                    or fence.source_id != row.source_id
+                    or fence.current_source_generation != row.source_generation
+                ):
                     raise ValueError("Graph partition evidence is unavailable")
         result[partition_id] = tuple(row.episode_id for row in active)
     return result
 
 
-async def graph_status_change(session: AsyncSession, mapping_id: UUID, *, scope: Scope) -> KnowledgeChanged:
+async def graph_status_change(
+    session: AsyncSession, mapping_id: UUID, *, scope: Scope
+) -> KnowledgeChanged:
     """Build an identifier-only invalidation for atomic status/replay publication.
 
     Caller holds the mapping's publication locks and commits with commit_with_replay.
     A projection deletion does not imply canonical document deletion. Source scope
     covers mappings with no entity/event yet and survives retained-owner deletion.
     """
-    mapping = await session.scalar(select(GraphMapping).where(
-        GraphMapping.id == mapping_id, GraphMapping.workspace_id == scope.workspace_id,
-    ))
+    mapping = await session.scalar(
+        select(GraphMapping).where(
+            GraphMapping.id == mapping_id,
+            GraphMapping.workspace_id == scope.workspace_id,
+        )
+    )
     if mapping is None:
         raise ValueError("Graph mapping is unavailable")
     return make_knowledge_change(mapping.source_id, mapping.document_id, scope=scope)
 
 
 async def request_reconcile(
-    session: AsyncSession, request: ReconcileRequest, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    request: ReconcileRequest,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> UUID:
     """Atomically snapshot selected IDs/revisions in PostgreSQL; the HTTP caller commits before202.
 
@@ -499,19 +768,46 @@ async def request_reconcile(
     """
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     selection = request.model_dump(mode="json", exclude_none=True)
-    condition = await _scope_condition(session, selection, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    run = GraphReconcileRun(workspace_id=scope.workspace_id, actor_user_id=_operator_actor(scope),
-                            scope=selection, status="pending")
+    condition = await _scope_condition(
+        session, selection, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    run = GraphReconcileRun(
+        workspace_id=scope.workspace_id,
+        actor_user_id=_operator_actor(scope),
+        scope=selection,
+        status="pending",
+    )
     session.add(run)
     await session.flush()
-    await session.execute(insert(GraphReconcileMember).from_select(
-        ["workspace_id", "run_id", "mapping_id", "desired_revision", "desired_digest", "tombstoned"],
-        select(literal(scope.workspace_id, Uuid(as_uuid=True)), literal(run.id), GraphMapping.id, GraphMapping.desired_revision,
-               GraphMapping.desired_digest, GraphMapping.tombstoned).where(condition),
-    ))
-    run.upper_mapping_id = await session.scalar(select(GraphReconcileMember.mapping_id).where(
-        GraphReconcileMember.workspace_id == scope.workspace_id, GraphReconcileMember.run_id == run.id,
-    ).order_by(GraphReconcileMember.mapping_id.desc()).limit(1))
+    await session.execute(
+        insert(GraphReconcileMember).from_select(
+            [
+                "workspace_id",
+                "run_id",
+                "mapping_id",
+                "desired_revision",
+                "desired_digest",
+                "tombstoned",
+            ],
+            select(
+                literal(scope.workspace_id, Uuid(as_uuid=True)),
+                literal(run.id),
+                GraphMapping.id,
+                GraphMapping.desired_revision,
+                GraphMapping.desired_digest,
+                GraphMapping.tombstoned,
+            ).where(condition),
+        )
+    )
+    run.upper_mapping_id = await session.scalar(
+        select(GraphReconcileMember.mapping_id)
+        .where(
+            GraphReconcileMember.workspace_id == scope.workspace_id,
+            GraphReconcileMember.run_id == run.id,
+        )
+        .order_by(GraphReconcileMember.mapping_id.desc())
+        .limit(1)
+    )
     if run.upper_mapping_id is None:
         run.status = "succeeded"
     await session.flush()
@@ -519,18 +815,29 @@ async def request_reconcile(
 
 
 async def _scope_condition(
-    session: AsyncSession, selection: dict[str, Any], *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    selection: dict[str, Any],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> ColumnElement[bool]:
     """Resolve a run's selected canonical identity through current owner refs, always inside the workspace."""
     mine = GraphMapping.workspace_id == scope.workspace_id
     if selection.get("source_id"):
         return and_(mine, GraphMapping.source_id == UUID(str(selection["source_id"])))
     if selection.get("document_version_ids"):
-        return and_(mine, GraphMapping.document_version_id.in_(
-            [UUID(str(value)) for value in selection["document_version_ids"]]))
+        return and_(
+            mine,
+            GraphMapping.document_version_id.in_(
+                [UUID(str(value)) for value in selection["document_version_ids"]]
+            ),
+        )
     try:
         canonical = await entities.resolve_canonical_entity_id(
-            session, UUID(str(selection["entity_id"])), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            UUID(str(selection["entity_id"])),
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
     except LookupError as exc:
         raise ValueError("Entity scope is unavailable") from exc
@@ -538,7 +845,12 @@ async def _scope_condition(
 
 
 async def reconcile_slice(
-    session: AsyncSession, run_id: UUID, *, limit: int = 25, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    run_id: UUID,
+    *,
+    limit: int = 25,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Queue a bounded slice of immutable selected revisions without re-resolving mutable scope.
 
@@ -548,36 +860,77 @@ async def reconcile_slice(
     if not 1 <= limit <= 100:
         raise ValueError("Reconcile slice must be1..100")
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    run = await session.scalar(select(GraphReconcileRun).where(
-        GraphReconcileRun.id == run_id, GraphReconcileRun.workspace_id == scope.workspace_id,
-    ).with_for_update().execution_options(populate_existing=True))
+    run = await session.scalar(
+        select(GraphReconcileRun)
+        .where(
+            GraphReconcileRun.id == run_id,
+            GraphReconcileRun.workspace_id == scope.workspace_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if run is None or run.upper_mapping_id is None:
         return False
-    filters = [GraphReconcileMember.workspace_id == scope.workspace_id, GraphReconcileMember.run_id == run.id]
+    filters = [
+        GraphReconcileMember.workspace_id == scope.workspace_id,
+        GraphReconcileMember.run_id == run.id,
+    ]
     if run.cursor:
         filters.append(GraphReconcileMember.mapping_id > run.cursor)
-    members = (await session.scalars(select(GraphReconcileMember).where(*filters)
-        .order_by(GraphReconcileMember.mapping_id).limit(limit + 1))).all()
+    members = (
+        await session.scalars(
+            select(GraphReconcileMember)
+            .where(*filters)
+            .order_by(GraphReconcileMember.mapping_id)
+            .limit(limit + 1)
+        )
+    ).all()
     for member in members[:limit]:
-        row = await session.scalar(select(GraphMapping).where(
-            GraphMapping.id == member.mapping_id, GraphMapping.workspace_id == scope.workspace_id,
-        ).with_for_update().execution_options(populate_existing=True))
+        row = await session.scalar(
+            select(GraphMapping)
+            .where(
+                GraphMapping.id == member.mapping_id,
+                GraphMapping.workspace_id == scope.workspace_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         run.scanned += 1
         # Do not lock the partition after a mapping: worker ownership uses the
         # opposite order. A quarantined bucket needs recovery even if its old
         # applied metadata still matches this selected canonical revision.
-        partition = await session.scalar(select(GraphPartition).where(
-            GraphPartition.id == row.partition_id, GraphPartition.workspace_id == scope.workspace_id,
-        )) if row is not None else None
+        partition = (
+            await session.scalar(
+                select(GraphPartition).where(
+                    GraphPartition.id == row.partition_id,
+                    GraphPartition.workspace_id == scope.workspace_id,
+                )
+            )
+            if row is not None
+            else None
+        )
         projection_safe = partition is not None and partition.uncertain_operation_id is None
-        if (row is not None and row.desired_revision == member.desired_revision
-                and row.desired_digest == member.desired_digest and row.tombstoned == member.tombstoned
-                and row.status not in ("blocked", "failed")
-                and not (projection_safe and row.status == "synchronized" and row.applied_revision == member.desired_revision
-                         and row.applied_digest == member.desired_digest)
-                and not (projection_safe and row.tombstoned and row.external_state == "absent"
-                         and row.applied_revision == member.desired_revision
-                         and row.applied_digest == member.desired_digest and row.error_code is None)):
+        if (
+            row is not None
+            and row.desired_revision == member.desired_revision
+            and row.desired_digest == member.desired_digest
+            and row.tombstoned == member.tombstoned
+            and row.status not in ("blocked", "failed")
+            and not (
+                projection_safe
+                and row.status == "synchronized"
+                and row.applied_revision == member.desired_revision
+                and row.applied_digest == member.desired_digest
+            )
+            and not (
+                projection_safe
+                and row.tombstoned
+                and row.external_state == "absent"
+                and row.applied_revision == member.desired_revision
+                and row.applied_digest == member.desired_digest
+                and row.error_code is None
+            )
+        ):
             await _queue(session, row, "delete" if row.tombstoned else "reconcile")
         run.cursor = member.mapping_id
     # 'partial' marks complete scanning, not permanent remote failure. GET computes
@@ -588,7 +941,11 @@ async def reconcile_slice(
 
 
 async def reconcile_status(
-    session: AsyncSession, run_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    run_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> ReconcileStatus | None:
     """Aggregate current exact-revision outcomes for already scanned immutable members.
 
@@ -598,74 +955,151 @@ async def reconcile_status(
     a live writer or unresolved dispatch prevents certifying physical convergence.
     """
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    run = await session.scalar(select(GraphReconcileRun).where(
-        GraphReconcileRun.id == run_id, GraphReconcileRun.workspace_id == scope.workspace_id,
-    ))
+    run = await session.scalar(
+        select(GraphReconcileRun).where(
+            GraphReconcileRun.id == run_id,
+            GraphReconcileRun.workspace_id == scope.workspace_id,
+        )
+    )
     if run is None:
         return None
-    matching = and_(GraphMapping.desired_revision == GraphReconcileMember.desired_revision,
-                    GraphMapping.desired_digest == GraphReconcileMember.desired_digest,
-                    GraphMapping.tombstoned == GraphReconcileMember.tombstoned)
+    matching = and_(
+        GraphMapping.desired_revision == GraphReconcileMember.desired_revision,
+        GraphMapping.desired_digest == GraphReconcileMember.desired_digest,
+        GraphMapping.tombstoned == GraphReconcileMember.tombstoned,
+    )
     # 'absent' is also a fresh mapping's default and can survive a later failed
     # delete. Only the current applied revision/digest certifies cleanup completion.
     uncertain = or_(GraphPartition.id.is_(None), GraphPartition.uncertain_operation_id.is_not(None))
-    unresolved = select(GraphDispatch.id).join(GraphOperation,
-        GraphOperation.id == GraphDispatch.operation_id).where(
-        GraphOperation.workspace_id == scope.workspace_id, GraphDispatch.workspace_id == scope.workspace_id,
-        GraphOperation.partition_id == GraphMapping.partition_id,
-        GraphDispatch.completed_at.is_(None), GraphDispatch.cessation_verified_at.is_(None),
-    ).correlate(GraphMapping).exists()
+    unresolved = (
+        select(GraphDispatch.id)
+        .join(GraphOperation, GraphOperation.id == GraphDispatch.operation_id)
+        .where(
+            GraphOperation.workspace_id == scope.workspace_id,
+            GraphDispatch.workspace_id == scope.workspace_id,
+            GraphOperation.partition_id == GraphMapping.partition_id,
+            GraphDispatch.completed_at.is_(None),
+            GraphDispatch.cessation_verified_at.is_(None),
+        )
+        .correlate(GraphMapping)
+        .exists()
+    )
     # Applied metadata survives an interrupted sibling write. Shared physical
     # state is not proved while that bucket is quarantined or still has a writer.
-    physical_ready = and_(~uncertain, ~unresolved,
-        or_(GraphPartition.lease_expires_at.is_(None), GraphPartition.lease_expires_at <= datetime.now(UTC)))
-    converged = and_(matching, physical_ready,
+    physical_ready = and_(
+        ~uncertain,
+        ~unresolved,
+        or_(
+            GraphPartition.lease_expires_at.is_(None),
+            GraphPartition.lease_expires_at <= datetime.now(UTC),
+        ),
+    )
+    converged = and_(
+        matching,
+        physical_ready,
         GraphMapping.applied_revision == GraphReconcileMember.desired_revision,
         GraphMapping.applied_digest == GraphReconcileMember.desired_digest,
-        GraphMapping.error_code.is_(None), or_(
-        and_(GraphMapping.tombstoned.is_(True), GraphMapping.external_state == "absent"),
-        and_(GraphMapping.tombstoned.is_(False), GraphMapping.status == "synchronized"),
-    ))
+        GraphMapping.error_code.is_(None),
+        or_(
+            and_(GraphMapping.tombstoned.is_(True), GraphMapping.external_state == "absent"),
+            and_(GraphMapping.tombstoned.is_(False), GraphMapping.status == "synchronized"),
+        ),
+    )
     failed = or_(GraphMapping.id.is_(None), and_(matching, GraphMapping.status == "failed"))
-    blocked = and_(GraphMapping.id.is_not(None), ~failed, or_(~matching, uncertain,
-                   and_(~converged, GraphMapping.status == "blocked")))
-    filters = [GraphReconcileMember.workspace_id == scope.workspace_id, GraphReconcileMember.run_id == run.id]
+    blocked = and_(
+        GraphMapping.id.is_not(None),
+        ~failed,
+        or_(~matching, uncertain, and_(~converged, GraphMapping.status == "blocked")),
+    )
+    filters = [
+        GraphReconcileMember.workspace_id == scope.workspace_id,
+        GraphReconcileMember.run_id == run.id,
+    ]
     if run.cursor is None:
         filters.append(literal(False))
     else:
         filters.append(GraphReconcileMember.mapping_id <= run.cursor)
-    counts = (await session.execute(select(
-        func.count(), func.coalesce(func.sum(case((converged, 1), else_=0)), 0),
-        func.coalesce(func.sum(case((blocked, 1), else_=0)), 0),
-        func.coalesce(func.sum(case((failed, 1), else_=0)), 0),
-    ).select_from(GraphReconcileMember).outerjoin(GraphMapping,
-        and_(GraphMapping.id == GraphReconcileMember.mapping_id, GraphMapping.workspace_id == scope.workspace_id),
-    ).outerjoin(GraphPartition,
-        and_(GraphPartition.id == GraphMapping.partition_id, GraphPartition.workspace_id == scope.workspace_id),
-    ).where(*filters))).one()
+    counts = (
+        await session.execute(
+            select(
+                func.count(),
+                func.coalesce(func.sum(case((converged, 1), else_=0)), 0),
+                func.coalesce(func.sum(case((blocked, 1), else_=0)), 0),
+                func.coalesce(func.sum(case((failed, 1), else_=0)), 0),
+            )
+            .select_from(GraphReconcileMember)
+            .outerjoin(
+                GraphMapping,
+                and_(
+                    GraphMapping.id == GraphReconcileMember.mapping_id,
+                    GraphMapping.workspace_id == scope.workspace_id,
+                ),
+            )
+            .outerjoin(
+                GraphPartition,
+                and_(
+                    GraphPartition.id == GraphMapping.partition_id,
+                    GraphPartition.workspace_id == scope.workspace_id,
+                ),
+            )
+            .where(*filters)
+        )
+    ).one()
     scanned, done, held, errors = (int(value) for value in counts)
     queued = scanned - done - held - errors
     scanning = run.status in ("pending", "running")
-    status = run.status if scanning else ("succeeded" if not (queued or held or errors) else "partial")
-    return ReconcileStatus(run_id=run.id, status=status, scanned=scanned, queued=queued,
-                           converged=done, blocked=held, failed=errors,
-                           continuation=str(run.cursor) if run.status == "running" and run.cursor else None)
+    status = (
+        run.status if scanning else ("succeeded" if not (queued or held or errors) else "partial")
+    )
+    return ReconcileStatus(
+        run_id=run.id,
+        status=status,
+        scanned=scanned,
+        queued=queued,
+        converged=done,
+        blocked=held,
+        failed=errors,
+        continuation=str(run.cursor) if run.status == "running" and run.cursor else None,
+    )
 
 
-async def find_changes(session: AsyncSession, *, kind: str | None = None, canonical_id: UUID | None = None,
-                       observed_from: datetime | None = None, observed_to: datetime | None = None,
-                       limit: int = 50, cursor: str | None = None,
-                       scope: Scope, multi_workspace_enabled: bool) -> ChangePage:
+async def find_changes(
+    session: AsyncSession,
+    *,
+    kind: str | None = None,
+    canonical_id: UUID | None = None,
+    observed_from: datetime | None = None,
+    observed_to: datetime | None = None,
+    limit: int = 50,
+    cursor: str | None = None,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> ChangePage:
     """Page recorded owner mutations and currently retained citations; never fabricate prior snapshots."""
-    if not 1 <= limit <= 100 or any(value is not None and value.tzinfo is None for value in (observed_from, observed_to)):
+    if not 1 <= limit <= 100 or any(
+        value is not None and value.tzinfo is None for value in (observed_from, observed_to)
+    ):
         raise ValueError("Invalid change bounds")
     fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     # The cursor binds the admitted fence (workspace, actor, membership and configuration
     # revisions): a token minted for another workspace/actor or before a role/membership/
     # configuration change is rejected rather than rebased.
-    fingerprint = digest([kind, canonical_id, observed_from, observed_to, str(fence.workspace_id), fence.user_id,
-                          fence.membership_revision, fence.configuration_revision])
-    filters = [GraphChange.workspace_id == scope.workspace_id, GraphChange.id > _after(cursor, fingerprint)]
+    fingerprint = digest(
+        [
+            kind,
+            canonical_id,
+            observed_from,
+            observed_to,
+            str(fence.workspace_id),
+            fence.user_id,
+            fence.membership_revision,
+            fence.configuration_revision,
+        ]
+    )
+    filters = [
+        GraphChange.workspace_id == scope.workspace_id,
+        GraphChange.id > _after(cursor, fingerprint),
+    ]
     if kind:
         filters.append(GraphChange.kind == kind)
     if canonical_id:
@@ -674,29 +1108,54 @@ async def find_changes(session: AsyncSession, *, kind: str | None = None, canoni
         filters.append(GraphChange.created_at >= observed_from)
     if observed_to:
         filters.append(GraphChange.created_at < observed_to)
-    rows = (await session.scalars(select(GraphChange).where(*filters).order_by(GraphChange.id).limit(limit + 1))).all()
+    rows = (
+        await session.scalars(
+            select(GraphChange).where(*filters).order_by(GraphChange.id).limit(limit + 1)
+        )
+    ).all()
     items = []
     for row in rows[:limit]:
         refs = []
         if not row.deleted:
             # A historical ID is not authority to recover removed evidence text.
             for offset in range(0, len(row.support), 100):
-                batch = [(UUID(version), UUID(chunk)) for version, chunk in row.support[offset:offset + 100]]
+                batch = [
+                    (UUID(version), UUID(chunk))
+                    for version, chunk in row.support[offset : offset + 100]
+                ]
                 try:
-                    refs.extend(await documents.read_evidence_refs(
-                        session, batch, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-                    ))
+                    refs.extend(
+                        await documents.read_evidence_refs(
+                            session,
+                            batch,
+                            scope=scope,
+                            multi_workspace_enabled=multi_workspace_enabled,
+                        )
+                    )
                 except ValueError:
                     continue
         if row.origin == "derived" and (not refs or len(refs) != len(row.support)):
             # Audit identity/field metadata can reveal revoked material too; only a fully
             # current permitted support closure authorizes a derived historical row.
             continue
-        items.append(ChangeRead(id=row.id, kind=row.kind, canonical_id=row.canonical_id,
-                                revision=row.revision, changed_fields=row.changed_fields, origin=row.origin,
-                                deleted=row.deleted, observed_at=row.created_at,
-                                evidence=[item.model_dump(mode="json") for item in refs]))
-    return ChangePage(items=items, next_cursor=_cursor(rows[limit - 1].id, fingerprint) if len(rows) > limit else None)
+        items.append(
+            ChangeRead(
+                id=row.id,
+                kind=row.kind,
+                canonical_id=row.canonical_id,
+                revision=row.revision,
+                changed_fields=row.changed_fields,
+                origin=row.origin,
+                deleted=row.deleted,
+                observed_at=row.created_at,
+                evidence=[item.model_dump(mode="json") for item in refs],
+            )
+        )
+    return ChangePage(
+        items=items,
+        next_cursor=_cursor(rows[limit - 1].id, fingerprint) if len(rows) > limit else None,
+    )
+
 
 __all__ = [
     "ChangePage",

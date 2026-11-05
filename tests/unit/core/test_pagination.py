@@ -123,7 +123,9 @@ class TestPaginationCursor:
         uid = str(uuid4())
 
         for invalid_items in ([12345, uid], [now, 67890], [None, None]):
-            encoded = base64.urlsafe_b64encode(json.dumps(invalid_items).encode()).decode().rstrip("=")
+            encoded = (
+                base64.urlsafe_b64encode(json.dumps(invalid_items).encode()).decode().rstrip("=")
+            )
             with pytest.raises(ValidationFailedError) as exc_info:
                 decode_cursor(encoded)
             assert exc_info.value.status_code == 422

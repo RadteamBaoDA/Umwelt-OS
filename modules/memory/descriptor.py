@@ -24,9 +24,7 @@ class MemoryDescriptor(ModuleDescriptor):
     tools: tuple[str, ...] = ()
     navigation: tuple[dict[str, str], ...] = ({"label": "Memory", "href": "/knowledge/memory"},)
     settings_schema: dict[str, object] | None = None
-    routers: tuple[RouterSpec, ...] = (
-        RouterSpec("modules.memory.routes", 450),
-    )
+    routers: tuple[RouterSpec, ...] = (RouterSpec("modules.memory.routes", 450),)
     erasure_module: str | None = "modules.memory.erasure"
     erasure_order: int = 130
 

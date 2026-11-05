@@ -1,4 +1,5 @@
 """System prompt overrides: resolution and fixed contracts that must survive customization."""
+
 from uuid import uuid4
 
 from modules.knowledge.entities.extraction import extraction_messages as entity_messages

@@ -24,7 +24,9 @@ from modules.sources.public import ConnectorSource
 _MAX_PAGE_BYTES = 10 * 1024 * 1024
 
 
-async def _fetch_models(author: str, before_request: Callable[[], Awaitable[None]]) -> list[dict[str, object]]:
+async def _fetch_models(
+    author: str, before_request: Callable[[], Awaitable[None]]
+) -> list[dict[str, object]]:
     """Fetch one fixed public author listing with bounded bytes and no pagination or redirects.
 
     ``before_request`` runs immediately before the send and aborts it by raising.
@@ -39,17 +41,23 @@ async def _fetch_models(author: str, before_request: Callable[[], Awaitable[None
             ) as client:
                 await before_request()
                 async with client.stream(
-                    "GET", url, headers={"Accept": "application/json"},
+                    "GET",
+                    url,
+                    headers={"Accept": "application/json"},
                     extensions={"trace": send_fence_trace(before_request)},
                 ) as response:
                     if response.status_code == 429:
-                        raise ProviderRateLimited(_retry_deadline(response.headers, datetime.now(UTC)))
+                        raise ProviderRateLimited(
+                            _retry_deadline(response.headers, datetime.now(UTC))
+                        )
                     if response.status_code == 403:
                         if (
                             response.headers.get("x-ratelimit-remaining") == "0"
                             or response.headers.get("retry-after") is not None
                         ):
-                            raise ProviderRateLimited(_retry_deadline(response.headers, datetime.now(UTC)))
+                            raise ProviderRateLimited(
+                                _retry_deadline(response.headers, datetime.now(UTC))
+                            )
                         raise ValueError("huggingface_access_unavailable")
                     if response.status_code >= 400 or 300 <= response.status_code < 400:
                         raise ValueError("huggingface_provider_unavailable")
@@ -97,7 +105,10 @@ def _model_times(model: dict[str, Any]) -> tuple[object, object, datetime | None
 
 
 def _model_record(
-    model: dict[str, Any], author: str, truncated: bool, collected_at: datetime,
+    model: dict[str, Any],
+    author: str,
+    truncated: bool,
+    collected_at: datetime,
 ) -> IngestionRecord:
     """Validate one model row against the configured author and map it to a bounded ingestion record.
 
@@ -109,7 +120,11 @@ def _model_record(
     if not isinstance(model_id, str) or not 1 <= len(model_id) <= 512:
         raise ValueError("huggingface_response_invalid")
     pieces = model_id.split("/")
-    if len(pieces) != 2 or pieces[0].casefold() != author.casefold() or pieces[1] in {"", ".", ".."}:
+    if (
+        len(pieces) != 2
+        or pieces[0].casefold() != author.casefold()
+        or pieces[1] in {"", ".", ".."}
+    ):
         raise ValueError("huggingface_scope_mismatch")
     tags_raw = model.get("tags", [])
     if not isinstance(tags_raw, list) or any(not isinstance(tag, str) for tag in tags_raw):
@@ -124,13 +139,17 @@ def _model_record(
     pipeline = pipeline_raw
     sha = sha_raw
     last_modified_raw, created_raw, modified, created = _model_times(model)
-    license_label = next((tag.split(":", 1)[1] for tag in tags if tag.startswith("license:") and len(tag) > 8), None)
+    license_label = next(
+        (tag.split(":", 1)[1] for tag in tags if tag.startswith("license:") and len(tag) > 8), None
+    )
     selected: dict[str, object] = {
         "id": model_id,
         "sha": sha,
         "lastModified": last_modified_raw if isinstance(last_modified_raw, str) else None,
         "createdAt": created_raw if isinstance(created_raw, str) else None,
-        "tags": [tag for tag in tags_raw if isinstance(tag, str)] if isinstance(tags_raw, list) else [],
+        "tags": [tag for tag in tags_raw if isinstance(tag, str)]
+        if isinstance(tags_raw, list)
+        else [],
         "pipeline_tag": pipeline,
         "license": license_label,
     }
@@ -140,12 +159,13 @@ def _model_record(
     content = f"{model_id}\nPipeline: {pipeline or 'unspecified'}\nTags: {', '.join(tags)}"
     source_fields: dict[str, object] = {"author": pieces[0][:1000], "tags": tags}
     source_fields_truncated = isinstance(tags_raw, list) and (
-        len(tags_raw) > 100
-        or any(isinstance(tag, str) and len(tag) > 255 for tag in tags_raw)
+        len(tags_raw) > 100 or any(isinstance(tag, str) and len(tag) > 255 for tag in tags_raw)
     )
-    source_fields_truncated = source_fields_truncated or (
-        isinstance(created_raw, str) and len(created_raw) > 64
-    ) or (isinstance(last_modified_raw, str) and len(last_modified_raw) > 64)
+    source_fields_truncated = (
+        source_fields_truncated
+        or (isinstance(created_raw, str) and len(created_raw) > 64)
+        or (isinstance(last_modified_raw, str) and len(last_modified_raw) > 64)
+    )
     if pipeline is not None:
         source_fields["pipeline_tag"] = pipeline[:128]
         source_fields_truncated = source_fields_truncated or len(pipeline) > 128
@@ -188,14 +208,22 @@ def _model_record(
 
 
 async def collect_huggingface_models(
-    source: ConnectorSource, *, collected_at: datetime, before_request: Callable[[], Awaitable[None]],
+    source: ConnectorSource,
+    *,
+    collected_at: datetime,
+    before_request: Callable[[], Awaitable[None]],
 ) -> ProviderCollectionPage:
     """Collect at most 100 public model metadata rows for the configured author."""
     if collected_at.tzinfo is None or collected_at.utcoffset() is None:
         raise ValueError("collected_at must be timezone-aware")
     config = ConnectorConfig.model_validate(source.configuration)
     author = config.huggingface_author
-    if source.provider != "huggingface" or source.type != "api" or not author or config.history_mode != "returned_snapshot":
+    if (
+        source.provider != "huggingface"
+        or source.type != "api"
+        or not author
+        or config.history_mode != "returned_snapshot"
+    ):
         raise ValueError("provider_scope_invalid")
     try:
         models = await _fetch_models(author, before_request)

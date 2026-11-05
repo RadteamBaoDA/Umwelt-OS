@@ -31,18 +31,29 @@ from modules.tools.models import BrowserPageEvidence, BrowserReadJob
 
 
 async def _admit(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
-    lock: bool = False, expected: AccessFence | None = None,
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    lock: bool = False,
+    expected: AccessFence | None = None,
 ) -> AccessFence:
     """Owner admission; a member is denied before any session await (canonical ``admit_scope``)."""
     return await admit_scope(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=lock, expected=expected,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        lock=lock,
+        expected=expected,
         allowed_scopes=(WorkspaceContext, InternalJobScope),
     )
 
 
 async def _job_authority(
-    session: AsyncSession, job: BrowserReadJob, *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    job: BrowserReadJob,
+    *,
+    multi_workspace_enabled: bool,
 ) -> tuple[InternalJobScope, AccessFence] | None:
     """Recipe J: lock the job's ORIGINAL access epoch; None means authority revoked.
 
@@ -55,12 +66,19 @@ async def _job_authority(
     if job.membership_revision is None or job.configuration_revision is None:
         return None
     scope = InternalJobScope(
-        workspace_id=job.workspace_id, actor_user_id=job.owner_id, membership_revision=job.membership_revision,
+        workspace_id=job.workspace_id,
+        actor_user_id=job.owner_id,
+        membership_revision=job.membership_revision,
     )
-    original = AccessFence(job.workspace_id, job.owner_id, job.membership_revision, job.configuration_revision)
+    original = AccessFence(
+        job.workspace_id, job.owner_id, job.membership_revision, job.configuration_revision
+    )
     try:
         fence = await workspaces.lock_access_fence(
-            session, scope=scope, expected=original, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            scope=scope,
+            expected=original,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
     except (HTTPException, DomainError) as exc:
         if error_status(exc) in {401, 403, 404, 409}:
@@ -78,7 +96,9 @@ def browser_capability_verified() -> bool:
     return False
 
 
-async def _erase_evidence_in_uow(session: AsyncSession, job_ids: list[UUID] | tuple[UUID, ...]) -> int:
+async def _erase_evidence_in_uow(
+    session: AsyncSession, job_ids: list[UUID] | tuple[UUID, ...]
+) -> int:
     """Delete private page rows (bytes, text and URLs) for the given jobs; caller commits."""
     from sqlalchemy import delete
 
@@ -90,13 +110,18 @@ async def _erase_evidence_in_uow(session: AsyncSession, job_ids: list[UUID] | tu
 
 async def _fail_job(
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
-    job_id: UUID, code: str,
+    job_id: UUID,
+    code: str,
 ) -> "BrowserReadResult":
     """Write a terminal failed status for a rejected service result; terminal rows are untouched."""
     async with session_factory() as session:
-        row = await session.scalar(select(BrowserReadJob).where(
-            BrowserReadJob.id == job_id,
-        ).with_for_update())
+        row = await session.scalar(
+            select(BrowserReadJob)
+            .where(
+                BrowserReadJob.id == job_id,
+            )
+            .with_for_update()
+        )
         if row is None:
             raise LookupError("Browser job not found")
         if row.status in {"queued", "running"}:
@@ -143,8 +168,14 @@ class BrowserReadJobRead(BaseModel):
     tool_slot: int
     source_id: UUID
     status: Literal[
-        "queued", "running", "succeeded", "cancel_requested", "cancelled",
-        "failed", "uncertain", "expired",
+        "queued",
+        "running",
+        "succeeded",
+        "cancel_requested",
+        "cancelled",
+        "failed",
+        "uncertain",
+        "expired",
     ]
     actual_pages: int
     actual_bytes: int
@@ -176,10 +207,17 @@ class BrowserReadResult(BaseModel):
 def _read(row: BrowserReadJob) -> BrowserReadJobRead:
     """Map one private durable job to its credential-free public view."""
     return BrowserReadJobRead(
-        id=row.id, operation_id=row.operation_id, run_id=row.run_id,
-        tool_slot=row.tool_slot, source_id=row.source_id, status=row.status,
-        actual_pages=row.actual_pages, actual_bytes=row.actual_bytes,
-        result_hash=row.result_hash, error_code=row.error_code, expires_at=row.expires_at,
+        id=row.id,
+        operation_id=row.operation_id,
+        run_id=row.run_id,
+        tool_slot=row.tool_slot,
+        source_id=row.source_id,
+        status=row.status,
+        actual_pages=row.actual_pages,
+        actual_bytes=row.actual_bytes,
+        result_hash=row.result_hash,
+        error_code=row.error_code,
+        expires_at=row.expires_at,
     )
 
 
@@ -207,15 +245,18 @@ async def submit_browser_read_in_uow(
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     authorization = budget.authorization
     if (
-        authorization.owner_id != _actor(scope) or access_fence.workspace_id != scope.workspace_id
+        authorization.owner_id != _actor(scope)
+        or access_fence.workspace_id != scope.workspace_id
         or grant.workspace_id != scope.workspace_id
-        or not grant.enabled or grant.source_id != args.source_id
+        or not grant.enabled
+        or grant.source_id != args.source_id
         or authorization.run_id != run_id
         or authorization.tool_slot != tool_slot
         or args.source_id not in authorization.source_ids
         or authorization.auth_session_hash != auth_session_hash
         or authorization.arguments_hash == ""
-        or type(budget.max_bytes) is not int or not 1 <= budget.max_bytes <= 5 * 1024 * 1024
+        or type(budget.max_bytes) is not int
+        or not 1 <= budget.max_bytes <= 5 * 1024 * 1024
         or not 1 <= budget.max_active_seconds <= 45
         or args.max_pages > authorization.remaining_pages
         or budget.max_bytes > authorization.remaining_bytes
@@ -224,12 +265,16 @@ async def submit_browser_read_in_uow(
         or budget.expires_at.tzinfo is None
     ):
         raise PermissionError("Browser job authorization is invalid")
-    existing = await session.scalar(select(BrowserReadJob).where(
-        BrowserReadJob.workspace_id == scope.workspace_id,
-        BrowserReadJob.owner_id == _actor(scope),
-        BrowserReadJob.run_id == run_id,
-        BrowserReadJob.tool_slot == tool_slot,
-    ).with_for_update())
+    existing = await session.scalar(
+        select(BrowserReadJob)
+        .where(
+            BrowserReadJob.workspace_id == scope.workspace_id,
+            BrowserReadJob.owner_id == _actor(scope),
+            BrowserReadJob.run_id == run_id,
+            BrowserReadJob.tool_slot == tool_slot,
+        )
+        .with_for_update()
+    )
     if existing is not None:
         if (
             existing.arguments_hash != authorization.arguments_hash
@@ -240,20 +285,31 @@ async def submit_browser_read_in_uow(
             raise ValueError("Browser tool slot was already used with different arguments")
         return _read(existing)
     row = BrowserReadJob(
-        id=uuid7(), operation_id=budget.operation_id, workspace_id=scope.workspace_id,
-        owner_id=_actor(scope), membership_revision=access_fence.membership_revision,
-        configuration_revision=access_fence.configuration_revision, run_id=run_id,
-        tool_slot=tool_slot, auth_session_hash=auth_session_hash,
+        id=uuid7(),
+        operation_id=budget.operation_id,
+        workspace_id=scope.workspace_id,
+        owner_id=_actor(scope),
+        membership_revision=access_fence.membership_revision,
+        configuration_revision=access_fence.configuration_revision,
+        run_id=run_id,
+        tool_slot=tool_slot,
+        auth_session_hash=auth_session_hash,
         conversation_id=authorization.conversation_id,
         profile_id=authorization.profile_id,
         authorized_source_ids=sorted(str(item) for item in authorization.source_ids),
         profile_revision_hash=authorization.profile_revision_hash,
-        claim_generation=authorization.claim_generation, source_id=grant.source_id,
-        source_generation=grant.source_generation, connector_revision=grant.connector_revision,
-        grant_revision=grant.grant_revision, scope_hash=grant.scope_hash,
-        arguments_hash=authorization.arguments_hash, max_pages=args.max_pages,
-        max_bytes=budget.max_bytes, max_active_seconds=budget.max_active_seconds,
-        service_token_hash=budget.service_token_hash, expires_at=budget.expires_at,
+        claim_generation=authorization.claim_generation,
+        source_id=grant.source_id,
+        source_generation=grant.source_generation,
+        connector_revision=grant.connector_revision,
+        grant_revision=grant.grant_revision,
+        scope_hash=grant.scope_hash,
+        arguments_hash=authorization.arguments_hash,
+        max_pages=args.max_pages,
+        max_bytes=budget.max_bytes,
+        max_active_seconds=budget.max_active_seconds,
+        service_token_hash=budget.service_token_hash,
+        expires_at=budget.expires_at,
         status="queued",
     )
     session.add(row)
@@ -262,16 +318,25 @@ async def submit_browser_read_in_uow(
 
 
 async def cancel_browser_job_in_uow(
-    session: AsyncSession, job_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    job_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> BrowserReadJobRead:
     """Record cancellation intent under the job lock; caller commits before remote cleanup."""
     _require_owner(scope)
     if type(multi_workspace_enabled) is not bool:
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
-    row = await session.scalar(select(BrowserReadJob).where(
-        BrowserReadJob.id == job_id, BrowserReadJob.workspace_id == scope.workspace_id,
-        BrowserReadJob.owner_id == _actor(scope),
-    ).with_for_update())
+    row = await session.scalar(
+        select(BrowserReadJob)
+        .where(
+            BrowserReadJob.id == job_id,
+            BrowserReadJob.workspace_id == scope.workspace_id,
+            BrowserReadJob.owner_id == _actor(scope),
+        )
+        .with_for_update()
+    )
     if row is None:
         raise LookupError("Browser job not found")
     if row.status in {"queued", "running", "uncertain"}:
@@ -324,13 +389,21 @@ class _ValidatedPages:
 def _job_identity(job: BrowserReadJob) -> tuple[Any, ...]:
     """Return the fields that must not change between claim, dispatch and publication."""
     return (
-        job.operation_id, job.source_id, job.run_id, job.tool_slot,
-        job.claim_generation, job.auth_session_hash, job.profile_id,
+        job.operation_id,
+        job.source_id,
+        job.run_id,
+        job.tool_slot,
+        job.claim_generation,
+        job.auth_session_hash,
+        job.profile_id,
     )
 
 
 async def _collect_job_authority(
-    session: AsyncSession, candidate: BrowserReadJob, *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    candidate: BrowserReadJob,
+    *,
+    multi_workspace_enabled: bool,
 ) -> _JobAuthority | None:
     """Lock the Source, then read grant, session and run authority for ``candidate``.
 
@@ -343,34 +416,59 @@ async def _collect_job_authority(
     from modules.connectors import public as connectors
     from modules.sources import public as sources
 
-    authority = await _job_authority(session, candidate, multi_workspace_enabled=multi_workspace_enabled)
+    authority = await _job_authority(
+        session, candidate, multi_workspace_enabled=multi_workspace_enabled
+    )
     if authority is None:
         return None
     job_scope, fence = authority
     source = await sources.lock_source(
-        session, candidate.source_id, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        candidate.source_id,
+        scope=job_scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         expected_access_fence=fence,
     )
     source_view = await sources.get_connector_source(
-        session, candidate.source_id, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        candidate.source_id,
+        scope=job_scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     grant = await connectors.resolve_agent_browser_scope(
-        session, candidate.owner_id, candidate.source_id,
-        scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        candidate.owner_id,
+        candidate.source_id,
+        scope=job_scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     auth = BrowserRunAuthorization(
-        candidate.owner_id, candidate.run_id, candidate.tool_slot, candidate.arguments_hash,
-        candidate.auth_session_hash, candidate.conversation_id, candidate.profile_id,
+        candidate.owner_id,
+        candidate.run_id,
+        candidate.tool_slot,
+        candidate.arguments_hash,
+        candidate.auth_session_hash,
+        candidate.conversation_id,
+        candidate.profile_id,
         candidate.profile_revision_hash,
         frozenset(UUID(item) for item in candidate.authorized_source_ids),
-        candidate.claim_generation, 0, 0, 0, candidate.max_active_seconds,
+        candidate.claim_generation,
+        0,
+        0,
+        0,
+        candidate.max_active_seconds,
     )
     session_valid = await revalidate_account_session(
-        session, candidate.auth_session_hash, candidate.owner_id,
+        session,
+        candidate.auth_session_hash,
+        candidate.owner_id,
         multi_workspace_enabled=multi_workspace_enabled,
     )
     run_valid = await revalidate_browser_run_authority(
-        session, auth, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        auth,
+        scope=job_scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     return _JobAuthority(job_scope, fence, source, source_view, grant, session_valid, run_valid)
 
@@ -379,26 +477,36 @@ def _grant_matches_job(authority: _JobAuthority, row: BrowserReadJob) -> bool:
     """Return whether the live Source, grant and session still equal what the job was admitted under."""
     grant, source = authority.grant, authority.source
     return bool(
-        source is not None and source.status == "active"
+        source is not None
+        and source.status == "active"
         and source.generation == row.source_generation
         and authority.source_view is not None
-        and grant is not None and grant.enabled
+        and grant is not None
+        and grant.enabled
         and grant.scope_hash == row.scope_hash
         and grant.connector_revision == row.connector_revision
         and grant.grant_revision == row.grant_revision
-        and authority.session_valid and authority.run_valid
+        and authority.session_valid
+        and authority.run_valid
     )
 
 
 async def _fail_locked_job(
-    session: AsyncSession, row: BrowserReadJob, code: str, authority: _JobAuthority,
-    *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    row: BrowserReadJob,
+    code: str,
+    authority: _JobAuthority,
+    *,
+    multi_workspace_enabled: bool,
 ) -> BrowserReadResult:
     """Mark the locked job failed with ``code``, commit under its original fence and report it."""
     row.status = "failed"
     row.error_code = code
     await commit_with_replay(
-        session, [], scope=authority.scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        [],
+        scope=authority.scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         access_fence=authority.fence,
     )
     return BrowserReadResult(job=_read(row), pages=())
@@ -406,8 +514,12 @@ async def _fail_locked_job(
 
 async def _prepare_dispatch(
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
-    job_id: UUID, claim_generation: int, settings: Any,
-    *, deadline: float, multi_workspace_enabled: bool,
+    job_id: UUID,
+    claim_generation: int,
+    settings: Any,
+    *,
+    deadline: float,
+    multi_workspace_enabled: bool,
 ) -> _DispatchPlan | BrowserReadResult:
     """Revalidate authority under locks and build the service request, or fail the job.
 
@@ -425,46 +537,80 @@ async def _prepare_dispatch(
             raise PermissionError("Browser job claim is no longer dispatchable")
         identity = _job_identity(candidate)
         authority = await _collect_job_authority(
-            session, candidate, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            candidate,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
         if authority is None:
             await session.rollback()
             return await _fail_job(session_factory, job_id, "authority_revoked")
         # Lock Tools only after Sources and Agents; an owner cancellation may
         # have changed the durable job while authority was being revalidated.
-        row = await session.scalar(select(BrowserReadJob).where(
-            BrowserReadJob.id == job_id,
-        ).with_for_update().execution_options(populate_existing=True))
-        if row is None or identity != _job_identity(row) or row.status != "queued" or row.cancel_requested:
+        row = await session.scalar(
+            select(BrowserReadJob)
+            .where(
+                BrowserReadJob.id == job_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if (
+            row is None
+            or identity != _job_identity(row)
+            or row.status != "queued"
+            or row.cancel_requested
+        ):
             raise PermissionError("Browser job claim is no longer dispatchable")
         grant = authority.grant
         if not _grant_matches_job(authority, row) or grant is None:
             return await _fail_locked_job(
-                session, row, "authority_revoked", authority, multi_workspace_enabled=multi_workspace_enabled,
+                session,
+                row,
+                "authority_revoked",
+                authority,
+                multi_workspace_enabled=multi_workspace_enabled,
             )
         service_secret = settings.browser_shared_token.get_secret_value()
         job_token = derive_browser_job_token(service_secret, row.operation_id, claim_generation)
-        if not hmac.compare_digest(hashlib.sha256(job_token.encode("ascii")).hexdigest(), row.service_token_hash):
+        if not hmac.compare_digest(
+            hashlib.sha256(job_token.encode("ascii")).hexdigest(), row.service_token_hash
+        ):
             return await _fail_locked_job(
-                session, row, "token_mismatch", authority, multi_workspace_enabled=multi_workspace_enabled,
+                session,
+                row,
+                "token_mismatch",
+                authority,
+                multi_workspace_enabled=multi_workspace_enabled,
             )
         target_url = grant.origin + ("" if grant.path_prefix == "/" else grant.path_prefix)
         payload: dict[str, Any] = {
-            "job_id": str(row.id), "operation_id": str(row.operation_id),
+            "job_id": str(row.id),
+            "operation_id": str(row.operation_id),
             "claim_generation": row.claim_generation,
-            "service_instance_id": "", "job_token": job_token,
-            "target_url": target_url, "origin": grant.origin,
-            "path_prefix": grant.path_prefix, "max_pages": row.max_pages,
-            "timeout_seconds": min(row.max_active_seconds, max(1, int(deadline - time.monotonic()))),
+            "service_instance_id": "",
+            "job_token": job_token,
+            "target_url": target_url,
+            "origin": grant.origin,
+            "path_prefix": grant.path_prefix,
+            "max_pages": row.max_pages,
+            "timeout_seconds": min(
+                row.max_active_seconds, max(1, int(deadline - time.monotonic()))
+            ),
         }
         return _DispatchPlan(
-            payload, str(settings.browser_service_url).rstrip("/"), service_secret, job_token,
-            row.operation_id, grant,
+            payload,
+            str(settings.browser_service_url).rstrip("/"),
+            service_secret,
+            job_token,
+            row.operation_id,
+            grant,
         )
 
 
 async def _call_browser_service(
-    plan: _DispatchPlan, *, deadline: float,
+    plan: _DispatchPlan,
+    *,
+    deadline: float,
 ) -> tuple[dict[str, object] | None, int, bool]:
     """POST the read to the isolated service; return ``(response_data, http_status, interrupted)``.
 
@@ -483,7 +629,9 @@ async def _call_browser_service(
     remaining = max(0.1, deadline - time.monotonic())
     try:
         async with httpx.AsyncClient(
-            timeout=min(remaining, 47), trust_env=False, follow_redirects=False,
+            timeout=min(remaining, 47),
+            trust_env=False,
+            follow_redirects=False,
         ) as client:
             instance_response = await client.get(
                 f"{plan.service_url}/agent-reads/instance",
@@ -492,7 +640,11 @@ async def _call_browser_service(
             instance_response.raise_for_status()
             instance_data = instance_response.json()
             service_instance_id = instance_data.get("service_instance_id")
-            if not isinstance(service_instance_id, str) or not service_instance_id or len(service_instance_id) > 128:
+            if (
+                not isinstance(service_instance_id, str)
+                or not service_instance_id
+                or len(service_instance_id) > 128
+            ):
                 raise ValueError("Browser service identity is invalid")
             payload["service_instance_id"] = service_instance_id
             payload["timeout_seconds"] = min(
@@ -500,7 +652,9 @@ async def _call_browser_service(
             )
             async with asyncio.timeout(max(0.1, deadline - time.monotonic())):
                 async with client.stream(
-                    "POST", f"{plan.service_url}/agent-reads", json=payload,
+                    "POST",
+                    f"{plan.service_url}/agent-reads",
+                    json=payload,
                     headers={
                         "Authorization": f"Bearer {shared_token}",
                         "X-Browser-Job-Token": plan.job_token,
@@ -546,7 +700,10 @@ async def _read_service_envelope(response: Any) -> dict[str, object]:
 
 async def _recover_failed_dispatch(
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
-    plan: _DispatchPlan, job_id: UUID, claim_generation: int, http_status: int,
+    plan: _DispatchPlan,
+    job_id: UUID,
+    claim_generation: int,
+    http_status: int,
 ) -> BrowserReadResult:
     """Resolve a failed dispatch: prove cleanup or mark the guard uncertain.
 
@@ -564,12 +721,15 @@ async def _recover_failed_dispatch(
     if not cleaned and isinstance(payload.get("service_instance_id"), str):
         try:
             async with httpx.AsyncClient(
-                timeout=2, trust_env=False, follow_redirects=False,
+                timeout=2,
+                trust_env=False,
+                follow_redirects=False,
             ) as client:
                 cancel_response = await client.post(
                     f"{plan.service_url}/agent-reads/{job_id}/cancel",
                     json={
-                        "job_id": str(job_id), "operation_id": str(operation_id),
+                        "job_id": str(job_id),
+                        "operation_id": str(operation_id),
                         "claim_generation": claim_generation,
                         "service_instance_id": payload["service_instance_id"],
                         "job_token": plan.job_token,
@@ -579,7 +739,10 @@ async def _recover_failed_dispatch(
                         "X-Browser-Job-Token": plan.job_token,
                     },
                 )
-                cleaned = cancel_response.status_code == 200 and cancel_response.json().get("cleaned") is True
+                cleaned = (
+                    cancel_response.status_code == 200
+                    and cancel_response.json().get("cleaned") is True
+                )
         except (httpx.HTTPError, ValueError, TypeError):
             cleaned = False
     async with session_factory() as session:
@@ -587,17 +750,25 @@ async def _recover_failed_dispatch(
         if guard is None or guard.state == "cleared":
             cleaned = True
     async with session_factory() as session:
-        row = await session.scalar(select(BrowserReadJob).where(
-            BrowserReadJob.id == job_id,
-        ).with_for_update())
+        row = await session.scalar(
+            select(BrowserReadJob)
+            .where(
+                BrowserReadJob.id == job_id,
+            )
+            .with_for_update()
+        )
         if row is None:
             raise LookupError("Browser job not found")
         if cleaned:
             row.status = "failed"
-            row.error_code = "service_busy" if http_status == 429 else (
-                "capability_unverified"
-                if http_status == 403 and row.service_instance_id is None
-                else "browser_denied"
+            row.error_code = (
+                "service_busy"
+                if http_status == 429
+                else (
+                    "capability_unverified"
+                    if http_status == 403 and row.service_instance_id is None
+                    else "browser_denied"
+                )
             )
         else:
             row.status = "uncertain"
@@ -612,7 +783,10 @@ async def _recover_failed_dispatch(
 
 
 def _validate_service_pages(
-    response_data: dict[str, object], plan: _DispatchPlan, job_id: UUID, claim_generation: int,
+    response_data: dict[str, object],
+    plan: _DispatchPlan,
+    job_id: UUID,
+    claim_generation: int,
 ) -> _ValidatedPages:
     """Verify the service result's identity, bounds, target scope and digests, building page rows.
 
@@ -631,15 +805,23 @@ def _validate_service_pages(
         or response_data.get("operation_id") != str(plan.operation_id)
         or response_data.get("claim_generation") != claim_generation
         or response_data.get("service_instance_id") != payload["service_instance_id"]
-        or not isinstance(pages_wire, list) or not 1 <= len(pages_wire) <= int(payload["max_pages"])
+        or not isinstance(pages_wire, list)
+        or not 1 <= len(pages_wire) <= int(payload["max_pages"])
     ):
         raise ValueError("Browser service result identity or bounds are invalid")
     if not all(isinstance(page, dict) for page in pages_wire):
         raise ValueError("Browser page evidence is invalid")
-    service_result_hash = hashlib.sha256(json.dumps(
-        [{key: value for key, value in page.items() if key != "raw_content"} for page in pages_wire],
-        sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-    ).encode("utf-8")).hexdigest()
+    service_result_hash = hashlib.sha256(
+        json.dumps(
+            [
+                {key: value for key, value in page.items() if key != "raw_content"}
+                for page in pages_wire
+            ],
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
     persisted: list[BrowserPageRead] = []
     raw_total = 0
     persisted_rows: list[BrowserPageEvidence] = []
@@ -647,12 +829,15 @@ def _validate_service_pages(
         if not isinstance(item, dict):
             raise ValueError("Browser page evidence is invalid")
         raw_value, text_value = item.get("raw_content"), item.get("extracted_text")
-        if (
-            not agent_browser_target_in_scope(plan.grant, str(item.get("requested_url", "")))
-            or not agent_browser_target_in_scope(plan.grant, str(item.get("final_url", "")))
-        ):
+        if not agent_browser_target_in_scope(
+            plan.grant, str(item.get("requested_url", ""))
+        ) or not agent_browser_target_in_scope(plan.grant, str(item.get("final_url", ""))):
             raise PermissionError("Browser page target is outside the source grant")
-        if not isinstance(raw_value, str) or not isinstance(text_value, str) or len(text_value.encode("utf-8")) > 20_000:
+        if (
+            not isinstance(raw_value, str)
+            or not isinstance(text_value, str)
+            or len(text_value.encode("utf-8")) > 20_000
+        ):
             raise ValueError("Browser page evidence exceeds its bound")
         raw = base64.b64decode(raw_value, validate=True)
         raw_total += len(raw)
@@ -665,28 +850,45 @@ def _validate_service_pages(
         if item.get("content_digest") != digest:
             raise ValueError("Browser page digest does not match its raw bytes")
         page = BrowserPageEvidence(
-            id=uuid7(), job_id=job_id, page_number=index,
+            id=uuid7(),
+            job_id=job_id,
+            page_number=index,
             requested_url=str(item.get("requested_url", "")),
-            final_url=str(item.get("final_url", "")), observed_at=observed,
-            content_digest=digest, raw_content=raw, extracted_text=text_value,
+            final_url=str(item.get("final_url", "")),
+            observed_at=observed,
+            content_digest=digest,
+            raw_content=raw,
+            extracted_text=text_value,
         )
         persisted_rows.append(page)
-        persisted.append(BrowserPageRead(
-            id=page.id, requested_url=page.requested_url, final_url=page.final_url,
-            observed_at=page.observed_at, content_digest=page.content_digest,
-            extracted_text=page.extracted_text,
-        ))
-    result_hash = hashlib.sha256(json.dumps(
-        [{"id": str(page.id), "digest": page.content_digest} for page in persisted],
-        sort_keys=True, separators=(",", ":"),
-    ).encode("ascii")).hexdigest()
+        persisted.append(
+            BrowserPageRead(
+                id=page.id,
+                requested_url=page.requested_url,
+                final_url=page.final_url,
+                observed_at=page.observed_at,
+                content_digest=page.content_digest,
+                extracted_text=page.extracted_text,
+            )
+        )
+    result_hash = hashlib.sha256(
+        json.dumps(
+            [{"id": str(page.id), "digest": page.content_digest} for page in persisted],
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("ascii")
+    ).hexdigest()
     return _ValidatedPages(persisted, persisted_rows, raw_total, result_hash, service_result_hash)
 
 
 async def _publish_browser_pages(
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
-    job_id: UUID, claim_generation: int, response_data: dict[str, object], pages: _ValidatedPages,
-    *, multi_workspace_enabled: bool,
+    job_id: UUID,
+    claim_generation: int,
+    response_data: dict[str, object],
+    pages: _ValidatedPages,
+    *,
+    multi_workspace_enabled: bool,
 ) -> BrowserReadResult:
     """Publish validated evidence only after a second full authority and guard check under locks.
 
@@ -702,23 +904,33 @@ async def _publish_browser_pages(
             raise PermissionError("Browser result claim is no longer current")
         identity = _job_identity(candidate)
         authority = await _collect_job_authority(
-            session, candidate, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            candidate,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
         if authority is None:
             await session.rollback()
             return await _fail_job(session_factory, job_id, "authority_revoked")
         # Source and Agent locks fence against revoke/cancel before the job row
         # and its private page evidence are published.
-        row = await session.scalar(select(BrowserReadJob).where(
-            BrowserReadJob.id == job_id,
-        ).with_for_update().execution_options(populate_existing=True))
+        row = await session.scalar(
+            select(BrowserReadJob)
+            .where(
+                BrowserReadJob.id == job_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if row is None or identity != _job_identity(row):
             raise PermissionError("Browser result identity changed before publication")
         if row.cancel_requested or row.status != "running":
             if row.status in {"queued", "running", "cancel_requested", "uncertain"}:
                 row.status = "cancelled"
             await commit_with_replay(
-                session, [], scope=authority.scope, multi_workspace_enabled=multi_workspace_enabled,
+                session,
+                [],
+                scope=authority.scope,
+                multi_workspace_enabled=multi_workspace_enabled,
                 access_fence=authority.fence,
             )
             raise PermissionError("Browser result was cancelled before publication")
@@ -726,7 +938,8 @@ async def _publish_browser_pages(
         if (
             not _grant_matches_job(authority, row)
             or response_data.get("service_instance_id") != row.service_instance_id
-            or guard is None or guard.state != "cleared"
+            or guard is None
+            or guard.state != "cleared"
             or guard.service_instance_id != row.service_instance_id
             or guard.remote_job_id != row.id
             or not hmac.compare_digest(guard.nonce_hash, row.service_token_hash)
@@ -735,7 +948,11 @@ async def _publish_browser_pages(
             or row.result_hash != pages.service_result_hash
         ):
             return await _fail_locked_job(
-                session, row, "authority_revoked", authority, multi_workspace_enabled=multi_workspace_enabled,
+                session,
+                row,
+                "authority_revoked",
+                authority,
+                multi_workspace_enabled=multi_workspace_enabled,
             )
         session.add_all(pages.rows)
         row.actual_pages = len(pages.reads)
@@ -746,7 +963,10 @@ async def _publish_browser_pages(
         row.service_instance_id = str(response_data["service_instance_id"])
         await session.flush()
         await commit_with_replay(
-            session, [], scope=authority.scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            [],
+            scope=authority.scope,
+            multi_workspace_enabled=multi_workspace_enabled,
             access_fence=authority.fence,
         )
         return BrowserReadResult(job=_read(row), pages=tuple(pages.reads))
@@ -773,8 +993,12 @@ async def execute_browser_read(
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     settings = Settings()
     plan = await _prepare_dispatch(
-        session_factory, job_id, claim_generation, settings,
-        deadline=deadline, multi_workspace_enabled=multi_workspace_enabled,
+        session_factory,
+        job_id,
+        claim_generation,
+        settings,
+        deadline=deadline,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if isinstance(plan, BrowserReadResult):
         return plan
@@ -793,7 +1017,11 @@ async def execute_browser_read(
     except (ValueError, TypeError, KeyError):
         return await _fail_job(session_factory, job_id, "invalid_result")
     return await _publish_browser_pages(
-        session_factory, job_id, claim_generation, response_data, pages,
+        session_factory,
+        job_id,
+        claim_generation,
+        response_data,
+        pages,
         multi_workspace_enabled=multi_workspace_enabled,
     )
 
@@ -819,56 +1047,100 @@ async def read_browser_result(
     if type(multi_workspace_enabled) is not bool:
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     owner_id = _actor(scope)
-    row = await session.scalar(select(BrowserReadJob).where(
-        BrowserReadJob.id == job_id, BrowserReadJob.workspace_id == scope.workspace_id,
-        BrowserReadJob.owner_id == owner_id,
-    ))
-    if row is None or row.status != "succeeded" or row.expires_at <= datetime.now(row.expires_at.tzinfo):
+    row = await session.scalar(
+        select(BrowserReadJob).where(
+            BrowserReadJob.id == job_id,
+            BrowserReadJob.workspace_id == scope.workspace_id,
+            BrowserReadJob.owner_id == owner_id,
+        )
+    )
+    if (
+        row is None
+        or row.status != "succeeded"
+        or row.expires_at <= datetime.now(row.expires_at.tzinfo)
+    ):
         return None
     authorization = BrowserRunAuthorization(
-        owner_id, row.run_id, row.tool_slot, row.arguments_hash, row.auth_session_hash,
-        row.conversation_id, row.profile_id, row.profile_revision_hash,
+        owner_id,
+        row.run_id,
+        row.tool_slot,
+        row.arguments_hash,
+        row.auth_session_hash,
+        row.conversation_id,
+        row.profile_id,
+        row.profile_revision_hash,
         frozenset(UUID(item) for item in row.authorized_source_ids),
-        row.claim_generation, 0, 0, 0, 0,
+        row.claim_generation,
+        0,
+        0,
+        0,
+        0,
     )
     if row.auth_session_hash != auth_session_hash:
         return None
     async with session_factory() as fresh:
-        if (
-            not await revalidate_account_session(
-                fresh, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled,
-            )
-            or not await revalidate_browser_run_authority(
-                fresh, authorization, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            )
+        if not await revalidate_account_session(
+            fresh,
+            auth_session_hash,
+            owner_id,
+            multi_workspace_enabled=multi_workspace_enabled,
+        ) or not await revalidate_browser_run_authority(
+            fresh,
+            authorization,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         ):
             return None
         grant = await connectors.resolve_agent_browser_scope(
-            fresh, owner_id, row.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            fresh,
+            owner_id,
+            row.source_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
     if (
-        grant is None or not grant.enabled or grant.scope_hash != row.scope_hash
+        grant is None
+        or not grant.enabled
+        or grant.scope_hash != row.scope_hash
         or grant.source_generation != row.source_generation
         or grant.connector_revision != row.connector_revision
         or grant.grant_revision != row.grant_revision
     ):
         return None
-    pages = list((await session.scalars(select(BrowserPageEvidence).where(
-        BrowserPageEvidence.job_id == row.id,
-    ).order_by(BrowserPageEvidence.page_number))).all())
+    pages = list(
+        (
+            await session.scalars(
+                select(BrowserPageEvidence)
+                .where(
+                    BrowserPageEvidence.job_id == row.id,
+                )
+                .order_by(BrowserPageEvidence.page_number)
+            )
+        ).all()
+    )
     if (
-        len(pages) != row.actual_pages or len(pages) > 3
-        or any(not page.raw_content or hashlib.sha256(page.raw_content).hexdigest() != page.content_digest
-               for page in pages)
+        len(pages) != row.actual_pages
+        or len(pages) > 3
+        or any(
+            not page.raw_content
+            or hashlib.sha256(page.raw_content).hexdigest() != page.content_digest
+            for page in pages
+        )
     ):
         return None
     result = BrowserReadResult(
         job=_read(row),
-        pages=tuple(BrowserPageRead(
-            id=page.id, requested_url=page.requested_url, final_url=page.final_url,
-            observed_at=page.observed_at, content_digest=page.content_digest,
-            extracted_text=page.extracted_text,
-        ) for page in pages),
+        pages=tuple(
+            BrowserPageRead(
+                id=page.id,
+                requested_url=page.requested_url,
+                final_url=page.final_url,
+                observed_at=page.observed_at,
+                content_digest=page.content_digest,
+                extracted_text=page.extracted_text,
+            )
+            for page in pages
+        ),
     )
     if len(result.model_dump_json().encode("utf-8")) > 64_000:
         return None

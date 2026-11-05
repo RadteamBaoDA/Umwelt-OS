@@ -38,9 +38,7 @@ class ExportDescriptor(ModuleDescriptor):
     tools: tuple[str, ...] = ()
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
-    routers: tuple[RouterSpec, ...] = (
-        RouterSpec("modules.export.routes", 40),
-    )
+    routers: tuple[RouterSpec, ...] = (RouterSpec("modules.export.routes", 40),)
 
 
 descriptor = ExportDescriptor()

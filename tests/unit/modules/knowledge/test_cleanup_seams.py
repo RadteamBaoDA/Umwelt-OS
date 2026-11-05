@@ -86,13 +86,17 @@ def _flat(values: list[object]) -> list[object]:
 
 def _assert_ordered_locks(rec: Rec) -> None:
     import re
+
     assert rec.stmts
     for text in rec.texts():
-        assert "FOR UPDATE" in text and re.search(r"ORDER BY \w+\.(id|mapping_id).*FOR UPDATE", text, re.DOTALL), text
+        assert "FOR UPDATE" in text and re.search(
+            r"ORDER BY \w+\.(id|mapping_id).*FOR UPDATE", text, re.DOTALL
+        ), text
 
 
 def _tables(rec: Rec) -> list[str]:
     import re
+
     return [m.group(1) for text in rec.texts() if (m := re.search(r"FROM (\w+)", text))]
 
 
@@ -101,31 +105,42 @@ _REAL_ADMIT = {m: m._admit for m in (entities, relationships, timeline, temporal
 
 @pytest.fixture(autouse=True)
 def _admit():
-    with patch_entity_attr("_admit", AsyncMock(return_value=FENCE)), \
-         patch.object(relationships, "_admit", AsyncMock(return_value=FENCE)), \
-         patch.object(timeline, "_admit", AsyncMock(return_value=FENCE)), \
-         patch.object(temporal, "_admit", AsyncMock(return_value=FENCE)), \
-         patch.object(observations, "_admit", AsyncMock(return_value=FENCE)), \
-         patch.object(ingestion_outbox, "_admit_ingestion_scope", AsyncMock(return_value=FENCE)):
+    with (
+        patch_entity_attr("_admit", AsyncMock(return_value=FENCE)),
+        patch.object(relationships, "_admit", AsyncMock(return_value=FENCE)),
+        patch.object(timeline, "_admit", AsyncMock(return_value=FENCE)),
+        patch.object(temporal, "_admit", AsyncMock(return_value=FENCE)),
+        patch.object(observations, "_admit", AsyncMock(return_value=FENCE)),
+        patch.object(ingestion_outbox, "_admit_ingestion_scope", AsyncMock(return_value=FENCE)),
+    ):
         yield
 
 
 # ---------- owner closures built from discovery results ----------
 
 ENT_RESULTS = lambda: (  # noqa: E731  # terse test stub
-    [(M1, M2)], [(M1, M1)], [M2], [(M1, M2)],
+    [(M1, M2)],
+    [(M1, M1)],
+    [M2],
+    [(M1, M2)],
 )
 
 
 async def _entity_closure(results=None, document_id=None):
     return await entities.support_cleanup_ids(
-        Rec(*(results or ENT_RESULTS())), source_id=SRC, document_id=document_id, **KW)
+        Rec(*(results or ENT_RESULTS())), source_id=SRC, document_id=document_id, **KW
+    )
 
 
 async def _relationship_closure(results=None, refs=(), document_id=None):
     return await relationships.support_cleanup_ids(
-        Rec(*(results or [[(M1, M2)], [(M1, M2)]])), refs=list(refs), source_id=SRC,
-        document_id=document_id, membership_ids=[M1], **KW)
+        Rec(*(results or [[(M1, M2)], [(M1, M2)]])),
+        refs=list(refs),
+        source_id=SRC,
+        document_id=document_id,
+        membership_ids=[M1],
+        **KW,
+    )
 
 
 TL_RESULTS = lambda: ([(M1, M2)], [M1], [M2])  # noqa: E731  # terse test stub
@@ -133,29 +148,43 @@ TL_RESULTS = lambda: ([(M1, M2)], [M1], [M2])  # noqa: E731  # terse test stub
 
 async def _timeline_closure(results=None, document_id=None):
     return await timeline.support_cleanup_ids(
-        Rec(*(results or TL_RESULTS())), source_id=SRC, document_id=document_id, **KW)
+        Rec(*(results or TL_RESULTS())), source_id=SRC, document_id=document_id, **KW
+    )
 
 
 async def _temporal_closure(results=None, document_id=None):
     return await temporal.tombstone_cleanup_ids(
-        Rec(*(results or ([M1], [(M1, M2, M2)], [M2]))), source_id=SRC, document_id=document_id, **KW)
+        Rec(*(results or ([M1], [(M1, M2, M2)], [M2]))),
+        source_id=SRC,
+        document_id=document_id,
+        **KW,
+    )
 
 
 async def _observation_closure(document_id=None):
     return await observations.observation_cleanup_ids(
-        Rec([M1, M2]), source_id=SRC, document_id=document_id, **KW)
+        Rec([M1, M2]), source_id=SRC, document_id=document_id, **KW
+    )
 
 
 # ---------- discovery ----------
+
 
 @pytest.mark.asyncio
 async def test_discovery_sql_is_workspace_qualified() -> None:
     cases = [
         (lambda r: entities.support_cleanup_ids(r, source_id=SRC, **KW), ENT_RESULTS()),
-        (lambda r: relationships.support_cleanup_ids(
-            r, refs=[(M1, M2)], source_id=SRC, membership_ids=[M1], **KW), ([(M1, M2)], [(M1, M2)], [7], [])),
+        (
+            lambda r: relationships.support_cleanup_ids(
+                r, refs=[(M1, M2)], source_id=SRC, membership_ids=[M1], **KW
+            ),
+            ([(M1, M2)], [(M1, M2)], [7], []),
+        ),
         (lambda r: timeline.support_cleanup_ids(r, source_id=SRC, **KW), TL_RESULTS()),
-        (lambda r: temporal.tombstone_cleanup_ids(r, source_id=SRC, **KW), ([M1], [(M1, M2, M2)], [M2])),
+        (
+            lambda r: temporal.tombstone_cleanup_ids(r, source_id=SRC, **KW),
+            ([M1], [(M1, M2, M2)], [M2]),
+        ),
         (lambda r: observations.observation_cleanup_ids(r, source_id=SRC, **KW), ([M1],)),
     ]
     for build, results in cases:
@@ -179,24 +208,35 @@ async def test_member_denied_before_any_query(module) -> None:
 async def test_overflow_flag_without_raising() -> None:
     big = lambda n: [(uuid4(), uuid4()) for _ in range(n)]  # noqa: E731  # terse test stub
     assert (await entities.support_cleanup_ids(Rec(big(10_001)), source_id=SRC, **KW)).overflow
-    assert (await relationships.support_cleanup_ids(
-        Rec(big(10_001)), refs=[], source_id=SRC, membership_ids=[], **KW)).overflow
+    assert (
+        await relationships.support_cleanup_ids(
+            Rec(big(10_001)), refs=[], source_id=SRC, membership_ids=[], **KW
+        )
+    ).overflow
     assert (await timeline.support_cleanup_ids(Rec(big(10_001)), source_id=SRC, **KW)).overflow
-    assert (await temporal.tombstone_cleanup_ids(
-        Rec([uuid4() for _ in range(10_001)]), source_id=SRC, **KW)).overflow
-    assert (await observations.observation_cleanup_ids(
-        Rec([uuid4() for _ in range(10_001)]), source_id=SRC, **KW)).overflow
+    assert (
+        await temporal.tombstone_cleanup_ids(
+            Rec([uuid4() for _ in range(10_001)]), source_id=SRC, **KW
+        )
+    ).overflow
+    assert (
+        await observations.observation_cleanup_ids(
+            Rec([uuid4() for _ in range(10_001)]), source_id=SRC, **KW
+        )
+    ).overflow
 
 
 @pytest.mark.asyncio
 async def test_relationship_history_scan_ceiling_sets_overflow() -> None:
     pages = [list(range(i * 100 + 1, i * 100 + 101)) for i in range(101)]
     closure = await relationships.support_cleanup_ids(
-        Rec([], *pages), refs=[(M1, M2)], source_id=SRC, membership_ids=[], **KW)
+        Rec([], *pages), refs=[(M1, M2)], source_id=SRC, membership_ids=[], **KW
+    )
     assert closure.overflow and len(closure.history_ids) == 10_000
 
 
 # ---------- prepare ----------
+
 
 @pytest.mark.asyncio
 async def test_entities_prepare_locks_in_order() -> None:
@@ -206,8 +246,11 @@ async def test_entities_prepare_locks_in_order() -> None:
     await entities.prepare_support_cleanup_in_uow(rec, closure, entity_ids=(other,), **HELD)
     _assert_ordered_locks(rec)
     assert _tables(rec) == [
-        "entities", "entity_evidence_memberships", "entity_aliases",
-        "entity_alias_evidence", "entity_field_evidence",
+        "entities",
+        "entity_evidence_memberships",
+        "entity_aliases",
+        "entity_alias_evidence",
+        "entity_field_evidence",
     ]
     assert other in _flat(rec.params())
 
@@ -216,13 +259,23 @@ async def test_entities_prepare_locks_in_order() -> None:
 async def test_relationships_timeline_temporal_observations_prepare_in_order() -> None:
     rec = Rec()
     await relationships.prepare_support_cleanup_in_uow(
-        rec, relationships.RelationshipSupportClosure(SRC, None, (M1,), (M1,), (M2,), (), (3,), False),
-        **HELD)
-    assert _tables(rec) == ["relationships", "relationship_evidence", "relationship_snapshot_history"]
+        rec,
+        relationships.RelationshipSupportClosure(SRC, None, (M1,), (M1,), (M2,), (), (3,), False),
+        **HELD,
+    )
+    assert _tables(rec) == [
+        "relationships",
+        "relationship_evidence",
+        "relationship_snapshot_history",
+    ]
     _assert_ordered_locks(rec)
     rec = Rec()
     await timeline.prepare_support_cleanup_in_uow(rec, await _timeline_closure(), **HELD)
-    assert _tables(rec) == ["timeline_events", "timeline_event_evidence", "timeline_event_participants"]
+    assert _tables(rec) == [
+        "timeline_events",
+        "timeline_event_evidence",
+        "timeline_event_participants",
+    ]
     _assert_ordered_locks(rec)
     rec = Rec()
     await temporal.prepare_tombstone_scope_in_uow(rec, await _temporal_closure(), **HELD)
@@ -237,37 +290,58 @@ async def test_relationships_timeline_temporal_observations_prepare_in_order() -
 @pytest.mark.asyncio
 async def test_prepare_rejects_overflowed_closure() -> None:
     closure = await timeline.support_cleanup_ids(
-        Rec([(uuid4(), uuid4()) for _ in range(10_001)]), source_id=SRC, **KW)
+        Rec([(uuid4(), uuid4()) for _ in range(10_001)]), source_id=SRC, **KW
+    )
     with pytest.raises(ValueError):
         await timeline.prepare_support_cleanup_in_uow(Rec(), closure, **HELD)
 
 
 async def _fenced_calls():
-    ent, tl, tmp, obs = (await _entity_closure(), await _timeline_closure(),
-                         await _temporal_closure(), await _observation_closure())
+    ent, tl, tmp, obs = (
+        await _entity_closure(),
+        await _timeline_closure(),
+        await _temporal_closure(),
+        await _observation_closure(),
+    )
     rel = relationships.RelationshipSupportClosure(SRC, None, (M1,), (M1,), (M2,), (), (3,), False)
     return {
         "obs_prepare": lambda r, kw: observations.prepare_document_cleanup_in_uow(r, obs, **kw),
-        "ent_prepare": lambda r, kw: entities.prepare_support_cleanup_in_uow(r, ent, entity_ids=(), **kw),
+        "ent_prepare": lambda r, kw: entities.prepare_support_cleanup_in_uow(
+            r, ent, entity_ids=(), **kw
+        ),
         "rel_prepare": lambda r, kw: relationships.prepare_support_cleanup_in_uow(r, rel, **kw),
         "tl_prepare": lambda r, kw: timeline.prepare_support_cleanup_in_uow(r, tl, **kw),
         "tmp_prepare": lambda r, kw: temporal.prepare_tombstone_scope_in_uow(r, tmp, **kw),
         "ing_prepare": lambda r, kw: ingestion.prepare_document_materializations_in_uow(
-            r, DOC, source_id=SRC, **kw),
+            r, DOC, source_id=SRC, **kw
+        ),
         "obs_apply": lambda r, kw: observations.purge_source_in_uow(r, SRC, closure=obs, **kw),
         "ent_apply": lambda r, kw: entities.remove_source_support(r, ent, **kw),
         "rel_apply": lambda r, kw: relationships.remove_source_support(
-            r, rel, refs=[], membership_ids=[M1], **kw),
+            r, rel, refs=[], membership_ids=[M1], **kw
+        ),
         "tl_apply": lambda r, kw: timeline.remove_source_support(r, tl, **kw),
         "tmp_apply": lambda r, kw: temporal.tombstone_scope_in_uow(r, tmp, **kw),
     }
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("name", [
-    "obs_prepare", "ent_prepare", "rel_prepare", "tl_prepare", "tmp_prepare", "ing_prepare",
-    "obs_apply", "ent_apply", "rel_apply", "tl_apply", "tmp_apply",
-])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "obs_prepare",
+        "ent_prepare",
+        "rel_prepare",
+        "tl_prepare",
+        "tmp_prepare",
+        "ing_prepare",
+        "obs_apply",
+        "ent_apply",
+        "rel_apply",
+        "tl_apply",
+        "tmp_apply",
+    ],
+)
 @pytest.mark.parametrize("change", ["access", "source_id", "source_workspace"])
 async def test_stale_fence_rejected_before_any_sql(name: str, change: str) -> None:
     call = (await _fenced_calls())[name]
@@ -286,7 +360,8 @@ async def test_stale_fence_rejected_before_any_sql(name: str, change: str) -> No
 @pytest.mark.asyncio
 async def test_entity_alias_overflow_sets_flag() -> None:
     closure = await entities.support_cleanup_ids(
-        Rec([(M1, M2)], [], [], [(uuid4(), uuid4()) for _ in range(10_001)]), source_id=SRC, **KW)
+        Rec([(M1, M2)], [], [], [(uuid4(), uuid4()) for _ in range(10_001)]), source_id=SRC, **KW
+    )
     assert closure.overflow
 
 
@@ -294,7 +369,8 @@ async def test_entity_alias_overflow_sets_flag() -> None:
 async def test_relationship_refs_guard_sets_overflow() -> None:
     refs = [(uuid4(), uuid4()) for _ in range(10_001)]
     closure = await relationships.support_cleanup_ids(
-        Rec([], []), refs=refs, source_id=SRC, membership_ids=[], **KW)
+        Rec([], []), refs=refs, source_id=SRC, membership_ids=[], **KW
+    )
     assert closure.overflow
 
 
@@ -315,11 +391,13 @@ async def test_ingestion_prepare_locks_and_limit() -> None:
     _assert_ordered_locks(rec)
     with pytest.raises(DocumentCleanupPreparationLimitError) as caught:
         await ingestion.prepare_document_materializations_in_uow(
-            Rec([uuid4() for _ in range(10_001)]), DOC, source_id=SRC, **HELD)
+            Rec([uuid4() for _ in range(10_001)]), DOC, source_id=SRC, **HELD
+        )
     assert str(caught.value) == "ingestion"
 
 
 # ---------- held apply ----------
+
 
 def _no_locks(rec: Rec) -> None:
     assert not any("FOR UPDATE" in text for text in rec.texts())
@@ -343,12 +421,17 @@ async def test_relationships_held_apply_no_locks_and_detects_change() -> None:
     results = [[(M1, M2)], [(M1, M2)]]
     closure = await _relationship_closure(results)
     rec = Rec(*results)
-    assert await relationships.remove_source_support(
-        rec, closure, refs=[], membership_ids=[M1], **HELD) == 1
+    assert (
+        await relationships.remove_source_support(
+            rec, closure, refs=[], membership_ids=[M1], **HELD
+        )
+        == 1
+    )
     _no_locks(rec)
     with pytest.raises(RuntimeError, match="cleanup closure changed"):
         await relationships.remove_source_support(
-            Rec([(M2, M2)], []), closure, refs=[], membership_ids=[M1], **HELD)
+            Rec([(M2, M2)], []), closure, refs=[], membership_ids=[M1], **HELD
+        )
 
 
 @pytest.mark.asyncio
@@ -357,12 +440,17 @@ async def test_relationships_remove_requires_history_purged_first() -> None:
     results = [[(M1, M2)], [(M1, M2)], [], []]
     closure = await _relationship_closure(results, refs=refs)
     # purge ran: history rediscovery empty -> apply succeeds
-    assert await relationships.remove_source_support(
-        Rec(*results), closure, refs=refs, membership_ids=[M1], **HELD) == 1
+    assert (
+        await relationships.remove_source_support(
+            Rec(*results), closure, refs=refs, membership_ids=[M1], **HELD
+        )
+        == 1
+    )
     # purge skipped / late history row still matching refs -> refuse
     with pytest.raises(RuntimeError, match="cleanup closure changed"):
         await relationships.remove_source_support(
-            Rec([(M1, M2)], [(M1, M2)], [9], []), closure, refs=refs, membership_ids=[M1], **HELD)
+            Rec([(M1, M2)], [(M1, M2)], [9], []), closure, refs=refs, membership_ids=[M1], **HELD
+        )
 
 
 @pytest.mark.asyncio
@@ -397,7 +485,11 @@ async def test_timeline_held_apply_returns_scoped_collection_change() -> None:
 async def test_temporal_held_apply_tombstones_without_locks() -> None:
     closure = await _temporal_closure()
     mapping = SimpleNamespace(
-        id=M1, desired_revision=1, tombstoned=False, status="applied", canonical_state={"a": 1},
+        id=M1,
+        desired_revision=1,
+        tombstoned=False,
+        status="applied",
+        canonical_state={"a": 1},
         desired_digest="x",
     )
     support = SimpleNamespace(removed=False)

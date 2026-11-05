@@ -38,18 +38,32 @@ def test_propose_none_and_single_and_multi() -> None:
     """none binds nothing, single one source, multi at most three, deterministic order."""
     ids = _ids(5)
     active = [(i, "rss", "rss") for i in reversed(ids)]
-    assert gadgets.propose_slot_sources(next(r.id for r in gadgets.RENDERERS if r.source_mode == "none"), active) == []
+    assert (
+        gadgets.propose_slot_sources(
+            next(r.id for r in gadgets.RENDERERS if r.source_mode == "none"), active
+        )
+        == []
+    )
     assert gadgets.propose_slot_sources("news_feed", active) == ids[:3]
     single = next(r.id for r in gadgets.RENDERERS if r.source_mode == "single")
     assert len(gadgets.propose_slot_sources(single, active)) <= 1
-    assert len(gadgets.propose_slot_sources("finance_chart", [(UUID(int=i + 1), "vn_stock", "api") for i in range(3)])) <= 1
+    assert (
+        len(
+            gadgets.propose_slot_sources(
+                "finance_chart", [(UUID(int=i + 1), "vn_stock", "api") for i in range(3)]
+            )
+        )
+        <= 1
+    )
 
 
 def test_propose_filters_by_shape() -> None:
     """Incompatible sources are never proposed; empty input yields empty."""
     assert gadgets.propose_slot_sources("news_feed", []) == []
     row = next(r for r in gadgets.RENDERERS if r.source_mode != "none" and r.accepted_shapes)
-    for i, (prov, kind) in enumerate([("rss", "rss"), ("yahoo_finance", "market"), (None, "document")]):
+    for i, (prov, kind) in enumerate(
+        [("rss", "rss"), ("yahoo_finance", "market"), (None, "document")]
+    ):
         got = gadgets.propose_slot_sources(row.id, [(UUID(int=i + 1), prov, kind)])
         assert all(gadgets.source_data_shapes(prov, kind) & row.accepted_shapes for _ in got)
 

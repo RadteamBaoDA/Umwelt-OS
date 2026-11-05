@@ -26,9 +26,13 @@ from modules.tasks.schemas import (
     TaskView,
 )
 
-router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"], dependencies=[Depends(module_dependency("tasks"))])
+router = APIRouter(
+    prefix="/api/v1/tasks", tags=["tasks"], dependencies=[Depends(module_dependency("tasks"))]
+)
 Session = Annotated[AsyncSession, Depends(get_session)]
-WorkspaceRead = Annotated[WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)]
+WorkspaceRead = Annotated[
+    WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)
+]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 
@@ -43,9 +47,7 @@ async def _call[T](operation: Awaitable[T]) -> T:
         ) from exc
     except TaskConflict as exc:
         details = (
-            {"current_revision": exc.current_revision}
-            if exc.current_revision is not None
-            else {}
+            {"current_revision": exc.current_revision} if exc.current_revision is not None else {}
         )
         raise HTTPException(
             status_code=409,
@@ -97,38 +99,56 @@ async def list_tasks(
     except ValidationError as exc:
         raise HTTPException(
             status_code=422,
-            detail={"code": "invalid_task_request", "message": "Invalid task filters", "details": {}},
+            detail={
+                "code": "invalid_task_request",
+                "message": "Invalid task filters",
+                "details": {},
+            },
         ) from exc
-    return await _call(public.list_tasks(
-        session, task_filter, scope=scope,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-    ))
+    return await _call(
+        public.list_tasks(
+            session,
+            task_filter,
+            scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        )
+    )
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=TaskRead)
 async def create_task(
-    payload: TaskCreate, session: Session, scope: WorkspaceWrite,
-    request: Request, response: Response,
+    payload: TaskCreate,
+    session: Session,
+    scope: WorkspaceWrite,
+    request: Request,
+    response: Response,
 ) -> TaskRead:
     """Create a new task under the authenticated owner account."""
     _no_store(response)
-    return await _call(public.create_task(
-        session, payload, scope=scope,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-    ))
+    return await _call(
+        public.create_task(
+            session,
+            payload,
+            scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        )
+    )
 
 
 @router.get("/{task_id}", response_model=TaskRead)
 async def get_task(
-    task_id: UUID, session: Session, scope: WorkspaceRead,
-    request: Request, response: Response
+    task_id: UUID, session: Session, scope: WorkspaceRead, request: Request, response: Response
 ) -> TaskRead:
     """Retrieve an existing task by its identifier."""
     _no_store(response)
-    return await _call(public.get_task(
-        session, task_id, scope=scope,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-    ))
+    return await _call(
+        public.get_task(
+            session,
+            task_id,
+            scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        )
+    )
 
 
 @router.patch("/{task_id}", response_model=TaskRead)
@@ -142,21 +162,34 @@ async def update_task(
 ) -> TaskRead:
     """Update fields of an existing task under optimistic revision control."""
     _no_store(response)
-    return await _call(public.update_task(
-        session, task_id, payload, scope=scope,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-    ))
+    return await _call(
+        public.update_task(
+            session,
+            task_id,
+            payload,
+            scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        )
+    )
 
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_task(
-    task_id: UUID, session: Session, scope: WorkspaceWrite,
-    request: Request, response: Response,
+    task_id: UUID,
+    session: Session,
+    scope: WorkspaceWrite,
+    request: Request,
+    response: Response,
     expected_revision: Annotated[int, Query(ge=1, le=9_007_199_254_740_991)],
 ) -> None:
     """Soft-delete a task only when the caller supplies its current revision."""
     _no_store(response)
-    await _call(public.delete_task(
-        session, task_id, expected_revision, scope=scope,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-    ))
+    await _call(
+        public.delete_task(
+            session,
+            task_id,
+            expected_revision,
+            scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        )
+    )

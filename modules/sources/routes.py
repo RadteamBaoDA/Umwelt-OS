@@ -23,11 +23,17 @@ from modules.sources.schemas import (
 )
 
 
-async def _with_timing(session: AsyncSession, scope: WorkspaceContext | AdminWorkspaceReadContext, reads: list[SourceRead]) -> None:
+async def _with_timing(
+    session: AsyncSession,
+    scope: WorkspaceContext | AdminWorkspaceReadContext,
+    reads: list[SourceRead],
+) -> None:
     """Fill next_due_at/retry_at from connector schedule state, scoped to the workspace."""
     from modules.connectors import public as connectors
 
-    timing = await connectors.collection_timing(session, scope, [r.id for r in reads if r.type != "manual"])
+    timing = await connectors.collection_timing(
+        session, scope, [r.id for r in reads if r.type != "manual"]
+    )
     for read in reads:
         read.next_due_at, read.retry_at = timing.get(read.id, (None, None))
 
@@ -52,7 +58,9 @@ router = APIRouter(
     dependencies=[Depends(module_dependency("sources"))],
 )
 Session = Annotated[AsyncSession, Depends(get_session)]
-WorkspaceRead = Annotated[WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)]
+WorkspaceRead = Annotated[
+    WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)
+]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 
@@ -73,7 +81,10 @@ async def list_sources(
     """Return <=100 owned-workspace Sources through the principal-bound pagination seam."""
     _require_source_owner(scope)
     items, next_cursor = await public.list_sources(
-        session, limit, cursor, scope=scope,
+        session,
+        limit,
+        cursor,
+        scope=scope,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
     reads = [_to_read(item) for item in items]
@@ -86,7 +97,10 @@ async def list_sources(
 
 @router.post("", response_model=SourceRead, status_code=201)
 async def create_source(
-    payload: SourceCreate, session: Session, request: Request, scope: WorkspaceWrite,
+    payload: SourceCreate,
+    session: Session,
+    request: Request,
+    scope: WorkspaceWrite,
 ) -> SourceRead:
     """Create in the selected owner workspace after CSRF/module write admission.
 
@@ -99,26 +113,42 @@ async def create_source(
     from modules.connectors import public as connectors
 
     # Local-service providers fetch private addresses; fail clearly at creation, not only at configure/collect time.
-    if payload.provider in connectors.LOCAL_SERVICE_PROVIDERS and not is_instance_operator_id(scope.user_id):
-        raise HTTPException(status_code=403, detail="Local-service connectors are restricted to the instance operator")
+    if payload.provider in connectors.LOCAL_SERVICE_PROVIDERS and not is_instance_operator_id(
+        scope.user_id
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Local-service connectors are restricted to the instance operator",
+        )
     if payload.provider in connectors.BUILTIN_PROVIDERS and await public.list_provider_sources(
-        session, frozenset({payload.provider}), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        frozenset({payload.provider}),
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     ):
         raise HTTPException(status_code=409, detail="builtin_already_added")
     source = await public.create_source(
-        session, payload, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        payload,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     return _to_read(source)
 
 
 @router.get("/{source_id}", response_model=SourceRead)
 async def get_source(
-    source_id: UUID, session: Session, request: Request, scope: WorkspaceRead,
+    source_id: UUID,
+    session: Session,
+    request: Request,
+    scope: WorkspaceRead,
 ) -> SourceRead:
     """Read one owned-workspace Source; absent/foreign UUIDs preserve the same 404."""
     _require_source_owner(scope)
     source = await public.get_source(
-        session, source_id, scope=scope,
+        session,
+        source_id,
+        scope=scope,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
     if source is None:
@@ -130,14 +160,21 @@ async def get_source(
 
 @router.get("/{source_id}/impact", response_model=SourceImpactRead)
 async def get_source_impact(
-    source_id: UUID, session: Session, request: Request, scope: WorkspaceRead,
+    source_id: UUID,
+    session: Session,
+    request: Request,
+    scope: WorkspaceRead,
 ) -> SourceImpactRead:
     """Return owner-only dependent counts; 409 while a data purge is pending."""
     if scope.role == "admin_viewer":
-        raise HTTPException(status_code=403, detail="Source impact includes private activity counts")
+        raise HTTPException(
+            status_code=403, detail="Source impact includes private activity counts"
+        )
     _require_source_owner(scope)
     impact = await public.get_source_impact(
-        session, source_id, scope=scope,
+        session,
+        source_id,
+        scope=scope,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
     if impact is None:
@@ -147,12 +184,18 @@ async def get_source_impact(
 
 @router.patch("/{source_id}", response_model=SourceRead)
 async def update_source(
-    source_id: UUID, payload: SourcePatch, session: Session, request: Request, scope: WorkspaceWrite,
+    source_id: UUID,
+    payload: SourcePatch,
+    session: Session,
+    request: Request,
+    scope: WorkspaceWrite,
 ) -> SourceRead:
     """Patch non-null fields in the selected owner workspace, retaining lifecycle conflicts."""
     _require_source_owner(scope)
     source = await public.get_source(
-        session, source_id, scope=scope,
+        session,
+        source_id,
+        scope=scope,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
     if source is None:
@@ -162,7 +205,10 @@ async def update_source(
     ):
         raise HTTPException(status_code=422, detail="At least one non-null field is required")
     source = await public.update_source(
-        session, source, payload, scope=scope,
+        session,
+        source,
+        payload,
+        scope=scope,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
     if source is None:
@@ -182,7 +228,9 @@ async def delete_source(
     _require_source_owner(scope)
     if with_data:
         operation = await public.start_source_purge(
-            session, source_id, scope=scope,
+            session,
+            source_id,
+            scope=scope,
             multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
         )
         if operation is None:
@@ -204,7 +252,9 @@ async def delete_source(
             ).model_dump(mode="json"),
         )
     source = await public.archive_source(
-        session, source_id, scope=scope,
+        session,
+        source_id,
+        scope=scope,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
     if source is None:

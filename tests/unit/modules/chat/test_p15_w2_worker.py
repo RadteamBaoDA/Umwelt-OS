@@ -37,8 +37,10 @@ from tests.unit.typing_regressions.test_none_handling_regressions import (
 
 NOW_UTC = datetime(2026, 10, 7, tzinfo=UTC)
 SETTINGS = SimpleNamespace(
-    ai_allowed_endpoint_cidrs=(), ai_allowed_endpoint_hosts={"api.tavily.com"},
-    web_search_allowed_cidrs=[], web_search_daily_limit=50,
+    ai_allowed_endpoint_cidrs=(),
+    ai_allowed_endpoint_hosts={"api.tavily.com"},
+    web_search_allowed_cidrs=[],
+    web_search_daily_limit=50,
 )
 R1 = WebSearchResult("Result one", "https://example.com/one", "example.com", "first snippet")
 R2 = WebSearchResult("Result two", "https://example.org/two", "example.org", "second snippet")
@@ -46,15 +48,22 @@ R2 = WebSearchResult("Result two", "https://example.org/two", "example.org", "se
 
 def _web_config(**overrides: Any) -> Any:
     values: dict[str, Any] = {
-        "web_search_provider": "tavily", "web_search_endpoint": "https://api.tavily.com",
-        "web_search_api_key": "k", "web_search_credential_configured": True,
-        "privacy": PrivacySettings(allow_remote_reasoning=True, allow_remote_web_search=True,
-                                   reasoning_destinations=["omniroute"]),
+        "web_search_provider": "tavily",
+        "web_search_endpoint": "https://api.tavily.com",
+        "web_search_api_key": "k",
+        "web_search_credential_configured": True,
+        "privacy": PrivacySettings(
+            allow_remote_reasoning=True,
+            allow_remote_web_search=True,
+            reasoning_destinations=["omniroute"],
+        ),
     }
     values.update(overrides)
     if "privacy" not in overrides and values["web_search_endpoint"]:
         destination = hashlib.sha256(values["web_search_endpoint"].encode()).hexdigest()[:32]
-        values["privacy"] = values["privacy"].model_copy(update={"web_search_destinations": [f"web-search:{destination}"]})
+        values["privacy"] = values["privacy"].model_copy(
+            update={"web_search_destinations": [f"web-search:{destination}"]}
+        )
     return _config(**values)
 
 
@@ -89,8 +98,14 @@ class _Search:
         self.cancelled = AsyncMock(return_value=False)
         patch_worker(monkeypatch, "_lock_live_response", self.lock)
         patch_worker(monkeypatch, "is_run_cancelled", self.cancelled)
-        monkeypatch.setattr(worker.settings_public, "lock_ai_settings_for_share", AsyncMock(side_effect=lock_settings))
-        monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(side_effect=config_read))
+        monkeypatch.setattr(
+            worker.settings_public,
+            "lock_ai_settings_for_share",
+            AsyncMock(side_effect=lock_settings),
+        )
+        monkeypatch.setattr(
+            worker.settings_public, "get_ai_execution_config", AsyncMock(side_effect=config_read)
+        )
         monkeypatch.setattr(worker.sources_public, "get_source_fence", self.fence)
         monkeypatch.setattr(worker.web, "consume_daily_quota", self.quota)
         monkeypatch.setattr(worker.web, "search", self.search)
@@ -102,17 +117,28 @@ class _Search:
 
     async def run(self, message: str = "what is new?", scope: list[Any] | None = None) -> Any:
         return await worker._search_for_run(
-            message, scope or [], uuid4(), uuid4(), {"f": 1}, _factory(self.session),
-            SETTINGS, MagicMock(),  # type: ignore[arg-type]
-            scope=self.scope, access_fence=self.access_fence,  # type: ignore[arg-type]
+            message,
+            scope or [],
+            uuid4(),
+            uuid4(),
+            {"f": 1},
+            _factory(self.session),
+            SETTINGS,
+            MagicMock(),  # type: ignore[arg-type]
+            scope=self.scope,
+            access_fence=self.access_fence,  # type: ignore[arg-type]
         )
 
 
 # ---------------------------------------------------------------- skip / outcome mapping
 
 
-@pytest.mark.parametrize(("message", "reason"), [("   ", "empty_query"), ("x" * 401, "query_too_long")])
-async def test_query_skips_open_no_fence(monkeypatch: pytest.MonkeyPatch, message: str, reason: str) -> None:
+@pytest.mark.parametrize(
+    ("message", "reason"), [("   ", "empty_query"), ("x" * 401, "query_too_long")]
+)
+async def test_query_skips_open_no_fence(
+    monkeypatch: pytest.MonkeyPatch, message: str, reason: str
+) -> None:
     s = _Search(monkeypatch)
     run = await s.run(message)
     assert run.outcome == {"status": "skipped", "reason": reason, "result_count": 0}
@@ -144,7 +170,9 @@ async def test_daily_limit_skips(monkeypatch: pytest.MonkeyPatch) -> None:
     s.search.assert_not_awaited()
 
 
-@pytest.mark.parametrize("error", [worker.PrivacyFenceChanged("x"), worker.ResponseNoLongerActive("y")])
+@pytest.mark.parametrize(
+    "error", [worker.PrivacyFenceChanged("x"), worker.ResponseNoLongerActive("y")]
+)
 async def test_inactive_run_skips(monkeypatch: pytest.MonkeyPatch, error: Exception) -> None:
     s = _Search(monkeypatch)
     s.lock.side_effect = error
@@ -161,10 +189,17 @@ async def test_cancelled_run_skips(monkeypatch: pytest.MonkeyPatch) -> None:
     s.search.assert_not_awaited()
 
 
-@pytest.mark.parametrize(("code", "status"), [
-    ("timeout", "unavailable"), ("provider_error", "unavailable"), ("network_denied", "unavailable"),
-])
-async def test_provider_failures_are_unavailable(monkeypatch: pytest.MonkeyPatch, code: str, status: str) -> None:
+@pytest.mark.parametrize(
+    ("code", "status"),
+    [
+        ("timeout", "unavailable"),
+        ("provider_error", "unavailable"),
+        ("network_denied", "unavailable"),
+    ],
+)
+async def test_provider_failures_are_unavailable(
+    monkeypatch: pytest.MonkeyPatch, code: str, status: str
+) -> None:
     s = _Search(monkeypatch)
     s.search.side_effect = WebSearchError(code)  # type: ignore[arg-type]
     assert (await s.run()).outcome == {"status": status, "reason": code, "result_count": 0}
@@ -173,9 +208,16 @@ async def test_provider_failures_are_unavailable(monkeypatch: pytest.MonkeyPatch
 
 async def test_transport_policy_denial_is_network_denied(monkeypatch: pytest.MonkeyPatch) -> None:
     s = _Search(monkeypatch)
-    patch_worker(monkeypatch, "approved_web_search_transport",
-                        MagicMock(side_effect=EndpointNetworkPolicyError("denied")))
-    assert (await s.run()).outcome == {"status": "unavailable", "reason": "network_denied", "result_count": 0}
+    patch_worker(
+        monkeypatch,
+        "approved_web_search_transport",
+        MagicMock(side_effect=EndpointNetworkPolicyError("denied")),
+    )
+    assert (await s.run()).outcome == {
+        "status": "unavailable",
+        "reason": "network_denied",
+        "result_count": 0,
+    }
     s.search.assert_not_awaited()
 
 
@@ -191,20 +233,36 @@ async def test_used_and_no_results(monkeypatch: pytest.MonkeyPatch) -> None:
 
 async def test_missing_ai_settings_row_is_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
     s = _Search(monkeypatch)
-    monkeypatch.setattr(worker.settings_public, "lock_ai_settings_for_share", AsyncMock(return_value=False))
-    assert (await s.run()).outcome == {"status": "skipped", "reason": "not_configured", "result_count": 0}
+    monkeypatch.setattr(
+        worker.settings_public, "lock_ai_settings_for_share", AsyncMock(return_value=False)
+    )
+    assert (await s.run()).outcome == {
+        "status": "skipped",
+        "reason": "not_configured",
+        "result_count": 0,
+    }
     s.search.assert_not_awaited()
     s.quota.assert_not_awaited()
 
 
 async def test_host_denied_spends_one_daily_quota(monkeypatch: pytest.MonkeyPatch) -> None:
     s = _Search(monkeypatch)
-    patch_worker(monkeypatch, "approved_web_search_transport", MagicMock(side_effect=EndpointNetworkPolicyError("host")))
-    assert (await s.run()).outcome == {"status": "unavailable", "reason": "network_denied", "result_count": 0}
+    patch_worker(
+        monkeypatch,
+        "approved_web_search_transport",
+        MagicMock(side_effect=EndpointNetworkPolicyError("host")),
+    )
+    assert (await s.run()).outcome == {
+        "status": "unavailable",
+        "reason": "network_denied",
+        "result_count": 0,
+    }
     s.quota.assert_awaited_once()
 
 
-async def test_timeout_is_cancelled_before_rollback_once_body_is_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_timeout_is_cancelled_before_rollback_once_body_is_sent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """P3-1: the deadline is disarmed before the fence rollback, so a slow rollback is not cancelled."""
     s = _Search(monkeypatch)
     patch_worker(monkeypatch, "WEB_SEARCH_FENCE_SECONDS", 0.05)
@@ -225,7 +283,9 @@ async def test_timeout_is_cancelled_before_rollback_once_body_is_sent(monkeypatc
     assert "rollback_done" in s.steps
 
 
-async def test_fence_wait_timeout_is_unavailable_and_released(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fence_wait_timeout_is_unavailable_and_released(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     s = _Search(monkeypatch)
     patch_worker(monkeypatch, "WEB_SEARCH_FENCE_SECONDS", 0.05)
 
@@ -233,7 +293,11 @@ async def test_fence_wait_timeout_is_unavailable_and_released(monkeypatch: pytes
         await asyncio.sleep(1)  # the privacy key is held elsewhere
 
     s.lock.side_effect = slow_lock
-    assert (await s.run()).outcome == {"status": "unavailable", "reason": "timeout", "result_count": 0}
+    assert (await s.run()).outcome == {
+        "status": "unavailable",
+        "reason": "timeout",
+        "result_count": 0,
+    }
     s.search.assert_not_awaited()
     s.session.rollback.assert_awaited_once()
 
@@ -241,13 +305,17 @@ async def test_fence_wait_timeout_is_unavailable_and_released(monkeypatch: pytes
 # ---------------------------------------------------------------- P1-1: decision inside the fence
 
 
-async def test_gate_is_read_after_live_lock_and_settings_share_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_gate_is_read_after_live_lock_and_settings_share_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     s = _Search(monkeypatch)
     await s.run(scope=[uuid4()])
     assert s.steps == ["live_lock", "ai_settings_share", "config", "egress", "release"]
 
 
-async def test_consent_revoked_during_fence_wait_means_no_egress(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_consent_revoked_during_fence_wait_means_no_egress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A revocation committed while the fence waits on the privacy key is seen by the in-fence read."""
     s = _Search(monkeypatch)
     gate = asyncio.Event()
@@ -259,7 +327,9 @@ async def test_consent_revoked_during_fence_wait_means_no_egress(monkeypatch: py
     s.lock.side_effect = blocked_lock
     task = asyncio.create_task(s.run())
     await asyncio.sleep(0)
-    s.config = _web_config(privacy=PrivacySettings(allow_remote_web_search=False))  # save_ai_settings commits
+    s.config = _web_config(
+        privacy=PrivacySettings(allow_remote_web_search=False)
+    )  # save_ai_settings commits
     gate.set()
     run = await task
     assert run.outcome == {"status": "skipped", "reason": "not_configured", "result_count": 0}
@@ -271,7 +341,8 @@ async def test_consent_revoked_during_fence_wait_means_no_egress(monkeypatch: py
 
 @pytest.mark.parametrize("provider", ["tavily", "brave"])
 async def test_fence_released_after_body_written_before_response(
-    monkeypatch: pytest.MonkeyPatch, provider: str,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
 ) -> None:
     """Real socket + real httpcore: the fence is rolled back once the body is handed to the transport,
     and before the provider sends response headers (no DB lock across the response wait)."""
@@ -281,30 +352,44 @@ async def test_fence_released_after_body_written_before_response(
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         head = await reader.readuntil(b"\r\n\r\n")
-        length = next((int(line.split(b":")[1]) for line in head.split(b"\r\n")
-                       if line.lower().startswith(b"content-length")), 0)
+        length = next(
+            (
+                int(line.split(b":")[1])
+                for line in head.split(b"\r\n")
+                if line.lower().startswith(b"content-length")
+            ),
+            0,
+        )
         body = await reader.readexactly(length)
         await asyncio.sleep(0.1)  # provider "thinking": the fence must already be gone
         seen["released_before_response"] = s.session.rollback.await_count
         seen["body"] = body
-        payload = json.dumps({"results": [{"title": "T", "url": "https://e.com/", "content": "c"}]}
-                             if provider == "tavily" else
-                             {"web": {"results": [{"title": "T", "url": "https://e.com/", "description": "c"}]}})
-        writer.write(f"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {len(payload)}\r\n"
-                     f"Connection: close\r\n\r\n{payload}".encode())
+        payload = json.dumps(
+            {"results": [{"title": "T", "url": "https://e.com/", "content": "c"}]}
+            if provider == "tavily"
+            else {"web": {"results": [{"title": "T", "url": "https://e.com/", "description": "c"}]}}
+        )
+        writer.write(
+            f"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {len(payload)}\r\n"
+            f"Connection: close\r\n\r\n{payload}".encode()
+        )
         await writer.drain()
         writer.close()
 
     server = await asyncio.start_server(handle, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
-    s.config = _web_config(web_search_provider=provider, web_search_endpoint=f"http://127.0.0.1:{port}")
+    s.config = _web_config(
+        web_search_provider=provider, web_search_endpoint=f"http://127.0.0.1:{port}"
+    )
 
     def factory(endpoint: str, *_a: Any, **_k: Any) -> ApprovedEndpointTransport:
         transport = approved_transport(endpoint, ["127.0.0.0/8"])
         inner = transport._delegate.handle_async_request
 
         async def spy(request: httpx.Request) -> httpx.Response:
-            seen["released_at_send_start"] = s.session.rollback.await_count  # connect + body still ahead
+            seen["released_at_send_start"] = (
+                s.session.rollback.await_count
+            )  # connect + body still ahead
             return await inner(request)
 
         transport._delegate.handle_async_request = spy  # type: ignore[method-assign]
@@ -325,9 +410,20 @@ async def test_nat64_metadata_answer_is_network_denied(monkeypatch: pytest.Monke
     s = _Search(monkeypatch)
     monkeypatch.setattr(worker.web, "search", real_search)
     delegate = AsyncMock()
-    patch_worker(monkeypatch, "approved_web_search_transport", lambda *_a, **_k: ApprovedEndpointTransport(
-        httpx.URL("https://api.tavily.com"), (), delegate, allow_global=True))
-    answer = (socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("64:ff9b::a9fe:a9fe", 443, 0, 0))
+    patch_worker(
+        monkeypatch,
+        "approved_web_search_transport",
+        lambda *_a, **_k: ApprovedEndpointTransport(
+            httpx.URL("https://api.tavily.com"), (), delegate, allow_global=True
+        ),
+    )
+    answer = (
+        socket.AF_INET6,
+        socket.SOCK_STREAM,
+        socket.IPPROTO_TCP,
+        "",
+        ("64:ff9b::a9fe:a9fe", 443, 0, 0),
+    )
     with patch.object(asyncio.get_running_loop(), "getaddrinfo", AsyncMock(return_value=[answer])):
         run = await s.run()
     assert run.outcome == {"status": "unavailable", "reason": "network_denied", "result_count": 0}
@@ -341,15 +437,37 @@ async def test_nat64_metadata_answer_is_network_denied(monkeypatch: pytest.Monke
 class _WebGen(_Gen):
     """``_Gen`` with an opted-in run, a scripted search and a captured prompt."""
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, tokens: list[str], web_run: Any,
-                 evidence: list[Any] | None = None) -> None:
+    def __init__(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tokens: list[str],
+        web_run: Any,
+        evidence: list[Any] | None = None,
+    ) -> None:
         super().__init__(monkeypatch, tokens)
-        self.session.execute = AsyncMock(return_value=SimpleNamespace(
-            fetchone=lambda: (uuid4(), uuid4(), {"_web_search": {"requested": True}}, False, uuid4(), 1)))
-        self.run_row = SimpleNamespace(status="streaming", retrieval_context={"_web_search": {"requested": True}})
-        patch_worker(monkeypatch, "_lock_live_response", AsyncMock(return_value=(True, self.run_row)))
-        context = AnswerContext(query="q", evidence=evidence if evidence is not None else [_evidence(content="Doc.")],
-                                has_sufficient_evidence=True)
+        self.session.execute = AsyncMock(
+            return_value=SimpleNamespace(
+                fetchone=lambda: (
+                    uuid4(),
+                    uuid4(),
+                    {"_web_search": {"requested": True}},
+                    False,
+                    uuid4(),
+                    1,
+                )
+            )
+        )
+        self.run_row = SimpleNamespace(
+            status="streaming", retrieval_context={"_web_search": {"requested": True}}
+        )
+        patch_worker(
+            monkeypatch, "_lock_live_response", AsyncMock(return_value=(True, self.run_row))
+        )
+        context = AnswerContext(
+            query="q",
+            evidence=evidence if evidence is not None else [_evidence(content="Doc.")],
+            has_sufficient_evidence=True,
+        )
         patch_worker(monkeypatch, "build_context", AsyncMock(return_value=context))
         self.search = AsyncMock(return_value=web_run)
         patch_worker(monkeypatch, "_search_for_run", self.search)
@@ -368,7 +486,9 @@ class _WebGen(_Gen):
         return next(m for m in self.added if isinstance(m, Message))
 
 
-async def test_outcome_persisted_and_event_before_first_delta(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_outcome_persisted_and_event_before_first_delta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     gen = _WebGen(monkeypatch, ["Hi"], worker._web_search_run("timeout"))
     await gen.run()
     outcome = {"status": "unavailable", "reason": "timeout", "result_count": 0}
@@ -383,18 +503,29 @@ async def test_outcome_persisted_and_event_before_first_delta(monkeypatch: pytes
 
 async def test_not_requested_runs_no_search_and_no_event(monkeypatch: pytest.MonkeyPatch) -> None:
     gen = _WebGen(monkeypatch, ["Hi"], worker._web_search_run(None, [R1], "tavily"))
-    gen.session.execute = AsyncMock(return_value=SimpleNamespace(fetchone=lambda: (uuid4(), uuid4(), {}, False, uuid4(), 1)))
+    gen.session.execute = AsyncMock(
+        return_value=SimpleNamespace(fetchone=lambda: (uuid4(), uuid4(), {}, False, uuid4(), 1))
+    )
     await gen.run()
     gen.search.assert_not_awaited()
     assert gen.events("web_search") == []
-    assert "web search" not in gen.prompts[0][0]["content"].lower() and "<web_results>" not in gen.prompts[0][0]["content"]
+    assert (
+        "web search" not in gen.prompts[0][0]["content"].lower()
+        and "<web_results>" not in gen.prompts[0][0]["content"]
+    )
 
 
-async def test_citation_numbering_and_uncited_results_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
-    gen = _WebGen(monkeypatch, ["A [1] B [3] C [1]"], worker._web_search_run(None, [R1, R2], "tavily"))
+async def test_citation_numbering_and_uncited_results_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gen = _WebGen(
+        monkeypatch, ["A [1] B [3] C [1]"], worker._web_search_run(None, [R1, R2], "tavily")
+    )
     await gen.run()
     prompt = gen.prompts[0][0]["content"]
-    assert "[2] Title: Result one | Site: example.com" in prompt and "[3] Title: Result two" in prompt
+    assert (
+        "[2] Title: Result one | Site: example.com" in prompt and "[3] Title: Result two" in prompt
+    )
     assert "https://example.com/one" not in prompt  # host only in the prompt
     assert gen.message.content == "A [1] B [2] C [1]"
     citations = gen.message.citations
@@ -406,7 +537,9 @@ async def test_citation_numbering_and_uncited_results_dropped(monkeypatch: pytes
 
 
 async def test_web_only_year_in_text_is_not_a_bad_citation(monkeypatch: pytest.MonkeyPatch) -> None:
-    gen = _WebGen(monkeypatch, ["In [2023] the web says [3]"], worker._web_search_run(None, [R1, R2], "brave"))
+    gen = _WebGen(
+        monkeypatch, ["In [2023] the web says [3]"], worker._web_search_run(None, [R1, R2], "brave")
+    )
     await gen.run()
     assert gen.message.content == "In [2023] the web says [1]"
     assert [c["url"] for c in gen.message.citations] == [R2.url]
@@ -419,7 +552,9 @@ async def test_no_results_adds_explicit_prompt_line(monkeypatch: pytest.MonkeyPa
 
 
 async def test_web_only_answer_is_kept(monkeypatch: pytest.MonkeyPatch) -> None:
-    gen = _WebGen(monkeypatch, ["Web says so [3] and [2]"], worker._web_search_run(None, [R1, R2], "brave"))
+    gen = _WebGen(
+        monkeypatch, ["Web says so [3] and [2]"], worker._web_search_run(None, [R1, R2], "brave")
+    )
     await gen.run()
     assert gen.message.content == "Web says so [1] and [2]"
     assert [c["url"] for c in gen.message.citations] == [R2.url, R1.url]
@@ -428,11 +563,16 @@ async def test_web_only_answer_is_kept(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.parametrize("text", ["Claim [1] web [2]", "Claim [2][7]"])
 async def test_web_only_rejected_when_doc_marker_invalid_or_out_of_range(
-    monkeypatch: pytest.MonkeyPatch, text: str,
+    monkeypatch: pytest.MonkeyPatch,
+    text: str,
 ) -> None:
     # Evidence with blank content cannot be validated, so marker [1] is a dropped document marker.
-    gen = _WebGen(monkeypatch, [text], worker._web_search_run(None, [R1], "tavily"),
-                  evidence=[_evidence(content="   ")])
+    gen = _WebGen(
+        monkeypatch,
+        [text],
+        worker._web_search_run(None, [R1], "tavily"),
+        evidence=[_evidence(content="   ")],
+    )
     await gen.run()
     assert gen.message.content == INSUFFICIENT_EVIDENCE_MESSAGE
     assert gen.message.citations == []
@@ -464,7 +604,9 @@ def _blocking_search(started: asyncio.Event, record: dict[str, Any]) -> Any:
     return search
 
 
-async def test_retrieval_error_keeps_type_and_cancels_search(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_retrieval_error_keeps_type_and_cancels_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     gen = _WebGen(monkeypatch, ["x"], None)
     started, record = asyncio.Event(), {}
     patch_worker(monkeypatch, "_search_for_run", _blocking_search(started, record))
@@ -480,7 +622,9 @@ async def test_retrieval_error_keeps_type_and_cancels_search(monkeypatch: pytest
     assert record == {"cancelled": True}
 
 
-async def test_shutdown_cancels_and_awaits_search_then_releases(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_shutdown_cancels_and_awaits_search_then_releases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     gen = _WebGen(monkeypatch, ["x"], None)
     started, record = asyncio.Event(), {}
     patch_worker(monkeypatch, "_search_for_run", _blocking_search(started, record))
@@ -498,7 +642,9 @@ async def test_shutdown_cancels_and_awaits_search_then_releases(monkeypatch: pyt
     assert all(t.done() for t in before)  # the search task finished: nothing leaked
 
 
-@pytest.mark.parametrize("url", ["javascript:alert(1)", "https://user:pw@e.com/", "ftp://e.com/", "https://e .com/"])
+@pytest.mark.parametrize(
+    "url", ["javascript:alert(1)", "https://user:pw@e.com/", "ftp://e.com/", "https://e .com/"]
+)
 def test_web_citation_rejects_unsafe_url(url: str) -> None:
     from pydantic import ValidationError
 
@@ -511,7 +657,12 @@ def test_web_citation_rejects_unsafe_url(url: str) -> None:
 
 async def test_web_citations_with_same_url_are_deduped(monkeypatch: pytest.MonkeyPatch) -> None:
     dup = WebSearchResult("Dup", R1.url, R1.host, "other snippet")
-    gen = _WebGen(monkeypatch, ["Web says [1] and [2]"], worker._web_search_run(None, [R1, dup], "brave"), evidence=[])
+    gen = _WebGen(
+        monkeypatch,
+        ["Web says [1] and [2]"],
+        worker._web_search_run(None, [R1, dup], "brave"),
+        evidence=[],
+    )
     await gen.run()
     assert [c["url"] for c in gen.message.citations] == [R1.url]
     assert gen.message.content == "Web says [1] and [1]"
@@ -526,11 +677,16 @@ async def test_search_scopes_every_read_and_quota_key(monkeypatch: pytest.Monkey
     assert s.lock.await_args.kwargs == {"scope": s.scope, "access_fence": s.access_fence}
     assert worker.settings_public.lock_ai_settings_for_share.await_args.kwargs == {"scope": s.scope}
     assert worker.settings_public.get_ai_execution_config.await_args.kwargs == {"scope": s.scope}
-    assert s.fence.await_args.kwargs["scope"] is s.scope and "multi_workspace_enabled" in s.fence.await_args.kwargs
+    assert (
+        s.fence.await_args.kwargs["scope"] is s.scope
+        and "multi_workspace_enabled" in s.fence.await_args.kwargs
+    )
     assert s.quota.await_args.args[1] == f"{s.scope.workspace_id}:{s.scope.actor_user_id}"
 
 
-async def test_stale_access_fence_is_inactive_without_egress(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stale_access_fence_is_inactive_without_egress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     s = _Search(monkeypatch)
     s.lock.side_effect = worker.PrivacyFenceChanged("access changed")
     assert (await s.run()).outcome["reason"] == "run_inactive"
@@ -547,12 +703,18 @@ async def test_missing_source_fence_fails_closed(monkeypatch: pytest.MonkeyPatch
     s.quota.assert_not_awaited()
 
 
-async def test_fallback_uses_one_quota_and_records_actual_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fallback_uses_one_quota_and_records_actual_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fallback_endpoint = "https://router.example/v1"
-    fallback = WebSearchTarget(provider="omniroute", endpoint=fallback_endpoint, api_key="key", credential_configured=True)
+    fallback = WebSearchTarget(
+        provider="omniroute", endpoint=fallback_endpoint, api_key="key", credential_configured=True
+    )
     primary = "web-search:" + hashlib.sha256(b"https://api.tavily.com").hexdigest()[:32]
     secondary = "web-search:" + hashlib.sha256(fallback_endpoint.encode()).hexdigest()[:32]
-    privacy = PrivacySettings(allow_remote_web_search=True, web_search_destinations=[primary, secondary])
+    privacy = PrivacySettings(
+        allow_remote_web_search=True, web_search_destinations=[primary, secondary]
+    )
     s = _Search(monkeypatch, _web_config(privacy=privacy, web_search_fallbacks=(fallback,)))
     s.search.side_effect = [WebSearchError("provider_error"), [R1]]
     run = await s.run()
@@ -562,11 +724,17 @@ async def test_fallback_uses_one_quota_and_records_actual_provider(monkeypatch: 
 
 
 @pytest.mark.parametrize("revoke", [False, True])
-async def test_presend_timeout_refences_before_fallback(monkeypatch: pytest.MonkeyPatch, revoke: bool) -> None:
+async def test_presend_timeout_refences_before_fallback(
+    monkeypatch: pytest.MonkeyPatch, revoke: bool
+) -> None:
     fallback_endpoint = "https://router.example/v1"
-    fallback = WebSearchTarget(provider="omniroute", endpoint=fallback_endpoint, api_key="key", credential_configured=True)
-    destinations = ["web-search:" + hashlib.sha256(endpoint.encode()).hexdigest()[:32]
-                    for endpoint in ("https://api.tavily.com", fallback_endpoint)]
+    fallback = WebSearchTarget(
+        provider="omniroute", endpoint=fallback_endpoint, api_key="key", credential_configured=True
+    )
+    destinations = [
+        "web-search:" + hashlib.sha256(endpoint.encode()).hexdigest()[:32]
+        for endpoint in ("https://api.tavily.com", fallback_endpoint)
+    ]
     privacy = PrivacySettings(allow_remote_web_search=True, web_search_destinations=destinations)
     s = _Search(monkeypatch, _web_config(privacy=privacy, web_search_fallbacks=(fallback,)))
     patch_worker(monkeypatch, "WEB_SEARCH_FENCE_SECONDS", 0.05)

@@ -35,7 +35,9 @@ FLAG = False  # the disposable stack runs the default single-workspace rollout
 class FakeN8n:
     """Records stop calls; ``lose_stop`` makes the response vanish after the stop was sent."""
 
-    service_url = "http://fake"  # mirrors N8nApi.service_url, read when binding the n8n endpoint lineage
+    service_url = (
+        "http://fake"  # mirrors N8nApi.service_url, read when binding the n8n endpoint lineage
+    )
 
     def __init__(self, lose_stop: bool = False) -> None:
         self.lose_stop, self.calls = lose_stop, []
@@ -48,13 +50,19 @@ class FakeN8n:
 
 def _settings() -> Any:
     return SimpleNamespace(
-        multi_workspace_enabled=FLAG, n8n_api_key=SimpleNamespace(get_secret_value=lambda: "k"),
-        n8n_webhook_token=SimpleNamespace(get_secret_value=lambda: "t"),  # resolve_n8n reads env token too
-        n8n_service_url="http://fake")
+        multi_workspace_enabled=FLAG,
+        n8n_api_key=SimpleNamespace(get_secret_value=lambda: "k"),
+        n8n_webhook_token=SimpleNamespace(
+            get_secret_value=lambda: "t"
+        ),  # resolve_n8n reads env token too
+        n8n_service_url="http://fake",
+    )
 
 
 class Env:
-    def __init__(self, factory: async_sessionmaker, source_id: UUID, scope: InternalJobScope) -> None:
+    def __init__(
+        self, factory: async_sessionmaker, source_id: UUID, scope: InternalJobScope
+    ) -> None:
         self.factory, self.source_id, self.scope = factory, source_id, scope
 
     async def fence(self, session: Any) -> Any:
@@ -65,10 +73,14 @@ class Env:
     async def row(self) -> Any:
         async with self.factory() as session:
             row = await session.scalar(
-                select(ConnectorProvisioning).where(ConnectorProvisioning.source_id == self.source_id)
-                .execution_options(populate_existing=True))
+                select(ConnectorProvisioning)
+                .where(ConnectorProvisioning.source_id == self.source_id)
+                .execution_options(populate_existing=True)
+            )
             assert row is not None
-            snapshot = SimpleNamespace(**{c.key: getattr(row, c.key) for c in ConnectorProvisioning.__table__.columns})
+            snapshot = SimpleNamespace(
+                **{c.key: getattr(row, c.key) for c in ConnectorProvisioning.__table__.columns}
+            )
             await session.rollback()
             return snapshot
 
@@ -77,26 +89,45 @@ class Env:
         async with self.factory() as session:
             fence = await self.fence(session)
             await provisioning.begin_backend_transition_in_uow(
-                session, self.source_id, revision, target, scope=self.scope, multi_workspace_enabled=FLAG,
-                access_fence=fence)
+                session,
+                self.source_id,
+                revision,
+                target,
+                scope=self.scope,
+                multi_workspace_enabled=FLAG,
+                access_fence=fence,
+            )
             await session.commit()
 
     async def advance(self, api: Any) -> str:
         async with self.factory() as session:
             fence = await self.fence(session)
             return await provisioning.advance_backend_transition(
-                session, self.source_id, api, scope=self.scope, multi_workspace_enabled=FLAG, access_fence=fence)
+                session,
+                self.source_id,
+                api,
+                scope=self.scope,
+                multi_workspace_enabled=FLAG,
+                access_fence=fence,
+            )
 
     async def admits(self, backend_revision: int | None = None) -> bool:
         """Collection fence plus backend readiness, exactly as the bearer routes and scheduler ask."""
         row = await self.row()
         async with self.factory() as session:
             source = await sources.get_connector_source(
-                session, self.source_id, scope=self.scope, multi_workspace_enabled=FLAG)
+                session, self.source_id, scope=self.scope, multi_workspace_enabled=FLAG
+            )
             assert source is not None
             ok = await provisioning.require_collection_fence(
-                session, source, source.generation, row.desired_revision, backend_revision=backend_revision,
-                scope=self.scope, multi_workspace_enabled=FLAG)
+                session,
+                source,
+                source.generation,
+                row.desired_revision,
+                backend_revision=backend_revision,
+                scope=self.scope,
+                multi_workspace_enabled=FLAG,
+            )
             await session.rollback()
             return ok
 
@@ -113,43 +144,76 @@ class Env:
 
 
 @pytest.fixture
-async def make_env(committed_engine: AsyncEngine, ready_owner_client: AsyncClient) -> AsyncIterator[Any]:
+async def make_env(
+    committed_engine: AsyncEngine, ready_owner_client: AsyncClient
+) -> AsyncIterator[Any]:
     made: list[UUID] = []
     factory = async_sessionmaker(committed_engine, expire_on_commit=False)
 
     async def make(**row: Any) -> Env:
-        created = await ready_owner_client.post("/api/v1/sources", json={"type": "rss", "name": f"c4-{uuid4().hex[:8]}"})
+        created = await ready_owner_client.post(
+            "/api/v1/sources", json={"type": "rss", "name": f"c4-{uuid4().hex[:8]}"}
+        )
         created.raise_for_status()
         source_id = UUID(created.json()["id"])
         made.append(source_id)
         async with committed_engine.connect() as connection:
-            workspace_id, generation = (await connection.execute(
-                text("SELECT workspace_id, generation FROM sources WHERE id = :i"), {"i": source_id})).one()
-            user_id, revision = (await connection.execute(
-                text("SELECT user_id, revision FROM workspace_memberships WHERE workspace_id = :w AND role = 'owner'"),
-                {"w": workspace_id})).one()
+            workspace_id, generation = (
+                await connection.execute(
+                    text("SELECT workspace_id, generation FROM sources WHERE id = :i"),
+                    {"i": source_id},
+                )
+            ).one()
+            user_id, revision = (
+                await connection.execute(
+                    text(
+                        "SELECT user_id, revision FROM workspace_memberships WHERE workspace_id = :w AND role = 'owner'"
+                    ),
+                    {"w": workspace_id},
+                )
+            ).one()
         values: dict[str, Any] = {
-            "source_id": source_id, "source_generation": generation, "desired_revision": 3, "applied_revision": 3,
-            "desired_enabled": True, "state": "active", "execution_backend": "n8n", "backend_revision": 1,
-            "applied_backend_revision": 1, "workflow_id": "wf-old", "workflow_name": "c4-old",
-            "template_revision": 1, "applied_template_revision": 1, "desired_configuration": {}, "n8n_service_url": "http://fake"}
+            "source_id": source_id,
+            "source_generation": generation,
+            "desired_revision": 3,
+            "applied_revision": 3,
+            "desired_enabled": True,
+            "state": "active",
+            "execution_backend": "n8n",
+            "backend_revision": 1,
+            "applied_backend_revision": 1,
+            "workflow_id": "wf-old",
+            "workflow_name": "c4-old",
+            "template_revision": 1,
+            "applied_template_revision": 1,
+            "desired_configuration": {},
+            "n8n_service_url": "http://fake",
+        }
         values.update(row)
         async with factory() as session:
             session.add(ConnectorProvisioning(**values))
             await session.commit()
         scope = InternalJobScope(
-            workspace_id=workspace_id, actor_user_id=user_id, membership_revision=revision,
-            source_id=source_id, source_generation=generation)
+            workspace_id=workspace_id,
+            actor_user_id=user_id,
+            membership_revision=revision,
+            source_id=source_id,
+            source_generation=generation,
+        )
         return Env(factory, source_id, scope)
 
     yield make
     async with committed_engine.begin() as connection:
         for source_id in made:  # stale rows must not leak into the next test's bulk upgrade
-            await connection.execute(text("DELETE FROM connector_provisioning WHERE source_id = :i"), {"i": source_id})
+            await connection.execute(
+                text("DELETE FROM connector_provisioning WHERE source_id = :i"), {"i": source_id}
+            )
 
 
 @pytest.mark.asyncio
-async def test_lost_stop_response_is_reconciliation_and_neither_backend_admits(make_env: Any) -> None:
+async def test_lost_stop_response_is_reconciliation_and_neither_backend_admits(
+    make_env: Any,
+) -> None:
     env = await make_env()
     assert await env.admits()  # healthy n8n source
     await env.begin("native")
@@ -160,10 +224,14 @@ async def test_lost_stop_response_is_reconciliation_and_neither_backend_admits(m
     assert row.execution_backend == "n8n" and row.transition_phase == "reconciliation_required"
     assert not backends.backend_admits(row) and not await env.admits()
     assert await env.late_webhook() == 409  # n8n side stays shut while the stop is unconfirmed
-    async with env.factory() as session:  # native was never activated: no schedule exists or is enabled
+    async with (
+        env.factory() as session
+    ):  # native was never activated: no schedule exists or is enabled
         schedule = await session.get(ConnectorSchedule, env.source_id)
         assert schedule is None or not schedule.enabled
-    assert await env.advance(FakeN8n()) == "reconciliation_required"  # a sweep never guesses past it
+    assert (
+        await env.advance(FakeN8n()) == "reconciliation_required"
+    )  # a sweep never guesses past it
 
 
 @pytest.mark.asyncio
@@ -173,7 +241,9 @@ async def test_late_webhook_from_old_token_only_template_is_rejected(make_env: A
     healthy = await make_env()
     assert await healthy.admits() and await healthy.late_webhook() is None
     await healthy.begin("native")
-    assert not await healthy.admits(backend_revision=1)  # an old workflow still carries its build-time revision
+    assert not await healthy.admits(
+        backend_revision=1
+    )  # an old workflow still carries its build-time revision
     assert await healthy.late_webhook() == 409
     assert await healthy.advance(FakeN8n()) in ("idle", "activating_new")
     row = await healthy.row()
@@ -183,7 +253,8 @@ async def test_late_webhook_from_old_token_only_template_is_rejected(make_env: A
 
 @pytest.mark.asyncio
 async def test_crash_between_draining_and_deactivating_old_is_resumed_by_the_sweep(
-    make_env: Any, monkeypatch: pytest.MonkeyPatch,
+    make_env: Any,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     env = await make_env()
     await env.begin("native")  # the process dies here: durable phase is draining, nothing was sent
@@ -193,26 +264,57 @@ async def test_crash_between_draining_and_deactivating_old_is_resumed_by_the_swe
     advanced = await worker._advance_transitions(env.factory, _settings(), {STATE_KEY: {}})
     assert advanced >= 1 and n8n.calls == [("wf-old", False)]
     row = await env.row()
-    assert row.transition_phase == "idle" and row.execution_backend == "native" and row.old_workflow_id is None
-    assert backends.backend_admits(row) and row.applied_backend_revision == row.backend_revision == 2
+    assert (
+        row.transition_phase == "idle"
+        and row.execution_backend == "native"
+        and row.old_workflow_id is None
+    )
+    assert (
+        backends.backend_admits(row) and row.applied_backend_revision == row.backend_revision == 2
+    )
 
 
 @pytest.mark.asyncio
 async def test_native_activation_without_a_workflow_admits(make_env: Any) -> None:
     env = await make_env(
-        workflow_id=None, workflow_name=None, desired_enabled=False, state="saved_not_active",
-        applied_revision=0, applied_backend_revision=0, applied_template_revision=0, template_revision=0)
+        workflow_id=None,
+        workflow_name=None,
+        desired_enabled=False,
+        state="saved_not_active",
+        applied_revision=0,
+        applied_backend_revision=0,
+        applied_template_revision=0,
+        template_revision=0,
+    )
     assert not await env.admits()
     async with env.factory() as session:
         fence = await env.fence(session)
         source_fence, row, _slots = await provisioning.lock_connector(
-            session, env.source_id, scope=env.scope, multi_workspace_enabled=FLAG, expected_access_fence=fence)
+            session,
+            env.source_id,
+            scope=env.scope,
+            multi_workspace_enabled=FLAG,
+            expected_access_fence=fence,
+        )
         assert source_fence is not None and row is not None
-        assert await activation.activate_native_in_uow(
-            session, env.source_id, source_fence, row, scope=env.scope, multi_workspace_enabled=FLAG) == ""
+        assert (
+            await activation.activate_native_in_uow(
+                session,
+                env.source_id,
+                source_fence,
+                row,
+                scope=env.scope,
+                multi_workspace_enabled=FLAG,
+            )
+            == ""
+        )
         await session.commit()
     row = await env.row()
-    assert row.execution_backend == "native" and row.workflow_id is None and backends.backend_admits(row)
+    assert (
+        row.execution_backend == "native"
+        and row.workflow_id is None
+        and backends.backend_admits(row)
+    )
     assert await env.admits() and await env.late_webhook() == 409
     async with env.factory() as session:
         schedule = await session.get(ConnectorSchedule, env.source_id)
@@ -221,7 +323,8 @@ async def test_native_activation_without_a_workflow_admits(make_env: Any) -> Non
 
 @pytest.mark.asyncio
 async def test_bulk_template_upgrade_stops_the_old_workflow_and_waits_for_the_owner(
-    make_env: Any, monkeypatch: pytest.MonkeyPatch,
+    make_env: Any,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     stale = await make_env(applied_template_revision=0, template_revision=0)
     n8n = FakeN8n()

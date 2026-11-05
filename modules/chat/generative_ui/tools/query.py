@@ -84,7 +84,9 @@ def _extract_citation_ref(obj: Any) -> CitationRef | None:
         source_id = getattr(obj, "source_id", None) or getattr(obj, "sourceId", None)
         document_id = getattr(obj, "document_id", None) or getattr(obj, "documentId", None)
         chunk_id = getattr(obj, "chunk_id", None) or getattr(obj, "chunkId", None)
-        doc_ver_id = getattr(obj, "document_version_id", None) or getattr(obj, "documentVersionId", None)
+        doc_ver_id = getattr(obj, "document_version_id", None) or getattr(
+            obj, "documentVersionId", None
+        )
         title = getattr(obj, "title", None)
     if source_id and document_id and chunk_id:
         return CitationRef(
@@ -122,15 +124,15 @@ def _row_matches(row: Mapping[str, Any], filters: Mapping[str, Any]) -> bool:
     return True
 
 
-def _aggregate_values(group_rows: list[dict[str, Any]], metric: str | None, agg: str) -> float | int:
+def _aggregate_values(
+    group_rows: list[dict[str, Any]], metric: str | None, agg: str
+) -> float | int:
     """Aggregate one group's rows: count (or no metric) counts rows; otherwise ``agg`` over the parseable metric values.
 
     Groups with no parseable value yield 0.0; an unknown ``agg`` behaves like ``sum``.
     """
     nums = [
-        n
-        for r in group_rows
-        if metric is not None and (n := _to_float(r.get(metric))) is not None
+        n for r in group_rows if metric is not None and (n := _to_float(r.get(metric))) is not None
     ]
     if agg == "count" or metric is None:
         return len(group_rows)
@@ -146,7 +148,10 @@ def _aggregate_values(group_rows: list[dict[str, Any]], metric: str | None, agg:
 
 
 def _group_rows(
-    rows: list[dict[str, Any]], group_by: str, metric: str | None, agg: str,
+    rows: list[dict[str, Any]],
+    group_by: str,
+    metric: str | None,
+    agg: str,
 ) -> list[dict[str, Any]]:
     """Group rows by ``group_by`` (missing values group as "Other") and aggregate each group.
 
@@ -207,6 +212,7 @@ def query_records(
         filtered = _group_rows(filtered, group_by, metric, agg)
 
     if sort_by:
+
         def _sort_key(item: dict[str, Any]) -> tuple[int, float | str]:
             """Numbers sort after strings; strings compare as text."""
             val = item.get(sort_by)
@@ -326,11 +332,17 @@ def build_table_payload(
     hidden_keys = {"source_id", "document_id", "document_version_id", "chunk_id"}
     if columns:
         resolved_cols = [
-            col if isinstance(col, TableColumn) else TableColumn(key=col, label=col.replace("_", " ").title())
+            col
+            if isinstance(col, TableColumn)
+            else TableColumn(key=col, label=col.replace("_", " ").title())
             for col in columns
         ]
     else:
-        first_keys = [k for k in (records[0].keys() if records else ["label", "value"]) if k not in hidden_keys]
+        first_keys = [
+            k
+            for k in (records[0].keys() if records else ["label", "value"])
+            if k not in hidden_keys
+        ]
         if not first_keys:
             first_keys = ["label", "value"]
         resolved_cols = [

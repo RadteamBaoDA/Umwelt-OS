@@ -1,4 +1,5 @@
 """W4-jobs-c: the hourly collection-receipt purge is registered on the main worker."""
+
 from __future__ import annotations
 
 from apps.worker.main import CronWorkerSettings

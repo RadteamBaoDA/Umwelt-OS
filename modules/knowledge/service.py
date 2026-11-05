@@ -42,7 +42,9 @@ class KnowledgeService:
     workspace, module availability, provenance and deletion state for its own operation.
     """
 
-    def __init__(self, session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> None:
+    def __init__(
+        self, session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool
+    ) -> None:
         """Bind a session and explicit workspace context without granting admission.
 
         Args:
@@ -56,40 +58,71 @@ class KnowledgeService:
         self.scope = scope
         self.multi_workspace_enabled = multi_workspace_enabled
 
-    async def entities(self, *, limit: int, cursor: str | None, entity_type: str | None, query: str | None) -> EntityPage:
+    async def entities(
+        self, *, limit: int, cursor: str | None, entity_type: str | None, query: str | None
+    ) -> EntityPage:
         """List a filtered entity page; the entity owner admits and scopes the query."""
         return await entities.list_entities(
-            self.session, limit, cursor, entity_type, query,
-            scope=self.scope, multi_workspace_enabled=self.multi_workspace_enabled,
+            self.session,
+            limit,
+            cursor,
+            entity_type,
+            query,
+            scope=self.scope,
+            multi_workspace_enabled=self.multi_workspace_enabled,
         )
 
     async def entity(self, entity_id: UUID) -> EntityRead | None:
         """Resolve one entity through the owner, which validates workspace visibility."""
         return await entities.get_entity(
-            self.session, entity_id, scope=self.scope, multi_workspace_enabled=self.multi_workspace_enabled,
+            self.session,
+            entity_id,
+            scope=self.scope,
+            multi_workspace_enabled=self.multi_workspace_enabled,
         )
 
-    async def entity_evidence(self, entity_id: UUID, *, limit: int, cursor: str | None) -> EntityEvidencePage | None:
+    async def entity_evidence(
+        self, entity_id: UUID, *, limit: int, cursor: str | None
+    ) -> EntityEvidencePage | None:
         """List bounded versioned evidence; the entity owner checks workspace provenance."""
         return await entities.list_entity_evidence(
-            self.session, entity_id, limit, cursor,
-            scope=self.scope, multi_workspace_enabled=self.multi_workspace_enabled,
+            self.session,
+            entity_id,
+            limit,
+            cursor,
+            scope=self.scope,
+            multi_workspace_enabled=self.multi_workspace_enabled,
         )
 
-    async def entity_neighbors(self, entity_id: UUID, *, limit: int, cursor: str | None) -> NeighborPage | None:
+    async def entity_neighbors(
+        self, entity_id: UUID, *, limit: int, cursor: str | None
+    ) -> NeighborPage | None:
         """Read bounded neighboring entities and relationships through their owner contract."""
         return await relationships.get_neighbors(
-            self.session, entity_id, limit, cursor,
-            scope=self.scope, multi_workspace_enabled=self.multi_workspace_enabled,
+            self.session,
+            entity_id,
+            limit,
+            cursor,
+            scope=self.scope,
+            multi_workspace_enabled=self.multi_workspace_enabled,
         )
 
     async def entity_review(self, *, limit: int, cursor: str | None = None) -> EntityReviewPage:
         """List bounded review candidates through the owner-scoped extraction snapshot contract."""
         return await entities.list_review_candidates(
-            self.session, limit, cursor, scope=self.scope, multi_workspace_enabled=self.multi_workspace_enabled,
+            self.session,
+            limit,
+            cursor,
+            scope=self.scope,
+            multi_workspace_enabled=self.multi_workspace_enabled,
         )
 
-    async def assign_review_candidate(self, candidate_id: UUID, payload: EntityReviewAssignmentRequest, *, actor_id: int,
+    async def assign_review_candidate(
+        self,
+        candidate_id: UUID,
+        payload: EntityReviewAssignmentRequest,
+        *,
+        actor_id: int,
     ) -> EntityReviewAssignmentResult:
         """Delegate a review assignment under the bound scope.
 
@@ -97,11 +130,20 @@ class KnowledgeService:
         actor (403), then performs workspace scoping and the write transaction.
         """
         return await entities.assign_review_candidate(
-            self.session, candidate_id, payload, actor_id=actor_id,
-            scope=self.scope, multi_workspace_enabled=self.multi_workspace_enabled,
+            self.session,
+            candidate_id,
+            payload,
+            actor_id=actor_id,
+            scope=self.scope,
+            multi_workspace_enabled=self.multi_workspace_enabled,
         )
 
-    async def resolve_relationship_review(self, candidate_id: UUID, payload: EntityRelationshipReviewRequest, *, actor_id: int,
+    async def resolve_relationship_review(
+        self,
+        candidate_id: UUID,
+        payload: EntityRelationshipReviewRequest,
+        *,
+        actor_id: int,
     ) -> EntityRelationshipReviewResult:
         """Delegate relationship review under the bound scope.
 
@@ -109,51 +151,100 @@ class KnowledgeService:
         actor (403), then performs workspace scoping and the write transaction.
         """
         return await entities.resolve_relationship_review(
-            self.session, candidate_id, payload, actor_id=actor_id,
-            scope=self.scope, multi_workspace_enabled=self.multi_workspace_enabled,
+            self.session,
+            candidate_id,
+            payload,
+            actor_id=actor_id,
+            scope=self.scope,
+            multi_workspace_enabled=self.multi_workspace_enabled,
         )
 
-    async def get_events(self, *, limit: int = 50, cursor: str | None = None, source_id: UUID | None = None) -> EventPage:
+    async def get_events(
+        self, *, limit: int = 50, cursor: str | None = None, source_id: UUID | None = None
+    ) -> EventPage:
         """Delegate scoped canonical event paging; derived graph status does not replace these results."""
         return await timeline.list_events(
-            self.session, limit=limit, cursor=cursor, source_id=source_id,
-            scope=self.scope, multi_workspace_enabled=self.multi_workspace_enabled,
+            self.session,
+            limit=limit,
+            cursor=cursor,
+            source_id=source_id,
+            scope=self.scope,
+            multi_workspace_enabled=self.multi_workspace_enabled,
         )
 
-    async def get_timeline(self, query: TimelineQuery, *, limit: int = 50, cursor: str | None = None) -> TimelinePage:
+    async def get_timeline(
+        self, query: TimelineQuery, *, limit: int = 50, cursor: str | None = None
+    ) -> TimelinePage:
         """Delegate timeline filters and precision partitions to the scoped timeline owner."""
         return await timeline.list_timeline(
-            self.session, query, limit=limit, cursor=cursor,
-            scope=self.scope, multi_workspace_enabled=self.multi_workspace_enabled,
+            self.session,
+            query,
+            limit=limit,
+            cursor=cursor,
+            scope=self.scope,
+            multi_workspace_enabled=self.multi_workspace_enabled,
         )
 
-    async def get_entity_timeline(self, entity_id: UUID, query: TimelineQuery, *, graph_enabled: bool, limit: int = 50,
-                                  cursor: str | None = None) -> dict[str, Any]:
+    async def get_entity_timeline(
+        self,
+        entity_id: UUID,
+        query: TimelineQuery,
+        *,
+        graph_enabled: bool,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
         """Resolve canonical identity, timeline page and bounded graph batches under the bound scope.
 
         Graph enablement is supplied by the caller; owner modules admit each canonical and derived read.
         """
         canonical_id = await entities.resolve_canonical_entity_id(
-            self.session, entity_id, scope=self.scope, multi_workspace_enabled=self.multi_workspace_enabled,
+            self.session,
+            entity_id,
+            scope=self.scope,
+            multi_workspace_enabled=self.multi_workspace_enabled,
         )
         selected = query.model_copy(update={"entity_id": canonical_id})
         page = await self.get_timeline(selected, limit=limit, cursor=cursor)
-        versions = sorted({UUID(str(item["document_version_id"])) for event in page.items
-                           for item in event.evidence if item.get("document_version_id")}, key=str)
+        versions = sorted(
+            {
+                UUID(str(item["document_version_id"]))
+                for event in page.items
+                for item in event.evidence
+                if item.get("document_version_id")
+            },
+            key=str,
+        )
         statuses = []
         for offset in range(0, len(versions), 100):
-            statuses.extend(await temporal.mapping_statuses(
-                self.session, versions[offset:offset + 100], graph_enabled=graph_enabled,
-                scope=self.scope, multi_workspace_enabled=self.multi_workspace_enabled,
-            ))
+            statuses.extend(
+                await temporal.mapping_statuses(
+                    self.session,
+                    versions[offset : offset + 100],
+                    graph_enabled=graph_enabled,
+                    scope=self.scope,
+                    multi_workspace_enabled=self.multi_workspace_enabled,
+                )
+            )
         return {"canonical_entity_id": canonical_id, "timeline": page, "graph_statuses": statuses}
 
-    async def entity_history(self, entity_id: UUID, *, limit: int = 50, cursor: str | None = None,
-                             membership_cursor: str | None = None) -> EntityHistoryPage | None:
+    async def entity_history(
+        self,
+        entity_id: UUID,
+        *,
+        limit: int = 50,
+        cursor: str | None = None,
+        membership_cursor: str | None = None,
+    ) -> EntityHistoryPage | None:
         """Delegate separately paged owner audit and retained membership history under the bound scope."""
         return await entities.list_entity_history(
-            self.session, entity_id, limit=limit, cursor=cursor, membership_cursor=membership_cursor,
-            scope=self.scope, multi_workspace_enabled=self.multi_workspace_enabled,
+            self.session,
+            entity_id,
+            limit=limit,
+            cursor=cursor,
+            membership_cursor=membership_cursor,
+            scope=self.scope,
+            multi_workspace_enabled=self.multi_workspace_enabled,
         )
 
     async def find_changes(self, **filters: Any) -> ChangePage:
@@ -161,7 +252,10 @@ class KnowledgeService:
         if "scope" in filters or "multi_workspace_enabled" in filters:
             raise TypeError("KnowledgeService scope and feature flag are bound at construction")
         return await temporal.find_changes(
-            self.session, **filters, scope=self.scope, multi_workspace_enabled=self.multi_workspace_enabled,
+            self.session,
+            **filters,
+            scope=self.scope,
+            multi_workspace_enabled=self.multi_workspace_enabled,
         )
 
     async def chat_evidence(
@@ -177,12 +271,18 @@ class KnowledgeService:
             Ordered list of detached ChatEvidenceChunk DTOs.
         """
         return await documents.read_chat_evidence_chunks(
-            self.session, refs, require_active_source=require_active_source,
-            scope=self.scope, multi_workspace_enabled=self.multi_workspace_enabled,
+            self.session,
+            refs,
+            require_active_source=require_active_source,
+            scope=self.scope,
+            multi_workspace_enabled=self.multi_workspace_enabled,
         )
 
     async def build_answer_context(
-        self, session_factory: async_sessionmaker[AsyncSession], redis: Redis, settings: Settings,
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        redis: Redis,
+        settings: Settings,
         request: AnswerContextRequest,
     ) -> AnswerContext:
         """Compose grounded retrieval context across scoped search, entities, temporal and documents.
@@ -199,7 +299,12 @@ class KnowledgeService:
         from modules.chat.public import build_answer_context
 
         return await build_answer_context(
-            self.session, session_factory, redis, settings, request, scope=self.scope,
+            self.session,
+            session_factory,
+            redis,
+            settings,
+            request,
+            scope=self.scope,
         )
 
     async def get_memories(
@@ -249,5 +354,7 @@ class KnowledgeService:
         from modules.memory.public import MemoryService
 
         return await MemoryService(self.session).get_active_memory_context(
-            limit=limit, scope=self.scope, multi_workspace_enabled=self.multi_workspace_enabled,
+            limit=limit,
+            scope=self.scope,
+            multi_workspace_enabled=self.multi_workspace_enabled,
         )

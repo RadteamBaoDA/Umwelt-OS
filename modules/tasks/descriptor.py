@@ -33,9 +33,7 @@ class TasksDescriptor(ModuleDescriptor):
     )
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
-    routers: tuple[RouterSpec, ...] = (
-        RouterSpec("modules.tasks.routes", 330),
-    )
+    routers: tuple[RouterSpec, ...] = (RouterSpec("modules.tasks.routes", 330),)
     erasure_module: str | None = "modules.tasks.erasure"
     erasure_order: int = 200
 

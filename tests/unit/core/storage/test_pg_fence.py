@@ -132,7 +132,10 @@ async def test_lock_is_taken_before_the_flag_is_written(fence: Any) -> None:
     pg, database = fence
     async with pg.ahold(WORKSPACE, erase=True):
         pass
-    assert [entry for entry in database.log if entry in {"lock", "flag-insert"}] == ["lock", "flag-insert"]
+    assert [entry for entry in database.log if entry in {"lock", "flag-insert"}] == [
+        "lock",
+        "flag-insert",
+    ]
 
 
 def test_sync_hold_is_unsupported(fence: Any) -> None:

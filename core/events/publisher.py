@@ -13,7 +13,11 @@ from core.workspaces.schemas import Scope
 
 
 async def publish_event(
-    session: AsyncSession, event: DomainEvent, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    event: DomainEvent,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> None:
     """Add scoped durable identity to the caller's already-admitted transaction outbox.
 
@@ -33,21 +37,32 @@ async def publish_event(
     """
     registry = get_event_registry()
     if event.type not in registry.routes:
-        raise ValueError(f"Outbox event type {event.type!r} is not declared by any module descriptor")
+        raise ValueError(
+            f"Outbox event type {event.type!r} is not declared by any module descriptor"
+        )
     runtime = registry.runtime()
     await runtime.admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     payload = deepcopy(event.payload)
-    identity = {"workspace_id": str(scope.workspace_id), "actor_user_id": runtime.actor_id(scope),
-                "membership_revision": scope.membership_revision}
+    identity = {
+        "workspace_id": str(scope.workspace_id),
+        "actor_user_id": runtime.actor_id(scope),
+        "membership_revision": scope.membership_revision,
+    }
     for key, value in identity.items():
         if key in payload and (type(payload[key]) is not type(value) or payload[key] != value):
             raise NotFoundError(detail="Event identity not found")
-    ctx = PublishContext(event=event, payload=payload, identity=identity, scope=scope,
-                         multi_workspace_enabled=multi_workspace_enabled)
+    ctx = PublishContext(
+        event=event,
+        payload=payload,
+        identity=identity,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
     handler = registry.handler(event.type)
     await handler.verify_publish(session, ctx)
     outbox = EventOutbox(
-        workspace_id=scope.workspace_id, actor_user_id=runtime.actor_id(scope),
+        workspace_id=scope.workspace_id,
+        actor_user_id=runtime.actor_id(scope),
         membership_revision=scope.membership_revision,
         id=event.id,
         type=event.type,
@@ -63,4 +78,6 @@ async def publish_event(
     # waiting for its slow safety-net tick. No-op when no process hook is installed.
     notify_on_commit(session, "dispatch_pending_work")
     if event.type == "document.version.ready":
-        notify_on_commit(session, "index_pending_chunks")  # chunks exist now: index without the minute tick
+        notify_on_commit(
+            session, "index_pending_chunks"
+        )  # chunks exist now: index without the minute tick

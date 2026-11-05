@@ -38,7 +38,11 @@ async def test_language_and_since_compose_with_privacy_filters() -> None:
     session = _session()
     since = datetime.now(UTC) - timedelta(days=7)
     await public.list_gadget_document_projections(
-        session, source_ids=(uuid4(),), language="vi", since=since, **KW,
+        session,
+        source_ids=(uuid4(),),
+        language="vi",
+        since=since,
+        **KW,
     )
     sql = _sql(session)
     # Privacy fences stay in the same statement as the new filters.
@@ -58,7 +62,10 @@ async def test_no_filters_leaves_language_unconstrained_so_unknown_matches_any()
 async def test_language_must_be_allowlisted(language: str) -> None:
     with pytest.raises(ValueError):
         await public.list_gadget_document_projections(
-            _session(), source_ids=(uuid4(),), language=language, **KW,
+            _session(),
+            source_ids=(uuid4(),),
+            language=language,
+            **KW,
         )
 
 
@@ -67,7 +74,10 @@ async def test_language_must_be_allowlisted(language: str) -> None:
 async def test_since_must_be_within_bounded_window(delta: timedelta) -> None:
     with pytest.raises(ValueError):
         await public.list_gadget_document_projections(
-            _session(), source_ids=(uuid4(),), since=datetime.now(UTC) - delta, **KW,
+            _session(),
+            source_ids=(uuid4(),),
+            since=datetime.now(UTC) - delta,
+            **KW,
         )
 
 
@@ -75,14 +85,27 @@ async def test_since_must_be_within_bounded_window(delta: timedelta) -> None:
 async def test_since_must_be_timezone_aware() -> None:
     with pytest.raises(ValueError):
         await public.list_gadget_document_projections(
-            _session(), source_ids=(uuid4(),), since=datetime.now(UTC).replace(tzinfo=None) - timedelta(days=1), **KW,
+            _session(),
+            source_ids=(uuid4(),),
+            since=datetime.now(UTC).replace(tzinfo=None) - timedelta(days=1),
+            **KW,
         )
 
 
-@pytest.mark.parametrize(("raw", "expected"), [
-    ("en", "en"), ("EN-us", "en"), ("vi_VN", "vi"), (" vi ", "vi"),
-    ("xx", None), ("", None), (None, None), (5, None), ("'; --", None),
-])
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("en", "en"),
+        ("EN-us", "en"),
+        ("vi_VN", "vi"),
+        (" vi ", "vi"),
+        ("xx", None),
+        ("", None),
+        (None, None),
+        (5, None),
+        ("'; --", None),
+    ],
+)
 def test_normalize_document_language(raw: object, expected: str | None) -> None:
     assert public.normalize_document_language(raw) == expected
 
@@ -113,10 +136,17 @@ async def test_apply_normalized_document_writes_language_on_create() -> None:
     session.scalar = AsyncMock(return_value=None)
     source_id = uuid4()
     payload = MagicMock(
-        source_id=source_id, provider_id="p1", content="x", title="t",
-        provenance={"metadata": {"language": "VI-vn"}}, observed_at=datetime.now(UTC),
-        accepted_record_hash="h", telegram_order=None, content_type="text/plain",
-        canonical_url=None, published_at=None,
+        source_id=source_id,
+        provider_id="p1",
+        content="x",
+        title="t",
+        provenance={"metadata": {"language": "VI-vn"}},
+        observed_at=datetime.now(UTC),
+        accepted_record_hash="h",
+        telegram_order=None,
+        content_type="text/plain",
+        canonical_url=None,
+        published_at=None,
     )
     projection = SimpleNamespace(provider="rss")
     identity = SimpleNamespace(tombstoned_at=None, document_id=None)
@@ -127,7 +157,12 @@ async def test_apply_normalized_document_writes_language_on_create() -> None:
 
 @pytest.mark.asyncio
 async def test_cursor_for_one_language_is_rejected_for_another() -> None:
-    fp = {"access_fence": FENCE, "source_ids": (uuid4(),), "observed_since": None, "channel_ids": None}
+    fp = {
+        "access_fence": FENCE,
+        "source_ids": (uuid4(),),
+        "observed_since": None,
+        "channel_ids": None,
+    }
     en = public._news_projection_cursor_fingerprint(**fp, language="en")  # type: ignore[arg-type]
     vi = public._news_projection_cursor_fingerprint(**fp, language="vi")  # type: ignore[arg-type]
     assert en != vi
@@ -140,7 +175,15 @@ async def test_cursor_for_one_language_is_rejected_for_another() -> None:
 async def test_language_and_channel_ids_compose_in_one_where() -> None:
     session = _session()
     await public.list_gadget_document_projections(
-        session, source_ids=(uuid4(),), channel_ids=("123",), language="en", **KW,
+        session,
+        source_ids=(uuid4(),),
+        channel_ids=("123",),
+        language="en",
+        **KW,
     )
     sql = _sql(session)
-    assert "documents.language = " in sql and "sources.provider" in sql and "normalized_version_provenance" in sql
+    assert (
+        "documents.language = " in sql
+        and "sources.provider" in sql
+        and "normalized_version_provenance" in sql
+    )

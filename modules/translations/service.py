@@ -39,9 +39,30 @@ _SYSTEM = (
 )
 _LANGUAGE = {"vi": "Vietnamese", "en": "English"}
 _VI_CHARS = re.compile(
-    r"[đàáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵ]", re.IGNORECASE,
+    r"[đàáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵ]",
+    re.IGNORECASE,
 )
-_EN_WORDS = frozenset(["the", "of", "and", "to", "in", "is", "for", "on", "with", "that", "as", "by", "at", "from", "this", "are", "was"])
+_EN_WORDS = frozenset(
+    [
+        "the",
+        "of",
+        "and",
+        "to",
+        "in",
+        "is",
+        "for",
+        "on",
+        "with",
+        "that",
+        "as",
+        "by",
+        "at",
+        "from",
+        "this",
+        "are",
+        "was",
+    ]
+)
 
 
 class TranslationBlocked(Exception):  # frozen contract name
@@ -55,6 +76,7 @@ class TranslationBlocked(Exception):  # frozen contract name
 
 class _News(BaseModel):
     """Strict schema of a translated news item (title and excerpt only; extra keys rejected)."""
+
     model_config = ConfigDict(extra="forbid")
     title: str
     excerpt: str
@@ -62,6 +84,7 @@ class _News(BaseModel):
 
 class _Segment(BaseModel):
     """Strict schema of one translated brief segment (extra keys rejected)."""
+
     model_config = ConfigDict(extra="forbid")
     content: str
 
@@ -87,31 +110,63 @@ def _language(text: str) -> Literal["vi", "en"] | None:
 
 def _schema(fields: tuple[str, ...]) -> dict[str, Any]:
     """Build the strict JSON-schema response format requiring exactly the given string fields."""
-    return {"name": "content_translation", "strict": True, "schema": {
-        "type": "object", "properties": {f: {"type": "string"} for f in fields},
-        "required": list(fields), "additionalProperties": False}}
+    return {
+        "name": "content_translation",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {f: {"type": "string"} for f in fields},
+            "required": list(fields),
+            "additionalProperties": False,
+        },
+    }
 
 
 async def _ask(
-    gateway: ModelGateway, config: AIExecutionConfig, policy: RequestPolicy, language: str,
-    payload: dict[str, str], schema: dict[str, Any], before_send: Callable[[], Awaitable[None]], deadline: float,
+    gateway: ModelGateway,
+    config: AIExecutionConfig,
+    policy: RequestPolicy,
+    language: str,
+    payload: dict[str, str],
+    schema: dict[str, Any],
+    before_send: Callable[[], Awaitable[None]],
+    deadline: float,
 ) -> dict[str, Any]:
     """Send one translation request through the gateway before ``deadline``; raises TranslationBlocked when the deadline is exhausted or the reply is unusable. Performs provider I/O after ``before_send`` rechecks."""
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TranslationBlocked("deadline_exceeded")
-    messages = [{"role": "system", "content": resolve_prompt(config.system_prompts, "translation") + " " + _SYSTEM.format(language=_LANGUAGE[language])},
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
+    messages = [
+        {
+            "role": "system",
+            "content": resolve_prompt(config.system_prompts, "translation")
+            + " "
+            + _SYSTEM.format(language=_LANGUAGE[language]),
+        },
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+    ]
     try:
-        response = await asyncio.wait_for(gateway.structured(
-            ROLE, config.defaults.resolve(ROLE), policy, messages, schema,
-            max_tokens=4096, temperature=0, before_send=before_send), remaining)
+        response = await asyncio.wait_for(
+            gateway.structured(
+                ROLE,
+                config.defaults.resolve(ROLE),
+                policy,
+                messages,
+                schema,
+                max_tokens=4096,
+                temperature=0,
+                before_send=before_send,
+            ),
+            remaining,
+        )
         data = json.loads(response["choices"][0]["message"]["content"])
         usage = response.get("usage") if isinstance(response, dict) else None
         for key, direction in (("prompt_tokens", "in"), ("completion_tokens", "out")):
             used = usage.get(key) if isinstance(usage, dict) else None
             if isinstance(used, int) and not isinstance(used, bool) and used > 0:
-                count("translation_tokens_total", used, direction=direction, target_language=language)
+                count(
+                    "translation_tokens_total", used, direction=direction, target_language=language
+                )
     except TimeoutError as exc:
         raise TranslationBlocked("deadline_exceeded") from exc
     except PrivacyPolicyDenied as exc:
@@ -140,9 +195,14 @@ def _restore(original: str, translated: str, protected: dict[str, str]) -> str:
 
 
 async def translate_input(
-    gateway: ModelGateway, execution_config: AIExecutionConfig, policy: RequestPolicy,
-    source: TranslationInput, target_language: Literal["vi", "en"],
-    before_send: Callable[[], Awaitable[None]], *, deadline: float,
+    gateway: ModelGateway,
+    execution_config: AIExecutionConfig,
+    policy: RequestPolicy,
+    source: TranslationInput,
+    target_language: Literal["vi", "en"],
+    before_send: Callable[[], Awaitable[None]],
+    *,
+    deadline: float,
 ) -> dict[str, str]:
     """Translate ``source.fields``; ``deadline`` is a ``time.monotonic()`` instant. All-or-nothing."""
     fields = source.fields
@@ -153,15 +213,36 @@ async def translate_input(
         raise TranslationBlocked("input_too_large")
     if _language(" ".join(fields.values())) == target_language:
         return dict(fields)
-    local = (execution_config.endpoint_destination_id or "").startswith("local:")  # stays on the owner's network: no consent
-    if source.local_only or not (local or (execution_config.privacy.allow_remote_reasoning and policy.reasoning_allowed)):
+    local = (execution_config.endpoint_destination_id or "").startswith(
+        "local:"
+    )  # stays on the owner's network: no consent
+    if source.local_only or not (
+        local or (execution_config.privacy.allow_remote_reasoning and policy.reasoning_allowed)
+    ):
         raise TranslationBlocked("privacy_blocked")
     if source.resource_type != "news_story":
-        return {"content": await _translate_brief(
-            gateway, execution_config, policy, target_language, fields["content"], before_send, deadline)}
+        return {
+            "content": await _translate_brief(
+                gateway,
+                execution_config,
+                policy,
+                target_language,
+                fields["content"],
+                before_send,
+                deadline,
+            )
+        }
     masked = {k: protect_text(fields[k]) for k in ("title", "excerpt")}
-    data = await _ask(gateway, execution_config, policy, target_language,
-                      {k: masked[k][0] for k in masked}, _schema(("title", "excerpt")), before_send, deadline)
+    data = await _ask(
+        gateway,
+        execution_config,
+        policy,
+        target_language,
+        {k: masked[k][0] for k in masked},
+        _schema(("title", "excerpt")),
+        before_send,
+        deadline,
+    )
     try:
         out = _News.model_validate(data)
     except ValidationError as exc:
@@ -173,8 +254,13 @@ async def translate_input(
 
 
 async def _translate_brief(
-    gateway: ModelGateway, config: AIExecutionConfig, policy: RequestPolicy, language: str, text: str,
-    before_send: Callable[[], Awaitable[None]], deadline: float,
+    gateway: ModelGateway,
+    config: AIExecutionConfig,
+    policy: RequestPolicy,
+    language: str,
+    text: str,
+    before_send: Callable[[], Awaitable[None]],
+    deadline: float,
 ) -> str:
     """Translate a markdown brief line by line in bounded chunks, preserving structure; rejects over-long lines (input_too_large) and honours the shared deadline."""
     lines = split_markdown(text)
@@ -196,8 +282,16 @@ async def _translate_brief(
     for chunk in chunks:  # sequential; nothing is returned unless every segment succeeds
         original = "\n".join(chunk)
         masked, protected = protect_text(original)
-        data = await _ask(gateway, config, policy, language, {"content": masked}, _schema(("content",)),
-                          before_send, deadline)
+        data = await _ask(
+            gateway,
+            config,
+            policy,
+            language,
+            {"content": masked},
+            _schema(("content",)),
+            before_send,
+            deadline,
+        )
         try:
             out = _Segment.model_validate(data)
         except ValidationError as exc:

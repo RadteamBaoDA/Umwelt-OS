@@ -82,7 +82,9 @@ def _render_markdown(payload: dict[str, Any]) -> bytes:
     """Render records as JSON blocks with fences longer than any embedded backtick run."""
     lines = ["# Umwelt-OS data export", "", f"Created: {payload['created_at']}", ""]
     coverage = json.dumps(payload["dataset_metadata"], ensure_ascii=False, indent=2)
-    lines.extend(("## Dataset coverage", "", "````json", coverage, "````", "", "## Limitations", ""))
+    lines.extend(
+        ("## Dataset coverage", "", "````json", coverage, "````", "", "## Limitations", "")
+    )
     for limitation in payload["limitations"]:
         lines.extend((f"- {limitation}", ""))
     for dataset, records in payload["data"].items():
@@ -104,18 +106,33 @@ def _render_csv(payload: dict[str, Any]) -> bytes:
     writer = csv.writer(output)
     writer.writerow(("record_type", "dataset", "record_json"))
     for dataset, metadata in payload["dataset_metadata"].items():
-        writer.writerow(("dataset_metadata", dataset, json.dumps(metadata, ensure_ascii=False, separators=(",", ":"))))
+        writer.writerow(
+            (
+                "dataset_metadata",
+                dataset,
+                json.dumps(metadata, ensure_ascii=False, separators=(",", ":")),
+            )
+        )
     for limitation in payload["limitations"]:
         writer.writerow(("limitation", "", json.dumps(limitation, ensure_ascii=False)))
     for dataset, records in payload["data"].items():
         for record in records:
-            writer.writerow(("data", dataset, json.dumps(record, ensure_ascii=False, separators=(",", ":"))))
+            writer.writerow(
+                ("data", dataset, json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+            )
     return output.getvalue().encode("utf-8")
 
 
 async def _collect_dataset(
-    session: AsyncSession, owner_id: int, dataset: str, record_kind: str, public: Any,
-    byte_budget: list[int], *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    owner_id: int,
+    dataset: str,
+    record_kind: str,
+    public: Any,
+    byte_budget: list[int],
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], tuple[Any, Any, list[BaseModel]]]:
     """Drain one public cursor under page, 100,000-row and 32 MiB bounds, retaining final fences."""
     cursor = None
@@ -125,8 +142,13 @@ async def _collect_dataset(
     metadata: dict[str, Any] | None = None
     while True:
         page = await public.export_page(
-            session, owner_id=owner_id, record_kind=record_kind, limit=PAGE_SIZE, cursor=cursor,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            owner_id=owner_id,
+            record_kind=record_kind,
+            limit=PAGE_SIZE,
+            cursor=cursor,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
         if snapshot is None:
             snapshot = page.snapshot_at
@@ -138,40 +160,60 @@ async def _collect_dataset(
                 "omitted_count": getattr(page, "omitted_count", 0),
             }
             if hasattr(page, "privacy_persisted"):
-                metadata.update({
-                    "privacy_persisted": page.privacy_persisted,
-                    "privacy_updated_at": page.privacy_updated_at,
-                    "history_enabled": page.history_enabled,
-                })
-        elif metadata is None or page.snapshot_at != snapshot or page.snapshot_count != metadata["snapshot_count"]:
-            raise HTTPException(status_code=409, detail="Export snapshot changed while reading owner pages")
+                metadata.update(
+                    {
+                        "privacy_persisted": page.privacy_persisted,
+                        "privacy_updated_at": page.privacy_updated_at,
+                        "history_enabled": page.history_enabled,
+                    }
+                )
+        elif (
+            metadata is None
+            or page.snapshot_at != snapshot
+            or page.snapshot_count != metadata["snapshot_count"]
+        ):
+            raise HTTPException(
+                status_code=409, detail="Export snapshot changed while reading owner pages"
+            )
         else:
             metadata["available"] = metadata["available"] and page.available
             metadata["omitted_count"] += getattr(page, "omitted_count", 0)
             if page.omission_reason is not None:
                 metadata["omission_reason"] = page.omission_reason
         if page.payload_bytes > page.max_payload_bytes:
-            raise HTTPException(status_code=503, detail="Owner export exceeded its declared page bound")
+            raise HTTPException(
+                status_code=503, detail="Owner export exceeded its declared page bound"
+            )
         for item in page.items:
             record = _plain(item)
             byte_budget[0] += len(_encode_json(record))
             if byte_budget[0] > MAX_EXPORT_BYTES:
-                raise HTTPException(status_code=413, detail="Export exceeds the 32 MiB download bound")
+                raise HTTPException(
+                    status_code=413, detail="Export exceeds the 32 MiB download bound"
+                )
             records.append(record)
         fences.extend(page.fences)
         if len(records) > 100_000 or len(fences) > 100_000:
-            raise HTTPException(status_code=413, detail="Export contains too many records for one bounded download")
+            raise HTTPException(
+                status_code=413, detail="Export contains too many records for one bounded download"
+            )
         cursor = page.next_cursor
         if cursor is None:
             break
     if snapshot is None or metadata is None:
-        raise HTTPException(status_code=503, detail="Owner export page did not establish a snapshot")
+        raise HTTPException(
+            status_code=503, detail="Owner export page did not establish a snapshot"
+        )
     return records, metadata, (public, snapshot, fences)
 
 
 async def _validate_final_fences(
-    session: AsyncSession, owner_id: int, metadata: dict[str, dict[str, Any]],
-    pending: dict[str, tuple[Any, Any, list[BaseModel]]], *, scope: WorkspaceContext,
+    session: AsyncSession,
+    owner_id: int,
+    metadata: dict[str, dict[str, Any]],
+    pending: dict[str, tuple[Any, Any, list[BaseModel]]],
+    *,
+    scope: WorkspaceContext,
     multi_workspace_enabled: bool,
 ) -> None:
     """Recheck every captured owner fence in bounded batches after all datasets are collected."""
@@ -180,30 +222,46 @@ async def _validate_final_fences(
         # Disabled retained chat history must remain disabled from page read through publication.
         if dataset in {"conversations", "messages"} and not dataset_meta["available"]:
             privacy = await memory_public.read_export_privacy(
-                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                session,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
             )
-            if (privacy.store_conversation_history or privacy.persisted != dataset_meta.get("privacy_persisted")
-                    or privacy.updated_at != dataset_meta.get("privacy_updated_at")):
-                raise HTTPException(status_code=409, detail="Conversation export privacy changed; retry the download")
+            if (
+                privacy.store_conversation_history
+                or privacy.persisted != dataset_meta.get("privacy_persisted")
+                or privacy.updated_at != dataset_meta.get("privacy_updated_at")
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Conversation export privacy changed; retry the download",
+                )
             continue
-        batches = [fences[offset:offset + PAGE_SIZE] for offset in range(0, len(fences), PAGE_SIZE)] or [[]]
+        batches = [
+            fences[offset : offset + PAGE_SIZE] for offset in range(0, len(fences), PAGE_SIZE)
+        ] or [[]]
         for batch in batches:
             arguments: dict[str, Any] = {
-                "session": session, "owner_id": owner_id,
+                "session": session,
+                "owner_id": owner_id,
                 "record_kind": {
                     "document_versions": "versions",
                     "memory_candidates": "candidates",
                     "news_topics": "topics",
                 }.get(dataset, dataset),
-                "snapshot_at": snapshot, "expected_snapshot_count": dataset_meta["snapshot_count"],
-                "fences": batch, "scope": scope, "multi_workspace_enabled": multi_workspace_enabled,
+                "snapshot_at": snapshot,
+                "expected_snapshot_count": dataset_meta["snapshot_count"],
+                "fences": batch,
+                "scope": scope,
+                "multi_workspace_enabled": multi_workspace_enabled,
             }
             if "privacy_persisted" in dataset_meta:
                 arguments["privacy_persisted"] = dataset_meta["privacy_persisted"]
                 arguments["privacy_updated_at"] = dataset_meta["privacy_updated_at"]
             validation = await public.validate_export_fences(**arguments)
             if not validation.valid:
-                raise HTTPException(status_code=409, detail="Owner data changed during export; retry the download")
+                raise HTTPException(
+                    status_code=409, detail="Owner data changed during export; retry the download"
+                )
 
 
 async def _build_export_response(
@@ -221,7 +279,9 @@ async def _build_export_response(
     the same scope and rollout gate.
     """
     if scope.role != "owner" or scope.user_id != owner.owner_id:
-        raise HTTPException(status_code=403, detail="Export actor does not match the workspace owner")
+        raise HTTPException(
+            status_code=403, detail="Export actor does not match the workspace owner"
+        )
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     collected: dict[str, list[dict[str, Any]]] = {}
     dataset_metadata: dict[str, dict[str, Any]] = {}
@@ -229,8 +289,14 @@ async def _build_export_response(
     byte_budget = [0]
     for dataset, record_kind, public in DATASETS:
         records, metadata, final_fences = await _collect_dataset(
-            session, owner.owner_id, dataset, record_kind, public, byte_budget,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            owner.owner_id,
+            dataset,
+            record_kind,
+            public,
+            byte_budget,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
         collected[dataset] = records
         dataset_metadata[dataset] = metadata
@@ -262,7 +328,9 @@ async def _build_export_response(
     media_type, render = content_types[output_format]
     content = await asyncio.to_thread(render, payload)
     if len(content) > MAX_EXPORT_BYTES:
-        raise HTTPException(status_code=413, detail="Rendered export exceeds the 32 MiB download bound")
+        raise HTTPException(
+            status_code=413, detail="Rendered export exceeds the 32 MiB download bound"
+        )
     response.headers["Cache-Control"] = "private, no-store, max-age=0"
     response.headers["Pragma"] = "no-cache"
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -271,8 +339,12 @@ async def _build_export_response(
     # Render and enforce the final byte cap before the last awaited owner check; no async work
     # occurs between this final fence pass and constructing the response body.
     await _validate_final_fences(
-        session, owner.owner_id, dataset_metadata, pending,
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        owner.owner_id,
+        dataset_metadata,
+        pending,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     return Response(content=content, media_type=media_type, headers=dict(response.headers))
 

@@ -19,14 +19,20 @@ from pydantic import ValidationError
 
 # Mock bs4 and crawlee before importing crawl module if not installed in the environment
 if "bs4" not in sys.modules:
+
     class MockBeautifulSoup:
         """Lightweight BeautifulSoup mock extracting text and links from HTML."""
+
         def __init__(self, markup: bytes | str, parser: str = "html.parser") -> None:
             self.text = markup.decode("utf-8", "ignore") if isinstance(markup, bytes) else markup
 
         def get_text(self, separator: str = " ", strip: bool = False) -> str:
             text = re.sub(r"<[^>]+>", " ", self.text)
-            return "\n".join(line.strip() for line in text.split("\n") if line.strip()) if strip else text
+            return (
+                "\n".join(line.strip() for line in text.split("\n") if line.strip())
+                if strip
+                else text
+            )
 
         def find_all(self, tag: str, href: bool = False) -> list[dict[str, str]]:
             if tag == "a" and href:
@@ -81,23 +87,53 @@ class TestWebCrawlingOptions:
         sid = uuid4()
         # Invalid mode
         with pytest.raises(ValidationError, match="pattern"):
-            CrawlRequest(source_id=sid, source_generation=1, connector_revision=1, url="https://example.com", mode="curl")
+            CrawlRequest(
+                source_id=sid,
+                source_generation=1,
+                connector_revision=1,
+                url="https://example.com",
+                mode="curl",
+            )
 
         # Exceeding max_pages (max is 10)
         with pytest.raises(ValidationError, match="less than or equal to 10"):
-            CrawlRequest(source_id=sid, source_generation=1, connector_revision=1, url="https://example.com", max_pages=11)
+            CrawlRequest(
+                source_id=sid,
+                source_generation=1,
+                connector_revision=1,
+                url="https://example.com",
+                max_pages=11,
+            )
 
         # Exceeding max_depth (max is 2)
         with pytest.raises(ValidationError, match="less than or equal to 2"):
-            CrawlRequest(source_id=sid, source_generation=1, connector_revision=1, url="https://example.com", max_depth=3)
+            CrawlRequest(
+                source_id=sid,
+                source_generation=1,
+                connector_revision=1,
+                url="https://example.com",
+                max_depth=3,
+            )
 
         # Negative depth
         with pytest.raises(ValidationError, match="greater than or equal to 0"):
-            CrawlRequest(source_id=sid, source_generation=1, connector_revision=1, url="https://example.com", max_depth=-1)
+            CrawlRequest(
+                source_id=sid,
+                source_generation=1,
+                connector_revision=1,
+                url="https://example.com",
+                max_depth=-1,
+            )
 
         # Exceeding timeout (max is 60)
         with pytest.raises(ValidationError, match="less than or equal to 60"):
-            CrawlRequest(source_id=sid, source_generation=1, connector_revision=1, url="https://example.com", timeout_seconds=61)
+            CrawlRequest(
+                source_id=sid,
+                source_generation=1,
+                connector_revision=1,
+                url="https://example.com",
+                timeout_seconds=61,
+            )
 
     def test_agent_read_request_valid(self) -> None:
         """Valid AgentReadRequest satisfies tight bounds and SHA-256 job token pattern."""
@@ -171,7 +207,9 @@ class TestUrlNormalizersAndDomainGuards:
     @pytest.mark.asyncio
     async def test_dns_safe_calls_validate_public_url(self) -> None:
         """_dns_safe delegates to validate_public_url to check public address resolution."""
-        with patch("modules.connectors.crawl.validate_public_url", new_callable=AsyncMock) as mock_val:
+        with patch(
+            "modules.connectors.crawl.validate_public_url", new_callable=AsyncMock
+        ) as mock_val:
             await _dns_safe("https://example.com")
             mock_val.assert_awaited_once_with("https://example.com")
 
@@ -249,28 +287,38 @@ class TestDepthBoundsAndTraversalLimits:
         html_p1 = b'<html><body><a href="/p3">Page 3</a></body></html>'
 
         # Mock httpx client response stream
-        mock_response_root = MagicMock(spec=httpx.Response)  # no __aenter__: real httpx.Response is not an async context manager
+        mock_response_root = MagicMock(
+            spec=httpx.Response
+        )  # no __aenter__: real httpx.Response is not an async context manager
         mock_response_root.status_code = 200
         mock_response_root.headers = {"content-type": "text/html"}
         mock_response_root.url = "https://example.com/start"
         mock_response_root.raise_for_status = MagicMock()
+
         async def aiter_root():
             yield html_root
+
         mock_response_root.aiter_bytes = aiter_root
         mock_response_root.aclose = AsyncMock()
 
-        mock_response_p1 = MagicMock(spec=httpx.Response)  # no __aenter__: real httpx.Response is not an async context manager
+        mock_response_p1 = MagicMock(
+            spec=httpx.Response
+        )  # no __aenter__: real httpx.Response is not an async context manager
         mock_response_p1.status_code = 200
         mock_response_p1.headers = {"content-type": "text/html"}
         mock_response_p1.url = "https://example.com/p1"
         mock_response_p1.raise_for_status = MagicMock()
+
         async def aiter_p1():
             yield html_p1
+
         mock_response_p1.aiter_bytes = aiter_p1
         mock_response_p1.aclose = AsyncMock()
 
-        with patch("modules.connectors.crawl._dns_safe", new_callable=AsyncMock), \
-             patch("httpx.AsyncClient.send", side_effect=[mock_response_root, mock_response_p1]):
+        with (
+            patch("modules.connectors.crawl._dns_safe", new_callable=AsyncMock),
+            patch("httpx.AsyncClient.send", side_effect=[mock_response_root, mock_response_p1]),
+        ):
             records = await crawl(req)
 
         # Capped by max_pages=2
@@ -301,8 +349,10 @@ class TestDepthBoundsAndTraversalLimits:
         mock_redirect.headers = {"location": "https://example.com/loop"}
         mock_redirect.aclose = AsyncMock()
 
-        with patch("modules.connectors.crawl._dns_safe", new_callable=AsyncMock), \
-             patch("httpx.AsyncClient.send", return_value=mock_redirect):
+        with (
+            patch("modules.connectors.crawl._dns_safe", new_callable=AsyncMock),
+            patch("httpx.AsyncClient.send", return_value=mock_redirect),
+        ):
             with pytest.raises(ValueError, match="Web redirect limit exceeded"):
                 await crawl(req)
 
@@ -373,14 +423,18 @@ class TestRateLimitersAndConcurrencyGuards:
             timeout_seconds=10,
         )
 
-        mock_resp = MagicMock(spec=httpx.Response)  # no __aenter__: real httpx.Response is not an async context manager
+        mock_resp = MagicMock(
+            spec=httpx.Response
+        )  # no __aenter__: real httpx.Response is not an async context manager
         mock_resp.status_code = 200
         mock_resp.headers = {"content-length": str(MAX_BYTES + 1024), "content-type": "text/html"}
         mock_resp.raise_for_status = MagicMock()
         mock_resp.aclose = AsyncMock()
 
-        with patch("modules.connectors.crawl._dns_safe", new_callable=AsyncMock), \
-             patch("httpx.AsyncClient.send", return_value=mock_resp):
+        with (
+            patch("modules.connectors.crawl._dns_safe", new_callable=AsyncMock),
+            patch("httpx.AsyncClient.send", return_value=mock_resp),
+        ):
             with pytest.raises(HTTPException) as exc:
                 await crawl(req)
             assert exc.value.status_code == 413

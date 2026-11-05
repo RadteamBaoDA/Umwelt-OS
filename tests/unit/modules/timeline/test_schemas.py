@@ -123,7 +123,9 @@ class TestEventCreate:
 
     def test_date_event_with_timestamp_rejected(self) -> None:
         """Verify date-precision event providing started_at is rejected."""
-        with pytest.raises(ValidationError, match="date events require occurred_date and forbid timestamps"):
+        with pytest.raises(
+            ValidationError, match="date events require occurred_date and forbid timestamps"
+        ):
             EventCreate(
                 type="conference",
                 title="PyCon",
@@ -154,7 +156,9 @@ class TestEventCreate:
 
     def test_unknown_event_with_date_or_time_rejected(self) -> None:
         """Verify unknown precision event providing occurrence date/time is rejected."""
-        with pytest.raises(ValidationError, match="unknown events cannot contain occurrence fields"):
+        with pytest.raises(
+            ValidationError, match="unknown events cannot contain occurrence fields"
+        ):
             EventCreate(
                 type="fact",
                 title="Fact",
@@ -167,7 +171,9 @@ class TestEventCreate:
         eid = uuid4()
         p1 = ParticipantInput(entity_id=eid, role="speaker")
         p2 = ParticipantInput(entity_id=eid, role="speaker")
-        with pytest.raises(ValidationError, match="participant entity and role pairs must be unique"):
+        with pytest.raises(
+            ValidationError, match="participant entity and role pairs must be unique"
+        ):
             EventCreate(
                 type="talk",
                 title="Talk Title",
@@ -233,7 +239,9 @@ class TestTimelineQueryAndPage:
 
     def test_timeline_query_date_range_validation(self) -> None:
         """Verify date_from and date_to must be supplied together and date_to > date_from."""
-        with pytest.raises(ValidationError, match="date_from and date_to must be supplied together"):
+        with pytest.raises(
+            ValidationError, match="date_from and date_to must be supplied together"
+        ):
             TimelineQuery(date_from=date(2025, 1, 1))
 
         with pytest.raises(ValidationError, match="date_to must be after date_from"):
@@ -244,7 +252,9 @@ class TestTimelineQueryAndPage:
 
     def test_timeline_query_unknown_precision_forbids_date_filter(self) -> None:
         """Verify unknown precision cannot be combined with date filters."""
-        with pytest.raises(ValidationError, match="unknown precision cannot be combined with date filters"):
+        with pytest.raises(
+            ValidationError, match="unknown precision cannot be combined with date filters"
+        ):
             TimelineQuery(
                 precision="unknown",
                 date_from=date(2025, 1, 1),

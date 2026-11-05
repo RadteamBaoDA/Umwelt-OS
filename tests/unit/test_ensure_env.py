@@ -1,7 +1,9 @@
 import importlib.util
 from pathlib import Path
 
-_spec = importlib.util.spec_from_file_location("ensure_env", Path(__file__).parents[2] / "scripts" / "ensure_env.py")
+_spec = importlib.util.spec_from_file_location(
+    "ensure_env", Path(__file__).parents[2] / "scripts" / "ensure_env.py"
+)
 ensure_env = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ensure_env)
 

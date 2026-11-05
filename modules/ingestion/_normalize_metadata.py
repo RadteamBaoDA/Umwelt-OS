@@ -28,7 +28,16 @@ from modules.knowledge.documents.public import (
 # Raw-metadata keys each typed provider may contribute to ``source_fields`` (the explicit allowlist).
 PROVIDER_FIELD_KEYS: dict[str, tuple[str, ...]] = {
     "youtube": ("author", "summary", "title", "tags", "published_at", "provider_updated_at"),
-    "arxiv": ("author", "authors", "categories", "tags", "summary", "title", "published_at", "provider_updated_at"),
+    "arxiv": (
+        "author",
+        "authors",
+        "categories",
+        "tags",
+        "summary",
+        "title",
+        "published_at",
+        "provider_updated_at",
+    ),
     "huggingface": ("author", "tags", "pipeline_tag", "created_at", "last_modified"),
     "bluesky": ("author", "canonical_url", "created_at"),
     "reddit": ("title", "subreddit", "author", "canonical_url", "created_at"),
@@ -36,7 +45,14 @@ PROVIDER_FIELD_KEYS: dict[str, tuple[str, ...]] = {
     "x": ("author_id", "canonical_url", "created_at", "language"),
     "google_mail": ("thread_id", "history_id", "subject", "from", "to", "date_header"),
     "google_calendar": (
-        "calendar_id", "event_id", "status", "start", "end", "start_timezone", "end_timezone", "recurrence",
+        "calendar_id",
+        "event_id",
+        "status",
+        "start",
+        "end",
+        "start_timezone",
+        "end_timezone",
+        "recurrence",
         "html_link",
     ),
     "google_drive": ("name", "mime_type", "modified_time", "web_view_link", "md5_checksum"),
@@ -44,20 +60,44 @@ PROVIDER_FIELD_KEYS: dict[str, tuple[str, ...]] = {
     "slack": ("channel_id", "message_ts", "thread_ts", "user_id"),
     "health": ("patient_id", "observation_id", "value", "unit", "observed_at_source"),
     "home_assistant": (
-        "entity_id", "state", "observed_at_source", "unit_of_measurement", "friendly_name", "latitude", "longitude",
+        "entity_id",
+        "state",
+        "observed_at_source",
+        "unit_of_measurement",
+        "friendly_name",
+        "latitude",
+        "longitude",
     ),
     "github_releases": (
-        "node_id", "name", "body", "html_url", "tag_name", "draft", "prerelease", "author", "created_at",
+        "node_id",
+        "name",
+        "body",
+        "html_url",
+        "tag_name",
+        "draft",
+        "prerelease",
+        "author",
+        "created_at",
         "published_at",
     ),
     "github": ("record_type", "node_id", "html_url"),
     "telegram": (),
-    **dict.fromkeys((*MEASUREMENT_PROVIDER_IDS, *NEWS_PROVIDER_IDS), ()),  # envelope source_fields only
+    **dict.fromkeys(
+        (*MEASUREMENT_PROVIDER_IDS, *NEWS_PROVIDER_IDS), ()
+    ),  # envelope source_fields only
 }
 
 # Native providers whose accepted records must always carry a typed ``provider_record`` envelope.
 ENVELOPE_REQUIRED_PROVIDERS = (
-    "youtube", "arxiv", "huggingface", "bluesky", "reddit", "mastodon", "x", "github_releases", "github",
+    "youtube",
+    "arxiv",
+    "huggingface",
+    "bluesky",
+    "reddit",
+    "mastodon",
+    "x",
+    "github_releases",
+    "github",
     *NEWS_PROVIDER_IDS,
 )
 
@@ -87,7 +127,12 @@ def _http_url(raw_metadata: dict[str, Any]) -> str | None:
     if not isinstance(raw_url, str):
         return None
     parsed = urlsplit(raw_url)
-    if parsed.scheme in {"http", "https"} and parsed.netloc and not parsed.username and not parsed.password:
+    if (
+        parsed.scheme in {"http", "https"}
+        and parsed.netloc
+        and not parsed.username
+        and not parsed.password
+    ):
         return raw_url[:2048]
     return None
 
@@ -110,7 +155,12 @@ def _parse_published_at(raw_metadata: dict[str, Any]) -> datetime | None:
 def _safe_metadata(raw_metadata: dict[str, Any]) -> dict[str, object]:
     """Keep only allowlisted descriptive fields, truncated to their limits (strings, tag/category lists)."""
     safe: dict[str, object] = {}
-    for key, limit in (("author", 500), ("language", 32), ("summary", 10_000), ("description", 10_000)):
+    for key, limit in (
+        ("author", 500),
+        ("language", 32),
+        ("summary", 10_000),
+        ("description", 10_000),
+    ):
         value = raw_metadata.get(key)
         if isinstance(value, str):
             safe[key] = value[:limit]
@@ -213,7 +263,9 @@ class TypedEnvelopeExtractor:
         merged["source_fields"] = source_fields
         return ProviderRecordMetadata.model_validate(merged)
 
-    def _finish_typed(self, item: ExtractionInput, provider_record: ProviderRecordMetadata) -> ProviderExtraction:
+    def _finish_typed(
+        self, item: ExtractionInput, provider_record: ProviderRecordMetadata
+    ) -> ProviderExtraction:
         """Provider-specific proof; only Telegram may carry a delivery proof envelope."""
         if item.telegram_envelope is not None:
             raise ValueError("Telegram delivery proof is not valid for this provider")
@@ -242,11 +294,17 @@ class MeasurementExtractor(TypedEnvelopeExtractor):
         measurement = WorldDataMeasurement.model_validate(record.metadata.get("world_data"))
         if measurement.provider != item.source_provider:
             raise ValueError("Structured measurement does not match configured source provider")
-        return ProviderExtraction(provider_record=ProviderRecordMetadata(
-            provider=measurement.provider, identity=record.provider_id, provider_version=record.version,
-            timestamp_basis="collection", coverage="returned_snapshot", content_truncated=False,
-            world_data=measurement,
-        ))
+        return ProviderExtraction(
+            provider_record=ProviderRecordMetadata(
+                provider=measurement.provider,
+                identity=record.provider_id,
+                provider_version=record.version,
+                timestamp_basis="collection",
+                coverage="returned_snapshot",
+                content_truncated=False,
+                world_data=measurement,
+            )
+        )
 
 
 class TelegramExtractor(TypedEnvelopeExtractor):
@@ -255,7 +313,9 @@ class TelegramExtractor(TypedEnvelopeExtractor):
     providers: ClassVar[tuple[str, ...]] = ("telegram",)
     requires_envelope: ClassVar[bool] = True
 
-    def _finish_typed(self, item: ExtractionInput, provider_record: ProviderRecordMetadata) -> ProviderExtraction:
+    def _finish_typed(
+        self, item: ExtractionInput, provider_record: ProviderRecordMetadata
+    ) -> ProviderExtraction:
         """Bind the record to its persisted raw delivery, selection clock and bot/epoch/update identity."""
         detail = provider_record.telegram
         envelope = item.telegram_envelope
@@ -265,12 +325,16 @@ class TelegramExtractor(TypedEnvelopeExtractor):
         raw = TelegramRawDelivery.model_validate(envelope.get("raw_update"))
         validate_telegram_record_delivery(item.record, provider_record, proof, raw)
         if item.observed_at != item.record.observed_at:
-            raise ValueError("Persisted observation selection clock differs from verified Telegram clock")
+            raise ValueError(
+                "Persisted observation selection clock differs from verified Telegram clock"
+            )
         merged = provider_record.model_dump(mode="json")
         merged["telegram"]["raw_update_sha256"] = proof.raw_update_sha256
         return ProviderExtraction(
             provider_record=ProviderRecordMetadata.model_validate(merged),
-            telegram_order=TelegramDocumentOrder(bot_id=detail.bot_id, epoch=detail.epoch, update_id=detail.update_id),
+            telegram_order=TelegramDocumentOrder(
+                bot_id=detail.bot_id, epoch=detail.epoch, update_id=detail.update_id
+            ),
         )
 
 

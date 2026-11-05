@@ -68,7 +68,10 @@ def test_should_auto_enable_db_query_triggers_on_flag_gadget_or_keywords() -> No
     assert should_auto_enable_db_query("Hello", {DB_QUERY_KEY: True}) is True
     assert should_auto_enable_db_query("Hello", {DB_QUERY_KEY: {"requested": True}}) is True
     assert should_auto_enable_db_query("Hello", {"kind": "gadget"}) is True
-    assert should_auto_enable_db_query("Hello", {GADGET_SCOPE_KEY: {"renderer": "finance_chart"}}) is True
+    assert (
+        should_auto_enable_db_query("Hello", {GADGET_SCOPE_KEY: {"renderer": "finance_chart"}})
+        is True
+    )
     assert should_auto_enable_db_query("What is the average BTC price today?", None) is True
     assert should_auto_enable_db_query("Giá vàng mới nhất và thống kê biến động?", None) is True
     assert should_auto_enable_db_query("Write a short poem about autumn leaves.", None) is False

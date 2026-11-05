@@ -29,9 +29,7 @@ def queue_writable(redis_memory: dict[str, int]) -> bool | None:
     return redis_memory.get("used_bytes", 0) < max_bytes * QUEUE_FULL_RATIO
 
 
-async def system_health(
-    session: AsyncSession, redis: Redis, settings: Settings
-) -> dict[str, Any]:
+async def system_health(session: AsyncSession, redis: Redis, settings: Settings) -> dict[str, Any]:
     """Probe PostgreSQL, Redis, and worker heartbeat with bounded timeouts and report configured optional services without claiming connectivity."""
     started = time.perf_counter()
     try:
@@ -55,7 +53,10 @@ async def system_health(
             cron_heartbeat = await redis.get(ARQ_CRON_WORKER_HEALTH_KEY)
             try:
                 memory = await redis.info("memory")
-                redis_memory = {"used_bytes": int(memory.get("used_memory", 0)), "max_bytes": int(memory.get("maxmemory", 0))}
+                redis_memory = {
+                    "used_bytes": int(memory.get("used_memory", 0)),
+                    "max_bytes": int(memory.get("maxmemory", 0)),
+                }
             except RedisError:
                 pass  # INFO may be ACL-denied; memory is optional and must not mark Redis or the worker down
         redis_status = "healthy"
@@ -76,20 +77,39 @@ async def system_health(
         async with asyncio.timeout(PROBE_TIMEOUT_SECONDS):
             if postgres != "healthy":
                 raise TimeoutError
-            gateway_configured = bool((await session.execute(text(
-                "SELECT 1 FROM ai_settings, jsonb_each(providers) AS p(id, rec) "
-                "WHERE rec->>'base_url' IS NOT NULL LIMIT 1"))).first())
-            n8n_stored = bool((await session.execute(text(
-                "SELECT 1 FROM ai_settings WHERE n8n->>'api_key_ciphertext' IS NOT NULL LIMIT 1"))).first())
+            gateway_configured = bool(
+                (
+                    await session.execute(
+                        text(
+                            "SELECT 1 FROM ai_settings, jsonb_each(providers) AS p(id, rec) "
+                            "WHERE rec->>'base_url' IS NOT NULL LIMIT 1"
+                        )
+                    )
+                ).first()
+            )
+            n8n_stored = bool(
+                (
+                    await session.execute(
+                        text(
+                            "SELECT 1 FROM ai_settings WHERE n8n->>'api_key_ciphertext' IS NOT NULL LIMIT 1"
+                        )
+                    )
+                ).first()
+            )
     except (SQLAlchemyError, TimeoutError):
         pass
     gateway_status = "configured" if gateway_configured else "unconfigured"
     components = {
         "postgres": {"status": postgres, "latency_ms": postgres_ms},
         "redis": {
-            "status": redis_status, "latency_ms": redis_ms,
+            "status": redis_status,
+            "latency_ms": redis_ms,
             **({"memory": redis_memory} if redis_memory else {}),
-            **({"queue_writable": writable} if (writable := queue_writable(redis_memory)) is not None else {}),
+            **(
+                {"queue_writable": writable}
+                if (writable := queue_writable(redis_memory)) is not None
+                else {}
+            ),
         },
         "worker": {"status": worker_status},
         "chat_worker": {"status": chat_worker_status},
@@ -98,11 +118,28 @@ async def system_health(
         "model_gateway": {"status": gateway_status, "connectivity": "not_tested"},
         "graph": {"status": "not_installed"},
         # Optional sidecars: never part of `overall`; configured means a key/token is set, not reachable.
-        "n8n": {"status": "configured" if n8n_stored or settings.n8n_api_key.get_secret_value() else "not_configured", "optional": True},
-        "browser": {"status": "configured" if settings.browser_shared_token.get_secret_value() else "not_configured", "optional": True},
+        "n8n": {
+            "status": "configured"
+            if n8n_stored or settings.n8n_api_key.get_secret_value()
+            else "not_configured",
+            "optional": True,
+        },
+        "browser": {
+            "status": "configured"
+            if settings.browser_shared_token.get_secret_value()
+            else "not_configured",
+            "optional": True,
+        },
     }
-    core_statuses = (postgres, redis_status, worker_status, chat_worker_status, model_worker_status,
-                     cron_worker_status)
-    healthy = all(s == "healthy" for s in core_statuses) and queue_writable(redis_memory) is not False
-    return {"overall": "healthy" if healthy else "degraded",
-            "components": components}
+    core_statuses = (
+        postgres,
+        redis_status,
+        worker_status,
+        chat_worker_status,
+        model_worker_status,
+        cron_worker_status,
+    )
+    healthy = (
+        all(s == "healthy" for s in core_statuses) and queue_writable(redis_memory) is not False
+    )
+    return {"overall": "healthy" if healthy else "degraded", "components": components}

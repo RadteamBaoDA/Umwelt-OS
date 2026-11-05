@@ -83,7 +83,9 @@ class TestLogSanitization:
 
     def test_redact_search_query_params(self) -> None:
         """redact_text masks q and query values but keeps other params."""
-        redacted = telemetry.redact_text("GET /api/v1/events?q=secret&x=1 and /a?limit=8&query=my+trip&y=2")
+        redacted = telemetry.redact_text(
+            "GET /api/v1/events?q=secret&x=1 and /a?limit=8&query=my+trip&y=2"
+        )
         assert "secret" not in redacted and "my+trip" not in redacted
         assert "?q=[redacted]&x=1" in redacted and "&query=[redacted]&y=2" in redacted
 
@@ -211,6 +213,7 @@ class TestMetricsRegistry:
 
     def test_isolated_swallows_sink_errors(self) -> None:
         """_isolated ensures errors in telemetry hooks never raise to callers."""
+
         def faulty_action() -> None:
             raise RuntimeError("Redis unreachable")
 
@@ -229,6 +232,7 @@ class TestAsyncSpansAndTiming:
         telemetry.registry = test_reg
 
         try:
+
             @telemetry.timed("async_operation_ms", op="fetch_data")
             async def mock_async_op(delay_s: float) -> str:
                 await asyncio.sleep(delay_s)
@@ -265,7 +269,9 @@ class TestRedactedRecordsStayFormattable:
             '%s - "%s %s HTTP/%s" %d',
             ("127.0.0.1:1", "GET", "/api?token=sk-live-abcdef1234567890abcdef", "1.1", 200),
         )
-        out = AccessFormatter("%(client_addr)s - %(request_line)s %(status_code)s", use_colors=False).format(record)
+        out = AccessFormatter(
+            "%(client_addr)s - %(request_line)s %(status_code)s", use_colors=False
+        ).format(record)
         assert "GET" in out and "200" in out
         assert "sk-live-abcdef1234567890abcdef" not in out
 
@@ -309,8 +315,12 @@ class TestRedactionStableRecords:
         from uvicorn.config import LOGGING_CONFIG
         from uvicorn.logging import AccessFormatter
 
-        record = self._record('%s - "%s %s HTTP/%s" %d', ("127.0.0.1:1", "cookie=", "SECRETVALUE", "1.1", 200))
-        out = AccessFormatter(LOGGING_CONFIG["formatters"]["access"]["fmt"], use_colors=False).format(record)
+        record = self._record(
+            '%s - "%s %s HTTP/%s" %d', ("127.0.0.1:1", "cookie=", "SECRETVALUE", "1.1", 200)
+        )
+        out = AccessFormatter(
+            LOGGING_CONFIG["formatters"]["access"]["fmt"], use_colors=False
+        ).format(record)
         assert "SECRETVALUE" not in out
         assert "SECRETVALUE" not in record.getMessage()
 

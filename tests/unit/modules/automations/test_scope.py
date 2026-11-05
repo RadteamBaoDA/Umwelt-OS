@@ -49,20 +49,54 @@ def _session(ids: list[UUID] | None = None) -> AsyncMock:
 
 # ---------------------------------------------------------------- member denial before any query
 @pytest.mark.asyncio
-@pytest.mark.parametrize("call", [
-    lambda s: public.create_automation(s, AutomationCreate(name="x", trigger={"type": "schedule", "cron": "0 8 * * 1", "timezone": "UTC"}, actions=[{"type": "create_notification", "message": "m"}]), {}, MagicMock(), scope=MEMBER, multi_workspace_enabled=FLAG),
-    lambda s: public.update_automation(s, uuid4(), AutomationUpdate(expected_revision=1), {}, MagicMock(), scope=MEMBER, multi_workspace_enabled=FLAG),
-    lambda s: public.delete_automation(s, uuid4(), 1, scope=MEMBER, multi_workspace_enabled=FLAG),
-    lambda s: public.get_automation(s, uuid4(), scope=MEMBER, multi_workspace_enabled=FLAG),
-    lambda s: public.list_automations(s, scope=MEMBER, multi_workspace_enabled=FLAG),
-    lambda s: public.get_revision(s, uuid4(), 1, scope=MEMBER, multi_workspace_enabled=FLAG),
-    lambda s: public.get_automation_conversation_id(s, uuid4(), scope=MEMBER, multi_workspace_enabled=FLAG),
-    lambda s: public.preview(s, MagicMock(spec=PreviewRequest), scope=MEMBER, multi_workspace_enabled=FLAG),
-    lambda s: execution.start_manual(s, uuid4(), 1, uuid4(), scope=MEMBER, multi_workspace_enabled=FLAG),
-    lambda s: execution.list_runs(s, uuid4(), scope=MEMBER, multi_workspace_enabled=FLAG),
-    lambda s: execution.decide_action(s, "h", uuid4(), 1, True, MagicMock(), scope=MEMBER, multi_workspace_enabled=FLAG),
-    lambda s: execution.enqueue_trigger(s, "webhook", "k", {"event": "e"}, hook="h", scope=MEMBER, multi_workspace_enabled=FLAG),
-])
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda s: public.create_automation(
+            s,
+            AutomationCreate(
+                name="x",
+                trigger={"type": "schedule", "cron": "0 8 * * 1", "timezone": "UTC"},
+                actions=[{"type": "create_notification", "message": "m"}],
+            ),
+            {},
+            MagicMock(),
+            scope=MEMBER,
+            multi_workspace_enabled=FLAG,
+        ),
+        lambda s: public.update_automation(
+            s,
+            uuid4(),
+            AutomationUpdate(expected_revision=1),
+            {},
+            MagicMock(),
+            scope=MEMBER,
+            multi_workspace_enabled=FLAG,
+        ),
+        lambda s: public.delete_automation(
+            s, uuid4(), 1, scope=MEMBER, multi_workspace_enabled=FLAG
+        ),
+        lambda s: public.get_automation(s, uuid4(), scope=MEMBER, multi_workspace_enabled=FLAG),
+        lambda s: public.list_automations(s, scope=MEMBER, multi_workspace_enabled=FLAG),
+        lambda s: public.get_revision(s, uuid4(), 1, scope=MEMBER, multi_workspace_enabled=FLAG),
+        lambda s: public.get_automation_conversation_id(
+            s, uuid4(), scope=MEMBER, multi_workspace_enabled=FLAG
+        ),
+        lambda s: public.preview(
+            s, MagicMock(spec=PreviewRequest), scope=MEMBER, multi_workspace_enabled=FLAG
+        ),
+        lambda s: execution.start_manual(
+            s, uuid4(), 1, uuid4(), scope=MEMBER, multi_workspace_enabled=FLAG
+        ),
+        lambda s: execution.list_runs(s, uuid4(), scope=MEMBER, multi_workspace_enabled=FLAG),
+        lambda s: execution.decide_action(
+            s, "h", uuid4(), 1, True, MagicMock(), scope=MEMBER, multi_workspace_enabled=FLAG
+        ),
+        lambda s: execution.enqueue_trigger(
+            s, "webhook", "k", {"event": "e"}, hook="h", scope=MEMBER, multi_workspace_enabled=FLAG
+        ),
+    ],
+)
 async def test_member_denied_before_any_query(call) -> None:
     session = AsyncMock()
     with pytest.raises(DomainError) as caught:
@@ -76,10 +110,16 @@ async def test_member_denied_before_any_query(call) -> None:
 @pytest.mark.asyncio
 async def test_live_rules_workspace_and_owner_before_limit() -> None:
     session = AsyncMock()
-    session.execute = AsyncMock(return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=list))))
+    session.execute = AsyncMock(
+        return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=list)))
+    )
     await execution.live_rules(session, "task_due", scope=OWNER)
     text, params = _sql(session.execute.call_args.args[0])
-    assert text.index("automations.workspace_id") < text.index("automations.owner_id") < text.index("LIMIT")
+    assert (
+        text.index("automations.workspace_id")
+        < text.index("automations.owner_id")
+        < text.index("LIMIT")
+    )
     assert WS in params and OWNER.user_id in params and 100 in params
 
 
@@ -93,8 +133,10 @@ async def test_dispatch_runs_scopes_runs_before_limit() -> None:
         return MagicMock(all=list)
 
     session.scalars = scalars
-    with patch("modules.automations.execution._admit", AsyncMock(return_value=MagicMock())), \
-         patch("modules.automations.execution.commit_with_replay", AsyncMock()):
+    with (
+        patch("modules.automations.execution._admit", AsyncMock(return_value=MagicMock())),
+        patch("modules.automations.execution.commit_with_replay", AsyncMock()),
+    ):
         await execution.dispatch_runs(_factory(session), AsyncMock(), **SC)
     assert len(statements) == 2
     for stmt in statements:
@@ -110,7 +152,9 @@ def _owner_ctx() -> MagicMock:
 
 def _worker_patches(**overrides: object):
     stack = {
-        "modules.automations.worker.workspaces.resolve_workspace_owner_context": AsyncMock(return_value=_owner_ctx()),
+        "modules.automations.worker.workspaces.resolve_workspace_owner_context": AsyncMock(
+            return_value=_owner_ctx()
+        ),
         "modules.settings.public.module_is_enabled": AsyncMock(return_value=True),
         "modules.automations.worker.scheduler.tick": AsyncMock(return_value=0),
         "modules.automations.worker.producers.sweep": AsyncMock(return_value=0),
@@ -123,6 +167,7 @@ def _worker_patches(**overrides: object):
 
 def _enter(patches: dict[str, object]):
     from contextlib import ExitStack
+
     es = ExitStack()
     mocks = {name: es.enter_context(patch(name, mock)) for name, mock in patches.items()}
     return es, mocks
@@ -130,8 +175,10 @@ def _enter(patches: dict[str, object]):
 
 def _ctx(session: object) -> dict[str, object]:
     return {
-        "session_factory": _factory(session), "settings": SimpleNamespace(multi_workspace_enabled=FLAG),
-        "redis": MagicMock(), worker_cursors.STATE_KEY: {},
+        "session_factory": _factory(session),
+        "settings": SimpleNamespace(multi_workspace_enabled=FLAG),
+        "redis": MagicMock(),
+        worker_cursors.STATE_KEY: {},
     }
 
 
@@ -155,14 +202,20 @@ async def test_cursor_persists_across_ctx_copies_and_wraps() -> None:
     session = AsyncMock()
     session.scalars = AsyncMock(side_effect=lambda _stmt: pages.pop(0))
     base = {
-        "session_factory": _factory(session), "settings": SimpleNamespace(multi_workspace_enabled=FLAG),
-        "redis": None, worker_cursors.STATE_KEY: {},
+        "session_factory": _factory(session),
+        "settings": SimpleNamespace(multi_workspace_enabled=FLAG),
+        "redis": None,
+        worker_cursors.STATE_KEY: {},
     }
     es, _ = _enter(_worker_patches())
     with es, patch.object(worker, "PAGE", 2):
-        await worker.reconcile_automation_runs(dict(base))  # full page: cursor advances to the last id
+        await worker.reconcile_automation_runs(
+            dict(base)
+        )  # full page: cursor advances to the last id
         assert base[worker_cursors.STATE_KEY][worker.CURSOR_KEY] == str(second)
-        await worker.reconcile_automation_runs(dict(base))  # a second shallow copy sees the same cursor
+        await worker.reconcile_automation_runs(
+            dict(base)
+        )  # a second shallow copy sees the same cursor
         stmt_text, params = _sql(session.scalars.call_args.args[0])
         assert "automations.workspace_id >" in stmt_text and second in params
         assert base[worker_cursors.STATE_KEY][worker.CURSOR_KEY] == ""  # short page wraps
@@ -171,12 +224,22 @@ async def test_cursor_persists_across_ctx_copies_and_wraps() -> None:
 @pytest.mark.asyncio
 async def test_owner_mismatch_skips_workspace_without_sweeps() -> None:
     session = _session([WS])
-    patches = _worker_patches(**{
-        "modules.automations.worker.workspaces.resolve_workspace_owner_context": AsyncMock(return_value=None)})
+    patches = _worker_patches(
+        **{
+            "modules.automations.worker.workspaces.resolve_workspace_owner_context": AsyncMock(
+                return_value=None
+            )
+        }
+    )
     es, mocks = _enter(patches)
     with es:
         assert await worker.reconcile_automation_runs(_ctx(session)) == 0
-    for name in ("scheduler.tick", "producers.sweep", "execution.fan_out_triggers", "execution.dispatch_runs"):
+    for name in (
+        "scheduler.tick",
+        "producers.sweep",
+        "execution.fan_out_triggers",
+        "execution.dispatch_runs",
+    ):
         mocks[f"modules.automations.worker.{name}"].assert_not_called()
 
 
@@ -214,7 +277,9 @@ async def test_non_denial_error_skips_workspace_and_continues(failure: str) -> N
             raise HTTPException(status_code=503, detail="replay storage")
         return 0
 
-    async def resolve(_session: object, workspace_id: UUID, *, multi_workspace_enabled: bool) -> MagicMock:
+    async def resolve(
+        _session: object, workspace_id: UUID, *, multi_workspace_enabled: bool
+    ) -> MagicMock:
         if workspace_id == first:
             raise HTTPException(status_code=409, detail="concurrent revision disagreement")
         return _owner_ctx()
@@ -245,7 +310,10 @@ async def test_scheduler_tick_scopes_existing_and_due_selects() -> None:
     session = AsyncMock()
     session.execute = AsyncMock(return_value=MagicMock(all=list))
     session.scalars = AsyncMock(return_value=MagicMock(all=list))
-    with patch.object(scheduler, "_admit", AsyncMock()), patch.object(scheduler, "commit_with_replay", AsyncMock()):
+    with (
+        patch.object(scheduler, "_admit", AsyncMock()),
+        patch.object(scheduler, "commit_with_replay", AsyncMock()),
+    ):
         await scheduler.tick(_factory(session), **SC)
     existing, _ = _sql(session.scalars.call_args.args[0])
     assert "JOIN automations" in existing
@@ -265,15 +333,22 @@ async def test_cursor_sweep_keys_by_workspace_and_passes_scope_to_readers() -> N
     session.get = AsyncMock(return_value=cursor)
     session.scalar = AsyncMock(return_value=cursor)
     reader = AsyncMock(return_value=[])
-    with patch("modules.automations.producers.execution.live_rules", AsyncMock(return_value=[MagicMock()])):
+    with patch(
+        "modules.automations.producers.execution.live_rules", AsyncMock(return_value=[MagicMock()])
+    ):
         await producers._cursor_sweep(
-            session, "new_event", reader, now, access_fence=MagicMock(), **SC)
+            session, "new_event", reader, now, access_fence=MagicMock(), **SC
+        )
     assert session.get.call_args.args == (AutomationCursor, (WS, "new_event"))
     text, params = _sql(session.scalar.call_args.args[0])
     assert "automation_cursors.workspace_id" in text and WS in params and "new_event" in params
     for call in reader.call_args_list:
         position = call.args[1]
-        assert isinstance(position, tuple) and isinstance(position[0], datetime) and isinstance(position[1], UUID)
+        assert (
+            isinstance(position, tuple)
+            and isinstance(position[0], datetime)
+            and isinstance(position[1], UUID)
+        )
         assert call.kwargs == {"scope": OWNER, "multi_workspace_enabled": FLAG}
 
 
@@ -282,27 +357,40 @@ async def test_first_seen_cursor_is_inserted_with_workspace() -> None:
     session = AsyncMock()
     session.get = AsyncMock(return_value=None)
     session.add = MagicMock()
-    assert await producers._cursor_sweep(
-        session, "new_event", AsyncMock(), datetime.now(UTC), access_fence=MagicMock(), **SC) == 0
+    assert (
+        await producers._cursor_sweep(
+            session, "new_event", AsyncMock(), datetime.now(UTC), access_fence=MagicMock(), **SC
+        )
+        == 0
+    )
     added = session.add.call_args.args[0]
-    assert isinstance(added, AutomationCursor) and added.workspace_id == WS and added.name == "new_event"
+    assert (
+        isinstance(added, AutomationCursor)
+        and added.workspace_id == WS
+        and added.name == "new_event"
+    )
 
 
 # ---------------------------------------------------------------- inbound webhook
 def _request() -> MagicMock:
     request = MagicMock()
     request.headers = {"content-type": "application/json", "content-length": "10"}
-    request.app.state.settings = SimpleNamespace(multi_workspace_enabled=FLAG, automation_webhook_signing_secrets={})
+    request.app.state.settings = SimpleNamespace(
+        multi_workspace_enabled=FLAG, automation_webhook_signing_secrets={}
+    )
     return request
 
 
 def _credential(token: str, owner_id: int = OWNER.user_id) -> SimpleNamespace:
-    return SimpleNamespace(workspace_id=WS, owner_id=owner_id, alias="hook", token_hash=hash_inbound_token(token))
+    return SimpleNamespace(
+        workspace_id=WS, owner_id=owner_id, alias="hook", token_hash=hash_inbound_token(token)
+    )
 
 
 async def _receive(session: object) -> object:
     return await routes.receive_inbound_webhook(
-        "hook", _request(), session, MagicMock(headers={}), token="secret", event_key="evt-1")
+        "hook", _request(), session, MagicMock(headers={}), token="secret", event_key="evt-1"
+    )
 
 
 @pytest.mark.asyncio
@@ -313,7 +401,10 @@ async def test_inbound_selects_by_alias_and_token_digest() -> None:
         await _receive(session)
     assert caught.value.status_code == 401
     text, params = _sql(session.scalars.call_args.args[0])
-    assert "automation_webhook_credentials.alias" in text and "automation_webhook_credentials.token_hash" in text
+    assert (
+        "automation_webhook_credentials.alias" in text
+        and "automation_webhook_credentials.token_hash" in text
+    )
     assert hash_inbound_token("secret") in params and "hook" in params
     assert "owner_id" not in text.split("WHERE")[1] and 1 not in params  # no literal owner 1
     assert "LIMIT" in text
@@ -334,8 +425,13 @@ async def test_inbound_owner_mismatch_is_unauthorized() -> None:
     session = AsyncMock()
     session.scalars = AsyncMock(return_value=MagicMock(all=lambda: [_credential("secret")]))
     other = MagicMock(user_id=OWNER.user_id + 1, membership_revision=1)
-    with patch("modules.automations.routes.workspaces.resolve_workspace_owner_context", AsyncMock(return_value=other)), \
-         pytest.raises(HTTPException) as caught:
+    with (
+        patch(
+            "modules.automations.routes.workspaces.resolve_workspace_owner_context",
+            AsyncMock(return_value=other),
+        ),
+        pytest.raises(HTTPException) as caught,
+    ):
         await _receive(session)
     assert caught.value.status_code == 401
 
@@ -356,9 +452,24 @@ async def _phase2(accepted: bool, prior: object = None) -> tuple[AsyncMock, Asyn
     session.scalars = AsyncMock(return_value=MagicMock(all=lambda: [cred]))
     session.scalar = AsyncMock(side_effect=[cred, prior])
     enqueue = AsyncMock(return_value=accepted)
-    with patch("modules.automations.routes.workspaces.resolve_workspace_owner_context", AsyncMock(return_value=_owner_ctx())),          patch.object(routes, "module_is_enabled", AsyncMock(return_value=True)),          patch.object(routes, "_admit", AsyncMock()), patch.object(routes, "enqueue_trigger", enqueue),          patch.object(routes, "commit_with_replay", AsyncMock()):
+    with (
+        patch(
+            "modules.automations.routes.workspaces.resolve_workspace_owner_context",
+            AsyncMock(return_value=_owner_ctx()),
+        ),
+        patch.object(routes, "module_is_enabled", AsyncMock(return_value=True)),
+        patch.object(routes, "_admit", AsyncMock()),
+        patch.object(routes, "enqueue_trigger", enqueue),
+        patch.object(routes, "commit_with_replay", AsyncMock()),
+    ):
         result = await routes.receive_inbound_webhook(
-            "hook", _stream_request(), session, MagicMock(headers={}), token="secret", event_key="evt-1")
+            "hook",
+            _stream_request(),
+            session,
+            MagicMock(headers={}),
+            token="secret",
+            event_key="evt-1",
+        )
     return session, enqueue, result
 
 
@@ -402,9 +513,14 @@ async def test_automation_conversation_insert_carries_workspace_and_actor() -> N
 @pytest.mark.asyncio
 async def test_create_tool_perform_takes_scope_and_forwards_it() -> None:
     settings = SimpleNamespace(multi_workspace_enabled=FLAG)
-    context = {"settings": settings, "principal": SimpleNamespace(scope=OWNER), "session_factory": MagicMock()}
+    context = {
+        "settings": settings,
+        "principal": SimpleNamespace(scope=OWNER),
+        "session_factory": MagicMock(),
+    }
     arguments = {
-        "name": "n", "trigger": {"type": "schedule", "cron": "0 8 * * 1", "timezone": "UTC"},
+        "name": "n",
+        "trigger": {"type": "schedule", "cron": "0 8 * * 1", "timezone": "UTC"},
         "actions": [{"type": "create_notification", "message": "m"}],
     }
     captured: dict[str, object] = {}
@@ -429,7 +545,8 @@ async def test_list_tool_uses_principal_scope() -> None:
     session = AsyncMock()
     factory = _factory(session)
     context = {
-        "settings": SimpleNamespace(multi_workspace_enabled=FLAG), "principal": SimpleNamespace(scope=OWNER),
+        "settings": SimpleNamespace(multi_workspace_enabled=FLAG),
+        "principal": SimpleNamespace(scope=OWNER),
         "session_factory": factory,
     }
     listing = AsyncMock(return_value=SimpleNamespace(items=[]))
@@ -443,10 +560,18 @@ async def test_list_tool_uses_principal_scope() -> None:
 @pytest.mark.asyncio
 async def test_process_run_owner_mismatch_leaves_row_untouched() -> None:
     session = AsyncMock()
-    session.execute = AsyncMock(return_value=MagicMock(first=MagicMock(return_value=(WS, OWNER.user_id))))
+    session.execute = AsyncMock(
+        return_value=MagicMock(first=MagicMock(return_value=(WS, OWNER.user_id)))
+    )
     other = MagicMock(user_id=OWNER.user_id + 1, membership_revision=1)
-    ctx = {"session_factory": _factory(session), "settings": SimpleNamespace(multi_workspace_enabled=FLAG)}
-    with patch("modules.automations.execution.workspaces.resolve_workspace_owner_context", AsyncMock(return_value=other)):
+    ctx = {
+        "session_factory": _factory(session),
+        "settings": SimpleNamespace(multi_workspace_enabled=FLAG),
+    }
+    with patch(
+        "modules.automations.execution.workspaces.resolve_workspace_owner_context",
+        AsyncMock(return_value=other),
+    ):
         assert await execution.process_run(ctx, str(uuid4())) == "noop"
     session.scalar.assert_not_called()
     session.commit.assert_not_called()
@@ -455,18 +580,36 @@ async def test_process_run_owner_mismatch_leaves_row_untouched() -> None:
 def test_no_literal_owner_one_remains() -> None:
     for module in (execution, producers, public, routes, worker):
         source = inspect.getsource(module)
-        assert "OWNER_ID" not in source and "owner_id == 1" not in source and "owner_id=1" not in source
+        assert (
+            "OWNER_ID" not in source
+            and "owner_id == 1" not in source
+            and "owner_id=1" not in source
+        )
 
 
 # ---------------------------------------------------------------- _start_agent HTTPException handling
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("status", "mark_code", "transient"), [(503, None, True), (409, "agent_rejected", False)])
-async def test_start_agent_http_errors_retry_5xx_and_reject_4xx(status: int, mark_code: str | None, transient: bool) -> None:
+@pytest.mark.parametrize(
+    ("status", "mark_code", "transient"), [(503, None, True), (409, "agent_rejected", False)]
+)
+async def test_start_agent_http_errors_retry_5xx_and_reject_4xx(
+    status: int, mark_code: str | None, transient: bool
+) -> None:
     ctx = {"session_factory": _factory(AsyncMock()), "agent_tool_registry": MagicMock()}
     run = SimpleNamespace(id=uuid4())
     mark, retry = AsyncMock(), AsyncMock(return_value="retry")
-    with patch.object(execution, "_admit", AsyncMock(side_effect=HTTPException(status_code=status, detail="x"))),          patch.object(execution, "_mark", mark), patch.object(execution, "_transient", retry):
-        result = await execution._start_agent(ctx, run, 0, {"type": "run_agent"}, "hash", "rule", **SC)  # type: ignore[arg-type]
+    with (
+        patch.object(
+            execution,
+            "_admit",
+            AsyncMock(side_effect=HTTPException(status_code=status, detail="x")),
+        ),
+        patch.object(execution, "_mark", mark),
+        patch.object(execution, "_transient", retry),
+    ):
+        result = await execution._start_agent(
+            ctx, run, 0, {"type": "run_agent"}, "hash", "rule", **SC
+        )  # type: ignore[arg-type]
     assert retry.called is transient
     if transient:
         assert result == "retry" and not mark.called
@@ -494,9 +637,17 @@ async def test_start_agent_locks_fence_before_run_and_sources_and_drift_is_trans
 
         return admit, locked_run, evidence
 
-    ctx = {"session_factory": _factory(AsyncMock()), "agent_tool_registry": MagicMock(), "settings": MagicMock(), "redis": MagicMock()}
+    ctx = {
+        "session_factory": _factory(AsyncMock()),
+        "agent_tool_registry": MagicMock(),
+        "settings": MagicMock(),
+        "redis": MagicMock(),
+    }
     run = SimpleNamespace(id=uuid4())
-    for fence, expect in ((snapshot, ["admit", "config", "fence_lock", "run_lock", "sources"]), (drifted, ["admit", "config", "fence_lock"])):
+    for fence, expect in (
+        (snapshot, ["admit", "config", "fence_lock", "run_lock", "sources"]),
+        (drifted, ["admit", "config", "fence_lock"]),
+    ):
         order.clear()
         admit, locked_run, evidence = build(fence)
 
@@ -505,8 +656,17 @@ async def test_start_agent_locks_fence_before_run_and_sources_and_drift_is_trans
             return MagicMock()
 
         mark, retry = AsyncMock(), AsyncMock(return_value="retry")
-        with patch.object(execution, "_admit", admit), patch.object(execution, "_locked_run", locked_run),                 patch.object(execution, "_run_evidence_current", evidence),                 patch.object(execution.settings_public, "get_ai_execution_config", config),                 patch.object(execution, "_mark", mark), patch.object(execution, "_transient", retry):
-            result = await execution._start_agent(ctx, run, 0, {"type": "run_agent"}, "hash", "rule", **SC)  # type: ignore[arg-type]
+        with (
+            patch.object(execution, "_admit", admit),
+            patch.object(execution, "_locked_run", locked_run),
+            patch.object(execution, "_run_evidence_current", evidence),
+            patch.object(execution.settings_public, "get_ai_execution_config", config),
+            patch.object(execution, "_mark", mark),
+            patch.object(execution, "_transient", retry),
+        ):
+            result = await execution._start_agent(
+                ctx, run, 0, {"type": "run_agent"}, "hash", "rule", **SC
+            )  # type: ignore[arg-type]
         assert order == expect
         assert result == ("dropped" if fence is snapshot else "retry")
         assert retry.called is (fence is drifted)

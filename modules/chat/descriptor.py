@@ -12,7 +12,9 @@ class ChatDescriptor(ModuleDescriptor):
     id: str = "chat"
     name: str = "Chat"
     version: str = "1.0.0"
-    description: str = "Persistent conversations, grounded model answer generation, and replayable SSE streaming."
+    description: str = (
+        "Persistent conversations, grounded model answer generation, and replayable SSE streaming."
+    )
     enabled: bool = True
     dependencies: tuple[str, ...] = ("knowledge.documents", "knowledge.entities")
     optional_dependencies: tuple[str, ...] = (

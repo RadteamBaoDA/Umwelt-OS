@@ -29,7 +29,13 @@ class _Session:
         self.sql: list[str] = []
 
     async def execute(self, statement):
-        self.sql.append(str(statement.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})))
+        self.sql.append(
+            str(
+                statement.compile(
+                    dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
+                )
+            )
+        )
         return _Result()
 
 
@@ -81,13 +87,17 @@ async def test_automation_run_purge_keeps_live_review_and_recent_runs() -> None:
 
 
 @pytest.mark.asyncio
-async def test_connector_history_purge_is_bounded_and_spares_live_requests_and_debited_windows() -> None:
+async def test_connector_history_purge_is_bounded_and_spares_live_requests_and_debited_windows() -> (
+    None
+):
     session = _Session()
     await scheduler.purge_collection_history(session, now=NOW)
     requests, sends, windows = session.sql
     assert "LIMIT 1000" in requests and "'queued'" not in requests and "2026-09-13" in requests
     assert "connector_provider_sends" in sends and "2026-10-06" in sends and "LIMIT 1000" in sends
-    assert "NOT (EXISTS" in windows and "connector_quota_debits" in windows and "2026-10-12" in windows
+    assert (
+        "NOT (EXISTS" in windows and "connector_quota_debits" in windows and "2026-10-12" in windows
+    )
 
 
 @pytest.mark.asyncio
@@ -105,7 +115,12 @@ async def test_seen_keys_skip_measurement_providers_without_querying() -> None:
     keys = [("a", "h")]
     kwargs = {"source_id": None, "source_generation": 1, "keys": keys}
     assert await ingestion.seen_record_keys(session, provider="open_meteo", **kwargs) == set()
-    assert await ingestion.seen_record_keys(session, provider="rss", source_id=None, source_generation=1, keys=[]) == set()
+    assert (
+        await ingestion.seen_record_keys(
+            session, provider="rss", source_id=None, source_generation=1, keys=[]
+        )
+        == set()
+    )
 
 
 @pytest.mark.asyncio
@@ -119,8 +134,12 @@ async def test_purged_deterministic_cleanup_event_is_republished_not_treated_as_
 
     published: list[object] = []
     identity = SimpleNamespace(
-        workspace_id=uuid4(), actor_user_id=1, membership_revision=1, configuration_revision=1,
-        source_id=uuid4(), source_generation=1,
+        workspace_id=uuid4(),
+        actor_user_id=1,
+        membership_revision=1,
+        configuration_revision=1,
+        source_id=uuid4(),
+        source_generation=1,
     )
 
     async def resolve(*_a, **_k):

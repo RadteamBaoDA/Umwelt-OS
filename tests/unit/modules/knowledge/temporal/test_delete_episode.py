@@ -48,7 +48,11 @@ class Scenario:
     """Wire graph, receipts, authorization and adapter for one delete case."""
 
     def __init__(
-        self, monkeypatch: pytest.MonkeyPatch, *, with_entity: bool = False, with_shared: bool = True,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        with_entity: bool = False,
+        with_shared: bool = True,
     ) -> None:
         self.graph = FakeGraph()
         self.episode_id = str(uuid4())
@@ -63,17 +67,30 @@ class Scenario:
         self.fact_ids = [self.fact_solo]
         if with_shared:
             graph.edges[self.fact_shared] = make_edge(
-                self.fact_shared, self.source_node, self.target_node, [self.episode_id, self.other_episode])
+                self.fact_shared,
+                self.source_node,
+                self.target_node,
+                [self.episode_id, self.other_episode],
+            )
             self.fact_ids = [self.fact_shared, self.fact_solo]
         graph.edges[self.fact_solo] = make_edge(
-            self.fact_solo, self.source_node, self.target_node, [self.episode_id])
+            self.fact_solo, self.source_node, self.target_node, [self.episode_id]
+        )
         graph.episodes[self.episode_id] = SimpleNamespace(
-            uuid=self.episode_id, group_id=GROUP, name="ep", source=SimpleNamespace(value="text"),
-            source_description="d", content="c", valid_at=NOW, created_at=NOW,
+            uuid=self.episode_id,
+            group_id=GROUP,
+            name="ep",
+            source=SimpleNamespace(value="text"),
+            source_description="d",
+            content="c",
+            valid_at=NOW,
+            created_at=NOW,
             entity_edges=list(self.fact_ids),
         )
         graph.mentions[self.mention_id] = SimpleNamespace(
-            uuid=self.mention_id, group_id=GROUP, source_node_uuid=self.episode_id,
+            uuid=self.mention_id,
+            group_id=GROUP,
+            source_node_uuid=self.episode_id,
             target_node_uuid=self.source_node,
         )
         if with_entity:
@@ -86,7 +103,8 @@ class Scenario:
         self.node_actions: tuple[CanonicalNodeRecoveryAction, ...] = ()
         self.authorize_node = AsyncMock()
         self.validate_partition = AsyncMock(
-            side_effect=lambda *args: graph.events.append(("validate",) + args))
+            side_effect=lambda *args: graph.events.append(("validate",) + args)
+        )
         self.adapter = TemporalGraph(GraphConfiguration(enabled=True, host="h"))
         self.adapter.state = GraphState.READY
         self.adapter._driver = object()
@@ -94,24 +112,41 @@ class Scenario:
         monkeypatch.setattr(self.adapter, "_partition_driver", AsyncMock(return_value=driver))
         monkeypatch.setattr(self.adapter, "_validate_partition", AsyncMock())
 
-    def receipts(self, *, phase_override: dict[str, Any] | None = None) -> tuple[GraphWriteReceipt, ...]:
+    def receipts(
+        self, *, phase_override: dict[str, Any] | None = None
+    ) -> tuple[GraphWriteReceipt, ...]:
         """Build a valid shell + bulk receipt history matching the fake graph."""
         episode_fp = _episode_state_fingerprint(self.graph.episodes[self.episode_id])
         facts = [self.graph.edges[item] for item in self.fact_ids]
         states = tuple(_fact_state(edge, DIMS) for edge in facts)
-        support = tuple(ExactFactSupport(
-            fact_id=s.fact_id, episode_ids=s.episode_ids, source_node_id=s.source_node_id,
-            target_node_id=s.target_node_id, state_fingerprint=s.state_fingerprint) for s in states)
+        support = tuple(
+            ExactFactSupport(
+                fact_id=s.fact_id,
+                episode_ids=s.episode_ids,
+                source_node_id=s.source_node_id,
+                target_node_id=s.target_node_id,
+                state_fingerprint=s.state_fingerprint,
+            )
+            for s in states
+        )
         common = {
-            "operation_id": self.operation_id, "lease_token": self.lease,
-            "episode_id": UUID(self.episode_id), "group_id": GROUP, "mapping_revision": 0,
-            "desired_support_digest": "a" * 64, **(phase_override or {}),
+            "operation_id": self.operation_id,
+            "lease_token": self.lease,
+            "episode_id": UUID(self.episode_id),
+            "group_id": GROUP,
+            "mapping_revision": 0,
+            "desired_support_digest": "a" * 64,
+            **(phase_override or {}),
         }
-        shell = GraphWriteReceipt(phase="shell_write_intent", episode_state_fingerprint=episode_fp, **common)
+        shell = GraphWriteReceipt(
+            phase="shell_write_intent", episode_state_fingerprint=episode_fp, **common
+        )
         entity_ids = (self.entity_id,) if self.entity_id else ()
         bulk = GraphWriteReceipt(
-            phase="bulk_write_intent", episode_state_fingerprint=episode_fp,
-            prior_episode_state_fingerprint=episode_fp, entity_ids=entity_ids,
+            phase="bulk_write_intent",
+            episode_state_fingerprint=episode_fp,
+            prior_episode_state_fingerprint=episode_fp,
+            entity_ids=entity_ids,
             mention_ids=(self.mention_id,),
             fact_ids=tuple(sorted(s.fact_id for s in states)),
             existing_fact_states=tuple(sorted(states, key=lambda s: s.fact_id)),
@@ -122,7 +157,9 @@ class Scenario:
         )
         return (shell, bulk)
 
-    def context(self, receipts: tuple[GraphWriteReceipt, ...] | None = None) -> OperationAuthorization:
+    def context(
+        self, receipts: tuple[GraphWriteReceipt, ...] | None = None
+    ) -> OperationAuthorization:
         """Build the owner closure with a journaling callback that logs ordering."""
         graph = self.graph
         journal = self.journal
@@ -142,10 +179,19 @@ class Scenario:
             journal.append(receipt)
 
         return OperationAuthorization(
-            group_id=GROUP, source_id=uuid4(), source_generation=1, operation_id=self.operation_id,
-            lease_token=self.lease, evidence=(), fence=fence, authorize=AsyncMock(),
-            canonicalize=AsyncMock(), validate_partition=self.validate_partition,
-            record_write_intent=record, reasoning=SimpleNamespace(), small_reasoning=SimpleNamespace(),
+            group_id=GROUP,
+            source_id=uuid4(),
+            source_generation=1,
+            operation_id=self.operation_id,
+            lease_token=self.lease,
+            evidence=(),
+            fence=fence,
+            authorize=AsyncMock(),
+            canonicalize=AsyncMock(),
+            validate_partition=self.validate_partition,
+            record_write_intent=record,
+            reasoning=SimpleNamespace(),
+            small_reasoning=SimpleNamespace(),
             embedding=SimpleNamespace(dimensions=DIMS),
             partition_episode_ids=(self.episode_id, self.other_episode),
             partition_inventory_complete=True,
@@ -157,8 +203,10 @@ class Scenario:
     async def delete(self, context: OperationAuthorization | None = None, **flags: bool) -> Any:
         """Run delete_episode with owned/tombstoned flags defaulting to True."""
         return await self.adapter.delete_episode(
-            UUID(self.episode_id), context or self.context(),
-            flags.get("known_owned", True), flags.get("tombstone_recorded", True),
+            UUID(self.episode_id),
+            context or self.context(),
+            flags.get("known_owned", True),
+            flags.get("tombstone_recorded", True),
         )
 
 
@@ -203,7 +251,9 @@ async def test_missing_receipts_unknown(scenario: Scenario) -> None:
     """Without any episode receipt the delete reports unknown and mutates nothing."""
     outcome = await scenario.delete(scenario.context(receipts=()))
     assert (outcome.removed, outcome.outcome) == (False, "unknown")
-    assert [e for e in scenario.graph.events if e[0] in {"write", "delete_fact", "delete_episode"}] == []
+    assert [
+        e for e in scenario.graph.events if e[0] in {"write", "delete_fact", "delete_episode"}
+    ] == []
 
 
 @pytest.mark.asyncio
@@ -227,7 +277,9 @@ async def test_receipt_phase_order_must_be_monotonic(scenario: Scenario) -> None
 
 
 @pytest.mark.asyncio
-async def test_shared_and_removed_support_subtraction_orders_journal_first(scenario: Scenario) -> None:
+async def test_shared_and_removed_support_subtraction_orders_journal_first(
+    scenario: Scenario,
+) -> None:
     """Intent is journaled before any mutation; shared fact keeps other support, solo fact is deleted."""
     outcome = await scenario.delete()
     events = scenario.graph.events
@@ -236,13 +288,21 @@ async def test_shared_and_removed_support_subtraction_orders_journal_first(scena
     assert outcome.shared_edge_ids == (scenario.fact_shared,)
     assert outcome.stale_edge_ids == () and outcome.node_recovery_required_ids == ()
     assert events[0] == ("fence_enter",) and events[-1] == ("fence_exit",)
-    first_mutation = min(i for i, e in enumerate(events) if e[0] in {"write", "delete_fact", "delete_episode"})
+    first_mutation = min(
+        i for i, e in enumerate(events) if e[0] in {"write", "delete_fact", "delete_episode"}
+    )
     assert events.index(("intent", "cleanup_write_intent")) < first_mutation
     assert len(scenario.journal) == 1 and scenario.journal[0].phase == "cleanup_write_intent"
-    shared_flow = [e for e in events[first_mutation - 1:] if e in {
-        ("read_edges", (scenario.fact_shared,)), ("write", scenario.fact_shared)}]
-    assert shared_flow == [("read_edges", (scenario.fact_shared,)), ("write", scenario.fact_shared),
-                           ("read_edges", (scenario.fact_shared,))]
+    shared_flow = [
+        e
+        for e in events[first_mutation - 1 :]
+        if e in {("read_edges", (scenario.fact_shared,)), ("write", scenario.fact_shared)}
+    ]
+    assert shared_flow == [
+        ("read_edges", (scenario.fact_shared,)),
+        ("write", scenario.fact_shared),
+        ("read_edges", (scenario.fact_shared,)),
+    ]
     assert scenario.graph.edges[scenario.fact_shared].episodes == [scenario.other_episode]
     assert scenario.fact_solo not in scenario.graph.edges
     assert scenario.episode_id not in scenario.graph.episodes
@@ -281,7 +341,9 @@ async def test_intent_recording_failure_returns_partial_unknown(scenario: Scenar
     assert (outcome.removed, outcome.outcome) == (False, "unknown")
     assert set(outcome.affected_edge_ids) == {scenario.fact_shared, scenario.fact_solo}
     assert outcome.shared_edge_ids == (scenario.fact_shared,)
-    assert [e for e in scenario.graph.events if e[0] in {"write", "delete_fact", "delete_episode"}] == []
+    assert [
+        e for e in scenario.graph.events if e[0] in {"write", "delete_fact", "delete_episode"}
+    ] == []
 
 
 @pytest.mark.asyncio
@@ -314,17 +376,34 @@ async def test_stale_fact_without_episode_support_is_reported_pending(scenario: 
     invalidated = datetime(2026, 2, 1, tzinfo=UTC)
     edge.invalid_at = invalidated
     shell, bulk = scenario.receipts()
-    prior = _fact_state(make_edge(scenario.fact_shared, scenario.source_node, scenario.target_node,
-                              [scenario.other_episode]), DIMS)
+    prior = _fact_state(
+        make_edge(
+            scenario.fact_shared,
+            scenario.source_node,
+            scenario.target_node,
+            [scenario.other_episode],
+        ),
+        DIMS,
+    )
     now_state = _fact_state(edge, DIMS)
     from dataclasses import replace
-    existing = tuple(prior if s.fact_id == scenario.fact_shared else s for s in bulk.existing_fact_states)
+
+    existing = tuple(
+        prior if s.fact_id == scenario.fact_shared else s for s in bulk.existing_fact_states
+    )
     intended = tuple(
         ExactFactSupport(
-            fact_id=scenario.fact_shared, episode_ids=now_state.episode_ids,
-            source_node_id=now_state.source_node_id, target_node_id=now_state.target_node_id,
-            invalid_at=invalidated, state_fingerprint=now_state.state_fingerprint,
-        ) if s.fact_id == scenario.fact_shared else s for s in bulk.intended_fact_support)
+            fact_id=scenario.fact_shared,
+            episode_ids=now_state.episode_ids,
+            source_node_id=now_state.source_node_id,
+            target_node_id=now_state.target_node_id,
+            invalid_at=invalidated,
+            state_fingerprint=now_state.state_fingerprint,
+        )
+        if s.fact_id == scenario.fact_shared
+        else s
+        for s in bulk.intended_fact_support
+    )
     stale_bulk = replace(bulk, existing_fact_states=existing, intended_fact_support=intended)
     outcome = await scenario.delete(scenario.context(receipts=(shell, stale_bulk)))
     assert scenario.fact_shared in outcome.shared_edge_ids
@@ -333,15 +412,19 @@ async def test_stale_fact_without_episode_support_is_reported_pending(scenario: 
 
 
 @pytest.mark.asyncio
-async def test_node_recovery_converges_when_retained_node_matches(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_node_recovery_converges_when_retained_node_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A retain action whose live node and incident links match clears the pending node id."""
     scenario = Scenario(monkeypatch, with_entity=True)
     entity = scenario.graph.entities[scenario.entity_id]
-    scenario.node_actions = (CanonicalNodeRecoveryAction(
-        graph_entity_uuid=scenario.entity_id,
-        expected_current_state_fingerprint=_entity_state_fingerprint(entity, DIMS),
-        action="retain",
-    ),)
+    scenario.node_actions = (
+        CanonicalNodeRecoveryAction(
+            graph_entity_uuid=scenario.entity_id,
+            expected_current_state_fingerprint=_entity_state_fingerprint(entity, DIMS),
+            action="retain",
+        ),
+    )
     outcome = await scenario.delete()
     assert outcome.node_recovery_required_ids == ()
     assert scenario.authorize_node.await_count == 2
@@ -349,7 +432,9 @@ async def test_node_recovery_converges_when_retained_node_matches(monkeypatch: p
 
 
 @pytest.mark.asyncio
-async def test_unretained_entity_ids_are_reported_for_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_unretained_entity_ids_are_reported_for_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Journaled entities without a converged action are returned as recovery-required ids."""
     scenario = Scenario(monkeypatch, with_entity=True)
     outcome = await scenario.delete()
@@ -384,4 +469,6 @@ async def test_episode_in_other_partition_is_refused(scenario: Scenario) -> None
     scenario.graph.episodes[scenario.episode_id].group_id = "other"
     outcome = await scenario.delete()
     assert (outcome.removed, outcome.outcome) == (False, "unknown")
-    assert [e for e in scenario.graph.events if e[0] in {"write", "delete_fact", "delete_episode"}] == []
+    assert [
+        e for e in scenario.graph.events if e[0] in {"write", "delete_fact", "delete_episode"}
+    ] == []

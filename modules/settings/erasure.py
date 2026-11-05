@@ -27,7 +27,9 @@ ERASURE_TABLES: tuple[str, ...] = (
 ERASURE_OWNER = AccountErasureOwner(ERASURE_TABLES)
 
 
-async def erase_account_settings_references(session: AsyncSession, scope: AccountErasureScope) -> None:
+async def erase_account_settings_references(
+    session: AsyncSession, scope: AccountErasureScope
+) -> None:
     """Anonymize the departing updater across peer translation settings without deleting them.
 
     Require original durable deletion authority, including for bootstrap account 1 whose
@@ -37,19 +39,31 @@ async def erase_account_settings_references(session: AsyncSession, scope: Accoun
     """
     await authorize_account_erasure(session, scope)
     record = _models.TranslationSettingsRecord
-    await session.execute(update(record).where(record.updated_by_user_id == scope.account_id).values(
-        updated_by_user_id=None, updated_at=record.updated_at,
-    ))
+    await session.execute(
+        update(record)
+        .where(record.updated_by_user_id == scope.account_id)
+        .values(
+            updated_by_user_id=None,
+            updated_at=record.updated_at,
+        )
+    )
 
 
-async def verify_account_settings_references(session: AsyncSession, scope: AccountErasureScope) -> None:
+async def verify_account_settings_references(
+    session: AsyncSession, scope: AccountErasureScope
+) -> None:
     """Reject completion while any translation setting still names the departing updater.
 
     Revalidate original deletion authority and check every workspace without exposing peer
     settings. Caller controls transaction cleanup; this read neither mutates nor commits.
     """
     await authorize_account_erasure(session, scope)
-    if await session.scalar(select(1).select_from(_models.TranslationSettingsRecord).where(
-        _models.TranslationSettingsRecord.updated_by_user_id == scope.account_id,
-    ).limit(1)):
+    if await session.scalar(
+        select(1)
+        .select_from(_models.TranslationSettingsRecord)
+        .where(
+            _models.TranslationSettingsRecord.updated_by_user_id == scope.account_id,
+        )
+        .limit(1)
+    ):
         raise RuntimeError("Account settings updater reference remains")

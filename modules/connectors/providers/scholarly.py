@@ -32,7 +32,9 @@ MAX_AUTHORS = 10
 _MAX_QUERY = 200
 _MAX_TITLE = 500
 _MAX_ABSTRACT = 3500
-_MAX_ABSTRACT_POSITION = 5000  # positions beyond this are ignored: bounds memory for hostile indexes
+_MAX_ABSTRACT_POSITION = (
+    5000  # positions beyond this are ignored: bounds memory for hostile indexes
+)
 _MAX_INDEX_WORDS = 5000
 _SELECT = "id,doi,title,publication_date,authorships,primary_location,cited_by_count,abstract_inverted_index"
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -49,7 +51,12 @@ def openalex_url(query: object) -> str:
     cleaned = " ".join(_CONTROL_RE.sub(" ", query).split())
     if not 1 <= len(cleaned) <= _MAX_QUERY:
         raise ProviderPayloadError("provider_scope_invalid")
-    params = {"search": cleaned, "sort": "publication_date:desc", "per-page": MAX_WORKS, "select": _SELECT}
+    params = {
+        "search": cleaned,
+        "sort": "publication_date:desc",
+        "per-page": MAX_WORKS,
+        "select": _SELECT,
+    }
     return f"{OPENALEX_URL}?" + urlencode(params, quote_via=quote)
 
 
@@ -122,7 +129,9 @@ def map_openalex(body: bytes, collected_at: datetime) -> list[IngestionRecord]:
         if not isinstance(work, dict):
             continue
         link = https_link(work.get("id"))
-        title = plain_text(work.get("title") if isinstance(work.get("title"), str) else None, _MAX_TITLE)
+        title = plain_text(
+            work.get("title") if isinstance(work.get("title"), str) else None, _MAX_TITLE
+        )
         if link is None or not title or len(link) > 512:
             continue
         abstract = rebuild_abstract(work.get("abstract_inverted_index"))
@@ -135,17 +144,31 @@ def map_openalex(body: bytes, collected_at: datetime) -> list[IngestionRecord]:
         cited = work.get("cited_by_count")
         fields: dict[str, Any] = {"title": title, "canonical_url": link}
         optional = {
-            "summary": abstract, "published_at": pub_iso, "authors": _authors(work.get("authorships")),
-            "doi": doi, "source": source,
+            "summary": abstract,
+            "published_at": pub_iso,
+            "authors": _authors(work.get("authorships")),
+            "doi": doi,
+            "source": source,
             "cited_by_count": cited if type(cited) is int and cited >= 0 else None,
         }
         fields.update({k: v for k, v in optional.items() if v is not None and v != "" and v != []})
-        basis: Literal["provider_published", "collection"] = "provider_published" if published else "collection"
+        basis: Literal["provider_published", "collection"] = (
+            "provider_published" if published else "collection"
+        )
         records[link] = _record(
-            provider="openalex", identity=link, title=title, summary=abstract, observed_at=published or collected_at,
-            collected_at=collected_at, version=content_version("openalex", link, title, abstract, doi, pub_iso),
-            basis=basis, modified_at=None, coverage="returned_snapshot", source_fields=fields,
-            canonical_url=link, published_at=pub_iso,
+            provider="openalex",
+            identity=link,
+            title=title,
+            summary=abstract,
+            observed_at=published or collected_at,
+            collected_at=collected_at,
+            version=content_version("openalex", link, title, abstract, doi, pub_iso),
+            basis=basis,
+            modified_at=None,
+            coverage="returned_snapshot",
+            source_fields=fields,
+            canonical_url=link,
+            published_at=pub_iso,
         )
     if not records:
         raise ProviderPayloadError("openalex_no_results", "incomplete")

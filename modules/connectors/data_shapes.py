@@ -11,29 +11,48 @@ from typing import Literal
 from modules.connectors.metric_catalog import provider_metrics
 from modules.connectors.provider_specs import get_provider_spec
 
-DataShape = Literal["news", "measurement", "event", "located", "messages", "video", "project_activity", "weather", "series", "job"]
+DataShape = Literal[
+    "news",
+    "measurement",
+    "event",
+    "located",
+    "messages",
+    "video",
+    "project_activity",
+    "weather",
+    "series",
+    "job",
+]
 
 # Providers outside the free-provider catalog (no FreeProviderSpec); health/home_assistant adapters
 # emit no metric observations, so they stay `news`.
-_NON_CATALOG: MappingProxyType[str, frozenset[DataShape]] = MappingProxyType({
-    "telegram": frozenset({"messages"}),
-    "youtube": frozenset({"video"}),
-    "github": frozenset({"project_activity"}),
-    "open_meteo": frozenset({"measurement", "weather", "located"}),  # writes the configured latitude/longitude
-})
+_NON_CATALOG: MappingProxyType[str, frozenset[DataShape]] = MappingProxyType(
+    {
+        "telegram": frozenset({"messages"}),
+        "youtube": frozenset({"video"}),
+        "github": frozenset({"project_activity"}),
+        "open_meteo": frozenset(
+            {"measurement", "weather", "located"}
+        ),  # writes the configured latitude/longitude
+    }
+)
 # Added on top of FreeProviderSpec.data_kind: adapters that write latitude/longitude and/or a numeric metric.
-_EXTRA: MappingProxyType[str, frozenset[DataShape]] = MappingProxyType({
-    "usgs": frozenset({"located", "measurement"}),  # earthquake_magnitude + coordinates
-    "nasa_eonet": frozenset({"located"}),  # coordinates nullable per event
-    "openweathermap": frozenset({"located"}),
-    "openaq": frozenset({"located"}),  # coordinates nullable per location
-    "nasa_firms": frozenset({"located", "measurement"}),  # fire_radiative_power at hotspot lat/lon
-    "iss_position": frozenset({"located"}),
-    # Job postings stay news documents (Feed keeps working) and also fit the Jobs table gadget.
-    "vietnamworks_jobs": frozenset({"job"}),
-    "itviec_jobs": frozenset({"job"}),
-    "wwr_jobs": frozenset({"job"}),
-})
+_EXTRA: MappingProxyType[str, frozenset[DataShape]] = MappingProxyType(
+    {
+        "usgs": frozenset({"located", "measurement"}),  # earthquake_magnitude + coordinates
+        "nasa_eonet": frozenset({"located"}),  # coordinates nullable per event
+        "openweathermap": frozenset({"located"}),
+        "openaq": frozenset({"located"}),  # coordinates nullable per location
+        "nasa_firms": frozenset(
+            {"located", "measurement"}
+        ),  # fire_radiative_power at hotspot lat/lon
+        "iss_position": frozenset({"located"}),
+        # Job postings stay news documents (Feed keeps working) and also fit the Jobs table gadget.
+        "vietnamworks_jobs": frozenset({"job"}),
+        "itviec_jobs": frozenset({"job"}),
+        "wwr_jobs": frozenset({"job"}),
+    }
+)
 
 
 def source_data_shapes(provider: str | None, source_type: str) -> frozenset[DataShape]:

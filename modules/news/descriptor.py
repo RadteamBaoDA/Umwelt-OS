@@ -12,7 +12,9 @@ class NewsDescriptor(ModuleDescriptor):
     id: str = "news"
     name: str = "News"
     version: str = "1.0.0"
-    description: str = "Owner-managed topic interests with story clustering and explainable relevance scoring."
+    description: str = (
+        "Owner-managed topic interests with story clustering and explainable relevance scoring."
+    )
     enabled: bool = True
     dependencies: tuple[str, ...] = ()
     optional_dependencies: tuple[str, ...] = (
@@ -48,8 +50,12 @@ class NewsDescriptor(ModuleDescriptor):
     erasure_module: str | None = "modules.news.erasure"
     erasure_order: int = 140
     event_consumers: tuple[EventConsumerSpec, ...] = (
-        EventConsumerSpec("news.document.ready", "process_news_document_ready",
-                          ("modules.ingestion", "modules.knowledge.documents"), "modules.ingestion.public:DocumentReadyEventHandler"),
+        EventConsumerSpec(
+            "news.document.ready",
+            "process_news_document_ready",
+            ("modules.ingestion", "modules.knowledge.documents"),
+            "modules.ingestion.public:DocumentReadyEventHandler",
+        ),
     )
 
 

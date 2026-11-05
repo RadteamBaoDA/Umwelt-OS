@@ -34,14 +34,18 @@ MAX_BATCH_BYTES = 10 * 1024 * 1024
 MAX_TRANSPORT_BYTES = 25 * 1024 * 1024
 MAX_PAGE_BYTES = 10 * 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 30
-DEFAULT_USER_AGENT = "Umwelt-OS/1.0 (self-hosted personal intelligence; +https://github.com/umwelt-os)"
+DEFAULT_USER_AGENT = (
+    "Umwelt-OS/1.0 (self-hosted personal intelligence; +https://github.com/umwelt-os)"
+)
 RUN_DEADLINE_SECONDS = 90
 
 Resolver = Callable[[str, int], Awaitable[list[str]]]
 BeforeSend = Callable[[], Awaitable[None]]
 
 
-class CollectionIncomplete(Exception):  # control-flow signal named by the protocol's collection_incomplete code
+class CollectionIncomplete(
+    Exception
+):  # control-flow signal named by the protocol's collection_incomplete code
     """A cap was reached while more data exists; nothing may be accepted or advanced."""
 
 
@@ -97,7 +101,9 @@ def _origin(url: str) -> tuple[str, str, int]:
     return scheme, (parts.hostname or "").lower(), parts.port or (443 if scheme == "https" else 80)
 
 
-def _pinned_request(url: str, address: str, headers: dict[str, str]) -> tuple[str, dict[str, str], dict[str, object]]:
+def _pinned_request(
+    url: str, address: str, headers: dict[str, str]
+) -> tuple[str, dict[str, str], dict[str, object]]:
     """Rewrite ``url`` to the validated IP, preserving Host and the TLS server name."""
     parts = urlsplit(url)
     host = parts.hostname or ""
@@ -111,9 +117,15 @@ def _pinned_request(url: str, address: str, headers: dict[str, str]) -> tuple[st
 
 
 async def fetch_bounded(
-    url: str, *, headers: dict[str, str] | None = None, before_send: BeforeSend,
-    resolve: Resolver = resolve_public, transport: httpx.AsyncBaseTransport | None = None,
-    max_bytes: int = MAX_PAGE_BYTES, timeout: float = REQUEST_TIMEOUT_SECONDS, json_body: bytes | None = None,  # noqa: ASYNC109  # forwarded to the HTTP client request timeout
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    before_send: BeforeSend,
+    resolve: Resolver = resolve_public,
+    transport: httpx.AsyncBaseTransport | None = None,
+    max_bytes: int = MAX_PAGE_BYTES,
+    timeout: float = REQUEST_TIMEOUT_SECONDS,
+    json_body: bytes | None = None,  # noqa: ASYNC109  # forwarded to the HTTP client request timeout
 ) -> Fetched:
     """GET (or, with ``json_body``, POST that JSON to) one URL through the pinned public destination with byte, status and time bounds.
 
@@ -124,7 +136,12 @@ async def fetch_bounded(
     Retry-After; redirects and other 3xx raise ``UnsafeDestination``; 304 returns no body.
     """
     parts = urlsplit(url)
-    if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password:
+    if (
+        parts.scheme not in {"http", "https"}
+        or not parts.hostname
+        or parts.username
+        or parts.password
+    ):
         raise UnsafeDestination("url_not_allowed")
     port = parts.port or (443 if parts.scheme == "https" else 80)
     addresses = await resolve(parts.hostname, port)
@@ -139,14 +156,23 @@ async def fetch_bounded(
         merged.setdefault("Content-Type", "application/json")
     pinned, request_headers, extensions = _pinned_request(url, addresses[0], merged)
     async with httpx.AsyncClient(
-        transport=transport, timeout=httpx.Timeout(timeout), trust_env=False,
-        follow_redirects=False, verify=True,
+        transport=transport,
+        timeout=httpx.Timeout(timeout),
+        trust_env=False,
+        follow_redirects=False,
+        verify=True,
     ) as client:
         await before_send()
-        async with asyncio.timeout(timeout), client.stream(
-            "GET" if json_body is None else "POST", pinned, headers=request_headers, extensions=extensions,
-            content=json_body,
-        ) as response:
+        async with (
+            asyncio.timeout(timeout),
+            client.stream(
+                "GET" if json_body is None else "POST",
+                pinned,
+                headers=request_headers,
+                extensions=extensions,
+                content=json_body,
+            ) as response,
+        ):
             status = response.status_code
             if status == 429:
                 raise ProviderRateLimited(_retry_deadline(response.headers, datetime.now(UTC)))
@@ -160,7 +186,9 @@ async def fetch_bounded(
             if advertised is not None and advertised.isdigit() and int(advertised) > max_bytes:
                 raise CollectionIncomplete
             body = await _read_capped(response, max_bytes)
-            return Fetched(body, response.headers.get("etag"), response.headers.get("last-modified"))
+            return Fetched(
+                body, response.headers.get("etag"), response.headers.get("last-modified")
+            )
 
 
 _WBITS = {"gzip": 16 + zlib.MAX_WBITS, "x-gzip": 16 + zlib.MAX_WBITS, "deflate": zlib.MAX_WBITS}
@@ -175,7 +203,9 @@ async def _read_capped(response: httpx.Response, max_bytes: int) -> bytes:
     """
     encoding = response.headers.get("content-encoding", "identity").strip().lower()
     body = bytearray()
-    if response.is_stream_consumed:  # in-memory response (already read by the transport): decoded, cap only
+    if (
+        response.is_stream_consumed
+    ):  # in-memory response (already read by the transport): decoded, cap only
         if len(response.content) > max_bytes:
             raise CollectionIncomplete
         return response.content
@@ -248,25 +278,48 @@ class Checkpoint:
 
     def encode(self) -> str:
         """Serialize to a bounded JSON string."""
-        text = json.dumps({"v": 1, "url": self.url, "rev": self.revision, "cur": self.cursor, "max": self.max_time,
-                           "etag": self.etag, "lm": self.last_modified, "ids": self.ids[:MAX_CHECKPOINT_IDS]},
-                          separators=(",", ":"))
+        text = json.dumps(
+            {
+                "v": 1,
+                "url": self.url,
+                "rev": self.revision,
+                "cur": self.cursor,
+                "max": self.max_time,
+                "etag": self.etag,
+                "lm": self.last_modified,
+                "ids": self.ids[:MAX_CHECKPOINT_IDS],
+            },
+            separators=(",", ":"),
+        )
         if len(text.encode()) > MAX_CHECKPOINT_BYTES:
             raise CollectionIncomplete  # cannot represent the continuation exactly
         return text
 
     @classmethod
-    def decode(cls, raw: str | None, *, revision: int, cursor: str | None, origin_url: str | None) -> "Checkpoint | None":
+    def decode(
+        cls, raw: str | None, *, revision: int, cursor: str | None, origin_url: str | None
+    ) -> "Checkpoint | None":
         """Return the checkpoint only when it still matches revision, cursor and origin; else None."""
         if not raw:
             return None
         try:
             data = json.loads(raw)
-            cp = cls(url=str(data["url"]), revision=int(data["rev"]), cursor=data["cur"], max_time=data.get("max"),
-                     etag=data.get("etag"), last_modified=data.get("lm"), ids=[str(i) for i in data.get("ids", [])])
+            cp = cls(
+                url=str(data["url"]),
+                revision=int(data["rev"]),
+                cursor=data["cur"],
+                max_time=data.get("max"),
+                etag=data.get("etag"),
+                last_modified=data.get("lm"),
+                ids=[str(i) for i in data.get("ids", [])],
+            )
         except (ValueError, KeyError, TypeError):
             return None
-        if cp.revision != revision or cp.cursor != cursor or (origin_url is not None and _origin(cp.url) != _origin(origin_url)):
+        if (
+            cp.revision != revision
+            or cp.cursor != cursor
+            or (origin_url is not None and _origin(cp.url) != _origin(origin_url))
+        ):
             return None
         return cp
 
@@ -281,7 +334,7 @@ def later(a: str | None, b: str | None) -> str | None:
     ta, tb = _parse_time(a), _parse_time(b)
     if ta is None or tb is None:
         return a if tb is None else b
-    return (a if ta >= tb else b)
+    return a if ta >= tb else b
 
 
 @dataclass
@@ -303,7 +356,9 @@ class RestCollection:
     last_modified: str | None = None
 
 
-def map_page(payload: Any, config: Any, floor: datetime | None) -> list[tuple[dict[str, Any], datetime | None]]:
+def map_page(
+    payload: Any, config: Any, floor: datetime | None
+) -> list[tuple[dict[str, Any], datetime | None]]:
     """Map one decoded page with the configured dotted paths; no expression evaluation.
 
     Rows without an id are skipped; rows with a parseable time older than ``floor`` are
@@ -327,18 +382,32 @@ def map_page(payload: Any, config: Any, floor: datetime | None) -> list[tuple[di
             continue
         title = _walk(row, config.title_field) if config.title_field else None
         body = _walk(row, config.content_field) if config.content_field else None
-        mapped.append((normalize({
-            "provider_id": str(identifier),
-            "content": str(body if body is not None else (title or "")),
-            "observed_at": datetime.now(UTC).isoformat(),
-            "version": str(raw_time) if moment is not None else None,
-            "metadata": {"title": title[:500] if isinstance(title, str) else None, "published_at": None},
-        }), moment))
+        mapped.append(
+            (
+                normalize(
+                    {
+                        "provider_id": str(identifier),
+                        "content": str(body if body is not None else (title or "")),
+                        "observed_at": datetime.now(UTC).isoformat(),
+                        "version": str(raw_time) if moment is not None else None,
+                        "metadata": {
+                            "title": title[:500] if isinstance(title, str) else None,
+                            "published_at": None,
+                        },
+                    }
+                ),
+                moment,
+            )
+        )
     return mapped
 
 
 async def _map_new_page(
-    payload: Any, config: Any, floor: datetime | None, skip: set[str], seen_ids: set[str],
+    payload: Any,
+    config: Any,
+    floor: datetime | None,
+    skip: set[str],
+    seen_ids: set[str],
 ) -> tuple[list[tuple[dict[str, Any], datetime | None]], int]:
     """Map one decoded page (off the event loop) and drop rows already committed or already seen this walk.
 
@@ -375,8 +444,12 @@ def _next_page_url(payload: Any, url: str, origin: tuple[str, str, int]) -> str 
 
 
 async def collect_rest(
-    config: Any, cursor: str | None, *, fetch: Callable[..., Awaitable[Fetched]],
-    conditional: dict[str, str] | None = None, resume: Checkpoint | None = None,
+    config: Any,
+    cursor: str | None,
+    *,
+    fetch: Callable[..., Awaitable[Fetched]],
+    conditional: dict[str, str] | None = None,
+    resume: Checkpoint | None = None,
 ) -> RestCollection:
     """Walk ``next_url`` pages (same origin only) and map them.
 
@@ -398,7 +471,8 @@ async def collect_rest(
     result = RestCollection(
         max_time=resume.max_time if resume is not None else None,
         etag=resume.etag if resume is not None else None,
-        last_modified=resume.last_modified if resume is not None else None)
+        last_modified=resume.last_modified if resume is not None else None,
+    )
     batch_bytes = 0
     url: str | None = start
     while url is not None:
@@ -420,13 +494,16 @@ async def collect_rest(
             result.etag, result.last_modified = fetched.etag, fetched.last_modified
         page_bytes = len(fetched.body)
         try:
-            payload = await to_thread_joined(json.loads, fetched.body)  # up to 10 MB: keep it off the worker loop
+            payload = await to_thread_joined(
+                json.loads, fetched.body
+            )  # up to 10 MB: keep it off the worker loop
         except (UnicodeDecodeError, ValueError) as exc:
             raise RestSchemaChanged("response_not_json") from exc
         page, page_size = await _map_new_page(payload, config, floor, skip, seen_ids)
         if (
             result.transport_bytes + page_bytes > MAX_TRANSPORT_BYTES
-            or len(result.records) + len(page) > MAX_RECORDS or batch_bytes + page_size > MAX_BATCH_BYTES
+            or len(result.records) + len(page) > MAX_RECORDS
+            or batch_bytes + page_size > MAX_BATCH_BYTES
         ):
             if not result.records:
                 raise CollectionIncomplete  # one page alone exceeds the batch bounds: no safe slice
@@ -439,8 +516,11 @@ async def collect_rest(
             if moment is not None:
                 result.max_time = later(result.max_time, moment.isoformat())
         url = _next_page_url(payload, url, origin)
-    result.cursor_after = cursor if result.continuation_url is not None or result.not_modified else (
-        result.max_time or cursor)
+    result.cursor_after = (
+        cursor
+        if result.continuation_url is not None or result.not_modified
+        else (result.max_time or cursor)
+    )
     return result
 
 

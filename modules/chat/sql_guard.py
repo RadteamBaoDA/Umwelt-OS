@@ -21,55 +21,228 @@ ALLOWED_RELATIONS = frozenset({"scoped_observations", "scoped_documents"})
 
 #: Syntax-tree node types a chat query may contain. Anything else (RangeFunction, XmlExpr, IntoClause,
 #: LockingClause, ParamRef, INSERT/UPDATE/DELETE, ...) is rejected by default.
-_ALLOWED_NODES = frozenset({
-    "SelectStmt", "WithClause", "CommonTableExpr", "RangeVar", "RangeSubselect", "JoinExpr", "Alias",
-    "ResTarget", "ColumnRef", "A_Const", "A_Expr", "A_Star", "A_Indirection", "A_ArrayExpr", "A_Indices",
-    "BoolExpr", "NullTest", "BooleanTest", "CaseExpr", "CaseWhen", "CoalesceExpr", "MinMaxExpr",
-    "SubLink", "TypeCast", "TypeName", "FuncCall", "SortBy", "WindowDef", "String", "Integer", "Float",
-    "Boolean", "SQLValueFunction", "GroupingSet", "RowExpr",
-})
+_ALLOWED_NODES = frozenset(
+    {
+        "SelectStmt",
+        "WithClause",
+        "CommonTableExpr",
+        "RangeVar",
+        "RangeSubselect",
+        "JoinExpr",
+        "Alias",
+        "ResTarget",
+        "ColumnRef",
+        "A_Const",
+        "A_Expr",
+        "A_Star",
+        "A_Indirection",
+        "A_ArrayExpr",
+        "A_Indices",
+        "BoolExpr",
+        "NullTest",
+        "BooleanTest",
+        "CaseExpr",
+        "CaseWhen",
+        "CoalesceExpr",
+        "MinMaxExpr",
+        "SubLink",
+        "TypeCast",
+        "TypeName",
+        "FuncCall",
+        "SortBy",
+        "WindowDef",
+        "String",
+        "Integer",
+        "Float",
+        "Boolean",
+        "SQLValueFunction",
+        "GroupingSet",
+        "RowExpr",
+    }
+)
 
-_ALLOWED_FUNCTIONS = frozenset({
-    # aggregates and statistics
-    "count", "sum", "avg", "min", "max", "stddev", "stddev_pop", "stddev_samp", "variance", "var_pop",
-    "var_samp", "corr", "percentile_cont", "percentile_disc", "string_agg", "array_agg", "bool_and",
-    "bool_or", "every",
-    # window functions
-    "row_number", "rank", "dense_rank", "percent_rank", "cume_dist", "ntile", "lag", "lead",
-    "first_value", "last_value", "nth_value",
-    # strings
-    "lower", "upper", "initcap", "length", "char_length", "character_length", "btrim", "ltrim", "rtrim",
-    "substring", "substr", "replace", "left", "right", "concat", "concat_ws", "position", "strpos",
-    "split_part", "lpad", "rpad", "reverse", "to_char", "to_number", "overlay",
-    # SIMILAR TO is parsed into ``~ similar_to_escape(pattern)``: a pure pattern translation, no more
-    # powerful than the allowed ``~`` regex operators
-    "similar_to_escape",
-    # dates (now() is STABLE and side-effect free, so it is allowed)
-    "date_trunc", "date_part", "extract", "age", "now", "timezone", "to_date", "to_timestamp",
-    # math
-    "round", "trunc", "ceil", "ceiling", "floor", "abs", "sign", "sqrt", "power", "exp", "ln", "log",
-    "log10", "mod", "width_bucket",
-    # json read helpers (the -> / ->> / #> operators are allowed separately)
-    "jsonb_typeof", "jsonb_array_length", "jsonb_extract_path_text", "json_typeof",
-})
+_ALLOWED_FUNCTIONS = frozenset(
+    {
+        # aggregates and statistics
+        "count",
+        "sum",
+        "avg",
+        "min",
+        "max",
+        "stddev",
+        "stddev_pop",
+        "stddev_samp",
+        "variance",
+        "var_pop",
+        "var_samp",
+        "corr",
+        "percentile_cont",
+        "percentile_disc",
+        "string_agg",
+        "array_agg",
+        "bool_and",
+        "bool_or",
+        "every",
+        # window functions
+        "row_number",
+        "rank",
+        "dense_rank",
+        "percent_rank",
+        "cume_dist",
+        "ntile",
+        "lag",
+        "lead",
+        "first_value",
+        "last_value",
+        "nth_value",
+        # strings
+        "lower",
+        "upper",
+        "initcap",
+        "length",
+        "char_length",
+        "character_length",
+        "btrim",
+        "ltrim",
+        "rtrim",
+        "substring",
+        "substr",
+        "replace",
+        "left",
+        "right",
+        "concat",
+        "concat_ws",
+        "position",
+        "strpos",
+        "split_part",
+        "lpad",
+        "rpad",
+        "reverse",
+        "to_char",
+        "to_number",
+        "overlay",
+        # SIMILAR TO is parsed into ``~ similar_to_escape(pattern)``: a pure pattern translation, no more
+        # powerful than the allowed ``~`` regex operators
+        "similar_to_escape",
+        # dates (now() is STABLE and side-effect free, so it is allowed)
+        "date_trunc",
+        "date_part",
+        "extract",
+        "age",
+        "now",
+        "timezone",
+        "to_date",
+        "to_timestamp",
+        # math
+        "round",
+        "trunc",
+        "ceil",
+        "ceiling",
+        "floor",
+        "abs",
+        "sign",
+        "sqrt",
+        "power",
+        "exp",
+        "ln",
+        "log",
+        "log10",
+        "mod",
+        "width_bucket",
+        # json read helpers (the -> / ->> / #> operators are allowed separately)
+        "jsonb_typeof",
+        "jsonb_array_length",
+        "jsonb_extract_path_text",
+        "json_typeof",
+    }
+)
 
-_ALLOWED_OPERATORS = frozenset({
-    "+", "-", "*", "/", "%", "^", "=", "<>", "!=", "<", ">", "<=", ">=", "||", "~~", "!~~", "~~*", "!~~*",
-    "~", "!~", "~*", "!~*", "->", "->>", "#>", "#>>", "@>", "<@", "?", "?|", "?&", "BETWEEN", "NOT BETWEEN",
-    "BETWEEN SYMMETRIC", "NOT BETWEEN SYMMETRIC", "IN", "NOT IN", "LIKE", "NOT LIKE", "ILIKE", "NOT ILIKE",
-})
+_ALLOWED_OPERATORS = frozenset(
+    {
+        "+",
+        "-",
+        "*",
+        "/",
+        "%",
+        "^",
+        "=",
+        "<>",
+        "!=",
+        "<",
+        ">",
+        "<=",
+        ">=",
+        "||",
+        "~~",
+        "!~~",
+        "~~*",
+        "!~~*",
+        "~",
+        "!~",
+        "~*",
+        "!~*",
+        "->",
+        "->>",
+        "#>",
+        "#>>",
+        "@>",
+        "<@",
+        "?",
+        "?|",
+        "?&",
+        "BETWEEN",
+        "NOT BETWEEN",
+        "BETWEEN SYMMETRIC",
+        "NOT BETWEEN SYMMETRIC",
+        "IN",
+        "NOT IN",
+        "LIKE",
+        "NOT LIKE",
+        "ILIKE",
+        "NOT ILIKE",
+    }
+)
 # SIMILAR TO needs no entry above: the parser rewrites ``a SIMILAR TO b`` to the already-allowed regex
 # operator ``~`` applied to ``similar_to_escape(b)``, so it is permitted via that function in ``_ALLOWED_FUNCTIONS`` above.
 
-_ALLOWED_CAST_TYPES = frozenset({
-    "text", "varchar", "bpchar", "char", "int2", "int4", "int8", "int", "integer", "bigint", "smallint",
-    "numeric", "decimal", "float4", "float8", "real", "double precision", "date", "time", "timestamp",
-    "timestamptz", "interval", "bool", "boolean", "jsonb", "json", "uuid",
-})
+_ALLOWED_CAST_TYPES = frozenset(
+    {
+        "text",
+        "varchar",
+        "bpchar",
+        "char",
+        "int2",
+        "int4",
+        "int8",
+        "int",
+        "integer",
+        "bigint",
+        "smallint",
+        "numeric",
+        "decimal",
+        "float4",
+        "float8",
+        "real",
+        "double precision",
+        "date",
+        "time",
+        "timestamp",
+        "timestamptz",
+        "interval",
+        "bool",
+        "boolean",
+        "jsonb",
+        "json",
+        "uuid",
+    }
+)
 
 #: ``SQLValueFunctionOp`` member-name prefixes that are pure date/time reads.
 _TIME_VALUE_FUNCTION_PREFIXES = (
-    "SVFOP_CURRENT_DATE", "SVFOP_CURRENT_TIME", "SVFOP_CURRENT_TIMESTAMP", "SVFOP_LOCALTIME",
+    "SVFOP_CURRENT_DATE",
+    "SVFOP_CURRENT_TIME",
+    "SVFOP_CURRENT_TIMESTAMP",
+    "SVFOP_LOCALTIME",
 )
 
 

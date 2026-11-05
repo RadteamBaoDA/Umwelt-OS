@@ -30,24 +30,40 @@ def by_id(records):
 
 def test_bbc_fixture_mapping():
     recs = by_id(map_feed("bbc_world", fixture("bbc_world_rss.xml"), NOW))
-    assert set(recs) == {"story-42", "https://www.bbc.co.uk/news/articles/c2", "story-43", "story-44"}
+    assert set(recs) == {
+        "story-42",
+        "https://www.bbc.co.uk/news/articles/c2",
+        "story-43",
+        "story-44",
+    }
     first = recs["story-42"]
     assert first.metadata["title"] == "Market & policy"
     assert first.observed_at == datetime(2026, 10, 7, 8, 0, tzinfo=UTC)
-    assert "alert" not in first.content and "<" not in first.content and "Rates hold" in first.content
+    assert (
+        "alert" not in first.content and "<" not in first.content and "Rates hold" in first.content
+    )
     assert pr(first)["world_data"] is None
     assert pr(first)["timestamp_basis"] == "provider_published"
     assert pr(first)["source_fields"]["publisher"] == "BBC News"
-    assert pr(first)["source_fields"]["canonical_url"].endswith("at_medium=RSS")  # raw origin URL preserved
-    assert first.metadata["full_text_available"] is False and first.metadata["content_scope"] == "feed_summary"
-    assert recs["https://www.bbc.co.uk/news/articles/c2"].observed_at == datetime(2026, 10, 7, 8, 30, tzinfo=UTC)
+    assert pr(first)["source_fields"]["canonical_url"].endswith(
+        "at_medium=RSS"
+    )  # raw origin URL preserved
+    assert (
+        first.metadata["full_text_available"] is False
+        and first.metadata["content_scope"] == "feed_summary"
+    )
+    assert recs["https://www.bbc.co.uk/news/articles/c2"].observed_at == datetime(
+        2026, 10, 7, 8, 30, tzinfo=UTC
+    )
     assert "canonical_url" not in pr(recs["story-44"])["source_fields"]  # javascript: link dropped
     assert pr(first)["license_label"]
 
 
 def test_missing_date_uses_collection_basis_and_version_ignores_clock():
     a = by_id(map_feed("bbc_world", fixture("bbc_world_rss.xml"), NOW))["story-43"]
-    b = by_id(map_feed("bbc_world", fixture("bbc_world_rss.xml"), NOW + timedelta(hours=5)))["story-43"]
+    b = by_id(map_feed("bbc_world", fixture("bbc_world_rss.xml"), NOW + timedelta(hours=5)))[
+        "story-43"
+    ]
     assert pr(a)["timestamp_basis"] == "collection" and a.observed_at == NOW
     assert b.observed_at != a.observed_at
     assert a.version == b.version and a.provider_id == b.provider_id
@@ -70,7 +86,9 @@ def test_duplicate_guid_in_one_feed_collapses():
     xml = fixture("bbc_world_rss.xml").decode()
     item = re.findall(r"<item>.*?</item>", xml, re.DOTALL)[0]
     doubled = xml.replace("</channel>", item + "</channel>").encode()
-    assert len(map_feed("bbc_world", doubled, NOW)) == len(map_feed("bbc_world", fixture("bbc_world_rss.xml"), NOW))
+    assert len(map_feed("bbc_world", doubled, NOW)) == len(
+        map_feed("bbc_world", fixture("bbc_world_rss.xml"), NOW)
+    )
 
 
 def test_atom_dates_and_modified():
@@ -93,15 +111,18 @@ def test_hostile_xml_rejected():
         map_feed("bbc_world", fixture("news_hostile_doctype.xml"), NOW)
 
 
-@pytest.mark.parametrize("body", [
-    pytest.param("<?xml version='1.0' encoding='UTF-16'?><rss/>".encode("utf-16"), id="utf16"),
-    pytest.param(b"<?xml version='1.0' encoding='ISO-8859-1'?><rss/>", id="latin1"),
-    pytest.param(b"<html><body>captcha</body></html>", id="html"),
-    pytest.param(b"", id="empty"),
-    pytest.param(b"<rss><channel></rss>", id="malformed"),
-    pytest.param(b"<rss><channel/></rss>", id="no_items"),
-    pytest.param(b"x" * (1024 * 1024 + 1), id="oversize"),
-])
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param("<?xml version='1.0' encoding='UTF-16'?><rss/>".encode("utf-16"), id="utf16"),
+        pytest.param(b"<?xml version='1.0' encoding='ISO-8859-1'?><rss/>", id="latin1"),
+        pytest.param(b"<html><body>captcha</body></html>", id="html"),
+        pytest.param(b"", id="empty"),
+        pytest.param(b"<rss><channel></rss>", id="malformed"),
+        pytest.param(b"<rss><channel/></rss>", id="no_items"),
+        pytest.param(b"x" * (1024 * 1024 + 1), id="oversize"),
+    ],
+)
 def test_malformed_or_non_feed_rejected(body):
     with pytest.raises(ProviderPayloadError):
         map_feed("bbc_world", body, NOW)
@@ -111,7 +132,8 @@ def _rss(items: int) -> bytes:
     """Build an RSS body of ``items`` dated items; item 0 is the newest."""
     rows = "".join(
         f"<item><title>t{i}</title><guid>g{i}</guid><pubDate>{(NOW - timedelta(hours=i + 1)).strftime('%a, %d %b %Y %H:%M:%S GMT')}</pubDate></item>"
-        for i in range(items))
+        for i in range(items)
+    )
     return f"<rss><channel>{rows}</channel></rss>".encode()
 
 
@@ -127,23 +149,35 @@ def test_map_feed_keeps_all_scanned_items_for_selection():
 
 
 def test_item_flood_rejected():
-    flood = "<rss><channel>" + "<item><title>t</title><guid>g</guid></item>" * 501 + "</channel></rss>"
+    flood = (
+        "<rss><channel>" + "<item><title>t</title><guid>g</guid></item>" * 501 + "</channel></rss>"
+    )
     with pytest.raises(ProviderPayloadError, match="too_many_items"):
         map_feed("bbc_world", flood.encode(), NOW)
 
 
 def test_future_and_naive_dates_ignored():
     future = (NOW + timedelta(days=3)).strftime("%a, %d %b %Y %H:%M:%S GMT")
-    xml = (f"<rss><channel><item><title>t</title><guid>g</guid><pubDate>{future}</pubDate></item>"
-           "<item><title>u</title><guid>h</guid><pubDate>7 Oct 2026 08:00:00 -0000</pubDate></item></channel></rss>")
-    assert {pr(r)["timestamp_basis"] for r in map_feed("bbc_world", xml.encode(), NOW)} == {"collection"}
+    xml = (
+        f"<rss><channel><item><title>t</title><guid>g</guid><pubDate>{future}</pubDate></item>"
+        "<item><title>u</title><guid>h</guid><pubDate>7 Oct 2026 08:00:00 -0000</pubDate></item></channel></rss>"
+    )
+    assert {pr(r)["timestamp_basis"] for r in map_feed("bbc_world", xml.encode(), NOW)} == {
+        "collection"
+    }
 
 
 def test_conditional_get_and_304():
-    stored = capture_validators("bbc_world", {"ETag": '"abc"', "Last-Modified": "Wed, 07 Oct 2026 08:00:00 GMT"}, "r1")
+    stored = capture_validators(
+        "bbc_world", {"ETag": '"abc"', "Last-Modified": "Wed, 07 Oct 2026 08:00:00 GMT"}, "r1"
+    )
     assert feed_request("bbc_world", stored, "r1").headers["If-None-Match"] == '"abc"'
-    assert "If-None-Match" not in feed_request("bbc_world", stored, "r2").headers  # config revision changed
-    assert "If-None-Match" not in feed_request("vnexpress_business", stored, "r1").headers  # other URL
+    assert (
+        "If-None-Match" not in feed_request("bbc_world", stored, "r2").headers
+    )  # config revision changed
+    assert (
+        "If-None-Match" not in feed_request("vnexpress_business", stored, "r1").headers
+    )  # other URL
     assert "If-None-Match" not in feed_request("tuoitre_news", stored, "r1").headers  # other URL
     bad = FeedValidators(stored.url, "r1", "bad\r\nX: y")
     assert "If-None-Match" not in feed_request("bbc_world", bad, "r1").headers
@@ -164,11 +198,17 @@ def test_feed_request_fixed_hosts():
 
 def test_hn_top_ids_bounded_and_deduped():
     ids = parse_hn_top_ids(fixture("hn_topstories.json"))
-    assert len(ids) == HN_MAX_ITEMS and len(set(ids)) == len(ids) and ids[:3] == (41000001, 41000002, 41000003)
+    assert (
+        len(ids) == HN_MAX_ITEMS
+        and len(set(ids)) == len(ids)
+        and ids[:3] == (41000001, 41000002, 41000003)
+    )
     for bad in (b"{}", b"[]", b'["a"]', b"[true]", b"[-1]", b"<html>"):
         with pytest.raises(ProviderPayloadError):
             parse_hn_top_ids(bad)
-    assert hn_item_request(41000001).url == "https://hacker-news.firebaseio.com/v0/item/41000001.json"
+    assert (
+        hn_item_request(41000001).url == "https://hacker-news.firebaseio.com/v0/item/41000001.json"
+    )
     with pytest.raises(ProviderPayloadError):
         hn_item_request("1/../x")  # type: ignore[arg-type]
 
@@ -176,9 +216,12 @@ def test_hn_top_ids_bounded_and_deduped():
 def test_hn_items_skip_removed_and_count():
     ids = (41000001, 41000002, 41000003, 41000004, 41000005, 41000006)
     bodies = {
-        41000001: fixture("hn_item_story.json"), 41000002: fixture("hn_item_deleted.json"),
-        41000003: fixture("hn_item_dead.json"), 41000004: fixture("hn_item_ask.json"),
-        41000005: b"null", 41000006: None,
+        41000001: fixture("hn_item_story.json"),
+        41000002: fixture("hn_item_deleted.json"),
+        41000003: fixture("hn_item_dead.json"),
+        41000004: fixture("hn_item_ask.json"),
+        41000005: b"null",
+        41000006: None,
     }
     res = map_hn_stories(ids, bodies, NOW)
     assert {r.provider_id for r in res.records} == {"hn:41000001", "hn:41000004"}
@@ -205,7 +248,10 @@ def test_hn_version_ignores_score_and_clock():
 
 def test_gdelt_request_bounded():
     req = gdelt_request()
-    assert req.url == "https://api.gdeltproject.org/api/v2/doc/doc?query=economy&mode=artlist&format=json&maxrecords=5&timespan=24h"
+    assert (
+        req.url
+        == "https://api.gdeltproject.org/api/v2/doc/doc?query=economy&mode=artlist&format=json&maxrecords=5&timespan=24h"
+    )
     assert GDELT_TIMEOUT_SECONDS == 30 and "maxrecords=50" in gdelt_request(50).url
     for bad in (0, 51, True, "5"):
         with pytest.raises(ProviderPayloadError):
@@ -217,14 +263,19 @@ def test_gdelt_mapping_dedupes_and_is_stable():
     assert len(recs) == 2  # insecure dropped, duplicate url collapsed
     a = next(r for r in recs if pr(r)["source_fields"]["domain"] == "example.com")
     assert pr(a)["timestamp_basis"] == "collection" and pr(a)["world_data"] is None
-    assert pr(a)["source_fields"]["language"] == "English" and a.metadata["full_text_available"] is False
+    assert (
+        pr(a)["source_fields"]["language"] == "English"
+        and a.metadata["full_text_available"] is False
+    )
     later = map_gdelt(jfixture("gdelt_artlist.json"), NOW + timedelta(hours=9))
     assert {r.provider_id: r.version for r in recs} == {r.provider_id: r.version for r in later}
     capped = map_gdelt(jfixture("gdelt_artlist.json"), NOW, max_records=1)
     assert len(capped) == 1 and pr(capped[0])["coverage"] == "truncated"
 
 
-@pytest.mark.parametrize("body", [b"Timespan is too short.", b"", b"[]", b'{"error":"x"}', b'{"articles":"no"}'])
+@pytest.mark.parametrize(
+    "body", [b"Timespan is too short.", b"", b"[]", b'{"error":"x"}', b'{"articles":"no"}']
+)
 def test_gdelt_rejects_error_and_empty_shapes(body):
     with pytest.raises(ProviderPayloadError) as exc:
         map_news_body("gdelt_economy", body, NOW)
@@ -253,7 +304,9 @@ def test_thanhnien_feed_mapping_and_url():
 @pytest.mark.parametrize("provider", ["tuoitre_news", "thanhnien_news", "dantri_news"])
 def test_vietnamese_feeds_empty_malformed_and_oversized(provider):
     with pytest.raises(ProviderPayloadError):
-        map_feed(provider, b"<rss><channel></channel></rss>", NOW)  # empty feed is incomplete, not a snapshot
+        map_feed(
+            provider, b"<rss><channel></channel></rss>", NOW
+        )  # empty feed is incomplete, not a snapshot
     mixed = b"<rss><channel><item><description>no id or title</description></item><item><title>ok</title><guid>g1</guid></item></channel></rss>"
     assert [r.metadata["title"] for r in map_feed(provider, mixed, NOW)] == ["ok"]
     with pytest.raises(ProviderPayloadError, match="too_large"):

@@ -24,8 +24,12 @@ def unavailable_v8_projection(requested_countries: list[str]) -> CiiProjection:
     if any(not code or len(code) > 8 or code != code.strip() for code in requested_countries):
         raise ValueError("CII country selector is invalid")
     return CiiProjection(
-        method_version="v8", requested_countries=tuple(requested_countries),
-        score=None, band=None, movement_24h=None, as_of=None,
+        method_version="v8",
+        requested_countries=tuple(requested_countries),
+        score=None,
+        band=None,
+        movement_24h=None,
+        as_of=None,
         availability="method_data_license_unverified",
         reason="Authoritative v8 method, source licensing, and the specified country set are not verified.",
     )

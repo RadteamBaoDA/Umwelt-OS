@@ -37,18 +37,24 @@ def _session(stored: dict | None) -> MagicMock:
 
 async def _save(row: SimpleNamespace, update: N8nUpdate) -> None:
     fence = AccessFence(workspace_id=WS, user_id=1, membership_revision=1, configuration_revision=1)
-    with patch.object(public, "require_settings_scope", AsyncMock(return_value=fence)), \
-         patch.object(public, "_row", AsyncMock(return_value=row)), \
-         patch.object(public, "read_n8n", AsyncMock()):
+    with (
+        patch.object(public, "require_settings_scope", AsyncMock(return_value=fence)),
+        patch.object(public, "_row", AsyncMock(return_value=row)),
+        patch.object(public, "read_n8n", AsyncMock()),
+    ):
         await public.save_n8n(AsyncMock(), update, _settings(), scope=SCOPE)
 
 
 @pytest.mark.asyncio
 async def test_absent_flag_means_enabled() -> None:
     for stored in (None, {}, {"revision": 2}):
-        assert (await public.resolve_n8n(_session(stored), _settings(), workspace_id=WS)).enabled is True
+        assert (
+            await public.resolve_n8n(_session(stored), _settings(), workspace_id=WS)
+        ).enabled is True
         assert await public.n8n_enabled(_session(stored), workspace_id=WS) is True
-    assert (await public.resolve_n8n(_session({"enabled": False}), _settings(), workspace_id=WS)).enabled is False
+    assert (
+        await public.resolve_n8n(_session({"enabled": False}), _settings(), workspace_id=WS)
+    ).enabled is False
     assert await public.n8n_enabled(_session({"enabled": False}), workspace_id=WS) is False
 
 
@@ -74,6 +80,13 @@ async def test_enabled_change_is_revision_checked() -> None:
 @pytest.mark.asyncio
 async def test_read_exposes_enabled_and_fixed_callback_base() -> None:
     row = SimpleNamespace(n8n={"revision": 3, "enabled": False})
-    with patch.object(public, "require_settings_scope", AsyncMock()), patch.object(public, "_row", AsyncMock(return_value=row)):
+    with (
+        patch.object(public, "require_settings_scope", AsyncMock()),
+        patch.object(public, "_row", AsyncMock(return_value=row)),
+    ):
         read = await public.read_n8n(_session(row.n8n), _settings(), scope=SCOPE)
-    assert read.enabled is False and read.callback_base_url == "http://api:8000" and read.configuration_revision == 3
+    assert (
+        read.enabled is False
+        and read.callback_base_url == "http://api:8000"
+        and read.configuration_revision == 3
+    )

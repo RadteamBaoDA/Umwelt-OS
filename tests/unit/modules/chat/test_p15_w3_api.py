@@ -24,8 +24,12 @@ from modules.chat.stream import format_sse_event
 
 NOW = datetime(2026, 10, 7, tzinfo=UTC)
 WEB = {
-    "sourceType": "web", "url": "https://example.com/a?q=secret#frag", "title": "Example",
-    "quote": "snippet", "provider": "tavily", "retrievedAt": "2026-10-07T00:00:00Z",
+    "sourceType": "web",
+    "url": "https://example.com/a?q=secret#frag",
+    "title": "Example",
+    "quote": "snippet",
+    "provider": "tavily",
+    "retrievedAt": "2026-10-07T00:00:00Z",
 }
 HASH = "a" * 64
 
@@ -50,7 +54,9 @@ def test_run_context_never_inherits_private_keys_and_writes_own_opt_in() -> None
     }
     regenerated = routes._run_context(original, privacy, False)
     assert regenerated["source_scope"] == ["s1"]
-    assert regenerated["_web_search"] == {"requested": False}  # not inherited, rewritten even when false
+    assert regenerated["_web_search"] == {
+        "requested": False
+    }  # not inherited, rewritten even when false
     assert "_web_search_outcome" not in regenerated
     assert regenerated["_chat_privacy_fence"]["updated_at"] == NOW.isoformat()
     assert routes._run_context(original, privacy, True)["_web_search"] == {"requested": True}
@@ -59,27 +65,42 @@ def test_run_context_never_inherits_private_keys_and_writes_own_opt_in() -> None
 
 def test_digest_changes_with_flag_but_old_receipts_stay_valid() -> None:
     base: dict[str, Any] = {
-        "action": "edit", "target_message_id": uuid4(), "base_content_hash": HASH, "content": "x",
+        "action": "edit",
+        "target_message_id": uuid4(),
+        "base_content_hash": HASH,
+        "content": "x",
     }
     off = routes._message_mutation_digest(**base)
     assert off != routes._message_mutation_digest(**base, web_search=True)
     assert off == routes._message_mutation_digest(**base, web_search=False)
     legacy = json.dumps(
         {**base, "target_message_id": str(base["target_message_id"])},
-        sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
     )
     assert off == hashlib.sha256(legacy.encode()).hexdigest()  # pre-deploy receipts still match
 
 
 def test_message_read_web_search_shape() -> None:
     common: dict[str, Any] = {
-        "id": uuid4(), "conversation_id": uuid4(), "role": "assistant", "content": "a", "created_at": NOW,
+        "id": uuid4(),
+        "conversation_id": uuid4(),
+        "role": "assistant",
+        "content": "a",
+        "created_at": NOW,
     }
     assert MessageRead(**common).web_search is None
     dumped = MessageRead(
-        **common, web_search={"status": "unavailable", "reason": "timeout", "result_count": 0},
+        **common,
+        web_search={"status": "unavailable", "reason": "timeout", "result_count": 0},
     ).model_dump(mode="json")
-    assert dumped["web_search"] == {"status": "unavailable", "reason": "timeout", "result_count": 0, "query": None}
+    assert dumped["web_search"] == {
+        "status": "unavailable",
+        "reason": "timeout",
+        "result_count": 0,
+        "query": None,
+    }
     with pytest.raises(ValidationError):
         MessageRead(**common, web_search={"status": "bogus", "reason": None, "result_count": 0})
 
@@ -96,14 +117,24 @@ class _ConversationSession:
     def __init__(self, messages: list[Any], outcomes: list[tuple[Any, Any]]) -> None:
         self.messages, self.outcomes, self.executes = messages, outcomes, 0
         self.conv = SimpleNamespace(
-            id=messages[0].conversation_id, title="t", context_kind=None, context_resource_id=None,
-            pinned=False, archived=False, created_at=NOW, updated_at=NOW, metadata_json={},
-            ephemeral=False, expires_at=None,
+            id=messages[0].conversation_id,
+            title="t",
+            context_kind=None,
+            context_resource_id=None,
+            pinned=False,
+            archived=False,
+            created_at=NOW,
+            updated_at=NOW,
+            metadata_json={},
+            ephemeral=False,
+            expires_at=None,
         )
 
     async def scalar(self, stmt: Any) -> Any:
         entity = stmt.column_descriptions[0]["entity"]
-        return self.conv if entity.__name__ == "Conversation" else uuid4()  # active run id: skips reload
+        return (
+            self.conv if entity.__name__ == "Conversation" else uuid4()
+        )  # active run id: skips reload
 
     async def scalars(self, _stmt: Any) -> _Rows:
         return _Rows(self.messages)
@@ -113,19 +144,31 @@ class _ConversationSession:
         return _Rows([] if self.executes == 1 else self.outcomes)
 
 
-async def test_get_conversation_reads_outcome_for_assistant_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_conversation_reads_outcome_for_assistant_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     cid, assistant_id, other_id = uuid4(), uuid4(), uuid4()
 
     def msg(mid: Any, role: str) -> Any:
         return SimpleNamespace(
-            id=mid, conversation_id=cid, role=role, content="c", client_request_id=None, model_identity=None,
-            citations=[], response_id=None, revision_of_message_id=None, created_at=NOW,
+            id=mid,
+            conversation_id=cid,
+            role=role,
+            content="c",
+            client_request_id=None,
+            model_identity=None,
+            citations=[],
+            response_id=None,
+            revision_of_message_id=None,
+            created_at=NOW,
         )
 
     session = _ConversationSession(
         [msg(uuid4(), "user"), msg(assistant_id, "assistant"), msg(other_id, "assistant")],
-        [(assistant_id, {"status": "skipped", "reason": "daily_limit", "result_count": 0}),
-         (other_id, {"status": "garbage"})],
+        [
+            (assistant_id, {"status": "skipped", "reason": "daily_limit", "result_count": 0}),
+            (other_id, {"status": "garbage"}),
+        ],
     )
 
     async def keep(_session: Any, lists: Any, _scope: Any = None) -> list[list[Any]]:
@@ -137,7 +180,9 @@ async def test_get_conversation_reads_outcome_for_assistant_messages(monkeypatch
         return SimpleNamespace(workspace_id=uuid4(), user_id=1)
 
     monkeypatch.setattr(routes, "owner_default_scope", default_scope)
-    detail = await routes.get_conversation(cid, session, SimpleNamespace(owner_id=1), SimpleNamespace(headers={}))  # type: ignore[arg-type]
+    detail = await routes.get_conversation(
+        cid, session, SimpleNamespace(owner_id=1), SimpleNamespace(headers={})
+    )  # type: ignore[arg-type]
     by_id = {m.id: m.web_search for m in detail.messages}
     assert by_id[assistant_id] is not None and by_id[assistant_id].reason == "daily_limit"
     assert by_id[other_id] is None  # malformed stored outcome reports nothing
@@ -147,14 +192,19 @@ async def test_get_conversation_reads_outcome_for_assistant_messages(monkeypatch
 def test_web_search_event_frame_shape() -> None:
     data = {"status": "used", "reason": None, "result_count": 2}
     frame = format_sse_event(event="web_search", data=data, event_id="r:3")
-    assert frame == 'id: r:3\nevent: web_search\ndata: {"status":"used","reason":null,"result_count":2}\n\n'
+    assert (
+        frame
+        == 'id: r:3\nevent: web_search\ndata: {"status":"used","reason":null,"result_count":2}\n\n'
+    )
 
 
 async def test_sse_poll_replays_web_search_event(monkeypatch: pytest.MonkeyPatch) -> None:
     from tests.unit.modules.chat import test_p14_sse_stream as sse
 
     web = SimpleNamespace(
-        seq=1, event_type="web_search", event_id=f"{sse.RID}:1",
+        seq=1,
+        event_type="web_search",
+        event_id=f"{sse.RID}:1",
         data={"status": "skipped", "reason": "not_configured", "result_count": 0},
     )
     store = sse._Store([web, sse._event(2)])
@@ -167,26 +217,41 @@ async def test_sse_poll_replays_web_search_event(monkeypatch: pytest.MonkeyPatch
     await response.body_iterator.aclose()  # type: ignore[attr-defined]
 
 
-async def test_filter_current_citations_passes_web_through_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_filter_current_citations_passes_web_through_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from modules.knowledge.documents import public as documents_public
 
     source, document, version, chunk = uuid4(), uuid4(), uuid4(), uuid4()
-    doc = {"sourceId": str(source), "documentId": str(document), "documentVersionId": str(version),
-           "chunkId": str(chunk)}
+    doc = {
+        "sourceId": str(source),
+        "documentId": str(document),
+        "documentVersionId": str(version),
+        "chunkId": str(chunk),
+    }
     gone = {**doc, "chunkId": str(uuid4())}
     calls: list[int] = []
 
     async def lock(_s: Any, refs: Any, **_k: Any) -> list[Any]:
         calls.append(len(refs))
-        return [SimpleNamespace(document_version_id=version, chunk_id=chunk, source_id=source, document_id=document)]
+        return [
+            SimpleNamespace(
+                document_version_id=version, chunk_id=chunk, source_id=source, document_id=document
+            )
+        ]
 
     monkeypatch.setattr(documents_public, "lock_chat_evidence_chunks", lock)
 
-    scope_kw = {"scope": SimpleNamespace(workspace_id=uuid4(), user_id=1), "multi_workspace_enabled": False}
+    scope_kw = {
+        "scope": SimpleNamespace(workspace_id=uuid4(), user_id=1),
+        "multi_workspace_enabled": False,
+    }
     web2 = {**WEB, "url": "https://example.org/b"}
     malformed = {"sourceType": "web", "url": "javascript:x"}  # missing title/provider/retrievedAt
     forged = {**WEB, "documentId": str(document)}  # mixed shape is rejected by extra="forbid"
-    out = await chat_public.filter_current_citations(None, [web2, gone, doc, malformed, "junk", forged, WEB], **scope_kw)  # type: ignore[arg-type]
+    out = await chat_public.filter_current_citations(
+        None, [web2, gone, doc, malformed, "junk", forged, WEB], **scope_kw
+    )  # type: ignore[arg-type]
     assert out == [web2, doc, WEB]
     assert out[0] is web2 and out[2] is WEB  # unchanged objects, original order
     calls.clear()
@@ -218,7 +283,9 @@ class _Stream:
         return None
 
 
-async def test_export_emits_web_citations_with_query_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_export_emits_web_citations_with_query_stripped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def ok(*_a: Any, **_k: Any) -> None:
         return None
 
@@ -233,11 +300,17 @@ async def test_export_emits_web_citations_with_query_stripped(monkeypatch: pytes
 
     ftp = {**WEB, "url": "ftp://x/y"}
     row = {
-        "message_id": uuid4(), "conversation_id": uuid4(), "role": "assistant", "content": "answer [1]",
+        "message_id": uuid4(),
+        "conversation_id": uuid4(),
+        "role": "assistant",
+        "content": "answer [1]",
         "citations": [WEB, ftp, {"junk": 1}],
-        "response_id": None, "revision_of_message_id": None,
-        "message_created_at": NOW, "message_updated_at": NOW,
-        "conversation_created_at": NOW, "conversation_updated_at": NOW,
+        "response_id": None,
+        "revision_of_message_id": None,
+        "message_created_at": NOW,
+        "message_updated_at": NOW,
+        "conversation_created_at": NOW,
+        "conversation_updated_at": NOW,
     }
 
     class _Session:
@@ -248,18 +321,34 @@ async def test_export_emits_web_citations_with_query_stripped(monkeypatch: pytes
     monkeypatch.setattr(chat_public, "_chat_export_privacy", privacy)
     monkeypatch.setattr(chat_public, "_chat_export_count", count)
     monkeypatch.setattr(chat_public, "_chat_export_evidence_fences", no_evidence)
-    page = await chat_public.export_page(_Session(), owner_id=1, record_kind="messages", limit=10,
-                                         scope=SimpleNamespace(workspace_id=uuid4(), user_id=1),
-                                         multi_workspace_enabled=False)  # type: ignore[arg-type]
+    page = await chat_public.export_page(
+        _Session(),
+        owner_id=1,
+        record_kind="messages",
+        limit=10,
+        scope=SimpleNamespace(workspace_id=uuid4(), user_id=1),
+        multi_workspace_enabled=False,
+    )  # type: ignore[arg-type]
     item = page.items[0]
     assert isinstance(item, ChatExportMessageRead)
-    assert [c.model_dump(mode="json") for c in item.citations] == [{
-        "source_type": "web", "url": "https://example.com/a", "title": "Example", "quote": "snippet",
-        "provider": "tavily", "retrieved_at": "2026-10-07T00:00:00Z",
-    }]
-    assert item.omitted_citation_count == 2  # unsafe URL and junk; the valid web item is never omitted
+    assert [c.model_dump(mode="json") for c in item.citations] == [
+        {
+            "source_type": "web",
+            "url": "https://example.com/a",
+            "title": "Example",
+            "quote": "snippet",
+            "provider": "tavily",
+            "retrieved_at": "2026-10-07T00:00:00Z",
+        }
+    ]
+    assert (
+        item.omitted_citation_count == 2
+    )  # unsafe URL and junk; the valid web item is never omitted
     assert page.fences[0].citations == []  # no evidence fence for web citations
-    assert ChatExportMessageRead.model_validate(item.model_dump(mode="json")).citations == item.citations
+    assert (
+        ChatExportMessageRead.model_validate(item.model_dump(mode="json")).citations
+        == item.citations
+    )
 
 
 def test_web_citations_ride_existing_jsonb_columns_that_cascade_on_delete() -> None:
@@ -278,10 +367,14 @@ def test_web_citations_ride_existing_jsonb_columns_that_cascade_on_delete() -> N
         (StreamEvent.__table__, "response_id"),  # type: ignore[attr-defined]
     ):
         assert next(iter(table.c[column].foreign_keys)).ondelete == "CASCADE"
-    assert not [t for t in Base.metadata.tables if t.startswith("chat") and "web" in t]  # no separate web table
+    assert not [
+        t for t in Base.metadata.tables if t.startswith("chat") and "web" in t
+    ]  # no separate web table
 
 
-async def test_delete_conversation_deletes_only_the_cascading_parent(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_delete_conversation_deletes_only_the_cascading_parent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import modules.agents.public as agents_public
     import modules.memory.public as memory_public
 
@@ -309,4 +402,6 @@ async def test_delete_conversation_deletes_only_the_cascading_parent(monkeypatch
     monkeypatch.setattr(memory_public, "lock_export_privacy", noop)
     monkeypatch.setattr(agents_public, "purge_conversation_actions", noop)
     assert await chat_public.delete_conversation(_Session(), convo.id, 1) is True  # type: ignore[arg-type]
-    assert deleted == [convo]  # messages, runs, events and their web citations go via ON DELETE CASCADE
+    assert deleted == [
+        convo
+    ]  # messages, runs, events and their web citations go via ON DELETE CASCADE

@@ -49,7 +49,9 @@ _PREFERENCE_PATTERNS = [
         r"\b(i\s+prefer|i\s+like|i\s+dislike|i\s+hate|i\s+want|i\s+need|my\s+favorite|my\s+preference\s+is)\b",
         re.IGNORECASE,
     ),
-    re.compile(r"\b(please\s+always|always\s+use|never\s+use|don't\s+use|do\s+not\s+use)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(please\s+always|always\s+use|never\s+use|don't\s+use|do\s+not\s+use)\b", re.IGNORECASE
+    ),
     re.compile(r"\b(prefer\s+to|rather\s+than)\b", re.IGNORECASE),
     re.compile(
         r"\b(tôi\s+thích|mình\s+thích|tôi\s+không\s+thích|mình\s+không\s+thích|tôi\s+ghét|tôi\s+muốn|mình\s+muốn|tôi\s+cần|mình\s+cần)\s+(.+)",
@@ -68,7 +70,9 @@ _PREFERENCE_PATTERNS = [
 # Bilingual (en-US / vi-VN) standing operational instructions and behavioral directives.
 _INSTRUCTION_PATTERNS = [
     re.compile(r"\b(always\s+(respond|format|include|write|answer))\b", re.IGNORECASE),
-    re.compile(r"\b(remember\s+to|make\s+sure\s+to|be\s+concise|keep\s+it\s+short)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(remember\s+to|make\s+sure\s+to|be\s+concise|keep\s+it\s+short)\b", re.IGNORECASE
+    ),
     re.compile(r"\b(rule:|guideline:|instruction:)\b", re.IGNORECASE),
     re.compile(r"\b(luôn\s+luôn|đừng\s+bao\s+giờ|không\s+bao\s+giờ)\s+(.+)", re.IGNORECASE),
     re.compile(
@@ -80,8 +84,14 @@ _INSTRUCTION_PATTERNS = [
 
 # Bilingual (en-US / vi-VN) explicit factual statements about the owner, role, or projects.
 _FACT_PATTERNS = [
-    re.compile(r"\b(my\s+name\s+is|i\s+am|i\s+live\s+in|i\s+work\s+at|i\s+work\s+on|my\s+role\s+is)\b", re.IGNORECASE),
-    re.compile(r"\b(my\s+(wife|husband|partner|child|son|daughter|brother|sister|father|mother|dog|cat)\s+is)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(my\s+name\s+is|i\s+am|i\s+live\s+in|i\s+work\s+at|i\s+work\s+on|my\s+role\s+is)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(my\s+(wife|husband|partner|child|son|daughter|brother|sister|father|mother|dog|cat)\s+is)\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"\b(remember\s+that|note\s+that|for\s+the\s+record)\b", re.IGNORECASE),
     re.compile(r"\b(we\s+decided\s+to|the\s+plan\s+is\s+to|our\s+project\s+is)\b", re.IGNORECASE),
     re.compile(
@@ -130,8 +140,32 @@ def _tokenize(text: str) -> set[str]:
         Set of lowercase string tokens with stopwords excluded.
     """
     stopwords = {
-        "a", "an", "the", "and", "or", "is", "in", "it", "to", "of", "for", "with", "on", "at", "by", "this", "that",
-        "là", "và", "của", "có", "cho", "với", "trong", "này", "đó",
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "is",
+        "in",
+        "it",
+        "to",
+        "of",
+        "for",
+        "with",
+        "on",
+        "at",
+        "by",
+        "this",
+        "that",
+        "là",
+        "và",
+        "của",
+        "có",
+        "cho",
+        "với",
+        "trong",
+        "này",
+        "đó",
     }
     words = re.findall(r"\b\w{2,}\b", text.lower())
     return {w for w in words if w not in stopwords}
@@ -221,7 +255,9 @@ def evaluate_candidate(
     confidence_score = 0.8
     if any(pat.search(cleaned) for pat in _SPECULATIVE_PATTERNS):
         confidence_score = 0.4
-    elif any(pat.search(cleaned) for pat in _PREFERENCE_PATTERNS + _FACT_PATTERNS + _INSTRUCTION_PATTERNS):
+    elif any(
+        pat.search(cleaned) for pat in _PREFERENCE_PATTERNS + _FACT_PATTERNS + _INSTRUCTION_PATTERNS
+    ):
         confidence_score = 0.95
 
     # 4. Reason summary

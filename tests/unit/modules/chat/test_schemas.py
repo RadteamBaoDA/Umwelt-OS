@@ -183,16 +183,18 @@ class TestCitationSchemas:
         now = datetime.now(UTC)
 
         # camelCase input
-        cit1 = Citation.model_validate({
-            "sourceType": "document",
-            "sourceId": str(src_id),
-            "documentId": str(doc_id),
-            "documentVersionId": str(ver_id),
-            "chunkId": str(chunk_id),
-            "title": "Specs Overview",
-            "quote": "Personal Intelligence OS architecture",
-            "observedAt": now.isoformat(),
-        })
+        cit1 = Citation.model_validate(
+            {
+                "sourceType": "document",
+                "sourceId": str(src_id),
+                "documentId": str(doc_id),
+                "documentVersionId": str(ver_id),
+                "chunkId": str(chunk_id),
+                "title": "Specs Overview",
+                "quote": "Personal Intelligence OS architecture",
+                "observedAt": now.isoformat(),
+            }
+        )
         assert cit1.sourceType == "document"
         assert cit1.sourceId == src_id
         assert cit1.documentId == doc_id

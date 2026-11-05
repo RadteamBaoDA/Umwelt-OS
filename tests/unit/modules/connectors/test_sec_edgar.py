@@ -15,13 +15,15 @@ from tests.unit.modules.connectors.p3_helpers import NOW
 CIK = "0000320193"
 PAYLOAD = {
     "cik": "320193",
-    "filings": {"recent": {
-        "accessionNumber": ["0000320193-26-000010", "0000320193-26-000005"],
-        "filingDate": ["2026-01-02", "2025-12-30"],
-        "form": ["8-K", "4"],
-        "primaryDocument": ["a8k.htm", ""],
-        "primaryDocDescription": ["CURRENT REPORT", "FORM 4"],
-    }},
+    "filings": {
+        "recent": {
+            "accessionNumber": ["0000320193-26-000010", "0000320193-26-000005"],
+            "filingDate": ["2026-01-02", "2025-12-30"],
+            "form": ["8-K", "4"],
+            "primaryDocument": ["a8k.htm", ""],
+            "primaryDocDescription": ["CURRENT REPORT", "FORM 4"],
+        }
+    },
 }
 
 
@@ -29,7 +31,12 @@ def test_request_declares_user_agent_and_fails_closed_without_scope():
     request = sec_edgar_request(CIK, "me@example.com")
     assert request.url == "https://data.sec.gov/submissions/CIK0000320193.json"
     assert request.headers["User-Agent"] == "Umwelt-OS me@example.com"
-    for cik, email in ((CIK, None), (CIK, "bad email@x.com"), ("320193", "me@example.com"), (None, "me@example.com")):
+    for cik, email in (
+        (CIK, None),
+        (CIK, "bad email@x.com"),
+        ("320193", "me@example.com"),
+        (None, "me@example.com"),
+    ):
         with pytest.raises(ProviderPayloadError):
             sec_edgar_request(cik, email)
 
@@ -37,18 +44,30 @@ def test_request_declares_user_agent_and_fails_closed_without_scope():
 def test_maps_one_record_per_filing_with_archive_url():
     records = {r.provider_id: r for r in map_sec_edgar(PAYLOAD, NOW, CIK)}
     first = records["0000320193-26-000010"]
-    assert first.content == "8-K\n\nCURRENT REPORT" and first.observed_at.date().isoformat() == "2026-01-02"
+    assert (
+        first.content == "8-K\n\nCURRENT REPORT"
+        and first.observed_at.date().isoformat() == "2026-01-02"
+    )
     fields = first.metadata["provider_record"]["source_fields"]
-    assert fields["canonical_url"] == "https://www.sec.gov/Archives/edgar/data/320193/000032019326000010/a8k.htm"
+    assert (
+        fields["canonical_url"]
+        == "https://www.sec.gov/Archives/edgar/data/320193/000032019326000010/a8k.htm"
+    )
     assert fields["form"] == "8-K" and fields["cik"] == CIK
-    assert "canonical_url" not in records["0000320193-26-000005"].metadata["provider_record"]["source_fields"]
+    assert (
+        "canonical_url"
+        not in records["0000320193-26-000005"].metadata["provider_record"]["source_fields"]
+    )
 
 
-@pytest.mark.parametrize("mutate", [
-    lambda p: p.update(cik="1"),
-    lambda p: p["filings"]["recent"].update(form=["8-K"]),
-    lambda p: p["filings"]["recent"].update(accessionNumber=["bad", "x"]),
-])
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda p: p.update(cik="1"),
+        lambda p: p["filings"]["recent"].update(form=["8-K"]),
+        lambda p: p["filings"]["recent"].update(accessionNumber=["bad", "x"]),
+    ],
+)
 def test_rejects_mismatched_or_malformed_payload(mutate):
     payload = json.loads(json.dumps(PAYLOAD))
     mutate(payload)
@@ -58,7 +77,12 @@ def test_rejects_mismatched_or_malformed_payload(mutate):
 
 def test_spec_flags():
     spec = get_provider_spec("sec_edgar")
-    assert spec and spec.eligibility == "open" and spec.data_kind == "event" and spec.default_interval_minutes == 360
+    assert (
+        spec
+        and spec.eligibility == "open"
+        and spec.data_kind == "event"
+        and spec.default_interval_minutes == 360
+    )
     assert spec.code_implemented and not spec.runtime_verified and "sec_edgar" in DISPATCHABLE
 
 
@@ -102,7 +126,10 @@ def test_malformed_row_is_skipped_and_batch_truncated():
 
 
 def test_empty_recent_filings_is_incomplete():
-    payload = {"cik": "320193", "filings": {"recent": {k: [] for k in PAYLOAD["filings"]["recent"]}}}
+    payload = {
+        "cik": "320193",
+        "filings": {"recent": {k: [] for k in PAYLOAD["filings"]["recent"]}},
+    }
     with pytest.raises(ProviderPayloadError) as err:
         map_sec_edgar(payload, NOW, CIK)
     assert err.value.kind == "incomplete"

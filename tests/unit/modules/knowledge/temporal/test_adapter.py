@@ -104,7 +104,9 @@ class TestCanonicalEntityBinding:
             chunk_id=uuid4(),
         )
 
-    def test_valid_binding_minimal(self, valid_membership_id: UUID, valid_evidence: EvidenceIdentity) -> None:
+    def test_valid_binding_minimal(
+        self, valid_membership_id: UUID, valid_evidence: EvidenceIdentity
+    ) -> None:
         """Verify minimal valid CanonicalEntityBinding."""
         binding = CanonicalEntityBinding(
             canonical_entity_id=uuid4(),
@@ -120,7 +122,9 @@ class TestCanonicalEntityBinding:
         assert binding.node_name is None
         assert binding.node_summary is None
 
-    def test_valid_binding_with_fields_and_support(self, valid_membership_id: UUID, valid_evidence: EvidenceIdentity) -> None:
+    def test_valid_binding_with_fields_and_support(
+        self, valid_membership_id: UUID, valid_evidence: EvidenceIdentity
+    ) -> None:
         """Verify CanonicalEntityBinding with node name and summary matching field support digests."""
         name = "Acme Corp"
         summary = "A sample organization."
@@ -148,7 +152,9 @@ class TestCanonicalEntityBinding:
         assert binding.node_summary == summary
         assert binding.prior_node_state_fingerprint == prior_fp
 
-    def test_invalid_revisions(self, valid_membership_id: UUID, valid_evidence: EvidenceIdentity) -> None:
+    def test_invalid_revisions(
+        self, valid_membership_id: UUID, valid_evidence: EvidenceIdentity
+    ) -> None:
         """Verify revisions must satisfy canonical_revision >= 1 and mapping_revision >= 0."""
         with pytest.raises(ValueError, match="exceeds its owner bounds"):
             CanonicalEntityBinding(
@@ -172,7 +178,9 @@ class TestCanonicalEntityBinding:
                 mapping_revision=-1,  # invalid
             )
 
-    def test_invalid_group_id_or_uuid(self, valid_membership_id: UUID, valid_evidence: EvidenceIdentity) -> None:
+    def test_invalid_group_id_or_uuid(
+        self, valid_membership_id: UUID, valid_evidence: EvidenceIdentity
+    ) -> None:
         """Verify group_id must be non-empty and <= 200 bytes, and graph_entity_uuid must be a UUID."""
         with pytest.raises(ValueError, match="exceeds its owner bounds"):
             CanonicalEntityBinding(
@@ -196,7 +204,9 @@ class TestCanonicalEntityBinding:
                 mapping_revision=0,
             )
 
-    def test_invalid_membership_bounds_and_duplicates(self, valid_evidence: EvidenceIdentity) -> None:
+    def test_invalid_membership_bounds_and_duplicates(
+        self, valid_evidence: EvidenceIdentity
+    ) -> None:
         """Verify membership_ids cannot be empty, exceed MAX_SUPPORT, or contain duplicates."""
         with pytest.raises(ValueError, match="exceeds its owner bounds"):
             CanonicalEntityBinding(
@@ -221,7 +231,9 @@ class TestCanonicalEntityBinding:
                 mapping_revision=0,
             )
 
-    def test_invalid_field_support_and_hash_mismatch(self, valid_membership_id: UUID, valid_evidence: EvidenceIdentity) -> None:
+    def test_invalid_field_support_and_hash_mismatch(
+        self, valid_membership_id: UUID, valid_evidence: EvidenceIdentity
+    ) -> None:
         """Verify field support requires valid field names ('name', 'description') and matching digests."""
         valid_digest = hashlib.sha256(b"Acme Corp").hexdigest()
 
@@ -299,7 +311,9 @@ class TestCanonicalNodeRecoveryAction:
         )
         assert action.action == "delete_orphan"
 
-    def test_delete_for_rebuild_requires_rebuild_mapping_ids(self, entity_uuid: str, state_fp: str) -> None:
+    def test_delete_for_rebuild_requires_rebuild_mapping_ids(
+        self, entity_uuid: str, state_fp: str
+    ) -> None:
         """Verify 'delete_for_rebuild' requires sorted non-empty rebuild_mapping_ids."""
         m_id1 = uuid4()
         m_id2 = uuid4()
@@ -315,7 +329,9 @@ class TestCanonicalNodeRecoveryAction:
         assert action.rebuild_mapping_ids == sorted_ids
 
         # Empty rebuild_mapping_ids on delete_for_rebuild raises ValueError
-        with pytest.raises(ValueError, match="Rebuild deletion requires bounded exact dependent mappings"):
+        with pytest.raises(
+            ValueError, match="Rebuild deletion requires bounded exact dependent mappings"
+        ):
             CanonicalNodeRecoveryAction(
                 graph_entity_uuid=entity_uuid,
                 expected_current_state_fingerprint=state_fp,
@@ -324,7 +340,9 @@ class TestCanonicalNodeRecoveryAction:
             )
 
         # Non-delete_for_rebuild with rebuild_mapping_ids raises ValueError
-        with pytest.raises(ValueError, match="Rebuild deletion requires bounded exact dependent mappings"):
+        with pytest.raises(
+            ValueError, match="Rebuild deletion requires bounded exact dependent mappings"
+        ):
             CanonicalNodeRecoveryAction(
                 graph_entity_uuid=entity_uuid,
                 expected_current_state_fingerprint=state_fp,
@@ -581,7 +599,11 @@ class TestTemporalGraphAdapterLifecycle:
     def test_init_disabled(self) -> None:
         """Verify TemporalGraph initializes to DISABLED state when disabled."""
         config = GraphConfiguration(
-            enabled=False, host="", port=0, username=None, password=None,
+            enabled=False,
+            host="",
+            port=0,
+            username=None,
+            password=None,
             database="test_db",
         )
         adapter = TemporalGraph(config)
@@ -590,7 +612,11 @@ class TestTemporalGraphAdapterLifecycle:
     def test_init_enabled_unconfigured(self) -> None:
         """Verify TemporalGraph initializes to UNCONFIGURED state when enabled without credentials."""
         config = GraphConfiguration(
-            enabled=True, host="", port=0, username=None, password=None,
+            enabled=True,
+            host="",
+            port=0,
+            username=None,
+            password=None,
             database="test_db",
         )
         adapter = TemporalGraph(config)
@@ -600,7 +626,11 @@ class TestTemporalGraphAdapterLifecycle:
     async def test_initialize_disabled_returns_disabled(self) -> None:
         """Verify initialize returns DISABLED immediately when config is disabled."""
         config = GraphConfiguration(
-            enabled=False, host="localhost", port=7687, username=None, password="secret",
+            enabled=False,
+            host="localhost",
+            port=7687,
+            username=None,
+            password="secret",
             database="test_db",
         )
         adapter = TemporalGraph(config)
@@ -611,7 +641,11 @@ class TestTemporalGraphAdapterLifecycle:
     async def test_initialize_missing_credentials_returns_unconfigured(self) -> None:
         """Verify initialize returns UNCONFIGURED when host or password missing."""
         config = GraphConfiguration(
-            enabled=True, host="", port=7687, username=None, password="secret",
+            enabled=True,
+            host="",
+            port=7687,
+            username=None,
+            password="secret",
             database="test_db",
         )
         adapter = TemporalGraph(config)
@@ -621,7 +655,9 @@ class TestTemporalGraphAdapterLifecycle:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("found", [0, 1])
     async def test_initialize_requires_actual_partition_uniqueness(
-        self, monkeypatch: pytest.MonkeyPatch, found: int,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        found: int,
     ) -> None:
         """A successful IF NOT EXISTS DDL is insufficient when its name collides."""
         from modules.knowledge.temporal import adapter as module
@@ -633,10 +669,16 @@ class TestTemporalGraphAdapterLifecycle:
             close=AsyncMock(),
         )
         monkeypatch.setattr(module, "_make_driver_type", lambda: lambda *_args: driver)
-        graph = TemporalGraph(GraphConfiguration(
-            enabled=True, host="localhost", port=7687, username="neo4j", password="secret",
-            database="test_db",
-        ))
+        graph = TemporalGraph(
+            GraphConfiguration(
+                enabled=True,
+                host="localhost",
+                port=7687,
+                username="neo4j",
+                password="secret",
+                database="test_db",
+            )
+        )
         state = await graph.initialize()
         assert state == (GraphState.READY if found else GraphState.UNAVAILABLE)
         assert driver.control_query.await_args_list[-1].args[0] == PARTITION_FENCE_SCHEMA
@@ -649,7 +691,11 @@ class TestTemporalGraphAdapterLifecycle:
         """Verify health checks report appropriate states."""
         # Disabled
         config_disabled = GraphConfiguration(
-            enabled=False, host="localhost", port=7687, username=None, password="secret",
+            enabled=False,
+            host="localhost",
+            port=7687,
+            username=None,
+            password="secret",
             database="test_db",
         )
         adapter_disabled = TemporalGraph(config_disabled)
@@ -657,7 +703,11 @@ class TestTemporalGraphAdapterLifecycle:
 
         # Unconfigured
         config_unconf = GraphConfiguration(
-            enabled=True, host="", port=7687, username=None, password=None,
+            enabled=True,
+            host="",
+            port=7687,
+            username=None,
+            password=None,
             database="test_db",
         )
         adapter_unconf = TemporalGraph(config_unconf)
@@ -667,7 +717,11 @@ class TestTemporalGraphAdapterLifecycle:
     async def test_close_resets_state(self) -> None:
         """Verify close resets adapter state to unconfigured or disabled."""
         config = GraphConfiguration(
-            enabled=True, host="localhost", port=7687, username=None, password="secret",
+            enabled=True,
+            host="localhost",
+            port=7687,
+            username=None,
+            password="secret",
             database="test_db",
         )
         adapter = TemporalGraph(config)
@@ -700,10 +754,12 @@ class _FakeResult:
 
     def __aiter__(self) -> AsyncIterator[_FakeRecord]:
         """Stream rows lazily so the row cap can abort early."""
+
         async def gen() -> AsyncIterator[_FakeRecord]:
             """Yield each stored row."""
             for row in self._rows:
                 yield _FakeRecord(row)
+
         return gen()
 
     def keys(self) -> list[str]:
@@ -714,7 +770,11 @@ class _FakeResult:
 class _FakeTx:
     """Fake explicit transaction whose run results are queued per call."""
 
-    def __init__(self, results: list[list[dict[str, Any]]] | None = None, commit_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        results: list[list[dict[str, Any]]] | None = None,
+        commit_error: Exception | None = None,
+    ) -> None:
         """Queue result sets; commit may be told to fail."""
         self._results = list(results or [])
         self.fence_rows: list[dict[str, Any]] = [{"erased": False}]
@@ -757,7 +817,9 @@ def _fake_client(*txs: _FakeTx) -> tuple[MagicMock, list[_FakeSession]]:
 
 async def _make_driver(*txs: _FakeTx) -> tuple[Any, MagicMock, list[_FakeSession]]:
     """Build a SafeDriver off-loop (as production does) and swap in a fake client."""
-    driver = await asyncio.to_thread(_make_driver_type(), "bolt://127.0.0.1:7687", "neo4j", "pw", "neo4j")
+    driver = await asyncio.to_thread(
+        _make_driver_type(), "bolt://127.0.0.1:7687", "neo4j", "pw", "neo4j"
+    )
     await driver.client.close()
     client, sessions = _fake_client(*txs)
     driver.client = client
@@ -789,7 +851,9 @@ class TestDispatchScopeDriver:
         driver, client, sessions = await _make_driver(tx)
         scope = _DispatchScope(_ownership())
         with _in_scope(scope):
-            rows, _, keys = await driver.execute_query("MATCH (n) RETURN n.x AS x", routing_="r", p=1)
+            rows, _, keys = await driver.execute_query(
+                "MATCH (n) RETURN n.x AS x", routing_="r", p=1
+            )
         assert rows == [{"x": 1}] and keys == ["x"]
         assert client.session.call_args.kwargs["default_access_mode"] == "WRITE"
         kwargs = sessions[0].begin_transaction.call_args.kwargs
@@ -812,7 +876,10 @@ class TestDispatchScopeDriver:
         """More than MAX_SUPPORT + 1 rows aborts with graph_query_result_limit and never commits."""
         tx = _FakeTx([[{"x": i} for i in range(MAX_SUPPORT + 5)]])
         driver, _, _ = await _make_driver(tx)
-        with _in_scope(_DispatchScope(_ownership())), pytest.raises(GraphOperationError, match="graph_query_result_limit"):
+        with (
+            _in_scope(_DispatchScope(_ownership())),
+            pytest.raises(GraphOperationError, match="graph_query_result_limit"),
+        ):
             await driver.execute_query("MATCH (n) RETURN n")
         tx.rollback.assert_awaited_once()
         tx.commit.assert_not_awaited()
@@ -836,7 +903,9 @@ class TestDispatchScopeDriver:
         driver, _, _ = await _make_driver(tx)
         moment = datetime(2024, 1, 2, tzinfo=UTC)
         with _in_scope(_DispatchScope(_ownership())):
-            await driver.execute_query("MATCH (n) RETURN n", name="a\x00b", when=moment, items=["c\x00"])
+            await driver.execute_query(
+                "MATCH (n) RETURN n", name="a\x00b", when=moment, items=["c\x00"]
+            )
         sent = tx.run.call_args.args[1]
         assert sent == {"name": "ab", "when": moment, "items": ["c"]}
         assert isinstance(sent["when"], datetime)
@@ -849,7 +918,9 @@ class TestDispatchScopeDriver:
         with pytest.raises(GraphOperationError, match="graph_dispatch_ownership_required"):
             await driver.execute_query("MATCH (n) RETURN n")
         await driver.health_check()
-        assert sessions[0].begin_transaction.call_args.kwargs["metadata"]["umwelt_dispatch"] == "setup"
+        assert (
+            sessions[0].begin_transaction.call_args.kwargs["metadata"]["umwelt_dispatch"] == "setup"
+        )
 
     @pytest.mark.asyncio
     async def test_index_exists_error_ignored(self) -> None:
@@ -857,7 +928,10 @@ class TestDispatchScopeDriver:
         tx = _FakeTx()
         tx.run = AsyncMock(side_effect=RuntimeError("EquivalentSchemaRuleAlreadyExists: x"))
         driver, _, _ = await _make_driver(tx)
-        assert await driver.execute_query("CREATE INDEX a IF NOT EXISTS FOR (n:Entity) ON (n.uuid)") is None
+        assert (
+            await driver.execute_query("CREATE INDEX a IF NOT EXISTS FOR (n:Entity) ON (n.uuid)")
+            is None
+        )
 
     @pytest.mark.asyncio
     async def test_statements_share_one_write_transaction(self) -> None:
@@ -872,15 +946,27 @@ class TestDispatchScopeDriver:
         tx.commit.assert_awaited_once()
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("fence_rows", [
-        [{"erased": True}], [], [{}], [{"erased": None}], [{"erased": 0}],
-        [{"erased": False}, {"erased": False}],
-    ])
-    async def test_erased_or_unproved_partition_never_reaches_payload(self, fence_rows: list[dict[str, Any]]) -> None:
+    @pytest.mark.parametrize(
+        "fence_rows",
+        [
+            [{"erased": True}],
+            [],
+            [{}],
+            [{"erased": None}],
+            [{"erased": 0}],
+            [{"erased": False}, {"erased": False}],
+        ],
+    )
+    async def test_erased_or_unproved_partition_never_reaches_payload(
+        self, fence_rows: list[dict[str, Any]]
+    ) -> None:
         tx = _FakeTx()
         tx.fence_rows = fence_rows
         driver, _, _ = await _make_driver(tx)
-        with _in_scope(_DispatchScope(_ownership())), pytest.raises(GraphOperationError, match="graph_partition_erased"):
+        with (
+            _in_scope(_DispatchScope(_ownership())),
+            pytest.raises(GraphOperationError, match="graph_partition_erased"),
+        ):
             await driver.execute_query("CREATE (n {secret: $text})", text="private")
         assert tx.run.await_count == 1
         tx.commit.assert_not_awaited()
@@ -895,7 +981,10 @@ class TestDispatchScopeDriver:
         ownership = _ownership()
         with _in_scope(_DispatchScope(ownership)):
             await driver.execute_statements([("Q1", {}), ("Q2", {})])
-        assert tx.run.await_args_list[0].args == (LOCK_PARTITION_FENCE, {"partition_id": ownership.group_id})
+        assert tx.run.await_args_list[0].args == (
+            LOCK_PARTITION_FENCE,
+            {"partition_id": ownership.group_id},
+        )
         assert [call.args[0] for call in tx.run.await_args_list[1:]] == ["Q1", "Q2"]
         tx.commit.assert_awaited_once()
 
@@ -926,7 +1015,9 @@ class TestBulkShape:
     """Tests for the pinned four-call NEO4J bulk payload validation."""
 
     @staticmethod
-    def _bulk(provider: Any, node_query_override: Any = None) -> tuple[Any, list[Any], tuple[Any, ...], dict[str, Any]]:
+    def _bulk(
+        provider: Any, node_query_override: Any = None
+    ) -> tuple[Any, list[Any], tuple[Any, ...], dict[str, Any]]:
         """Build captured calls and Graphiti arguments for one episode/entity/mention/fact."""
         from graphiti_core.models.edges.edge_db_queries import (
             get_entity_edge_save_bulk_query,
@@ -940,20 +1031,55 @@ class TestBulkShape:
         ids = [str(uuid4()) for _ in range(4)]
         episode = SimpleNamespace(uuid=ids[0], group_id="g1")
         node = SimpleNamespace(uuid=ids[1], group_id="g1")
-        mention = SimpleNamespace(uuid=ids[2], group_id="g1", source_node_uuid=ids[0], target_node_uuid=ids[1])
-        fact = SimpleNamespace(uuid=ids[3], group_id="g1", source_node_uuid=ids[1], target_node_uuid=ids[1],
-                               episodes=[ids[0]])
+        mention = SimpleNamespace(
+            uuid=ids[2], group_id="g1", source_node_uuid=ids[0], target_node_uuid=ids[1]
+        )
+        fact = SimpleNamespace(
+            uuid=ids[3],
+            group_id="g1",
+            source_node_uuid=ids[1],
+            target_node_uuid=ids[1],
+            episodes=[ids[0]],
+        )
         payload = {"uuid": ids[1], "group_id": "g1", "labels": ["Entity"]}
-        node_query = get_entity_node_save_bulk_query(provider, [payload]) if node_query_override is None else node_query_override
+        node_query = (
+            get_entity_node_save_bulk_query(provider, [payload])
+            if node_query_override is None
+            else node_query_override
+        )
         calls = [
-            (get_episode_node_save_bulk_query(provider), {"episodes": [{"uuid": ids[0], "group_id": "g1"}]}),
+            (
+                get_episode_node_save_bulk_query(provider),
+                {"episodes": [{"uuid": ids[0], "group_id": "g1"}]},
+            ),
             (node_query, {"nodes": [payload]}),
-            (get_episodic_edge_save_bulk_query(provider),
-             {"episodic_edges": [{"uuid": ids[2], "group_id": "g1", "source_node_uuid": ids[0],
-                                  "target_node_uuid": ids[1]}]}),
-            (get_entity_edge_save_bulk_query(provider),
-             {"entity_edges": [{"uuid": ids[3], "group_id": "g1", "source_node_uuid": ids[1],
-                                "target_node_uuid": ids[1], "episodes": [ids[0]]}]}),
+            (
+                get_episodic_edge_save_bulk_query(provider),
+                {
+                    "episodic_edges": [
+                        {
+                            "uuid": ids[2],
+                            "group_id": "g1",
+                            "source_node_uuid": ids[0],
+                            "target_node_uuid": ids[1],
+                        }
+                    ]
+                },
+            ),
+            (
+                get_entity_edge_save_bulk_query(provider),
+                {
+                    "entity_edges": [
+                        {
+                            "uuid": ids[3],
+                            "group_id": "g1",
+                            "source_node_uuid": ids[1],
+                            "target_node_uuid": ids[1],
+                            "episodes": [ids[0]],
+                        }
+                    ]
+                },
+            ),
         ]
         args = ([episode], [mention], [node], [fact], object())
         kwargs = {"driver": SimpleNamespace(provider=provider, graph_operations_interface=None)}
@@ -978,7 +1104,9 @@ class TestBulkShape:
         calls, args, kwargs, _ = self._bulk(GraphProvider.KUZU)
         with pytest.raises(GraphOperationError, match="graph_bulk_dispatch_shape_unsupported"):
             session._validated_bulk_payloads(calls, args, kwargs)
-        calls, args, kwargs, _ = self._bulk(GraphProvider.NEO4J, node_query_override=[("Q", {"nodes": []})])
+        calls, args, kwargs, _ = self._bulk(
+            GraphProvider.NEO4J, node_query_override=[("Q", {"nodes": []})]
+        )
         with pytest.raises(GraphOperationError, match="graph_bulk_dispatch_shape_unsupported"):
             session._validated_bulk_payloads(calls, args, kwargs)
 
@@ -1004,7 +1132,8 @@ class TestCessationAndDispatchSession:
         graph, _ = await self._graph(show, terminate, poll)
         ownership = _ownership()
         context = SimpleNamespace(
-            group_id=ownership.group_id, operation_id=ownership.operation_id,
+            group_id=ownership.group_id,
+            operation_id=ownership.operation_id,
             authorize_dispatch_cessation=AsyncMock(),
         )
         assert await graph.verify_dispatch_cessation(ownership, context) is True  # type: ignore[arg-type]
@@ -1022,7 +1151,8 @@ class TestCessationAndDispatchSession:
         graph, client = await self._graph(show)
         ownership = _ownership()
         context = SimpleNamespace(
-            group_id=ownership.group_id, operation_id=ownership.operation_id,
+            group_id=ownership.group_id,
+            operation_id=ownership.operation_id,
             authorize_dispatch_cessation=AsyncMock(),
         )
         assert await graph.verify_dispatch_cessation(ownership, context) is True  # type: ignore[arg-type]
@@ -1036,8 +1166,10 @@ class TestCessationAndDispatchSession:
         journal = AsyncMock()
         completion = AsyncMock()
         context = SimpleNamespace(
-            group_id="g1", operation_id=uuid4(),
-            record_dispatch_ownership=journal, record_dispatch_completion=completion,
+            group_id="g1",
+            operation_id=uuid4(),
+            record_dispatch_ownership=journal,
+            record_dispatch_completion=completion,
         )
         async with graph.dispatch_session(context) as ownership:  # type: ignore[arg-type]
             journal.assert_awaited_once_with(ownership)
@@ -1054,7 +1186,10 @@ class TestCessationAndDispatchSession:
         graph, _ = await self._graph(probe)
         journal = AsyncMock()
         context = SimpleNamespace(
-            group_id="g1", operation_id=uuid4(), record_dispatch_ownership=journal, record_dispatch_completion=None,
+            group_id="g1",
+            operation_id=uuid4(),
+            record_dispatch_ownership=journal,
+            record_dispatch_completion=None,
         )
         with pytest.raises(GraphOperationError, match="graph_write_timeout_unconfigured"):
             async with graph.dispatch_session(context):  # type: ignore[arg-type]
@@ -1080,20 +1215,27 @@ class TestPartitionIsolation:
         _require_group([SimpleNamespace(group_id="g1")], "g1")
         _require_group([], "g1")
         with pytest.raises(GraphOperationError, match="graph_partition_mismatch"):
-            _require_group([SimpleNamespace(group_id="g1"), SimpleNamespace(group_id="other")], "g1")
+            _require_group(
+                [SimpleNamespace(group_id="g1"), SimpleNamespace(group_id="other")], "g1"
+            )
 
     def test_defaults_and_index_error_mapping(self) -> None:
         """Graph defaults target Neo4j and an equivalent-index race maps to graph_index_exists."""
         config = GraphConfiguration()
         assert config.port == 7687 and config.database == "neo4j"
-        assert str(_safe_error(RuntimeError("EquivalentSchemaRuleAlreadyExists"))) == "graph_index_exists"
+        assert (
+            str(_safe_error(RuntimeError("EquivalentSchemaRuleAlreadyExists")))
+            == "graph_index_exists"
+        )
 
 
 class TestBulkDispatchOrdering:
     """Characterize SafeSession.execute_write: journal, capture, validate, journal again, then one transaction."""
 
     @staticmethod
-    async def _session(monkeypatch: pytest.MonkeyPatch, log: list[str], extra_calls: int = 0) -> tuple[Any, Any, Any]:
+    async def _session(
+        monkeypatch: pytest.MonkeyPatch, log: list[str], extra_calls: int = 0
+    ) -> tuple[Any, Any, Any]:
         """Build a session over a driver whose hook and statement executor append to ``log``."""
         from graphiti_core.driver.driver import GraphProvider
         from graphiti_core.utils import bulk_utils
@@ -1122,7 +1264,9 @@ class TestBulkDispatchOrdering:
         return driver.session(), (fake_bulk, args, kwargs), payload
 
     @pytest.mark.asyncio
-    async def test_journals_before_and_after_capture_then_one_transaction(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_journals_before_and_after_capture_then_one_transaction(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Nothing reaches the transaction until both receipts are journaled."""
         log: list[str] = []
         session, (func, args, kwargs), _ = await self._session(monkeypatch, log)
@@ -1131,7 +1275,9 @@ class TestBulkDispatchOrdering:
         assert session._bulk_capture is None
 
     @pytest.mark.asyncio
-    async def test_fifth_statement_exceeds_capture_limit(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_fifth_statement_exceeds_capture_limit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A fifth captured statement aborts before the final journal or any transaction."""
         log: list[str] = []
         session, (func, args, kwargs), _ = await self._session(monkeypatch, log, extra_calls=1)
@@ -1150,7 +1296,9 @@ class TestBulkDispatchOrdering:
         assert log == []
 
     @pytest.mark.asyncio
-    async def test_list_query_denied_and_plain_run_dispatches(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_list_query_denied_and_plain_run_dispatches(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Outside capture a plain statement dispatches once; list-form queries are denied."""
         log: list[str] = []
         session, _, _ = await self._session(monkeypatch, log)

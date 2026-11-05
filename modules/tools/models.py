@@ -45,23 +45,43 @@ class BrowserReadJob(Base):
             name="ck_w2_browser_read_jobs_original_epoch",
         ),
         CheckConstraint("tool_slot BETWEEN 1 AND 10", name="ck_browser_read_jobs_slot"),
-        CheckConstraint("claim_generation > 0 AND source_generation > 0 AND connector_revision > 0", name="ck_browser_read_jobs_fences"),
-        CheckConstraint("grant_revision > 0 AND max_pages BETWEEN 1 AND 3", name="ck_browser_read_jobs_limits"),
-        CheckConstraint("status IN ('queued','running','succeeded','cancel_requested','cancelled','failed','uncertain','expired')", name="ck_browser_read_jobs_status"),
-        CheckConstraint("actual_pages BETWEEN 0 AND 3 AND actual_bytes BETWEEN 0 AND 5242880", name="ck_browser_read_jobs_usage"),
+        CheckConstraint(
+            "claim_generation > 0 AND source_generation > 0 AND connector_revision > 0",
+            name="ck_browser_read_jobs_fences",
+        ),
+        CheckConstraint(
+            "grant_revision > 0 AND max_pages BETWEEN 1 AND 3", name="ck_browser_read_jobs_limits"
+        ),
+        CheckConstraint(
+            "status IN ('queued','running','succeeded','cancel_requested','cancelled','failed','uncertain','expired')",
+            name="ck_browser_read_jobs_status",
+        ),
+        CheckConstraint(
+            "actual_pages BETWEEN 0 AND 3 AND actual_bytes BETWEEN 0 AND 5242880",
+            name="ck_browser_read_jobs_usage",
+        ),
         UniqueConstraint("run_id", "tool_slot", name="uq_browser_read_jobs_run_slot"),
         Index("ix_browser_read_jobs_owner_expiry", "owner_id", "expires_at"),
         Index("ix_browser_read_jobs_retention", "status", "expires_at", "id"),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_browser_read_jobs_workspace", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_browser_read_jobs_principal", ondelete="RESTRICT"),
-        Index("ix_w2_browser_read_jobs_scope", 'workspace_id', 'id'),
-        Index("ix_w2_browser_read_jobs_work", 'workspace_id', 'created_at', 'id'),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_browser_read_jobs_workspace",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "owner_id"],
+            ["workspaces.id", "workspaces.owner_user_id"],
+            name="fk_w2_browser_read_jobs_principal",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_w2_browser_read_jobs_scope", "workspace_id", "id"),
+        Index("ix_w2_browser_read_jobs_work", "workspace_id", "created_at", "id"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     membership_revision: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     configuration_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
-
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     operation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, unique=True)
@@ -93,9 +113,12 @@ class BrowserReadJob(Base):
     result_hash: Mapped[str | None] = mapped_column(String(64))
     error_code: Mapped[str | None] = mapped_column(String(32))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
-
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
 
 class BrowserPageEvidence(Base):
@@ -104,13 +127,19 @@ class BrowserPageEvidence(Base):
     __tablename__ = "browser_page_evidence"
     __table_args__ = (
         CheckConstraint("page_number BETWEEN 1 AND 3", name="ck_browser_page_evidence_number"),
-        CheckConstraint("octet_length(raw_content) <= 5242880", name="ck_browser_page_evidence_raw_bytes"),
-        CheckConstraint("octet_length(extracted_text) <= 20000", name="ck_browser_page_evidence_text_bytes"),
+        CheckConstraint(
+            "octet_length(raw_content) <= 5242880", name="ck_browser_page_evidence_raw_bytes"
+        ),
+        CheckConstraint(
+            "octet_length(extracted_text) <= 20000", name="ck_browser_page_evidence_text_bytes"
+        ),
         UniqueConstraint("job_id", "page_number", name="uq_browser_page_evidence_job_page"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
-    job_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("browser_read_jobs.id", ondelete="CASCADE"), nullable=False)
+    job_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("browser_read_jobs.id", ondelete="CASCADE"), nullable=False
+    )
     page_number: Mapped[int] = mapped_column(Integer, nullable=False)
     requested_url: Mapped[str] = mapped_column(String(2048), nullable=False)
     final_url: Mapped[str] = mapped_column(String(2048), nullable=False)
@@ -125,31 +154,64 @@ class McpConnection(Base):
 
     Workspace identity is mandatory and survives nullable or detached canonical references.
     """
+
     __tablename__ = "mcp_connections"
     __table_args__ = (
-        CheckConstraint("revision > 0 AND credential_revision > 0", name="ck_mcp_connection_revisions"),
+        CheckConstraint(
+            "revision > 0 AND credential_revision > 0", name="ck_mcp_connection_revisions"
+        ),
         CheckConstraint("timeout_seconds BETWEEN 1 AND 60", name="ck_mcp_connection_timeout"),
-        CheckConstraint("transport IN ('streamable_http', 'stdio')", name="ck_mcp_connection_transport"),
+        CheckConstraint(
+            "transport IN ('streamable_http', 'stdio')", name="ck_mcp_connection_transport"
+        ),
         CheckConstraint("auth_method IN ('none', 'bearer')", name="ck_mcp_connection_auth"),
-        CheckConstraint("(endpoint IS NULL) != (deployment_profile_id IS NULL)", name="ck_mcp_connection_target"),
-        CheckConstraint("deployment_profile_hash IS NULL OR deployment_profile_hash ~ '^[0-9a-f]{64}$'", name="ck_mcp_connection_profile_hash"),
-        CheckConstraint("deployment_profile_hash IS NULL OR transport = 'stdio'", name="ck_mcp_connection_profile_transport"),
-        CheckConstraint("draft_check_profile_hash IS NULL OR draft_check_profile_hash ~ '^[0-9a-f]{64}$'", name="ck_mcp_connection_check_profile_hash"),
-        CheckConstraint("draft_check_profile_hash IS NULL OR (transport = 'stdio' AND deployment_profile_hash = draft_check_profile_hash AND health_code IS NOT NULL AND health_code = 'connected')", name="ck_mcp_connection_check_profile_identity"),
-        CheckConstraint("enabled = false OR health_code IS NULL OR health_code <> 'needs_review'", name="ck_mcp_connection_enable_review"),
+        CheckConstraint(
+            "(endpoint IS NULL) != (deployment_profile_id IS NULL)", name="ck_mcp_connection_target"
+        ),
+        CheckConstraint(
+            "deployment_profile_hash IS NULL OR deployment_profile_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_mcp_connection_profile_hash",
+        ),
+        CheckConstraint(
+            "deployment_profile_hash IS NULL OR transport = 'stdio'",
+            name="ck_mcp_connection_profile_transport",
+        ),
+        CheckConstraint(
+            "draft_check_profile_hash IS NULL OR draft_check_profile_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_mcp_connection_check_profile_hash",
+        ),
+        CheckConstraint(
+            "draft_check_profile_hash IS NULL OR (transport = 'stdio' AND deployment_profile_hash = draft_check_profile_hash AND health_code IS NOT NULL AND health_code = 'connected')",
+            name="ck_mcp_connection_check_profile_identity",
+        ),
+        CheckConstraint(
+            "enabled = false OR health_code IS NULL OR health_code <> 'needs_review'",
+            name="ck_mcp_connection_enable_review",
+        ),
         Index("ix_mcp_connections_owner_updated", "owner_id", "updated_at"),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_mcp_connections_workspace", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_mcp_connections_principal", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_mcp_connections_workspace",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "owner_id"],
+            ["workspaces.id", "workspaces.owner_user_id"],
+            name="fk_w2_mcp_connections_principal",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint("workspace_id", "id", name="uq_w2_mcp_connections_id"),
-        Index("ix_w2_mcp_connections_scope", 'workspace_id', 'id'),
-        Index("ix_w2_mcp_connections_work", 'workspace_id', 'created_at', 'id'),
+        Index("ix_w2_mcp_connections_scope", "workspace_id", "id"),
+        Index("ix_w2_mcp_connections_work", "workspace_id", "created_at", "id"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
-
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
-    owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("owner.id", ondelete="CASCADE"), nullable=False
+    )
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     transport: Mapped[str] = mapped_column(String(32), nullable=False)
     endpoint: Mapped[str | None] = mapped_column(String(2048))
@@ -164,9 +226,12 @@ class McpConnection(Base):
     timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="30")
     health_code: Mapped[str | None] = mapped_column(String(64))
     health_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
-
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
 
 class McpDiscovery(Base):
@@ -174,16 +239,33 @@ class McpDiscovery(Base):
 
     Workspace identity is mandatory and survives nullable or detached canonical references.
     """
+
     __tablename__ = "mcp_discoveries"
     __table_args__ = (
-        CheckConstraint("connection_revision > 0 AND capability_count BETWEEN 0 AND 200", name="ck_mcp_discovery_bounds"),
+        CheckConstraint(
+            "connection_revision > 0 AND capability_count BETWEEN 0 AND 200",
+            name="ck_mcp_discovery_bounds",
+        ),
         CheckConstraint("schema_set_hash ~ '^[0-9a-f]{64}$'", name="ck_mcp_discovery_hash"),
-        CheckConstraint("deployment_profile_hash IS NULL OR deployment_profile_hash ~ '^[0-9a-f]{64}$'", name="ck_mcp_discovery_profile_hash"),
+        CheckConstraint(
+            "deployment_profile_hash IS NULL OR deployment_profile_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_mcp_discovery_profile_hash",
+        ),
         Index("ix_mcp_discoveries_connection_created", "connection_id", "created_at"),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_mcp_discoveries_workspace", ondelete="RESTRICT"),
-        Index("ix_w2_mcp_discoveries_scope", 'workspace_id', 'id'),
-        Index("ix_w2_mcp_discoveries_work", 'workspace_id', 'created_at', 'id'),
-        ForeignKeyConstraint(["workspace_id", "connection_id"], ["mcp_connections.workspace_id", "mcp_connections.id"], name="fk_w2_mcp_discoveries_connection_id", ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_mcp_discoveries_workspace",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_w2_mcp_discoveries_scope", "workspace_id", "id"),
+        Index("ix_w2_mcp_discoveries_work", "workspace_id", "created_at", "id"),
+        ForeignKeyConstraint(
+            ["workspace_id", "connection_id"],
+            ["mcp_connections.workspace_id", "mcp_connections.id"],
+            name="fk_w2_mcp_discoveries_connection_id",
+            ondelete="CASCADE",
+        ),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
@@ -196,22 +278,32 @@ class McpDiscovery(Base):
     schema_set_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     deployment_profile_hash: Mapped[str | None] = mapped_column(String(64))
     capability_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class McpCapability(Base):
     """One immutable, untrusted tool/resource/template descriptor in a discovery snapshot."""
+
     __tablename__ = "mcp_capabilities"
     __table_args__ = (
-        CheckConstraint("kind IN ('tool', 'resource', 'resource_template')", name="ck_mcp_capability_kind"),
+        CheckConstraint(
+            "kind IN ('tool', 'resource', 'resource_template')", name="ck_mcp_capability_kind"
+        ),
         CheckConstraint("length(descriptor_hash) = 64", name="ck_mcp_capability_hash_length"),
-        CheckConstraint("octet_length(descriptor::text) <= 65536", name="ck_mcp_capability_schema_bytes"),
-        UniqueConstraint("discovery_id", "kind", "remote_key", name="uq_mcp_capability_discovery_key"),
+        CheckConstraint(
+            "octet_length(descriptor::text) <= 65536", name="ck_mcp_capability_schema_bytes"
+        ),
+        UniqueConstraint(
+            "discovery_id", "kind", "remote_key", name="uq_mcp_capability_discovery_key"
+        ),
         Index("ix_mcp_capabilities_discovery", "discovery_id"),
     )
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
-    discovery_id: Mapped[UUID] = mapped_column(ForeignKey("mcp_discoveries.id", ondelete="CASCADE"), nullable=False)
+    discovery_id: Mapped[UUID] = mapped_column(
+        ForeignKey("mcp_discoveries.id", ondelete="CASCADE"), nullable=False
+    )
     kind: Mapped[str] = mapped_column(String(24), nullable=False)
     remote_key: Mapped[str] = mapped_column(String(2048), nullable=False)
     descriptor: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
@@ -223,23 +315,44 @@ class McpCapabilityGrant(Base):
 
     Workspace identity is mandatory and survives nullable or detached canonical references.
     """
+
     __tablename__ = "mcp_capability_grants"
     __table_args__ = (
         CheckConstraint("purpose IN ('chat', 'collection')", name="ck_mcp_grant_purpose"),
-        CheckConstraint("risk IN ('READ_ONLY', 'INTERNAL_WRITE', 'EXTERNAL_WRITE', 'DESTRUCTIVE')", name="ck_mcp_grant_risk"),
-        CheckConstraint("grant_revision > 0 AND reviewed_connection_revision > 0", name="ck_mcp_grant_revisions"),
-        CheckConstraint("reviewed_profile_hash IS NULL OR reviewed_profile_hash ~ '^[0-9a-f]{64}$'", name="ck_mcp_grant_profile_hash"),
+        CheckConstraint(
+            "risk IN ('READ_ONLY', 'INTERNAL_WRITE', 'EXTERNAL_WRITE', 'DESTRUCTIVE')",
+            name="ck_mcp_grant_risk",
+        ),
+        CheckConstraint(
+            "grant_revision > 0 AND reviewed_connection_revision > 0", name="ck_mcp_grant_revisions"
+        ),
+        CheckConstraint(
+            "reviewed_profile_hash IS NULL OR reviewed_profile_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_mcp_grant_profile_hash",
+        ),
         Index("ix_mcp_grants_connection_active", "connection_id", "revoked_at", "expires_at"),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_mcp_capability_grants_workspace", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["workspace_id", "connection_id"], ["mcp_connections.workspace_id", "mcp_connections.id"], name="fk_w2_mcp_capability_grants_connection_id", ondelete="CASCADE"),
-        Index("ix_w2_mcp_capability_grants_scope", 'workspace_id', 'id'),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_mcp_capability_grants_workspace",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "connection_id"],
+            ["mcp_connections.workspace_id", "mcp_connections.id"],
+            name="fk_w2_mcp_capability_grants_connection_id",
+            ondelete="CASCADE",
+        ),
+        Index("ix_w2_mcp_capability_grants_scope", "workspace_id", "id"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
     connection_id: Mapped[UUID] = mapped_column(nullable=False)
-    capability_id: Mapped[UUID] = mapped_column(ForeignKey("mcp_capabilities.id", ondelete="RESTRICT"), nullable=False)
+    capability_id: Mapped[UUID] = mapped_column(
+        ForeignKey("mcp_capabilities.id", ondelete="RESTRICT"), nullable=False
+    )
     descriptor_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     reviewed_connection_revision: Mapped[int] = mapped_column(Integer, nullable=False)
     reviewed_profile_hash: Mapped[str | None] = mapped_column(String(64))
@@ -250,8 +363,9 @@ class McpCapabilityGrant(Base):
     destinations: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-
+    reviewed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class McpInboundClient(Base):
@@ -259,22 +373,35 @@ class McpInboundClient(Base):
 
     Workspace identity is mandatory and survives nullable or detached canonical references.
     """
+
     __tablename__ = "mcp_inbound_clients"
     __table_args__ = (
         CheckConstraint("length(token_hash) = 64", name="ck_mcp_inbound_token_hash"),
         CheckConstraint("revision > 0", name="ck_mcp_inbound_revision"),
         UniqueConstraint("token_hash", name="uq_mcp_inbound_token_hash"),
         Index("ix_mcp_inbound_clients_active", "revoked_at", "expires_at"),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_mcp_inbound_clients_workspace", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_mcp_inbound_clients_principal", ondelete="RESTRICT"),
-        Index("ix_w2_mcp_inbound_clients_scope", 'workspace_id', 'id'),
-        Index("ix_w2_mcp_inbound_clients_work", 'workspace_id', 'created_at', 'id'),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_mcp_inbound_clients_workspace",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "owner_id"],
+            ["workspaces.id", "workspaces.owner_user_id"],
+            name="fk_w2_mcp_inbound_clients_principal",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_w2_mcp_inbound_clients_scope", "workspace_id", "id"),
+        Index("ix_w2_mcp_inbound_clients_work", "workspace_id", "created_at", "id"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
-    owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("owner.id", ondelete="CASCADE"), nullable=False
+    )
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     token_prefix: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -285,5 +412,6 @@ class McpInboundClient(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

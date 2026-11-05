@@ -31,20 +31,35 @@ from modules.timeline.routes import router as timeline_router
 WS = uuid4()
 ID = "00000000-0000-4000-8000-000000000001"
 BAD = "not-a-uuid"  # reads: admission runs first, then path validation answers 422
-ACCOUNT = AccountRead(id=7, email=None, default_workspace_id=WS, email_verified_at=None,
-                      email_verification_source=None)
+ACCOUNT = AccountRead(
+    id=7,
+    email=None,
+    default_workspace_id=WS,
+    email_verified_at=None,
+    email_verification_source=None,
+)
 # (router, write (method, path), read path). Writes send an empty body; reads send no query.
 GROUPS = {
     "tasks": (tasks_router, ("DELETE", f"/api/v1/tasks/{ID}"), f"/api/v1/tasks/{BAD}"),
     "goals": (goals_router, ("DELETE", f"/api/v1/goals/{ID}"), f"/api/v1/goals/{BAD}"),
     "timeline": (timeline_router, ("DELETE", f"/api/v1/events/{ID}"), f"/api/v1/events/{BAD}"),
     "entities": (entities_router, ("POST", "/api/v1/entities"), f"/api/v1/entities/{BAD}"),
-    "relationships": (relationships_router, ("DELETE", f"/api/v1/relationships/{ID}"),
-                      f"/api/v1/relationships/{BAD}/evidence"),
-    "temporal": (temporal_router, ("POST", "/api/v1/system/graph/reconcile"), "/api/v1/system/graph/status"),
+    "relationships": (
+        relationships_router,
+        ("DELETE", f"/api/v1/relationships/{ID}"),
+        f"/api/v1/relationships/{BAD}/evidence",
+    ),
+    "temporal": (
+        temporal_router,
+        ("POST", "/api/v1/system/graph/reconcile"),
+        "/api/v1/system/graph/status",
+    ),
     "observations": (observations_router, None, "/api/v1/observations"),
-    "github": (github_router, ("POST", f"/api/v1/connectors/{ID}/github/oauth/start"),
-               f"/api/v1/connectors/{ID}/github/status"),
+    "github": (
+        github_router,
+        ("POST", f"/api/v1/connectors/{ID}/github/oauth/start"),
+        f"/api/v1/connectors/{ID}/github/status",
+    ),
 }
 
 
@@ -62,20 +77,30 @@ def _client(router: APIRouter, monkeypatch: pytest.MonkeyPatch, outcome: str) ->
     async def session() -> Iterator[AsyncMock]:  # type: ignore[misc]
         yield AsyncMock()
 
-    app.dependency_overrides.update({
-        require_account: account, require_account_write: account, get_session: session,
-    })
-    gates = [d.dependency for d in router.dependencies]  # module availability gates are covered elsewhere
+    app.dependency_overrides.update(
+        {
+            require_account: account,
+            require_account_write: account,
+            get_session: session,
+        }
+    )
+    gates = [
+        d.dependency for d in router.dependencies
+    ]  # module availability gates are covered elsewhere
     for route in router.routes:
         gates += [d.dependency for d in getattr(route, "dependencies", [])]
     for gate in gates:
         if getattr(gate, "__name__", "") == "require_enabled_module":
             app.dependency_overrides[gate] = noop
 
-    async def selected(_request: Request, _session: object, account_id: int, _wid: object) -> WorkspaceContext:
+    async def selected(
+        _request: Request, _session: object, account_id: int, _wid: object
+    ) -> WorkspaceContext:
         if outcome == "foreign":
             raise HTTPException(status_code=404, detail="Workspace not found")
-        return WorkspaceContext(user_id=account_id, workspace_id=WS, role=outcome, membership_revision=1)  # type: ignore[arg-type]
+        return WorkspaceContext(
+            user_id=account_id, workspace_id=WS, role=outcome, membership_revision=1
+        )  # type: ignore[arg-type]
 
     monkeypatch.setattr(deps, "_selected_workspace", selected)
     return TestClient(app, raise_server_exceptions=False, headers={"Origin": "http://testserver"})

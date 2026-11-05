@@ -17,8 +17,10 @@ def _feed(items: list[tuple[str, datetime | None]]) -> bytes:
     """RSS body from ``(guid, pubDate or None)`` pairs."""
     rows = "".join(
         f"<item><guid>{g}</guid>"
-        + (f"<pubDate>{d.strftime('%a, %d %b %Y %H:%M:%S GMT')}</pubDate>" if d else "") + "</item>"
-        for g, d in items)
+        + (f"<pubDate>{d.strftime('%a, %d %b %Y %H:%M:%S GMT')}</pubDate>" if d else "")
+        + "</item>"
+        for g, d in items
+    )
     return f"<rss><channel>{rows}</channel></rss>".encode()
 
 
@@ -38,14 +40,26 @@ async def test_generic_overlap_is_a_small_skew_not_a_day():
     cursor = (NOW - timedelta(hours=1)).isoformat()
 
     async def fetch(_url):
-        return _feed([("old", NOW - timedelta(hours=5)), ("edge", NOW - timedelta(hours=1, minutes=5))])
+        return _feed(
+            [("old", NOW - timedelta(hours=5)), ("edge", NOW - timedelta(hours=1, minutes=5))]
+        )
 
     out = await n8n.read_rss("https://a.example/feed", cursor, fetch=fetch)
     assert [r["provider_id"] for r in out["records"]] == ["edge"]  # 5h-old dropped, 5min skew kept
-    body = {"items": [{"id": 1, "updated": (NOW - timedelta(hours=5)).isoformat()},
-                      {"id": 2, "updated": (NOW - timedelta(hours=1, minutes=5)).isoformat()}]}
-    cfg = SimpleNamespace(url="https://a.example/items", items_path="items", id_field="id", title_field=None,
-                          content_field=None, updated_field="updated")
+    body = {
+        "items": [
+            {"id": 1, "updated": (NOW - timedelta(hours=5)).isoformat()},
+            {"id": 2, "updated": (NOW - timedelta(hours=1, minutes=5)).isoformat()},
+        ]
+    }
+    cfg = SimpleNamespace(
+        url="https://a.example/items",
+        items_path="items",
+        id_field="id",
+        title_field=None,
+        content_field=None,
+        updated_field="updated",
+    )
 
     async def rest_fetch(_url, **_kw):
         return rest.Fetched(httpx.Response(200, json=body).content)
@@ -73,7 +87,9 @@ def _mcp_run(monkeypatch, per_call: list[int | Exception]):
 
     got = _capture(monkeypatch)
     calls = [SimpleNamespace(grant_id=i, arguments={"i": i}) for i in range(len(per_call))]
-    monkeypatch.setattr(mcp_collection, "validate", lambda _s: SimpleNamespace(connection_id=1, calls=calls))
+    monkeypatch.setattr(
+        mcp_collection, "validate", lambda _s: SimpleNamespace(connection_id=1, calls=calls)
+    )
     it = iter(per_call)
 
     async def read(*_a, **kw):
@@ -86,10 +102,20 @@ def _mcp_run(monkeypatch, per_call: list[int | Exception]):
         return collection.CollectionState(cursor=None)
 
     monkeypatch.setattr(tools, "read_collection_capability", read)
-    monkeypatch.setattr(mcp_collection, "normalize", lambda n, _a, _t: [{"provider_id": f"{n}-{j}"} for j in range(n)] if isinstance(n, int) else [])
+    monkeypatch.setattr(
+        mcp_collection,
+        "normalize",
+        lambda n, _a, _t: (
+            [{"provider_id": f"{n}-{j}"} for j in range(n)] if isinstance(n, int) else []
+        ),
+    )
     monkeypatch.setattr(collection, "_state", state)
-    run = SimpleNamespace(attempt=attempt(source_type="mcp"), ctx={"agent_mcp_runtime": object()}, extras={},
-                          gate=lambda: None)
+    run = SimpleNamespace(
+        attempt=attempt(source_type="mcp"),
+        ctx={"agent_mcp_runtime": object()},
+        extras={},
+        gate=lambda: None,
+    )
     return run, got
 
 

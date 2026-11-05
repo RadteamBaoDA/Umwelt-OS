@@ -24,7 +24,9 @@ class NotificationEmit(BaseModel):
     @classmethod
     def link_is_in_app_path(cls, value: str | None) -> str | None:
         """Allow only relative in-app paths: must start with a single '/' (no '//', backslash or scheme)."""
-        if value is not None and (not value.startswith("/") or value.startswith("//") or "\\" in value):
+        if value is not None and (
+            not value.startswith("/") or value.startswith("//") or "\\" in value
+        ):
             raise ValueError("link must be a relative in-app path")
         return value
 

@@ -100,6 +100,7 @@ __all__ = [
 @dataclass(frozen=True)
 class ConnectorStatusRead:
     """Detached read-only source identity and collection-health fields for connector status listings."""
+
     id: UUID
     name: str
     type: str
@@ -111,7 +112,11 @@ class ConnectorStatusRead:
 
 
 async def list_connector_status(
-    session: AsyncSession, source_ids: Sequence[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_ids: Sequence[UUID],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> dict[UUID, ConnectorStatusRead]:
     """Read-only name/type/health projection for at most 200 workspace Sources, keyed by id.
 
@@ -123,31 +128,58 @@ async def list_connector_status(
         return {}
     if len(source_ids) > 200:
         raise ValueError("Connector status listing is limited to 200 sources")
-    rows = (await session.execute(
-        select(Source.id, Source.name, Source.type, Source.provider, Source.last_success_at,
-               Source.last_error_at, Source.last_error_code, Source.collected_at)
-        .where(Source.id.in_(list(source_ids)), *_source_scope(scope))
-    )).all()
+    rows = (
+        await session.execute(
+            select(
+                Source.id,
+                Source.name,
+                Source.type,
+                Source.provider,
+                Source.last_success_at,
+                Source.last_error_at,
+                Source.last_error_code,
+                Source.collected_at,
+            ).where(Source.id.in_(list(source_ids)), *_source_scope(scope))
+        )
+    ).all()
     return {row.id: ConnectorStatusRead(*row) for row in rows}
 
 
 async def _select_provider_sources(
-    session: AsyncSession, providers: frozenset[str], *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    providers: frozenset[str],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> list[Source]:
     """Admit the scope once, then select non-archived workspace Sources for ``providers``, oldest first.
 
     Shared by the ORM and DTO listings so both keep the same bound (500 rows), filters and order.
     """
     await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    return list((await session.scalars(
-        select(Source).where(
-            Source.provider.in_(sorted(providers)), Source.status != "archived", *_source_scope(scope),
-        ).order_by(Source.created_at, Source.id).limit(500).execution_options(populate_existing=True)
-    )).all())
+    return list(
+        (
+            await session.scalars(
+                select(Source)
+                .where(
+                    Source.provider.in_(sorted(providers)),
+                    Source.status != "archived",
+                    *_source_scope(scope),
+                )
+                .order_by(Source.created_at, Source.id)
+                .limit(500)
+                .execution_options(populate_existing=True)
+            )
+        ).all()
+    )
 
 
 async def list_provider_sources(
-    session: AsyncSession, providers: frozenset[str], *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    providers: frozenset[str],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> list[Source]:
     """Non-archived owner-workspace Sources whose provider is in ``providers``, oldest first.
 
@@ -155,23 +187,36 @@ async def list_provider_sources(
     callers pick the oldest per provider so a toggled preset keeps reusing its original Source.
     """
     return await _select_provider_sources(
-        session, providers, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        session, providers, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
 
 
 async def list_provider_connector_sources(
-    session: AsyncSession, providers: frozenset[str], *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    providers: frozenset[str],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> list[ConnectorSource]:
     """Public connector DTOs for the non-archived workspace Sources of ``providers``, oldest first.
 
     Same filters, order and 500-row bound as ``list_provider_sources`` but with one access fence and
     one select for the whole provider set; read only, no locks. Rows are fresh (populate_existing).
     """
-    return [_connector_source(row) for row in await _select_provider_sources(
-        session, providers, scope=scope, multi_workspace_enabled=multi_workspace_enabled)]
+    return [
+        _connector_source(row)
+        for row in await _select_provider_sources(
+            session, providers, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+    ]
 
 
 async def get_connector_sources(
-    session: AsyncSession, source_ids: frozenset[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_ids: frozenset[UUID],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> dict[UUID, ConnectorSource]:
     """Batch ``get_connector_source``: DTOs keyed by id for the ids visible in ``scope`` (missing ids absent).
 
@@ -183,8 +228,10 @@ async def get_connector_sources(
     if not source_ids:
         return {}
     rows = await session.scalars(
-        select(Source).where(Source.id.in_(list(source_ids)), *_source_scope(scope))
-        .execution_options(populate_existing=True))
+        select(Source)
+        .where(Source.id.in_(list(source_ids)), *_source_scope(scope))
+        .execution_options(populate_existing=True)
+    )
     return {row.id: _connector_source(row) for row in rows}
 
 
@@ -222,8 +269,12 @@ def _operation_scope(scope: Scope) -> tuple[ColumnElement[bool], ...]:
 
 
 async def _admit_source_scope(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
-    lock: bool = False, expected: AccessFence | None = None,
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    lock: bool = False,
+    expected: AccessFence | None = None,
 ) -> AccessFence:
     """Check real owner admission; lock auth/workspace/membership before any domain locks.
 
@@ -238,25 +289,39 @@ async def _admit_source_scope(
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     if lock:
         return await workspaces.lock_access_fence(
-            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            scope=scope,
+            expected=expected,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
     return await workspaces.read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
 
 
 def _cursor_fingerprint(fence: AccessFence, scope: Scope, *filters: object) -> str:
     """Fingerprint actual actor/workspace/revisions plus exact selector and ordering inputs."""
-    values = [str(fence.workspace_id), fence.user_id, fence.membership_revision,
-              fence.configuration_revision, *filters]
+    values = [
+        str(fence.workspace_id),
+        fence.user_id,
+        fence.membership_revision,
+        fence.configuration_revision,
+        *filters,
+    ]
     if isinstance(scope, InternalJobScope):
         values += [str(scope.source_id) if scope.source_id else None, scope.source_generation]
-    return hashlib.sha256(json.dumps(values, separators=(",", ":"), sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(values, separators=(",", ":"), sort_keys=True).encode()
+    ).hexdigest()
 
 
 def _encode_source_page_cursor(created_at: datetime, identifier: UUID, fingerprint: str) -> str:
     """Wrap the existing keyset primitive with the exact admitted request fingerprint."""
-    raw = json.dumps([2, fingerprint, encode_cursor(created_at, identifier)], separators=(",", ":")).encode()
+    raw = json.dumps(
+        [2, fingerprint, encode_cursor(created_at, identifier)], separators=(",", ":")
+    ).encode()
     return b64url_encode(raw)
 
 
@@ -280,12 +345,24 @@ def _decode_source_page_cursor(cursor: str, fingerprint: str) -> tuple[datetime,
 
 
 def _encode_source_export_cursor(
-    snapshot_at: datetime, created_at: datetime, identifier: UUID, fingerprint: str,
+    snapshot_at: datetime,
+    created_at: datetime,
+    identifier: UUID,
+    fingerprint: str,
 ) -> str:
     """Bind a canonical source metadata keyset position to one fixed owner snapshot."""
-    snapshot_fingerprint = hashlib.sha256(f"{fingerprint}:{snapshot_at.isoformat()}".encode()).hexdigest()
+    snapshot_fingerprint = hashlib.sha256(
+        f"{fingerprint}:{snapshot_at.isoformat()}".encode()
+    ).hexdigest()
     payload = json.dumps(
-        [2, "sources", snapshot_fingerprint, snapshot_at.isoformat(), created_at.isoformat(), str(identifier)],
+        [
+            2,
+            "sources",
+            snapshot_fingerprint,
+            snapshot_at.isoformat(),
+            created_at.isoformat(),
+            str(identifier),
+        ],
         separators=(",", ":"),
     ).encode()
     return b64url_encode(payload)
@@ -302,15 +379,28 @@ def _decode_source_export_cursor(cursor: str, fingerprint: str) -> tuple[datetim
         values = json.loads(raw)
         if not isinstance(values, list) or len(values) != 6 or values[:2] != [2, "sources"]:
             raise ValueError
-        snapshot_at, created_at = datetime.fromisoformat(values[3]), datetime.fromisoformat(values[4])
+        snapshot_at, created_at = (
+            datetime.fromisoformat(values[3]),
+            datetime.fromisoformat(values[4]),
+        )
         identifier = UUID(values[5])
-        snapshot_fingerprint = hashlib.sha256(f"{fingerprint}:{snapshot_at.isoformat()}".encode()).hexdigest()
-        if (any(value.tzinfo is None or value.utcoffset() is None for value in (snapshot_at, created_at))
-                or values[2] != snapshot_fingerprint
-                or snapshot_at.isoformat() != values[3] or created_at.isoformat() != values[4]
-                or created_at > snapshot_at or snapshot_at > datetime.now(UTC)
-                or str(identifier) != values[5]
-                or _encode_source_export_cursor(snapshot_at, created_at, identifier, fingerprint) != cursor):
+        snapshot_fingerprint = hashlib.sha256(
+            f"{fingerprint}:{snapshot_at.isoformat()}".encode()
+        ).hexdigest()
+        if (
+            any(
+                value.tzinfo is None or value.utcoffset() is None
+                for value in (snapshot_at, created_at)
+            )
+            or values[2] != snapshot_fingerprint
+            or snapshot_at.isoformat() != values[3]
+            or created_at.isoformat() != values[4]
+            or created_at > snapshot_at
+            or snapshot_at > datetime.now(UTC)
+            or str(identifier) != values[5]
+            or _encode_source_export_cursor(snapshot_at, created_at, identifier, fingerprint)
+            != cursor
+        ):
             raise ValueError
         return snapshot_at, created_at, identifier
     except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
@@ -330,12 +420,26 @@ def _source_export_scope(snapshot_at: datetime, *, scope: Scope) -> tuple[Column
 def _source_export_columns() -> tuple[InstrumentedAttribute[Any], ...]:
     """Return only credential-free fields supported by the current SourceRead DTO."""
     return (
-        Source.id, Source.type, Source.name, Source.provider, Source.status, Source.local_only,
-        Source.graph_enabled, Source.rag_index_enabled,
-        Source.last_sync_at, Source.last_success_at, Source.last_error_at, Source.last_error_code,
-        Source.collected_at, Source.indexed_at, Source.collection_error_code,
-        Source.processing_error_code, Source.generation, Source.retired_at,
-        Source.created_at, Source.updated_at,
+        Source.id,
+        Source.type,
+        Source.name,
+        Source.provider,
+        Source.status,
+        Source.local_only,
+        Source.graph_enabled,
+        Source.rag_index_enabled,
+        Source.last_sync_at,
+        Source.last_success_at,
+        Source.last_error_at,
+        Source.last_error_code,
+        Source.collected_at,
+        Source.indexed_at,
+        Source.collection_error_code,
+        Source.processing_error_code,
+        Source.generation,
+        Source.retired_at,
+        Source.created_at,
+        Source.updated_at,
     )
 
 
@@ -345,79 +449,156 @@ def _source_export_read(row: Any) -> SourceRead:
 
 
 async def export_page(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool, owner_id: int, record_kind: str, limit: int = 50, cursor: str | None = None,
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    owner_id: int,
+    record_kind: str,
+    limit: int = 50,
+    cursor: str | None = None,
 ) -> SourceMetadataExportPage:
     """Return a bounded source metadata export, excluding all provider configuration and secrets."""
-    fence = await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    fence = await _admit_source_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if owner_id != fence.user_id or record_kind != "sources" or not 1 <= limit <= 100:
         raise ValueError("Source export owner, kind or page limit is invalid")
-    fingerprint = _cursor_fingerprint(fence, scope, "sources-export", "created_at,id:asc", record_kind, limit)
+    fingerprint = _cursor_fingerprint(
+        fence, scope, "sources-export", "created_at,id:asc", record_kind, limit
+    )
     if cursor is None:
         snapshot_at, position = datetime.now(UTC), None
     else:
         snapshot_at, position_at, position_id = _decode_source_export_cursor(cursor, fingerprint)
         position = (position_at, position_id)
-    snapshot_count = int(await session.scalar(
-        select(func.count()).select_from(Source).where(*_source_export_scope(snapshot_at, scope=scope))
-    ) or 0)
-    statement = select(*_source_export_columns()).where(*_source_export_scope(snapshot_at, scope=scope))
+    snapshot_count = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(Source)
+            .where(*_source_export_scope(snapshot_at, scope=scope))
+        )
+        or 0
+    )
+    statement = select(*_source_export_columns()).where(
+        *_source_export_scope(snapshot_at, scope=scope)
+    )
     if position is not None:
         statement = statement.where(tuple_(Source.created_at, Source.id) > position)
-    rows = list((await session.execute(
-        statement.order_by(Source.created_at, Source.id).limit(limit + 1)
-    )).all())
+    rows = list(
+        (
+            await session.execute(statement.order_by(Source.created_at, Source.id).limit(limit + 1))
+        ).all()
+    )
     has_more, rows = len(rows) > limit, rows[:limit]
     items = [_source_export_read(row) for row in rows]
     encoded_items, payload_bytes = serialize_bounded_page(items, label="Source")
-    fences = [SourceMetadataExportFence(
-        source_id=row.id, workspace_id=scope.workspace_id, created_at=row.created_at, updated_at=row.updated_at,
-        generation=row.generation, content_digest=content_digest(raw),
-    ) for row, raw in zip(rows, encoded_items, strict=True)]
+    fences = [
+        SourceMetadataExportFence(
+            source_id=row.id,
+            workspace_id=scope.workspace_id,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            generation=row.generation,
+            content_digest=content_digest(raw),
+        )
+        for row, raw in zip(rows, encoded_items, strict=True)
+    ]
     return SourceMetadataExportPage(
-        owner_id=owner_id, workspace_id=scope.workspace_id, record_kind="sources", snapshot_at=snapshot_at,
-        snapshot_count=snapshot_count, items=items, fences=fences,
+        owner_id=owner_id,
+        workspace_id=scope.workspace_id,
+        record_kind="sources",
+        snapshot_at=snapshot_at,
+        snapshot_count=snapshot_count,
+        items=items,
+        fences=fences,
         payload_bytes=payload_bytes,
-        next_cursor=_encode_source_export_cursor(snapshot_at, rows[-1].created_at, rows[-1].id, fingerprint)
-        if has_more and rows else None,
+        next_cursor=_encode_source_export_cursor(
+            snapshot_at, rows[-1].created_at, rows[-1].id, fingerprint
+        )
+        if has_more and rows
+        else None,
     )
 
 
 async def validate_export_fences(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool, owner_id: int, record_kind: str, snapshot_at: datetime,
-    expected_snapshot_count: int, fences: list[SourceMetadataExportFence],
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    owner_id: int,
+    record_kind: str,
+    snapshot_at: datetime,
+    expected_snapshot_count: int,
+    fences: list[SourceMetadataExportFence],
 ) -> SourceMetadataExportValidation:
     """Recheck source eligibility, generation, row content, and fixed-cutoff inventory."""
-    access = await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    access = await _admit_source_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if owner_id != access.user_id or record_kind != "sources" or len(fences) > 100:
         raise ValueError("Source export validation input is invalid")
     if any(fence.workspace_id != scope.workspace_id for fence in fences):
-        return SourceMetadataExportValidation(valid=False, reason="record_changed", observed_snapshot_count=0)
-    observed = int(await session.scalar(
-        select(func.count()).select_from(Source).where(*_source_export_scope(snapshot_at, scope=scope))
-    ) or 0)
+        return SourceMetadataExportValidation(
+            valid=False, reason="record_changed", observed_snapshot_count=0
+        )
+    observed = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(Source)
+            .where(*_source_export_scope(snapshot_at, scope=scope))
+        )
+        or 0
+    )
     if observed != expected_snapshot_count:
-        return SourceMetadataExportValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed)
-    source_fences = [SourceExportFence(
-        source_id=item.source_id, workspace_id=item.workspace_id, generation=item.generation,
-    ) for item in fences]
-    if len(await filter_export_eligible_sources(
-        session, source_fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-    )) != len(source_fences):
-        return SourceMetadataExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+        return SourceMetadataExportValidation(
+            valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed
+        )
+    source_fences = [
+        SourceExportFence(
+            source_id=item.source_id,
+            workspace_id=item.workspace_id,
+            generation=item.generation,
+        )
+        for item in fences
+    ]
+    if len(
+        await filter_export_eligible_sources(
+            session,
+            source_fences,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    ) != len(source_fences):
+        return SourceMetadataExportValidation(
+            valid=False, reason="record_changed", observed_snapshot_count=observed
+        )
     for fence in fences:
-        row = (await session.execute(
-            select(*_source_export_columns()).where(
-                Source.id == fence.source_id, *_source_export_scope(snapshot_at, scope=scope),
+        row = (
+            await session.execute(
+                select(*_source_export_columns()).where(
+                    Source.id == fence.source_id,
+                    *_source_export_scope(snapshot_at, scope=scope),
+                )
             )
-        )).one_or_none()
+        ).one_or_none()
         if row is None:
-            return SourceMetadataExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+            return SourceMetadataExportValidation(
+                valid=False, reason="record_changed", observed_snapshot_count=observed
+            )
         item = _source_export_read(row)
-        if (item.generation != fence.generation or item.created_at != fence.created_at
-                or item.updated_at != fence.updated_at
-                or dto_digest(item) != fence.content_digest):
-            return SourceMetadataExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
-    return SourceMetadataExportValidation(valid=True, reason="valid", observed_snapshot_count=observed)
+        if (
+            item.generation != fence.generation
+            or item.created_at != fence.created_at
+            or item.updated_at != fence.updated_at
+            or dto_digest(item) != fence.content_digest
+        ):
+            return SourceMetadataExportValidation(
+                valid=False, reason="record_changed", observed_snapshot_count=observed
+            )
+    return SourceMetadataExportValidation(
+        valid=True, reason="valid", observed_snapshot_count=observed
+    )
 
 
 def export_eligible_source_ids(*, scope: Scope) -> Select[UUID]:
@@ -431,16 +612,23 @@ def export_eligible_source_ids(*, scope: Scope) -> Select[UUID]:
     """
     pending_data_purges = select(SourcePurgeOperation.source_id).where(
         SourcePurgeOperation.workspace_id == scope.workspace_id,
-        SourcePurgeOperation.status.in_(("queued", "running", "failed"))
+        SourcePurgeOperation.status.in_(("queued", "running", "failed")),
     )
     # Member branch: workspace-only; Documents adds the grant predicate. No Source config is read.
-    scoped = ((Source.workspace_id == scope.workspace_id,)
-              if isinstance(scope, WorkspaceContext) and scope.role != "owner" else _source_scope(scope))
+    scoped = (
+        (Source.workspace_id == scope.workspace_id,)
+        if isinstance(scope, WorkspaceContext) and scope.role != "owner"
+        else _source_scope(scope)
+    )
     return select(Source.id).where(*scoped, ~Source.id.in_(pending_data_purges))
 
 
 async def filter_export_eligible_sources(
-    session: AsyncSession, fences: Sequence[SourceExportFence], *, scope: Scope, multi_workspace_enabled: bool
+    session: AsyncSession,
+    fences: Sequence[SourceExportFence],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> tuple[UUID, ...]:
     """Keep a bounded set of captured source generations with no unfinished data purge."""
     await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
@@ -454,18 +642,23 @@ async def filter_export_eligible_sources(
     if not source_ids:
         return ()
     generations = {fence.source_id: fence.generation for fence in fences}
-    rows = (await session.execute(
-        select(Source.id, Source.generation)
-        .where(Source.id.in_(source_ids), Source.id.in_(export_eligible_source_ids(scope=scope)))
-    )).all()
+    rows = (
+        await session.execute(
+            select(Source.id, Source.generation).where(
+                Source.id.in_(source_ids), Source.id.in_(export_eligible_source_ids(scope=scope))
+            )
+        )
+    ).all()
     return tuple(
-        source_id for source_id, generation in rows
-        if generations.get(source_id) == generation
+        source_id for source_id, generation in rows if generations.get(source_id) == generation
     )
 
 
 async def observability_quality_summary(
-    session: AsyncSession, *, instance_operator: bool, now: datetime | None = None,
+    session: AsyncSession,
+    *,
+    instance_operator: bool,
+    now: datetime | None = None,
 ) -> dict[str, int]:
     """Aggregate instance health only for an already-admitted bootstrap operator/internal caller.
 
@@ -477,18 +670,29 @@ async def observability_quality_summary(
     now = now or datetime.now(UTC)
     cadence = cast(Source.configuration["schedule_interval_minutes"].astext, Integer)
     default_cadence = case((Source.type == "rss", 15), else_=30)
-    stale_sources = int(await session.scalar(select(func.count()).select_from(Source).where(
-        Source.status == "active",
-        Source.type.in_(("rss", "web", "api")),
-        func.coalesce(Source.last_success_at, Source.created_at)
-        < now - func.make_interval(0, 0, 0, 0, 0, 0, func.coalesce(cadence, default_cadence) * 120),
-    )) or 0)
+    stale_sources = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(Source)
+            .where(
+                Source.status == "active",
+                Source.type.in_(("rss", "web", "api")),
+                func.coalesce(Source.last_success_at, Source.created_at)
+                < now
+                - func.make_interval(
+                    0, 0, 0, 0, 0, 0, func.coalesce(cadence, default_cadence) * 120
+                ),
+            )
+        )
+        or 0
+    )
     return {"stale_sources": stale_sources}
 
 
 @dataclass(frozen=True)
 class ToolSourceRead:
     """Detached source identity and lifecycle fields safe for native tool output."""
+
     id: UUID
     name: str
     type: str
@@ -501,11 +705,17 @@ class ToolSourceRead:
 @dataclass(frozen=True)
 class ToolSourcePage:
     """Carry a bounded detached source page and continuation cursor."""
+
     items: tuple[ToolSourceRead, ...]
     next_cursor: str | None
 
 
-async def create_source(session: AsyncSession, payload: SourceCreate, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+async def create_source(
+    session: AsyncSession,
+    payload: SourceCreate,
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
     expected_access_fence: AccessFence | None = None,
 ) -> Source:
     """Create in the owner workspace after access locks, preserving wrapper replay/commit.
@@ -514,14 +724,28 @@ async def create_source(session: AsyncSession, payload: SourceCreate, *, scope: 
     sources default to local-only. An optional captured fence rejects stale deferred configuration;
     replay reuses the locked access fence without reacquiring earlier locks.
     """
-    access_fence = await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True, expected=expected_access_fence)
+    access_fence = await _admit_source_scope(
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        lock=True,
+        expected=expected_access_fence,
+    )
     source = Source(
         workspace_id=scope.workspace_id,
         type=payload.type,
         name=payload.name,
         provider=payload.provider,
-        local_only=payload.type == "manual" or payload.provider in {
-            "health", "home_assistant", "google_mail", "google_calendar", "google_drive", "notion", "slack",
+        local_only=payload.type == "manual"
+        or payload.provider
+        in {
+            "health",
+            "home_assistant",
+            "google_mail",
+            "google_calendar",
+            "google_drive",
+            "notion",
+            "slack",
         },
         graph_enabled=payload.graph_enabled,
         rag_index_enabled=payload.rag_index_enabled,
@@ -529,14 +753,23 @@ async def create_source(session: AsyncSession, payload: SourceCreate, *, scope: 
     session.add(source)
     await session.flush()
     await commit_with_replay(
-        session, [make_source_change(source.id, source.generation, source.status, scope=scope)],
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        [make_source_change(source.id, source.generation, source.status, scope=scope)],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
     await session.refresh(source)
     return source
 
 
-async def ensure_demo_source(session: AsyncSession, source_id: UUID, namespace: str, *, scope: Scope, multi_workspace_enabled: bool,
+async def ensure_demo_source(
+    session: AsyncSession,
+    source_id: UUID,
+    namespace: str,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
     expected_access_fence: AccessFence | None = None,
 ) -> bool:
     """Stage a verified demo owner's Source once under access locks, rejecting foreign IDs.
@@ -546,18 +779,31 @@ async def ensure_demo_source(session: AsyncSession, source_id: UUID, namespace: 
     An existing Source must match the bound current generation, including generations above 1;
     only a missing Source may be created at generation 1, never resurrected at a later epoch.
     """
-    await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True, expected=expected_access_fence)
+    await _admit_source_scope(
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        lock=True,
+        expected=expected_access_fence,
+    )
     if isinstance(scope, InternalJobScope) and scope.source_id not in (None, source_id):
         raise ValueError("Demo Source identity does not match its scope")
-    source = await session.scalar(select(Source).where(
-        Source.id == source_id, *_source_scope(scope),
-    ).execution_options(populate_existing=True))
+    source = await session.scalar(
+        select(Source)
+        .where(
+            Source.id == source_id,
+            *_source_scope(scope),
+        )
+        .execution_options(populate_existing=True)
+    )
     if source is not None:
         if source.configuration.get("demo_namespace") != namespace:
             raise RuntimeError("Demo source identity is occupied by another source")
         return False
-    if isinstance(scope, InternalJobScope) and scope.source_id is not None and (
-        scope.source_generation != 1
+    if (
+        isinstance(scope, InternalJobScope)
+        and scope.source_id is not None
+        and (scope.source_generation != 1)
     ):
         raise ValueError("Demo Source identity must match its creation generation")
     inserted = await session.scalar(
@@ -575,21 +821,32 @@ async def ensure_demo_source(session: AsyncSession, source_id: UUID, namespace: 
     )
     if inserted is not None:
         return True
-    source = await session.scalar(select(Source).where(
-        Source.id == source_id, *_source_scope(scope),
-    ).execution_options(populate_existing=True))
+    source = await session.scalar(
+        select(Source)
+        .where(
+            Source.id == source_id,
+            *_source_scope(scope),
+        )
+        .execution_options(populate_existing=True)
+    )
     if source is None or source.configuration.get("demo_namespace") != namespace:
         raise RuntimeError("Demo source identity is occupied by another source")
     return False
 
 
-async def get_source(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool
+async def get_source(
+    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool
 ) -> Source | None:
     """Return fresh owner-scoped Source ORM for Source routes; never authorize by UUID alone."""
     await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    return await session.scalar(select(Source).where(
-        Source.id == source_id, *_source_scope(scope),
-    ).execution_options(populate_existing=True))
+    return await session.scalar(
+        select(Source)
+        .where(
+            Source.id == source_id,
+            *_source_scope(scope),
+        )
+        .execution_options(populate_existing=True)
+    )
 
 
 CHAT_ATTACHMENTS_MARKER = "chat_attachments"
@@ -598,8 +855,14 @@ CHAT_ATTACHMENTS_SHARED_NAME = "Chat attachments (shared)"
 
 
 async def _get_or_create_marked_manual_source(
-    session: AsyncSession, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
-    marker: str, name: str, local_only: bool, lock_key: str,
+    session: AsyncSession,
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
+    marker: str,
+    name: str,
+    local_only: bool,
+    lock_key: str,
 ) -> Source:
     """Return the workspace's non-archived manual source carrying ``marker``/``local_only``, creating it once.
 
@@ -608,39 +871,56 @@ async def _get_or_create_marked_manual_source(
     created; a paused one is returned so intake reports it as inactive. Commits before returning.
     """
     access_fence = await _admit_source_scope(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        lock=True,
     )
     await session.execute(
-        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": lock_key},
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": lock_key},
     )
     source = await session.scalar(
-        select(Source).where(
+        select(Source)
+        .where(
             *_source_scope(scope),
             Source.configuration[marker].as_boolean().is_(True),
             Source.local_only.is_(local_only),
             Source.status != "archived",
-        ).order_by(Source.created_at.desc()).limit(1)
+        )
+        .order_by(Source.created_at.desc())
+        .limit(1)
     )
     if source is not None:
         await session.commit()
         return source
     # Built directly: create_source forces local_only for manual sources, which would break "shared".
     source = Source(
-        workspace_id=scope.workspace_id, type="manual", name=name,
-        local_only=local_only, configuration={marker: True},
+        workspace_id=scope.workspace_id,
+        type="manual",
+        name=name,
+        local_only=local_only,
+        configuration={marker: True},
     )
     session.add(source)
     await session.flush()
     await commit_with_replay(
-        session, [make_source_change(source.id, source.generation, source.status, scope=scope)],
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        [make_source_change(source.id, source.generation, source.status, scope=scope)],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
     await session.refresh(source)
     return source
 
 
 async def get_or_create_chat_attachments_source(
-    session: AsyncSession, *, scope: WorkspaceContext, multi_workspace_enabled: bool, shared: bool = False,
+    session: AsyncSession,
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
+    shared: bool = False,
 ) -> Source:
     """Return one of the workspace's two server-owned Chat attachments manual sources, creating it once.
 
@@ -651,7 +931,9 @@ async def get_or_create_chat_attachments_source(
     """
     variant = "shared" if shared else "private"
     return await _get_or_create_marked_manual_source(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         marker=CHAT_ATTACHMENTS_MARKER,
         name=CHAT_ATTACHMENTS_SHARED_NAME if shared else CHAT_ATTACHMENTS_NAME,
         local_only=not shared,
@@ -664,7 +946,10 @@ DOCUMENT_UPLOADS_NAME = "Uploads"
 
 
 async def get_or_create_uploads_source(
-    session: AsyncSession, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
 ) -> Source:
     """Return the workspace's server-owned default "Uploads" manual source, creating it once.
 
@@ -674,41 +959,71 @@ async def get_or_create_uploads_source(
     Commits before returning.
     """
     return await _get_or_create_marked_manual_source(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        marker=DOCUMENT_UPLOADS_MARKER, name=DOCUMENT_UPLOADS_NAME, local_only=True,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        marker=DOCUMENT_UPLOADS_MARKER,
+        name=DOCUMENT_UPLOADS_NAME,
+        local_only=True,
         lock_key=f"umwelt.sources.document_uploads.{scope.workspace_id}",
     )
 
 
 async def is_chat_attachments_source(
-    session: AsyncSession, source_id: UUID, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Report whether an in-workspace source carries the server-set Chat attachments marker."""
-    source = await get_source(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    source = await get_source(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     return source is not None and source.configuration.get(CHAT_ATTACHMENTS_MARKER) is True
 
 
 async def get_tool_source(
-    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool, source_ids: frozenset[UUID],
-    owner_all: bool = False, destination: ToolDestination = ToolDestination.LOCAL,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    source_ids: frozenset[UUID],
+    owner_all: bool = False,
+    destination: ToolDestination = ToolDestination.LOCAL,
 ) -> ToolSourceRead | None:
     """Read an active source projection within exact scope and destination privacy policy."""
     await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not owner_all and source_id not in source_ids:
         return None
-    row = (await session.execute(
-        select(Source.id, Source.name, Source.type, Source.status, Source.generation,
-               Source.local_only, Source.created_at)
-        .where(Source.id == source_id, Source.status == "active", *_source_scope(scope))
-    )).one_or_none()
+    row = (
+        await session.execute(
+            select(
+                Source.id,
+                Source.name,
+                Source.type,
+                Source.status,
+                Source.generation,
+                Source.local_only,
+                Source.created_at,
+            ).where(Source.id == source_id, Source.status == "active", *_source_scope(scope))
+        )
+    ).one_or_none()
     if row is not None and destination != ToolDestination.LOCAL and row.local_only:
         return None
     return ToolSourceRead(*row) if row else None
 
 
 async def list_tool_sources(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool, limit: int, cursor: str | None,
-    source_ids: frozenset[UUID], owner_all: bool = False,
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    limit: int,
+    cursor: str | None,
+    source_ids: frozenset[UUID],
+    owner_all: bool = False,
     destination: ToolDestination = ToolDestination.LOCAL,
 ) -> ToolSourcePage:
     """Page active, exact-scope sources after destination privacy filtering.
@@ -716,17 +1031,30 @@ async def list_tool_sources(
     Remote local-only rows are excluded before ordering, limit and cursor construction; the
     projection contains no source configuration or credentials.
     """
-    access = await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    access = await _admit_source_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     fingerprint = _cursor_fingerprint(
-        access, scope, "tool-sources", "created_at,id:desc", limit,
-        sorted(str(identifier) for identifier in source_ids), owner_all, destination.value,
+        access,
+        scope,
+        "tool-sources",
+        "created_at,id:desc",
+        limit,
+        sorted(str(identifier) for identifier in source_ids),
+        owner_all,
+        destination.value,
     )
     position = _decode_source_page_cursor(cursor, fingerprint) if cursor is not None else None
     if not 1 <= limit <= 100:
         raise ValueError("Source tool page size is outside its supported bound")
     statement = select(
-        Source.id, Source.name, Source.type, Source.status, Source.generation,
-        Source.local_only, Source.created_at,
+        Source.id,
+        Source.name,
+        Source.type,
+        Source.status,
+        Source.generation,
+        Source.local_only,
+        Source.created_at,
     ).where(Source.status == "active", *_source_scope(scope))
     if destination != ToolDestination.LOCAL:
         statement = statement.where(Source.local_only.is_(False))
@@ -736,12 +1064,20 @@ async def list_tool_sources(
         statement = statement.where(Source.id.in_(source_ids))
     if position is not None:
         statement = statement.where(tuple_(Source.created_at, Source.id) < position)
-    rows = list((await session.execute(
-        statement.order_by(desc(Source.created_at), desc(Source.id)).limit(limit + 1)
-    )).all())
+    rows = list(
+        (
+            await session.execute(
+                statement.order_by(desc(Source.created_at), desc(Source.id)).limit(limit + 1)
+            )
+        ).all()
+    )
     more = len(rows) > limit
     page = rows[:limit]
-    next_cursor = _encode_source_page_cursor(page[-1].created_at, page[-1].id, fingerprint) if more and page else None
+    next_cursor = (
+        _encode_source_page_cursor(page[-1].created_at, page[-1].id, fingerprint)
+        if more and page
+        else None
+    )
     return ToolSourcePage(tuple(ToolSourceRead(*row) for row in page), next_cursor)
 
 
@@ -761,7 +1097,8 @@ def _connector_source(source: Source) -> ConnectorSource:
     )
 
 
-async def get_connector_source(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool
+async def get_connector_source(
+    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool
 ) -> ConnectorSource | None:
     """Read fresh retained source configuration and project it for connector consumers.
 
@@ -769,12 +1106,20 @@ async def get_connector_source(session: AsyncSession, source_id: UUID, *, scope:
     caller's identity map already holds this source; this remains a read with no row lock.
     """
     await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    source = await session.scalar(select(Source).where(Source.id == source_id, *_source_scope(scope))
-                                  .execution_options(populate_existing=True))
+    source = await session.scalar(
+        select(Source)
+        .where(Source.id == source_id, *_source_scope(scope))
+        .execution_options(populate_existing=True)
+    )
     return _connector_source(source) if source is not None else None
 
 
-async def _lock_source_row(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+async def _lock_source_row(
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
     expected_access_fence: AccessFence | None = None,
 ) -> tuple[Source | None, AccessFence]:
     """Return the refreshed Source and access fence under auth->workspace->Source locks.
@@ -782,7 +1127,13 @@ async def _lock_source_row(session: AsyncSession, source_id: UUID, *, scope: Sco
     Entry requires no previously held domain locks. Optional expected fence performs deferred
     configuration CAS before Source locking; caller owns commit and release before external I/O.
     """
-    access_fence = await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True, expected=expected_access_fence)
+    access_fence = await _admit_source_scope(
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        lock=True,
+        expected=expected_access_fence,
+    )
     source = await session.scalar(
         select(Source)
         .where(Source.id == source_id, *_source_scope(scope))
@@ -792,7 +1143,6 @@ async def _lock_source_row(session: AsyncSession, source_id: UUID, *, scope: Sco
     return source, access_fence
 
 
-
 def source_fence_of(source: Source) -> SourceFence:
     """Detach a complete fence (including graph/RAG toggles) from a Source row.
 
@@ -800,13 +1150,18 @@ def source_fence_of(source: Source) -> SourceFence:
     omitting a toggle makes non-default Sources fail 409 forever. Pure; no I/O or authority.
     """
     return SourceFence(
-        id=source.id, workspace_id=source.workspace_id, status=source.status,
-        generation=source.generation, local_only=source.local_only,
-        graph_enabled=source.graph_enabled, rag_index_enabled=source.rag_index_enabled,
+        id=source.id,
+        workspace_id=source.workspace_id,
+        status=source.status,
+        generation=source.generation,
+        local_only=source.local_only,
+        graph_enabled=source.graph_enabled,
+        rag_index_enabled=source.rag_index_enabled,
     )
 
 
-async def get_source_fence(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool
+async def get_source_fence(
+    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool
 ) -> SourceFence | None:
     """Read a detached source eligibility fence without acquiring a database row lock.
 
@@ -816,16 +1171,25 @@ async def get_source_fence(session: AsyncSession, source_id: UUID, *, scope: Sco
     Source returns None. It is read-only and grants no authority to fetch provider items.
     """
     await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    source = await session.scalar(select(Source).where(
-        Source.id == source_id, *_source_scope(scope),
-    ).execution_options(populate_existing=True))
+    source = await session.scalar(
+        select(Source)
+        .where(
+            Source.id == source_id,
+            *_source_scope(scope),
+        )
+        .execution_options(populate_existing=True)
+    )
     if source is None:
         return None
     return source_fence_of(source)
 
 
 async def get_source_fences(
-    session: AsyncSession, source_ids: Sequence[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_ids: Sequence[UUID],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> dict[UUID, SourceFence]:
     """Read detached eligibility fences for many Sources with one admission and one ``IN`` query.
 
@@ -839,9 +1203,14 @@ async def get_source_fences(
     await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not unique:
         return {}
-    rows = await session.scalars(select(Source).where(
-        Source.id.in_(unique), *_source_scope(scope),
-    ).execution_options(populate_existing=True))
+    rows = await session.scalars(
+        select(Source)
+        .where(
+            Source.id.in_(unique),
+            *_source_scope(scope),
+        )
+        .execution_options(populate_existing=True)
+    )
     return {row.id: source_fence_of(row) for row in rows}
 
 
@@ -873,8 +1242,12 @@ async def github_retirement_peer_projection_in_uow(
     and grant publication by converted writers, so no later peer Source locks are acquired.
     """
     anchor = await _source_in_uow(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=access_fence, source_fence=source_fence,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        source_fence=source_fence,
     )
     if anchor is None or anchor.status != "archived" or anchor.provider != "github":
         raise ConflictError(detail="GitHub retirement anchor is unavailable")
@@ -908,7 +1281,12 @@ def ingestion_instance_lifecycle_projection(*, instance_operator: bool) -> Selec
     return select(Source.id, Source.status, Source.generation)
 
 
-async def lock_source(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+async def lock_source(
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
     expected_access_fence: AccessFence | None = None,
 ) -> SourceFence | None:
     """Lock access before one Source and return its scoped lifecycle; missing returns None.
@@ -916,7 +1294,10 @@ async def lock_source(session: AsyncSession, source_id: UUID, *, scope: Scope, m
     Called before any domain locks; use lock_source_set for multiple Sources in a transaction.
     """
     source, _access_fence = await _lock_source_row(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         expected_access_fence=expected_access_fence,
     )
     if source is None:
@@ -924,7 +1305,12 @@ async def lock_source(session: AsyncSession, source_id: UUID, *, scope: Scope, m
     return source_fence_of(source)
 
 
-async def lock_retained_evidence_source(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+async def lock_retained_evidence_source(
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
     expected_access_fence: AccessFence | None = None,
 ) -> SourceFence | None:
     """Share-lock a source while confirming retained data remains eligible for owner reads/effects.
@@ -935,13 +1321,25 @@ async def lock_retained_evidence_source(session: AsyncSession, source_id: UUID, 
     Source lifecycle ``FOR UPDATE`` mutations. Use lock_source_set(retained_evidence=True)
     for multiple Sources before Documents/domain locks; hold until publication commit.
     """
-    await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True, expected=expected_access_fence)
-    fences = await _lock_source_fence_rows(session, (source_id,), scope=scope, retained_evidence=True)
+    await _admit_source_scope(
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        lock=True,
+        expected=expected_access_fence,
+    )
+    fences = await _lock_source_fence_rows(
+        session, (source_id,), scope=scope, retained_evidence=True
+    )
     return fences[0] if fences is not None else None
 
 
 async def _lock_source_fence_rows(
-    session: AsyncSession, source_ids: tuple[UUID, ...], *, scope: Scope, retained_evidence: bool,
+    session: AsyncSession,
+    source_ids: tuple[UUID, ...],
+    *,
+    scope: Scope,
+    retained_evidence: bool,
 ) -> tuple[SourceFence, ...] | None:
     """Lock an admitted sorted Source set and return nothing unless the entire set matches.
 
@@ -951,24 +1349,41 @@ async def _lock_source_fence_rows(
     """
     if not source_ids:
         return ()
-    rows = list(await session.scalars(select(Source).where(
-        Source.id.in_(source_ids), *_source_scope(scope),
-    ).order_by(Source.id).with_for_update(read=retained_evidence)
-        .execution_options(populate_existing=True)))
+    rows = list(
+        await session.scalars(
+            select(Source)
+            .where(
+                Source.id.in_(source_ids),
+                *_source_scope(scope),
+            )
+            .order_by(Source.id)
+            .with_for_update(read=retained_evidence)
+            .execution_options(populate_existing=True)
+        )
+    )
     if len(rows) != len(source_ids):
         return None
     if retained_evidence:
-        eligible_ids = set(await session.scalars(export_eligible_source_ids(scope=scope).where(
-            Source.id.in_(source_ids),
-        )))
+        eligible_ids = set(
+            await session.scalars(
+                export_eligible_source_ids(scope=scope).where(
+                    Source.id.in_(source_ids),
+                )
+            )
+        )
         if eligible_ids != set(source_ids):
             return None
     return tuple(source_fence_of(source) for source in rows)
 
 
 async def lock_source_set(
-    session: AsyncSession, source_ids: Sequence[UUID], *, scope: Scope, multi_workspace_enabled: bool,
-    retained_evidence: bool = False, expected_access_fence: AccessFence | None = None,
+    session: AsyncSession,
+    source_ids: Sequence[UUID],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    retained_evidence: bool = False,
+    expected_access_fence: AccessFence | None = None,
 ) -> SourceFenceSet:
     """Admit once, then lock a complete deduplicated Source set in UUID order, bounded to 500.
 
@@ -984,16 +1399,26 @@ async def lock_source_set(
         raise TypeError("Source lock mode must be a boolean")
     ordered = tuple(sorted(set(source_ids), key=str))
     access_fence = await _admit_source_scope(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        lock=True, expected=expected_access_fence,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        lock=True,
+        expected=expected_access_fence,
     )
-    fences = await _lock_source_fence_rows(session, ordered, scope=scope, retained_evidence=retained_evidence)
+    fences = await _lock_source_fence_rows(
+        session, ordered, scope=scope, retained_evidence=retained_evidence
+    )
     if fences is None:
         raise NotFoundError(detail="Source set is unavailable")
     return SourceFenceSet(fences=fences, access_fence=access_fence)
 
 
-async def filter_active_source_ids(session: AsyncSession, source_ids: Sequence[UUID], *, scope: Scope, multi_workspace_enabled: bool
+async def filter_active_source_ids(
+    session: AsyncSession,
+    source_ids: Sequence[UUID],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> tuple[UUID, ...]:
     """Return only owner sources that are active and still eligible for current reads."""
     await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
@@ -1001,20 +1426,30 @@ async def filter_active_source_ids(session: AsyncSession, source_ids: Sequence[U
         return ()
     rows = await session.scalars(
         select(Source.id).where(
-            Source.id.in_(source_ids), Source.status == "active", Source.retired_at.is_(None),
-            *_source_scope(scope), Source.id.in_(export_eligible_source_ids(scope=scope)),
+            Source.id.in_(source_ids),
+            Source.status == "active",
+            Source.retired_at.is_(None),
+            *_source_scope(scope),
+            Source.id.in_(export_eligible_source_ids(scope=scope)),
         )
     )
     return tuple(rows.all())
 
 
-
-async def lock_source_for_document(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+async def lock_source_for_document(
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
     expected_access_fence: AccessFence | None = None,
 ) -> None:
     """Validate the source and hold its lock until the caller's transaction ends."""
     source, _access_fence = await _lock_source_row(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         expected_access_fence=expected_access_fence,
     )
     if source is None:
@@ -1028,7 +1463,9 @@ async def set_connector_configuration(
     source_id: UUID,
     expected_generation: int,
     configuration: dict[str, object],
-    *, scope: Scope, multi_workspace_enabled: bool,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
     allow_paused: bool = False,
     expected_access_fence: AccessFence | None = None,
 ) -> ConnectorSource | None:
@@ -1037,7 +1474,10 @@ async def set_connector_configuration(
     Optional captured access fence is rechecked before Source; deepcopy and flush only, no commit.
     """
     source, _access_fence = await _lock_source_row(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         expected_access_fence=expected_access_fence,
     )
     if source is None or source.status == "archived" or source.generation != expected_generation:
@@ -1051,7 +1491,13 @@ async def set_connector_configuration(
 
 
 async def record_collection_started(
-    session: AsyncSession, source_id: UUID, expected_generation: int, at: datetime, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_id: UUID,
+    expected_generation: int,
+    at: datetime,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
     expected_access_fence: AccessFence | None = None,
 ) -> bool:
     """Flush collection-start timestamps after ordered access/Source and exact-generation checks.
@@ -1059,14 +1505,20 @@ async def record_collection_started(
     No external work or commit; caller releases these locks before fetching provider content.
     """
     source, _access_fence = await _lock_source_row(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         expected_access_fence=expected_access_fence,
     )
     return await _record_collection_started(session, source, expected_generation, at)
 
 
 async def _record_collection_started(
-    session: AsyncSession, source: Source | None, expected_generation: int, at: datetime,
+    session: AsyncSession,
+    source: Source | None,
+    expected_generation: int,
+    at: datetime,
 ) -> bool:
     """Flush start timestamps for the current active exact Source generation; acquire no locks.
 
@@ -1087,7 +1539,9 @@ async def record_collection_result(
     expected_generation: int,
     at: datetime,
     error_code: str | None,
-    *, scope: Scope, multi_workspace_enabled: bool,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
     no_changes: bool = False,
     expected_access_fence: AccessFence | None = None,
 ) -> bool:
@@ -1097,14 +1551,25 @@ async def record_collection_result(
     fresh transaction after network work. This helper introduces no network I/O or commit.
     """
     source, _access_fence = await _lock_source_row(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         expected_access_fence=expected_access_fence,
     )
-    return await _record_collection_result(session, source, expected_generation, at, error_code, no_changes=no_changes)
+    return await _record_collection_result(
+        session, source, expected_generation, at, error_code, no_changes=no_changes
+    )
 
 
 async def _record_collection_result(
-    session: AsyncSession, source: Source | None, expected_generation: int, at: datetime, error_code: str | None, *, no_changes: bool = False,
+    session: AsyncSession,
+    source: Source | None,
+    expected_generation: int,
+    at: datetime,
+    error_code: str | None,
+    *,
+    no_changes: bool = False,
 ) -> bool:
     """Flush the unchanged success/error/no-change health rules for an active exact generation.
 
@@ -1130,7 +1595,14 @@ async def _record_collection_result(
 
 
 async def record_processing_result(
-    session: AsyncSession, source_id: UUID, expected_generation: int, at: datetime, error_code: str | None, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_id: UUID,
+    expected_generation: int,
+    at: datetime,
+    error_code: str | None,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
     expected_access_fence: AccessFence | None = None,
 ) -> bool:
     """Flush processing outcome under ordered access/Source and active generation fences.
@@ -1138,14 +1610,21 @@ async def record_processing_result(
     Deferred publishers pass captured access fence; no commit or model/provider I/O occurs here.
     """
     source, _access_fence = await _lock_source_row(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         expected_access_fence=expected_access_fence,
     )
     return await _record_processing_result(session, source, expected_generation, at, error_code)
 
 
 async def _record_processing_result(
-    session: AsyncSession, source: Source | None, expected_generation: int, at: datetime, error_code: str | None,
+    session: AsyncSession,
+    source: Source | None,
+    expected_generation: int,
+    at: datetime,
+    error_code: str | None,
 ) -> bool:
     """Flush existing processing success/error health fields for an active exact generation.
 
@@ -1167,8 +1646,13 @@ async def _record_processing_result(
 
 
 async def _source_in_uow(
-    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
-    access_fence: AccessFence, source_fence: SourceFence,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    source_fence: SourceFence,
 ) -> Source | None:
     """Revalidate fresh scope and exact Source under the caller's existing ordered locks.
 
@@ -1180,17 +1664,25 @@ async def _source_in_uow(
     if not isinstance(access_fence, AccessFence) or not isinstance(source_fence, SourceFence):
         raise TypeError("Captured access and Source fences are required")
     current_access = await _admit_source_scope(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if current_access != access_fence:
         raise ConflictError(detail="Workspace access fence changed")
     if source_fence.id != source_id or source_fence.workspace_id != scope.workspace_id:
         return None
-    source = await session.scalar(select(Source).where(
-        Source.id == source_id, *_source_scope(scope),
-    ).execution_options(populate_existing=True))
+    source = await session.scalar(
+        select(Source)
+        .where(
+            Source.id == source_id,
+            *_source_scope(scope),
+        )
+        .execution_options(populate_existing=True)
+    )
     if source is None or (
-        source.generation != source_fence.generation or source.status != source_fence.status
+        source.generation != source_fence.generation
+        or source.status != source_fence.status
         or source.local_only != source_fence.local_only
     ):
         return None
@@ -1198,8 +1690,15 @@ async def _source_in_uow(
 
 
 async def record_collection_started_in_uow(
-    session: AsyncSession, source_id: UUID, expected_generation: int, at: datetime, *,
-    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+    session: AsyncSession,
+    source_id: UUID,
+    expected_generation: int,
+    at: datetime,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    source_fence: SourceFence,
 ) -> bool:
     """Flush a collection start using exact caller-held access/Source snapshots, without locking.
 
@@ -1208,15 +1707,27 @@ async def record_collection_started_in_uow(
     behavior as the acquiring wrapper, no commit or network and no authority from DTO creation.
     """
     source = await _source_in_uow(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=access_fence, source_fence=source_fence,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        source_fence=source_fence,
     )
     return await _record_collection_started(session, source, expected_generation, at)
 
 
 async def record_collection_result_in_uow(
-    session: AsyncSession, source_id: UUID, expected_generation: int, at: datetime, error_code: str | None, *,
-    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+    session: AsyncSession,
+    source_id: UUID,
+    expected_generation: int,
+    at: datetime,
+    error_code: str | None,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    source_fence: SourceFence,
     no_changes: bool = False,
 ) -> bool:
     """Flush existing success/error/no-change rules under fresh caller-held Source/access proof.
@@ -1226,15 +1737,29 @@ async def record_collection_result_in_uow(
     returns False; fresh access mismatch409. No earlier lock, commit or provider I/O occurs.
     """
     source = await _source_in_uow(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=access_fence, source_fence=source_fence,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        source_fence=source_fence,
     )
-    return await _record_collection_result(session, source, expected_generation, at, error_code, no_changes=no_changes)
+    return await _record_collection_result(
+        session, source, expected_generation, at, error_code, no_changes=no_changes
+    )
 
 
 async def record_processing_result_in_uow(
-    session: AsyncSession, source_id: UUID, expected_generation: int, at: datetime, error_code: str | None, *,
-    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+    session: AsyncSession,
+    source_id: UUID,
+    expected_generation: int,
+    at: datetime,
+    error_code: str | None,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    source_fence: SourceFence,
 ) -> bool:
     """Flush processing success/error through fresh proof of the caller's locked exact Source.
 
@@ -1243,33 +1768,56 @@ async def record_processing_result_in_uow(
     mismatch409. This only revalidates nonlocking snapshots and flushes existing health rules.
     """
     source = await _source_in_uow(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=access_fence, source_fence=source_fence,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        source_fence=source_fence,
     )
     return await _record_processing_result(session, source, expected_generation, at, error_code)
 
 
 async def list_sources(
-    session: AsyncSession, limit: int, cursor: str | None, *, scope: Scope, multi_workspace_enabled: bool
+    session: AsyncSession,
+    limit: int,
+    cursor: str | None,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> tuple[list[Source], str | None]:
     """Return an owner-scoped bounded descending page; reject foreign/unbound cursors."""
-    access = await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    access = await _admit_source_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if not 1 <= limit <= 100:
         raise ValueError("Source page limit must be between 1 and 100")
     fingerprint = _cursor_fingerprint(access, scope, "sources", "created_at,id:desc", limit)
-    statement = select(Source).where(*_source_scope(scope)).order_by(desc(Source.created_at), desc(Source.id))
+    statement = (
+        select(Source)
+        .where(*_source_scope(scope))
+        .order_by(desc(Source.created_at), desc(Source.id))
+    )
     if cursor is not None:
         timestamp, identifier = _decode_source_page_cursor(cursor, fingerprint)
         statement = statement.where(tuple_(Source.created_at, Source.id) < (timestamp, identifier))
     rows = list((await session.scalars(statement.limit(limit + 1))).all())
     has_more = len(rows) > limit
     rows = rows[:limit]
-    next_cursor = _encode_source_page_cursor(rows[-1].created_at, rows[-1].id, fingerprint) if has_more and rows else None
+    next_cursor = (
+        _encode_source_page_cursor(rows[-1].created_at, rows[-1].id, fingerprint)
+        if has_more and rows
+        else None
+    )
     return rows, next_cursor
 
 
 async def get_gadget_sources(
-    session: AsyncSession, source_ids: tuple[UUID, ...], *, scope: Scope, multi_workspace_enabled: bool
+    session: AsyncSession,
+    source_ids: tuple[UUID, ...],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> tuple[GadgetSourceSelection, ...]:
     """Project up to 32 unique source IDs in request order for an authorized dashboard caller.
 
@@ -1311,7 +1859,12 @@ async def get_gadget_sources(
 
 
 async def list_active_gadget_sources(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool, limit: int = 32, cursor: str | None = None,
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    limit: int = 32,
+    cursor: str | None = None,
 ) -> GadgetSourceSelectionPage:
     """Page detached active-source identities for owner News selection and bounded catch-up.
 
@@ -1321,43 +1874,14 @@ async def list_active_gadget_sources(
     Documents current-version/scope fences for each item; this is not item-level
     authorization and does not grant agent access.
     """
-    access = await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    fingerprint = _cursor_fingerprint(access, scope, "active-gadget-sources", "created_at,id:desc", limit)
+    access = await _admit_source_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    fingerprint = _cursor_fingerprint(
+        access, scope, "active-gadget-sources", "created_at,id:desc", limit
+    )
     if not 1 <= limit <= 32:
         raise ValueError("Active source projection limit must be between 1 and 32")
-    statement = select(
-        Source.id, Source.name, Source.type, Source.provider, Source.status,
-        Source.generation, Source.local_only, Source.created_at,
-    ).where(Source.status == "active", *_source_scope(scope))
-    if cursor is not None:
-        timestamp, identifier = _decode_source_page_cursor(cursor, fingerprint)
-        statement = statement.where(tuple_(Source.created_at, Source.id) < (timestamp, identifier))
-    rows = list((await session.execute(statement.order_by(desc(Source.created_at), desc(Source.id)).limit(limit + 1))).all())
-    more = len(rows) > limit
-    rows = rows[:limit]
-    items = tuple(GadgetSourceSelection(
-        id=row.id, name=row.name, type=row.type, provider=row.provider,
-        status=row.status, generation=row.generation, local_only=row.local_only,
-    ) for row in rows)
-    next_cursor = _encode_source_page_cursor(rows[-1].created_at, rows[-1].id, fingerprint) if more and rows else None
-    return GadgetSourceSelectionPage(items=items, next_cursor=next_cursor)
-
-
-async def list_gadget_sources(
-    session: AsyncSession, limit: int = 50, cursor: str | None = None, *, scope: Scope, multi_workspace_enabled: bool
-) -> GadgetSourceSelectionPage:
-    """Return an authorized caller's bounded source-selection page using created-at/ID keyset order.
-
-    Only dashboard selection fields are queried, so connector configuration,
-    credentials, scopes, and source content never enter this detached page.
-    Current workspace owner admission is required before paging; this projection
-    does not establish provider item-level authorization.
-    """
-    access = await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    fingerprint = _cursor_fingerprint(access, scope, "gadget-sources", "created_at,id:desc", limit)
-    if not 1 <= limit <= 100:
-        raise ValueError("Source selection page limit must be between 1 and 100")
-
     statement = select(
         Source.id,
         Source.name,
@@ -1367,15 +1891,87 @@ async def list_gadget_sources(
         Source.generation,
         Source.local_only,
         Source.created_at,
-        Source.last_success_at,
-    ).where(*_source_scope(scope)).order_by(desc(Source.created_at), desc(Source.id))
+    ).where(Source.status == "active", *_source_scope(scope))
+    if cursor is not None:
+        timestamp, identifier = _decode_source_page_cursor(cursor, fingerprint)
+        statement = statement.where(tuple_(Source.created_at, Source.id) < (timestamp, identifier))
+    rows = list(
+        (
+            await session.execute(
+                statement.order_by(desc(Source.created_at), desc(Source.id)).limit(limit + 1)
+            )
+        ).all()
+    )
+    more = len(rows) > limit
+    rows = rows[:limit]
+    items = tuple(
+        GadgetSourceSelection(
+            id=row.id,
+            name=row.name,
+            type=row.type,
+            provider=row.provider,
+            status=row.status,
+            generation=row.generation,
+            local_only=row.local_only,
+        )
+        for row in rows
+    )
+    next_cursor = (
+        _encode_source_page_cursor(rows[-1].created_at, rows[-1].id, fingerprint)
+        if more and rows
+        else None
+    )
+    return GadgetSourceSelectionPage(items=items, next_cursor=next_cursor)
+
+
+async def list_gadget_sources(
+    session: AsyncSession,
+    limit: int = 50,
+    cursor: str | None = None,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> GadgetSourceSelectionPage:
+    """Return an authorized caller's bounded source-selection page using created-at/ID keyset order.
+
+    Only dashboard selection fields are queried, so connector configuration,
+    credentials, scopes, and source content never enter this detached page.
+    Current workspace owner admission is required before paging; this projection
+    does not establish provider item-level authorization.
+    """
+    access = await _admit_source_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    fingerprint = _cursor_fingerprint(access, scope, "gadget-sources", "created_at,id:desc", limit)
+    if not 1 <= limit <= 100:
+        raise ValueError("Source selection page limit must be between 1 and 100")
+
+    statement = (
+        select(
+            Source.id,
+            Source.name,
+            Source.type,
+            Source.provider,
+            Source.status,
+            Source.generation,
+            Source.local_only,
+            Source.created_at,
+            Source.last_success_at,
+        )
+        .where(*_source_scope(scope))
+        .order_by(desc(Source.created_at), desc(Source.id))
+    )
     if cursor is not None:
         timestamp, identifier = _decode_source_page_cursor(cursor, fingerprint)
         statement = statement.where(tuple_(Source.created_at, Source.id) < (timestamp, identifier))
     rows = list((await session.execute(statement.limit(limit + 1))).all())
     has_more = len(rows) > limit
     rows = rows[:limit]
-    next_cursor = _encode_source_page_cursor(rows[-1].created_at, rows[-1].id, fingerprint) if has_more and rows else None
+    next_cursor = (
+        _encode_source_page_cursor(rows[-1].created_at, rows[-1].id, fingerprint)
+        if has_more and rows
+        else None
+    )
     items = tuple(
         GadgetSourceSelection(
             id=row.id,
@@ -1401,14 +1997,23 @@ async def list_active_source_kinds(
     """
     await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     # ponytail: full scan of active sources, single-user workspace; page if counts get slow
-    rows = (await session.execute(
-        select(Source.id, Source.provider, Source.type).where(Source.status == "active", *_source_scope(scope))
-    )).all()
+    rows = (
+        await session.execute(
+            select(Source.id, Source.provider, Source.type).where(
+                Source.status == "active", *_source_scope(scope)
+            )
+        )
+    ).all()
     return tuple((row.id, row.provider, row.type) for row in rows)
 
 
 async def update_source(
-    session: AsyncSession, source: Source, payload: SourcePatch, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source: Source,
+    payload: SourcePatch,
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
     expected_access_fence: AccessFence | None = None,
 ) -> Source | None:
     """Apply an admitted Source patch with ordered inactive cleanup or active hint rearm.
@@ -1421,7 +2026,10 @@ async def update_source(
     this wrapper's scoped replay/commit and hand replay the captured locked access fence.
     """
     locked_source, access_fence = await _lock_source_row(
-        session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source.id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         expected_access_fence=expected_access_fence,
     )
     if locked_source is None:
@@ -1443,12 +2051,19 @@ async def update_source(
             source.retired_at = datetime.now(UTC) if next_status in {"paused", "archived"} else None
             if next_status in {"paused", "archived"}:
                 await _fence_connector_source(
-                    session, source, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                    session,
+                    source,
+                    scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
                     access_fence=access_fence,
                 )
             if source.provider == "github" and next_status == "active":
                 await _reconcile_github_hint_lifecycle(
-                    session, source, active=next_status == "active", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                    session,
+                    source,
+                    active=next_status == "active",
+                    scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
                 )
     # Toggle changes are not lifecycle transitions: no generation bump (that would fence in-flight
     # collection); the change event alone lets clients refresh. Workers re-read the flags per job.
@@ -1457,9 +2072,16 @@ async def update_source(
             flag_value = bool(getattr(payload, flag))
             changed = changed or getattr(source, flag) != flag_value
             setattr(source, flag, flag_value)
-    drafts = [make_source_change(source.id, source.generation, source.status, scope=scope)] if changed else []
+    drafts = (
+        [make_source_change(source.id, source.generation, source.status, scope=scope)]
+        if changed
+        else []
+    )
     await commit_with_replay(
-        session, drafts, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        drafts,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence,
     )
     await session.refresh(source)
@@ -1467,7 +2089,11 @@ async def update_source(
 
 
 async def pause_source_for_connector(
-    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
     expected_access_fence: AccessFence | None = None,
 ) -> ConnectorSource | None:
     """Pause an admitted exact-generation Source and run ordered cleanup in caller transaction.
@@ -1476,7 +2102,10 @@ async def pause_source_for_connector(
     cleanup callees. Flush only, no commit or provider I/O; caller releases before external work.
     """
     source, access_fence = await _lock_source_row(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         expected_access_fence=expected_access_fence,
     )
     if source is None or source.status == "archived":
@@ -1486,7 +2115,10 @@ async def pause_source_for_connector(
         source.status = "paused"
         source.retired_at = datetime.now(UTC)
     await _fence_connector_source(
-        session, source, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence,
     )
     await session.flush()
@@ -1494,8 +2126,13 @@ async def pause_source_for_connector(
 
 
 async def prepare_source_pause_for_connector_in_uow(
-    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
-    access_fence: AccessFence, source_fence: SourceFence,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    source_fence: SourceFence,
 ) -> None:
     """Prepare exact Source pause cleanup rows without mutating or granting new authority.
 
@@ -1508,8 +2145,12 @@ async def prepare_source_pause_for_connector_in_uow(
     returns no token; caller retains this transaction through exact proof and late apply.
     """
     source = await _source_in_uow(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=access_fence, source_fence=source_fence,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        source_fence=source_fence,
     )
     if source is None or source.status not in {"active", "paused"}:
         raise ConflictError(detail="Source pause preparation is unavailable")
@@ -1518,22 +2159,39 @@ async def prepare_source_pause_for_connector_in_uow(
     from modules.tools.public import lock_source_browser_results_in_uow
 
     await connectors.prepare_source_pause_cleanup_in_uow(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=access_fence, source_fence=source_fence,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        source_fence=source_fence,
     )
     await ingestion.lock_source_credentials_in_uow(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=access_fence, source_fence=source_fence,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        source_fence=source_fence,
     )
     await lock_source_browser_results_in_uow(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=access_fence, source_fence=source_fence,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        source_fence=source_fence,
     )
 
 
 async def pause_source_for_connector_in_uow(
-    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
-    access_fence: AccessFence, source_fence: SourceFence,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    source_fence: SourceFence,
 ) -> ConnectorSource | None:
     """Apply prepared active G->paused G+1 or exact paused G cleanup with the same principal.
 
@@ -1550,8 +2208,12 @@ async def pause_source_for_connector_in_uow(
     health recording and commits atomically, with G+1 replay only for the actual transition.
     """
     source = await _source_in_uow(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=access_fence, source_fence=source_fence,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        source_fence=source_fence,
     )
     if source is None or source.status not in {"active", "paused"}:
         return None
@@ -1569,22 +2231,37 @@ async def pause_source_for_connector_in_uow(
     from modules.tools.public import purge_source_browser_results_in_uow
 
     await ingestion.revoke_source_credentials(
-        session, source.id, scope=cleanup_scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source.id,
+        scope=cleanup_scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     await purge_source_browser_results_in_uow(
-        session, source.id, scope=cleanup_scope, multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=access_fence, source_fence=paused_fence,
+        session,
+        source.id,
+        scope=cleanup_scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        source_fence=paused_fence,
     )
     await connectors.apply_source_pause_cleanup_in_uow(
-        session, source_fence=paused_fence, previous_source_fence=source_fence,
-        scope=cleanup_scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        source_fence=paused_fence,
+        previous_source_fence=source_fence,
+        scope=cleanup_scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
     await session.flush()
     return _connector_source(source)
 
 
 async def archive_source(
-    session: AsyncSession, source_id: UUID, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
     expected_access_fence: AccessFence | None = None,
 ) -> Source | None:
     """Archive in the owner workspace under ordered access CAS/Source locks and scoped replay.
@@ -1593,7 +2270,10 @@ async def archive_source(
     the captured access fence is reused by replay without taking earlier locks again.
     """
     source, access_fence = await _lock_source_row(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         expected_access_fence=expected_access_fence,
     )
     if source is None:
@@ -1604,12 +2284,22 @@ async def archive_source(
         source.status = "archived"
         source.retired_at = datetime.now(UTC)
     await _fence_connector_source(
-        session, source, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence,
     )
-    drafts = [make_source_change(source.id, source.generation, source.status, scope=scope)] if changed else []
+    drafts = (
+        [make_source_change(source.id, source.generation, source.status, scope=scope)]
+        if changed
+        else []
+    )
     await commit_with_replay(
-        session, drafts, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        drafts,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence,
     )
     await session.refresh(source)
@@ -1617,7 +2307,11 @@ async def archive_source(
 
 
 async def start_source_purge(
-    session: AsyncSession, source_id: UUID, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
     expected_access_fence: AccessFence | None = None,
 ) -> SourcePurgeOperation | None:
     """Queue Source purge after ordered lifecycle cleanup, then own outbox/replay commit.
@@ -1629,17 +2323,26 @@ async def start_source_purge(
     event atomically; preserve this wrapper's scoped replay commit without provider I/O.
     """
     source, access_fence = await _lock_source_row(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         expected_access_fence=expected_access_fence,
     )
     if source is None:
         return None
     current = await session.scalar(
-        select(SourcePurgeOperation).where(
-            SourcePurgeOperation.source_id == source_id, *_operation_scope(scope),
-        ).order_by(SourcePurgeOperation.created_at.desc()).limit(1)
+        select(SourcePurgeOperation)
+        .where(
+            SourcePurgeOperation.source_id == source_id,
+            *_operation_scope(scope),
+        )
+        .order_by(SourcePurgeOperation.created_at.desc())
+        .limit(1)
     )
-    if current is not None and (source.status == "archived" or current.status in {"queued", "running"}):
+    if current is not None and (
+        source.status == "archived" or current.status in {"queued", "running"}
+    ):
         return current
 
     changed = source.status != "archived"
@@ -1648,32 +2351,55 @@ async def start_source_purge(
         source.status = "archived"
         source.retired_at = datetime.now(UTC)
     operation = SourcePurgeOperation(
-        workspace_id=scope.workspace_id, actor_user_id=scope.user_id,
+        workspace_id=scope.workspace_id,
+        actor_user_id=scope.user_id,
         membership_revision=scope.membership_revision,
         configuration_revision=access_fence.configuration_revision,
-        source_id=source_id, generation=source.generation, raw_uris=[],
+        source_id=source_id,
+        generation=source.generation,
+        raw_uris=[],
         pending_owner_codes=["documents"],
     )
     session.add(operation)
     await session.flush()
     from modules.ingestion import public as ingestion
+
     await _fence_connector_source(
-        session, source, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence,
     )
     now = datetime.now(UTC)
     event = DomainEvent(
-        id=uuid7(), type="source.purge.requested", version=1, occurred_at=now,
-        producer="modules.sources", payload={
-            "operation_id": str(operation.id), "workspace_id": str(operation.workspace_id),
-            "actor_user_id": operation.actor_user_id, "membership_revision": operation.membership_revision,
-            "source_id": str(operation.source_id), "source_generation": operation.generation,
+        id=uuid7(),
+        type="source.purge.requested",
+        version=1,
+        occurred_at=now,
+        producer="modules.sources",
+        payload={
+            "operation_id": str(operation.id),
+            "workspace_id": str(operation.workspace_id),
+            "actor_user_id": operation.actor_user_id,
+            "membership_revision": operation.membership_revision,
+            "source_id": str(operation.source_id),
+            "source_generation": operation.generation,
         },
     )
-    await ingestion.publish_event(session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    drafts = [make_source_change(source.id, source.generation, source.status, operation_id=operation.id, scope=scope)]
+    await ingestion.publish_event(
+        session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    drafts = [
+        make_source_change(
+            source.id, source.generation, source.status, operation_id=operation.id, scope=scope
+        )
+    ]
     await commit_with_replay(
-        session, drafts, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        drafts,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence,
     )
     await session.refresh(operation)
@@ -1681,7 +2407,9 @@ async def start_source_purge(
 
 
 # Source-local Memory coverage that can never improve without new evidence: durable unavailable.
-SOURCE_MEMORY_TERMINAL_CODES = frozenset({"evidence_identity_unavailable", "legacy_provenance_unresolved"})
+SOURCE_MEMORY_TERMINAL_CODES = frozenset(
+    {"evidence_identity_unavailable", "legacy_provenance_unresolved"}
+)
 
 
 def _open_coverage_operations() -> tuple[ColumnElement[bool], ...]:
@@ -1701,7 +2429,13 @@ def _open_coverage_operations() -> tuple[ColumnElement[bool], ...]:
 
 
 async def list_source_purge_observer_ids(
-    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool, after: UUID | None = None, limit: int = 100,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    after: UUID | None = None,
+    limit: int = 100,
 ) -> tuple[UUID, ...]:
     """Return <=100 exact unfinished purge operation IDs for one Source, keyset by ID.
 
@@ -1712,15 +2446,24 @@ async def list_source_purge_observer_ids(
     if not 1 <= limit <= 100:
         raise ValueError("Source observer page size must be between 1 and 100")
     statement = select(SourcePurgeOperation.id).where(
-        SourcePurgeOperation.source_id == source_id, *_operation_scope(scope), *_open_coverage_operations(),
+        SourcePurgeOperation.source_id == source_id,
+        *_operation_scope(scope),
+        *_open_coverage_operations(),
     )
     if after is not None:
         statement = statement.where(SourcePurgeOperation.id > after)
-    return tuple((await session.scalars(statement.order_by(SourcePurgeOperation.id).limit(limit))).all())
+    return tuple(
+        (await session.scalars(statement.order_by(SourcePurgeOperation.id).limit(limit))).all()
+    )
 
 
 async def discover_source_purge_observer_ids(
-    session: AsyncSession, *, workspace_id: UUID, source_id: UUID, after: UUID | None = None, limit: int = 100,
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    source_id: UUID,
+    after: UUID | None = None,
+    limit: int = 100,
 ) -> tuple[UUID, ...]:
     """Identity-only keyset discovery of open purge operation IDs for one Source (IDs only).
 
@@ -1731,12 +2474,15 @@ async def discover_source_purge_observer_ids(
     if not 1 <= limit <= 100:
         raise ValueError("Source observer page size must be between 1 and 100")
     statement = select(SourcePurgeOperation.id).where(
-        SourcePurgeOperation.workspace_id == workspace_id, SourcePurgeOperation.source_id == source_id,
+        SourcePurgeOperation.workspace_id == workspace_id,
+        SourcePurgeOperation.source_id == source_id,
         *_open_coverage_operations(),
     )
     if after is not None:
         statement = statement.where(SourcePurgeOperation.id > after)
-    return tuple((await session.scalars(statement.order_by(SourcePurgeOperation.id).limit(limit))).all())
+    return tuple(
+        (await session.scalars(statement.order_by(SourcePurgeOperation.id).limit(limit))).all()
+    )
 
 
 def coverage_settled_exclusion() -> ColumnElement[bool]:
@@ -1745,14 +2491,21 @@ def coverage_settled_exclusion() -> ColumnElement[bool]:
         SourcePurgeOperation.status == "failed",
         SourcePurgeOperation.memory_status == "succeeded",
         SourcePurgeOperation.memory_cache_pending.is_(False),
-        SourcePurgeOperation.pending_child_count.is_not(None),  # NULL = unsettled, never NULL-propagating
+        SourcePurgeOperation.pending_child_count.is_not(
+            None
+        ),  # NULL = unsettled, never NULL-propagating
         SourcePurgeOperation.pending_child_count == 0,
         SourcePurgeOperation.pending_owner_codes == cast([], JSONB),
     )
 
 
 async def pending_source_coverage_ids(
-    session: AsyncSession, *, scope: InternalJobScope, multi_workspace_enabled: bool, after: UUID | None = None, limit: int = 100,
+    session: AsyncSession,
+    *,
+    scope: InternalJobScope,
+    multi_workspace_enabled: bool,
+    after: UUID | None = None,
+    limit: int = 100,
 ) -> tuple[UUID, ...]:
     """Return one bounded keyset page of purge operations needing coverage reconciliation."""
     if not isinstance(scope, InternalJobScope):
@@ -1768,10 +2521,13 @@ async def pending_source_coverage_ids(
     )
     if after is not None:
         statement = statement.where(SourcePurgeOperation.id > after)
-    return tuple((await session.scalars(statement.order_by(SourcePurgeOperation.id).limit(limit))).all())
+    return tuple(
+        (await session.scalars(statement.order_by(SourcePurgeOperation.id).limit(limit))).all()
+    )
 
 
-async def source_data_purge_exists(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool
+async def source_data_purge_exists(
+    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool
 ) -> bool:
     """Report whether any data purge (in any state) ever fenced this Source.
 
@@ -1783,17 +2539,21 @@ async def source_data_purge_exists(session: AsyncSession, source_id: UUID, *, sc
     # A purge of another generation still fences copied evidence forever in this workspace.
     if isinstance(scope, InternalJobScope) and scope.source_id not in (None, source_id):
         return False
-    return await session.scalar(
-        select(SourcePurgeOperation.id).where(
-            SourcePurgeOperation.source_id == source_id,
-            SourcePurgeOperation.workspace_id == scope.workspace_id,
-        ).limit(1)
-    ) is not None
+    return (
+        await session.scalar(
+            select(SourcePurgeOperation.id)
+            .where(
+                SourcePurgeOperation.source_id == source_id,
+                SourcePurgeOperation.workspace_id == scope.workspace_id,
+            )
+            .limit(1)
+        )
+        is not None
+    )
 
 
 async def read_source_purge_operation(
-    session: AsyncSession,
-    operation_id: UUID, *, scope: Scope, multi_workspace_enabled: bool
+    session: AsyncSession, operation_id: UUID, *, scope: Scope, multi_workspace_enabled: bool
 ) -> OperationRead | None:
     """Return the allowlisted public progress projection for one Source purge receipt.
 
@@ -1801,9 +2561,14 @@ async def read_source_purge_operation(
     legacy URI JSON, child receipt IDs, event payloads, or owner-private cleanup data.
     """
     await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    operation = await session.scalar(select(SourcePurgeOperation).where(
-        SourcePurgeOperation.id == operation_id, *_operation_scope(scope),
-    ).execution_options(populate_existing=True))
+    operation = await session.scalar(
+        select(SourcePurgeOperation)
+        .where(
+            SourcePurgeOperation.id == operation_id,
+            *_operation_scope(scope),
+        )
+        .execution_options(populate_existing=True)
+    )
     if operation is None:
         return None
     return OperationRead(
@@ -1824,7 +2589,11 @@ async def read_source_purge_operation(
 
 
 async def _fence_connector_source(
-    session: AsyncSession, source: Source, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source: Source,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
     access_fence: AccessFence,
 ) -> None:
     """Prepare then retire exact-source work with the original admitted access, flush only.
@@ -1848,32 +2617,60 @@ async def _fence_connector_source(
     await session.flush()
     source_fence = source_fence_of(source)
     await connectors.prepare_source_lifecycle_cleanup_in_uow(
-        session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=access_fence, source_fence=source_fence,
+        session,
+        source.id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        source_fence=source_fence,
     )
     await ingestion.lock_source_credentials_in_uow(
-        session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=access_fence, source_fence=source_fence,
+        session,
+        source.id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        source_fence=source_fence,
     )
     await lock_source_browser_results_in_uow(
-        session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=access_fence, source_fence=source_fence,
+        session,
+        source.id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        source_fence=source_fence,
     )
     await ingestion.revoke_source_credentials(
-        session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source.id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     await purge_source_browser_results_in_uow(
-        session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=access_fence, source_fence=source_fence,
+        session,
+        source.id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        source_fence=source_fence,
     )
     await connectors.apply_source_lifecycle_cleanup_in_uow(
-        session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=access_fence, source_fence=source_fence,
+        session,
+        source.id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        source_fence=source_fence,
     )
 
 
 async def _reconcile_github_hint_lifecycle(
-    session: AsyncSession, source: Source, *, scope: Scope, multi_workspace_enabled: bool, active: bool,
+    session: AsyncSession,
+    source: Source,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    active: bool,
 ) -> None:
     """Continue the held source/provisioning lifecycle transaction into GitHub hint ownership.
 
@@ -1884,8 +2681,12 @@ async def _reconcile_github_hint_lifecycle(
     from modules.connectors import public as connectors
 
     await connectors.reconcile_github_source_hints_lifecycle(
-        session, source_id=source.id, source_generation=source.generation, active=active,
-        scope=_transitioned_source_scope(scope, source), multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id=source.id,
+        source_generation=source.generation,
+        active=active,
+        scope=_transitioned_source_scope(scope, source),
+        multi_workspace_enabled=multi_workspace_enabled,
     )
 
 
@@ -1902,7 +2703,8 @@ def _transitioned_source_scope(scope: Scope, source: Source) -> Scope:
         if scope.source_generation is None:
             raise RuntimeError("invariant violated: scope.source_generation must not be None")
         if scope.source_id != source.id or source.generation not in (
-            scope.source_generation, scope.source_generation + 1,
+            scope.source_generation,
+            scope.source_generation + 1,
         ):
             raise ValueError("Source lifecycle transition does not match its captured generation")
         return replace(scope, source_generation=source.generation)
@@ -1910,8 +2712,13 @@ def _transitioned_source_scope(scope: Scope, source: Source) -> Scope:
 
 
 async def get_connector_retained_effect_anchor_in_uow(
-    session: AsyncSession, source_id: UUID, *, source_generation: int,
-    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    source_generation: int,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
 ) -> SourceFence | None:
     """Read lifecycle metadata solely to settle Connector's exact retained remote effect.
 
@@ -1923,29 +2730,48 @@ async def get_connector_retained_effect_anchor_in_uow(
     revoked access raises, missing/foreign/earlier-generation anchor returns None.
     """
     current_access = await _admit_source_scope(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if current_access != access_fence:
         raise ConflictError(detail="Retained Connector access fence changed")
     if type(source_generation) is not int or source_generation <= 0:
         raise ValueError("Original Connector Source generation is required")
-    if isinstance(scope, InternalJobScope) and scope.source_id is not None and (
-        scope.source_id != source_id or scope.source_generation != source_generation
+    if (
+        isinstance(scope, InternalJobScope)
+        and scope.source_id is not None
+        and (scope.source_id != source_id or scope.source_generation != source_generation)
     ):
         raise ValueError("Retained effect does not match the original bound Source")
-    row = (await session.execute(select(
-        Source.id, Source.workspace_id, Source.status, Source.generation, Source.local_only,
-        Source.graph_enabled, Source.rag_index_enabled,
-    ).where(
-        Source.id == source_id, Source.workspace_id == scope.workspace_id,
-        Source.generation >= source_generation,
-    ))).one_or_none()
+    row = (
+        await session.execute(
+            select(
+                Source.id,
+                Source.workspace_id,
+                Source.status,
+                Source.generation,
+                Source.local_only,
+                Source.graph_enabled,
+                Source.rag_index_enabled,
+            ).where(
+                Source.id == source_id,
+                Source.workspace_id == scope.workspace_id,
+                Source.generation >= source_generation,
+            )
+        )
+    ).one_or_none()
     return SourceFence(**row._mapping) if row is not None else None
 
 
 async def lock_connector_retained_effect_anchor(
-    session: AsyncSession, source_id: UUID, *, source_generation: int,
-    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    source_generation: int,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
 ) -> SourceFence | None:
     """Acquire original admission then this Source for exact Connector effect settlement.
 
@@ -1955,29 +2781,46 @@ async def lock_connector_retained_effect_anchor(
     through cleanup/disposition commit and releases them before network. No commit/I/O.
     """
     await _admit_source_scope(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        lock=True, expected=access_fence,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        lock=True,
+        expected=access_fence,
     )
     if type(source_generation) is not int or source_generation <= 0:
         raise ValueError("Original Connector Source generation is required")
-    if isinstance(scope, InternalJobScope) and scope.source_id is not None and (
-        scope.source_id != source_id or scope.source_generation != source_generation
+    if (
+        isinstance(scope, InternalJobScope)
+        and scope.source_id is not None
+        and (scope.source_id != source_id or scope.source_generation != source_generation)
     ):
         raise ValueError("Retained effect does not match the original bound Source")
-    identifier = await session.scalar(select(Source.id).where(
-        Source.id == source_id, Source.workspace_id == scope.workspace_id,
-        Source.generation >= source_generation,
-    ).with_for_update())
+    identifier = await session.scalar(
+        select(Source.id)
+        .where(
+            Source.id == source_id,
+            Source.workspace_id == scope.workspace_id,
+            Source.generation >= source_generation,
+        )
+        .with_for_update()
+    )
     if identifier is None:
         return None
     return await get_connector_retained_effect_anchor_in_uow(
-        session, source_id, source_generation=source_generation, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        source_id,
+        source_generation=source_generation,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
 
 
 async def discover_source_job_identity(
-    session: AsyncSession, source_id: UUID, *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    multi_workspace_enabled: bool,
 ) -> InternalJobScope | None:
     """Discover one real owned-default scheduler identity without acquiring row locks.
 
@@ -1987,29 +2830,43 @@ async def discover_source_job_identity(
     Each eventual binding must independently lock/admit its captured original access,
     Source generation and configuration before any effect. No metadata is returned.
     """
-    identity = (await session.execute(select(Source.workspace_id, Source.generation).where(
-        Source.id == source_id,
-    ))).one_or_none()
+    identity = (
+        await session.execute(
+            select(Source.workspace_id, Source.generation).where(
+                Source.id == source_id,
+            )
+        )
+    ).one_or_none()
     if identity is None:
         return None
     owner = await workspaces.resolve_workspace_owner_context(
-        session, identity.workspace_id, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        identity.workspace_id,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if owner is None:
         return None
     scope = InternalJobScope(
-        workspace_id=identity.workspace_id, actor_user_id=owner.user_id,
-        membership_revision=owner.membership_revision, source_id=source_id,
+        workspace_id=identity.workspace_id,
+        actor_user_id=owner.user_id,
+        membership_revision=owner.membership_revision,
+        source_id=source_id,
         source_generation=identity.generation,
     )
-    current = await session.scalar(select(Source.id).where(
-        Source.id == source_id, *_source_scope(scope),
-    ))
+    current = await session.scalar(
+        select(Source.id).where(
+            Source.id == source_id,
+            *_source_scope(scope),
+        )
+    )
     return scope if current is not None else None
 
 
 async def resolve_source_job_scope(
-    session: AsyncSession, source_id: UUID, *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    multi_workspace_enabled: bool,
 ) -> InternalJobScope | None:
     """Resolve internal scheduler lineage only, then lock admission before Source reread.
 
@@ -2017,57 +2874,89 @@ async def resolve_source_job_scope(
     Deferred jobs compare their original captured claim to this result; they cannot upgrade it.
     Caller owns rollback/commit and releases locks before collection or other external work.
     """
-    identity = (await session.execute(select(Source.workspace_id, Source.generation).where(
-        Source.id == source_id,
-    ))).one_or_none()
+    identity = (
+        await session.execute(
+            select(Source.workspace_id, Source.generation).where(
+                Source.id == source_id,
+            )
+        )
+    ).one_or_none()
     if identity is None:
         return None
     owner = await workspaces.resolve_workspace_owner_context(
-        session, identity.workspace_id, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        identity.workspace_id,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if owner is None:
         return None
     try:
         scope = InternalJobScope(
-            workspace_id=identity.workspace_id, actor_user_id=owner.user_id,
-            membership_revision=owner.membership_revision, source_id=source_id,
+            workspace_id=identity.workspace_id,
+            actor_user_id=owner.user_id,
+            membership_revision=owner.membership_revision,
+            source_id=source_id,
             source_generation=identity.generation,
         )
     except ValueError:
         return None
     await workspaces.authorize_internal_job(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
-    current = await session.scalar(select(Source.id).where(
-        Source.id == source_id, *_source_scope(scope),
-    ))
+    current = await session.scalar(
+        select(Source.id).where(
+            Source.id == source_id,
+            *_source_scope(scope),
+        )
+    )
     return scope if current is not None else None
 
 
 async def read_source_purge_job_capture(
-    session: AsyncSession, operation_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    operation_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> SourcePurgeJobIdentity | None:
     """Read the exact captured purge authority tuple without locks, live Source or raw URIs.
 
     NULL (legacy) or stale configuration, a different membership epoch or an invalid tuple
     returns None; the caller never upgrades an old job to the current epoch.
     """
-    fence = await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    row = (await session.execute(select(
-        SourcePurgeOperation.id, SourcePurgeOperation.workspace_id, SourcePurgeOperation.actor_user_id,
-        SourcePurgeOperation.membership_revision, SourcePurgeOperation.configuration_revision,
-        SourcePurgeOperation.source_id, SourcePurgeOperation.generation,
-    ).where(
-        SourcePurgeOperation.id == operation_id, *_operation_scope(scope),
-        SourcePurgeOperation.membership_revision == scope.membership_revision,
-    ))).one_or_none()
+    fence = await _admit_source_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    row = (
+        await session.execute(
+            select(
+                SourcePurgeOperation.id,
+                SourcePurgeOperation.workspace_id,
+                SourcePurgeOperation.actor_user_id,
+                SourcePurgeOperation.membership_revision,
+                SourcePurgeOperation.configuration_revision,
+                SourcePurgeOperation.source_id,
+                SourcePurgeOperation.generation,
+            ).where(
+                SourcePurgeOperation.id == operation_id,
+                *_operation_scope(scope),
+                SourcePurgeOperation.membership_revision == scope.membership_revision,
+            )
+        )
+    ).one_or_none()
     if row is None or row.configuration_revision is None:
         return None
     try:
         capture = SourcePurgeJobIdentity(
-            operation_id=row.id, workspace_id=row.workspace_id, actor_user_id=row.actor_user_id,
-            membership_revision=row.membership_revision, configuration_revision=row.configuration_revision,
-            source_id=row.source_id, source_generation=row.generation,
+            operation_id=row.id,
+            workspace_id=row.workspace_id,
+            actor_user_id=row.actor_user_id,
+            membership_revision=row.membership_revision,
+            configuration_revision=row.configuration_revision,
+            source_id=row.source_id,
+            source_generation=row.generation,
         )
     except ValueError:
         return None
@@ -2075,7 +2964,11 @@ async def read_source_purge_job_capture(
 
 
 async def read_source_purge_job_identity(
-    session: AsyncSession, operation_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    operation_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> InternalJobScope | None:
     """Project the exact scoped retained purge capture to an InternalJobScope, nonlocking.
 
@@ -2085,14 +2978,19 @@ async def read_source_purge_job_identity(
     stale configuration returns None, never an upgraded job. No URI/content is exposed.
     """
     capture = await read_source_purge_job_capture(
-        session, operation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        operation_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if capture is None:
         return None
     try:
         return InternalJobScope(
-            workspace_id=capture.workspace_id, actor_user_id=capture.actor_user_id,
-            membership_revision=capture.membership_revision, source_id=capture.source_id,
+            workspace_id=capture.workspace_id,
+            actor_user_id=capture.actor_user_id,
+            membership_revision=capture.membership_revision,
+            source_id=capture.source_id,
             source_generation=capture.source_generation,
         )
     except ValueError:
@@ -2100,7 +2998,10 @@ async def read_source_purge_job_identity(
 
 
 async def resolve_source_purge_job_scope(
-    session: AsyncSession, operation_id: UUID, *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    operation_id: UUID,
+    *,
+    multi_workspace_enabled: bool,
 ) -> InternalJobScope | None:
     """Admit one retained purge's exact durable actor/membership/configuration/source identity.
 
@@ -2109,37 +3010,64 @@ async def resolve_source_purge_job_scope(
     exact capture reread; an admitted fence that differs from the captured tuple is a stale job
     (None, never rebased). Current permission loss propagates admission failure. No domain lock.
     """
-    row = (await session.execute(select(
-        SourcePurgeOperation.workspace_id, SourcePurgeOperation.actor_user_id,
-        SourcePurgeOperation.membership_revision, SourcePurgeOperation.configuration_revision,
-        SourcePurgeOperation.source_id, SourcePurgeOperation.generation,
-    ).where(SourcePurgeOperation.id == operation_id))).one_or_none()
+    row = (
+        await session.execute(
+            select(
+                SourcePurgeOperation.workspace_id,
+                SourcePurgeOperation.actor_user_id,
+                SourcePurgeOperation.membership_revision,
+                SourcePurgeOperation.configuration_revision,
+                SourcePurgeOperation.source_id,
+                SourcePurgeOperation.generation,
+            ).where(SourcePurgeOperation.id == operation_id)
+        )
+    ).one_or_none()
     if row is None or row.configuration_revision is None:
         return None
     try:
         scope = InternalJobScope(
-            workspace_id=row.workspace_id, actor_user_id=row.actor_user_id,
-            membership_revision=row.membership_revision, source_id=row.source_id,
+            workspace_id=row.workspace_id,
+            actor_user_id=row.actor_user_id,
+            membership_revision=row.membership_revision,
+            source_id=row.source_id,
             source_generation=row.generation,
         )
         expected = AccessFence(
-            workspace_id=row.workspace_id, user_id=row.actor_user_id,
-            membership_revision=row.membership_revision, configuration_revision=row.configuration_revision,
+            workspace_id=row.workspace_id,
+            user_id=row.actor_user_id,
+            membership_revision=row.membership_revision,
+            configuration_revision=row.configuration_revision,
         )
     except ValueError:
         return None
     fence = await workspaces.authorize_internal_job(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if fence != expected:
         return None
     capture = await read_source_purge_job_capture(
-        session, operation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        operation_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
-    if capture is None or (capture.workspace_id, capture.actor_user_id, capture.membership_revision,
-                           capture.configuration_revision, capture.source_id, capture.source_generation) != (
-            row.workspace_id, row.actor_user_id, row.membership_revision, row.configuration_revision,
-            row.source_id, row.generation):
+    if capture is None or (
+        capture.workspace_id,
+        capture.actor_user_id,
+        capture.membership_revision,
+        capture.configuration_revision,
+        capture.source_id,
+        capture.source_generation,
+    ) != (
+        row.workspace_id,
+        row.actor_user_id,
+        row.membership_revision,
+        row.configuration_revision,
+        row.source_id,
+        row.generation,
+    ):
         return None
     return scope
 
@@ -2155,12 +3083,24 @@ class SourceImpact:
 
 
 async def get_source_impact(
-    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> SourceImpact | None:
     """Count dependents of a source through public APIs; None when foreign/absent, 409 when purge-pending."""
-    if await get_source(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled) is None:
+    if (
+        await get_source(
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        is None
+    ):
         return None
-    if await session.scalar(export_eligible_source_ids(scope=scope).where(Source.id == source_id)) is None:
+    if (
+        await session.scalar(export_eligible_source_ids(scope=scope).where(Source.id == source_id))
+        is None
+    ):
         raise ConflictError(detail="Source purge is pending")
     from modules.chat import public as chat
     from modules.dashboard import public as dashboard
@@ -2181,7 +3121,9 @@ RETENTION_EXEMPT_SOURCE_TYPES = ("file", "manual")
 
 
 async def list_retention_cutoffs(
-    session: AsyncSession, *, now: datetime,
+    session: AsyncSession,
+    *,
+    now: datetime,
 ) -> list[tuple[UUID, datetime]]:
     """Return ``(source_id, cutoff)`` for every connector Source with a bounded retention window.
 
@@ -2197,7 +3139,9 @@ async def list_retention_cutoffs(
 
     rows = (
         await session.execute(
-            select(Source.id, Source.provider, Source.configuration).where(Source.type.not_in(RETENTION_EXEMPT_SOURCE_TYPES))
+            select(Source.id, Source.provider, Source.configuration).where(
+                Source.type.not_in(RETENTION_EXEMPT_SOURCE_TYPES)
+            )
         )
     ).all()
     cutoffs: list[tuple[UUID, datetime]] = []

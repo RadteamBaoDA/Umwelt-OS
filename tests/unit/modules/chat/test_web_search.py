@@ -19,9 +19,17 @@ KEY = "sk-SECRET-KEY-123"
 JSON = {"content-type": "application/json"}
 
 
-def _run(provider: str, handler: Any, message: str = "weather in hanoi") -> list[ws.WebSearchResult]:
+def _run(
+    provider: str, handler: Any, message: str = "weather in hanoi"
+) -> list[ws.WebSearchResult]:
     return asyncio.run(
-        ws.search(provider, "https://api.example.com", KEY, message, transport=httpx.MockTransport(handler))
+        ws.search(
+            provider,
+            "https://api.example.com",
+            KEY,
+            message,
+            transport=httpx.MockTransport(handler),
+        )
     )
 
 
@@ -41,12 +49,21 @@ def test_tavily_request_and_parse() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
         return httpx.Response(
-            200, headers=JSON,
-            json={"results": [{"title": "T", "url": "https://a.example/x#frag", "content": "snip"}, "junk", {"title": 1}]},
+            200,
+            headers=JSON,
+            json={
+                "results": [
+                    {"title": "T", "url": "https://a.example/x#frag", "content": "snip"},
+                    "junk",
+                    {"title": 1},
+                ]
+            },
         )
 
     results = _run("tavily", handler, "  weather   in\nhanoi ")
-    assert [(r.title, r.url, r.host, r.snippet) for r in results] == [("T", "https://a.example/x", "a.example", "snip")]
+    assert [(r.title, r.url, r.host, r.snippet) for r in results] == [
+        ("T", "https://a.example/x", "a.example", "snip")
+    ]
     request = seen[0]
     assert request.method == "POST" and request.url.path == "/search"
     assert request.headers["authorization"] == f"Bearer {KEY}"
@@ -59,10 +76,22 @@ def test_searxng_request_and_parse() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        return httpx.Response(200, headers=JSON, json={"results": [
-            {"title": "S", "url": "https://s.example/p", "content": "snippet"}, {"title": "no url"}]})
+        return httpx.Response(
+            200,
+            headers=JSON,
+            json={
+                "results": [
+                    {"title": "S", "url": "https://s.example/p", "content": "snippet"},
+                    {"title": "no url"},
+                ]
+            },
+        )
 
-    results = asyncio.run(ws.search("searxng", "http://searx:8080/", "", "weather", transport=httpx.MockTransport(handler)))
+    results = asyncio.run(
+        ws.search(
+            "searxng", "http://searx:8080/", "", "weather", transport=httpx.MockTransport(handler)
+        )
+    )
     assert [(r.title, r.host, r.snippet) for r in results] == [("S", "s.example", "snippet")]
     assert seen[0].method == "GET" and seen[0].url.path == "/search"
     assert seen[0].url.params["format"] == "json" and seen[0].url.params["q"] == "weather"
@@ -70,12 +99,20 @@ def test_searxng_request_and_parse() -> None:
 
 
 def test_searxng_is_keyless_but_keyed_providers_still_need_a_key() -> None:
-    searx = {"web_search_provider": "searxng", "web_search_endpoint": "http://searx:8080",
-             "web_search_api_key": "", "web_search_credential_configured": False}
+    searx = {
+        "web_search_provider": "searxng",
+        "web_search_endpoint": "http://searx:8080",
+        "web_search_api_key": "",
+        "web_search_credential_configured": False,
+    }
     assert ws.web_search_permitted(_config(**searx))
-    assert not ws.web_search_permitted(_config(**{**searx, "privacy": PrivacySettings(allow_remote_web_search=False)}))
+    assert not ws.web_search_permitted(
+        _config(**{**searx, "privacy": PrivacySettings(allow_remote_web_search=False)})
+    )
     assert not ws.web_search_permitted(_config(**{**searx, "web_search_endpoint": None}))
-    assert not ws.web_search_permitted(_config(web_search_api_key="", web_search_credential_configured=False))
+    assert not ws.web_search_permitted(
+        _config(web_search_api_key="", web_search_credential_configured=False)
+    )
 
 
 def test_brave_request_and_parse() -> None:
@@ -83,7 +120,13 @@ def test_brave_request_and_parse() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        return httpx.Response(200, headers=JSON, json={"web": {"results": [{"title": "B", "url": "http://b.example/", "description": "d"}]}})
+        return httpx.Response(
+            200,
+            headers=JSON,
+            json={
+                "web": {"results": [{"title": "B", "url": "http://b.example/", "description": "d"}]}
+            },
+        )
 
     results = _run("brave", handler)
     assert results[0].host == "b.example" and results[0].snippet == "d"
@@ -113,12 +156,24 @@ def test_sanitize_text_pipeline() -> None:
 def test_sanitize_url_rules() -> None:
     assert ws.sanitize_url("https://ex.com/p?q=1#f") == ("https://ex.com/p?q=1", "ex.com")
     for bad in (
-        "javascript:alert(1)", "ftp://ex.com/", "https://user:pw@ex.com/", "https://u@ex.com/", "https:///x",
-        "https://ex.com/a b", "https://ex.com/<x>", "https://ex.com/\u202e", "https://ex.com/\"", "https://ex.com:99999/",
-        "https://ex.com/" + "a" * 2100, "/relative",
+        "javascript:alert(1)",
+        "ftp://ex.com/",
+        "https://user:pw@ex.com/",
+        "https://u@ex.com/",
+        "https:///x",
+        "https://ex.com/a b",
+        "https://ex.com/<x>",
+        "https://ex.com/\u202e",
+        'https://ex.com/"',
+        "https://ex.com:99999/",
+        "https://ex.com/" + "a" * 2100,
+        "/relative",
     ):
         assert ws.sanitize_url(bad) is None, bad
-    items = [{"title": "T", "url": "javascript:x", "content": "c"}, {"title": "T", "url": "https://ok.example/", "content": "c"}]
+    items = [
+        {"title": "T", "url": "javascript:x", "content": "c"},
+        {"title": "T", "url": "https://ok.example/", "content": "c"},
+    ]
     assert [r.host for r in _run("tavily", _tavily(items))] == ["ok.example"]
 
 
@@ -127,7 +182,15 @@ def test_query_over_400_rejected_without_http() -> None:
         raise AssertionError("no HTTP expected")
 
     with pytest.raises(ws.WebSearchError) as info:
-        asyncio.run(ws.search("tavily", "https://x.example", KEY, "a" * 401, transport=httpx.MockTransport(handler)))
+        asyncio.run(
+            ws.search(
+                "tavily",
+                "https://x.example",
+                KEY,
+                "a" * 401,
+                transport=httpx.MockTransport(handler),
+            )
+        )
     assert info.value.code == "query_too_long"
     assert ws.normalize_query("a" * 400) == "a" * 400
     for blank in ("", "   ", "\n\t"):
@@ -149,11 +212,27 @@ def test_non_2xx_and_redirect_are_provider_error(status: int) -> None:
 
 
 def test_bad_content_type_json_and_oversize() -> None:
-    _fails("tavily", lambda r: httpx.Response(200, text="{}", headers={"content-type": "text/html"}), "provider_error")
-    _fails("tavily", lambda r: httpx.Response(200, content=b"{not json", headers=JSON), "provider_error")
-    _fails("tavily", lambda r: httpx.Response(200, content=b"x" * (ws.MAX_RESPONSE_BYTES + 1), headers=JSON), "provider_error")
+    _fails(
+        "tavily",
+        lambda r: httpx.Response(200, text="{}", headers={"content-type": "text/html"}),
+        "provider_error",
+    )
+    _fails(
+        "tavily",
+        lambda r: httpx.Response(200, content=b"{not json", headers=JSON),
+        "provider_error",
+    )
+    _fails(
+        "tavily",
+        lambda r: httpx.Response(200, content=b"x" * (ws.MAX_RESPONSE_BYTES + 1), headers=JSON),
+        "provider_error",
+    )
     bomb = gzip.compress(b" " * (ws.MAX_RESPONSE_BYTES + 10))
-    _fails("tavily", lambda r: httpx.Response(200, content=bomb, headers={**JSON, "content-encoding": "gzip"}), "provider_error")
+    _fails(
+        "tavily",
+        lambda r: httpx.Response(200, content=bomb, headers={**JSON, "content-encoding": "gzip"}),
+        "provider_error",
+    )
 
 
 def test_timeouts_and_transport_errors() -> None:
@@ -184,7 +263,11 @@ def test_key_and_query_never_logged(caplog: pytest.LogCaptureFixture) -> None:
     def boom(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError(f"cannot reach {request.url}", request=request)
 
-    for handler in (boom, lambda r: httpx.Response(500, headers=JSON), _tavily([{"title": "T", "url": "https://a.example/", "content": "c"}])):
+    for handler in (
+        boom,
+        lambda r: httpx.Response(500, headers=JSON),
+        _tavily([{"title": "T", "url": "https://a.example/", "content": "c"}]),
+    ):
         for provider in ("tavily", "brave"):
             try:
                 _run(provider, handler, query)
@@ -199,12 +282,21 @@ def test_key_and_query_never_logged(caplog: pytest.LogCaptureFixture) -> None:
 
 def _config(**over: Any) -> AIExecutionConfig:
     base: dict[str, Any] = {
-        "workspace_id": uuid4(), "actor_user_id": 1, "membership_revision": 1, "access_configuration_revision": 1,
-        "configuration_revision": 1, "gateway_identity": "a" * 64, "endpoint_destination_id": None,
-        "gateway_base_url": None, "gateway_api_key": "", "defaults": ModelDefaults(),
+        "workspace_id": uuid4(),
+        "actor_user_id": 1,
+        "membership_revision": 1,
+        "access_configuration_revision": 1,
+        "configuration_revision": 1,
+        "gateway_identity": "a" * 64,
+        "endpoint_destination_id": None,
+        "gateway_base_url": None,
+        "gateway_api_key": "",
+        "defaults": ModelDefaults(),
         "privacy": PrivacySettings(allow_remote_web_search=True),
-        "request_timeout_seconds": 20, "web_search_provider": "tavily",
-        "web_search_endpoint": "https://api.tavily.com", "web_search_api_key": KEY,
+        "request_timeout_seconds": 20,
+        "web_search_provider": "tavily",
+        "web_search_endpoint": "https://api.tavily.com",
+        "web_search_api_key": KEY,
         "web_search_credential_configured": True,
     }
     return AIExecutionConfig(**{**base, **over})
@@ -213,8 +305,11 @@ def _config(**over: Any) -> AIExecutionConfig:
 def test_permitted_matrix() -> None:
     assert ws.web_search_permitted(_config())
     for over in (
-        {"web_search_provider": "none"}, {"web_search_endpoint": None}, {"web_search_api_key": ""},
-        {"web_search_credential_configured": False}, {"privacy": PrivacySettings(allow_remote_web_search=False)},
+        {"web_search_provider": "none"},
+        {"web_search_endpoint": None},
+        {"web_search_api_key": ""},
+        {"web_search_credential_configured": False},
+        {"privacy": PrivacySettings(allow_remote_web_search=False)},
     ):
         assert not ws.web_search_permitted(_config(**over)), over
 
@@ -250,10 +345,19 @@ def test_daily_quota() -> None:
     async def go() -> None:
         redis: Any = _Redis()
         day = datetime(2026, 10, 7, tzinfo=UTC)
-        assert [await ws.consume_daily_quota(redis, "o1", 2, day) for _ in range(3)] == [True, True, False]
+        assert [await ws.consume_daily_quota(redis, "o1", 2, day) for _ in range(3)] == [
+            True,
+            True,
+            False,
+        ]
         assert await ws.consume_daily_quota(redis, "o2", 2, day)  # per owner
-        assert await ws.consume_daily_quota(redis, "o1", 2, datetime(2026, 10, 8, tzinfo=UTC))  # per day
-        assert "chat:websearch:o1:2026-10-07" in redis.counts and redis.ttl["chat:websearch:o1:2026-10-07"] == 172800
+        assert await ws.consume_daily_quota(
+            redis, "o1", 2, datetime(2026, 10, 8, tzinfo=UTC)
+        )  # per day
+        assert (
+            "chat:websearch:o1:2026-10-07" in redis.counts
+            and redis.ttl["chat:websearch:o1:2026-10-07"] == 172800
+        )
         assert not await ws.consume_daily_quota(redis, "o3", 0, day)  # 0 disables
         assert not await ws.consume_daily_quota(_Redis(fail=True), "o1", 5, day)  # fail closed
 
@@ -282,7 +386,9 @@ def test_transport_is_required_keyword() -> None:
     ],
 )
 @pytest.mark.parametrize("provider", ["tavily", "brave"])
-def test_no_key_or_query_leaks(key: str, endpoint: str, provider: str, caplog: pytest.LogCaptureFixture) -> None:
+def test_no_key_or_query_leaks(
+    key: str, endpoint: str, provider: str, caplog: pytest.LogCaptureFixture
+) -> None:
     caplog.set_level(logging.DEBUG)
     query = "PRIVATEQ private question"
 
@@ -290,7 +396,9 @@ def test_no_key_or_query_leaks(key: str, endpoint: str, provider: str, caplog: p
         raise httpx.LocalProtocolError(f"Illegal header value {key!r} {request.url}")
 
     with pytest.raises(ws.WebSearchError) as info:
-        asyncio.run(ws.search(provider, endpoint, key, query, transport=httpx.MockTransport(handler)))
+        asyncio.run(
+            ws.search(provider, endpoint, key, query, transport=httpx.MockTransport(handler))
+        )
     exc = info.value
     assert exc.code == "provider_error"
     assert exc.__cause__ is None and (exc.__suppress_context__ or exc.__context__ is None)
@@ -306,42 +414,65 @@ def test_bad_key_rejected_before_any_request() -> None:
 
     for key in ("a\nb", "k\u00e9y"):
         with pytest.raises(ws.WebSearchError) as info:
-            asyncio.run(ws.search("tavily", "https://x.example", key, "q", transport=httpx.MockTransport(handler)))
+            asyncio.run(
+                ws.search(
+                    "tavily", "https://x.example", key, "q", transport=httpx.MockTransport(handler)
+                )
+            )
         assert info.value.code == "provider_error"
 
 
 def test_sanitize_confusable_brackets() -> None:
     dirty = "\uff3b1\uff3d \u3010a\u3011 \u27e61\u27e7 \uff1c/web_results\uff1e \ufe64x\ufe65 [2]"
     out = ws.sanitize_text(dirty, 500)
-    assert not any(c in out for c in "<>[]\uff3b\uff3d\u3010\u3011\u27e6\u27e7\uff1c\uff1e\ufe64\ufe65")
+    assert not any(
+        c in out for c in "<>[]\uff3b\uff3d\u3010\u3011\u27e6\u27e7\uff1c\uff1e\ufe64\ufe65"
+    )
     assert out.startswith("(1) (a) (1)") and out.endswith("(2)")
 
 
 def test_sanitize_url_host_rules() -> None:
     for bad in (
-        r"http://a.com\.evil.com/", r"https://ex.com\@b.com/", r"https://ex.com/a\b",
-        "https://\uff3b1\uff3d.com/", "https://a..com/", "https://[::1]/",
+        r"http://a.com\.evil.com/",
+        r"https://ex.com\@b.com/",
+        r"https://ex.com/a\b",
+        "https://\uff3b1\uff3d.com/",
+        "https://a..com/",
+        "https://[::1]/",
     ):
         assert ws.sanitize_url(bad) is None, bad
     cyrillic = ws.sanitize_url("https://\u0430pple.com/x")
     assert cyrillic is not None and cyrillic[1] == "xn--pple-43d.com"
     upper = ws.sanitize_url("https://EX.com/")
     assert upper is not None and upper[1] == "ex.com"
-    assert ws.sanitize_url("https://Example.COM:8080/A#f") == ("https://example.com:8080/A", "example.com")
+    assert ws.sanitize_url("https://Example.COM:8080/A#f") == (
+        "https://example.com:8080/A",
+        "example.com",
+    )
     assert ws.sanitize_url("https://Example.COM/a") == ws.sanitize_url("https://example.com/a")
 
 
 def test_host_case_variants_share_one_url_for_citation_dedupe() -> None:
-    items = [{"title": "A", "url": "https://Example.COM/a", "content": "c"},
-             {"title": "B", "url": "https://example.com/a", "content": "c"}]
-    assert len({r.url for r in ws.parse_results("tavily", {"results": items})}) == 1  # worker dedupes by url
+    items = [
+        {"title": "A", "url": "https://Example.COM/a", "content": "c"},
+        {"title": "B", "url": "https://example.com/a", "content": "c"},
+    ]
+    assert (
+        len({r.url for r in ws.parse_results("tavily", {"results": items})}) == 1
+    )  # worker dedupes by url
 
 
 def test_content_type_exact_media_type() -> None:
     ok = {"content-type": "Application/JSON; charset=utf-8"}
-    assert _run("tavily", lambda r: httpx.Response(200, content=b'{"results": []}', headers=ok)) == []
+    assert (
+        _run("tavily", lambda r: httpx.Response(200, content=b'{"results": []}', headers=ok)) == []
+    )
     for bad in ("application/jsonp", "application/json-seq", "text/plain; x=application/json"):
-        _fails("tavily", lambda r, bad=bad: httpx.Response(200, content=b"{}", headers={"content-type": bad}), "provider_error")
+        _fails(
+            "tavily",
+            lambda r, bad=bad: httpx.Response(200, content=b"{}", headers={"content-type": bad}),
+            "provider_error",
+        )
 
 
 def test_omniroute_request_and_results() -> None:
@@ -349,11 +480,25 @@ def test_omniroute_request_and_results() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(200, headers=JSON, json={"results": [
-            {"title": "Result", "url": "https://result.example/", "snippet": "body"}]})
+        return httpx.Response(
+            200,
+            headers=JSON,
+            json={
+                "results": [
+                    {"title": "Result", "url": "https://result.example/", "snippet": "body"}
+                ]
+            },
+        )
 
-    result = asyncio.run(ws.search("omniroute", "https://router.example/v1", KEY, "hello",
-                                   transport=httpx.MockTransport(handler)))
+    result = asyncio.run(
+        ws.search(
+            "omniroute",
+            "https://router.example/v1",
+            KEY,
+            "hello",
+            transport=httpx.MockTransport(handler),
+        )
+    )
     assert result[0].snippet == "body"
     request = requests[0]
     assert request.method == "POST" and request.url.path == "/v1/search"
@@ -364,8 +509,20 @@ def test_omniroute_request_and_results() -> None:
 def test_fallback_attempts_only_retryable_failures_and_preserves_empty_success() -> None:
     from core.model_gateway.schemas import WebSearchTarget
 
-    targets = [WebSearchTarget(provider="brave", endpoint="https://first.example", api_key=KEY, credential_configured=True),
-               WebSearchTarget(provider="omniroute", endpoint="https://second.example/v1", api_key=KEY, credential_configured=True)]
+    targets = [
+        WebSearchTarget(
+            provider="brave",
+            endpoint="https://first.example",
+            api_key=KEY,
+            credential_configured=True,
+        ),
+        WebSearchTarget(
+            provider="omniroute",
+            endpoint="https://second.example/v1",
+            api_key=KEY,
+            credential_configured=True,
+        ),
+    ]
     calls: list[str] = []
 
     def make_transport(target: WebSearchTarget) -> httpx.AsyncBaseTransport:
@@ -374,6 +531,7 @@ def test_fallback_attempts_only_retryable_failures_and_preserves_empty_success()
             if request.url.host == "first.example":
                 return httpx.Response(503, headers=JSON)
             return httpx.Response(200, headers=JSON, json={"results": []})
+
         return httpx.MockTransport(handler)
 
     result, provider = asyncio.run(ws.search_with_fallback(targets, "hello", make_transport))
@@ -396,13 +554,27 @@ def test_fallback_attempts_only_retryable_failures_and_preserves_empty_success()
 def test_empty_primary_result_does_not_try_fallback() -> None:
     from core.model_gateway.schemas import WebSearchTarget
 
-    targets = [WebSearchTarget(provider="tavily", endpoint="https://first.example", api_key=KEY, credential_configured=True),
-               WebSearchTarget(provider="omniroute", endpoint="https://second.example", api_key=KEY, credential_configured=True)]
+    targets = [
+        WebSearchTarget(
+            provider="tavily",
+            endpoint="https://first.example",
+            api_key=KEY,
+            credential_configured=True,
+        ),
+        WebSearchTarget(
+            provider="omniroute",
+            endpoint="https://second.example",
+            api_key=KEY,
+            credential_configured=True,
+        ),
+    ]
     calls: list[str] = []
 
     def transport(target: WebSearchTarget) -> httpx.AsyncBaseTransport:
         calls.append(target.provider)
-        return httpx.MockTransport(lambda request: httpx.Response(200, headers=JSON, json={"results": []}))
+        return httpx.MockTransport(
+            lambda request: httpx.Response(200, headers=JSON, json={"results": []})
+        )
 
     results, provider = asyncio.run(ws.search_with_fallback(targets, "hello", transport))
     assert results == [] and provider == "tavily" and calls == ["tavily"]
@@ -417,19 +589,34 @@ def _reason(handler: Any) -> str | None:
 
 def test_large_omniroute_snippets_parse_and_truncate() -> None:
     page = "word " * 12_000  # ~60 KB per snippet, ~300 KB body (> old 256 KiB cap)
-    results = [{"title": f"T{i}", "url": f"https://site{i}.example/", "snippet": page} for i in range(5)]
-    found = _run("omniroute", lambda r: httpx.Response(200, json={"results": results}, headers=JSON))
+    results = [
+        {"title": f"T{i}", "url": f"https://site{i}.example/", "snippet": page} for i in range(5)
+    ]
+    found = _run(
+        "omniroute", lambda r: httpx.Response(200, json={"results": results}, headers=JSON)
+    )
     assert len(found) == 5 and all(len(r.snippet) <= ws.SNIPPET_MAX for r in found)
 
 
 def test_failure_reasons_are_specific_and_secret_free(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO, logger="bbd.chat.web_search")
-    assert _reason(lambda r: httpx.Response(200, content=b"x" * (ws.MAX_RESPONSE_BYTES + 1), headers=JSON)) == "too_large"
+    assert (
+        _reason(
+            lambda r: httpx.Response(200, content=b"x" * (ws.MAX_RESPONSE_BYTES + 1), headers=JSON)
+        )
+        == "too_large"
+    )
     assert _reason(lambda r: httpx.Response(502, headers=JSON)) == "http_502"
     html_type = {"content-type": "text/html; charset=utf-8"}
-    assert _reason(lambda r: httpx.Response(200, text="<p/>", headers=html_type)) == "content_type:text/html"
+    assert (
+        _reason(lambda r: httpx.Response(200, text="<p/>", headers=html_type))
+        == "content_type:text/html"
+    )
     assert _reason(lambda r: httpx.Response(200, content=b"{nope", headers=JSON)) == "invalid_json"
-    assert _reason(lambda r: httpx.Response(200, json={"error": "x"}, headers=JSON)) == "unexpected_shape"
+    assert (
+        _reason(lambda r: httpx.Response(200, json={"error": "x"}, headers=JSON))
+        == "unexpected_shape"
+    )
     assert "reason=unexpected_shape" in caplog.text
     for secret in (KEY, "api.example.com", "weather in hanoi"):
         assert secret not in caplog.text

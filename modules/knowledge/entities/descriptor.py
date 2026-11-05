@@ -30,9 +30,7 @@ class EntityDescriptor(ModuleDescriptor):
     tools: tuple[str, ...] = ()
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
-    routers: tuple[RouterSpec, ...] = (
-        RouterSpec("modules.knowledge.entities.routes", 90),
-    )
+    routers: tuple[RouterSpec, ...] = (RouterSpec("modules.knowledge.entities.routes", 90),)
     erasure_module: str | None = "modules.knowledge.entities.erasure"
     erasure_order: int = 90
 

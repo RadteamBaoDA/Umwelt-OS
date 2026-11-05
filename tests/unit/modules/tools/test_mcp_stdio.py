@@ -174,7 +174,10 @@ class TestStdioFraming:
     @pytest.mark.asyncio
     async def test_read_stdio_stdout_single_frame(self) -> None:
         """Verify _read_stdio_stdout reads one complete JSON-RPC frame and sends SessionMessage."""
-        json_data = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"value": "ok"}}).encode("utf-8") + b"\n"
+        json_data = (
+            json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"value": "ok"}}).encode("utf-8")
+            + b"\n"
+        )
         stream = MockByteReceiveStream([json_data])
         rs, rr = anyio.create_memory_object_stream[SessionMessage | Exception](10)
         shutdown = anyio.Event()
@@ -203,7 +206,10 @@ class TestStdioFraming:
     @pytest.mark.asyncio
     async def test_read_stdio_stdout_buffer_slicing_across_chunks(self) -> None:
         """Verify _read_stdio_stdout correctly reassembles a frame split across multiple chunks."""
-        full_json = json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"split": "data"}}).encode("utf-8") + b"\n"
+        full_json = (
+            json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"split": "data"}}).encode("utf-8")
+            + b"\n"
+        )
         part1 = full_json[:10]
         part2 = full_json[10:]
 
@@ -276,7 +282,10 @@ class TestStdioFraming:
     @pytest.mark.asyncio
     async def test_read_stdio_stdout_fence_change_raises(self) -> None:
         """Verify fence check failure before frame delivery raises McpTransportError."""
-        json_data = json.dumps({"jsonrpc": "2.0", "id": 4, "result": {"status": "ok"}}).encode("utf-8") + b"\n"
+        json_data = (
+            json.dumps({"jsonrpc": "2.0", "id": 4, "result": {"status": "ok"}}).encode("utf-8")
+            + b"\n"
+        )
         stream = MockByteReceiveStream([json_data])
         rs, _ = anyio.create_memory_object_stream[SessionMessage | Exception](10)
         shutdown = anyio.Event()

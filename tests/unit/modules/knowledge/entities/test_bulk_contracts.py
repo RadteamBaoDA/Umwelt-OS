@@ -15,7 +15,9 @@ _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 
 def _sql(statement) -> str:
-    return str(statement.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    return str(
+        statement.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})
+    )
 
 
 class _Rows:
@@ -43,7 +45,11 @@ class _GraphSession:
         wanted = self._uuids(sql.split("WHERE", 1)[1])
         if "FROM entity_redirects" in sql:
             old = wanted[0] if "old_entity_id =" in sql else None
-            return SimpleNamespace(target_entity_id=self.redirects[old]) if old in self.redirects else None
+            return (
+                SimpleNamespace(target_entity_id=self.redirects[old])
+                if old in self.redirects
+                else None
+            )
         return wanted[0] if wanted[0] in self.entity_ids else None
 
     async def execute(self, statement):
@@ -65,7 +71,8 @@ async def _singular(session, identifier, workspace_id):
     scope = SimpleNamespace(workspace_id=workspace_id)
     try:
         return await entities.resolve_canonical_entity_id(
-            session, identifier, scope=scope, multi_workspace_enabled=False)
+            session, identifier, scope=scope, multi_workspace_enabled=False
+        )
     except (LookupError, ValueError) as exc:
         return exc
 
@@ -111,19 +118,25 @@ async def test_bulk_resolution_query_count_is_independent_of_entity_count() -> N
 
 
 @pytest.mark.asyncio
-async def test_resolve_canonical_entity_ids_aligns_with_input_and_raises_first_value_error() -> None:
+async def test_resolve_canonical_entity_ids_aligns_with_input_and_raises_first_value_error() -> (
+    None
+):
     workspace_id = uuid4()
     ok, missing, x, y = uuid4(), uuid4(), uuid4(), uuid4()
     scope = SimpleNamespace(workspace_id=workspace_id)
     db = _GraphSession({ok}, {x: y, y: x})
     resolved = await entities.resolve_canonical_entity_ids(
-        db, [ok, missing, ok], scope=scope, multi_workspace_enabled=False)
+        db, [ok, missing, ok], scope=scope, multi_workspace_enabled=False
+    )
     assert resolved == [ok, None, ok]
     with pytest.raises(ValueError, match="cycle"):
-        await entities.resolve_canonical_entity_ids(db, [ok, x], scope=scope, multi_workspace_enabled=False)
+        await entities.resolve_canonical_entity_ids(
+            db, [ok, x], scope=scope, multi_workspace_enabled=False
+        )
     with pytest.raises(ValueError, match="at most 100"):
         await entities.resolve_canonical_entity_ids(
-            db, [uuid4() for _ in range(101)], scope=scope, multi_workspace_enabled=False)
+            db, [uuid4() for _ in range(101)], scope=scope, multi_workspace_enabled=False
+        )
 
 
 def test_bulk_statements_compile_with_one_window_per_batch() -> None:
@@ -144,4 +157,6 @@ def test_bulk_statements_compile_with_one_window_per_batch() -> None:
         select(Relationship.target_entity_id.label("focus"), Relationship.id.label("rid")),
     )
     assert "UNION" in _sql(matches) and "UNION ALL" not in _sql(matches)
-    assert callable(relationships.get_neighbors_bulk) and callable(entities.list_entity_evidence_bulk)
+    assert callable(relationships.get_neighbors_bulk) and callable(
+        entities.list_entity_evidence_bulk
+    )

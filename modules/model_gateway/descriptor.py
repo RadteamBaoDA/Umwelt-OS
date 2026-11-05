@@ -13,9 +13,7 @@ class ModelGatewayDescriptor(ModuleDescriptor):
     name: str = "Model gateway"
     description: str = "Owner model-provider configuration and connectivity tests."
     routes: tuple[str, ...] = ("/api/v1/settings/models",)
-    routers: tuple[RouterSpec, ...] = (
-        RouterSpec("modules.model_gateway.routes", 260),
-    )
+    routers: tuple[RouterSpec, ...] = (RouterSpec("modules.model_gateway.routes", 260),)
 
 
 descriptor = ModelGatewayDescriptor()

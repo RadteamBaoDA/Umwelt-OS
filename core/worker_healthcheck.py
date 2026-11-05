@@ -4,6 +4,7 @@
 with a TTL of ``health_check_interval + 1`` seconds, so key existence proves the worker loop is alive.
 Usage: ``python -m core.worker_healthcheck <health key>``; exit code 0 healthy, 1 otherwise.
 """
+
 from __future__ import annotations
 
 import asyncio

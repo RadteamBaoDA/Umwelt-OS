@@ -35,25 +35,44 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from list_unindexed_fks import split_statements  # sibling script, shared SQL splitter
 
-GRANDFATHERED = frozenset({
-    "0001_init", "0002_observations_provider_ids", "0003_model_test_results", "0004_connector_oauth",
-    "0005_reddit_oauth", "0006_web_search_fallbacks", "0007_collection_receipt_stats", "0008_live_map_config",
-    "0008_owner_display_name_accent", "0009_system_health_history", "0010_observations_vn_stock",
-    "0011_merge_live_map", "0011_model_capability_evidence", "0012_merge_live_and_capability",
-    "0013_chat_sql_reader_role",
-})
+GRANDFATHERED = frozenset(
+    {
+        "0001_init",
+        "0002_observations_provider_ids",
+        "0003_model_test_results",
+        "0004_connector_oauth",
+        "0005_reddit_oauth",
+        "0006_web_search_fallbacks",
+        "0007_collection_receipt_stats",
+        "0008_live_map_config",
+        "0008_owner_display_name_accent",
+        "0009_system_health_history",
+        "0010_observations_vn_stock",
+        "0011_merge_live_map",
+        "0011_model_capability_evidence",
+        "0012_merge_live_and_capability",
+        "0013_chat_sql_reader_role",
+    }
+)
 
 # revision -> {rule: reason}. Keep this list tiny and justified.
 ALLOWED: dict[str, dict[str, str]] = {
     "0014_perf_indexes_and_safety": {
         "stored-generated-column": "one-off document_chunks.content_tsv rewrite, documented in the revision "
-                                   "docstring and docs/operations.md (maintenance window)",
+        "docstring and docs/operations.md (maintenance window)",
     },
 }
 
 VOLATILE_FUNCTIONS = (
-    "random", "gen_random_uuid", "uuid_generate_v1", "uuid_generate_v4", "uuid_generate_v7", "clock_timestamp",
-    "timeofday", "nextval", "setseed",
+    "random",
+    "gen_random_uuid",
+    "uuid_generate_v1",
+    "uuid_generate_v4",
+    "uuid_generate_v7",
+    "clock_timestamp",
+    "timeofday",
+    "nextval",
+    "setseed",
 )
 _SECTION = re.compile(r"^-- Running upgrade (?P<old>.+?) -> (?P<new>[A-Za-z0-9_]+)", re.MULTILINE)
 _IDENT = r'"?([A-Za-z_][A-Za-z0-9_]*)"?'
@@ -78,7 +97,7 @@ def split_sections(sql: str) -> list[tuple[str, str]]:
     sections = []
     for index, match in enumerate(matches):
         end = matches[index + 1].start() if index + 1 < len(matches) else len(sql)
-        sections.append((match.group("new"), sql[match.end():end]))
+        sections.append((match.group("new"), sql[match.end() : end]))
     return sections
 
 
@@ -88,12 +107,20 @@ def _statement_violations(statement: str, new_tables: set[str], in_transaction: 
     rules: list[str] = []
     if "CONCURRENTLY" in upper and (upper.startswith(("CREATE", "DROP"))) and in_transaction:
         rules.append("concurrent-in-transaction")
-    index = re.match(r"CREATE (?:UNIQUE )?INDEX (?!CONCURRENTLY)(?:IF NOT EXISTS )?\S+ ON (?:ONLY )?" + _IDENT, statement, re.IGNORECASE)
+    index = re.match(
+        r"CREATE (?:UNIQUE )?INDEX (?!CONCURRENTLY)(?:IF NOT EXISTS )?\S+ ON (?:ONLY )?" + _IDENT,
+        statement,
+        re.IGNORECASE,
+    )
     if index and index.group(1) not in new_tables:
         rules.append("index-not-concurrent")
     if re.match(r"DROP INDEX (?!CONCURRENTLY)", statement, re.IGNORECASE):
         rules.append("index-not-concurrent")
-    alter = re.match(r"ALTER TABLE (?:ONLY )?(?:IF EXISTS )?" + _IDENT + r"\s+(.*)$", statement, re.IGNORECASE | re.DOTALL)
+    alter = re.match(
+        r"ALTER TABLE (?:ONLY )?(?:IF EXISTS )?" + _IDENT + r"\s+(.*)$",
+        statement,
+        re.IGNORECASE | re.DOTALL,
+    )
     if alter and alter.group(1) not in new_tables:
         rules.extend(_alter_violations(" ".join(alter.group(2).split())))
     return rules
@@ -115,7 +142,11 @@ def _alter_violations(clause: str) -> list[str]:
         rules.append("column-type-change")
     if re.search(r"\bALTER COLUMN \S+ SET NOT NULL\b", upper):
         rules.append("set-not-null")
-    if re.match(r"ADD CONSTRAINT\b", upper) and re.search(r"\b(FOREIGN KEY|CHECK)\b", upper) and "NOT VALID" not in upper:
+    if (
+        re.match(r"ADD CONSTRAINT\b", upper)
+        and re.search(r"\b(FOREIGN KEY|CHECK)\b", upper)
+        and "NOT VALID" not in upper
+    ):
         rules.append("constraint-without-not-valid")
     return rules
 
@@ -137,7 +168,9 @@ def lint(sql: str, grandfathered: frozenset[str] = GRANDFATHERED) -> list[Violat
             if keyword == "COMMIT":
                 in_transaction = False
                 continue
-            created = re.match(r"CREATE TABLE (?:IF NOT EXISTS )?" + _IDENT, statement, re.IGNORECASE)
+            created = re.match(
+                r"CREATE TABLE (?:IF NOT EXISTS )?" + _IDENT, statement, re.IGNORECASE
+            )
             if created:
                 new_tables.add(created.group(1))
             for rule in _statement_violations(statement, new_tables, in_transaction):
@@ -148,10 +181,16 @@ def lint(sql: str, grandfathered: frozenset[str] = GRANDFATHERED) -> list[Violat
 
 def render_upgrade_sql() -> str:
     """Render ``alembic upgrade 0001_init:head --sql`` offline (placeholder URL; no connection)."""
-    env = {**os.environ, "DATABASE_URL": "postgresql+asyncpg://u:build-placeholder@postgres:5432/db"}
+    env = {
+        **os.environ,
+        "DATABASE_URL": "postgresql+asyncpg://u:build-placeholder@postgres:5432/db",
+    }
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "0001_init:head", "--sql"],
-        check=True, capture_output=True, text=True, env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
     )
     return result.stdout
 

@@ -22,13 +22,35 @@ async def _clean_pool() -> Any:
 
 
 async def test_same_origin_policy_and_protocol_share_one_client() -> None:
-    first = pool.pinned_client("https://api.example.com/v1", ["10.0.0.0/8", "192.168.0.0/16"], protocol="Openai")
-    again = pool.pinned_client("https://api.example.com/other/path", ["192.168.0.0/16", "10.0.0.0/8"], protocol="Openai")
+    first = pool.pinned_client(
+        "https://api.example.com/v1", ["10.0.0.0/8", "192.168.0.0/16"], protocol="Openai"
+    )
+    again = pool.pinned_client(
+        "https://api.example.com/other/path", ["192.168.0.0/16", "10.0.0.0/8"], protocol="Openai"
+    )
     assert first is again  # path and CIDR order are irrelevant to the pinned origin/policy
-    assert pool.pinned_client("https://api.example.com", ["10.0.0.0/8"], protocol="Openai") is not first
-    assert pool.pinned_client("https://api.example.com", ["10.0.0.0/8", "192.168.0.0/16"], protocol="Anthropic") is not first
-    assert pool.pinned_client("https://api.example.com", ["10.0.0.0/8", "192.168.0.0/16"], allow_global=True) is not first
-    assert pool.pinned_client("https://other.example.com", ["10.0.0.0/8", "192.168.0.0/16"], protocol="Openai") is not first
+    assert (
+        pool.pinned_client("https://api.example.com", ["10.0.0.0/8"], protocol="Openai")
+        is not first
+    )
+    assert (
+        pool.pinned_client(
+            "https://api.example.com", ["10.0.0.0/8", "192.168.0.0/16"], protocol="Anthropic"
+        )
+        is not first
+    )
+    assert (
+        pool.pinned_client(
+            "https://api.example.com", ["10.0.0.0/8", "192.168.0.0/16"], allow_global=True
+        )
+        is not first
+    )
+    assert (
+        pool.pinned_client(
+            "https://other.example.com", ["10.0.0.0/8", "192.168.0.0/16"], protocol="Openai"
+        )
+        is not first
+    )
     assert first.follow_redirects is False and first.trust_env is False
 
 
@@ -48,7 +70,9 @@ async def test_pool_is_lru_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     pool.pinned_client("https://h3.example.com", ["10.0.0.0/8"])
     assert len(pool._POOL) == 3
     assert pool.pinned_client("https://h0.example.com", ["10.0.0.0/8"]) is clients[0]
-    assert pool.pinned_client("https://h1.example.com", ["10.0.0.0/8"]) is not clients[1]  # evicted, rebuilt
+    assert (
+        pool.pinned_client("https://h1.example.com", ["10.0.0.0/8"]) is not clients[1]
+    )  # evicted, rebuilt
 
 
 async def test_sdk_context_exit_does_not_close_the_shared_client() -> None:
@@ -66,7 +90,9 @@ async def test_shutdown_closes_every_pooled_client() -> None:
     await pool.close_pinned_clients()  # idempotent
 
 
-async def test_evicted_client_is_closed_after_the_grace_period(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_evicted_client_is_closed_after_the_grace_period(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(pool, "MAX_POOLED_CLIENTS", 1)
     monkeypatch.setattr(pool, "EVICTION_CLOSE_DELAY_SECONDS", 0.01)
     first = pool.pinned_client("https://a.example.com", ["10.0.0.0/8"])
@@ -77,7 +103,9 @@ async def test_evicted_client_is_closed_after_the_grace_period(monkeypatch: pyte
     assert first.is_closed
 
 
-async def test_reused_client_still_resolves_and_validates_dns_on_every_request(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_reused_client_still_resolves_and_validates_dns_on_every_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Rebinding after the first (approved) answer is denied on the second request over the same client."""
     seen_hosts: list[str] = []
 
@@ -85,9 +113,14 @@ async def test_reused_client_still_resolves_and_validates_dns_on_every_request(m
         seen_hosts.append(request.url.host)
         return httpx.Response(200, json={"ok": True})
 
-    def build(base_url: str, cidrs: Any, *, allow_global: bool = False) -> ApprovedEndpointTransport:
+    def build(
+        base_url: str, cidrs: Any, *, allow_global: bool = False
+    ) -> ApprovedEndpointTransport:
         return ApprovedEndpointTransport(
-            httpx.URL(base_url), cidrs, httpx.MockTransport(handler), allow_global=allow_global,
+            httpx.URL(base_url),
+            cidrs,
+            httpx.MockTransport(handler),
+            allow_global=allow_global,
         )
 
     monkeypatch.setattr(pool, "approved_transport", build)
@@ -105,12 +138,19 @@ async def test_reused_client_still_resolves_and_validates_dns_on_every_request(m
     assert (await client.get("https://api.example.com/v1/models")).status_code == 200
     again = pool.pinned_client("https://api.example.com", ["10.0.0.0/8"])
     assert again is client
-    with pytest.raises(EndpointNetworkPolicyError):  # DNS now points at link-local: denied, nothing dialled
+    with pytest.raises(
+        EndpointNetworkPolicyError
+    ):  # DNS now points at link-local: denied, nothing dialled
         await again.get("https://api.example.com/v1/models")
     assert (await again.get("https://api.example.com/v1/models")).status_code == 200
     assert resolutions == ["api.example.com"] * 3  # resolved per request, not per client
-    assert seen_hosts == ["10.1.2.3", "10.1.2.3"]  # the delegate only ever saw the checked literal IP
-    with pytest.raises(EndpointNetworkPolicyError):  # origin change on a reused client is still refused
+    assert seen_hosts == [
+        "10.1.2.3",
+        "10.1.2.3",
+    ]  # the delegate only ever saw the checked literal IP
+    with pytest.raises(
+        EndpointNetworkPolicyError
+    ):  # origin change on a reused client is still refused
         await again.get("https://evil.example.org/v1/models")
 
 
@@ -119,14 +159,23 @@ async def test_gateway_http_client_uses_the_pool() -> None:
 
     def gateway(**overrides: Any) -> ModelGateway:
         return ModelGateway(
-            redis=AsyncMock(), base_url="https://api.example.com", api_key="k", destination_id="d",
-            scope=_scope(), gateway_identity="a" * 64, configuration_revision=1,
-            before_send=AsyncMock(), approved_endpoint_cidrs=("10.0.0.0/8",), **overrides,
+            redis=AsyncMock(),
+            base_url="https://api.example.com",
+            api_key="k",
+            destination_id="d",
+            scope=_scope(),
+            gateway_identity="a" * 64,
+            configuration_revision=1,
+            before_send=AsyncMock(),
+            approved_endpoint_cidrs=("10.0.0.0/8",),
+            **overrides,
         )
 
     first = gateway()._http_client("https://api.example.com/v1")
     assert gateway()._http_client("https://api.example.com/v1") is first
-    assert gateway(allow_public_endpoints=True)._http_client("https://api.example.com/v1") is not first
+    assert (
+        gateway(allow_public_endpoints=True)._http_client("https://api.example.com/v1") is not first
+    )
     assert gateway(kind="anthropic")._http_client("https://api.example.com/v1") is not first
 
 

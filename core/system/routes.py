@@ -39,10 +39,14 @@ async def read_system_configuration(
     return {
         "multi_workspace_enabled": settings.multi_workspace_enabled,
         "secure_cookies": settings.secure_cookies,
-        "google_login_configured": bool(settings.google_client_id and settings.google_client_secret.get_secret_value()),
+        "google_login_configured": bool(
+            settings.google_client_id and settings.google_client_secret.get_secret_value()
+        ),
         "github_app_configured": bool(
-            settings.github_app_client_id and settings.github_app_client_secret.get_secret_value()
-            and settings.github_app_id and settings.github_app_webhook_secret.get_secret_value()
+            settings.github_app_client_id
+            and settings.github_app_client_secret.get_secret_value()
+            and settings.github_app_id
+            and settings.github_app_webhook_secret.get_secret_value()
         ),
         "n8n_configured": bool(settings.n8n_api_key.get_secret_value()),
         "mcp_widgets_enabled": settings.mcp_widgets_enabled,

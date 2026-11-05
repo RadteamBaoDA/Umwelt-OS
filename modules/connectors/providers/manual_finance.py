@@ -71,12 +71,16 @@ def _transaction(
     except (TypeError, ValueError) as exc:
         raise ValueError(f"Row {row}: date must use ISO YYYY-MM-DD format") from exc
     try:
-        amount = amount_value if isinstance(amount_value, Decimal) else Decimal(amount_value.strip())
+        amount = (
+            amount_value if isinstance(amount_value, Decimal) else Decimal(amount_value.strip())
+        )
     except (InvalidOperation, AttributeError) as exc:
         raise ValueError(f"Row {row}: amount must be a decimal number") from exc
     if not amount.is_finite():
         raise ValueError(f"Row {row}: amount must be finite")
-    return FinancialTransaction(account_id, transaction_id, transaction_date, amount, currency_value, description)
+    return FinancialTransaction(
+        account_id, transaction_id, transaction_date, amount, currency_value, description
+    )
 
 
 def parse_finance_csv(content: bytes) -> FinancialImport:
@@ -101,10 +105,17 @@ def parse_finance_csv(content: bytes) -> FinancialImport:
         for row_number, row in enumerate(reader, start=2):
             if None in row or any(row.get(field) is None for field in CSV_FIELDS):
                 raise ValueError(f"Row {row_number}: field count does not match the CSV header")
-            records.append(_transaction(
-                row["account_id"], row["transaction_id"], row["date"], row["amount"],
-                row["currency"], row["description"], row=row_number,
-            ))
+            records.append(
+                _transaction(
+                    row["account_id"],
+                    row["transaction_id"],
+                    row["date"],
+                    row["amount"],
+                    row["currency"],
+                    row["description"],
+                    row=row_number,
+                )
+            )
     except csv.Error as exc:
         raise ValueError("Malformed personal-finance CSV") from exc
     if not records:
@@ -138,13 +149,17 @@ def parse_finance_ofx(content: bytes) -> FinancialImport:
         account_id = getattr(account, "acctid", None)
         currency_code = getattr(statement, "curdef", None)
         for transaction in getattr(statement, "transactions", ()):
-            records.append(_transaction(
-                str(account_id or ""), str(getattr(transaction, "fitid", "")),
-                getattr(transaction, "dtposted", ""), getattr(transaction, "trnamt", ""),
-                str(currency_code or ""),
-                str(getattr(transaction, "name", None) or getattr(transaction, "memo", "")),
-                row=len(records) + 1,
-            ))
+            records.append(
+                _transaction(
+                    str(account_id or ""),
+                    str(getattr(transaction, "fitid", "")),
+                    getattr(transaction, "dtposted", ""),
+                    getattr(transaction, "trnamt", ""),
+                    str(currency_code or ""),
+                    str(getattr(transaction, "name", None) or getattr(transaction, "memo", "")),
+                    row=len(records) + 1,
+                )
+            )
     if not records:
         raise ValueError("OFX document contains no supported transactions")
     return FinancialImport(tuple(records))
@@ -174,25 +189,36 @@ def render_finance_markdown(imported: FinancialImport, max_bytes: int = MAX_IMPO
     if max_bytes <= 0:
         raise ValueError("Markdown size limit must be positive")
     lines = [
-        "# Imported financial transactions", "",
+        "# Imported financial transactions",
+        "",
         "| Account ID | Transaction ID | Date | Amount | Currency | Description |",
         "| --- | --- | --- | ---: | --- | --- |",
     ]
     size = sum(len(line.encode("utf-8")) + 1 for line in lines)
     for transaction in imported.transactions:
         values = (
-            transaction.account_id, transaction.transaction_id, transaction.date.isoformat(),
-            str(transaction.amount), transaction.currency, transaction.description,
+            transaction.account_id,
+            transaction.transaction_id,
+            transaction.date.isoformat(),
+            str(transaction.amount),
+            transaction.currency,
+            transaction.description,
         )
         cells = [
-            value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            .replace("|", "\\|").replace("\r", "\\r").replace("\n", "\\n")
+            value.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("|", "\\|")
+            .replace("\r", "\\r")
+            .replace("\n", "\\n")
             for value in values
         ]
         line = "| " + " | ".join(cells) + " |"
         size += len(line.encode("utf-8")) + 1
         if size > max_bytes:
-            raise ValueError("Normalized personal-finance document exceeds the configured size limit")
+            raise ValueError(
+                "Normalized personal-finance document exceeds the configured size limit"
+            )
         lines.append(line)
     if not imported.transactions:
         raise ValueError("Personal-finance import contains no transactions")

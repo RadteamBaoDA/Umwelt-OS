@@ -77,7 +77,15 @@ class TestActionSchemas:
 
     def test_run_agent_action_profile_roster(self) -> None:
         """Verify RunAgentAction only accepts allowed fixed-roster specialist profiles."""
-        valid_profiles = ["knowledge", "research", "personal", "project", "news", "planning", "automation"]
+        valid_profiles = [
+            "knowledge",
+            "research",
+            "personal",
+            "project",
+            "news",
+            "planning",
+            "automation",
+        ]
         for p in valid_profiles:
             action = RunAgentAction(type="run_agent", profile_id=p, instruction="Analyze data")  # type: ignore[arg-type]
             assert action.profile_id == p
@@ -99,12 +107,16 @@ class TestActionSchemas:
 
     def test_create_notification_action_link_validation(self) -> None:
         """Verify relative in-app link validation on notification action."""
-        act = CreateNotificationAction(type="create_notification", message="Review plan", link="/goals/123")
+        act = CreateNotificationAction(
+            type="create_notification", message="Review plan", link="/goals/123"
+        )
         assert act.link == "/goals/123"
 
         # Absolute or malicious link rejected
         with pytest.raises(ValidationError):
-            CreateNotificationAction(type="create_notification", message="Review", link="https://evil.com")
+            CreateNotificationAction(
+                type="create_notification", message="Review", link="https://evil.com"
+            )
 
     def test_call_webhook_action_alias(self) -> None:
         """Verify CallWebhookAction alias and event pattern."""
@@ -120,7 +132,9 @@ class TestAutomationDefinitionSchemas:
         """Verify valid AutomationDefinition with matching trigger and conditions."""
         trigger = TaskDueTrigger(type="task_due", lead_minutes=30)
         condition = Condition(field="status", operator="eq", value="inbox")
-        action = CreateNotificationAction(type="create_notification", message="Task due soon!", link="/tasks")
+        action = CreateNotificationAction(
+            type="create_notification", message="Task due soon!", link="/tasks"
+        )
 
         defn = AutomationDefinition(
             trigger=trigger,
@@ -138,7 +152,9 @@ class TestAutomationDefinitionSchemas:
         invalid_cond = Condition(field="hours_until_due", operator="lt", value=2)
         action = CreateTaskAction(type="create_task", title="Task")
 
-        with pytest.raises(ValueError, match="field 'hours_until_due' is not declared by trigger 'webhook'"):
+        with pytest.raises(
+            ValueError, match="field 'hours_until_due' is not declared by trigger 'webhook'"
+        ):
             AutomationDefinition(
                 trigger=trigger,
                 conditions=[invalid_cond],

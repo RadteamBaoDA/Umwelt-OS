@@ -21,7 +21,9 @@ class _ComposeLoader(yaml.SafeLoader):
 
 
 for _tag in ("!reset", "!override"):
-    _ComposeLoader.add_multi_constructor(_tag, lambda loader, _suffix, node: loader.construct_sequence(node))
+    _ComposeLoader.add_multi_constructor(
+        _tag, lambda loader, _suffix, node: loader.construct_sequence(node)
+    )
 
 
 def test_compose_split_keeps_browser_and_n8n_separate() -> None:

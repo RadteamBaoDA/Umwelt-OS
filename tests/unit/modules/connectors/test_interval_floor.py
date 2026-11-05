@@ -23,11 +23,30 @@ from tests.unit.modules.connectors.test_builtins import SCOPE, _enable, _request
 
 # Providers that deliberately keep the 15-minute default: real-time prices/hazards and owner-credential sources.
 # A new provider must be added either here or to PROVIDER_MIN_INTERVAL_MINUTES, so the choice is conscious.
-FIFTEEN_MINUTE_PROVIDERS = frozenset({
-    "binance", "coinpaprika", "coingecko", "iss_position", "nws_alerts", "usgs", "hn_top", "nasa_eonet",
-    "github", "reddit", "google_mail", "google_calendar", "google_drive", "notion", "slack", "telegram",
-    "home_assistant", "health", "mastodon", "x",
-})
+FIFTEEN_MINUTE_PROVIDERS = frozenset(
+    {
+        "binance",
+        "coinpaprika",
+        "coingecko",
+        "iss_position",
+        "nws_alerts",
+        "usgs",
+        "hn_top",
+        "nasa_eonet",
+        "github",
+        "reddit",
+        "google_mail",
+        "google_calendar",
+        "google_drive",
+        "notion",
+        "slack",
+        "telegram",
+        "home_assistant",
+        "health",
+        "mastodon",
+        "x",
+    }
+)
 # Floors pre-registered for a provider with no adapter yet (none: ITviec shipped on the owner's 2026-11-04 decision).
 UNREGISTERED_FLOORS: frozenset[str] = frozenset()
 
@@ -62,8 +81,15 @@ def _source(provider: str, interval: int | None) -> ConnectorSource:
     if interval is not None:
         cfg["schedule_interval_minutes"] = interval
     return ConnectorSource(
-        id=uuid4(), workspace_id=uuid4(), type=PROVIDER_SOURCE_TYPES[provider], status="active",
-        generation=1, configuration=cfg, local_only=False, provider=provider)
+        id=uuid4(),
+        workspace_id=uuid4(),
+        type=PROVIDER_SOURCE_TYPES[provider],
+        status="active",
+        generation=1,
+        configuration=cfg,
+        local_only=False,
+        provider=provider,
+    )
 
 
 def test_registry_rejects_interval_below_floor_and_accepts_floor() -> None:
@@ -90,9 +116,15 @@ async def test_enable_defaults_to_floor_and_rejects_shorter_interval() -> None:
     assert world.row.desired_configuration["schedule_interval_minutes"] == 360
     with _World("vn_stock"), pytest.raises(HTTPException) as exc:
         await builtins.enable_builtin(
-            "vn_stock", _session(), _request(), SCOPE,  # type: ignore[arg-type]
-            builtins.BuiltinEnableRequest(schedule_interval_minutes=60))
-    assert exc.value.status_code == 422 and "schedule_interval_below_minimum: minimum 360" in str(exc.value.detail)
+            "vn_stock",
+            _session(),
+            _request(),
+            SCOPE,  # type: ignore[arg-type]
+            builtins.BuiltinEnableRequest(schedule_interval_minutes=60),
+        )
+    assert exc.value.status_code == 422 and "schedule_interval_below_minimum: minimum 360" in str(
+        exc.value.detail
+    )
 
 
 async def test_builtin_read_and_catalog_expose_the_floor() -> None:
@@ -115,28 +147,53 @@ def test_manual_collect_cooldown_only_for_slow_providers() -> None:
     assert collection_cooldown_seconds(None, now, now) == 0
 
 
-def _collect_env(monkeypatch: pytest.MonkeyPatch, provider: str, last_started: datetime | None) -> tuple[MagicMock, AsyncMock]:
+def _collect_env(
+    monkeypatch: pytest.MonkeyPatch, provider: str, last_started: datetime | None
+) -> tuple[MagicMock, AsyncMock]:
     """Patch the collect-now route's collaborators for a native, fenced source whose last start is ``last_started``."""
     session = MagicMock(rollback=AsyncMock(), scalar=AsyncMock(return_value=last_started))
     queued = AsyncMock(return_value=SimpleNamespace(status="queued", request_id=uuid4()))
     source = SimpleNamespace(type="api", status="active", provider=provider, generation=1)
     monkeypatch.setattr(routes, "_owner_access", AsyncMock())
     monkeypatch.setattr(routes, "_source", AsyncMock(return_value=source))
-    monkeypatch.setattr(routes.provisioning, "activation_status", AsyncMock(return_value=SimpleNamespace(
-        state="active", applied_revision=2, desired_revision=2, source_generation=1, execution_backend="native")))
-    monkeypatch.setattr(routes.provisioning, "require_collection_fence", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        routes.provisioning,
+        "activation_status",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                state="active",
+                applied_revision=2,
+                desired_revision=2,
+                source_generation=1,
+                execution_backend="native",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        routes.provisioning, "require_collection_fence", AsyncMock(return_value=True)
+    )
     monkeypatch.setattr(routes.scheduler, "request_collection", queued)
     return session, queued
 
 
 async def _collect(session: MagicMock) -> object:
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=SimpleNamespace(multi_workspace_enabled=False))))
-    return await routes.trigger_collection(uuid4(), session, request, SimpleNamespace(workspace_id=uuid4()))  # type: ignore[arg-type]
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(settings=SimpleNamespace(multi_workspace_enabled=False))
+        )
+    )
+    return await routes.trigger_collection(
+        uuid4(), session, request, SimpleNamespace(workspace_id=uuid4())
+    )  # type: ignore[arg-type]
 
 
-async def test_collect_now_inside_a_six_hour_floor_is_429_with_retry_after(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_collect_now_inside_a_six_hour_floor_is_429_with_retry_after(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A floor-360 provider started 1 h ago answers 429 `collection_too_soon` with the remaining seconds, queueing nothing."""
-    session, queued = _collect_env(monkeypatch, "vietnamworks_jobs", datetime.now(UTC) - timedelta(hours=1))
+    session, queued = _collect_env(
+        monkeypatch, "vietnamworks_jobs", datetime.now(UTC) - timedelta(hours=1)
+    )
     with pytest.raises(HTTPException) as exc:
         await _collect(session)
     assert exc.value.status_code == 429
@@ -146,9 +203,13 @@ async def test_collect_now_inside_a_six_hour_floor_is_429_with_retry_after(monke
     queued.assert_not_awaited()
 
 
-async def test_collect_now_after_the_floor_or_for_fast_providers_is_queued(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_collect_now_after_the_floor_or_for_fast_providers_is_queued(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Past the floor, or for a floor-15 provider started a minute ago, the manual run is queued as before."""
-    session, queued = _collect_env(monkeypatch, "vietnamworks_jobs", datetime.now(UTC) - timedelta(hours=7))
+    session, queued = _collect_env(
+        monkeypatch, "vietnamworks_jobs", datetime.now(UTC) - timedelta(hours=7)
+    )
     assert (await _collect(session)).status == "queued"  # type: ignore[attr-defined]
     session, queued = _collect_env(monkeypatch, "binance", datetime.now(UTC) - timedelta(minutes=1))
     assert (await _collect(session)).status == "queued"  # type: ignore[attr-defined]

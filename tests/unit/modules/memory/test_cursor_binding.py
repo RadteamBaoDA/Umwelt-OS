@@ -13,7 +13,10 @@ from modules.memory.public import bind_page_cursor, page_cursor_binding, unbind_
 
 def _scope(user_id: int = 7, workspace_id=None) -> WorkspaceContext:
     return WorkspaceContext(
-        user_id=user_id, workspace_id=workspace_id or uuid4(), role="owner", membership_revision=1,
+        user_id=user_id,
+        workspace_id=workspace_id or uuid4(),
+        role="owner",
+        membership_revision=1,
     )
 
 
@@ -30,8 +33,12 @@ def test_binding_differs_by_workspace_actor_and_filters() -> None:
     scope = _scope()
     base = page_cursor_binding(scope, kind="memories", status="active")
     assert base == page_cursor_binding(scope, kind="memories", status="active")
-    assert base != page_cursor_binding(_scope(workspace_id=uuid4()), kind="memories", status="active")
-    assert base != page_cursor_binding(_scope(user_id=8, workspace_id=scope.workspace_id), kind="memories", status="active")
+    assert base != page_cursor_binding(
+        _scope(workspace_id=uuid4()), kind="memories", status="active"
+    )
+    assert base != page_cursor_binding(
+        _scope(user_id=8, workspace_id=scope.workspace_id), kind="memories", status="active"
+    )
     assert base != page_cursor_binding(scope, kind="memories", status="forgotten")
     assert base != page_cursor_binding(scope, kind="candidates", status="active")
 
@@ -47,7 +54,8 @@ def test_foreign_or_malformed_cursor_is_422(bad: str) -> None:
 def test_cursor_from_another_workspace_is_rejected() -> None:
     mine, theirs = _scope(), _scope()
     cursor = bind_page_cursor(
-        encode_cursor(datetime.now(UTC), uuid4()), page_cursor_binding(theirs, kind="agent_runs"),
+        encode_cursor(datetime.now(UTC), uuid4()),
+        page_cursor_binding(theirs, kind="agent_runs"),
     )
     with pytest.raises(DomainError) as caught:
         unbind_page_cursor(cursor, page_cursor_binding(mine, kind="agent_runs"))

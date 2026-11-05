@@ -11,6 +11,7 @@ from modules.settings.openrouter_models import OpenRouterModelFilters
 
 class OwnerPreferencesRead(BaseModel):
     """Expose persisted theme, locale, timezone, and configuration revision state."""
+
     configuration_revision: int = Field(ge=1)
     persisted: bool = False
     theme: Literal["light", "dark", "system"]
@@ -24,6 +25,7 @@ class OwnerPreferencesRead(BaseModel):
 
 class OwnerPreferencesUpdate(BaseModel):
     """Validate a revision-fenced owner preference update."""
+
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(ge=1)
@@ -52,6 +54,7 @@ class OwnerPreferencesUpdate(BaseModel):
 
 class RetentionSettingsRead(BaseModel):
     """Expose the configured agent trace cutoff and immutable retained-data policies."""
+
     configuration_revision: int = Field(ge=1)
     persisted: bool = False
     agent_trace_days: int = Field(ge=1, le=3650)
@@ -61,6 +64,7 @@ class RetentionSettingsRead(BaseModel):
 
 class RetentionSettingsUpdate(BaseModel):
     """Validate a revision-fenced trace retention change without permitting source/history deletion."""
+
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(ge=1)
@@ -71,6 +75,7 @@ class RetentionSettingsUpdate(BaseModel):
 
 class ModuleLifecycleEntry(BaseModel):
     """Describe requested and dependency-derived module availability for owner Settings/navigation."""
+
     id: str
     name: str
     enabled: bool
@@ -84,6 +89,7 @@ class ModuleLifecycleEntry(BaseModel):
 
 class ModuleLifecycleRead(BaseModel):
     """Expose module availability and the revision for safe owner updates."""
+
     configuration_revision: int = Field(ge=1)
     persisted: bool = False
     modules: list[ModuleLifecycleEntry]
@@ -91,6 +97,7 @@ class ModuleLifecycleRead(BaseModel):
 
 class ModuleLifecycleUpdate(BaseModel):
     """Validate an optimistic enable/disable request for one descriptor-owned module."""
+
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(ge=1)
@@ -100,13 +107,16 @@ class ModuleLifecycleUpdate(BaseModel):
 
 class MaintenanceSummaryRead(BaseModel):
     """Expose the latest durable bounded-maintenance counts and next eligible timestamp."""
+
     completed_at: datetime | None = None
     agent_traces_redacted: int = Field(ge=0, default=0)
     temporary_data_deleted: int = Field(ge=0, default=0)
     next_eligible_at: datetime | None = None
 
+
 class TranslationSettingsRead(BaseModel):
     """Workspace translation choice; unrelated to the viewer's UI locale."""
+
     enabled: bool = False
     target_language: Literal["vi", "en"] = "vi"
     configuration_revision: int = Field(default=1, ge=1)
@@ -114,6 +124,7 @@ class TranslationSettingsRead(BaseModel):
 
 class TranslationSettingsUpdate(BaseModel):
     """Owner update must compare this revision under a row lock; the server picks the next one."""
+
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool
@@ -123,6 +134,7 @@ class TranslationSettingsUpdate(BaseModel):
 
 class SystemPromptEntry(BaseModel):
     """One editable prompt: effective text, built-in default and whether it is customized."""
+
     key: str
     value: str
     default: str
@@ -131,12 +143,14 @@ class SystemPromptEntry(BaseModel):
 
 class SystemPromptsRead(BaseModel):
     """All editable system prompts with the revision used for optimistic updates."""
+
     configuration_revision: int = Field(ge=1)
     prompts: list[SystemPromptEntry]
 
 
 class SystemPromptsUpdate(BaseModel):
     """Partial update; ``None`` or blank resets a key to its default."""
+
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(ge=1)
@@ -148,6 +162,7 @@ CredentialAction = Literal["unchanged", "replaced", "removed"]
 
 class WebSearchEntryRead(BaseModel):
     """Expose one ordered search destination and credential presence, never its key."""
+
     provider: Literal["tavily", "brave", "searxng", "omniroute"]
     endpoint: str
     credential_configured: bool
@@ -156,6 +171,7 @@ class WebSearchEntryRead(BaseModel):
 
 class WebSearchRead(BaseModel):
     """Return ordered search destinations and their shared remote-search consent."""
+
     configuration_revision: int = Field(ge=1)
     providers: list[WebSearchEntryRead]
     allow_remote_web_search: bool
@@ -163,6 +179,7 @@ class WebSearchRead(BaseModel):
 
 class WebSearchEntryUpdate(BaseModel):
     """Validate one search destination and write-only credential action."""
+
     model_config = ConfigDict(extra="forbid")
     provider: Literal["tavily", "brave", "searxng", "omniroute"]
     endpoint: AnyHttpUrl
@@ -172,6 +189,7 @@ class WebSearchEntryUpdate(BaseModel):
 
 class WebSearchUpdate(BaseModel):
     """Replace up to four ordered search destinations under the shared revision fence."""
+
     model_config = ConfigDict(extra="forbid")
     expected_revision: int = Field(ge=1)
     providers: list[WebSearchEntryUpdate] = Field(max_length=4)
@@ -180,6 +198,7 @@ class WebSearchUpdate(BaseModel):
 
 class WebSearchTest(BaseModel):
     """Probe one draft; a blank key may reuse a saved key only for the same endpoint."""
+
     model_config = ConfigDict(extra="forbid")
     provider: Literal["tavily", "brave", "searxng", "omniroute"]
     endpoint: AnyHttpUrl
@@ -188,6 +207,7 @@ class WebSearchTest(BaseModel):
 
 class ConnectionTestResult(BaseModel):
     """Outcome of a connection test; ``error`` is a short code, never a URL or secret."""
+
     ok: bool
     error: str | None = None
     detail: int | None = None  # result count (web search) or HTTP status (n8n)
@@ -196,6 +216,7 @@ class ConnectionTestResult(BaseModel):
 
 class N8nRead(BaseModel):
     """n8n connection settings; secrets are never returned. ``*_source`` says where the effective value comes from."""
+
     configuration_revision: int = Field(ge=1)
     service_url: str
     api_key_configured: bool
@@ -209,6 +230,7 @@ class N8nRead(BaseModel):
 
 class N8nUpdate(BaseModel):
     """Full replace of the stored n8n settings; ``service_url`` None clears it (environment fallback)."""
+
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(ge=1)
@@ -222,6 +244,7 @@ class N8nUpdate(BaseModel):
 
 class N8nTest(BaseModel):
     """Optional draft; blank fields fall back to the effective (stored, then environment) value."""
+
     model_config = ConfigDict(extra="forbid")
 
     service_url: AnyHttpUrl | None = None
@@ -235,6 +258,7 @@ VizRouterApi = Literal["chat", "decisions"]  # openrouter only; rows saved witho
 
 class VizRouterRead(BaseModel):
     """Visualization router settings; the TypeSafe key is never returned, only whether one is stored."""
+
     configuration_revision: int = Field(ge=1)
     kind: VizRouterKind = "internal"
     provider_id: str | None = None
@@ -256,6 +280,7 @@ class VizRouterUpdate(BaseModel):
     ``allow_remote_visualization_routing`` is consent bound to the destination chosen here: changing the
     provider or kind in a later save clears it.
     """
+
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(ge=1)
@@ -270,12 +295,15 @@ class VizRouterUpdate(BaseModel):
     api_key_action: CredentialAction = "unchanged"
     api_key: str | None = Field(default=None, max_length=4096, repr=False)
     account_id: str | None = Field(default=None, max_length=64)  # cloudflare
-    gateway_url: str | None = Field(default=None, max_length=500)  # cloudflare optional AI Gateway base URL (https)
+    gateway_url: str | None = Field(
+        default=None, max_length=500
+    )  # cloudflare optional AI Gateway base URL (https)
     allow_remote_visualization_routing: bool = False
 
 
 class VizRouterTestResult(BaseModel):
     """Outcome of Test routing: ``mode`` is the mode that worked (LLM classifier only); ``error`` is a short code."""
+
     ok: bool
     category: str | None = None
     mode: VizRouterMode | None = None
@@ -284,6 +312,7 @@ class VizRouterTestResult(BaseModel):
 
 class VizDecisionModelsRequest(BaseModel):
     """Discovery input: an optional transient OpenRouter key; blank uses the saved key (never persisted here)."""
+
     model_config = ConfigDict(extra="forbid")
 
     api_key: str | None = Field(default=None, max_length=4096, repr=False)
@@ -291,12 +320,14 @@ class VizDecisionModelsRequest(BaseModel):
 
 class VizDecisionModel(BaseModel):
     """One discovered Decisions-API model."""
+
     id: str = Field(max_length=200)
     input_modalities: list[str] = Field(default_factory=list, max_length=8)
 
 
 class VizDecisionModelsResult(BaseModel):
     """Bounded discovery outcome: ``models`` on success, a short ``error`` code (never URL/body/key) otherwise."""
+
     ok: bool
     models: list[VizDecisionModel] = Field(default_factory=list, max_length=200)
     error: str | None = None
@@ -304,6 +335,7 @@ class VizDecisionModelsResult(BaseModel):
 
 class OpenRouterBrowseRequest(BaseModel):
     """Browse input: allowlisted filters plus paging; a blank key falls back to a saved OpenRouter provider's key."""
+
     model_config = ConfigDict(extra="forbid")
 
     provider_id: ProviderId | None = None
@@ -315,6 +347,7 @@ class OpenRouterBrowseRequest(BaseModel):
 
 class OpenRouterModelRead(BaseModel):
     """One validated, bounded OpenRouter catalog entry."""
+
     id: str = Field(max_length=200)
     name: str = Field(max_length=200)
     created: int | None = None
@@ -328,6 +361,7 @@ class OpenRouterModelRead(BaseModel):
 
 class OpenRouterBrowseResult(BaseModel):
     """Browse outcome: ``models`` on success, a short ``error`` code (never URL/body/key) otherwise."""
+
     ok: bool
     error: str | None = None
     models: list[OpenRouterModelRead] = Field(default_factory=list, max_length=200)

@@ -82,14 +82,17 @@ def _build_rerank_policy(config: Any) -> RequestPolicy:
     because local-only evidence is rejected before this point.
     """
     return RequestPolicy(
-        workspace_id=config.workspace_id, actor_user_id=config.actor_user_id,
-        membership_revision=config.membership_revision, gateway_identity=config.gateway_identity,
+        workspace_id=config.workspace_id,
+        actor_user_id=config.actor_user_id,
+        membership_revision=config.membership_revision,
+        gateway_identity=config.gateway_identity,
         reasoning_allowed=config.privacy.allow_remote_reasoning,
         embeddings_allowed=config.privacy.allow_remote_embeddings,
         web_search_allowed=config.privacy.allow_remote_web_search,
         local_only=False,
         permitted_destinations=frozenset(
-            config.privacy.reasoning_destinations + config.privacy.embedding_destinations
+            config.privacy.reasoning_destinations
+            + config.privacy.embedding_destinations
             + ([config.endpoint_destination_id] if config.endpoint_destination_id else [])
         ),
         reasoning_destinations=frozenset(config.privacy.reasoning_destinations),
@@ -98,7 +101,9 @@ def _build_rerank_policy(config: Any) -> RequestPolicy:
     )
 
 
-def _reorder_by_rerank_indices(evidence_items: list[EvidenceItem], indices: list[int]) -> list[EvidenceItem]:
+def _reorder_by_rerank_indices(
+    evidence_items: list[EvidenceItem], indices: list[int]
+) -> list[EvidenceItem]:
     """Reorder ``evidence_items`` by gateway ``indices``, ignoring out-of-range/duplicate indices.
 
     Items the reranker did not mention keep their original relative order at the end.
@@ -153,15 +158,25 @@ class _RerankEgressLock:
             ModelGatewayError: when any chunk changed, lost its source, or became local-only.
         """
         await ensure_ai_config_unchanged(
-            self._session_factory, self._settings, self._redis, self._scope,
-            self._config, "reranker", self._mapping,
+            self._session_factory,
+            self._settings,
+            self._redis,
+            self._scope,
+            self._config,
+            "reranker",
+            self._mapping,
         )
         self._send_session = self._session_factory()
         evidence_items = self._evidence_items
-        refs = list(dict.fromkeys((item.document_version_id, item.chunk_id) for item in evidence_items))
+        refs = list(
+            dict.fromkeys((item.document_version_id, item.chunk_id) for item in evidence_items)
+        )
         try:
             current = await documents_public.lock_chat_evidence_chunks(
-                self._send_session, refs, require_active_source=True, **self._scope_kw,
+                self._send_session,
+                refs,
+                require_active_source=True,
+                **self._scope_kw,
             )
             current_by_ref = {(item.document_version_id, item.chunk_id): item for item in current}
             if any(
@@ -196,7 +211,10 @@ async def _prepare_rerank(
     ``(config, mapping, policy, destination_id)``. Reads configuration only; no commit.
     """
     config = await settings_public.get_ai_execution_config(
-        session, settings, redis, scope=scope_kw["scope"],
+        session,
+        settings,
+        redis,
+        scope=scope_kw["scope"],
     )
     config = settings_public.derive_for_role(config, "reranker")
     rerank_mapping = config.defaults.resolve("reranker")
@@ -258,7 +276,11 @@ async def _apply_configured_reranking(
 
     # Any local_only evidence must not be sent to remote reranking
     if any(item.local_only for item in evidence_items):
-        return evidence_items, "unavailable", ["Remote reranking skipped because evidence contains local-only sources"]
+        return (
+            evidence_items,
+            "unavailable",
+            ["Remote reranking skipped because evidence contains local-only sources"],
+        )
 
     try:
         scope_kw = await _scope_kwargs(session, scope)
@@ -271,16 +293,29 @@ async def _apply_configured_reranking(
         # required redis/destination_id, so reranking always raised TypeError.
         documents = [item.content for item in evidence_items]
         egress = _RerankEgressLock(
-            session_factory, settings, redis, scope_kw["scope"], config, rerank_mapping,
-            evidence_items, scope_kw,
+            session_factory,
+            settings,
+            redis,
+            scope_kw["scope"],
+            config,
+            rerank_mapping,
+            evidence_items,
+            scope_kw,
         )
 
         gateway = ModelGatewayFactory(
-            session_factory, redis, scope_kw["scope"], config.endpoint_allowed_cidrs,
-            evidence_provider=settings_public.capability_evidence, gateway_cls=ModelGateway,
+            session_factory,
+            redis,
+            scope_kw["scope"],
+            config.endpoint_allowed_cidrs,
+            evidence_provider=settings_public.capability_evidence,
+            gateway_cls=ModelGateway,
         ).create(
-            config, timeout_seconds=config.request_timeout_seconds, before_send=egress.before_send,
-            destination_id=destination_id, base_url=config.gateway_base_url or "http://localhost:8000",
+            config,
+            timeout_seconds=config.request_timeout_seconds,
+            before_send=egress.before_send,
+            destination_id=destination_id,
+            base_url=config.gateway_base_url or "http://localhost:8000",
         )
 
         # Release the outer session's snapshot/locks before the network call; the egress hook
@@ -300,7 +335,11 @@ async def _apply_configured_reranking(
         if indices:
             return _reorder_by_rerank_indices(evidence_items, indices), "applied", []
 
-        return evidence_items, "unavailable", ["Reranker output could not be parsed; preserved retrieval ranking"]
+        return (
+            evidence_items,
+            "unavailable",
+            ["Reranker output could not be parsed; preserved retrieval ranking"],
+        )
 
     except TypeError:
         raise
@@ -339,9 +378,15 @@ def _validate_selected_only_request(request: AnswerContextRequest) -> None:
     if not request.selected_refs or len(request.selected_refs) > MAX_SELECTED_REFS:
         raise ValueError("Exact gadget retrieval requires bounded selected evidence references")
     for selected in request.selected_refs:
-        fence = fence_by_document.get(selected.document_id) if selected.document_id is not None else None
+        fence = (
+            fence_by_document.get(selected.document_id)
+            if selected.document_id is not None
+            else None
+        )
         if (
-            selected.document_id is None or selected.source_id is None or fence is None
+            selected.document_id is None
+            or selected.source_id is None
+            or fence is None
             or selected.document_version_id != fence.document_version_id
             or selected.source_id != fence.source_id
         ):
@@ -374,7 +419,12 @@ async def _collect_search_refs(
         )
         # worker.py commits right before build_context, so the session holds no locks here.
         search_res = await search_public.search(
-            session, redis, settings, search_req, release_during_embed=True, **scope_kw,
+            session,
+            redis,
+            settings,
+            search_req,
+            release_during_embed=True,
+            **scope_kw,
         )
         warnings.extend(search_res.warnings)
         for hit in search_res.items:
@@ -389,7 +439,10 @@ async def _collect_search_refs(
 
 
 def _entity_context_item(
-    entity_data: Any, evidence_page: Any, neighbors: Any, collector: _RefCollector,
+    entity_data: Any,
+    evidence_page: Any,
+    neighbors: Any,
+    collector: _RefCollector,
 ) -> EntityContextItem:
     """Build one entity context item from already-read owner DTOs and register its backing evidence refs.
 
@@ -400,17 +453,19 @@ def _entity_context_item(
     if evidence_page:
         for ev in evidence_page.items:
             collector.add_default((ev.document_version_id, ev.chunk_id), 0.5)
-            backing_refs.append(Citation(
-                sourceType="document",
-                sourceId=ev.source_id,
-                documentId=ev.document_id,
-                documentVersionId=ev.document_version_id,
-                chunkId=ev.chunk_id,
-                title=ev.title,
-                url=ev.canonical_url,
-                observedAt=ev.observed_at,
-                quote=ev.excerpt[:200] if ev.excerpt else "Entity evidence",
-            ))
+            backing_refs.append(
+                Citation(
+                    sourceType="document",
+                    sourceId=ev.source_id,
+                    documentId=ev.document_id,
+                    documentVersionId=ev.document_version_id,
+                    chunkId=ev.chunk_id,
+                    title=ev.title,
+                    url=ev.canonical_url,
+                    observedAt=ev.observed_at,
+                    quote=ev.excerpt[:200] if ev.excerpt else "Entity evidence",
+                )
+            )
 
     neighbor_dicts = [
         {
@@ -451,8 +506,12 @@ async def _resolve_one_entity(
     if entity_data is None:
         return None
 
-    evidence_page = await entities_public.list_entity_evidence(session, canonical_id, limit=10, **scope_kw)
-    neighbors = await relationships_public.get_neighbors(session, canonical_id, limit=10, **scope_kw)
+    evidence_page = await entities_public.list_entity_evidence(
+        session, canonical_id, limit=10, **scope_kw
+    )
+    neighbors = await relationships_public.get_neighbors(
+        session, canonical_id, limit=10, **scope_kw
+    )
     return _entity_context_item(entity_data, evidence_page, neighbors, collector)
 
 
@@ -472,11 +531,17 @@ async def _resolve_entities_bulk(
     reads = await entities_public.get_entities(session, entity_ids, **scope_kw)
     present = [read for read in reads if read is not None]
     canonical_ids = [read.id for read in present]
-    evidence_pages = await entities_public.list_entity_evidence_bulk(session, canonical_ids, limit=10, **scope_kw)
-    neighbor_pages = await relationships_public.get_neighbors_bulk(session, canonical_ids, limit=10, **scope_kw)
+    evidence_pages = await entities_public.list_entity_evidence_bulk(
+        session, canonical_ids, limit=10, **scope_kw
+    )
+    neighbor_pages = await relationships_public.get_neighbors_bulk(
+        session, canonical_ids, limit=10, **scope_kw
+    )
     return [
         _entity_context_item(read, evidence_page, neighbors, collector)
-        for read, evidence_page, neighbors in zip(present, evidence_pages, neighbor_pages, strict=True)
+        for read, evidence_page, neighbors in zip(
+            present, evidence_pages, neighbor_pages, strict=True
+        )
     ]
 
 
@@ -543,17 +608,23 @@ def _timeline_event_backing(event: Any, collector: _RefCollector) -> list[Citati
         if v_id and c_id:
             ref = (UUID(str(v_id)), UUID(str(c_id)))
             collector.add_default(ref, 0.5)
-            event_backing.append(Citation(
-                sourceType="document",
-                sourceId=UUID(str(ev_dict.get("source_id", "00000000-0000-0000-0000-000000000000"))),
-                documentId=UUID(str(ev_dict.get("document_id", "00000000-0000-0000-0000-000000000000"))),
-                documentVersionId=ref[0],
-                chunkId=ref[1],
-                title=str(ev_dict.get("title", event.title)),
-                url=ev_dict.get("canonical_url"),
-                observedAt=event.started_at,
-                quote=str(ev_dict.get("excerpt", event.title))[:200],
-            ))
+            event_backing.append(
+                Citation(
+                    sourceType="document",
+                    sourceId=UUID(
+                        str(ev_dict.get("source_id", "00000000-0000-0000-0000-000000000000"))
+                    ),
+                    documentId=UUID(
+                        str(ev_dict.get("document_id", "00000000-0000-0000-0000-000000000000"))
+                    ),
+                    documentVersionId=ref[0],
+                    chunkId=ref[1],
+                    title=str(ev_dict.get("title", event.title)),
+                    url=ev_dict.get("canonical_url"),
+                    observedAt=event.started_at,
+                    quote=str(ev_dict.get("excerpt", event.title))[:200],
+                )
+            )
     return event_backing
 
 
@@ -579,16 +650,20 @@ async def _resolve_temporal_context(
                 date_to=date_to,
                 timezone=request.timezone or "Asia/Ho_Chi_Minh",
             )
-            timeline_page = await timeline_public.list_timeline(session, timeline_query, limit=10, **scope_kw)
+            timeline_page = await timeline_public.list_timeline(
+                session, timeline_query, limit=10, **scope_kw
+            )
             for event in timeline_page.items:
-                temporal_summaries.append(TemporalContextItem(
-                    event_id=event.id,
-                    title=event.title,
-                    event_type=event.type,
-                    timestamp=event.started_at,
-                    summary=event.summary,
-                    backing_refs=_timeline_event_backing(event, collector),
-                ))
+                temporal_summaries.append(
+                    TemporalContextItem(
+                        event_id=event.id,
+                        title=event.title,
+                        event_type=event.type,
+                        timestamp=event.started_at,
+                        summary=event.summary,
+                        backing_refs=_timeline_event_backing(event, collector),
+                    )
+                )
     except TypeError:
         raise  # a call-shape bug must surface, not degrade silently
     except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
@@ -608,7 +683,9 @@ async def _read_evidence_items(
     """
     unique_refs = list(dict.fromkeys(collector.refs))[:100]
     chunks = await documents_public.read_chat_evidence_chunks(
-        session, unique_refs, require_active_source=True,
+        session,
+        unique_refs,
+        require_active_source=True,
         require_current_version=request.selected_only,
         selection_fences=tuple(request.selection_fences) if request.selected_only else None,
         **scope_kw,
@@ -617,24 +694,26 @@ async def _read_evidence_items(
     evidence_items: list[EvidenceItem] = []
     for chunk in chunks:
         ref = (chunk.document_version_id, chunk.chunk_id)
-        evidence_items.append(EvidenceItem(
-            source_id=chunk.source_id,
-            source_type="document",
-            source_generation=chunk.source_generation,
-            local_only=chunk.local_only,
-            document_id=chunk.document_id,
-            document_version_id=chunk.document_version_id,
-            version_number=chunk.version_number,
-            chunk_id=chunk.chunk_id,
-            chunk_index=chunk.chunk_index,
-            content=chunk.content,
-            title=chunk.title,
-            canonical_url=chunk.canonical_url,
-            observed_at=chunk.observed_at,
-            published_at=chunk.published_at,
-            metadata_is_version_snapshot=chunk.metadata_is_version_snapshot,
-            score=collector.scores.get(ref, 0.0),
-        ))
+        evidence_items.append(
+            EvidenceItem(
+                source_id=chunk.source_id,
+                source_type="document",
+                source_generation=chunk.source_generation,
+                local_only=chunk.local_only,
+                document_id=chunk.document_id,
+                document_version_id=chunk.document_version_id,
+                version_number=chunk.version_number,
+                chunk_id=chunk.chunk_id,
+                chunk_index=chunk.chunk_index,
+                content=chunk.content,
+                title=chunk.title,
+                canonical_url=chunk.canonical_url,
+                observed_at=chunk.observed_at,
+                published_at=chunk.published_at,
+                metadata_is_version_snapshot=chunk.metadata_is_version_snapshot,
+                score=collector.scores.get(ref, 0.0),
+            )
+        )
 
     # Deterministic sorting before budget fit
     evidence_items.sort(
@@ -727,7 +806,13 @@ async def build_context(
         reranked_items, rerank_status, rerank_warnings = budgeted_items, "skipped", []
     else:
         reranked_items, rerank_status, rerank_warnings = await _apply_configured_reranking(
-            session, session_factory, redis, settings, request.query, budgeted_items, scope,
+            session,
+            session_factory,
+            redis,
+            settings,
+            request.query,
+            budgeted_items,
+            scope,
         )
     warnings.extend(rerank_warnings)
 
@@ -782,7 +867,9 @@ async def _source_fence_reasons(
         except ValueError:
             continue
     source_fence_cache: dict[UUID, Any] = (
-        await sources_public.get_source_fences(session, list(parsed.values()), **scope_kw) if parsed else {}
+        await sources_public.get_source_fences(session, list(parsed.values()), **scope_kw)
+        if parsed
+        else {}
     )
     seen_fence_checks: set[tuple[UUID, Any, Any]] = set()
     for source_id_str, expected in context.fence_snapshot.items():
@@ -812,7 +899,9 @@ async def _source_fence_reasons(
             )
 
         if destination == "remote" and fence.local_only:
-            reasons.append(f"Source {source_id} is local_only and cannot be sent to remote destinations")
+            reasons.append(
+                f"Source {source_id} is local_only and cannot be sent to remote destinations"
+            )
     return reasons
 
 
@@ -840,14 +929,17 @@ async def _evidence_chunk_reasons(
     read_chunks: Any
     if lock_evidence:
         read_chunks = (
-            documents_public.lock_chat_evidence_state if lightweight
+            documents_public.lock_chat_evidence_state
+            if lightweight
             else documents_public.lock_chat_evidence_chunks
         )
     else:
         read_chunks = documents_public.read_chat_evidence_chunks
     try:
         existing_chunks = await read_chunks(
-            session, refs, require_active_source=True,
+            session,
+            refs,
+            require_active_source=True,
             require_current_version=require_current_versions,
             selection_fences=tuple(context.selection_fences) if context.selection_fences else None,
             **scope_kw,
@@ -867,7 +959,9 @@ async def _evidence_chunk_reasons(
         if current.source_generation != item.source_generation or current.source_status != "active":
             reasons.append(f"Evidence source {item.source_id} changed before publication")
         if destination == "remote" and current.local_only:
-            reasons.append(f"Evidence source {item.source_id} became local-only before remote publication")
+            reasons.append(
+                f"Evidence source {item.source_id} became local-only before remote publication"
+            )
     return reasons
 
 
@@ -909,19 +1003,30 @@ async def revalidate_context_fence(
 
     if context.selection_fences and not (lightweight and lock_evidence):
         selection_valid = await documents_public.validate_gadget_document_selection_fences(
-            session, tuple(context.selection_fences), **scope_kw,
+            session,
+            tuple(context.selection_fences),
+            **scope_kw,
         )
         if not selection_valid:
-            reasons.append("One or more exact selected document versions or provider scopes are stale")
+            reasons.append(
+                "One or more exact selected document versions or provider scopes are stale"
+            )
 
     # 1. Recheck source status and generations (deduplicated per unique source_id / expected fence)
     reasons.extend(await _source_fence_reasons(session, context, destination, scope_kw))
 
     # 2. Recheck document chunks existence
-    reasons.extend(await _evidence_chunk_reasons(
-        session, context, destination=destination, require_current_versions=require_current_versions,
-        lock_evidence=lock_evidence, scope_kw=scope_kw, lightweight=lightweight,
-    ))
+    reasons.extend(
+        await _evidence_chunk_reasons(
+            session,
+            context,
+            destination=destination,
+            require_current_versions=require_current_versions,
+            lock_evidence=lock_evidence,
+            scope_kw=scope_kw,
+            lightweight=lightweight,
+        )
+    )
 
     return len(reasons) == 0, reasons
 

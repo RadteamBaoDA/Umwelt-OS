@@ -43,11 +43,18 @@ def parse_catalog(body: bytes) -> tuple[Coin, ...]:
             continue
         coin_id, symbol, name = row.get("id"), row.get("symbol"), row.get("name")
         symbol = symbol.upper() if isinstance(symbol, str) else symbol
-        if (not isinstance(coin_id, str) or not _COIN_ID.fullmatch(coin_id)
-                or not isinstance(symbol, str) or not 1 <= len(symbol) <= 32
-                or symbol != symbol.strip() or not symbol.isprintable()
-                or not isinstance(name, str) or not 1 <= len(name) <= 128
-                or name != name.strip() or not name.isprintable()):
+        if (
+            not isinstance(coin_id, str)
+            or not _COIN_ID.fullmatch(coin_id)
+            or not isinstance(symbol, str)
+            or not 1 <= len(symbol) <= 32
+            or symbol != symbol.strip()
+            or not symbol.isprintable()
+            or not isinstance(name, str)
+            or not 1 <= len(name) <= 128
+            or name != name.strip()
+            or not name.isprintable()
+        ):
             continue  # A single unusable upstream entry must not hide every valid coin.
         if coin_id in seen:
             continue
@@ -58,7 +65,9 @@ def parse_catalog(body: bytes) -> tuple[Coin, ...]:
     return tuple(coins)
 
 
-async def load_catalog(api_key: str, before_send: Callable[[], Awaitable[None]]) -> tuple[Coin, ...]:
+async def load_catalog(
+    api_key: str, before_send: Callable[[], Awaitable[None]]
+) -> tuple[Coin, ...]:
     """Fetch the fixed public catalog once per process-hour; only a cache miss debits and sends."""
     global _catalog, _expires_at
     if _catalog and time.monotonic() < _expires_at:
@@ -67,8 +76,11 @@ async def load_catalog(api_key: str, before_send: Callable[[], Awaitable[None]])
         if _catalog and time.monotonic() < _expires_at:
             return _catalog
         fetched = await rest.fetch_bounded(
-            COINS_URL, headers={"x-cg-demo-api-key": api_key}, before_send=before_send,
-            max_bytes=MAX_CATALOG_BYTES, timeout=15,
+            COINS_URL,
+            headers={"x-cg-demo-api-key": api_key},
+            before_send=before_send,
+            max_bytes=MAX_CATALOG_BYTES,
+            timeout=15,
         )
         if fetched.body is None:
             raise ValueError("CoinGecko catalog returned no data")
@@ -80,10 +92,20 @@ async def load_catalog(api_key: str, before_send: Callable[[], Awaitable[None]])
 def search_catalog(coins: tuple[Coin, ...], query: str) -> list[Coin]:
     """Return at most fifty id/name/symbol matches without hiding identical ticker symbols."""
     term = query.casefold().strip()
-    matches = [coin for coin in coins if term in coin["id"].casefold()
-               or term in coin["symbol"].casefold() or term in coin["name"].casefold()]
-    matches.sort(key=lambda coin: (
-        coin["symbol"].casefold() != term, coin["id"].casefold() != term,
-        not coin["name"].casefold().startswith(term), coin["name"].casefold(), coin["id"],
-    ))
+    matches = [
+        coin
+        for coin in coins
+        if term in coin["id"].casefold()
+        or term in coin["symbol"].casefold()
+        or term in coin["name"].casefold()
+    ]
+    matches.sort(
+        key=lambda coin: (
+            coin["symbol"].casefold() != term,
+            coin["id"].casefold() != term,
+            not coin["name"].casefold().startswith(term),
+            coin["name"].casefold(),
+            coin["id"],
+        )
+    )
     return matches[:50]

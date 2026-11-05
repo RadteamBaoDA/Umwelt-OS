@@ -9,7 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 def agent_run_lease_key(run_id: UUID) -> int:
     """Derive the signed session-advisory key used to exclude one durable Agent run."""
-    raw = int.from_bytes(hashlib.blake2b(run_id.bytes, digest_size=8, person=b"bbd-agent").digest(), "big")
+    raw = int.from_bytes(
+        hashlib.blake2b(run_id.bytes, digest_size=8, person=b"bbd-agent").digest(), "big"
+    )
     return raw if raw < 2**63 else raw - 2**64
 
 

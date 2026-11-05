@@ -1,13 +1,18 @@
 """Arq queue routing for jobs that run on the dedicated model worker."""
+
 from arq.connections import ArqRedis
 from arq.constants import default_queue_name
 
 MODEL_QUEUE = "arq:model"
 # Jobs dominated by remote model I/O (already bounded by ModelGateway slots); keeping them off the
 # main worker stops them from starving heavy-slot jobs such as chunk embedding.
-MODEL_JOBS = frozenset({
-    "process_entity_extraction_work", "process_timeline_extraction_work", "translate_content",
-})
+MODEL_JOBS = frozenset(
+    {
+        "process_entity_extraction_work",
+        "process_timeline_extraction_work",
+        "translate_content",
+    }
+)
 
 
 def queue_for(job_name: str) -> str | None:

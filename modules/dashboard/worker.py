@@ -52,15 +52,18 @@ async def run_scheduled_highlights(ctx: dict[str, object]) -> int:
     factory = worker_session_factory(ctx)
     cursor = await _read_workspace_cursor(ctx, HIGHLIGHT_CURSOR_KEY)
     async with factory() as session:
-        statement = select(GadgetDefinition.id, GadgetDefinition.workspace_id, GadgetDefinition.owner_id).where(
+        statement = select(
+            GadgetDefinition.id, GadgetDefinition.workspace_id, GadgetDefinition.owner_id
+        ).where(
             GadgetDefinition.renderer.in_(("highlights", "watch_rules")),
-            GadgetDefinition.highlight_rules != [], GadgetDefinition.source_ids != [],
+            GadgetDefinition.highlight_rules != [],
+            GadgetDefinition.source_ids != [],
         )
         if cursor is not None:
             statement = statement.where(GadgetDefinition.id > cursor)
-        candidates = list((await session.execute(
-            statement.order_by(GadgetDefinition.id).limit(100)
-        )).all())
+        candidates = list(
+            (await session.execute(statement.order_by(GadgetDefinition.id).limit(100))).all()
+        )
     if not candidates:
         await _write_workspace_cursor(ctx, HIGHLIGHT_CURSOR_KEY, None)
         return 0
@@ -75,24 +78,34 @@ async def run_scheduled_highlights(ctx: dict[str, object]) -> int:
         async with factory() as session:
             try:
                 owner = await workspaces.resolve_workspace_owner_context(
-                    session, workspace_id, multi_workspace_enabled=settings.multi_workspace_enabled,
+                    session,
+                    workspace_id,
+                    multi_workspace_enabled=settings.multi_workspace_enabled,
                 )
                 if owner is None or owner.user_id != owner_id:
                     continue
                 scope = InternalJobScope(
-                    workspace_id=workspace_id, actor_user_id=owner.user_id,
+                    workspace_id=workspace_id,
+                    actor_user_id=owner.user_id,
                     membership_revision=owner.membership_revision,
                 )
                 await workspaces.read_access_fence(
-                    session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+                    session,
+                    scope=scope,
+                    multi_workspace_enabled=settings.multi_workspace_enabled,
                 )
                 if not await settings_public.module_is_enabled(
-                    session, "dashboard", scope=scope,
+                    session,
+                    "dashboard",
+                    scope=scope,
                     multi_workspace_enabled=settings.multi_workspace_enabled,
                 ):
                     continue
                 await public.evaluate_gadget_highlights(
-                    session, definition_id, emit_notifications=True, scope=scope,
+                    session,
+                    definition_id,
+                    emit_notifications=True,
+                    scope=scope,
                     multi_workspace_enabled=settings.multi_workspace_enabled,
                 )
                 evaluated += 1
@@ -118,7 +131,9 @@ async def run_scheduled_brief(ctx: dict[str, object]) -> bool:
     cursor = await _read_workspace_cursor(ctx, BRIEF_CURSOR_KEY)
     async with factory() as session:
         workspace_ids = await workspaces.list_workspace_job_candidate_ids(
-            session, after=cursor, limit=100,
+            session,
+            after=cursor,
+            limit=100,
         )
     if not workspace_ids:
         await _write_workspace_cursor(ctx, BRIEF_CURSOR_KEY, None)
@@ -130,54 +145,80 @@ async def run_scheduled_brief(ctx: dict[str, object]) -> bool:
         async with factory() as session:
             try:
                 owner = await workspaces.resolve_workspace_owner_context(
-                    session, workspace_id, multi_workspace_enabled=settings.multi_workspace_enabled,
+                    session,
+                    workspace_id,
+                    multi_workspace_enabled=settings.multi_workspace_enabled,
                 )
                 if owner is None:
                     continue
                 scope = InternalJobScope(
-                    workspace_id=workspace_id, actor_user_id=owner.user_id,
+                    workspace_id=workspace_id,
+                    actor_user_id=owner.user_id,
                     membership_revision=owner.membership_revision,
                 )
                 access_fence = await briefs._admit(
-                    session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+                    session,
+                    scope=scope,
+                    multi_workspace_enabled=settings.multi_workspace_enabled,
                 )
                 if not await settings_public.module_is_enabled(
-                    session, "dashboard", scope=scope,
+                    session,
+                    "dashboard",
+                    scope=scope,
                     multi_workspace_enabled=settings.multi_workspace_enabled,
                 ):
                     continue
                 access_fence = await workspaces.lock_access_fence(
-                    session, scope=scope, expected=access_fence,
+                    session,
+                    scope=scope,
+                    expected=access_fence,
                     multi_workspace_enabled=settings.multi_workspace_enabled,
                 )
                 await briefs._lock_schedule_slot(session, workspace_id)
-                schedule_row = await session.scalar(select(BriefScheduleRow).where(
-                    BriefScheduleRow.workspace_id == workspace_id,
-                    BriefScheduleRow.owner_id == owner.user_id,
-                ).with_for_update())
+                schedule_row = await session.scalar(
+                    select(BriefScheduleRow)
+                    .where(
+                        BriefScheduleRow.workspace_id == workspace_id,
+                        BriefScheduleRow.owner_id == owner.user_id,
+                    )
+                    .with_for_update()
+                )
                 if schedule_row is None:
                     default = BriefSchedule()
                     schedule_row = BriefScheduleRow(
-                        workspace_id=workspace_id, owner_id=owner.user_id,
-                        enabled=default.enabled, hour=default.hour, minute=default.minute,
-                        timezone=default.timezone, schedule_owner="internal_brief", automation_id=None,
+                        workspace_id=workspace_id,
+                        owner_id=owner.user_id,
+                        enabled=default.enabled,
+                        hour=default.hour,
+                        minute=default.minute,
+                        timezone=default.timezone,
+                        schedule_owner="internal_brief",
+                        automation_id=None,
                     )
                     session.add(schedule_row)
                     await session.flush()
                     schedule = default
                     should_run = schedule.enabled
                     await commit_with_replay(
-                        session, [], scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+                        session,
+                        [],
+                        scope=scope,
+                        multi_workspace_enabled=settings.multi_workspace_enabled,
                         access_fence=access_fence,
                     )
                 else:
                     schedule = BriefSchedule.model_validate(schedule_row)
-                    should_run = schedule.enabled and schedule_row.schedule_owner == "internal_brief"
+                    should_run = (
+                        schedule.enabled and schedule_row.schedule_owner == "internal_brief"
+                    )
                     await session.rollback()  # release the schedule lock before possible model I/O
                 if should_run:
                     created = await briefs.run_due_brief(
-                        session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
-                        settings=settings, redis=cast(Redis, ctx["redis"]),
+                        session,
+                        scope=scope,
+                        multi_workspace_enabled=settings.multi_workspace_enabled,
+                        settings=settings,
+                        redis=cast(Redis, ctx["redis"]),
                     )
                     created_any = created is not None or created_any
             except (DomainError, HTTPException) as exc:

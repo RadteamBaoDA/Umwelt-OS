@@ -17,8 +17,13 @@ from core.model_gateway.schemas import PROVIDER_KINDS_WITHOUT_MAX_TOKENS, ModelM
 from tests.unit.core.test_anthropic_transport import MESSAGE, SSE, USER
 from tests.unit.core.test_model_gateway import _MAPPING, _POLICY, _gateway
 
-MAX_TOKENS_400 = {"type": "error", "error": {"type": "invalid_request_error",
-                                             "message": "max_tokens: 32000 > 8192, which is the maximum allowed"}}
+MAX_TOKENS_400 = {
+    "type": "error",
+    "error": {
+        "type": "invalid_request_error",
+        "message": "max_tokens: 32000 > 8192, which is the maximum allowed",
+    },
+}
 
 
 @asynccontextmanager
@@ -30,15 +35,23 @@ async def _null() -> Any:
 @pytest.fixture(autouse=True)
 def _fences() -> Any:
     """Neutralise Redis-backed lease/breaker and the retry sleep."""
-    with patch.object(ModelGateway, "_lease", side_effect=lambda *_: _null()), \
-         patch.object(ModelGateway, "_breaker_check", AsyncMock()), patch.object(ModelGateway, "_breaker_ok", AsyncMock()), \
-         patch.object(ModelGateway, "_breaker_fail", AsyncMock()), \
-         patch("core.model_gateway.client._retry_delay", return_value=0):
+    with (
+        patch.object(ModelGateway, "_lease", side_effect=lambda *_: _null()),
+        patch.object(ModelGateway, "_breaker_check", AsyncMock()),
+        patch.object(ModelGateway, "_breaker_ok", AsyncMock()),
+        patch.object(ModelGateway, "_breaker_fail", AsyncMock()),
+        patch("core.model_gateway.client._retry_delay", return_value=0),
+    ):
         yield
 
 
-def _gw(handler: Callable[[httpx.Request], httpx.Response], seen: list[httpx.Request], *, kind: str,
-        clamped: bool = False) -> ModelGateway:
+def _gw(
+    handler: Callable[[httpx.Request], httpx.Response],
+    seen: list[httpx.Request],
+    *,
+    kind: str,
+    clamped: bool = False,
+) -> ModelGateway:
     """Gateway of ``kind`` whose pinned http client answers through ``handler`` and records requests in ``seen``."""
     redis = MagicMock()
     redis.exists = AsyncMock(return_value=1 if clamped else 0)
@@ -51,8 +64,11 @@ def _gw(handler: Callable[[httpx.Request], httpx.Response], seen: list[httpx.Req
         seen.append(request)
         return handler(request)
 
-    patcher = patch.object(ModelGateway, "_http_client",
-                           side_effect=lambda _u: httpx.AsyncClient(transport=httpx.MockTransport(record)))
+    patcher = patch.object(
+        ModelGateway,
+        "_http_client",
+        side_effect=lambda _u: httpx.AsyncClient(transport=httpx.MockTransport(record)),
+    )
     patcher.start()
     return gw
 
@@ -66,8 +82,22 @@ def _stop_patches() -> Any:
 
 def _ok_openai(_r: httpx.Request) -> httpx.Response:
     """Minimal OpenAI chat.completion reply."""
-    return httpx.Response(200, json={"id": "c", "object": "chat.completion", "created": 1, "model": "m", "choices": [
-        {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}]})
+    return httpx.Response(
+        200,
+        json={
+            "id": "c",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "m",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "ok"},
+                }
+            ],
+        },
+    )
 
 
 def test_schema_field_bounds_and_hosted_kind_constant() -> None:
@@ -108,7 +138,11 @@ async def test_anthropic_ignores_mapping_value_and_streams_with_internal_default
     """Anthropic never uses max_output_tokens; the internal 32000 streaming default is sent."""
     mapping = ModelMapping(model="m", version="1", destination="remote", max_output_tokens=777)
     seen: list[httpx.Request] = []
-    gw = _gw(lambda _r: httpx.Response(200, text=SSE, headers={"content-type": "text/event-stream"}), seen, kind="anthropic")
+    gw = _gw(
+        lambda _r: httpx.Response(200, text=SSE, headers={"content-type": "text/event-stream"}),
+        seen,
+        kind="anthropic",
+    )
     _ = [x async for x in gw.stream("chat", mapping, _POLICY, USER, before_send=AsyncMock())]
     assert json.loads(seen[0].content)["max_tokens"] == 32000
 
@@ -126,16 +160,22 @@ async def test_anthropic_stream_max_tokens_400_retries_once_with_default_and_cac
 
     gw = _gw(handler, seen, kind="anthropic")
     lines = [x async for x in gw.stream("chat", _MAPPING, _POLICY, USER, before_send=AsyncMock())]
-    assert [json.loads(r.content)["max_tokens"] for r in seen] == [32000, 4096] and lines[-1] == "data: [DONE]"
+    assert [json.loads(r.content)["max_tokens"] for r in seen] == [32000, 4096] and lines[
+        -1
+    ] == "data: [DONE]"
     assert gw.redis.set.await_args.kwargs == {"ex": 3600}  # type: ignore[attr-defined]
     assert gw.redis.set.await_args.args[0].endswith(f"{gw.model_identity}:m")  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cached_clamp_applies_first_and_failure_is_not_capability_unsupported() -> None:
+async def test_anthropic_cached_clamp_applies_first_and_failure_is_not_capability_unsupported() -> (
+    None
+):
     """A cached clamp sends 4096 up front; a max_tokens 400 that persists is a gateway error, never 'unsupported'."""
     seen: list[httpx.Request] = []
-    gw = _gw(lambda _r: httpx.Response(400, json=MAX_TOKENS_400), seen, kind="anthropic", clamped=True)
+    gw = _gw(
+        lambda _r: httpx.Response(400, json=MAX_TOKENS_400), seen, kind="anthropic", clamped=True
+    )
     evidence = MagicMock(lookup=AsyncMock(return_value=None), record=AsyncMock())
     object.__setattr__(gw, "evidence", evidence)
     with pytest.raises(ModelGatewayError) as exc:

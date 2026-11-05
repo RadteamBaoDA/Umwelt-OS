@@ -30,10 +30,16 @@ class GraphAllocation(Base):
 
     Workspace identity is mandatory and survives nullable or detached canonical references.
     """
+
     __tablename__ = "temporal_allocations"
     __table_args__ = (
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_temporal_allocations_workspace", ondelete="RESTRICT"),
-        Index("ix_w2_temporal_allocations_scope", 'workspace_id', 'source_id', 'generation'),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_temporal_allocations_workspace",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_w2_temporal_allocations_scope", "workspace_id", "source_id", "generation"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
@@ -43,12 +49,12 @@ class GraphAllocation(Base):
     next_bucket: Mapped[int] = mapped_column(Integer, default=0)
 
 
-
 class GraphPartition(Base, CreatedAtMixin):
     """Reserve bounded history and one exclusive writer; uncertainty survives lease expiry.
 
     Workspace identity is mandatory and survives nullable or detached canonical references.
     """
+
     __tablename__ = "temporal_partitions"
     __table_args__ = (
         UniqueConstraint("source_id", "generation", "ordinal"),
@@ -56,8 +62,13 @@ class GraphPartition(Base, CreatedAtMixin):
             "reservations BETWEEN 0 AND 100 AND evidence_reservations BETWEEN 0 AND 100",
             name="ck_temporal_partition_bound",
         ),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_temporal_partitions_workspace", ondelete="RESTRICT"),
-        Index("ix_w2_temporal_partitions_scope", 'workspace_id', 'id'),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_temporal_partitions_workspace",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_w2_temporal_partitions_scope", "workspace_id", "id"),
         Index("ix_w2_temporal_partitions_work", "workspace_id", "created_at", "id"),
     )
 
@@ -75,21 +86,28 @@ class GraphPartition(Base, CreatedAtMixin):
     uncertain_operation_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
 
 
-
 class GraphMapping(Base, CreatedAtMixin):
     """Own a stable version episode and desired/applied revisions independent of graph availability.
 
     Workspace identity is mandatory and survives nullable or detached canonical references.
     """
+
     __tablename__ = "temporal_mappings"
     __table_args__ = (
         UniqueConstraint("document_version_id", "source_generation"),
         Index(
-            "ix_temporal_mappings_canonical_state", "canonical_state",
-            postgresql_using="gin", postgresql_ops={"canonical_state": "jsonb_path_ops"},
+            "ix_temporal_mappings_canonical_state",
+            "canonical_state",
+            postgresql_using="gin",
+            postgresql_ops={"canonical_state": "jsonb_path_ops"},
         ),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_temporal_mappings_workspace", ondelete="RESTRICT"),
-        Index("ix_w2_temporal_mappings_scope", 'workspace_id', 'id'),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_temporal_mappings_workspace",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_w2_temporal_mappings_scope", "workspace_id", "id"),
         Index("ix_w2_temporal_mappings_work", "workspace_id", "created_at", "id"),
     )
 
@@ -116,16 +134,27 @@ class GraphMapping(Base, CreatedAtMixin):
     external_state: Mapped[str] = mapped_column(String(16), default="absent")
 
 
-
 class GraphSupport(Base):
     """Retain exact identifiers needed to authorize or purge a mapping before evidence cascades.
 
     Workspace identity is mandatory and survives nullable or detached canonical references.
     """
+
     __tablename__ = "temporal_supports"
     __table_args__ = (
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_temporal_supports_workspace", ondelete="RESTRICT"),
-        Index("ix_w2_temporal_supports_scope", 'workspace_id', 'mapping_id', 'document_version_id', 'chunk_id'),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_temporal_supports_workspace",
+            ondelete="RESTRICT",
+        ),
+        Index(
+            "ix_w2_temporal_supports_scope",
+            "workspace_id",
+            "mapping_id",
+            "document_version_id",
+            "chunk_id",
+        ),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
@@ -139,21 +168,29 @@ class GraphSupport(Base):
     removed: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
-
 class GraphOperation(Base, CreatedAtMixin):
     """Durably queue one exact episode attempt; receipt identity is stable across recovery leases.
 
     Workspace identity is mandatory and survives nullable or detached canonical references.
     """
+
     __tablename__ = "temporal_operations"
     __table_args__ = (
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_temporal_operations_workspace", ondelete="RESTRICT"),
-        Index("ix_w2_temporal_operations_scope", 'workspace_id', 'id'),
-        Index("ix_w2_temporal_operations_work", 'workspace_id', 'status', 'next_attempt_at', 'id'),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_temporal_operations_workspace",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_w2_temporal_operations_scope", "workspace_id", "id"),
+        Index("ix_w2_temporal_operations_work", "workspace_id", "status", "next_attempt_at", "id"),
         # Open work only (queries filter these statuses); terminal rows are the vast majority.
         Index(
-            "ix_temporal_operations_open_status", "status",
-            postgresql_where=text("status IN ('pending', 'running', 'blocked', 'reconcile_needed')"),
+            "ix_temporal_operations_open_status",
+            "status",
+            postgresql_where=text(
+                "status IN ('pending', 'running', 'blocked', 'reconcile_needed')"
+            ),
         ),
     )
 
@@ -184,7 +221,6 @@ class GraphOperation(Base, CreatedAtMixin):
     replacement_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
-
 class GraphDispatch(Base, CreatedAtMixin):
     """Journal every immutable synchronous transport independently of operation retries.
 
@@ -200,8 +236,13 @@ class GraphDispatch(Base, CreatedAtMixin):
     __tablename__ = "temporal_dispatches"
     __table_args__ = (
         UniqueConstraint("operation_id", "server_run_id", "client_id"),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_temporal_dispatches_workspace", ondelete="RESTRICT"),
-        Index("ix_w2_temporal_dispatches_scope", 'workspace_id', 'id'),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_temporal_dispatches_workspace",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_w2_temporal_dispatches_scope", "workspace_id", "id"),
         Index("ix_w2_temporal_dispatches_work", "workspace_id", "created_at", "id"),
     )
 
@@ -218,12 +259,12 @@ class GraphDispatch(Base, CreatedAtMixin):
     cessation_reason: Mapped[str | None] = mapped_column(String(64))
 
 
-
 class GraphReceipt(Base, CreatedAtMixin):
     """Append every prewrite exact-ID/hash receipt in operation order; never retain narrative text.
 
     Workspace identity is mandatory and survives nullable or detached canonical references.
     """
+
     __tablename__ = "temporal_receipts"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     operation_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), index=True)
@@ -231,14 +272,17 @@ class GraphReceipt(Base, CreatedAtMixin):
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
     __table_args__ = (
         UniqueConstraint("operation_id", "sequence"),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_temporal_receipts_workspace", ondelete="RESTRICT"),
-        Index("ix_w2_temporal_receipts_scope", 'workspace_id', 'id'),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_temporal_receipts_workspace",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_w2_temporal_receipts_scope", "workspace_id", "id"),
         Index("ix_w2_temporal_receipts_work", "workspace_id", "created_at", "id"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-
-
 
 
 class GraphChange(Base, CreatedAtMixin):
@@ -246,10 +290,16 @@ class GraphChange(Base, CreatedAtMixin):
 
     Workspace identity is mandatory and survives nullable or detached canonical references.
     """
+
     __tablename__ = "temporal_changes"
     __table_args__ = (
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_temporal_changes_workspace", ondelete="RESTRICT"),
-        Index("ix_w2_temporal_changes_scope", 'workspace_id', 'id'),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_temporal_changes_workspace",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_w2_temporal_changes_scope", "workspace_id", "id"),
         Index("ix_w2_temporal_changes_work", "workspace_id", "created_at", "id"),
     )
 
@@ -266,19 +316,33 @@ class GraphChange(Base, CreatedAtMixin):
     support: Mapped[list[list[str]]] = mapped_column(JSONB, default=list)
 
 
-
 class GraphReconcileRun(Base, CreatedAtMixin):
     """Resume a bounded owner-selected reconciliation slice with immutable coverage boundary.
 
     Workspace identity is mandatory and survives nullable or detached canonical references.
     """
+
     __tablename__ = "temporal_reconcile_runs"
     __table_args__ = (
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_temporal_reconcile_runs_workspace", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["workspace_id", "actor_user_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_temporal_reconcile_runs_principal", ondelete="RESTRICT"),
-        Index("ix_w2_temporal_reconcile_runs_scope", 'workspace_id', 'id'),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_temporal_reconcile_runs_workspace",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "actor_user_id"],
+            ["workspaces.id", "workspaces.owner_user_id"],
+            name="fk_w2_temporal_reconcile_runs_principal",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_w2_temporal_reconcile_runs_scope", "workspace_id", "id"),
         Index("ix_w2_temporal_reconcile_runs_work", "workspace_id", "created_at", "id"),
-        Index("ix_temporal_reconcile_runs_open_status", "status", postgresql_where=text("status IN ('pending', 'running')")),
+        Index(
+            "ix_temporal_reconcile_runs_open_status",
+            "status",
+            postgresql_where=text("status IN ('pending', 'running')"),
+        ),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
@@ -296,7 +360,6 @@ class GraphReconcileRun(Base, CreatedAtMixin):
     failed: Mapped[int] = mapped_column(Integer, default=0)
 
 
-
 class GraphReconcileMember(Base):
     """Retain each run's exact selected desired revision through cleanup and later canonical corrections.
 
@@ -305,8 +368,13 @@ class GraphReconcileMember(Base):
 
     __tablename__ = "temporal_reconcile_members"
     __table_args__ = (
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_temporal_reconcile_members_workspace", ondelete="RESTRICT"),
-        Index("ix_w2_temporal_reconcile_members_scope", 'workspace_id', 'run_id', 'mapping_id'),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_temporal_reconcile_members_workspace",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_w2_temporal_reconcile_members_scope", "workspace_id", "run_id", "mapping_id"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
@@ -318,7 +386,6 @@ class GraphReconcileMember(Base):
     tombstoned: Mapped[bool] = mapped_column(Boolean)
 
 
-
 class GraphRebuildDependency(Base, CreatedAtMixin):
     """Retain original destructive-operation proof and exact dependent effects through later projection rebuilds.
 
@@ -327,9 +394,25 @@ class GraphRebuildDependency(Base, CreatedAtMixin):
 
     __tablename__ = "temporal_rebuild_dependencies"
     __table_args__ = (
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_temporal_rebuild_dependencies_workspace", ondelete="RESTRICT"),
-        Index("ix_w2_temporal_rebuild_dependencies_scope", 'workspace_id', 'operation_id', 'mapping_id'),
-        Index("ix_w2_temporal_rebuild_dependencies_work", "workspace_id", "created_at", "operation_id", "mapping_id"),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_temporal_rebuild_dependencies_workspace",
+            ondelete="RESTRICT",
+        ),
+        Index(
+            "ix_w2_temporal_rebuild_dependencies_scope",
+            "workspace_id",
+            "operation_id",
+            "mapping_id",
+        ),
+        Index(
+            "ix_w2_temporal_rebuild_dependencies_work",
+            "workspace_id",
+            "created_at",
+            "operation_id",
+            "mapping_id",
+        ),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
@@ -338,4 +421,3 @@ class GraphRebuildDependency(Base, CreatedAtMixin):
     mapping_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
     source_generation: Mapped[int] = mapped_column(Integer)
     effect_ids: Mapped[list[list[str]]] = mapped_column(JSONB)
-

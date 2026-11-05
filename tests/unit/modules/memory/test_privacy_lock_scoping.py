@@ -91,7 +91,11 @@ def _call_sites() -> list[tuple[str, str, str, str]]:
                     name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
                     if name in LOCK_CALLS:
                         shared = [k.value for k in child.keywords if k.arg == "shared"]
-                        literal = bool(shared) and isinstance(shared[0], ast.Constant) and shared[0].value is True
+                        literal = (
+                            bool(shared)
+                            and isinstance(shared[0], ast.Constant)
+                            and shared[0].value is True
+                        )
                         mode = "R" if literal else ("dynamic" if shared else "W")
                         sites.append((rel, ".".join(inner), name, mode))
                 walk(child, inner)
@@ -157,7 +161,9 @@ async def test_shared_and_exclusive_forms_use_the_same_workspace_key() -> None:
     (exclusive_sql, exclusive), (shared_sql, shared) = session.statements
     assert "pg_advisory_xact_lock(" in exclusive_sql
     assert "pg_advisory_xact_lock_shared(" in shared_sql
-    expected = dict(zip(("namespace", "workspace_key"), public.privacy_lock_key(workspace), strict=True))
+    expected = dict(
+        zip(("namespace", "workspace_key"), public.privacy_lock_key(workspace), strict=True)
+    )
     assert exclusive == shared == expected
 
 
@@ -169,7 +175,9 @@ async def test_multi_workspace_locks_are_sorted_by_key_and_deduplicated() -> Non
     assert taken == sorted(public.privacy_lock_key(item)[1] for item in workspaces)
     reverse = _Recorder()
     await public.lock_export_privacy_workspaces(reverse, reversed(workspaces))  # type: ignore[arg-type]
-    assert [p["workspace_key"] for _s, p in reverse.statements] == taken  # input order never matters
+    assert [
+        p["workspace_key"] for _s, p in reverse.statements
+    ] == taken  # input order never matters
 
 
 async def test_shared_then_exclusive_upgrade_is_logged(caplog: pytest.LogCaptureFixture) -> None:
@@ -189,7 +197,9 @@ async def test_in_uow_lock_uses_the_scope_workspace(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(public, "lock_export_privacy", lock)
     session = object()
     await public.lock_export_privacy_in_uow(
-        session, scope=SimpleNamespace(workspace_id=workspace),  # type: ignore[arg-type]
-        multi_workspace_enabled=False, access_fence=fence,  # type: ignore[arg-type]
+        session,
+        scope=SimpleNamespace(workspace_id=workspace),  # type: ignore[arg-type]
+        multi_workspace_enabled=False,
+        access_fence=fence,  # type: ignore[arg-type]
     )
     lock.assert_awaited_once_with(session, workspace)

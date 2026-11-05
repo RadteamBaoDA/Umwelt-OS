@@ -24,13 +24,19 @@ BATCH_ID = uuid4()
 EVENT_ID = uuid4()
 DOC_ID = uuid4()
 SCOPE = InternalJobScope(
-    workspace_id=WORKSPACE, actor_user_id=7, membership_revision=3, source_id=SOURCE_ID, source_generation=1,
+    workspace_id=WORKSPACE,
+    actor_user_id=7,
+    membership_revision=3,
+    source_id=SOURCE_ID,
+    source_generation=1,
 )
 ACCESS = AccessFence(WORKSPACE, 7, 3, 5)
 SOURCE_FENCE = SimpleNamespace(id=SOURCE_ID, status="active", generation=1)
 STAGE_KEYS = {
-    "ingestion.stage.requested": "receive", "connector.crawl.requested": "collect_web",
-    "ingestion.normalize.requested": "normalize", "document.file.uploaded": "parse_file",
+    "ingestion.stage.requested": "receive",
+    "connector.crawl.requested": "collect_web",
+    "ingestion.normalize.requested": "normalize",
+    "document.file.uploaded": "parse_file",
 }
 
 
@@ -43,15 +49,20 @@ class FakeSession:
 
     async def get(self, model: Any, _ident: Any, **kwargs: Any) -> Any:
         """Lock the state row."""
-        self.calls.append(f"get:{model.__name__}:{'lock' if kwargs.get('with_for_update') else 'read'}")
+        self.calls.append(
+            f"get:{model.__name__}:{'lock' if kwargs.get('with_for_update') else 'read'}"
+        )
         return self.rows["state"]
 
     async def scalar(self, stmt: Any, *_a: Any, **_k: Any) -> Any:
         """Answer by first entity; the predecessor-stage probe selects a bare column and returns ``rows['pending']``."""
         entity = stmt.column_descriptions[0]["entity"].__name__
         name = stmt.column_descriptions[0]["name"]
-        label = f"scalar:{entity}" + (":predecessor" if name == "id" and entity == "IngestionStage"
-                                      and "stage_key IN" in str(stmt) else "")
+        label = f"scalar:{entity}" + (
+            ":predecessor"
+            if name == "id" and entity == "IngestionStage" and "stage_key IN" in str(stmt)
+            else ""
+        )
         self.calls.append(label)
         if label.endswith("predecessor"):
             return self.rows.get("predecessor")
@@ -61,33 +72,57 @@ class FakeSession:
         """Candidate discovery / journal locks: answer from scripted row lists."""
         entity = stmt.column_descriptions[0]["entity"].__name__
         locked = "FOR UPDATE" in str(stmt)
-        self.calls.append(f"execute:{entity}:{'lock' if locked else 'read'}:{len(stmt.column_descriptions)}")
+        self.calls.append(
+            f"execute:{entity}:{'lock' if locked else 'read'}:{len(stmt.column_descriptions)}"
+        )
         return SimpleNamespace(all=lambda: self.rows.get("candidate_rows", []))
 
 
 class Harness:
     """Build the fakes for one event type and record the cross-module call sequence."""
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, event_type: str, *, payload: dict[str, Any] | None = None,
-                 provider: str = "rss") -> None:
+    def __init__(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        event_type: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        provider: str = "rss",
+    ) -> None:
         self.calls: list[str] = []
         self.mp = monkeypatch
         self.event_type = event_type
-        self.payload = payload if payload is not None else {"run_id": str(RUN_ID), "stage_id": str(STAGE_ID)}
+        self.payload = (
+            payload if payload is not None else {"run_id": str(RUN_ID), "stage_id": str(STAGE_ID)}
+        )
         self.delivery = SimpleNamespace(
-            id=EVENT_ID, type=event_type, status="queued", dispatched_at=NOW, producer="modules.ingestion",
-            version=1, payload=self.payload,
+            id=EVENT_ID,
+            type=event_type,
+            status="queued",
+            dispatched_at=NOW,
+            producer="modules.ingestion",
+            version=1,
+            payload=self.payload,
         )
         run = SimpleNamespace(id=RUN_ID, batch_id=BATCH_ID)
         batch = SimpleNamespace(id=BATCH_ID)
         stage = SimpleNamespace(id=STAGE_ID, status="pending", attempts=0, lease_expires_at=None)
         event = SimpleNamespace(
-            type=event_type, version=1, producer="modules.ingestion", payload=self.payload,
-            id=EVENT_ID, dispatched_at=NOW,
+            type=event_type,
+            version=1,
+            producer="modules.ingestion",
+            payload=self.payload,
+            id=EVENT_ID,
+            dispatched_at=NOW,
         )
-        self.rows = {"state": SimpleNamespace(lease_run_id=None, collection_lease_token=None),
-                     "IngestionRun": run, "IngestionBatch": batch, "IngestionStage": stage, "EventOutbox": event,
-                     "candidate_rows": []}
+        self.rows = {
+            "state": SimpleNamespace(lease_run_id=None, collection_lease_token=None),
+            "IngestionRun": run,
+            "IngestionBatch": batch,
+            "IngestionStage": stage,
+            "EventOutbox": event,
+            "candidate_rows": [],
+        }
         self.session = FakeSession(self.calls, self.rows)
         self.projection = SimpleNamespace(status="active", generation=1, provider=provider)
         self.valid_envelope = True
@@ -129,9 +164,15 @@ class Harness:
 
         async def capture_claim(*_a, **_k):
             h.calls.append("capture_normalization_claim")
-            return SimpleNamespace(
-                attempts=0, batch_id=BATCH_ID, tag="claim",
-            ) if h.rows.get("claim", True) else None
+            return (
+                SimpleNamespace(
+                    attempts=0,
+                    batch_id=BATCH_ID,
+                    tag="claim",
+                )
+                if h.rows.get("claim", True)
+                else None
+            )
 
         async def lock_document(*_a, **_k):
             h.calls.append("lock_document_for_extraction")
@@ -162,12 +203,28 @@ class Harness:
     async def call(self, **kwargs: Any) -> Any:
         """Run ``_lock_worker_event`` for this harness's event type."""
         return await worker._lock_worker_event(
-            self.session, EVENT_ID, multi_workspace_enabled=False, event_types=(self.event_type,), **kwargs)
+            self.session,
+            EVENT_ID,
+            multi_workspace_enabled=False,
+            event_types=(self.event_type,),
+            **kwargs,
+        )
 
 
-HEAD = ["resolve_event_scope", "read_access_fence", "get_event_delivery", "resolve_run_scope", "lock_source_set",
-        "get_connector_source"]
-TAIL = ["get:SourceIngestionState:lock", "scalar:IngestionRun", "scalar:IngestionBatch", "scalar:IngestionStage"]
+HEAD = [
+    "resolve_event_scope",
+    "read_access_fence",
+    "get_event_delivery",
+    "resolve_run_scope",
+    "lock_source_set",
+    "get_connector_source",
+]
+TAIL = [
+    "get:SourceIngestionState:lock",
+    "scalar:IngestionRun",
+    "scalar:IngestionBatch",
+    "scalar:IngestionStage",
+]
 
 
 @pytest.mark.asyncio
@@ -184,17 +241,29 @@ async def test_receive_event_lock_order_and_state(monkeypatch):
 @pytest.mark.asyncio
 async def test_crawl_event_takes_the_collection_fence_after_the_projection(monkeypatch):
     """Crawl events lock the Connector collection fence right after the projection (not for native providers)."""
-    h = Harness(monkeypatch, "connector.crawl.requested", payload={
-        "run_id": str(RUN_ID), "stage_id": str(STAGE_ID), "connector_revision": 2})
+    h = Harness(
+        monkeypatch,
+        "connector.crawl.requested",
+        payload={"run_id": str(RUN_ID), "stage_id": str(STAGE_ID), "connector_revision": 2},
+    )
     await h.call()
     assert h.calls[:7] == [*HEAD, "collection_fence"]
-    for variant, expected in (({"connector_revision": 0}, None), ({"connector_revision": "2"}, None)):
-        h2 = Harness(monkeypatch, "connector.crawl.requested", payload={
-            "run_id": str(RUN_ID), "stage_id": str(STAGE_ID), **variant})
+    for variant, expected in (
+        ({"connector_revision": 0}, None),
+        ({"connector_revision": "2"}, None),
+    ):
+        h2 = Harness(
+            monkeypatch,
+            "connector.crawl.requested",
+            payload={"run_id": str(RUN_ID), "stage_id": str(STAGE_ID), **variant},
+        )
         assert await h2.call() is expected
         assert h2.calls[-1] == "get_connector_source"
-    h3 = Harness(monkeypatch, "connector.crawl.requested", payload={
-        "run_id": str(RUN_ID), "stage_id": str(STAGE_ID), "connector_revision": 2})
+    h3 = Harness(
+        monkeypatch,
+        "connector.crawl.requested",
+        payload={"run_id": str(RUN_ID), "stage_id": str(STAGE_ID), "connector_revision": 2},
+    )
     h3.mp.setattr(worker.connectors, "is_native_provider", lambda provider: True)
     assert await h3.call() is None and "collection_fence" not in h3.calls
 
@@ -203,8 +272,11 @@ async def test_crawl_event_takes_the_collection_fence_after_the_projection(monke
 async def test_upload_event_prepares_the_document_before_state(monkeypatch):
     """Upload: the Document/URI preparation precedes the state row and everything else."""
     payload = {
-        "run_id": str(RUN_ID), "stage_id": str(STAGE_ID), "document_id": str(DOC_ID),
-        "raw_uri": f"workspaces/{WORKSPACE}/documents/{DOC_ID}/a.pdf", "mime_type": "application/pdf",
+        "run_id": str(RUN_ID),
+        "stage_id": str(STAGE_ID),
+        "document_id": str(DOC_ID),
+        "raw_uri": f"workspaces/{WORKSPACE}/documents/{DOC_ID}/a.pdf",
+        "mime_type": "application/pdf",
     }
     h = Harness(monkeypatch, "document.file.uploaded", payload=payload)
     await h.call()
@@ -223,11 +295,26 @@ async def test_upload_event_prepares_the_document_before_state(monkeypatch):
 
 def _candidate_row(provider_id: str = "p1") -> tuple[Any, ...]:
     """One discovery row in the exact column order of the candidate query."""
-    return (uuid4(), uuid4(), provider_id, "h" * 64, WORKSPACE, SOURCE_ID, 1, RUN_ID, BATCH_ID, STAGE_ID, 1, SOURCE_ID)
+    return (
+        uuid4(),
+        uuid4(),
+        provider_id,
+        "h" * 64,
+        WORKSPACE,
+        SOURCE_ID,
+        1,
+        RUN_ID,
+        BATCH_ID,
+        STAGE_ID,
+        1,
+        SOURCE_ID,
+    )
 
 
 @pytest.mark.asyncio
-async def test_normalize_event_discovers_prepares_then_locks_journal_rows_before_outbox(monkeypatch):
+async def test_normalize_event_discovers_prepares_then_locks_journal_rows_before_outbox(
+    monkeypatch,
+):
     """Normalize: claim -> discover -> prepare D -> state/run/batch/stage -> journals -> accepted -> compare -> outbox."""
     h = Harness(monkeypatch, "ingestion.normalize.requested", provider="reddit")
     row = _candidate_row()
@@ -235,9 +322,17 @@ async def test_normalize_event_discovers_prepares_then_locks_journal_rows_before
     h.rows["IngestionStage"].status = "pending"
     # Journal/observation pairs reloaded under lock must reproduce the discovered identities exactly.
     progress = SimpleNamespace(
-        id=row[0], workspace_id=WORKSPACE, source_id=SOURCE_ID, source_generation=1, run_id=RUN_ID, stage_id=STAGE_ID,
-        normalization_version=1)
-    observation = SimpleNamespace(id=row[1], provider_id="p1", record_hash="h" * 64, batch_id=BATCH_ID, source_id=SOURCE_ID)
+        id=row[0],
+        workspace_id=WORKSPACE,
+        source_id=SOURCE_ID,
+        source_generation=1,
+        run_id=RUN_ID,
+        stage_id=STAGE_ID,
+        normalization_version=1,
+    )
+    observation = SimpleNamespace(
+        id=row[1], provider_id="p1", record_hash="h" * 64, batch_id=BATCH_ID, source_id=SOURCE_ID
+    )
 
     original = h.session.execute
 
@@ -250,11 +345,17 @@ async def test_normalize_event_discovers_prepares_then_locks_journal_rows_before
     h.session.execute = execute
     work = await h.call()
     assert h.calls == [
-        *HEAD, "capture_normalization_claim", "execute:ObservationNormalization:read:12",
-        "prepare_normalized_document_keys", *TAIL,
-        "execute:ObservationNormalization:lock:1", "execute:SourceObservation:lock:1",
-        "execute:ObservationNormalization:read:12", "execute:ObservationNormalization:read:2",
-        "scalar:EventOutbox", "scalar:IngestionStage:predecessor",
+        *HEAD,
+        "capture_normalization_claim",
+        "execute:ObservationNormalization:read:12",
+        "prepare_normalized_document_keys",
+        *TAIL,
+        "execute:ObservationNormalization:lock:1",
+        "execute:SourceObservation:lock:1",
+        "execute:ObservationNormalization:read:12",
+        "execute:ObservationNormalization:read:2",
+        "scalar:EventOutbox",
+        "scalar:IngestionStage:predecessor",
     ]
     assert work.document_preparation == "doc-prep" and len(work.normalization_rows) == 1
     assert work.observation_preparation is None
@@ -269,20 +370,34 @@ async def test_measurement_provider_prepares_observation_keys_before_the_outbox(
     row = _candidate_row()
     h.rows["candidate_rows"] = [row]
     progress = SimpleNamespace(
-        id=row[0], workspace_id=WORKSPACE, source_id=SOURCE_ID, source_generation=1, run_id=RUN_ID, stage_id=STAGE_ID,
-        normalization_version=1)
-    observation = SimpleNamespace(id=row[1], provider_id="p1", record_hash="h" * 64, batch_id=BATCH_ID, source_id=SOURCE_ID)
+        id=row[0],
+        workspace_id=WORKSPACE,
+        source_id=SOURCE_ID,
+        source_generation=1,
+        run_id=RUN_ID,
+        stage_id=STAGE_ID,
+        normalization_version=1,
+    )
+    observation = SimpleNamespace(
+        id=row[1], provider_id="p1", record_hash="h" * 64, batch_id=BATCH_ID, source_id=SOURCE_ID
+    )
     original = h.session.execute
 
     async def execute(stmt, *a, **k):
         result = await original(stmt, *a, **k)
-        return SimpleNamespace(all=lambda: [(progress, observation)]) if len(stmt.column_descriptions) == 2 else result
+        return (
+            SimpleNamespace(all=lambda: [(progress, observation)])
+            if len(stmt.column_descriptions) == 2
+            else result
+        )
 
     h.session.execute = execute
     work = await h.call()
     assert work.observation_preparation == "obs-prep"
     assert h.calls.index("prepare_ingestion_observation_keys") < h.calls.index("scalar:EventOutbox")
-    assert h.calls.index("prepare_ingestion_observation_keys") > max(i for i, c in enumerate(h.calls) if c.startswith("execute"))
+    assert h.calls.index("prepare_ingestion_observation_keys") > max(
+        i for i, c in enumerate(h.calls) if c.startswith("execute")
+    )
 
 
 @pytest.mark.asyncio
@@ -351,6 +466,7 @@ async def test_unfinished_predecessor_yields_no_work(monkeypatch):
 @pytest.mark.asyncio
 async def test_early_exits_never_reach_domain_locks(monkeypatch):
     """Missing scope/delivery, wrong type/status, bad envelope or run lineage stop before the Source lock."""
+
     def configure(h: Harness, mode: str) -> None:
         if mode == "wrong-type":
             h.delivery.type = "other.event"
@@ -367,7 +483,15 @@ async def test_early_exits_never_reach_domain_locks(monkeypatch):
         elif mode == "foreign-run":
             h.run_scope = SimpleNamespace(other=True)
 
-    for mode in ("wrong-type", "not-queued", "no-dispatch", "bad-envelope", "no-delivery", "bad-run-id", "foreign-run"):
+    for mode in (
+        "wrong-type",
+        "not-queued",
+        "no-dispatch",
+        "bad-envelope",
+        "no-delivery",
+        "bad-run-id",
+        "foreign-run",
+    ):
         h = Harness(monkeypatch, "ingestion.stage.requested")
         configure(h, mode)
         assert await h.call() is None, mode
@@ -382,16 +506,29 @@ async def test_source_comparisons_and_expected_claim(monkeypatch):
     assert await h.call() is None and h.calls[-1] == "get_connector_source"
 
     h2 = Harness(monkeypatch, "ingestion.stage.requested")
-    payload_hash = hashlib.sha256(json.dumps(
-        h2.payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+    payload_hash = hashlib.sha256(
+        json.dumps(
+            h2.payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+        ).encode()
+    ).hexdigest()
     expected = SimpleNamespace(
-        scope=SCOPE, access_fence=ACCESS, event_id=EVENT_ID, event_type="ingestion.stage.requested",
-        producer="modules.ingestion", dispatched_at=NOW, payload_hash=payload_hash, source_fence=SOURCE_FENCE,
-        attempts=0, batch_id=BATCH_ID)
+        scope=SCOPE,
+        access_fence=ACCESS,
+        event_id=EVENT_ID,
+        event_type="ingestion.stage.requested",
+        producer="modules.ingestion",
+        dispatched_at=NOW,
+        payload_hash=payload_hash,
+        source_fence=SOURCE_FENCE,
+        attempts=0,
+        batch_id=BATCH_ID,
+    )
     assert await h2.call(expected=expected) is not None
 
     h3 = Harness(monkeypatch, "ingestion.stage.requested")
-    changed = SimpleNamespace(**{**expected.__dict__, "access_fence": AccessFence(WORKSPACE, 7, 3, 99)})
+    changed = SimpleNamespace(
+        **{**expected.__dict__, "access_fence": AccessFence(WORKSPACE, 7, 3, 99)}
+    )
     with pytest.raises(ConflictError) as exc:
         await h3.call(expected=changed)
     assert (exc.value.status_code, exc.value.detail) == (409, "Original worker admission changed")
@@ -402,7 +539,9 @@ async def test_source_comparisons_and_expected_claim(monkeypatch):
     assert await h4.call(expected=other_hash) is None and "lock_source_set" not in h4.calls
 
     h5 = Harness(monkeypatch, "ingestion.stage.requested")
-    other_source = SimpleNamespace(**{**expected.__dict__, "source_fence": SimpleNamespace(id=SOURCE_ID)})
+    other_source = SimpleNamespace(
+        **{**expected.__dict__, "source_fence": SimpleNamespace(id=SOURCE_ID)}
+    )
     assert await h5.call(expected=other_source) is None and "get_connector_source" not in h5.calls
 
 

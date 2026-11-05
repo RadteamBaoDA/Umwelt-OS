@@ -13,9 +13,7 @@ class PickDescriptor(ModuleDescriptor):
     name: str = "Pick"
     description: str = "Deterministic selection helpers exposed over the pick API."
     routes: tuple[str, ...] = ("/api/v1/pick",)
-    routers: tuple[RouterSpec, ...] = (
-        RouterSpec("modules.pick.routes", 380),
-    )
+    routers: tuple[RouterSpec, ...] = (RouterSpec("modules.pick.routes", 380),)
 
 
 descriptor = PickDescriptor()

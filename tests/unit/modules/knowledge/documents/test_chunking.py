@@ -62,7 +62,10 @@ class TestChunkTextOverlapAndContinuity:
     """Test overlap calculation, chunk progression, and coverage of long texts."""
 
     def test_zero_overlap_produces_non_overlapping_chunks(self) -> None:
-        text = "apple banana orange grape pear peach plum melon cherry lemon kiwi mango pineapple strawberry blueberry " * 10
+        text = (
+            "apple banana orange grape pear peach plum melon cherry lemon kiwi mango pineapple strawberry blueberry "
+            * 10
+        )
         chunks = chunk_text(text, target_tokens=20, overlap_ratio=0.0)
         assert len(chunks) > 1
 
@@ -109,7 +112,10 @@ class TestChunkTextOverlapAndContinuity:
         assert last_start + last_chunk.token_count == len(tokens)
 
     def test_chunk_token_count_respects_target_bounds(self) -> None:
-        text = "Machine learning and artificial intelligence systems require robust data ingestion pipelines. " * 30
+        text = (
+            "Machine learning and artificial intelligence systems require robust data ingestion pipelines. "
+            * 30
+        )
         target = 25
         chunks = chunk_text(text, target_tokens=target, overlap_ratio=0.1)
         for chunk in chunks:

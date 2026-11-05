@@ -90,7 +90,8 @@ class InboundResponseBuffer:
             if self._start is not None or self._complete:
                 raise ValueError("Unexpected response start")
             content_types = [
-                value for name, value in message.get("headers", [])
+                value
+                for name, value in message.get("headers", [])
                 if name.lower() == b"content-type"
             ]
             if (
@@ -144,7 +145,13 @@ class InboundMcpGuard:
     ) -> None:
         """Bind the SDK child to exact deployment addressing, lease admission, and owner callbacks."""
         parsed = urlsplit(audience)
-        if not parsed.scheme or not parsed.netloc or parsed.path != "/api/v1/mcp/" or parsed.query or parsed.fragment:
+        if (
+            not parsed.scheme
+            or not parsed.netloc
+            or parsed.path != "/api/v1/mcp/"
+            or parsed.query
+            or parsed.fragment
+        ):
             raise ValueError("Invalid inbound MCP audience")
         if (
             not expected_host
@@ -213,12 +220,17 @@ class InboundMcpGuard:
         """
         if method in {"GET", "DELETE"} or method != "POST":
             return _Reject(405, "method_not_allowed")
-        content_encodings = [value for name, value in headers if name.lower() == b"content-encoding"]
+        content_encodings = [
+            value for name, value in headers if name.lower() == b"content-encoding"
+        ]
         content_types = [value for name, value in headers if name.lower() == b"content-type"]
         content_lengths = [value for name, value in headers if name.lower() == b"content-length"]
         if content_encodings and content_encodings != [b"identity"]:
             return _Reject(415, "unsupported_encoding")
-        if len(content_types) != 1 or not content_types[0].split(b";", 1)[0].strip().lower() == b"application/json":
+        if (
+            len(content_types) != 1
+            or not content_types[0].split(b";", 1)[0].strip().lower() == b"application/json"
+        ):
             return _Reject(415, "unsupported_media_type")
         if len(content_lengths) > 1:
             return _Reject(400, "invalid_request")
@@ -234,10 +246,15 @@ class InboundMcpGuard:
 
     async def _send_rejection(self, send: Send, rejection: _Reject) -> None:
         """Emit the fixed error for a pre-computed rejection."""
-        await self._send_fixed_error(send, rejection.status, rejection.code, bearer_challenge=rejection.bearer_challenge)
+        await self._send_fixed_error(
+            send, rejection.status, rejection.code, bearer_challenge=rejection.bearer_challenge
+        )
 
     async def _authenticate(
-        self, scope: Scope, send: Send, token_box: list[str],
+        self,
+        scope: Scope,
+        send: Send,
+        token_box: list[str],
     ) -> InboundPrincipal | None:
         """Authenticate the bearer, then drop it and strip credentials from the forwarded scope.
 
@@ -260,11 +277,17 @@ class InboundMcpGuard:
             ]
 
     async def _read_bounded_body(
-        self, receive: Receive, send: Send, declared_length: int | None, deadline: float,
+        self,
+        receive: Receive,
+        send: Send,
+        declared_length: int | None,
+        deadline: float,
     ) -> bytes | None:
         """Read the request body, answering 408/413/400 itself; ``None`` means a response was sent."""
         try:
-            return await self._read_request_body(receive, declared_length=declared_length, deadline=deadline)
+            return await self._read_request_body(
+                receive, declared_length=declared_length, deadline=deadline
+            )
         except TimeoutError:
             await self._send_fixed_error(send, 408, "request_timeout")
         except OverflowError:
@@ -274,8 +297,13 @@ class InboundMcpGuard:
         return None
 
     async def _serve_admitted(
-        self, scope: Scope, receive: Receive, send: Send, lease: McpInboundLease,
-        token_box: list[str], deadline: float,
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        lease: McpInboundLease,
+        token_box: list[str],
+        deadline: float,
     ) -> None:
         """Run an admitted request: authenticate, authorize, frame, read, fence, serve and emit.
 
@@ -321,7 +349,8 @@ class InboundMcpGuard:
             receive,
             state,
             operation_deadline=max(
-                loop.time(), deadline - _CLEANUP_RESERVE_SECONDS,
+                loop.time(),
+                deadline - _CLEANUP_RESERVE_SECONDS,
             ),
             cleanup_deadline=deadline,
         )
@@ -364,7 +393,11 @@ class InboundMcpGuard:
             await self._send_fixed_error(send, 500, "request_failed")
 
     async def _read_request_body(
-        self, receive: Receive, *, declared_length: int | None, deadline: float,
+        self,
+        receive: Receive,
+        *,
+        declared_length: int | None,
+        deadline: float,
     ) -> bytes:
         """Read at most 128KB of actual ASGI request bytes within a five-second body window."""
         loop = asyncio.get_running_loop()
@@ -410,13 +443,17 @@ class InboundMcpGuard:
         receiver = InboundReplayReceiver(body, source_receive)
         response = InboundResponseBuffer(max_body_bytes=1_048_576, deadline=cleanup_deadline)
         # ASGI apps are coroutine functions at runtime; typing exposes them as generic Awaitables.
-        child_task = asyncio.create_task(cast("Coroutine[Any, Any, None]", self._app(scope, receiver, response)))
+        child_task = asyncio.create_task(
+            cast("Coroutine[Any, Any, None]", self._app(scope, receiver, response))
+        )
         disconnect_task = asyncio.create_task(receiver.wait_for_disconnect())
         completed = False
         try:
             remaining = max(0.0, operation_deadline - asyncio.get_running_loop().time())
             done, _ = await asyncio.wait(
-                {child_task, disconnect_task}, timeout=remaining, return_when=asyncio.FIRST_COMPLETED,
+                {child_task, disconnect_task},
+                timeout=remaining,
+                return_when=asyncio.FIRST_COMPLETED,
             )
             if disconnect_task in done:
                 raise asyncio.CancelledError
@@ -471,7 +508,11 @@ class InboundMcpGuard:
                 raise TimeoutError
 
     async def _emit_response(
-        self, send: Send, start: Message, body: bytes, state: InboundRequestState,
+        self,
+        send: Send,
+        start: Message,
+        body: bytes,
+        state: InboundRequestState,
     ) -> None:
         """Revalidate the same principal, lease, binding, and sink before the first response byte."""
         try:
@@ -507,7 +548,12 @@ class InboundMcpGuard:
         await send({"type": "http.response.body", "body": body, "more_body": False})
 
     async def _send_fixed_error(
-        self, send: Send, status: int, code: str, *, bearer_challenge: bool = False,
+        self,
+        send: Send,
+        status: int,
+        code: str,
+        *,
+        bearer_challenge: bool = False,
     ) -> None:
         """Emit a fixed no-store JSON error without request, token, provider, or database details."""
         body = json.dumps({"error": code}, separators=(",", ":")).encode("ascii")

@@ -21,10 +21,18 @@ def _case(**overrides):
     """Build one candidate, its matching current scope and the single provenance row it matches."""
     source_id, doc_id, version_id, obs_id = uuid4(), uuid4(), uuid4(), uuid4()
     candidate = ObservationEvidenceCandidate(
-        observation_id=obs_id, source_id=source_id, source_generation=3, provider="prov",
-        provider_scope_discriminator=DISC, external_id="ext", document_id=doc_id, document_version_id=version_id,
+        observation_id=obs_id,
+        source_id=source_id,
+        source_generation=3,
+        provider="prov",
+        provider_scope_discriminator=DISC,
+        external_id="ext",
+        document_id=doc_id,
+        document_version_id=version_id,
     )
-    scopes = {source_id: SimpleNamespace(provider_id="prov", source_generation=3, discriminator=DISC)}
+    scopes = {
+        source_id: SimpleNamespace(provider_id="prov", source_generation=3, discriminator=DISC)
+    }
     # (doc, version, source, source_generation, version_number, current_version, provider_id, accepted_gen, provenance)
     row = [doc_id, version_id, source_id, 3, 1, 2, "ext", 3, {"provider_scope_discriminator": DISC}]
     for index, value in overrides.pop("row", {}).items():
@@ -37,7 +45,12 @@ async def _run(candidate, scopes, rows, historical, scope=SCOPE_KW["scope"]):
     session = AsyncMock()
     session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=rows)))
     result = await current_observation_evidence_versions(
-        session, [candidate], scopes, scope=scope, multi_workspace_enabled=False, include_historical=historical,
+        session,
+        [candidate],
+        scopes,
+        scope=scope,
+        multi_workspace_enabled=False,
+        include_historical=historical,
     )
     return result, session
 
@@ -84,8 +97,15 @@ async def test_historical_mode_requires_current_provider_scope(scope_key: str) -
     if scope_key == "absent":
         scopes = {}
     else:
-        setattr(live, {"provider": "provider_id", "source_generation": "source_generation",
-                       "discriminator": "discriminator"}[scope_key], "changed" if scope_key != "source_generation" else 9)
+        setattr(
+            live,
+            {
+                "provider": "provider_id",
+                "source_generation": "source_generation",
+                "discriminator": "discriminator",
+            }[scope_key],
+            "changed" if scope_key != "source_generation" else 9,
+        )
     result, _ = await _run(candidate, scopes, rows, True)
     assert result == {}
 
@@ -105,7 +125,9 @@ async def test_historical_mode_still_requires_owner_scope() -> None:
 
     from core.workspaces.schemas import WorkspaceContext
 
-    member = WorkspaceContext(user_id=2, workspace_id=SCOPE_KW["scope"].workspace_id, role="member", membership_revision=1)
+    member = WorkspaceContext(
+        user_id=2, workspace_id=SCOPE_KW["scope"].workspace_id, role="member", membership_revision=1
+    )
     candidate, scopes, rows = _case()
     with pytest.raises(ForbiddenError):
         await _run(candidate, scopes, rows, True, scope=member)

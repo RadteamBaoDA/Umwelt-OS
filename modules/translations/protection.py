@@ -10,17 +10,19 @@ import secrets
 MARKER_RE = re.compile(r"@@P[0-9a-f]{8}_\d+@@")
 _CURRENCY = r"(?:USDT|USDC|USD|EUR|VND|GBP|JPY|CNY|BTC|ETH)"
 _PROTECTED_RE = re.compile(
-    "|".join([
-        r"```.*?```",  # fenced code
-        r"`[^`\n]+`",  # inline code
-        r"(?<=\]\()[^)\s]+",  # Markdown link destination
-        r"(?:https?://|www\.)[^\s)\]>]+",  # bare URL
-        r"\[\d+(?:\s*[,\-–]\s*\d+)*\]",  # citation [n]
-        r"\$[A-Z][A-Z.]{0,5}\b",  # cashtag
-        r"\b(?:NYSE|NASDAQ|HOSE|HNX|UPCOM|HSX):[A-Z]{1,6}\b",  # exchange-qualified ticker
-        r"\(\s*[A-Z]{2,5}\s*\)",  # (AAPL)
-        rf"(?:(?<![\w])[+\-−])?(?:[$€£¥₫]\s?)?\d+(?:[.,/:\-]\d+)*(?:\s?(?:%|{_CURRENCY}\b))?",  # numbers, dates
-    ]),
+    "|".join(
+        [
+            r"```.*?```",  # fenced code
+            r"`[^`\n]+`",  # inline code
+            r"(?<=\]\()[^)\s]+",  # Markdown link destination
+            r"(?:https?://|www\.)[^\s)\]>]+",  # bare URL
+            r"\[\d+(?:\s*[,\-–]\s*\d+)*\]",  # citation [n]
+            r"\$[A-Z][A-Z.]{0,5}\b",  # cashtag
+            r"\b(?:NYSE|NASDAQ|HOSE|HNX|UPCOM|HSX):[A-Z]{1,6}\b",  # exchange-qualified ticker
+            r"\(\s*[A-Z]{2,5}\s*\)",  # (AAPL)
+            rf"(?:(?<![\w])[+\-−])?(?:[$€£¥₫]\s?)?\d+(?:[.,/:\-]\d+)*(?:\s?(?:%|{_CURRENCY}\b))?",  # numbers, dates
+        ]
+    ),
     re.DOTALL,
 )
 _PREFIX_RE = re.compile(r"^(?:\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s*))+")

@@ -32,24 +32,41 @@ async def erase_account_shared_rows(session: AsyncSession, scope: AccountErasure
     translation remains until later SQL deletion, so this ownership proof cannot be lost.
     """
     await authorize_account_erasure(session, scope)
-    await session.execute(update(TranslationAdmissionSlot).where(exists(
-        select(1).select_from(ContentTranslation).where(
-            ContentTranslation.id == TranslationAdmissionSlot.translation_id,
-            ContentTranslation.workspace_id == scope.workspace_id,
+    await session.execute(
+        update(TranslationAdmissionSlot)
+        .where(
+            exists(
+                select(1)
+                .select_from(ContentTranslation)
+                .where(
+                    ContentTranslation.id == TranslationAdmissionSlot.translation_id,
+                    ContentTranslation.workspace_id == scope.workspace_id,
+                )
+            )
         )
-    )).values(
-        translation_id=None, expires_at=None,
-        fencing_token=TranslationAdmissionSlot.fencing_token + 1,
-    ))
+        .values(
+            translation_id=None,
+            expires_at=None,
+            fencing_token=TranslationAdmissionSlot.fencing_token + 1,
+        )
+    )
 
 
 async def verify_account_shared_rows(session: AsyncSession, scope: AccountErasureScope) -> None:
     """Require no singleton slot still points to an owned translation before success."""
     await authorize_account_erasure(session, scope)
-    if await session.scalar(select(TranslationAdmissionSlot.id).where(exists(
-        select(1).select_from(ContentTranslation).where(
-            ContentTranslation.id == TranslationAdmissionSlot.translation_id,
-            ContentTranslation.workspace_id == scope.workspace_id,
+    if await session.scalar(
+        select(TranslationAdmissionSlot.id)
+        .where(
+            exists(
+                select(1)
+                .select_from(ContentTranslation)
+                .where(
+                    ContentTranslation.id == TranslationAdmissionSlot.translation_id,
+                    ContentTranslation.workspace_id == scope.workspace_id,
+                )
+            )
         )
-    )).limit(1)):
+        .limit(1)
+    ):
         raise RuntimeError("Translation admission slot retains account data")

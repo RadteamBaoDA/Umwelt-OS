@@ -23,7 +23,9 @@ def test_only_minimum_space_fits() -> None:
     occupied = [(0, 0, 17, 100)]  # 3 free columns; nothing fits at y < 100 except below
     descriptor = gadgets.renderer_descriptor("news_feed")
     assert layouts.find_free_position(occupied, 20, 6, 8) == (0, 100)
-    assert layouts.find_free_position([(0, 0, 16, 100_000)], 20, descriptor.minimum_width, descriptor.minimum_height) == (16, 0)
+    assert layouts.find_free_position(
+        [(0, 0, 16, 100_000)], 20, descriptor.minimum_width, descriptor.minimum_height
+    ) == (16, 0)
     assert layouts.find_free_position([(0, 0, 16, 100_000)], 20, 6, 8) is None
 
 

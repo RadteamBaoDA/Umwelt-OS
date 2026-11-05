@@ -9,8 +9,11 @@ from modules.dashboard.schemas import GadgetConfiguration, GadgetFilters, Gadget
 
 def test_live_map_accepts_bounded_provider_configuration() -> None:
     config = GadgetConfiguration(
-        scope=GadgetScope(live_map_providers=["usgs", "github_releases"],
-                          live_map_github_owner="openai", live_map_github_repo="example"),
+        scope=GadgetScope(
+            live_map_providers=["usgs", "github_releases"],
+            live_map_github_owner="openai",
+            live_map_github_repo="example",
+        ),
         filters=GadgetFilters(map_mode="live", map_weather_layer="wind"),
     )
     assert validate_renderer_configuration("map", config) == config

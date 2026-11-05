@@ -76,12 +76,18 @@ class S3Config:
         """Build the config from ``core.config.Settings`` (secrets unwrapped here, never logged)."""
         prefix = str(settings.s3_prefix).strip("/")
         return cls(
-            bucket=settings.s3_bucket, region=settings.s3_region, endpoint_url=settings.s3_endpoint_url or None,
+            bucket=settings.s3_bucket,
+            region=settings.s3_region,
+            endpoint_url=settings.s3_endpoint_url or None,
             access_key_id=settings.s3_access_key_id.get_secret_value(),
             secret_access_key=settings.s3_secret_access_key.get_secret_value(),
-            prefix=f"{prefix}/" if prefix else "", sse=settings.s3_sse, sse_kms_key_id=settings.s3_sse_kms_key_id,
-            path_style=settings.s3_path_style, conditional_put=settings.s3_conditional_put,
-            part_size_bytes=settings.s3_part_size_bytes, presigned_downloads=settings.storage_presigned_downloads,
+            prefix=f"{prefix}/" if prefix else "",
+            sse=settings.s3_sse,
+            sse_kms_key_id=settings.s3_sse_kms_key_id,
+            path_style=settings.s3_path_style,
+            conditional_put=settings.s3_conditional_put,
+            part_size_bytes=settings.s3_part_size_bytes,
+            presigned_downloads=settings.storage_presigned_downloads,
             presign_ttl_seconds=settings.storage_presigned_ttl_seconds,
             presign_endpoint_url=settings.s3_presign_endpoint_url or None,
             max_download_bytes=settings.upload_max_bytes,
@@ -128,7 +134,15 @@ class _UploadWriter:
     key until ``finish`` succeeds; ``abort`` discards any multipart upload so no partial object remains.
     """
 
-    def __init__(self, client: Any, bucket: str, key: str, part_size: int, extra: dict[str, str], conditional: bool) -> None:
+    def __init__(
+        self,
+        client: Any,
+        bucket: str,
+        key: str,
+        part_size: int,
+        extra: dict[str, str],
+        conditional: bool,
+    ) -> None:
         """Bind to ``key``; ``extra`` holds the encryption arguments, ``conditional`` adds ``If-None-Match: *``."""
         self._client, self._bucket, self._key = client, bucket, key
         self._part_size, self._extra, self._conditional = part_size, extra, conditional
@@ -147,11 +161,17 @@ class _UploadWriter:
     async def _upload_part(self, part: bytes) -> None:
         """Upload one part, creating the multipart upload lazily so small objects need only one PUT."""
         if self._upload_id is None:
-            created = await self._client.create_multipart_upload(Bucket=self._bucket, Key=self._key, **self._extra)
+            created = await self._client.create_multipart_upload(
+                Bucket=self._bucket, Key=self._key, **self._extra
+            )
             self._upload_id = created["UploadId"]
         number = len(self._parts) + 1
         response = await self._client.upload_part(
-            Bucket=self._bucket, Key=self._key, UploadId=self._upload_id, PartNumber=number, Body=part,
+            Bucket=self._bucket,
+            Key=self._key,
+            UploadId=self._upload_id,
+            PartNumber=number,
+            Body=part,
         )
         self._parts.append({"ETag": response["ETag"], "PartNumber": number})
 
@@ -165,15 +185,23 @@ class _UploadWriter:
             if self._upload_id is None:
                 body = bytes(self._buffer)
                 await self._client.put_object(
-                    Bucket=self._bucket, Key=self._key, Body=body, ContentLength=len(body), **self._extra, **condition,
+                    Bucket=self._bucket,
+                    Key=self._key,
+                    Body=body,
+                    ContentLength=len(body),
+                    **self._extra,
+                    **condition,
                 )
                 return
             if self._buffer:
                 await self._upload_part(bytes(self._buffer))
                 self._buffer.clear()
             await self._client.complete_multipart_upload(
-                Bucket=self._bucket, Key=self._key, UploadId=self._upload_id,
-                MultipartUpload={"Parts": self._parts}, **condition,
+                Bucket=self._bucket,
+                Key=self._key,
+                UploadId=self._upload_id,
+                MultipartUpload={"Parts": self._parts},
+                **condition,
             )
             self._upload_id = None  # completed: nothing left to abort
         except ClientError as exc:
@@ -185,7 +213,9 @@ class _UploadWriter:
         """Discard an in-flight multipart upload (best effort; lifecycle rules also expire stale ones)."""
         if self._upload_id is not None:
             with contextlib.suppress(ClientError):
-                await self._client.abort_multipart_upload(Bucket=self._bucket, Key=self._key, UploadId=self._upload_id)
+                await self._client.abort_multipart_upload(
+                    Bucket=self._bucket, Key=self._key, UploadId=self._upload_id
+                )
             self._upload_id = None
 
 
@@ -203,14 +233,25 @@ class S3StorageBackend:
         cfg = self._config
         kwargs: dict[str, Any] = {}
         if cfg.access_key_id:
-            kwargs.update(aws_access_key_id=cfg.access_key_id, aws_secret_access_key=cfg.secret_access_key)
-        return cast("AbstractAsyncContextManager[Any]", self._session.client(
-            "s3", region_name=cfg.region, endpoint_url=endpoint_url or cfg.endpoint_url,
-            config=BotoConfig(
-                signature_version="s3v4", s3={"addressing_style": "path" if cfg.path_style else "virtual"},
-                retries={"max_attempts": 3, "mode": "standard"}, connect_timeout=10, read_timeout=60,
-            ), **kwargs,
-        ))
+            kwargs.update(
+                aws_access_key_id=cfg.access_key_id, aws_secret_access_key=cfg.secret_access_key
+            )
+        return cast(
+            "AbstractAsyncContextManager[Any]",
+            self._session.client(
+                "s3",
+                region_name=cfg.region,
+                endpoint_url=endpoint_url or cfg.endpoint_url,
+                config=BotoConfig(
+                    signature_version="s3v4",
+                    s3={"addressing_style": "path" if cfg.path_style else "virtual"},
+                    retries={"max_attempts": 3, "mode": "standard"},
+                    connect_timeout=10,
+                    read_timeout=60,
+                ),
+                **kwargs,
+            ),
+        )
 
     def _full(self, key: str) -> str:
         """Return the bucket key for ``key``: validated and prefixed with the configured bucket prefix."""
@@ -226,7 +267,12 @@ class S3StorageBackend:
         return extra
 
     async def put_stream(
-        self, key: str, chunks: AsyncIterator[bytes], max_bytes: int, *, workspace_id: UUID,
+        self,
+        key: str,
+        chunks: AsyncIterator[bytes],
+        max_bytes: int,
+        *,
+        workspace_id: UUID,
     ) -> StoredObject:
         """Atomically publish ``chunks`` at ``key`` under the workspace fence, never overwriting.
 
@@ -242,10 +288,19 @@ class S3StorageBackend:
         require_document_key(workspace_id, key)
         final_key = self._full(key)
         conditional = self._config.conditional_put
-        target = final_key if conditional else f"{self._config.prefix}{STAGING_DIR}/{workspace_id}/{uuid4().hex}"
+        target = (
+            final_key
+            if conditional
+            else f"{self._config.prefix}{STAGING_DIR}/{workspace_id}/{uuid4().hex}"
+        )
         async with self.fence.ahold(workspace_id), self._client() as client:
             writer = _UploadWriter(
-                client, self._config.bucket, target, self._config.part_size_bytes, self._encryption(), conditional,
+                client,
+                self._config.bucket,
+                target,
+                self._config.part_size_bytes,
+                self._encryption(),
+                conditional,
             )
             try:
                 size, digest = await self._stream_into(writer, chunks, max_bytes)
@@ -261,7 +316,9 @@ class S3StorageBackend:
         return StoredObject(key, size, digest)
 
     @staticmethod
-    async def _stream_into(writer: _UploadWriter, chunks: AsyncIterator[bytes], max_bytes: int) -> tuple[int, str]:
+    async def _stream_into(
+        writer: _UploadWriter, chunks: AsyncIterator[bytes], max_bytes: int
+    ) -> tuple[int, str]:
         """Feed ``chunks`` to ``writer`` enforcing the byte bound; return (size, sha256 hex). Rejects empty input."""
         size = 0
         digest = hashlib.sha256()
@@ -290,7 +347,10 @@ class S3StorageBackend:
         else:
             raise FileExistsError(final_key)
         await client.copy_object(
-            Bucket=bucket, Key=final_key, CopySource={"Bucket": bucket, "Key": staging_key}, **self._encryption(),
+            Bucket=bucket,
+            Key=final_key,
+            CopySource={"Bucket": bucket, "Key": staging_key},
+            **self._encryption(),
         )
 
     async def _discard(self, client: Any, writer: _UploadWriter, staging_key: str | None) -> None:
@@ -339,7 +399,9 @@ class S3StorageBackend:
             with os.fdopen(descriptor, "wb") as handle:
                 total = 0
                 # aclosing releases the HTTP body and client immediately on a size error or cancellation.
-                async with contextlib.aclosing(cast(AsyncGenerator[bytes, None], self.open_stream(key))) as stream:
+                async with contextlib.aclosing(
+                    cast(AsyncGenerator[bytes, None], self.open_stream(key))
+                ) as stream:
                     async for block in stream:
                         total += len(block)
                         if total > self._config.max_download_bytes:
@@ -347,7 +409,9 @@ class S3StorageBackend:
                         await to_thread_joined(handle.write, block)
             yield path
         finally:
-            await to_thread_joined(path.unlink, True)  # temp-file cleanup off the loop (missing_ok=True)
+            await to_thread_joined(
+                path.unlink, True
+            )  # temp-file cleanup off the loop (missing_ok=True)
 
     @staticmethod
     def _headers(filename: str) -> dict[str, str]:
@@ -357,7 +421,9 @@ class S3StorageBackend:
     def file_response(self, key: str, *, media_type: str, filename: str) -> Response:
         """Return a streaming attachment response without a known length (use ``afile_response`` for one)."""
         self._full(key)
-        return StreamingResponse(self.open_stream(key), media_type=media_type, headers=self._headers(filename))
+        return StreamingResponse(
+            self.open_stream(key), media_type=media_type, headers=self._headers(filename)
+        )
 
     async def afile_response(self, key: str, *, media_type: str, filename: str) -> Response:
         """Return the download response for ``key``, either streamed through the API or a presigned redirect.
@@ -374,12 +440,18 @@ class S3StorageBackend:
             ttl = max(1, min(self._config.presign_ttl_seconds, MAX_PRESIGN_TTL_SECONDS))
             async with self._client(endpoint_url=self._config.presign_endpoint_url) as client:
                 url = await client.generate_presigned_url(
-                    "get_object", ExpiresIn=ttl, Params={
-                        "Bucket": self._config.bucket, "Key": full,
-                        "ResponseContentDisposition": disposition, "ResponseContentType": media_type,
+                    "get_object",
+                    ExpiresIn=ttl,
+                    Params={
+                        "Bucket": self._config.bucket,
+                        "Key": full,
+                        "ResponseContentDisposition": disposition,
+                        "ResponseContentType": media_type,
                     },
                 )
-            return RedirectResponse(url, status_code=307, headers={"Referrer-Policy": "no-referrer"})
+            return RedirectResponse(
+                url, status_code=307, headers={"Referrer-Policy": "no-referrer"}
+            )
         async with self._client() as client:
             try:
                 head = await client.head_object(Bucket=self._config.bucket, Key=full)
@@ -421,7 +493,9 @@ class S3StorageBackend:
         async with self._client() as client:
             return await self._head_exists(client, full)
 
-    async def _iter_objects(self, prefix: str, *, page_size: int | None = None) -> AsyncGenerator[tuple[str, datetime]]:
+    async def _iter_objects(
+        self, prefix: str, *, page_size: int | None = None
+    ) -> AsyncGenerator[tuple[str, datetime]]:
         """Yield ``(storage key, last_modified)`` beneath ``prefix`` page by page (bounded memory).
 
         ``prefix`` names a directory-like scope: a trailing ``/`` is enforced so ``workspaces/…07`` never
@@ -432,10 +506,12 @@ class S3StorageBackend:
         async with self._client() as client:
             paginator = client.get_paginator("list_objects_v2")
             async for page in paginator.paginate(
-                Bucket=self._config.bucket, Prefix=self._config.prefix + scope, PaginationConfig=paging,
+                Bucket=self._config.bucket,
+                Prefix=self._config.prefix + scope,
+                PaginationConfig=paging,
             ):
                 for item in page.get("Contents", []):
-                    yield item["Key"][len(self._config.prefix):], item["LastModified"]
+                    yield item["Key"][len(self._config.prefix) :], item["LastModified"]
 
     async def list_prefix(self, prefix: str) -> list[str]:
         """Return sorted keys beneath ``prefix`` using paginated ``ListObjectsV2`` (``""`` lists the whole store)."""
@@ -471,7 +547,10 @@ class S3StorageBackend:
         async with self._client() as client:
             response = await client.delete_objects(
                 Bucket=self._config.bucket,
-                Delete={"Objects": [{"Key": self._config.prefix + key} for key in keys], "Quiet": False},
+                Delete={
+                    "Objects": [{"Key": self._config.prefix + key} for key in keys],
+                    "Quiet": False,
+                },
             )
         return len(response.get("Deleted", []))
 
@@ -479,7 +558,9 @@ class S3StorageBackend:
         """Raise ``ValueError`` unless ``key`` is a safe key in the legacy ``documents/`` or this workspace's layout."""
         checked_key(key)
         if not key.startswith(("documents/", f"workspaces/{workspace_id}/documents/")):
-            raise ValueError("Original storage path is outside the account workspace/document layouts")
+            raise ValueError(
+                "Original storage path is outside the account workspace/document layouts"
+            )
 
     async def aprobe_workspace_orphan(self, workspace_id: UUID) -> OrphanProbe:
         """Return ``file`` for the first remaining object of the workspace or ``absent`` (no directories exist)."""

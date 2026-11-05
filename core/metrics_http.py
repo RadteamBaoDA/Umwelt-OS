@@ -42,7 +42,9 @@ def _is_internal(host: str | None) -> bool:
     return address.is_loopback or address.is_private
 
 
-def metrics_access(settings: Settings, headers: dict[bytes, bytes], client_host: str | None) -> Access:
+def metrics_access(
+    settings: Settings, headers: dict[bytes, bytes], client_host: str | None
+) -> Access:
     """Decide whether a scrape request is allowed under the policy in this module's docstring.
 
     Args:
@@ -57,10 +59,16 @@ def metrics_access(settings: Settings, headers: dict[bytes, bytes], client_host:
     if token:
         supplied = headers.get(b"authorization", b"").decode("latin-1")
         scheme, _, value = supplied.partition(" ")
-        if scheme.lower() == "bearer" and hmac.compare_digest(value.strip().encode(), token.encode()):
+        if scheme.lower() == "bearer" and hmac.compare_digest(
+            value.strip().encode(), token.encode()
+        ):
             return "allowed"
         return "unauthorized"
-    if settings.is_dev and not any(name in headers for name in _PROXY_HEADERS) and _is_internal(client_host):
+    if (
+        settings.is_dev
+        and not any(name in headers for name in _PROXY_HEADERS)
+        and _is_internal(client_host)
+    ):
         return "allowed"
     return "disabled"
 
@@ -112,12 +120,25 @@ class MetricsMiddleware:
         client = scope.get("client")
         verdict = metrics_access(self.settings, headers, client[0] if client else None)
         if verdict == "allowed":
-            status, body, extra = 200, generate_latest(REGISTRY), [(b"content-type", CONTENT_TYPE_LATEST.encode())]
+            status, body, extra = (
+                200,
+                generate_latest(REGISTRY),
+                [(b"content-type", CONTENT_TYPE_LATEST.encode())],
+            )
         elif verdict == "unauthorized":
             status, body, extra = 401, b"unauthorized", [(b"www-authenticate", b"Bearer")]
         else:
             status, body, extra = 404, b"not found", []
         body_out = b"" if scope["method"] == "HEAD" else body
-        await send({"type": "http.response.start", "status": status,
-                    "headers": [*extra, (b"content-length", str(len(body)).encode()), (b"cache-control", b"no-store")]})
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status,
+                "headers": [
+                    *extra,
+                    (b"content-length", str(len(body)).encode()),
+                    (b"cache-control", b"no-store"),
+                ],
+            }
+        )
         await send({"type": "http.response.body", "body": body_out})

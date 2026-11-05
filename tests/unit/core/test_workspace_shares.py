@@ -25,7 +25,9 @@ def _memberships(member_revision=3, with_member=True):
     owner = SimpleNamespace(user_id=OWNER, role="owner", owner_user_id=OWNER, revision=5)
     out = {OWNER: owner}
     if with_member:
-        out[MEMBER] = SimpleNamespace(user_id=MEMBER, role="member", owner_user_id=None, revision=member_revision)
+        out[MEMBER] = SimpleNamespace(
+            user_id=MEMBER, role="member", owner_user_id=None, revision=member_revision
+        )
     return SimpleNamespace(owner_user_id=OWNER, configuration_revision=7), out
 
 
@@ -74,17 +76,37 @@ async def test_cas_ok_returns_locked_rows(monkeypatch):
 
 def test_granted_resource_ids_sql_and_owner_rejected():
     scope = WorkspaceContext(MEMBER, WS, "member", 3)
-    sql = str(public.granted_resource_ids(scope=scope, kind="document").compile(dialect=postgresql.dialect()))
-    for fragment in ("workspace_id", "member_user_id", "revoked_at IS NULL", "membership_revision", "resource_type"):
+    sql = str(
+        public.granted_resource_ids(scope=scope, kind="document").compile(
+            dialect=postgresql.dialect()
+        )
+    )
+    for fragment in (
+        "workspace_id",
+        "member_user_id",
+        "revoked_at IS NULL",
+        "membership_revision",
+        "resource_type",
+    ):
         assert fragment in sql
     with pytest.raises(ValueError):
         public.granted_resource_ids(scope=WorkspaceContext(OWNER, WS, "owner", 5), kind="document")
 
 
 def _row(**kw):
-    base = {"workspace_id": WS, "resource_type": "document", "resource_id": uuid4(), "member_user_id": MEMBER,
-                "granted_by_user_id": OWNER, "revision": 1, "resource_revision": 4, "membership_revision": 3,
-                "created_at": datetime.now(UTC), "updated_at": datetime.now(UTC), "revoked_at": None}
+    base = {
+        "workspace_id": WS,
+        "resource_type": "document",
+        "resource_id": uuid4(),
+        "member_user_id": MEMBER,
+        "granted_by_user_id": OWNER,
+        "revision": 1,
+        "resource_revision": 4,
+        "membership_revision": 3,
+        "created_at": datetime.now(UTC),
+        "updated_at": datetime.now(UTC),
+        "revoked_at": None,
+    }
     return SimpleNamespace(**{**base, **kw})
 
 
@@ -112,7 +134,13 @@ async def test_grant_lock_order_and_no_revision_bump(monkeypatch):
     calls: list[str] = []
     ws, ms, session = _setup_grant(monkeypatch, calls, row=None)
     out = await public.grant_share_in_uow(
-        session, WS, OWNER, "document", uuid4(), MEMBER, ShareUpsert(expected_revision=3, resource_revision=4),
+        session,
+        WS,
+        OWNER,
+        "document",
+        uuid4(),
+        MEMBER,
+        ShareUpsert(expected_revision=3, resource_revision=4),
         multi_workspace_enabled=True,
     )
     assert calls == ["workspace+memberships", "share", "resource"]
@@ -126,11 +154,13 @@ async def test_regrant_bumps_share_revision_and_noop_when_in_effect(monkeypatch)
     row = _row(revoked_at=datetime.now(UTC))
     _, _, session = _setup_grant(monkeypatch, [], row=row)
     body = ShareUpsert(expected_revision=3, resource_revision=4)
-    out = await public.grant_share_in_uow(session, WS, OWNER, "document", row.resource_id, MEMBER, body,
-                                          multi_workspace_enabled=True)
+    out = await public.grant_share_in_uow(
+        session, WS, OWNER, "document", row.resource_id, MEMBER, body, multi_workspace_enabled=True
+    )
     assert out.revision == 2 and out.revoked_at is None
-    out = await public.grant_share_in_uow(session, WS, OWNER, "document", row.resource_id, MEMBER, body,
-                                          multi_workspace_enabled=True)
+    out = await public.grant_share_in_uow(
+        session, WS, OWNER, "document", row.resource_id, MEMBER, body, multi_workspace_enabled=True
+    )
     assert out.revision == 2  # already in effect, unchanged
 
 
@@ -139,7 +169,13 @@ async def test_grant_resource_revision_mismatch_is_409(monkeypatch):
     _, _, session = _setup_grant(monkeypatch, [], row=None, projection_revision=9)
     with pytest.raises(HTTPException) as exc:
         await public.grant_share_in_uow(
-            session, WS, OWNER, "document", uuid4(), MEMBER, ShareUpsert(expected_revision=3, resource_revision=4),
+            session,
+            WS,
+            OWNER,
+            "document",
+            uuid4(),
+            MEMBER,
+            ShareUpsert(expected_revision=3, resource_revision=4),
             multi_workspace_enabled=True,
         )
     assert (exc.value.status_code, exc.value.detail) == (409, "resource_revision_changed")
@@ -153,7 +189,9 @@ async def test_revoke_bumps_share_only(monkeypatch):
     assert row.revoked_at is not None and row.revision == 2
     assert ws.configuration_revision == 7 and ms[MEMBER].revision == 3
     with pytest.raises(HTTPException) as exc:  # missing If-Match
-        await public.revoke_share_in_uow(session, WS, OWNER, "document", row.resource_id, MEMBER, None)
+        await public.revoke_share_in_uow(
+            session, WS, OWNER, "document", row.resource_id, MEMBER, None
+        )
     assert exc.value.status_code == 428
 
 
@@ -171,7 +209,13 @@ async def test_brief_path_propagates_shareable_409(monkeypatch):
     monkeypatch.setattr(dash, "read_brief_access_projection", AsyncMock(), raising=False)
     with pytest.raises(HTTPException) as exc:
         await public.grant_share_in_uow(
-            MagicMock(), WS, OWNER, "brief", uuid4(), MEMBER, ShareUpsert(expected_revision=3, resource_revision=1),
+            MagicMock(),
+            WS,
+            OWNER,
+            "brief",
+            uuid4(),
+            MEMBER,
+            ShareUpsert(expected_revision=3, resource_revision=1),
             multi_workspace_enabled=True,
         )
     assert (exc.value.status_code, exc.value.detail) == (409, "brief_not_shareable")
@@ -199,10 +243,18 @@ async def test_revoke_resource_shares_flush_only():
     session = MagicMock()
     session.execute = AsyncMock(return_value=SimpleNamespace(rowcount=2))
     session.commit = AsyncMock()
-    assert await public.revoke_resource_shares_in_uow(
-        session, workspace_id=WS, resource_type="document", resource_ids=(uuid4(),)) == 2
-    assert await public.revoke_resource_shares_in_uow(
-        session, workspace_id=WS, resource_type="document", resource_ids=()) == 0
+    assert (
+        await public.revoke_resource_shares_in_uow(
+            session, workspace_id=WS, resource_type="document", resource_ids=(uuid4(),)
+        )
+        == 2
+    )
+    assert (
+        await public.revoke_resource_shares_in_uow(
+            session, workspace_id=WS, resource_type="document", resource_ids=()
+        )
+        == 0
+    )
     session.commit.assert_not_called()
 
 

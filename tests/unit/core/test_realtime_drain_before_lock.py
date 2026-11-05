@@ -14,8 +14,12 @@ from core.realtime import routes as rr
 
 
 def _request(factory: Any) -> Request:
-    app = SimpleNamespace(state=SimpleNamespace(
-        session_factory=factory, settings=SimpleNamespace(multi_workspace_enabled=False)), exception_handlers={})
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            session_factory=factory, settings=SimpleNamespace(multi_workspace_enabled=False)
+        ),
+        exception_handlers={},
+    )
     return Request({"type": "http", "app": app, "headers": []})
 
 
@@ -25,7 +29,8 @@ class _Session:
 
 def _wrap() -> Any:
     return rr._RealtimeResponse(
-        Response(b"hello"), request=_request(_Session), workspace=1, access_fence=2, auth_session=3)  # type: ignore[arg-type]
+        Response(b"hello"), request=_request(_Session), workspace=1, access_fence=2, auth_session=3
+    )  # type: ignore[arg-type]
 
 
 def _patch(monkeypatch: pytest.MonkeyPatch, order: list[str]) -> None:
@@ -47,8 +52,13 @@ def test_body_drain_precedes_lock(monkeypatch: pytest.MonkeyPatch) -> None:
         order.append(f"{m['type']}:{m.get('body', b'')!r}")
 
     asyncio.run(_wrap()({"type": "http", "headers": []}, None, send))
-    assert order == ["lock", "http.response.start:b''", "http.response.body:b''", "lock",
-                     "http.response.body:b'hello'"]
+    assert order == [
+        "lock",
+        "http.response.start:b''",
+        "http.response.body:b''",
+        "lock",
+        "http.response.body:b'hello'",
+    ]
 
 
 def test_drain_timeout_never_takes_body_lock(monkeypatch: pytest.MonkeyPatch) -> None:

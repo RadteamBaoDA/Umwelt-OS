@@ -19,7 +19,14 @@ from modules.chat.generative_ui.tool_specs import (
 
 T0 = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
 WS = uuid4()
-SLOT = {"id": "s1", "label": "Tue", "date": "2026-10-20", "start_time": "10:00", "end_time": "10:30", "available": True}
+SLOT = {
+    "id": "s1",
+    "label": "Tue",
+    "date": "2026-10-20",
+    "start_time": "10:00",
+    "end_time": "10:30",
+    "available": True,
+}
 SLOT_OFF = {**SLOT, "id": "s2", "available": False}
 
 
@@ -39,7 +46,11 @@ class FakeSession:
 
     async def execute(self, stmt: Any) -> Any:
         if str(stmt).lstrip().upper().startswith("SELECT"):
-            rows = [(self.run.id, self.run.workspace_id)] if self.run.status == "awaiting_input" else []
+            rows = (
+                [(self.run.id, self.run.workspace_id)]
+                if self.run.status == "awaiting_input"
+                else []
+            )
             return SimpleNamespace(all=lambda: rows)
         self.heartbeats += 1
         return None
@@ -62,17 +73,32 @@ class FakeSession:
 
 def _run(status: str = "streaming") -> Any:
     return SimpleNamespace(
-        id=uuid4(), conversation_id=uuid4(), status=status, input_request=None, workspace_id=WS, actor_user_id=2,
-        updated_at=T0, completed_at=None, error_code=None, error_message=None,
+        id=uuid4(),
+        conversation_id=uuid4(),
+        status=status,
+        input_request=None,
+        workspace_id=WS,
+        actor_user_id=2,
+        updated_at=T0,
+        completed_at=None,
+        error_code=None,
+        error_message=None,
     )
 
 
 def _args(kind: str = "time_slots") -> RequestUserInputArgs:
     if kind == "time_slots":
-        return RequestUserInputArgs.model_validate({"kind": kind, "prompt": "When?", "slots": [SLOT, SLOT_OFF]})
+        return RequestUserInputArgs.model_validate(
+            {"kind": kind, "prompt": "When?", "slots": [SLOT, SLOT_OFF]}
+        )
     if kind == "choice":
-        return RequestUserInputArgs.model_validate({
-            "kind": kind, "prompt": "Which?", "options": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}]})
+        return RequestUserInputArgs.model_validate(
+            {
+                "kind": kind,
+                "prompt": "Which?",
+                "options": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+            }
+        )
     return RequestUserInputArgs.model_validate({"kind": kind, "prompt": "Name?"})
 
 
@@ -85,14 +111,24 @@ def _no_privacy_lock(monkeypatch: pytest.MonkeyPatch) -> None:
 async def _parked(kind: str = "time_slots") -> tuple[FakeSession, Any, str]:
     run = _run()
     session = FakeSession(run)
-    payload = await ui.create_input_request(session, run, _args(kind), ttl=timedelta(minutes=5), now=T0)  # type: ignore[arg-type]
+    payload = await ui.create_input_request(
+        session, run, _args(kind), ttl=timedelta(minutes=5), now=T0
+    )  # type: ignore[arg-type]
     return session, run, payload["request_id"]
 
 
 async def _submit(session: FakeSession, rid: str, answer: str, **kw: Any) -> str:
-    base: dict[str, Any] = {"workspace_id": WS, "actor_user_id": 2, "now": T0 + timedelta(minutes=1)}
+    base: dict[str, Any] = {
+        "workspace_id": WS,
+        "actor_user_id": 2,
+        "now": T0 + timedelta(minutes=1),
+    }
     return await ui.submit_input(
-        session, response_id=session.run.id, request_id=rid, answer=answer, **{**base, **kw},  # type: ignore[arg-type]
+        session,
+        response_id=session.run.id,
+        request_id=rid,
+        answer=answer,
+        **{**base, **kw},  # type: ignore[arg-type]
     )
 
 
@@ -100,9 +136,15 @@ async def test_create_parks_run_and_event_has_no_answer_state() -> None:
     session, run, rid = await _parked()
     assert run.status == "awaiting_input" and run.input_request["state"] == "pending"
     event = session.events[0]
-    assert (event.event_type, event.seq, event.event_id) == ("message.input.request", 1, f"{run.id}:1")
+    assert (event.event_type, event.seq, event.event_id) == (
+        "message.input.request",
+        1,
+        f"{run.id}:1",
+    )
     assert set(event.data) == {"request_id", "kind", "prompt", "options", "slots", "expires_at"}
-    assert event.data["request_id"] == rid and "answer" not in event.data and "state" not in event.data
+    assert (
+        event.data["request_id"] == rid and "answer" not in event.data and "state" not in event.data
+    )
     assert event.data["expires_at"] == (T0 + timedelta(minutes=5)).isoformat()
 
 
@@ -116,7 +158,12 @@ async def test_create_requires_streaming_run() -> None:
 async def test_submit_slot_resumes_run_and_returns_tool_result() -> None:
     session, run, rid = await _parked()
     result = json.loads(await _submit(session, rid, "s1"))
-    assert result == {"status": "answered", "kind": "time_slots", "answer": "s1", "label": "Tue (2026-10-20 10:00-10:30)"}
+    assert result == {
+        "status": "answered",
+        "kind": "time_slots",
+        "answer": "s1",
+        "label": "Tue (2026-10-20 10:00-10:30)",
+    }
     assert run.status == "streaming"  # stays in the active set: the 409 rule has no gap
     resolved = session.events[-1]
     assert resolved.event_type == "message.input.resolved" and resolved.seq == 2
@@ -125,16 +172,26 @@ async def test_submit_slot_resumes_run_and_returns_tool_result() -> None:
 
 async def test_decline_choice_and_text_answers() -> None:
     session, _, rid = await _parked("time_slots")
-    assert json.loads(await _submit(session, rid, INPUT_DECLINE)) == {"status": "declined", "kind": "time_slots"}
+    assert json.loads(await _submit(session, rid, INPUT_DECLINE)) == {
+        "status": "declined",
+        "kind": "time_slots",
+    }
     session, _, rid = await _parked("choice")
     assert json.loads(await _submit(session, rid, "b"))["label"] == "B"
     session, _, rid = await _parked("text")
     assert json.loads(await _submit(session, rid, "  Ada  "))["answer"] == "Ada"
 
 
-@pytest.mark.parametrize(("kind", "answer"), [
-    ("time_slots", "nope"), ("time_slots", "s2"), ("choice", "z"), ("text", "   "), ("text", "x" * 2001),
-])
+@pytest.mark.parametrize(
+    ("kind", "answer"),
+    [
+        ("time_slots", "nope"),
+        ("time_slots", "s2"),
+        ("choice", "z"),
+        ("text", "   "),
+        ("text", "x" * 2001),
+    ],
+)
 async def test_invalid_answers_rejected_without_state_change(kind: str, answer: str) -> None:
     session, run, rid = await _parked(kind)
     with pytest.raises(ui.InputRequestError) as err:
@@ -145,7 +202,11 @@ async def test_invalid_answers_rejected_without_state_change(kind: str, answer: 
 
 async def test_wrong_request_id_and_foreign_owner_are_404() -> None:
     session, run, rid = await _parked()
-    for kw, request_id in (({}, "other"), ({"actor_user_id": 9}, rid), ({"workspace_id": uuid4()}, rid)):
+    for kw, request_id in (
+        ({}, "other"),
+        ({"actor_user_id": 9}, rid),
+        ({"workspace_id": uuid4()}, rid),
+    ):
         with pytest.raises(ui.InputRequestError) as err:
             await _submit(session, request_id, "s1", **kw)
         assert err.value.status_code == 404
@@ -204,7 +265,12 @@ class Clock:
 
 async def _wait(session: FakeSession, rid: str, clock: Clock, **kw: Any) -> ui.InputOutcome:
     return await ui.await_user_input(
-        lambda: session, session.run.id, rid, now=clock.now, sleep=clock.sleep, **kw,  # type: ignore[arg-type]
+        lambda: session,
+        session.run.id,
+        rid,
+        now=clock.now,
+        sleep=clock.sleep,
+        **kw,  # type: ignore[arg-type]
     )
 
 
@@ -215,7 +281,9 @@ async def test_await_returns_answer_submitted_while_parked_and_heartbeats() -> N
         if clock.sleeps == 3:
             await _submit(session, rid, "s1", now=clock.t)
 
-    out = await _wait(session, rid, Clock(answer_after_three_polls), poll_interval=1.0, heartbeat_interval=2.0)
+    out = await _wait(
+        session, rid, Clock(answer_after_three_polls), poll_interval=1.0, heartbeat_interval=2.0
+    )
     assert out.outcome == "answered" and json.loads(out.tool_result)["answer"] == "s1"
     assert session.heartbeats >= 1 and run.status == "streaming"
 
@@ -248,14 +316,25 @@ def test_ttl_clamped_to_worker_job_budget() -> None:
     assert ui.resolve_ttl(60) == timedelta(seconds=60)
 
 
-@pytest.mark.parametrize("payload", [
-    {"kind": "time_slots", "prompt": "p"},
-    {"kind": "choice", "prompt": "p", "options": [{"id": "a", "label": "A"}]},
-    {"kind": "choice", "prompt": "p", "options": [{"id": "a", "label": "A"}, {"id": "a", "label": "B"}]},
-    {"kind": "choice", "prompt": "p", "options": [{"id": INPUT_DECLINE, "label": "A"}, {"id": "b", "label": "B"}]},
-    {"kind": "text", "prompt": "p", "options": [{"id": "a", "label": "A"}]},
-    {"kind": "text", "prompt": ""},
-])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"kind": "time_slots", "prompt": "p"},
+        {"kind": "choice", "prompt": "p", "options": [{"id": "a", "label": "A"}]},
+        {
+            "kind": "choice",
+            "prompt": "p",
+            "options": [{"id": "a", "label": "A"}, {"id": "a", "label": "B"}],
+        },
+        {
+            "kind": "choice",
+            "prompt": "p",
+            "options": [{"id": INPUT_DECLINE, "label": "A"}, {"id": "b", "label": "B"}],
+        },
+        {"kind": "text", "prompt": "p", "options": [{"id": "a", "label": "A"}]},
+        {"kind": "text", "prompt": ""},
+    ],
+)
 def test_args_validation(payload: dict[str, Any]) -> None:
     with pytest.raises(ValidationError):
         RequestUserInputArgs.model_validate(payload)
@@ -263,7 +342,9 @@ def test_args_validation(payload: dict[str, Any]) -> None:
 
 def test_tool_spec_is_opt_in() -> None:
     def names(**kw: bool) -> set[str]:
-        return {s["function"]["name"] for s in build_chat_tool_specs(include_read_skill=False, **kw)}
+        return {
+            s["function"]["name"] for s in build_chat_tool_specs(include_read_skill=False, **kw)
+        }
 
     assert "request_user_input" not in names()
     assert "request_user_input" in names(include_user_input=True)

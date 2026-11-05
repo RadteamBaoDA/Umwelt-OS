@@ -38,12 +38,26 @@ def factory(log):
 
 
 def attempt(provider=None, source_type="api", authenticated=False, terms=None):
-    source = SimpleNamespace(id=uuid4(), provider=provider, type=source_type, generation=1, configuration={},
-                             workspace_id=uuid4())
+    source = SimpleNamespace(
+        id=uuid4(),
+        provider=provider,
+        type=source_type,
+        generation=1,
+        configuration={},
+        workspace_id=uuid4(),
+    )
     return collection.Attempt(
-        ref=REF, attempt=1, scope=SimpleNamespace(workspace_id=uuid4()), multi=True, source=source,
-        access_fence=None, source_fence=None, terms_revision=terms, connector_revision=2,
-        authenticated=authenticated)
+        ref=REF,
+        attempt=1,
+        scope=SimpleNamespace(workspace_id=uuid4()),
+        multi=True,
+        source=source,
+        access_fence=None,
+        source_fence=None,
+        terms_revision=terms,
+        connector_revision=2,
+        authenticated=authenticated,
+    )
 
 
 def test_snapshot_matches_requires_all_three_to_agree():
@@ -53,20 +67,23 @@ def test_snapshot_matches_requires_all_three_to_agree():
     assert not collection.snapshot_matches((1, 2, 3), (1, 2, 4))
 
 
-@pytest.mark.parametrize("exc, code, retryable", [
-    (rest.CollectionIncomplete(), "collection_incomplete", None),
-    (rest.RestSchemaChanged("x"), "schema_changed", None),
-    (collection.TermsIneligible(), "terms_not_accepted", None),
-    (rest.UnsafeDestination("x"), "destination_blocked", None),
-    (rest.UnsafeDestination("host_unresolvable"), "provider_timeout", True),
-    (rest.ProviderHttpError(401), "invalid_credential", None),
-    (rest.ProviderHttpError(503), "provider_unavailable", True),
-    (rest.ProviderHttpError(404), "provider_rejected", False),
-    (TimeoutError(), "provider_timeout", True),
-    (HTTPException(status_code=409), "ingestion_conflict", True),
-    (ValueError("x"), "provider_response_invalid", None),
-    (RuntimeError("boom"), "executor_error", True),
-])
+@pytest.mark.parametrize(
+    "exc, code, retryable",
+    [
+        (rest.CollectionIncomplete(), "collection_incomplete", None),
+        (rest.RestSchemaChanged("x"), "schema_changed", None),
+        (collection.TermsIneligible(), "terms_not_accepted", None),
+        (rest.UnsafeDestination("x"), "destination_blocked", None),
+        (rest.UnsafeDestination("host_unresolvable"), "provider_timeout", True),
+        (rest.ProviderHttpError(401), "invalid_credential", None),
+        (rest.ProviderHttpError(503), "provider_unavailable", True),
+        (rest.ProviderHttpError(404), "provider_rejected", False),
+        (TimeoutError(), "provider_timeout", True),
+        (HTTPException(status_code=409), "ingestion_conflict", True),
+        (ValueError("x"), "provider_response_invalid", None),
+        (RuntimeError("boom"), "executor_error", True),
+    ],
+)
 def test_failures_map_to_bounded_codes(exc, code, retryable):
     got = collection._classify(exc)
     assert got["error_code"] == code and got.get("retryable") == retryable
@@ -84,7 +101,13 @@ async def test_gate_debits_once_per_physical_send_and_rechecks_at_header_time(mo
 
     monkeypatch.setattr(collection.SendGate, "_authorize", authorize)
     monkeypatch.setattr(quota, "debit_send", debit_send)
-    gate = collection.SendGate(factory(log), attempt("open_meteo"), settings=None, deadline=1e18, quota_provider="open_meteo")
+    gate = collection.SendGate(
+        factory(log),
+        attempt("open_meteo"),
+        settings=None,
+        deadline=1e18,
+        quota_provider="open_meteo",
+    )
     for _ in range(2):  # two sends, each announced by a pre-call and a header-time call
         await gate()
         await gate()
@@ -105,7 +128,13 @@ async def test_gate_exhausted_budget_raises_before_any_send_and_commits_nothing(
 
     monkeypatch.setattr(collection.SendGate, "_authorize", authorize)
     monkeypatch.setattr(quota, "debit_send", debit_send)
-    gate = collection.SendGate(factory(log), attempt("open_meteo"), settings=None, deadline=1e18, quota_provider="open_meteo")
+    gate = collection.SendGate(
+        factory(log),
+        attempt("open_meteo"),
+        settings=None,
+        deadline=1e18,
+        quota_provider="open_meteo",
+    )
     with pytest.raises(quota.QuotaDeferred):
         await gate()
     assert "commit" not in log and "rollback" in log
@@ -117,7 +146,9 @@ async def test_gate_rejects_a_changed_alpha_credential_operation(monkeypatch):
         return None
 
     monkeypatch.setattr(collection.SendGate, "_authorize", authorize)
-    gate = collection.SendGate(factory([]), attempt("alpha_vantage"), settings=None, deadline=1e18, quota_provider=None)
+    gate = collection.SendGate(
+        factory([]), attempt("alpha_vantage"), settings=None, deadline=1e18, quota_provider=None
+    )
     first = uuid4()
     await gate(first)
     await gate(first)  # header-time recheck of the same send
@@ -127,7 +158,9 @@ async def test_gate_rejects_a_changed_alpha_credential_operation(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_gate_past_deadline_is_a_timeout_not_a_send():
-    gate = collection.SendGate(factory([]), attempt(), settings=None, deadline=0.0, quota_provider=None)
+    gate = collection.SendGate(
+        factory([]), attempt(), settings=None, deadline=0.0, quota_provider=None
+    )
     with pytest.raises(TimeoutError):
         await gate()
 
@@ -150,8 +183,13 @@ def harness(monkeypatch, adapter, att=None, settled=None):
     monkeypatch.setattr(collection, "_release_lease", noop)
     monkeypatch.setattr(collection, "_record_rate_limit", noop)
     monkeypatch.setattr(collection, "_adapter_for", lambda source: adapter)
-    ctx = {"settings": SimpleNamespace(multi_workspace_enabled=True), "session_factory": factory([])}
-    admission = CollectionAdmissionRead(request_id=REF.request_id, source_id=uuid4(), admission_token=REF.admission_token, attempt=1)
+    ctx = {
+        "settings": SimpleNamespace(multi_workspace_enabled=True),
+        "session_factory": factory([]),
+    }
+    admission = CollectionAdmissionRead(
+        request_id=REF.request_id, source_id=uuid4(), admission_token=REF.admission_token, attempt=1
+    )
     return ctx, admission, settled
 
 
@@ -186,7 +224,11 @@ async def test_provider_429_keeps_the_full_retry_after(monkeypatch):
 
     ctx, admission, settled = harness(monkeypatch, adapter)
     await collection.execute_collection(ctx, admission)
-    assert settled[0]["provider_deadline"] == until and settled[0]["retryable"] and settled[0]["outcome"] == "failed"
+    assert (
+        settled[0]["provider_deadline"] == until
+        and settled[0]["retryable"]
+        and settled[0]["outcome"] == "failed"
+    )
 
 
 @pytest.mark.asyncio
@@ -212,7 +254,9 @@ async def test_unsupported_providers_fail_closed_without_a_send(monkeypatch):
         raise AssertionError("must not run")
 
     for provider, adapter_fn in (("web", None),):
-        ctx, admission, settled = harness(monkeypatch, adapter_fn, attempt(provider if provider != "web" else None, "web"))
+        ctx, admission, settled = harness(
+            monkeypatch, adapter_fn, attempt(provider if provider != "web" else None, "web")
+        )
         await collection.execute_collection(ctx, admission)
         assert settled == [{"outcome": "failed", "error_code": "collection_unsupported"}]
 
@@ -244,7 +288,9 @@ async def test_authenticated_native_rest_requires_credential_reentry(monkeypatch
         async def rollback(self):
             return None
 
-    run = SimpleNamespace(attempt=attempt(authenticated=True), factory=_Empty, gate=SimpleNamespace(fetch_bytes=None))
+    run = SimpleNamespace(
+        attempt=attempt(authenticated=True), factory=_Empty, gate=SimpleNamespace(fetch_bytes=None)
+    )
     with pytest.raises(rest.ProviderHttpError) as exc:
         await collection._run_rest(run)
     assert collection._classify(exc.value)["error_code"] == "invalid_credential"
@@ -273,11 +319,19 @@ async def test_generic_accept_uses_request_ref_and_a_request_scoped_batch_key(mo
 
     monkeypatch.setattr(collection.ingestion, "drop_seen_records", drop_seen)
     run = SimpleNamespace(attempt=attempt(), factory=factory([]))
-    record = {"provider_id": "1", "content": "c", "observed_at": datetime.now(UTC).isoformat(), "version": None, "metadata": {}}
+    record = {
+        "provider_id": "1",
+        "content": "c",
+        "observed_at": datetime.now(UTC).isoformat(),
+        "version": None,
+        "metadata": {},
+    }
     await collection._accept_generic(run, [record], None, "2026-01-01T00:00:00+00:00")
     batch, token, kwargs = calls["receive"]
     assert token is None and kwargs["request_ref"] == REF
-    assert batch.batch_key == f"connector-request:{REF.request_id}" and batch.connector_revision == 2
+    assert (
+        batch.batch_key == f"connector-request:{REF.request_id}" and batch.connector_revision == 2
+    )
     await collection._accept_generic(run, [], None, None)
     assert calls["none"]["request_ref"] == REF  # empty: no batch, no cursor, no fake data
     # All-seen poll: no batch; the earned cursor rides the no-change settlement.
@@ -291,7 +345,9 @@ async def test_generic_accept_uses_request_ref_and_a_request_scoped_batch_key(mo
 async def test_rss_truncation_is_reported_so_the_cursor_cannot_advance():
     def feed(n, nxt=None):
         items = "".join(
-            f"<item><guid>g{i}</guid><title>t{i}</title><pubDate>2026-01-01T00:00:00Z</pubDate></item>" for i in range(n))
+            f"<item><guid>g{i}</guid><title>t{i}</title><pubDate>2026-01-01T00:00:00Z</pubDate></item>"
+            for i in range(n)
+        )
         link = f'<link rel="next" href="{nxt}"/>' if nxt else ""
         return f"<rss><channel>{link}{items}</channel></rss>".encode()
 
@@ -300,10 +356,16 @@ async def test_rss_truncation_is_reported_so_the_cursor_cannot_advance():
 
     stats: dict[str, bool] = {}
     out = await n8n.read_rss("https://a.example/feed", None, fetch=fetch_many, stats=stats)
-    assert len(out["records"]) == 500 and stats == {"truncated": True}  # mid-page: no exact continuation
+    assert len(out["records"]) == 500 and stats == {
+        "truncated": True
+    }  # mid-page: no exact continuation
 
     async def fetch_pages(url):
-        return feed(250, "https://a.example/feed?p=2") if "p=2" not in url else feed(250, "https://a.example/feed?p=3")
+        return (
+            feed(250, "https://a.example/feed?p=2")
+            if "p=2" not in url
+            else feed(250, "https://a.example/feed?p=3")
+        )
 
     stats = {}
     out = await n8n.read_rss("https://a.example/feed", None, fetch=fetch_pages, stats=stats)
@@ -319,8 +381,15 @@ async def test_rss_truncation_is_reported_so_the_cursor_cannot_advance():
 
 # ---------------------------------------------------------------- C3b: continuation, validators, 304
 
+
 def _rec(i):
-    return {"provider_id": str(i), "content": "c", "observed_at": datetime.now(UTC).isoformat(), "version": None, "metadata": {}}
+    return {
+        "provider_id": str(i),
+        "content": "c",
+        "observed_at": datetime.now(UTC).isoformat(),
+        "version": None,
+        "metadata": {},
+    }
 
 
 def _capture(monkeypatch):
@@ -337,12 +406,18 @@ def _capture(monkeypatch):
 async def test_partial_walk_commits_a_checkpoint_and_leaves_the_cursor(monkeypatch):
     got = _capture(monkeypatch)
     state = collection.CollectionState(cursor="2026-01-01T00:00:00+00:00")
-    walk = collection.Walk([_rec(1), _rec(2)], "https://a.example/p3", "2026-02-01T00:00:00+00:00", '"e"', None)
+    walk = collection.Walk(
+        [_rec(1), _rec(2)], "https://a.example/p3", "2026-02-01T00:00:00+00:00", '"e"', None
+    )
     await collection._accept_walk(SimpleNamespace(attempt=attempt()), state, walk, None)
-    assert got["before"] == got["after"] == state.cursor  # no skip: cursor only moves when the walk is complete
+    assert (
+        got["before"] == got["after"] == state.cursor
+    )  # no skip: cursor only moves when the walk is complete
     update = got["update"]
     assert update.coverage == "partial" and not update.update_validators
-    cp = rest.Checkpoint.decode(update.continuation_state, revision=2, cursor=state.cursor, origin_url=None)
+    cp = rest.Checkpoint.decode(
+        update.continuation_state, revision=2, cursor=state.cursor, origin_url=None
+    )
     assert cp.url == "https://a.example/p3" and cp.max_time == "2026-02-01T00:00:00+00:00"
     assert cp.ids == [rest.id_hash("1"), rest.id_hash("2")]
 
@@ -368,13 +443,24 @@ async def test_final_empty_segment_still_earns_the_cursor_through_the_no_change_
 
 
 @pytest.mark.asyncio
-async def test_not_modified_is_a_receipted_no_change_without_cursor_or_validator_changes(monkeypatch):
+async def test_not_modified_is_a_receipted_no_change_without_cursor_or_validator_changes(
+    monkeypatch,
+):
     got = _capture(monkeypatch)
     state = collection.CollectionState(cursor="c", etag='"e"', validators_revision=2)
-    await collection._accept_walk(SimpleNamespace(attempt=attempt()), state, collection.Walk([], None, None, None, None, True), None)
+    await collection._accept_walk(
+        SimpleNamespace(attempt=attempt()),
+        state,
+        collection.Walk([], None, None, None, None, True),
+        None,
+    )
     update = got["update"]
     assert got["records"] == [] and got["after"] == "c"
-    assert not update.update_validators and update.cursor_after is None and update.continuation_state is None
+    assert (
+        not update.update_validators
+        and update.cursor_after is None
+        and update.continuation_state is None
+    )
 
 
 def test_conditional_headers_need_validators_stored_under_the_current_revision():
@@ -398,9 +484,19 @@ def _rest_harness(monkeypatch, state, pages):
     monkeypatch.setattr(collection, "_state", get_state)
     from modules.connectors import registry
 
-    monkeypatch.setattr(registry, "configuration", lambda source: SimpleNamespace(
-        url="https://a.example/items", feed_url="https://a.example/feed", items_path="items", id_field="id",
-        title_field=None, content_field=None, updated_field=None))
+    monkeypatch.setattr(
+        registry,
+        "configuration",
+        lambda source: SimpleNamespace(
+            url="https://a.example/items",
+            feed_url="https://a.example/feed",
+            items_path="items",
+            id_field="id",
+            title_field=None,
+            content_field=None,
+            updated_field=None,
+        ),
+    )
     run = SimpleNamespace(attempt=attempt(), gate=SimpleNamespace(fetch_bytes=fetch))
     return run, sent, got
 
@@ -416,13 +512,19 @@ async def test_rest_sends_stored_validators_and_a_304_settles_no_change(monkeypa
 
 @pytest.mark.asyncio
 async def test_rest_resumes_from_checkpoint_without_conditional_headers(monkeypatch):
-    cp = rest.Checkpoint(url="https://a.example/items?p=2", revision=2, cursor="c", ids=[rest.id_hash("1")])
-    state = collection.CollectionState(cursor="c", etag='"e"', validators_revision=2, continuation_state=cp.encode())
+    cp = rest.Checkpoint(
+        url="https://a.example/items?p=2", revision=2, cursor="c", ids=[rest.id_hash("1")]
+    )
+    state = collection.CollectionState(
+        cursor="c", etag='"e"', validators_revision=2, continuation_state=cp.encode()
+    )
     body = rest.Fetched(b'{"items": [{"id": 1}, {"id": 2}]}')
     run, sent, got = _rest_harness(monkeypatch, state, [body])
     await collection._run_rest(run)
     assert sent == [("https://a.example/items?p=2", None)]
-    assert [r["provider_id"] for r in got["records"]] == ["2"]  # boundary record 1 not delivered twice
+    assert [r["provider_id"] for r in got["records"]] == [
+        "2"
+    ]  # boundary record 1 not delivered twice
 
 
 def test_keyless_forbidden_is_a_provider_rejection_not_a_credential_error():
@@ -434,7 +536,9 @@ def test_keyless_forbidden_is_a_provider_rejection_not_a_credential_error():
     # Catalog-only keyless providers (no free-provider spec) must not surface invalid_credential.
     assert collection._sends_no_credential(SimpleNamespace(provider="youtube", type="rss"))
     assert collection._sends_no_credential(SimpleNamespace(provider="arxiv", type="rss"))
-    assert not collection._sends_no_credential(SimpleNamespace(provider="alpha_vantage", type="api"))
+    assert not collection._sends_no_credential(
+        SimpleNamespace(provider="alpha_vantage", type="api")
+    )
     assert not collection._sends_no_credential(SimpleNamespace(provider="mastodon", type="api"))
     assert not collection._sends_no_credential(SimpleNamespace(provider="coingecko", type="api"))
     assert not collection._sends_no_credential(SimpleNamespace(provider=None, type="api"))

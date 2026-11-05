@@ -81,8 +81,11 @@ from modules.settings.public import module_dependency
 from modules.sources import public as sources
 from modules.sources.public import ConnectorSource, SourceCreate, SourcePatch
 
-router = APIRouter(prefix="/api/v1/connectors/builtins", tags=["connectors"],
-                   dependencies=[Depends(module_dependency("connectors"))])
+router = APIRouter(
+    prefix="/api/v1/connectors/builtins",
+    tags=["connectors"],
+    dependencies=[Depends(module_dependency("connectors"))],
+)
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 OwnerWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
@@ -92,6 +95,7 @@ _USES_WITH_REVIEW = ("personal", "noncommercial", "commercial")
 
 class SectionRead(BaseModel):
     """One selectable RSS section as the UI renders it (slug is the only value the owner sends back)."""
+
     slug: str
     label_en: str
     label_vi: str
@@ -99,6 +103,7 @@ class SectionRead(BaseModel):
 
 class BuiltinSourceRead(BaseModel):
     """One built-in preset with the owner's current toggle state; ``source_id`` is None until first enabled."""
+
     id: str
     label: str
     category: str
@@ -121,6 +126,7 @@ class BuiltinSourceRead(BaseModel):
 
 class BuiltinEnableRequest(BaseModel):
     """Owner input for the enable toggle: the deployment use declared with the terms acknowledgement."""
+
     model_config = ConfigDict(extra="forbid")
     declared_use: Literal["personal", "noncommercial", "commercial", "unknown"] = "personal"
     # Optional owner switches; None keeps the Source's current value (new Sources default to on).
@@ -135,7 +141,9 @@ class BuiltinEnableRequest(BaseModel):
     exclude_keywords: tuple[str, ...] | None = Field(default=None, max_length=20)
     max_age_days: StrictInt | None = Field(default=None, ge=1, le=365)
     # Wave B: RSS section slugs (catalog providers only; membership is checked against the server catalog).
-    feed_sections: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=MAX_SECTIONS)
+    feed_sections: tuple[str, ...] | None = Field(
+        default=None, min_length=1, max_length=MAX_SECTIONS
+    )
     # Wave D per-type options; the same bounded types as ``ConnectorConfig`` (422 on any other value), allowed
     # per provider by the registry (422 on the wrong provider).
     hn_list: HnList | None = None
@@ -146,11 +154,17 @@ class BuiltinEnableRequest(BaseModel):
     usgs_min_magnitude: UsgsMagnitude | None = None
     usgs_period: UsgsPeriod | None = None
     min_magnitude: float | None = Field(default=None, ge=2.0, le=8.0)
-    eonet_categories: tuple[EonetCategory, ...] | None = Field(default=None, min_length=1, max_length=13)
+    eonet_categories: tuple[EonetCategory, ...] | None = Field(
+        default=None, min_length=1, max_length=13
+    )
     eonet_status: EonetStatus | None = None
     eonet_days: StrictInt | None = Field(default=None, ge=1, le=30)
-    gdacs_event_types: tuple[GdacsType, ...] | None = Field(default=None, min_length=1, max_length=6)
-    gdacs_alert_levels: tuple[GdacsAlert, ...] | None = Field(default=None, min_length=1, max_length=3)
+    gdacs_event_types: tuple[GdacsType, ...] | None = Field(
+        default=None, min_length=1, max_length=6
+    )
+    gdacs_alert_levels: tuple[GdacsAlert, ...] | None = Field(
+        default=None, min_length=1, max_length=3
+    )
     nws_severity: tuple[NwsSeverity, ...] | None = Field(default=None, min_length=1, max_length=4)
     nws_area: NwsArea | None = None
     nvd_severity: tuple[NvdSeverity, ...] | None = Field(default=None, min_length=1, max_length=4)
@@ -169,8 +183,12 @@ class BuiltinEnableRequest(BaseModel):
     fx_quotes: tuple[FxCurrency, ...] | None = Field(default=None, min_length=1, max_length=10)
     oecd_countries: tuple[OecdArea, ...] | None = Field(default=None, min_length=1, max_length=10)
     crypto_symbols: tuple[CryptoPair, ...] | None = Field(default=None, min_length=1, max_length=10)
-    vn_symbols: tuple[VnSymbol, ...] | None = Field(default=None, min_length=1, max_length=MAX_VN_SYMBOLS)
-    job_keywords: tuple[JobKeyword, ...] | None = Field(default=None, min_length=1, max_length=MAX_JOB_KEYWORDS)
+    vn_symbols: tuple[VnSymbol, ...] | None = Field(
+        default=None, min_length=1, max_length=MAX_VN_SYMBOLS
+    )
+    job_keywords: tuple[JobKeyword, ...] | None = Field(
+        default=None, min_length=1, max_length=MAX_JOB_KEYWORDS
+    )
     job_cities: tuple[JobCity, ...] | None = Field(default=None, min_length=1, max_length=3)
     job_levels: tuple[JobLevel, ...] | None = Field(default=None, min_length=1, max_length=5)
     job_min_salary_usd: StrictInt | None = Field(default=None, ge=0, le=20000)
@@ -190,7 +208,9 @@ def _spec(provider: str) -> FreeProviderSpec:
     return spec
 
 
-def _read(spec: FreeProviderSpec, source: ConnectorSource | None, active: bool) -> BuiltinSourceRead:
+def _read(
+    spec: FreeProviderSpec, source: ConnectorSource | None, active: bool
+) -> BuiltinSourceRead:
     """Project a spec plus its (optional) Source and activation flag into the owner-facing row.
 
     Adds the applicable option names and, for section-catalog presets, the catalog and its default slug so the
@@ -198,15 +218,25 @@ def _read(spec: FreeProviderSpec, source: ConnectorSource | None, active: bool) 
     """
     catalog = SECTION_CATALOG.get(spec.id)
     return BuiltinSourceRead(
-        id=spec.id, label=spec.label, category=spec.category, eligibility=spec.eligibility,
-        terms_url=spec.terms_url, terms_checked_on=spec.checked_on, attribution=spec.attribution,
+        id=spec.id,
+        label=spec.label,
+        category=spec.category,
+        eligibility=spec.eligibility,
+        terms_url=spec.terms_url,
+        terms_checked_on=spec.checked_on,
+        attribution=spec.attribution,
         execution=spec.execution,
         realtime_tier=get_realtime_tier(spec.id, getattr(source, "configuration", None)),
         data_shapes=sorted(source_data_shapes(spec.id, PROVIDER_SOURCE_TYPES.get(spec.id, "api"))),
-        source_id=source.id if source is not None else None, enabled=active,
+        source_id=source.id if source is not None else None,
+        enabled=active,
         applicable_options=applicable_options(spec.id),
-        sections=[SectionRead(slug=x.slug, label_en=x.label_en, label_vi=x.label_vi) for x in catalog.sections]
-        if catalog else None,
+        sections=[
+            SectionRead(slug=x.slug, label_en=x.label_en, label_vi=x.label_vi)
+            for x in catalog.sections
+        ]
+        if catalog
+        else None,
         default_section=catalog.default if catalog else None,
         min_interval_minutes=min_interval_minutes(spec.id),
     )
@@ -215,8 +245,11 @@ def _read(spec: FreeProviderSpec, source: ConnectorSource | None, active: bool) 
 def _is_enabled(source: ConnectorSource, row: object | None) -> bool:
     """A built-in is on only when its Source is active and the connector row is active and current."""
     return bool(
-        row is not None and source.status == "active" and getattr(row, "state", None) == "active"
-        and getattr(row, "desired_enabled", False) and getattr(row, "applied_revision", -1) == getattr(row, "desired_revision", -2)
+        row is not None
+        and source.status == "active"
+        and getattr(row, "state", None) == "active"
+        and getattr(row, "desired_enabled", False)
+        and getattr(row, "applied_revision", -1) == getattr(row, "desired_revision", -2)
         and getattr(row, "source_generation", -1) == source.generation
     )
 
@@ -229,6 +262,7 @@ class _RowSnapshot:
     lazy load, which raises MissingGreenlet under asyncio. The enable sequence rolls back between steps,
     so it never keeps the ORM row itself across a step, only this snapshot.
     """
+
     state: str
     desired_enabled: bool
     applied_revision: int
@@ -242,31 +276,47 @@ def _snapshot(row: Any) -> _RowSnapshot | None:
     if row is None:
         return None
     return _RowSnapshot(
-        state=row.state, desired_enabled=row.desired_enabled, applied_revision=row.applied_revision,
-        desired_revision=row.desired_revision, source_generation=row.source_generation,
-        desired_configuration=copy.deepcopy(row.desired_configuration))
+        state=row.state,
+        desired_enabled=row.desired_enabled,
+        applied_revision=row.applied_revision,
+        desired_revision=row.desired_revision,
+        source_generation=row.source_generation,
+        desired_configuration=copy.deepcopy(row.desired_configuration),
+    )
 
 
-async def _oldest_source(session: AsyncSession, provider: str, *, scope: WorkspaceContext, gate: bool):  # type: ignore[no-untyped-def]
+async def _oldest_source(
+    session: AsyncSession, provider: str, *, scope: WorkspaceContext, gate: bool
+):  # type: ignore[no-untyped-def]
     """Oldest non-archived Source ORM row for the provider, or None."""
-    rows = await sources.list_provider_sources(session, frozenset({provider}), scope=scope, multi_workspace_enabled=gate)
+    rows = await sources.list_provider_sources(
+        session, frozenset({provider}), scope=scope, multi_workspace_enabled=gate
+    )
     return rows[0] if rows else None
 
 
-async def _state(session: AsyncSession, spec: FreeProviderSpec, *, scope: WorkspaceContext, gate: bool) -> BuiltinSourceRead:
+async def _state(
+    session: AsyncSession, spec: FreeProviderSpec, *, scope: WorkspaceContext, gate: bool
+) -> BuiltinSourceRead:
     """Read one built-in's toggle state from the current Source and connector row."""
     found = await _oldest_source(session, spec.id, scope=scope, gate=gate)
     if found is None:
         return _read(spec, None, False)
-    source = await sources.get_connector_source(session, found.id, scope=scope, multi_workspace_enabled=gate)
+    source = await sources.get_connector_source(
+        session, found.id, scope=scope, multi_workspace_enabled=gate
+    )
     if source is None:
         return _read(spec, None, False)
-    row = await provisioning.activation_status(session, source.id, scope=scope, multi_workspace_enabled=gate)
+    row = await provisioning.activation_status(
+        session, source.id, scope=scope, multi_workspace_enabled=gate
+    )
     return _read(spec, source, _is_enabled(source, row))
 
 
 @router.get("", response_model=list[BuiltinSourceRead])
-async def list_builtins(session: Session, request: Request, _owner: OwnerRead) -> list[BuiltinSourceRead]:
+async def list_builtins(
+    session: Session, request: Request, _owner: OwnerRead
+) -> list[BuiltinSourceRead]:
     """List every built-in preset with its toggle state for the owner workspace.
 
     Owner-only (members have no Source access). Creates no Source and takes no row locks; the
@@ -279,21 +329,30 @@ async def list_builtins(session: Session, request: Request, _owner: OwnerRead) -
     specs = [spec for spec in FREE_PROVIDER_SPECS if spec.id in BUILTIN_PROVIDERS]
     oldest: dict[str, ConnectorSource] = {}
     for source in await sources.list_provider_connector_sources(
-            session, frozenset(spec.id for spec in specs), scope=_owner, multi_workspace_enabled=gate):
+        session, frozenset(spec.id for spec in specs), scope=_owner, multi_workspace_enabled=gate
+    ):
         if source.provider is not None:
             oldest.setdefault(source.provider, source)  # rows arrive oldest first
     rows = await provisioning.activation_statuses(
-        session, frozenset(source.id for source in oldest.values()), scope=_owner, multi_workspace_enabled=gate)
+        session,
+        frozenset(source.id for source in oldest.values()),
+        scope=_owner,
+        multi_workspace_enabled=gate,
+    )
     return [
         _read(spec, oldest[spec.id], _is_enabled(oldest[spec.id], rows.get(oldest[spec.id].id)))
-        if spec.id in oldest else _read(spec, None, False)
+        if spec.id in oldest
+        else _read(spec, None, False)
         for spec in specs
     ]
 
 
 @router.post("/{provider}/enable", response_model=BuiltinSourceRead)
 async def enable_builtin(
-    provider: str, session: Session, request: Request, _owner: OwnerWrite,
+    provider: str,
+    session: Session,
+    request: Request,
+    _owner: OwnerWrite,
     payload: Annotated[BuiltinEnableRequest, Body()] = _DEFAULT_ENABLE,
 ) -> BuiltinSourceRead:
     """Turn a built-in on: create/reuse its Source, save settings, acknowledge terms, review, activate.
@@ -329,40 +388,68 @@ async def enable_builtin(
     _require_eligible_use(spec, use, request, review_class=review_class)
     fence = await _owner_access(session, request, scope)
 
-    source = await _ensure_active_source(session, provider, spec, payload, scope=scope, gate=gate, fence=fence)
+    source = await _ensure_active_source(
+        session, provider, spec, payload, scope=scope, gate=gate, fence=fence
+    )
     source_configuration, desired = _desired_configuration(provider, spec, payload, source)
     source, fence = await _save_desired_configuration(
-        session, request, source, source_configuration, desired, scope=scope, gate=gate, fence=fence,
+        session,
+        request,
+        source,
+        source_configuration,
+        desired,
+        scope=scope,
+        gate=gate,
+        fence=fence,
     )
 
     # 4-5. Terms: the owner toggle is the acknowledgement; review-class adds operator evidence for this version.
     await session.rollback()
     terms = await provider_terms.acknowledge_terms(
-        session, source.id, provider_terms.ProviderTermsAcknowledge(declared_use=use, terms_version=spec.checked_on),
-        scope=scope, multi_workspace_enabled=gate)
+        session,
+        source.id,
+        provider_terms.ProviderTermsAcknowledge(declared_use=use, terms_version=spec.checked_on),
+        scope=scope,
+        multi_workspace_enabled=gate,
+    )
     if review_class and not terms.eligible:
         terms = await provider_terms.record_operator_review(
-            session, workspace_id=scope.workspace_id, source_id=source.id,
+            session,
+            workspace_id=scope.workspace_id,
+            source_id=source.id,
             reviewer_user_id=reviewer_user_id,
             body=provider_terms.OperatorTermsReview(
-                state="approved", allowed_use=use,
+                state="approved",
+                allowed_use=use,
                 evidence_ref=f"builtin-toggle:{spec.id}:{spec.terms_url}@{spec.checked_on}",
-                reviewed_terms_version=spec.checked_on),
-            instance_operator=True)
+                reviewed_terms_version=spec.checked_on,
+            ),
+            instance_operator=True,
+        )
     await scheduler.clear_collection_block(
-        session, source.id, terms_revision=terms.terms_revision, workspace_id=scope.workspace_id)
+        session, source.id, terms_revision=terms.terms_revision, workspace_id=scope.workspace_id
+    )
     await session.commit()
 
     # 6. Activate natively unless it is already on at the current revision.
-    row = _snapshot(await provisioning.activation_status(session, source.id, scope=scope, multi_workspace_enabled=gate))
+    row = _snapshot(
+        await provisioning.activation_status(
+            session, source.id, scope=scope, multi_workspace_enabled=gate
+        )
+    )
     if row is None:
         raise HTTPException(status_code=409, detail="No connector provisioning state exists")
     if not _is_enabled(source, row):
         await session.rollback()
         fence = await _owner_access(session, request, scope, expected=fence)
         await activate_native(
-            session, request, scope, source, ActivationRequest(expected_revision=row.desired_revision),
-            access_fence=fence)
+            session,
+            request,
+            scope,
+            source,
+            ActivationRequest(expected_revision=row.desired_revision),
+            access_fence=fence,
+        )
     return await _state(session, spec, scope=scope, gate=gate)
 
 
@@ -381,8 +468,14 @@ def _require_eligible_use(spec: Any, use: Any, request: Request, *, review_class
 
 
 async def _ensure_active_source(
-    session: AsyncSession, provider: str, spec: Any, payload: BuiltinEnableRequest,
-    *, scope: WorkspaceContext, gate: bool, fence: AccessFence,
+    session: AsyncSession,
+    provider: str,
+    spec: Any,
+    payload: BuiltinEnableRequest,
+    *,
+    scope: WorkspaceContext,
+    gate: bool,
+    fence: AccessFence,
 ) -> ConnectorSource:
     """Reuse the oldest Source (un-pausing it and applying explicit switches) or create it.
 
@@ -397,15 +490,22 @@ async def _ensure_active_source(
         await session.refresh(found)
     if found is None:
         found = await sources.create_source(
-            session, SourceCreate(
-                type=PROVIDER_SOURCE_TYPES[provider], name=payload.name or spec.label, provider=provider,
+            session,
+            SourceCreate(
+                type=PROVIDER_SOURCE_TYPES[provider],
+                name=payload.name or spec.label,
+                provider=provider,
                 graph_enabled=bool(payload.graph_enabled),
                 rag_index_enabled=(
                     payload.rag_index_enabled
                     if payload.rag_index_enabled is not None
                     else not spec.skip_embedding
-                )),
-            scope=scope, multi_workspace_enabled=gate, expected_access_fence=fence)
+                ),
+            ),
+            scope=scope,
+            multi_workspace_enabled=gate,
+            expected_access_fence=fence,
+        )
     else:
         # Re-enabling an existing Source: un-pause it and apply any explicitly sent switches in one patch.
         patch: dict[str, Any] = {"status": "active"} if found.status == "paused" else {}
@@ -415,16 +515,26 @@ async def _ensure_active_source(
                 patch[flag] = wanted
         if patch:
             await sources.update_source(
-                session, found, SourcePatch(**patch), scope=scope, multi_workspace_enabled=gate,
-                expected_access_fence=fence)
-    source = await sources.get_connector_source(session, found.id, scope=scope, multi_workspace_enabled=gate)
+                session,
+                found,
+                SourcePatch(**patch),
+                scope=scope,
+                multi_workspace_enabled=gate,
+                expected_access_fence=fence,
+            )
+    source = await sources.get_connector_source(
+        session, found.id, scope=scope, multi_workspace_enabled=gate
+    )
     if source is None or source.status != "active":
         raise HTTPException(status_code=409, detail="Source is inactive; it cannot be enabled")
     return source
 
 
 def _desired_configuration(
-    provider: str, spec: Any, payload: BuiltinEnableRequest, source: ConnectorSource,
+    provider: str,
+    spec: Any,
+    payload: BuiltinEnableRequest,
+    source: ConnectorSource,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Merge request, saved and default settings into ``(source_configuration, desired)``.
 
@@ -443,8 +553,13 @@ def _desired_configuration(
 
     # Only non-None filter values are passed so default sources serialise exactly as before.
     options = {
-        field: value for field in (
-            "max_items", "include_keywords", "exclude_keywords", "max_age_days", "feed_sections",
+        field: value
+        for field in (
+            "max_items",
+            "include_keywords",
+            "exclude_keywords",
+            "max_age_days",
+            "feed_sections",
             *sorted(ALL_OPTION_NAMES - {"max_items"}),
         )
         if (value := pick(field)) is not None
@@ -452,12 +567,17 @@ def _desired_configuration(
     floor = min_interval_minutes(provider)
     interval = pick("schedule_interval_minutes", max(spec.default_interval_minutes, floor))
     if isinstance(interval, int) and interval < floor:
-        raise HTTPException(status_code=422, detail=f"schedule_interval_below_minimum: minimum {floor} minutes")
+        raise HTTPException(
+            status_code=422, detail=f"schedule_interval_below_minimum: minimum {floor} minutes"
+        )
     try:
         config = ConnectorConfig(
-            timeout_seconds=30, history_mode="returned_snapshot",
+            timeout_seconds=30,
+            history_mode="returned_snapshot",
             schedule_interval_minutes=interval,
-            realtime_mode=pick("realtime_mode"), **options)
+            realtime_mode=pick("realtime_mode"),
+            **options,
+        )
         source_configuration = serialize_source_configuration(source, config)
         registry.validate(source.model_copy(update={"configuration": source_configuration}))
     except ValueError as exc:
@@ -466,9 +586,15 @@ def _desired_configuration(
 
 
 async def _save_desired_configuration(
-    session: AsyncSession, request: Request, source: ConnectorSource,
-    source_configuration: dict[str, Any], desired: dict[str, Any],
-    *, scope: WorkspaceContext, gate: bool, fence: AccessFence,
+    session: AsyncSession,
+    request: Request,
+    source: ConnectorSource,
+    source_configuration: dict[str, Any],
+    desired: dict[str, Any],
+    *,
+    scope: WorkspaceContext,
+    gate: bool,
+    fence: AccessFence,
 ) -> tuple[ConnectorSource, AccessFence]:
     """Save ``desired`` only when it differs (every save bumps the revision and demotes an active connector).
 
@@ -477,22 +603,51 @@ async def _save_desired_configuration(
     (possibly reloaded) Source and the (possibly re-admitted) access fence. 409 when the
     revision moved, 404 if the Source vanished.
     """
-    row = _snapshot(await provisioning.activation_status(session, source.id, scope=scope, multi_workspace_enabled=gate))
-    if row is None or row.desired_configuration != desired or row.source_generation != source.generation:
+    row = _snapshot(
+        await provisioning.activation_status(
+            session, source.id, scope=scope, multi_workspace_enabled=gate
+        )
+    )
+    if (
+        row is None
+        or row.desired_configuration != desired
+        or row.source_generation != source.generation
+    ):
         await session.rollback()
         fence = await _owner_access(session, request, scope, expected=fence)
         saved = await save_connector_configuration(
-            session, source, row.desired_revision if row is not None else 0, source_configuration, desired,
-            scope=scope, multi_workspace_enabled=gate)
+            session,
+            source,
+            row.desired_revision if row is not None else 0,
+            source_configuration,
+            desired,
+            scope=scope,
+            multi_workspace_enabled=gate,
+        )
         if saved is None:
-            raise HTTPException(status_code=409, detail="Source or connector revision changed while saving")
+            raise HTTPException(
+                status_code=409, detail="Source or connector revision changed while saving"
+            )
         saved_source, saved_row = saved
         saved_row.state = "saved_not_active"
-        await commit_with_replay(session, [
-            make_source_change(saved_source.id, saved_source.generation, saved_source.status,
-                               connector_state="saved_not_active", scope=scope),
-        ], access_fence=fence, multi_workspace_enabled=gate, scope=scope)
-        reloaded = await sources.get_connector_source(session, source.id, scope=scope, multi_workspace_enabled=gate)
+        await commit_with_replay(
+            session,
+            [
+                make_source_change(
+                    saved_source.id,
+                    saved_source.generation,
+                    saved_source.status,
+                    connector_state="saved_not_active",
+                    scope=scope,
+                ),
+            ],
+            access_fence=fence,
+            multi_workspace_enabled=gate,
+            scope=scope,
+        )
+        reloaded = await sources.get_connector_source(
+            session, source.id, scope=scope, multi_workspace_enabled=gate
+        )
         if reloaded is None:
             raise HTTPException(status_code=404, detail="Source not found")
         source = reloaded
@@ -500,7 +655,9 @@ async def _save_desired_configuration(
 
 
 @router.post("/{provider}/disable", response_model=BuiltinSourceRead)
-async def disable_builtin(provider: str, session: Session, request: Request, _owner: OwnerWrite) -> BuiltinSourceRead:
+async def disable_builtin(
+    provider: str, session: Session, request: Request, _owner: OwnerWrite
+) -> BuiltinSourceRead:
     """Turn a built-in off by pausing its Source (same cleanup as ``deactivate_source``).
 
     Idempotent: a never-enabled or already-paused built-in just returns its state. The Source, terms
@@ -512,12 +669,24 @@ async def disable_builtin(provider: str, session: Session, request: Request, _ow
     found = await _oldest_source(session, provider, scope=scope, gate=gate)
     if found is None or found.status == "paused":
         return await _state(session, spec, scope=scope, gate=gate)
-    source = await sources.pause_source_for_connector(session, found.id, scope=scope, multi_workspace_enabled=gate)
+    source = await sources.pause_source_for_connector(
+        session, found.id, scope=scope, multi_workspace_enabled=gate
+    )
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
-    row = await provisioning.activation_status(session, source.id, scope=scope, multi_workspace_enabled=gate)
+    row = await provisioning.activation_status(
+        session, source.id, scope=scope, multi_workspace_enabled=gate
+    )
     state = row.state if row is not None else None
-    await commit_with_replay(session, [
-        make_source_change(source.id, source.generation, source.status, connector_state=state, scope=scope),
-    ], access_fence=fence, multi_workspace_enabled=gate, scope=scope)
+    await commit_with_replay(
+        session,
+        [
+            make_source_change(
+                source.id, source.generation, source.status, connector_state=state, scope=scope
+            ),
+        ],
+        access_fence=fence,
+        multi_workspace_enabled=gate,
+        scope=scope,
+    )
     return await _state(session, spec, scope=scope, gate=gate)

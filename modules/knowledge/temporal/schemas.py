@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 class GraphStatus(BaseModel):
     """Separate canonical availability from desired/applied derived graph progress."""
+
     mapping_id: UUID
     document_version_id: UUID
     episode_id: UUID
@@ -23,6 +24,7 @@ class GraphStatus(BaseModel):
 
 class ReconcileRequest(BaseModel):
     """Select one finite owner scope; empty/global requests and ambiguous scopes are rejected."""
+
     model_config = ConfigDict(extra="forbid")
     source_id: UUID | None = None
     document_version_ids: list[UUID] = Field(default_factory=list, max_length=100)
@@ -31,7 +33,16 @@ class ReconcileRequest(BaseModel):
     @model_validator(mode="after")
     def bounded_scope(self) -> "ReconcileRequest":
         """Require exactly one scope and unique version identities before any work is queued."""
-        if sum((self.source_id is not None, bool(self.document_version_ids), self.entity_id is not None)) != 1:
+        if (
+            sum(
+                (
+                    self.source_id is not None,
+                    bool(self.document_version_ids),
+                    self.entity_id is not None,
+                )
+            )
+            != 1
+        ):
             raise ValueError("Choose exactly one bounded reconciliation scope")
         if len(set(self.document_version_ids)) != len(self.document_version_ids):
             raise ValueError("Version identities must be unique")
@@ -40,6 +51,7 @@ class ReconcileRequest(BaseModel):
 
 class ReconcileStatus(BaseModel):
     """Expose resumable coverage counts without claiming pending/blocked cleanup is successful."""
+
     run_id: UUID
     status: str
     scanned: int
@@ -52,6 +64,7 @@ class ReconcileStatus(BaseModel):
 
 class ChangeRead(BaseModel):
     """Identify an observed canonical mutation without fabricated earlier field values."""
+
     id: int
     kind: str
     canonical_id: UUID
@@ -65,6 +78,7 @@ class ChangeRead(BaseModel):
 
 class ChangePage(BaseModel):
     """Bound canonical change history, explicitly starting when durable tracking was installed."""
+
     items: list[ChangeRead]
     next_cursor: str | None
     history_before_tracking_available: Literal[False] = False

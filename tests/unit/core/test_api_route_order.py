@@ -24,10 +24,14 @@ def _flatten(routes: list[Any], prefix: str = "") -> list[list[Any]]:
         if original is not None:
             rows.extend(_flatten(original.routes, prefix + route.include_context.prefix))
             continue
-        rows.append([
-            type(route).__name__, prefix + (getattr(route, "path", None) or ""),
-            sorted(getattr(route, "methods", None) or []), getattr(route, "name", None),
-        ])
+        rows.append(
+            [
+                type(route).__name__,
+                prefix + (getattr(route, "path", None) or ""),
+                sorted(getattr(route, "methods", None) or []),
+                getattr(route, "name", None),
+            ]
+        )
     return rows
 
 
@@ -41,7 +45,11 @@ def _build_app() -> FastAPI:
     from apps.api.main import create_app
     from core.config import Settings
 
-    return create_app(Settings(public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"))
+    return create_app(
+        Settings(
+            public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"
+        )
+    )
 
 
 def test_route_table_matches_recorded_baseline() -> None:

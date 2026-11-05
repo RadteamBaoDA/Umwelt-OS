@@ -17,9 +17,13 @@ from tests.unit.modules.connectors.p3_helpers import fixture
 
 NOW = datetime(2026, 10, 22, 0, 0, tzinfo=UTC)  # after the fixtures' live capture dates
 FIXTURES = {
-    "gdacs_events": "gdacs_events.json", "nws_alerts": "nws_alerts.json", "emsc_quakes": "emsc_quakes.json",
-    "launch_library": "launch_library.json", "wikipedia_mostread": "wikipedia_mostread.json",
-    "wikipedia_top_views": "wikipedia_top_views.json", "bmkg_quakes": "bmkg_quakes.json",
+    "gdacs_events": "gdacs_events.json",
+    "nws_alerts": "nws_alerts.json",
+    "emsc_quakes": "emsc_quakes.json",
+    "launch_library": "launch_library.json",
+    "wikipedia_mostread": "wikipedia_mostread.json",
+    "wikipedia_top_views": "wikipedia_top_views.json",
+    "bmkg_quakes": "bmkg_quakes.json",
     "satnogs_observations": "satnogs_observations.json",
 }
 
@@ -51,10 +55,14 @@ def test_gdacs_naive_time_is_treated_as_utc_and_location_is_in_summary():
 
 
 def test_wikipedia_top_views_skips_non_content_pages_and_links_articles():
-    records = map_json_feed(JSON_FEEDS["wikipedia_top_views"], fixture("wikipedia_top_views.json"), NOW)
+    records = map_json_feed(
+        JSON_FEEDS["wikipedia_top_views"], fixture("wikipedia_top_views.json"), NOW
+    )
     titles = {r.metadata["title"] for r in records}
     assert "Main Page" not in titles and "Kim Jong Un" in titles
-    assert all(r.metadata["canonical_url"].startswith("https://en.wikipedia.org/wiki/") for r in records)
+    assert all(
+        r.metadata["canonical_url"].startswith("https://en.wikipedia.org/wiki/") for r in records
+    )
 
 
 def test_identity_and_version_ignore_collection_clock():
@@ -87,13 +95,18 @@ def test_non_json_body_is_refused():
 
 def test_date_addressed_feeds_resolve_to_a_concrete_day():
     url = feed_request(JSON_FEEDS["wikipedia_mostread"]).url
-    assert "{" not in url and url.startswith("https://api.wikimedia.org/feed/v1/wikipedia/en/featured/")
+    assert "{" not in url and url.startswith(
+        "https://api.wikimedia.org/feed/v1/wikipedia/en/featured/"
+    )
     assert set(json_feed_adapters()) == set(JSON_FEEDS)
 
 
 def test_wikipedia_featured_feed_uses_today_and_pageviews_use_yesterday():
     now = datetime(2026, 10, 26, 0, 30, tzinfo=UTC)
-    featured, pageviews = JSON_FEEDS["wikipedia_mostread"].url, JSON_FEEDS["wikipedia_top_views"].url
+    featured, pageviews = (
+        JSON_FEEDS["wikipedia_mostread"].url,
+        JSON_FEEDS["wikipedia_top_views"].url,
+    )
     assert callable(featured) and callable(pageviews)
     assert featured(now).endswith("/featured/2026/10/26")
     assert pageviews(now).endswith("/2026/10/25")
@@ -102,8 +115,18 @@ def test_wikipedia_featured_feed_uses_today_and_pageviews_use_yesterday():
 def _bmkg_body(rows: int) -> bytes:
     """Build a BMKG-shaped body of ``rows`` distinct quakes; row 0 is the newest."""
     import json
-    quakes = [{"DateTime": f"2026-10-21T{(23 - i // 60):02d}:{(59 - i % 60):02d}:00+00:00", "Coordinates": f"{i}.0,1.0",
-               "Wilayah": f"place {i}", "Magnitude": "5.0", "Kedalaman": "10 km", "Potensi": "none"} for i in range(rows)]
+
+    quakes = [
+        {
+            "DateTime": f"2026-10-21T{(23 - i // 60):02d}:{(59 - i % 60):02d}:00+00:00",
+            "Coordinates": f"{i}.0,1.0",
+            "Wilayah": f"place {i}",
+            "Magnitude": "5.0",
+            "Kedalaman": "10 km",
+            "Potensi": "none",
+        }
+        for i in range(rows)
+    ]
     return json.dumps({"Infogempa": {"gempa": quakes}}).encode()
 
 
@@ -126,9 +149,15 @@ def test_wiki_local_skip_covers_live_main_pages_and_namespaces():
     from modules.connectors.providers.json_feed import _WIKI_SKIP, JSON_FEEDS, localized_feed
 
     feed = JSON_FEEDS["wikipedia_top_views"]
-    live = {"ko": ["위키백과:대문", "파일:A.png"], "de": ["Datei:A.svg", "Wikipedia:Hauptseite"],
-            "fr": ["Fichier:A.png"], "es": ["Archivo:A.png"], "vi": ["Tập_tin:A.png"], "ja": ["ファイル:A.png"],
-            "zh": ["Portal:X"]}
+    live = {
+        "ko": ["위키백과:대문", "파일:A.png"],
+        "de": ["Datei:A.svg", "Wikipedia:Hauptseite"],
+        "fr": ["Fichier:A.png"],
+        "es": ["Archivo:A.png"],
+        "vi": ["Tập_tin:A.png"],
+        "ja": ["ファイル:A.png"],
+        "zh": ["Portal:X"],
+    }
     for lang, ids in live.items():
         skips = localized_feed(feed, lang).skip_id_prefixes
         assert skips[: len(_WIKI_SKIP)] == _WIKI_SKIP

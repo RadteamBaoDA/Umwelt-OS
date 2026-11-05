@@ -1,4 +1,5 @@
 """Owner display-name rules shared by preferences, first-run setup and the 0008 migration backfill."""
+
 import re
 
 MAX_DISPLAY_NAME = 80

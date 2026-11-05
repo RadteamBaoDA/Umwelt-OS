@@ -18,7 +18,9 @@ from modules.connectors.providers.macro import (
 from modules.ingestion.public import IngestionRecord
 
 USGS_URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson"
-_MAX_FEATURES = 500  # ReceiveBatch record limit; more is reported incomplete rather than truncated silently
+_MAX_FEATURES = (
+    500  # ReceiveBatch record limit; more is reported incomplete rather than truncated silently
+)
 _ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9_ .-]{1,32}$")
 
@@ -74,7 +76,11 @@ def map_usgs(payload: object, collected_at: datetime) -> list[IngestionRecord]:
     for feature in features:
         if not isinstance(feature, dict):
             raise ProviderPayloadError("usgs_feature_invalid")
-        event_id, props, geometry = feature.get("id"), feature.get("properties"), feature.get("geometry")
+        event_id, props, geometry = (
+            feature.get("id"),
+            feature.get("properties"),
+            feature.get("geometry"),
+        )
         if not isinstance(event_id, str) or not _ID_RE.fullmatch(event_id) or event_id in seen:
             raise ProviderPayloadError("usgs_feature_id_invalid")
         seen.add(event_id)
@@ -98,22 +104,41 @@ def map_usgs(payload: object, collected_at: datetime) -> list[IngestionRecord]:
         updated_ms = int(updated.timestamp() * 1000)
         occurred_ms = int(occurred.timestamp() * 1000)
         fields: dict[str, str | float | int | None] = {
-            "place": place, "type": _clean(props.get("type"), 32), "status": _clean(props.get("status"), 32),
-            "magType": mag_type if isinstance(mag_type, str) and _TOKEN_RE.fullmatch(mag_type) else None,
-            "depth_km": float(depth), "latitude": float(lat), "longitude": float(lon),
-            "event_time": occurred_ms, "updated": updated_ms,
+            "place": place,
+            "type": _clean(props.get("type"), 32),
+            "status": _clean(props.get("status"), 32),
+            "magType": mag_type
+            if isinstance(mag_type, str) and _TOKEN_RE.fullmatch(mag_type)
+            else None,
+            "depth_km": float(depth),
+            "latitude": float(lat),
+            "longitude": float(lon),
+            "event_time": occurred_ms,
+            "updated": updated_ms,
         }
-        records.append(build_record(
-            provider="usgs", identity=f"usgs:{event_id}",
-            content=f"Earthquake M{'?' if mag is None else mag_text} {place or 'unknown location'} at {occurred.isoformat()}",
-            title=f"M{'?' if mag is None else mag_text} {place or 'earthquake'}"[:500],
-            observed_at=occurred, collected_at=collected_at,
-            version=content_version("usgs", event_id, updated_ms, mag_text, fields["status"]),
-            metric="earthquake_magnitude", value=mag, unit="magnitude", symbol=None,
-            region=(place or "")[:80] or None, latitude=float(lat), longitude=float(lon),
-            quality="provider_reported", timestamp_basis="provider_modified", modified_at=updated,
-            provider_fields=fields, decimal_key="decimal_mag",
-        ))
+        records.append(
+            build_record(
+                provider="usgs",
+                identity=f"usgs:{event_id}",
+                content=f"Earthquake M{'?' if mag is None else mag_text} {place or 'unknown location'} at {occurred.isoformat()}",
+                title=f"M{'?' if mag is None else mag_text} {place or 'earthquake'}"[:500],
+                observed_at=occurred,
+                collected_at=collected_at,
+                version=content_version("usgs", event_id, updated_ms, mag_text, fields["status"]),
+                metric="earthquake_magnitude",
+                value=mag,
+                unit="magnitude",
+                symbol=None,
+                region=(place or "")[:80] or None,
+                latitude=float(lat),
+                longitude=float(lon),
+                quality="provider_reported",
+                timestamp_basis="provider_modified",
+                modified_at=updated,
+                provider_fields=fields,
+                decimal_key="decimal_mag",
+            )
+        )
     return records
 
 

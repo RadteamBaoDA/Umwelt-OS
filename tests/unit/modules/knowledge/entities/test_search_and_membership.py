@@ -33,7 +33,13 @@ async def test_list_entities_escapes_like_wildcards(monkeypatch: pytest.MonkeyPa
             return SimpleNamespace(all=list)
 
     await public.list_entities(
-        _Session(), 10, None, None, r"50%_a\b", scope=_SCOPE, multi_workspace_enabled=False,  # type: ignore[arg-type]
+        _Session(),
+        10,
+        None,
+        None,
+        r"50%_a\b",
+        scope=_SCOPE,
+        multi_workspace_enabled=False,  # type: ignore[arg-type]
     )
     compiled = seen[0].compile(dialect=postgresql.dialect())
     sql = str(compiled)
@@ -43,13 +49,26 @@ async def test_list_entities_escapes_like_wildcards(monkeypatch: pytest.MonkeyPa
 
 
 def _args(entity_id: Any) -> dict[str, Any]:
-    ref = SimpleNamespace(source_generation=1, document_id=uuid4(), source_id=uuid4(),
-                          document_version_id=uuid4(), chunk_id=uuid4())
+    ref = SimpleNamespace(
+        source_generation=1,
+        document_id=uuid4(),
+        source_id=uuid4(),
+        document_version_id=uuid4(),
+        chunk_id=uuid4(),
+    )
     from datetime import UTC, datetime
+
     return {
-        "entity_id": entity_id, "evidence_ref": ref, "source_generation": 1, "extraction_identity": "x",
-        "candidate_key": "k", "match_fingerprint": "f" * 64, "observed_at": datetime.now(UTC),
-        "confidence": 0.5, "scope": _SCOPE, "multi_workspace_enabled": False,
+        "entity_id": entity_id,
+        "evidence_ref": ref,
+        "source_generation": 1,
+        "extraction_identity": "x",
+        "candidate_key": "k",
+        "match_fingerprint": "f" * 64,
+        "observed_at": datetime.now(UTC),
+        "confidence": 0.5,
+        "scope": _SCOPE,
+        "multi_workspace_enabled": False,
     }
 
 
@@ -77,13 +96,17 @@ async def test_membership_fresh_insert_is_one_statement(monkeypatch: pytest.Monk
 
 
 @pytest.mark.asyncio
-async def test_membership_conflict_reads_back_and_checks_entity(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_membership_conflict_reads_back_and_checks_entity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     patch_entities(monkeypatch, "_admit", _admit)
     entity_id, mid = uuid4(), uuid4()
     session = _Session([None, (mid, entity_id)])
     assert await public.record_extraction_membership(session, **_args(entity_id)) == mid  # type: ignore[arg-type]
     assert session.executes == 2
     with pytest.raises(ValueError):
-        await public.record_extraction_membership(_Session([None, (mid, uuid4())]), **_args(entity_id))  # type: ignore[arg-type]
+        await public.record_extraction_membership(
+            _Session([None, (mid, uuid4())]), **_args(entity_id)
+        )  # type: ignore[arg-type]
     with pytest.raises(RuntimeError):
         await public.record_extraction_membership(_Session([None, None]), **_args(entity_id))  # type: ignore[arg-type]

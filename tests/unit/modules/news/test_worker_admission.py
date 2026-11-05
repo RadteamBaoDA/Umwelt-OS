@@ -33,19 +33,25 @@ async def test_invalid_provenance_locks_admission_before_checkpoint_and_outbox()
         async def _call(*_a: object, **_k: object) -> object:
             order.append(name)
             return result
+
         return AsyncMock(side_effect=_call)
 
-    ctx = {"session_factory": _session_factory(), "settings": SimpleNamespace(multi_workspace_enabled=True)}
-    with patch.object(worker.ingestion, "resolve_ingestion_event_scope", rec("scope", SCOPE)), \
-         patch.object(worker.workspaces, "read_access_fence", rec("read", FENCE)), \
-         patch.object(worker.workspaces, "lock_access_fence", rec("lock_admission", FENCE)), \
-         patch.object(worker.settings_public, "module_is_enabled", rec("module", True)), \
-         patch.object(worker.ingestion, "get_event_delivery", rec("delivery", delivery)), \
-         patch.object(worker.ingestion, "resolve_ready_event_provenance", rec("provenance", None)), \
-         patch.object(worker, "_ensure_recovery_checkpoint", rec("checkpoint")), \
-         patch.object(worker.ingestion, "lock_news_document_ready_event", rec("outbox", event)), \
-         patch.object(worker.ingestion, "fail_news_document_ready_event", rec("fail")), \
-         patch.object(worker, "commit_with_replay", rec("commit")):
+    ctx = {
+        "session_factory": _session_factory(),
+        "settings": SimpleNamespace(multi_workspace_enabled=True),
+    }
+    with (
+        patch.object(worker.ingestion, "resolve_ingestion_event_scope", rec("scope", SCOPE)),
+        patch.object(worker.workspaces, "read_access_fence", rec("read", FENCE)),
+        patch.object(worker.workspaces, "lock_access_fence", rec("lock_admission", FENCE)),
+        patch.object(worker.settings_public, "module_is_enabled", rec("module", True)),
+        patch.object(worker.ingestion, "get_event_delivery", rec("delivery", delivery)),
+        patch.object(worker.ingestion, "resolve_ready_event_provenance", rec("provenance", None)),
+        patch.object(worker, "_ensure_recovery_checkpoint", rec("checkpoint")),
+        patch.object(worker.ingestion, "lock_news_document_ready_event", rec("outbox", event)),
+        patch.object(worker.ingestion, "fail_news_document_ready_event", rec("fail")),
+        patch.object(worker, "commit_with_replay", rec("commit")),
+    ):
         await worker.process_news_document_ready(ctx, str(uuid4()))
     assert order.index("lock_admission") < order.index("delivery")
     assert order.index("lock_admission") < order.index("checkpoint") < order.index("outbox")
@@ -91,13 +97,23 @@ async def test_recovery_locks_access_fence_before_checkpoint_read() -> None:
     cm.__aexit__ = AsyncMock(return_value=False)
     lock = AsyncMock(side_effect=lambda *_a, **k: order.append("lock") or k["expected"])
     owner = SimpleNamespace(user_id=1, membership_revision=2)
-    ctx = {"session_factory": MagicMock(return_value=cm), "redis": None, "w2_cursor_state": {},
-           "settings": SimpleNamespace(multi_workspace_enabled=True)}
-    with patch.object(worker.documents, "list_ready_document_workspace_ids", AsyncMock(return_value=[])), \
-         patch.object(worker.workspaces, "resolve_workspace_owner_context", AsyncMock(return_value=owner)), \
-         patch.object(worker.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)), \
-         patch.object(worker.workspaces, "lock_access_fence", lock), \
-         patch.object(worker.settings_public, "module_is_enabled", AsyncMock(return_value=True)):
+    ctx = {
+        "session_factory": MagicMock(return_value=cm),
+        "redis": None,
+        "w2_cursor_state": {},
+        "settings": SimpleNamespace(multi_workspace_enabled=True),
+    }
+    with (
+        patch.object(
+            worker.documents, "list_ready_document_workspace_ids", AsyncMock(return_value=[])
+        ),
+        patch.object(
+            worker.workspaces, "resolve_workspace_owner_context", AsyncMock(return_value=owner)
+        ),
+        patch.object(worker.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)),
+        patch.object(worker.workspaces, "lock_access_fence", lock),
+        patch.object(worker.settings_public, "module_is_enabled", AsyncMock(return_value=True)),
+    ):
         await worker.recover_news_work(ctx)
     assert lock.await_args.kwargs["expected"] == FENCE
     assert order == ["lock", "checkpoint"]
@@ -109,7 +125,10 @@ async def test_cursor_is_forward_only_and_malformed_remote_keeps_local() -> None
     redis = AsyncMock()
     redis.get.return_value = None
     state: dict[str, str] = {}
-    older, newer = {"redis": redis, "w2_cursor_state": state}, {"redis": redis, "w2_cursor_state": state}
+    older, newer = (
+        {"redis": redis, "w2_cursor_state": state},
+        {"redis": redis, "w2_cursor_state": state},
+    )
     key = worker.RECOVERY_CURSOR_KEY
     await worker._read_cursor(older, key)
     await worker._read_cursor(newer, key)

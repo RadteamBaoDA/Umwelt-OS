@@ -53,31 +53,45 @@ def _app(settings: Settings) -> FastAPI:
 
 def _client(app: FastAPI, host: str = "127.0.0.1") -> AsyncClient:
     """Async client whose ASGI scope reports ``host`` as the direct peer."""
-    return AsyncClient(transport=ASGITransport(app=app, client=(host, 5000)), base_url="http://test")
+    return AsyncClient(
+        transport=ASGITransport(app=app, client=(host, 5000)), base_url="http://test"
+    )
 
 
 async def test_http_metrics_use_route_template_not_raw_path() -> None:
     """Raw ids never become label values; unmatched paths collapse to one series."""
     async with _client(_app(_settings())) as client:
-        before = _sample("umwelt_http_requests_total", method="GET", route="/items/{item_id}", status="200")
+        before = _sample(
+            "umwelt_http_requests_total", method="GET", route="/items/{item_id}", status="200"
+        )
         for item_id in (1, 2, 3):
             assert (await client.get(f"/items/{item_id}")).status_code == 200
         await client.get("/no/such/path/12345")
         await client.get("/boom")
-    assert _sample("umwelt_http_requests_total", method="GET", route="/items/{item_id}", status="200") == before + 3
+    assert (
+        _sample("umwelt_http_requests_total", method="GET", route="/items/{item_id}", status="200")
+        == before + 3
+    )
     assert _sample("umwelt_http_requests_total", method="GET", route="unmatched", status="404") >= 1
     assert _sample("umwelt_http_requests_total", method="GET", route="/boom", status="503") >= 1
     exposition = generate_latest(metrics.REGISTRY).decode()
     assert "/items/1" not in exposition
     assert "12345" not in exposition
-    assert _sample("umwelt_http_request_duration_seconds_count", method="GET", route="/items/{item_id}") >= 3
+    assert (
+        _sample(
+            "umwelt_http_request_duration_seconds_count", method="GET", route="/items/{item_id}"
+        )
+        >= 3
+    )
 
 
 async def test_metrics_endpoint_with_token_requires_bearer() -> None:
     """A configured token is the only way in, from any address."""
     async with _client(_app(_settings("s3cret-token")), host="10.0.0.5") as client:
         assert (await client.get("/metrics")).status_code == 401
-        assert (await client.get("/metrics", headers={"Authorization": "Bearer wrong"})).status_code == 401
+        assert (
+            await client.get("/metrics", headers={"Authorization": "Bearer wrong"})
+        ).status_code == 401
         response = await client.get("/metrics", headers={"Authorization": "Bearer s3cret-token"})
     assert response.status_code == 200
     assert "umwelt_http_requests_total" in response.text
@@ -97,7 +111,9 @@ async def test_metrics_endpoint_dev_allows_internal_direct_clients_only() -> Non
     app = _app(_settings(environment="development"))
     async with _client(app, host="172.18.0.4") as client:
         assert (await client.get("/metrics")).status_code == 200
-        assert (await client.get("/metrics", headers={"X-Forwarded-For": "8.8.8.8"})).status_code == 404
+        assert (
+            await client.get("/metrics", headers={"X-Forwarded-For": "8.8.8.8"})
+        ).status_code == 404
     async with _client(app, host="8.8.8.8") as client:
         assert (await client.get("/metrics")).status_code == 404
 
@@ -105,9 +121,14 @@ async def test_metrics_endpoint_dev_allows_internal_direct_clients_only() -> Non
 def test_metrics_access_policy_unit() -> None:
     """The pure decision function."""
     assert metrics_access(_settings("t"), {b"authorization": b"Bearer t"}, None) == "allowed"
-    assert metrics_access(_settings("t"), {b"authorization": b"Basic t"}, "127.0.0.1") == "unauthorized"
+    assert (
+        metrics_access(_settings("t"), {b"authorization": b"Basic t"}, "127.0.0.1")
+        == "unauthorized"
+    )
     assert metrics_access(_settings(), {}, "127.0.0.1") == "disabled"
-    assert metrics_access(_settings(environment="dev"), {}, "localhost") == "disabled"  # hostnames are never "internal"
+    assert (
+        metrics_access(_settings(environment="dev"), {}, "localhost") == "disabled"
+    )  # hostnames are never "internal"
 
 
 def test_label_helpers_bound_cardinality() -> None:
@@ -124,9 +145,11 @@ def test_record_job_maps_ingestion_stages() -> None:
     before = _sample("umwelt_ingestion_stage_total", stage="normalize", outcome="returned")
     metrics.record_job("process_normalize_event", "returned", 0.2)
     metrics.record_job("translate_content", "ok", 0.2)
-    assert _sample("umwelt_ingestion_stage_total", stage="normalize", outcome="returned") == before + 1
+    assert (
+        _sample("umwelt_ingestion_stage_total", stage="normalize", outcome="returned") == before + 1
+    )
     assert _sample("umwelt_jobs_total", job="translate_content", outcome="ok") >= 1
-    assert "stage=\"translate" not in generate_latest(metrics.REGISTRY).decode()
+    assert 'stage="translate' not in generate_latest(metrics.REGISTRY).decode()
 
 
 async def test_cron_run_records_success_failure_and_preserves_behaviour() -> None:
@@ -135,6 +158,7 @@ async def test_cron_run_records_success_failure_and_preserves_behaviour() -> Non
     Duration and last success on success; failure counter on error; result and exception unchanged.
     Without ``ctx["redis"]`` the single-flight wrapper simply runs the job.
     """
+
     async def good(ctx: dict[str, object]) -> int:
         """Succeed."""
         return 7
@@ -162,6 +186,7 @@ async def test_cron_run_records_success_failure_and_preserves_behaviour() -> Non
 
 async def test_cron_run_skipped_by_held_lease_records_no_metrics() -> None:
     """A tick that finds the single-flight lease held is not a run: no duration, success or failure sample."""
+
     class _HeldLease:
         """Redis stand-in whose ``SET NX`` always loses."""
 
@@ -190,7 +215,9 @@ class _FakeRedis:
         """Return the member count."""
         return len(self.queues.get(key, []))
 
-    async def zrange(self, key: str, start: int, stop: int, withscores: bool = False) -> list[tuple[str, float]]:
+    async def zrange(
+        self, key: str, start: int, stop: int, withscores: bool = False
+    ) -> list[tuple[str, float]]:
         """Return the lowest-scored member."""
         return sorted(self.queues.get(key, []), key=lambda item: item[1])[:1]
 
@@ -198,11 +225,20 @@ class _FakeRedis:
 async def test_queue_sampler_depth_and_oldest_age() -> None:
     """Depth is the ZSET size; age is measured from the lowest due time and is never negative."""
     now = 1_000_000.0
-    redis: Any = _FakeRedis({"arq:queue": [("a", (now - 42) * 1000), ("b", (now - 5) * 1000)], "arq:model": [("c", (now + 60) * 1000)]})
+    redis: Any = _FakeRedis(
+        {
+            "arq:queue": [("a", (now - 42) * 1000), ("b", (now - 5) * 1000)],
+            "arq:model": [("c", (now + 60) * 1000)],
+        }
+    )
     await metrics.sample_arq_queues(redis, ["arq:queue", "arq:model", "arq:chat"], now=now)
     assert _sample("umwelt_arq_queue_depth", queue="arq:queue") == 2
-    assert _sample("umwelt_arq_queue_oldest_job_age_seconds", queue="arq:queue") == pytest.approx(42)
-    assert _sample("umwelt_arq_queue_oldest_job_age_seconds", queue="arq:model") == 0  # deferred, not waiting
+    assert _sample("umwelt_arq_queue_oldest_job_age_seconds", queue="arq:queue") == pytest.approx(
+        42
+    )
+    assert (
+        _sample("umwelt_arq_queue_oldest_job_age_seconds", queue="arq:model") == 0
+    )  # deferred, not waiting
     assert _sample("umwelt_arq_queue_depth", queue="arq:chat") == 0
 
 
@@ -219,7 +255,9 @@ async def test_sampler_loop_counts_failures_and_survives() -> None:
         nonlocal calls
         calls += 1
 
-    task = asyncio.ensure_future(metrics.run_sampler_loop([("failing_test", failing), ("counting", counting)], interval=0.01))
+    task = asyncio.ensure_future(
+        metrics.run_sampler_loop([("failing_test", failing), ("counting", counting)], interval=0.01)
+    )
     await asyncio.sleep(0.08)
     await metrics.stop_background([task])
     assert calls >= 2
@@ -234,18 +272,27 @@ async def test_event_loop_lag_detects_blocking() -> None:
     await asyncio.sleep(0.05)
     await metrics.stop_background([task])
     assert _sample("umwelt_event_loop_lag_histogram_seconds_count") >= 1
-    assert _sample("umwelt_event_loop_lag_histogram_seconds_bucket", le="+Inf") > _sample("umwelt_event_loop_lag_histogram_seconds_bucket", le="0.1")
+    assert _sample("umwelt_event_loop_lag_histogram_seconds_bucket", le="+Inf") > _sample(
+        "umwelt_event_loop_lag_histogram_seconds_bucket", le="0.1"
+    )
 
 
 async def test_pool_collector_reports_engine_pool() -> None:
     """Size, checked-out and overflow gauges come from the live engine pool."""
-    engine = create_async_engine("postgresql+asyncpg://u:p@127.0.0.1:1/db", pool_size=3, max_overflow=2)
+    engine = create_async_engine(
+        "postgresql+asyncpg://u:p@127.0.0.1:1/db", pool_size=3, max_overflow=2
+    )
     metrics.register_engine(engine)
     exposition = generate_latest(metrics.REGISTRY).decode()
     assert "umwelt_db_pool_size" in exposition
-    size_lines = [line for line in exposition.splitlines() if line.startswith("umwelt_db_pool_size{")]
+    size_lines = [
+        line for line in exposition.splitlines() if line.startswith("umwelt_db_pool_size{")
+    ]
     assert any(line.endswith(" 3.0") for line in size_lines)
-    assert any(line.startswith("umwelt_db_pool_max_connections{") and line.endswith(" 5.0") for line in exposition.splitlines())
+    assert any(
+        line.startswith("umwelt_db_pool_max_connections{") and line.endswith(" 5.0")
+        for line in exposition.splitlines()
+    )
     await engine.dispose()
 
 
@@ -264,9 +311,16 @@ def test_first_token_histogram_recorded_via_model_call() -> None:
 
     count_before = _sample("umwelt_chat_time_to_first_token_seconds_count", capability="streaming")
     sum_before = _sample("umwelt_chat_time_to_first_token_seconds_sum", capability="streaming")
-    record_model_call("streaming", "chat", time.perf_counter(), True, None, None, first_token_ms=750.0)
-    assert _sample("umwelt_chat_time_to_first_token_seconds_count", capability="streaming") == count_before + 1
-    assert _sample("umwelt_chat_time_to_first_token_seconds_sum", capability="streaming") == pytest.approx(sum_before + 0.75)
+    record_model_call(
+        "streaming", "chat", time.perf_counter(), True, None, None, first_token_ms=750.0
+    )
+    assert (
+        _sample("umwelt_chat_time_to_first_token_seconds_count", capability="streaming")
+        == count_before + 1
+    )
+    assert _sample(
+        "umwelt_chat_time_to_first_token_seconds_sum", capability="streaming"
+    ) == pytest.approx(sum_before + 0.75)
 
 
 def test_worker_metrics_server_off_by_default() -> None:
@@ -324,14 +378,16 @@ async def test_outbox_sampler_sets_backlog_and_lag() -> None:
             return _Result(self.row)
 
     row = SimpleNamespace(
-        pending=7, oldest=datetime.now(UTC) - timedelta(seconds=90), rows_total=1234, backlog=5)
+        pending=7, oldest=datetime.now(UTC) - timedelta(seconds=90), rows_total=1234, backlog=5
+    )
     await sample_outbox(lambda: _Session(row))  # type: ignore[arg-type]
     assert _sample("umwelt_outbox_rows_total") == 1234
     assert _sample("umwelt_outbox_purge_backlog") == 5
     assert _sample("umwelt_outbox_pending_count") == 7
     assert _sample("umwelt_outbox_oldest_pending_age_seconds") == pytest.approx(90, abs=2)
-    await sample_outbox(lambda: _Session(
-        SimpleNamespace(pending=0, oldest=None, rows_total=-1, backlog=None)))  # type: ignore[arg-type]
+    await sample_outbox(
+        lambda: _Session(SimpleNamespace(pending=0, oldest=None, rows_total=-1, backlog=None))
+    )  # type: ignore[arg-type]
     assert _sample("umwelt_outbox_rows_total") == 0  # never-analyzed table reports reltuples -1
     assert _sample("umwelt_outbox_purge_backlog") == 0
     assert _sample("umwelt_outbox_pending_count") == 0
@@ -342,7 +398,11 @@ async def test_create_app_serves_metrics_without_adding_a_route() -> None:
     """The composed API answers /metrics from middleware (dev, internal peer) and keeps it out of the route table."""
     from apps.api.main import create_app
 
-    app = create_app(Settings(public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"))
+    app = create_app(
+        Settings(
+            public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"
+        )
+    )
     assert all(getattr(route, "path", "") != "/metrics" for route in app.routes)
     async with _client(app) as client:
         response = await client.get("/metrics")

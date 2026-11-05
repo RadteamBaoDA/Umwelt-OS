@@ -120,7 +120,8 @@ class TestRequestContextMiddleware:
                 yield "data: x\n\n"
 
             return StreamingResponse(
-                body(), media_type="text/event-stream",
+                body(),
+                media_type="text/event-stream",
                 headers={"Cache-Control": "private, no-store, no-transform"},
             )
 
@@ -132,13 +133,21 @@ class TestRequestContextMiddleware:
 
         return app
 
-    def test_metrics_use_route_template_and_status_class(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_metrics_use_route_template_and_status_class(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from core import errors
 
         counted: list[dict[str, Any]] = []
         observed: list[dict[str, Any]] = []
-        monkeypatch.setattr(errors, "count", lambda name, **labels: counted.append({"name": name, **labels}))
-        monkeypatch.setattr(errors, "observe_ms", lambda name, _start, **labels: observed.append({"name": name, **labels}))
+        monkeypatch.setattr(
+            errors, "count", lambda name, **labels: counted.append({"name": name, **labels})
+        )
+        monkeypatch.setattr(
+            errors,
+            "observe_ms",
+            lambda name, _start, **labels: observed.append({"name": name, **labels}),
+        )
         client = TestClient(self._app(), raise_server_exceptions=False)
 
         assert client.get("/api/v1/items/abc-123").status_code == 200
@@ -146,11 +155,30 @@ class TestRequestContextMiddleware:
         assert client.get("/nope").status_code == 404
 
         assert counted == [
-            {"name": "api_requests_total", "method": "GET", "route": "/api/v1/items/{item_id}", "status_class": "2xx"},
-            {"name": "api_requests_total", "method": "GET", "route": "/api/v1/crash", "status_class": "5xx"},
-            {"name": "api_requests_total", "method": "GET", "route": "unmatched", "status_class": "4xx"},
+            {
+                "name": "api_requests_total",
+                "method": "GET",
+                "route": "/api/v1/items/{item_id}",
+                "status_class": "2xx",
+            },
+            {
+                "name": "api_requests_total",
+                "method": "GET",
+                "route": "/api/v1/crash",
+                "status_class": "5xx",
+            },
+            {
+                "name": "api_requests_total",
+                "method": "GET",
+                "route": "unmatched",
+                "status_class": "4xx",
+            },
         ]
-        assert [o["route"] for o in observed] == ["/api/v1/items/{item_id}", "/api/v1/crash", "unmatched"]
+        assert [o["route"] for o in observed] == [
+            "/api/v1/items/{item_id}",
+            "/api/v1/crash",
+            "unmatched",
+        ]
         assert all(o["name"] == "api_request_ms" for o in observed)
 
     def test_trace_is_bound_to_the_request_id_inside_the_handler(self) -> None:
@@ -247,6 +275,7 @@ class TestInternalExceptionHandler:
         assert len(err["requestId"]) > 10
         # Verify requestId is a valid UUID
         from uuid import UUID
+
         UUID(err["requestId"])
 
         # Secret message must never leak to response body

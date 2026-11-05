@@ -82,6 +82,7 @@ class WorkerClaim:
     Captured access/Source fences and payload hash are comparisons, not authority. Each
     phase must resolve original durable identity, lock in order and match every field.
     """
+
     scope: InternalJobScope
     access_fence: AccessFence
     source_fence: SourceFence
@@ -103,6 +104,7 @@ class WorkerClaim:
 @dataclass(frozen=True)
 class NormalizationCandidate:
     """Detach one bounded journal/accepted-key identity with its complete scoped lineage."""
+
     journal_id: UUID
     observation_id: UUID
     external_id: str
@@ -134,6 +136,7 @@ class WorkerState:
     Owner snapshots never prove locks; preparation APIs acquired the actual existing rows.
     Normalization rows keep accepted record order while lock acquisition uses sorted IDs.
     """
+
     scope: InternalJobScope
     access_fence: AccessFence
     source: SourceFence
@@ -153,16 +156,32 @@ def _capture_worker_claim(work: WorkerState) -> WorkerClaim:
     if work.event.dispatched_at is None:
         raise ValueError("A durable dispatch claim is required")
     return WorkerClaim(
-        scope=work.scope, access_fence=work.access_fence, source_fence=work.source,
-        event_id=work.event.id, event_type=work.event.type, producer=work.event.producer,
+        scope=work.scope,
+        access_fence=work.access_fence,
+        source_fence=work.source,
+        event_id=work.event.id,
+        event_type=work.event.type,
+        producer=work.event.producer,
         dispatched_at=work.event.dispatched_at,
-        payload_hash=hashlib.sha256(json.dumps(work.event.payload, sort_keys=True,
-            separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()).hexdigest(),
-        run_id=work.run.id, batch_id=work.batch.id, stage_id=work.stage.id,
-        attempts=work.stage.attempts, stage_status=work.stage.status,
+        payload_hash=hashlib.sha256(
+            json.dumps(
+                work.event.payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest(),
+        run_id=work.run.id,
+        batch_id=work.batch.id,
+        stage_id=work.stage.id,
+        attempts=work.stage.attempts,
+        stage_status=work.stage.status,
         stage_lease_expires_at=work.stage.lease_expires_at,
         state_lease_run_id=work.state.lease_run_id if work.state is not None else None,
-        state_collection_token=work.state.collection_lease_token if work.state is not None else None,
+        state_collection_token=work.state.collection_lease_token
+        if work.state is not None
+        else None,
     )
 
 
@@ -172,9 +191,13 @@ def _same_worker_claim(work: WorkerState, claim: WorkerClaim) -> bool:
 
 
 async def _capture_normalization_retry_claim_in_uow(
-    session: AsyncSession, *, delivery: EventDelivery,
-    scope: InternalJobScope, access_fence: AccessFence,
-    source_fence: SourceFence, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    *,
+    delivery: EventDelivery,
+    scope: InternalJobScope,
+    access_fence: AccessFence,
+    source_fence: SourceFence,
+    multi_workspace_enabled: bool,
 ) -> WorkerClaim | None:
     """Read an original normalization comparison before D/I/O/outbox preparation.
 
@@ -185,54 +208,109 @@ async def _capture_normalization_retry_claim_in_uow(
     """
     if type(multi_workspace_enabled) is not bool:
         raise TypeError("Actual workspace rollout flag required")
-    if (delivery.type != "ingestion.normalize.requested" or delivery.producer != "modules.ingestion"
-            or delivery.status != "queued" or delivery.dispatched_at is None
-            or not valid_event_envelope(delivery, scope) or scope.source_id != source_fence.id
-            or scope.source_generation != source_fence.generation or source_fence.status != "active"):
+    if (
+        delivery.type != "ingestion.normalize.requested"
+        or delivery.producer != "modules.ingestion"
+        or delivery.status != "queued"
+        or delivery.dispatched_at is None
+        or not valid_event_envelope(delivery, scope)
+        or scope.source_id != source_fence.id
+        or scope.source_generation != source_fence.generation
+        or source_fence.status != "active"
+    ):
         return None
     run_id, stage_id = UUID(delivery.payload["run_id"]), UUID(delivery.payload["stage_id"])
-    row = (await session.execute(select(
-        IngestionRun.id.label("run_id"), IngestionRun.batch_id, IngestionRun.status.label("run_status"),
-        IngestionStage.id.label("stage_id"), IngestionStage.attempts,
-        IngestionStage.status.label("stage_status"), IngestionStage.lease_expires_at,
-        SourceIngestionState.lease_run_id, SourceIngestionState.collection_lease_token,
-    ).select_from(IngestionRun).join(IngestionBatch, IngestionBatch.id == IngestionRun.batch_id)
-        .join(IngestionStage, IngestionStage.run_id == IngestionRun.id)
-        .outerjoin(SourceIngestionState, SourceIngestionState.source_id == IngestionRun.source_id).where(
-            IngestionRun.id == run_id, IngestionRun.workspace_id == scope.workspace_id,
-            IngestionRun.actor_user_id == scope.actor_user_id,
-            IngestionRun.membership_revision == scope.membership_revision,
-            IngestionRun.source_id == source_fence.id, IngestionBatch.source_id == source_fence.id,
-            IngestionBatch.source_generation == source_fence.generation,
-            IngestionStage.id == stage_id, IngestionStage.stage_key == "normalize",
-        ))).one_or_none()
-    if (row is None or row.run_status in {"failed", "succeeded", "needs_ocr"}
-            or row.stage_status in {"failed", "succeeded"}
-            or type(row.attempts) is not int or row.attempts < 0):
+    row = (
+        await session.execute(
+            select(
+                IngestionRun.id.label("run_id"),
+                IngestionRun.batch_id,
+                IngestionRun.status.label("run_status"),
+                IngestionStage.id.label("stage_id"),
+                IngestionStage.attempts,
+                IngestionStage.status.label("stage_status"),
+                IngestionStage.lease_expires_at,
+                SourceIngestionState.lease_run_id,
+                SourceIngestionState.collection_lease_token,
+            )
+            .select_from(IngestionRun)
+            .join(IngestionBatch, IngestionBatch.id == IngestionRun.batch_id)
+            .join(IngestionStage, IngestionStage.run_id == IngestionRun.id)
+            .outerjoin(
+                SourceIngestionState, SourceIngestionState.source_id == IngestionRun.source_id
+            )
+            .where(
+                IngestionRun.id == run_id,
+                IngestionRun.workspace_id == scope.workspace_id,
+                IngestionRun.actor_user_id == scope.actor_user_id,
+                IngestionRun.membership_revision == scope.membership_revision,
+                IngestionRun.source_id == source_fence.id,
+                IngestionBatch.source_id == source_fence.id,
+                IngestionBatch.source_generation == source_fence.generation,
+                IngestionStage.id == stage_id,
+                IngestionStage.stage_key == "normalize",
+            )
+        )
+    ).one_or_none()
+    if (
+        row is None
+        or row.run_status in {"failed", "succeeded", "needs_ocr"}
+        or row.stage_status in {"failed", "succeeded"}
+        or type(row.attempts) is not int
+        or row.attempts < 0
+    ):
         return None
-    if await session.scalar(select(IngestionStage.id).where(
-        IngestionStage.run_id == run_id, IngestionStage.stage_key.in_(("receive", "collect_web")),
-        IngestionStage.status != "succeeded",
-    ).limit(1)) is not None:
+    if (
+        await session.scalar(
+            select(IngestionStage.id)
+            .where(
+                IngestionStage.run_id == run_id,
+                IngestionStage.stage_key.in_(("receive", "collect_web")),
+                IngestionStage.status != "succeeded",
+            )
+            .limit(1)
+        )
+        is not None
+    ):
         return None
     try:
-        payload_hash = hashlib.sha256(json.dumps(delivery.payload, sort_keys=True,
-            separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+        payload_hash = hashlib.sha256(
+            json.dumps(
+                delivery.payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
     except (ValueError, TypeError):
         return None
     return WorkerClaim(
-        scope=scope, access_fence=access_fence, source_fence=source_fence,
-        event_id=delivery.id, event_type=delivery.type, producer=delivery.producer,
-        dispatched_at=delivery.dispatched_at, payload_hash=payload_hash,
-        run_id=row.run_id, batch_id=row.batch_id, stage_id=row.stage_id,
-        attempts=row.attempts, stage_status=row.stage_status, stage_lease_expires_at=row.lease_expires_at,
-        state_lease_run_id=row.lease_run_id, state_collection_token=row.collection_lease_token,
+        scope=scope,
+        access_fence=access_fence,
+        source_fence=source_fence,
+        event_id=delivery.id,
+        event_type=delivery.type,
+        producer=delivery.producer,
+        dispatched_at=delivery.dispatched_at,
+        payload_hash=payload_hash,
+        run_id=row.run_id,
+        batch_id=row.batch_id,
+        stage_id=row.stage_id,
+        attempts=row.attempts,
+        stage_status=row.stage_status,
+        stage_lease_expires_at=row.lease_expires_at,
+        state_lease_run_id=row.lease_run_id,
+        state_collection_token=row.collection_lease_token,
     )
 
 
 async def _lock_normalization_retry_event(
-    session: AsyncSession, identifier: UUID, *,
-    multi_workspace_enabled: bool, expected: WorkerClaim,
+    session: AsyncSession,
+    identifier: UUID,
+    *,
+    multi_workspace_enabled: bool,
+    expected: WorkerClaim,
 ) -> WorkerState | None:
     """Lock only original normalization scheduling roots for post-rollback disposition.
 
@@ -243,66 +321,139 @@ async def _lock_normalization_retry_event(
     """
     if type(multi_workspace_enabled) is not bool:
         raise TypeError("Actual workspace rollout flag required")
-    if (identifier != expected.event_id or expected.event_type != "ingestion.normalize.requested"
-            or expected.producer != "modules.ingestion" or expected.scope.source_id is None):
+    if (
+        identifier != expected.event_id
+        or expected.event_type != "ingestion.normalize.requested"
+        or expected.producer != "modules.ingestion"
+        or expected.scope.source_id is None
+    ):
         return None
     scope = await ingestion_api.resolve_ingestion_event_scope(
-        session, identifier, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        identifier,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if scope != expected.scope:
         return None
-    access_fence = await read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    access_fence = await read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if access_fence != expected.access_fence:
         raise ConflictError("Original normalization admission changed")
-    if await ingestion_api.resolve_ingestion_run_scope(session, expected.run_id,
-        multi_workspace_enabled=multi_workspace_enabled) != scope:
+    if (
+        await ingestion_api.resolve_ingestion_run_scope(
+            session, expected.run_id, multi_workspace_enabled=multi_workspace_enabled
+        )
+        != scope
+    ):
         return None
     try:
-        locked = await sources.lock_source_set(session, (cast(UUID, scope.source_id),), scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=expected.access_fence)
+        locked = await sources.lock_source_set(
+            session,
+            (cast(UUID, scope.source_id),),
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=expected.access_fence,
+        )
     except NotFoundError:
         # Source generation advanced or Source vanished: treat as lost admission, not a worker crash.
         return None
     source = locked.fences[0]
-    if (source is None or source != expected.source_fence or source.status != "active"
-            or source.generation != scope.source_generation):
+    if (
+        source is None
+        or source != expected.source_fence
+        or source.status != "active"
+        or source.generation != scope.source_generation
+    ):
         return None
-    projection = await sources.get_connector_source(session, source.id, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled)
-    if projection is None or projection.status != source.status or projection.generation != source.generation:
+    projection = await sources.get_connector_source(
+        session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    if (
+        projection is None
+        or projection.status != source.status
+        or projection.generation != source.generation
+    ):
         return None
-    state = await session.get(SourceIngestionState, source.id, with_for_update=True, populate_existing=True)
-    run = await session.scalar(select(IngestionRun).where(
-        IngestionRun.id == expected.run_id, IngestionRun.workspace_id == scope.workspace_id,
-        IngestionRun.actor_user_id == scope.actor_user_id,
-        IngestionRun.membership_revision == scope.membership_revision, IngestionRun.source_id == source.id,
-    ).with_for_update().execution_options(populate_existing=True))
-    if run is None or run.batch_id != expected.batch_id or run.status in {"failed", "succeeded", "needs_ocr"}:
+    state = await session.get(
+        SourceIngestionState, source.id, with_for_update=True, populate_existing=True
+    )
+    run = await session.scalar(
+        select(IngestionRun)
+        .where(
+            IngestionRun.id == expected.run_id,
+            IngestionRun.workspace_id == scope.workspace_id,
+            IngestionRun.actor_user_id == scope.actor_user_id,
+            IngestionRun.membership_revision == scope.membership_revision,
+            IngestionRun.source_id == source.id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if (
+        run is None
+        or run.batch_id != expected.batch_id
+        or run.status in {"failed", "succeeded", "needs_ocr"}
+    ):
         return None
-    batch = await session.scalar(select(IngestionBatch).where(
-        IngestionBatch.id == expected.batch_id, IngestionBatch.source_id == source.id,
-        IngestionBatch.source_generation == source.generation,
-    ).with_for_update().execution_options(populate_existing=True))
-    stage = await session.scalar(select(IngestionStage).where(
-        IngestionStage.id == expected.stage_id, IngestionStage.run_id == expected.run_id,
-        IngestionStage.stage_key == "normalize",
-    ).with_for_update().execution_options(populate_existing=True))
+    batch = await session.scalar(
+        select(IngestionBatch)
+        .where(
+            IngestionBatch.id == expected.batch_id,
+            IngestionBatch.source_id == source.id,
+            IngestionBatch.source_generation == source.generation,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    stage = await session.scalar(
+        select(IngestionStage)
+        .where(
+            IngestionStage.id == expected.stage_id,
+            IngestionStage.run_id == expected.run_id,
+            IngestionStage.stage_key == "normalize",
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if batch is None or stage is None or stage.status in {"failed", "succeeded"}:
         return None
-    if await session.scalar(select(IngestionStage.id).where(
-        IngestionStage.run_id == run.id, IngestionStage.stage_key.in_(("receive", "collect_web")),
-        IngestionStage.status != "succeeded",
-    ).limit(1)) is not None:
+    if (
+        await session.scalar(
+            select(IngestionStage.id)
+            .where(
+                IngestionStage.run_id == run.id,
+                IngestionStage.stage_key.in_(("receive", "collect_web")),
+                IngestionStage.status != "succeeded",
+            )
+            .limit(1)
+        )
+        is not None
+    ):
         return None
-    event = await session.scalar(select(EventOutbox).where(
-        EventOutbox.id == identifier, EventOutbox.workspace_id == scope.workspace_id,
-        EventOutbox.actor_user_id == scope.actor_user_id, EventOutbox.membership_revision == scope.membership_revision,
-        EventOutbox.status == "queued", EventOutbox.dispatched_at == expected.dispatched_at,
-    ).with_for_update().execution_options(populate_existing=True))
-    if (event is None or not valid_event_envelope(event, scope)
-            or event.payload.get("run_id") != str(run.id) or event.payload.get("stage_id") != str(stage.id)):
+    event = await session.scalar(
+        select(EventOutbox)
+        .where(
+            EventOutbox.id == identifier,
+            EventOutbox.workspace_id == scope.workspace_id,
+            EventOutbox.actor_user_id == scope.actor_user_id,
+            EventOutbox.membership_revision == scope.membership_revision,
+            EventOutbox.status == "queued",
+            EventOutbox.dispatched_at == expected.dispatched_at,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if (
+        event is None
+        or not valid_event_envelope(event, scope)
+        or event.payload.get("run_id") != str(run.id)
+        or event.payload.get("stage_id") != str(stage.id)
+    ):
         return None
-    work = WorkerState(scope, locked.access_fence, source, projection, state, run, batch, stage, event)
+    work = WorkerState(
+        scope, locked.access_fence, source, projection, state, run, batch, stage, event
+    )
     return work if _same_worker_claim(work, expected) else None
 
 
@@ -328,8 +479,12 @@ class _Discovery:
 
 
 async def _admit_worker_delivery(
-    session: AsyncSession, identifier: UUID, *, multi_workspace_enabled: bool,
-    event_types: tuple[str, ...], expected: WorkerClaim | None,
+    session: AsyncSession,
+    identifier: UUID,
+    *,
+    multi_workspace_enabled: bool,
+    event_types: tuple[str, ...],
+    expected: WorkerClaim | None,
 ) -> _Admitted | None:
     """Resolve the retained principal, recheck the original access fence and validate the queued envelope.
 
@@ -337,26 +492,44 @@ async def _admit_worker_delivery(
     when ``expected`` carries an access fence that no longer matches (original admission lost).
     """
     scope = await ingestion_api.resolve_ingestion_event_scope(
-        session, identifier, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        identifier,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if scope is None or (expected is not None and scope != expected.scope):
         return None
-    access_fence = await read_access_fence(session, scope=scope,
-                                          multi_workspace_enabled=multi_workspace_enabled)
+    access_fence = await read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if expected is not None and access_fence != expected.access_fence:
         raise ConflictError("Original worker admission changed")
-    delivery = await ingestion_api.get_event_delivery(session, identifier, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled)
-    if (delivery is None or delivery.type not in event_types or delivery.status != "queued"
-            or delivery.dispatched_at is None):
+    delivery = await ingestion_api.get_event_delivery(
+        session, identifier, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    if (
+        delivery is None
+        or delivery.type not in event_types
+        or delivery.status != "queued"
+        or delivery.dispatched_at is None
+    ):
         return None
     if not valid_event_envelope(delivery, scope):
         return None
     if expected is not None and (
-        delivery.id != expected.event_id or delivery.type != expected.event_type
-        or delivery.producer != expected.producer or delivery.dispatched_at != expected.dispatched_at
-        or hashlib.sha256(json.dumps(delivery.payload, sort_keys=True, separators=(",", ":"),
-            ensure_ascii=False, allow_nan=False).encode()).hexdigest() != expected.payload_hash
+        delivery.id != expected.event_id
+        or delivery.type != expected.event_type
+        or delivery.producer != expected.producer
+        or delivery.dispatched_at != expected.dispatched_at
+        or hashlib.sha256(
+            json.dumps(
+                delivery.payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+        != expected.payload_hash
     ):
         # Reject changed preparation identities before any earlier owner-resource lock.
         return None
@@ -365,15 +538,20 @@ async def _admit_worker_delivery(
         stage_id = UUID(delivery.payload["stage_id"])
     except (KeyError, ValueError, TypeError, AttributeError):
         return None
-    run_scope = await ingestion_api.resolve_ingestion_run_scope(session, run_id,
-        multi_workspace_enabled=multi_workspace_enabled)
+    run_scope = await ingestion_api.resolve_ingestion_run_scope(
+        session, run_id, multi_workspace_enabled=multi_workspace_enabled
+    )
     if run_scope != scope:
         return None
     return _Admitted(scope, access_fence, delivery, run_id, stage_id)
 
 
 async def _lock_worker_source(
-    session: AsyncSession, admitted: _Admitted, *, multi_workspace_enabled: bool, expected: WorkerClaim | None,
+    session: AsyncSession,
+    admitted: _Admitted,
+    *,
+    multi_workspace_enabled: bool,
+    expected: WorkerClaim | None,
 ) -> tuple[Any, SourceFence, ConnectorSource] | None:
     """Lock the Source set, compare the original Source fence and read the detached connector projection.
 
@@ -382,8 +560,13 @@ async def _lock_worker_source(
     """
     scope, delivery = admitted.scope, admitted.delivery
     try:
-        locked = await sources.lock_source_set(session, (cast(UUID, scope.source_id),), scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=admitted.access_fence)
+        locked = await sources.lock_source_set(
+            session,
+            (cast(UUID, scope.source_id),),
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=admitted.access_fence,
+        )
     except NotFoundError:
         # Generation advanced or Source gone: the dispatcher gate fails the outbox row; no work here.
         return None
@@ -392,22 +575,40 @@ async def _lock_worker_source(
         return None
     if expected is not None and source != expected.source_fence:
         return None
-    projection = await sources.get_connector_source(session, source.id, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled)
-    if projection is None or projection.status != source.status or projection.generation != source.generation:
+    projection = await sources.get_connector_source(
+        session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    if (
+        projection is None
+        or projection.status != source.status
+        or projection.generation != source.generation
+    ):
         return None
     if delivery.type == "connector.crawl.requested":
         revision = delivery.payload.get("connector_revision")
-        if (connectors.is_native_provider(projection.provider) or type(revision) is not int
-                or revision < 1 or not await connectors.require_collection_fence(session, projection,
-                    CollectionFence(source_generation=source.generation, connector_revision=revision),
-                    lock=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled)):
+        if (
+            connectors.is_native_provider(projection.provider)
+            or type(revision) is not int
+            or revision < 1
+            or not await connectors.require_collection_fence(
+                session,
+                projection,
+                CollectionFence(source_generation=source.generation, connector_revision=revision),
+                lock=True,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+        ):
             return None
     return locked, source, projection
 
 
 async def _prepare_upload_document(
-    session: AsyncSession, admitted: _Admitted, source: SourceFence, *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    admitted: _Admitted,
+    source: SourceFence,
+    *,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Prepare the existing Document and its URI lifecycle for an upload event; ``False`` means no work.
 
@@ -424,13 +625,27 @@ async def _prepare_upload_document(
     legacy_prefix = f"documents/{document_id}/"
     if not raw_uri.startswith((expected_prefix, legacy_prefix)):
         raise ValueError("Upload storage key differs from retained document scope")
-    return bool(await documents.lock_document_for_extraction(session, document_id, source.id,
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=admitted.access_fence,
-        source_fence=source, expected_raw_uri=raw_uri, expected_mime_type=mime_type))
+    return bool(
+        await documents.lock_document_for_extraction(
+            session,
+            document_id,
+            source.id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=admitted.access_fence,
+            source_fence=source,
+            expected_raw_uri=raw_uri,
+            expected_mime_type=mime_type,
+        )
+    )
 
 
 async def _discover_normalization(
-    session: AsyncSession, claim: WorkerClaim, admitted: _Admitted, source: SourceFence, *,
+    session: AsyncSession,
+    claim: WorkerClaim,
+    admitted: _Admitted,
+    source: SourceFence,
+    *,
     multi_workspace_enabled: bool,
 ) -> _Discovery:
     """Discover up to 32 pending journal identities nonlockingly, then prepare D's sorted keys before I.
@@ -438,67 +653,118 @@ async def _discover_normalization(
     The returned query is re-executed under held locks to compare the exact lineage set.
     """
     scope = admitted.scope
-    query = (select(
-        ObservationNormalization.id, SourceObservation.id, SourceObservation.provider_id,
-        SourceObservation.record_hash, ObservationNormalization.workspace_id,
-        ObservationNormalization.source_id, ObservationNormalization.source_generation,
-        ObservationNormalization.run_id, SourceObservation.batch_id,
-        ObservationNormalization.stage_id, ObservationNormalization.normalization_version,
-        SourceObservation.source_id,
-    ).select_from(ObservationNormalization)
-        .join(SourceObservation, SourceObservation.id == ObservationNormalization.observation_id).where(
-        ObservationNormalization.workspace_id == scope.workspace_id,
-        ObservationNormalization.source_id == source.id,
-        ObservationNormalization.source_generation == source.generation,
-        ObservationNormalization.run_id == admitted.run_id,
-        ObservationNormalization.stage_id == admitted.stage_id,
-        ObservationNormalization.normalization_version == NORMALIZATION_VERSION,
-        ObservationNormalization.disposition == "pending",
-        SourceObservation.source_id == source.id,
-        SourceObservation.batch_id == claim.batch_id,
-    ).order_by(SourceObservation.provider_id, SourceObservation.id).limit(NORMALIZATION_BATCH_RECORDS))
-    candidates = tuple(NormalizationCandidate(*tuple(row)) for row in (await session.execute(query)).all())
+    query = (
+        select(
+            ObservationNormalization.id,
+            SourceObservation.id,
+            SourceObservation.provider_id,
+            SourceObservation.record_hash,
+            ObservationNormalization.workspace_id,
+            ObservationNormalization.source_id,
+            ObservationNormalization.source_generation,
+            ObservationNormalization.run_id,
+            SourceObservation.batch_id,
+            ObservationNormalization.stage_id,
+            ObservationNormalization.normalization_version,
+            SourceObservation.source_id,
+        )
+        .select_from(ObservationNormalization)
+        .join(SourceObservation, SourceObservation.id == ObservationNormalization.observation_id)
+        .where(
+            ObservationNormalization.workspace_id == scope.workspace_id,
+            ObservationNormalization.source_id == source.id,
+            ObservationNormalization.source_generation == source.generation,
+            ObservationNormalization.run_id == admitted.run_id,
+            ObservationNormalization.stage_id == admitted.stage_id,
+            ObservationNormalization.normalization_version == NORMALIZATION_VERSION,
+            ObservationNormalization.disposition == "pending",
+            SourceObservation.source_id == source.id,
+            SourceObservation.batch_id == claim.batch_id,
+        )
+        .order_by(SourceObservation.provider_id, SourceObservation.id)
+        .limit(NORMALIZATION_BATCH_RECORDS)
+    )
+    candidates = tuple(
+        NormalizationCandidate(*tuple(row)) for row in (await session.execute(query)).all()
+    )
     document_preparation = await documents.prepare_normalized_document_keys(
-        session, source.id, tuple(sorted({item.external_id for item in candidates})),
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=admitted.access_fence, source_fence=source,
+        session,
+        source.id,
+        tuple(sorted({item.external_id for item in candidates})),
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=admitted.access_fence,
+        source_fence=source,
     )
     return _Discovery(query, candidates, claim.batch_id, document_preparation)
 
 
 async def _lock_run_batch_stage(
-    session: AsyncSession, admitted: _Admitted, source: SourceFence,
+    session: AsyncSession,
+    admitted: _Admitted,
+    source: SourceFence,
 ) -> tuple[SourceIngestionState | None, IngestionRun, IngestionBatch, IngestionStage] | None:
     """Lock state, then the exact run, batch and stage rows (in that order); ``None`` if any is missing."""
     scope = admitted.scope
-    state = await session.get(SourceIngestionState, source.id, with_for_update=True, populate_existing=True)
-    run = await session.scalar(select(IngestionRun).where(
-        IngestionRun.id == admitted.run_id, IngestionRun.workspace_id == scope.workspace_id,
-        IngestionRun.actor_user_id == scope.actor_user_id,
-        IngestionRun.membership_revision == scope.membership_revision,
-        IngestionRun.source_id == source.id,
-    ).with_for_update().execution_options(populate_existing=True))
+    state = await session.get(
+        SourceIngestionState, source.id, with_for_update=True, populate_existing=True
+    )
+    run = await session.scalar(
+        select(IngestionRun)
+        .where(
+            IngestionRun.id == admitted.run_id,
+            IngestionRun.workspace_id == scope.workspace_id,
+            IngestionRun.actor_user_id == scope.actor_user_id,
+            IngestionRun.membership_revision == scope.membership_revision,
+            IngestionRun.source_id == source.id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if run is None:
         return None
-    batch = await session.scalar(select(IngestionBatch).where(
-        IngestionBatch.id == run.batch_id, IngestionBatch.source_id == source.id,
-        IngestionBatch.source_generation == source.generation,
-    ).with_for_update().execution_options(populate_existing=True))
-    stage_key = {"ingestion.stage.requested": "receive", "connector.crawl.requested": "collect_web",
-                 "ingestion.normalize.requested": "normalize", "document.file.uploaded": "parse_file"}[
-        admitted.delivery.type]
-    stage = await session.scalar(select(IngestionStage).where(
-        IngestionStage.id == admitted.stage_id, IngestionStage.run_id == run.id,
-        IngestionStage.stage_key == stage_key,
-    ).with_for_update().execution_options(populate_existing=True))
+    batch = await session.scalar(
+        select(IngestionBatch)
+        .where(
+            IngestionBatch.id == run.batch_id,
+            IngestionBatch.source_id == source.id,
+            IngestionBatch.source_generation == source.generation,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    stage_key = {
+        "ingestion.stage.requested": "receive",
+        "connector.crawl.requested": "collect_web",
+        "ingestion.normalize.requested": "normalize",
+        "document.file.uploaded": "parse_file",
+    }[admitted.delivery.type]
+    stage = await session.scalar(
+        select(IngestionStage)
+        .where(
+            IngestionStage.id == admitted.stage_id,
+            IngestionStage.run_id == run.id,
+            IngestionStage.stage_key == stage_key,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if batch is None or stage is None:
         return None
     return state, run, batch, stage
 
 
 async def _lock_normalization_rows(
-    session: AsyncSession, claim: WorkerClaim, discovery: _Discovery, admitted: _Admitted, source: SourceFence,
-    projection: ConnectorSource, run: IngestionRun, batch: IngestionBatch, stage: IngestionStage, *,
+    session: AsyncSession,
+    claim: WorkerClaim,
+    discovery: _Discovery,
+    admitted: _Admitted,
+    source: SourceFence,
+    projection: ConnectorSource,
+    run: IngestionRun,
+    batch: IngestionBatch,
+    stage: IngestionStage,
+    *,
     multi_workspace_enabled: bool,
 ) -> tuple[tuple[tuple[ObservationNormalization, SourceObservation], ...], Any]:
     """Lock the discovered journal/accepted rows in id order, compare the lineage set and prepare Observations.
@@ -510,46 +776,96 @@ async def _lock_normalization_rows(
     scope, candidates = admitted.scope, discovery.candidates
     if run.batch_id != discovery.batch_id:
         raise NormalizationPreparationConflict("normalization_batch_changed", claim)
-    await session.execute(select(ObservationNormalization).where(
-        ObservationNormalization.id.in_(tuple(item.journal_id for item in candidates)),
-        ObservationNormalization.workspace_id == scope.workspace_id,
-        ObservationNormalization.source_id == source.id,
-        ObservationNormalization.source_generation == source.generation,
-        ObservationNormalization.run_id == run.id, ObservationNormalization.stage_id == stage.id,
-        ObservationNormalization.normalization_version == NORMALIZATION_VERSION,
-    ).order_by(ObservationNormalization.id).with_for_update().execution_options(populate_existing=True))
-    await session.execute(select(SourceObservation).where(
-        SourceObservation.id.in_(tuple(item.observation_id for item in candidates)),
-        SourceObservation.source_id == source.id, SourceObservation.batch_id == batch.id,
-    ).order_by(SourceObservation.id).with_for_update().execution_options(populate_existing=True))
-    refreshed_candidates = tuple(NormalizationCandidate(*cast(Any, tuple(row)))
-        for row in (await session.execute(discovery.query)).all())
+    await session.execute(
+        select(ObservationNormalization)
+        .where(
+            ObservationNormalization.id.in_(tuple(item.journal_id for item in candidates)),
+            ObservationNormalization.workspace_id == scope.workspace_id,
+            ObservationNormalization.source_id == source.id,
+            ObservationNormalization.source_generation == source.generation,
+            ObservationNormalization.run_id == run.id,
+            ObservationNormalization.stage_id == stage.id,
+            ObservationNormalization.normalization_version == NORMALIZATION_VERSION,
+        )
+        .order_by(ObservationNormalization.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    await session.execute(
+        select(SourceObservation)
+        .where(
+            SourceObservation.id.in_(tuple(item.observation_id for item in candidates)),
+            SourceObservation.source_id == source.id,
+            SourceObservation.batch_id == batch.id,
+        )
+        .order_by(SourceObservation.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    refreshed_candidates = tuple(
+        NormalizationCandidate(*cast(Any, tuple(row)))
+        for row in (await session.execute(discovery.query)).all()
+    )
     if refreshed_candidates != candidates:
         raise NormalizationPreparationConflict("normalization_candidate_set_changed", claim)
-    normalization_rows = tuple((progress, observation) for progress, observation in
-        (await session.execute(discovery.query.with_only_columns(
-            ObservationNormalization, SourceObservation,
-        ).execution_options(populate_existing=True))).all())
+    normalization_rows = tuple(
+        (progress, observation)
+        for progress, observation in (
+            await session.execute(
+                discovery.query.with_only_columns(
+                    ObservationNormalization,
+                    SourceObservation,
+                ).execution_options(populate_existing=True)
+            )
+        ).all()
+    )
     # Content reload must still have the exact identities compared under those held rows.
-    if tuple(NormalizationCandidate(
-        progress.id, observation.id, observation.provider_id, observation.record_hash,
-        progress.workspace_id, progress.source_id, progress.source_generation, progress.run_id,
-        observation.batch_id, progress.stage_id, progress.normalization_version, observation.source_id,
-    ) for progress, observation in normalization_rows) != candidates:
+    if (
+        tuple(
+            NormalizationCandidate(
+                progress.id,
+                observation.id,
+                observation.provider_id,
+                observation.record_hash,
+                progress.workspace_id,
+                progress.source_id,
+                progress.source_generation,
+                progress.run_id,
+                observation.batch_id,
+                progress.stage_id,
+                progress.normalization_version,
+                observation.source_id,
+            )
+            for progress, observation in normalization_rows
+        )
+        != candidates
+    ):
         raise NormalizationPreparationConflict("normalization_candidate_lineage_changed", claim)
     observation_preparation = None
     if projection.provider in MEASUREMENT_PROVIDER_IDS:
         observation_preparation = await observations.prepare_ingestion_observation_keys(
-            session, source.id, tuple(sorted({(item.external_id, item.observation_id)
-                for item in candidates}, key=lambda item: (item[0], str(item[1])))),
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            access_fence=admitted.access_fence, source_fence=source,
+            session,
+            source.id,
+            tuple(
+                sorted(
+                    {(item.external_id, item.observation_id) for item in candidates},
+                    key=lambda item: (item[0], str(item[1])),
+                )
+            ),
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=admitted.access_fence,
+            source_fence=source,
         )
     return normalization_rows, observation_preparation
 
 
 async def _lock_worker_outbox(
-    session: AsyncSession, identifier: UUID, admitted: _Admitted, run: IngestionRun, stage: IngestionStage,
+    session: AsyncSession,
+    identifier: UUID,
+    admitted: _Admitted,
+    run: IngestionRun,
+    stage: IngestionStage,
 ) -> EventOutbox | None:
     """Lock the outbox row last and require it to equal the earlier detached envelope and the locked lineage.
 
@@ -558,32 +874,55 @@ async def _lock_worker_outbox(
     predecessor still owns collection settlement.
     """
     scope, delivery = admitted.scope, admitted.delivery
-    event = await session.scalar(select(EventOutbox).where(
-        EventOutbox.id == identifier, EventOutbox.workspace_id == scope.workspace_id,
-        EventOutbox.actor_user_id == scope.actor_user_id,
-        EventOutbox.membership_revision == scope.membership_revision,
-        EventOutbox.status == "queued", EventOutbox.dispatched_at == delivery.dispatched_at,
-    ).with_for_update().execution_options(populate_existing=True))
+    event = await session.scalar(
+        select(EventOutbox)
+        .where(
+            EventOutbox.id == identifier,
+            EventOutbox.workspace_id == scope.workspace_id,
+            EventOutbox.actor_user_id == scope.actor_user_id,
+            EventOutbox.membership_revision == scope.membership_revision,
+            EventOutbox.status == "queued",
+            EventOutbox.dispatched_at == delivery.dispatched_at,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if event is None or not valid_event_envelope(event, scope):
         return None
-    if (event.type != delivery.type or event.version != delivery.version
-            or event.producer != delivery.producer or event.payload != delivery.payload):
+    if (
+        event.type != delivery.type
+        or event.version != delivery.version
+        or event.producer != delivery.producer
+        or event.payload != delivery.payload
+    ):
         # Earlier owner preparation was for this exact admitted detached envelope only.
         return None
     if event.payload.get("run_id") != str(run.id) or event.payload.get("stage_id") != str(stage.id):
         return None
-    if event.type == "ingestion.normalize.requested" and await session.scalar(
-        select(IngestionStage.id).where(IngestionStage.run_id == run.id,
-            IngestionStage.stage_key.in_(("receive", "collect_web")),
-            IngestionStage.status != "succeeded").limit(1)
-    ) is not None:
+    if (
+        event.type == "ingestion.normalize.requested"
+        and await session.scalar(
+            select(IngestionStage.id)
+            .where(
+                IngestionStage.run_id == run.id,
+                IngestionStage.stage_key.in_(("receive", "collect_web")),
+                IngestionStage.status != "succeeded",
+            )
+            .limit(1)
+        )
+        is not None
+    ):
         return None
     return event
 
 
 async def _lock_worker_event(
-    session: AsyncSession, identifier: UUID, *, multi_workspace_enabled: bool,
-    event_types: tuple[str, ...], expected: WorkerClaim | None = None,
+    session: AsyncSession,
+    identifier: UUID,
+    *,
+    multi_workspace_enabled: bool,
+    event_types: tuple[str, ...],
+    expected: WorkerClaim | None = None,
 ) -> WorkerState | None:
     """Resolve/admit retained event+run identity before content or domain locks.
 
@@ -605,28 +944,44 @@ async def _lock_worker_event(
     outbox.
     """
     admitted = await _admit_worker_delivery(
-        session, identifier, multi_workspace_enabled=multi_workspace_enabled, event_types=event_types,
-        expected=expected)
+        session,
+        identifier,
+        multi_workspace_enabled=multi_workspace_enabled,
+        event_types=event_types,
+        expected=expected,
+    )
     if admitted is None:
         return None
     sourced = await _lock_worker_source(
-        session, admitted, multi_workspace_enabled=multi_workspace_enabled, expected=expected)
+        session, admitted, multi_workspace_enabled=multi_workspace_enabled, expected=expected
+    )
     if sourced is None:
         return None
     locked, source, projection = sourced
     delivery = admitted.delivery
     normalization_claim, proceed = await _capture_normalization_claim(
-        session, admitted, source, multi_workspace_enabled=multi_workspace_enabled, expected=expected)
+        session,
+        admitted,
+        source,
+        multi_workspace_enabled=multi_workspace_enabled,
+        expected=expected,
+    )
     if not proceed:
         return None
     try:
         if delivery.type == "document.file.uploaded" and not await _prepare_upload_document(
-                session, admitted, source, multi_workspace_enabled=multi_workspace_enabled):
+            session, admitted, source, multi_workspace_enabled=multi_workspace_enabled
+        ):
             return None
         discovery = None
         if normalization_claim is not None:
             discovery = await _discover_normalization(
-                session, normalization_claim, admitted, source, multi_workspace_enabled=multi_workspace_enabled)
+                session,
+                normalization_claim,
+                admitted,
+                source,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
         locked_rows = await _lock_run_batch_stage(session, admitted, source)
         if locked_rows is None:
             return None
@@ -635,20 +990,42 @@ async def _lock_worker_event(
         observation_preparation = None
         if discovery is not None:
             normalization_rows, observation_preparation = await _lock_normalization_rows(
-                session, cast(WorkerClaim, normalization_claim), discovery, admitted, source, projection, run, batch,
-                stage, multi_workspace_enabled=multi_workspace_enabled)
+                session,
+                cast(WorkerClaim, normalization_claim),
+                discovery,
+                admitted,
+                source,
+                projection,
+                run,
+                batch,
+                stage,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
         event = await _lock_worker_outbox(session, identifier, admitted, run, stage)
         if event is None:
             return None
-        work = WorkerState(admitted.scope, locked.access_fence, source, projection, state, run, batch, stage, event,
-                           normalization_rows, discovery.document_preparation if discovery else None,
-                           observation_preparation)
+        work = WorkerState(
+            admitted.scope,
+            locked.access_fence,
+            source,
+            projection,
+            state,
+            run,
+            batch,
+            stage,
+            event,
+            normalization_rows,
+            discovery.document_preparation if discovery else None,
+            observation_preparation,
+        )
         return work if _claim_matches(work, normalization_claim, expected) else None
     except (OperationalError, IntegrityError, RuntimeError) as exc:
         _raise_preparation_conflict(exc, normalization_claim)
 
 
-def _claim_matches(work: WorkerState, normalization_claim: WorkerClaim | None, expected: WorkerClaim | None) -> bool:
+def _claim_matches(
+    work: WorkerState, normalization_claim: WorkerClaim | None, expected: WorkerClaim | None
+) -> bool:
     """Final comparison of the locked rows against the pre-D claim and the caller's expected claim.
 
     A normalization event without a pre-D claim may only serve an already-terminal stage (the idempotent path
@@ -664,7 +1041,9 @@ def _claim_matches(work: WorkerState, normalization_claim: WorkerClaim | None, e
     return expected is None or _same_worker_claim(work, expected)
 
 
-def _raise_preparation_conflict(exc: Exception, normalization_claim: WorkerClaim | None) -> NoReturn:
+def _raise_preparation_conflict(
+    exc: Exception, normalization_claim: WorkerClaim | None
+) -> NoReturn:
     """Translate a preparation-time database/runtime failure into the carried-claim conflict, never swallowing it.
 
     Without a normalization claim the original error propagates. A conflict must carry the same claim that was
@@ -677,11 +1056,17 @@ def _raise_preparation_conflict(exc: Exception, normalization_claim: WorkerClaim
         if exc.claim != normalization_claim:
             raise RuntimeError("Normalization preparation comparisons disagree") from exc
         raise exc
-    raise NormalizationPreparationConflict("normalization_preparation_conflict", normalization_claim) from exc
+    raise NormalizationPreparationConflict(
+        "normalization_preparation_conflict", normalization_claim
+    ) from exc
 
 
 async def _capture_normalization_claim(
-    session: AsyncSession, admitted: _Admitted, source: SourceFence, *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    admitted: _Admitted,
+    source: SourceFence,
+    *,
+    multi_workspace_enabled: bool,
     expected: WorkerClaim | None,
 ) -> tuple[WorkerClaim | None, bool]:
     """Capture the pre-D normalization comparison; the flag is ``False`` when the load must yield no work.
@@ -692,8 +1077,12 @@ async def _capture_normalization_claim(
     if admitted.delivery.type != "ingestion.normalize.requested":
         return None, True
     claim = await _capture_normalization_retry_claim_in_uow(
-        session, delivery=admitted.delivery, scope=admitted.scope, access_fence=admitted.access_fence,
-        source_fence=source, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        delivery=admitted.delivery,
+        scope=admitted.scope,
+        access_fence=admitted.access_fence,
+        source_fence=source,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if expected is not None and claim != expected:
         return claim, False
@@ -711,7 +1100,9 @@ def _wake_dispatcher_after_commit(session: AsyncSession, delay_seconds: float = 
     deferral would block fresher wakes); rows still not due then are picked up by the safety net.
     No-op without a wake hook; rolled-back transactions discard the wake.
     """
-    notify_on_commit(session, "dispatch_pending_work", defer_seconds=min(max(delay_seconds, 1.0), 5.0))
+    notify_on_commit(
+        session, "dispatch_pending_work", defer_seconds=min(max(delay_seconds, 1.0), 5.0)
+    )
 
 
 async def _commit_ingestion_change(
@@ -719,7 +1110,10 @@ async def _commit_ingestion_change(
     run: IngestionRun,
     stage: IngestionStage,
     extras: tuple[ReplayDraft, ...] = (),
-    *, scope: InternalJobScope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    *,
+    scope: InternalJobScope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
 ) -> None:
     """Commit scoped stage/outbox/replay once under the captured caller-held access fence.
 
@@ -728,8 +1122,15 @@ async def _commit_ingestion_change(
     """
     await commit_with_replay(
         session,
-        [make_ingestion_change(run.source_id, run.id, run.status, stage.stage_key, stage.status, scope=scope), *extras],
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        [
+            make_ingestion_change(
+                run.source_id, run.id, run.status, stage.stage_key, stage.status, scope=scope
+            ),
+            *extras,
+        ],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
     if stage.status in {"succeeded", "failed"}:
         count("ingestion_stages_total", stage=stage.stage_key, outcome=stage.status)
@@ -738,25 +1139,37 @@ async def _commit_ingestion_change(
 
 
 async def _refresh_run_status(
-    session: AsyncSession, run: IngestionRun, *, scope: InternalJobScope,
-    multi_workspace_enabled: bool, access_fence: AccessFence,
+    session: AsyncSession,
+    run: IngestionRun,
+    *,
+    scope: InternalJobScope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
 ) -> None:
     """Derive one caller-locked scoped run's status, preserving its first stage failure.
 
     Nonlocking current admission must equal the captured fence and retained root
     principal before stage reads; no earlier locks, hidden commit or cross-run count.
     """
-    current = await read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    if (current != access_fence or run.workspace_id != scope.workspace_id
-            or run.actor_user_id != scope.actor_user_id or run.membership_revision != scope.membership_revision
-            or run.source_id != scope.source_id):
+    current = await read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    if (
+        current != access_fence
+        or run.workspace_id != scope.workspace_id
+        or run.actor_user_id != scope.actor_user_id
+        or run.membership_revision != scope.membership_revision
+        or run.source_id != scope.source_id
+    ):
         raise ConflictError("Original run admission changed")
-    stages = list((await session.scalars(
-        select(IngestionStage).where(IngestionStage.run_id == run.id)
-    )).all())
+    stages = list(
+        (await session.scalars(select(IngestionStage).where(IngestionStage.run_id == run.id))).all()
+    )
     if any(stage.status == "failed" for stage in stages):
         run.status = "failed"
-        run.error_code = next((stage.error_code for stage in stages if stage.status == "failed"), "stage_failed")
+        run.error_code = next(
+            (stage.error_code for stage in stages if stage.status == "failed"), "stage_failed"
+        )
     elif stages and all(stage.status == "succeeded" for stage in stages):
         run.status = "succeeded"
         run.error_code = None
@@ -774,7 +1187,9 @@ class ConnectorRetryError(OSError):
         self.retry_after = retry_after
 
 
-def _update_native_run_lease(state: SourceIngestionState | None, run_id: UUID, *, terminal: bool) -> None:
+def _update_native_run_lease(
+    state: SourceIngestionState | None, run_id: UUID, *, terminal: bool
+) -> None:
     """Renew or release only this native run's source lease at slice boundaries.
 
     A live fetch token or newer run is never changed; terminalization clears only
@@ -822,24 +1237,47 @@ def _prepare_crawl_records(
         if not isinstance(raw_records, list) or not raw_records or len(raw_records) > 500:
             raise ValueError("Browser job returned no pages or too many records")
         records = [ConnectorRecord.model_validate(item) for item in raw_records]
-        if any({"provider_record", "world_data", "_owner_telegram_proof", "_native_telegram"}
-               & record.metadata.keys() for record in records):
+        if any(
+            {"provider_record", "world_data", "_owner_telegram_proof", "_native_telegram"}
+            & record.metadata.keys()
+            for record in records
+        ):
             raise ValueError("Browser metadata cannot provide native provenance")
     except (TypeError, ValueError) as exc:
         raise ValueError("Browser collector returned invalid records") from exc
     canonical_records = [record.model_dump(mode="json") for record in records]
-    payload_hash = hashlib.sha256(json.dumps(canonical_records, sort_keys=True,
-        separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
-    record_hashes = [hashlib.sha256(json.dumps(
-        {"version": data.get("version"), "content": data["content"], "metadata": data["metadata"]},
-        sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
-        for data in canonical_records]
+    payload_hash = hashlib.sha256(
+        json.dumps(
+            canonical_records, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode()
+    ).hexdigest()
+    record_hashes = [
+        hashlib.sha256(
+            json.dumps(
+                {
+                    "version": data.get("version"),
+                    "content": data["content"],
+                    "metadata": data["metadata"],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode()
+        ).hexdigest()
+        for data in canonical_records
+    ]
     return records, canonical_records, payload_hash, record_hashes
 
 
 async def _collect_web_job(
-    ctx: dict[str, object], factory: async_sessionmaker[AsyncSession], event: EventOutbox,
-    run_id: UUID, stage_id: UUID, *, claim: WorkerClaim, multi_workspace_enabled: bool,
+    ctx: dict[str, object],
+    factory: async_sessionmaker[AsyncSession],
+    event: EventOutbox,
+    run_id: UUID,
+    stage_id: UUID,
+    *,
+    claim: WorkerClaim,
+    multi_workspace_enabled: bool,
 ) -> None:
     """Send a generic browser request under the exact original durable stage claim.
 
@@ -854,30 +1292,53 @@ async def _collect_web_job(
     if not token:
         raise ValueError("Browser collector is not configured")
     async with factory() as session:
-        work = await _lock_worker_event(session, event.id, multi_workspace_enabled=multi_workspace_enabled,
-            event_types=("connector.crawl.requested",), expected=claim)
-        if (work is None or work.run.id != run_id or work.stage.id != stage_id
-                or work.stage.status != "running" or work.stage.lease_expires_at is None
-                or work.stage.lease_expires_at <= datetime.now(UTC)
-                or work.state is None or work.state.lease_run_id != run_id
-                or work.state.lease_expires_at is None or work.state.lease_expires_at <= datetime.now(UTC)):
+        work = await _lock_worker_event(
+            session,
+            event.id,
+            multi_workspace_enabled=multi_workspace_enabled,
+            event_types=("connector.crawl.requested",),
+            expected=claim,
+        )
+        if (
+            work is None
+            or work.run.id != run_id
+            or work.stage.id != stage_id
+            or work.stage.status != "running"
+            or work.stage.lease_expires_at is None
+            or work.stage.lease_expires_at <= datetime.now(UTC)
+            or work.state is None
+            or work.state.lease_run_id != run_id
+            or work.state.lease_expires_at is None
+            or work.state.lease_expires_at <= datetime.now(UTC)
+        ):
             raise ValueError("Crawl original claim is no longer active")
         config = dict(work.event.payload["configuration"])
         payload = {
-            "source_id": str(work.source.id), "source_generation": work.source.generation,
+            "source_id": str(work.source.id),
+            "source_generation": work.source.generation,
             "connector_revision": work.event.payload["connector_revision"],
-            "url": config["url"], "mode": config["mode"], "max_pages": config["max_pages"],
-            "max_depth": config["max_depth"], "timeout_seconds": config["timeout_seconds"],
+            "url": config["url"],
+            "mode": config["mode"],
+            "max_pages": config["max_pages"],
+            "max_depth": config["max_depth"],
+            "timeout_seconds": config["timeout_seconds"],
         }
     try:
         async with httpx.AsyncClient(timeout=int(config["timeout_seconds"]) + 5) as client:
-            response = await client.post(f"{str(settings.browser_service_url).rstrip('/')}/crawl",
-                json=payload, headers={"Authorization": f"Bearer {token}"})
+            response = await client.post(
+                f"{str(settings.browser_service_url).rstrip('/')}/crawl",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
             if response.status_code in {408, 425, 429} or response.status_code >= 500:
-                raise ConnectorRetryError(f"Browser collector returned HTTP {response.status_code}",
-                                          _retry_after_seconds(response))
+                raise ConnectorRetryError(
+                    f"Browser collector returned HTTP {response.status_code}",
+                    _retry_after_seconds(response),
+                )
             if response.status_code >= 400:
-                raise ValueError(f"Browser collector rejected the job with HTTP {response.status_code}")
+                raise ValueError(
+                    f"Browser collector rejected the job with HTTP {response.status_code}"
+                )
     except httpx.TimeoutException as exc:
         raise TimeoutError("Browser collection timed out") from exc
     except httpx.NetworkError as exc:
@@ -885,28 +1346,53 @@ async def _collect_web_job(
     if len(response.content) > 10 * 1024 * 1024:
         raise ValueError("Browser batch exceeds the intake bound")
     records, canonical_records, payload_hash, record_hashes = await to_thread_joined(
-        _prepare_crawl_records, response)
+        _prepare_crawl_records, response
+    )
     collected_at = datetime.now(UTC)
     async with factory() as session:
-        work = await _lock_worker_event(session, event.id, multi_workspace_enabled=multi_workspace_enabled,
-            event_types=("connector.crawl.requested",), expected=claim)
-        if (work is None or work.stage.status != "running" or work.state is None
-                or work.state.lease_run_id != run_id or work.stage.lease_expires_at is None
-                or work.stage.lease_expires_at <= datetime.now(UTC)
-                or work.state.lease_expires_at is None or work.state.lease_expires_at <= datetime.now(UTC)):
+        work = await _lock_worker_event(
+            session,
+            event.id,
+            multi_workspace_enabled=multi_workspace_enabled,
+            event_types=("connector.crawl.requested",),
+            expected=claim,
+        )
+        if (
+            work is None
+            or work.stage.status != "running"
+            or work.state is None
+            or work.state.lease_run_id != run_id
+            or work.stage.lease_expires_at is None
+            or work.stage.lease_expires_at <= datetime.now(UTC)
+            or work.state.lease_expires_at is None
+            or work.state.lease_expires_at <= datetime.now(UTC)
+        ):
             raise ValueError("Crawl original claim changed during HTTP")
         received_at = datetime.now(UTC)
         observations = []
-        for record, data, record_hash in zip(records, canonical_records, record_hashes, strict=True):
+        for record, data, record_hash in zip(
+            records, canonical_records, record_hashes, strict=True
+        ):
             observed_at = record.observed_at
             if observed_at.tzinfo is None:
                 raise ValueError("Browser collector returned a naive observation time")
-            observations.append({"source_id": work.source.id, "batch_id": work.batch.id,
-                "provider_id": data["provider_id"], "record_hash": record_hash, "payload": data,
-                "observed_at": observed_at.astimezone(UTC), "received_at": received_at,
-                "collected_at": collected_at})
-        await session.execute(pg_insert(SourceObservation).values(observations)
-            .on_conflict_do_nothing(constraint="uq_source_observations_batch_record_observed"))
+            observations.append(
+                {
+                    "source_id": work.source.id,
+                    "batch_id": work.batch.id,
+                    "provider_id": data["provider_id"],
+                    "record_hash": record_hash,
+                    "payload": data,
+                    "observed_at": observed_at.astimezone(UTC),
+                    "received_at": received_at,
+                    "collected_at": collected_at,
+                }
+            )
+        await session.execute(
+            pg_insert(SourceObservation)
+            .values(observations)
+            .on_conflict_do_nothing(constraint="uq_source_observations_batch_record_observed")
+        )
         work.batch.payload_hash = payload_hash
         cursor_after = max(record.observed_at.astimezone(UTC) for record in records).isoformat()
         if work.state.cursor:
@@ -916,20 +1402,54 @@ async def _collect_web_job(
                     cursor_after = work.state.cursor
             except ValueError:
                 # A non-ISO legacy cursor is not comparable: the freshly computed cursor replaces it.
-                logger.debug("Stored crawl cursor is not an ISO timestamp; replacing it", exc_info=True)
+                logger.debug(
+                    "Stored crawl cursor is not an ISO timestamp; replacing it", exc_info=True
+                )
         work.state.cursor = cursor_after
         await session.flush()
-        normalize_stage = await ingestion_api.schedule_normalization(session, work.run, work.batch,
-            work.source.generation, received_at, scope=work.scope, multi_workspace_enabled=multi_workspace_enabled)
-        drafts = () if normalize_stage is None else (make_ingestion_change(work.source.id, work.run.id,
-            work.run.status, normalize_stage.stage_key, normalize_stage.status, scope=work.scope),)
-        await _commit_ingestion_change(session, work.run, work.stage, drafts, scope=work.scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=work.access_fence)
+        normalize_stage = await ingestion_api.schedule_normalization(
+            session,
+            work.run,
+            work.batch,
+            work.source.generation,
+            received_at,
+            scope=work.scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        drafts = (
+            ()
+            if normalize_stage is None
+            else (
+                make_ingestion_change(
+                    work.source.id,
+                    work.run.id,
+                    work.run.status,
+                    normalize_stage.stage_key,
+                    normalize_stage.status,
+                    scope=work.scope,
+                ),
+            )
+        )
+        await _commit_ingestion_change(
+            session,
+            work.run,
+            work.stage,
+            drafts,
+            scope=work.scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=work.access_fence,
+        )
 
 
 async def _fail_ingestion_stage(
-    factory: async_sessionmaker[AsyncSession], event_id: UUID, run_id: UUID, stage_id: UUID,
-    error_code: str, *, claim: WorkerClaim, multi_workspace_enabled: bool,
+    factory: async_sessionmaker[AsyncSession],
+    event_id: UUID,
+    run_id: UUID,
+    stage_id: UUID,
+    error_code: str,
+    *,
+    claim: WorkerClaim,
+    multi_workspace_enabled: bool,
 ) -> None:
     """Fail only the original admitted dispatch/stage attempt, with flush-only Source health.
 
@@ -937,8 +1457,13 @@ async def _fail_ingestion_stage(
     Earlier locks are acquired once by the scoped loader before state/run/stage/outbox.
     """
     async with factory() as session:
-        work = await _lock_worker_event(session, event_id, multi_workspace_enabled=multi_workspace_enabled,
-            event_types=(claim.event_type,), expected=claim)
+        work = await _lock_worker_event(
+            session,
+            event_id,
+            multi_workspace_enabled=multi_workspace_enabled,
+            event_types=(claim.event_type,),
+            expected=claim,
+        )
         if work is None or work.run.id != run_id or work.stage.id != stage_id:
             return
         work.stage.status = "failed"
@@ -947,30 +1472,61 @@ async def _fail_ingestion_stage(
         work.run.status = "failed"
         work.run.error_code = error_code
         work.event.status = "failed"
-        logger.warning("Ingestion stage failed run_id=%s stage_id=%s error_code=%s",
-                       work.run.id, work.stage.id, error_code)
-        changed = await sources.record_collection_result_in_uow(session, work.source.id,
-            work.source.generation, datetime.now(UTC), error_code, scope=work.scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=work.access_fence, source_fence=work.source)
+        logger.warning(
+            "Ingestion stage failed run_id=%s stage_id=%s error_code=%s",
+            work.run.id,
+            work.stage.id,
+            error_code,
+        )
+        changed = await sources.record_collection_result_in_uow(
+            session,
+            work.source.id,
+            work.source.generation,
+            datetime.now(UTC),
+            error_code,
+            scope=work.scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=work.access_fence,
+            source_fence=work.source,
+        )
         _update_native_run_lease(work.state, work.run.id, terminal=True)
-        extras = (make_source_change(work.source.id, work.source.generation, work.source.status,
-                                    scope=work.scope),) if changed else ()
-        await _commit_ingestion_change(session, work.run, work.stage, extras, scope=work.scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=work.access_fence)
+        extras = (
+            (
+                make_source_change(
+                    work.source.id, work.source.generation, work.source.status, scope=work.scope
+                ),
+            )
+            if changed
+            else ()
+        )
+        await _commit_ingestion_change(
+            session,
+            work.run,
+            work.stage,
+            extras,
+            scope=work.scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=work.access_fence,
+        )
 
 
 async def _ingestion_enabled(session: AsyncSession, work: WorkerState, enabled: bool) -> bool:
     """Per-workspace module gate after admission; disabled leaves the durable event untouched."""
     from modules.settings.public import module_is_enabled
 
-    if await module_is_enabled(session, "ingestion", scope=work.scope, multi_workspace_enabled=enabled):
+    if await module_is_enabled(
+        session, "ingestion", scope=work.scope, multi_workspace_enabled=enabled
+    ):
         return True
     await session.rollback()
     return False
 
 
 async def _claim_ingestion_stage(
-    factory: async_sessionmaker[AsyncSession], identifier: UUID, enabled: bool, event_types: tuple[str, ...],
+    factory: async_sessionmaker[AsyncSession],
+    identifier: UUID,
+    enabled: bool,
+    event_types: tuple[str, ...],
 ) -> tuple[WorkerClaim, EventOutbox, UUID, UUID] | None:
     """Commit the stage's running lease in one transaction and return the detached claim, or ``None``.
 
@@ -981,28 +1537,53 @@ async def _claim_ingestion_stage(
     committed with replay before any external work.
     """
     async with factory() as session:
-        work = await _lock_worker_event(session, identifier, multi_workspace_enabled=enabled, event_types=event_types)
+        work = await _lock_worker_event(
+            session, identifier, multi_workspace_enabled=enabled, event_types=event_types
+        )
         if work is None or not await _ingestion_enabled(session, work, enabled):
             return None
         run, stage, event, state = work.run, work.stage, work.event, work.state
         now = datetime.now(UTC)
         if stage.status == "succeeded":
-            await ingestion_api.mark_event_delivered(session, identifier, scope=work.scope, multi_workspace_enabled=enabled)
+            await ingestion_api.mark_event_delivered(
+                session, identifier, scope=work.scope, multi_workspace_enabled=enabled
+            )
             await session.commit()
             return None
-        if stage.status == "failed" or (stage.status == "running" and stage.lease_expires_at and stage.lease_expires_at > now):
+        if stage.status == "failed" or (
+            stage.status == "running" and stage.lease_expires_at and stage.lease_expires_at > now
+        ):
             return None
         if stage.attempts >= MAX_STAGE_ATTEMPTS:
             claim = _capture_worker_claim(work)
             await session.rollback()
-            await _fail_ingestion_stage(factory, identifier, claim.run_id, claim.stage_id, "retry_exhausted",
-                                       claim=claim, multi_workspace_enabled=enabled)
+            await _fail_ingestion_stage(
+                factory,
+                identifier,
+                claim.run_id,
+                claim.stage_id,
+                "retry_exhausted",
+                claim=claim,
+                multi_workspace_enabled=enabled,
+            )
             return None
-        if state is None or state.lease_run_id != run.id or state.lease_expires_at is None or state.lease_expires_at <= now:
+        if (
+            state is None
+            or state.lease_run_id != run.id
+            or state.lease_expires_at is None
+            or state.lease_expires_at <= now
+        ):
             claim = _capture_worker_claim(work)
             await session.rollback()
-            await _fail_ingestion_stage(factory, identifier, claim.run_id, claim.stage_id, "lease_expired",
-                                       claim=claim, multi_workspace_enabled=enabled)
+            await _fail_ingestion_stage(
+                factory,
+                identifier,
+                claim.run_id,
+                claim.stage_id,
+                "lease_expired",
+                claim=claim,
+                multi_workspace_enabled=enabled,
+            )
             return None
         stage.status = "running"
         stage.attempts += 1
@@ -1013,15 +1594,30 @@ async def _claim_ingestion_stage(
         claim = _capture_worker_claim(work)
         run_id, stage_id = run.id, stage.id
         set_trace(ingestion_run_id=str(run_id))
-        logger.info("Ingestion stage started run_id=%s stage_id=%s attempt=%s", run_id, stage_id, stage.attempts)
-        await _commit_ingestion_change(session, run, stage, scope=work.scope,
-            multi_workspace_enabled=enabled, access_fence=work.access_fence)
+        logger.info(
+            "Ingestion stage started run_id=%s stage_id=%s attempt=%s",
+            run_id,
+            stage_id,
+            stage.attempts,
+        )
+        await _commit_ingestion_change(
+            session,
+            run,
+            stage,
+            scope=work.scope,
+            multi_workspace_enabled=enabled,
+            access_fence=work.access_fence,
+        )
     return claim, event, run_id, stage_id
 
 
 async def _schedule_transient_retry(
-    factory: async_sessionmaker[AsyncSession], identifier: UUID, enabled: bool, event_types: tuple[str, ...],
-    claim: WorkerClaim, exc: Exception,
+    factory: async_sessionmaker[AsyncSession],
+    identifier: UUID,
+    enabled: bool,
+    event_types: tuple[str, ...],
+    claim: WorkerClaim,
+    exc: Exception,
 ) -> float | None:
     """Schedule a bounded retry after a transient failure under the original claim; return the defer delay.
 
@@ -1032,17 +1628,32 @@ async def _schedule_transient_retry(
     """
     run_id, stage_id = claim.run_id, claim.stage_id
     async with factory() as session:
-        work = await _lock_worker_event(session, identifier, multi_workspace_enabled=enabled,
-                                       event_types=event_types, expected=claim)
+        work = await _lock_worker_event(
+            session,
+            identifier,
+            multi_workspace_enabled=enabled,
+            event_types=event_types,
+            expected=claim,
+        )
         if work is None:
             return None
         if work.stage.attempts >= MAX_STAGE_ATTEMPTS:
             await session.rollback()
-            await _fail_ingestion_stage(factory, identifier, run_id, stage_id, "retry_exhausted",
-                                       claim=claim, multi_workspace_enabled=enabled)
+            await _fail_ingestion_stage(
+                factory,
+                identifier,
+                run_id,
+                stage_id,
+                "retry_exhausted",
+                claim=claim,
+                multi_workspace_enabled=enabled,
+            )
             return None
-        delay = (max(0.5, exc.retry_after) if isinstance(exc, ConnectorRetryError) and exc.retry_after is not None
-                 else random.uniform(0.5, min(60.0, 2.0 ** work.stage.attempts)))  # noqa: S311  # retry backoff jitter, not a security value
+        delay = (
+            max(0.5, exc.retry_after)
+            if isinstance(exc, ConnectorRetryError) and exc.retry_after is not None
+            else random.uniform(0.5, min(60.0, 2.0**work.stage.attempts))
+        )  # noqa: S311  # retry backoff jitter, not a security value
         work.stage.status = "retrying"
         work.stage.error_code = "transient_failure"
         work.stage.next_attempt_at = datetime.now(UTC) + timedelta(seconds=delay)
@@ -1052,15 +1663,28 @@ async def _schedule_transient_retry(
         work.event.next_attempt_at = work.stage.next_attempt_at
         _wake_dispatcher_after_commit(session, delay)
         _update_native_run_lease(work.state, work.run.id, terminal=False)
-        logger.warning("Ingestion stage retry scheduled run_id=%s stage_id=%s attempt=%s",
-                       work.run.id, work.stage.id, work.stage.attempts)
-        await _commit_ingestion_change(session, work.run, work.stage, scope=work.scope,
-            multi_workspace_enabled=enabled, access_fence=work.access_fence)
+        logger.warning(
+            "Ingestion stage retry scheduled run_id=%s stage_id=%s attempt=%s",
+            work.run.id,
+            work.stage.id,
+            work.stage.attempts,
+        )
+        await _commit_ingestion_change(
+            session,
+            work.run,
+            work.stage,
+            scope=work.scope,
+            multi_workspace_enabled=enabled,
+            access_fence=work.access_fence,
+        )
     return delay
 
 
 async def _complete_ingestion_stage(
-    factory: async_sessionmaker[AsyncSession], identifier: UUID, enabled: bool, event_types: tuple[str, ...],
+    factory: async_sessionmaker[AsyncSession],
+    identifier: UUID,
+    enabled: bool,
+    event_types: tuple[str, ...],
     claim: WorkerClaim,
 ) -> None:
     """Settle a finished stage under the original claim: observations proven, run refreshed, event delivered.
@@ -1071,35 +1695,89 @@ async def _complete_ingestion_stage(
     """
     run_id, stage_id = claim.run_id, claim.stage_id
     async with factory() as session:
-        work = await _lock_worker_event(session, identifier, multi_workspace_enabled=enabled,
-                                       event_types=event_types, expected=claim)
-        if (work is None or work.stage.status != "running" or work.stage.lease_expires_at is None
-                or work.stage.lease_expires_at <= datetime.now(UTC)):
+        work = await _lock_worker_event(
+            session,
+            identifier,
+            multi_workspace_enabled=enabled,
+            event_types=event_types,
+            expected=claim,
+        )
+        if (
+            work is None
+            or work.stage.status != "running"
+            or work.stage.lease_expires_at is None
+            or work.stage.lease_expires_at <= datetime.now(UTC)
+        ):
             return
-        observed = await session.scalar(select(func.count()).select_from(SourceObservation).where(
-            SourceObservation.batch_id == work.batch.id, SourceObservation.source_id == work.source.id))
+        observed = await session.scalar(
+            select(func.count())
+            .select_from(SourceObservation)
+            .where(
+                SourceObservation.batch_id == work.batch.id,
+                SourceObservation.source_id == work.source.id,
+            )
+        )
         if not observed:
             await session.rollback()
-            await _fail_ingestion_stage(factory, identifier, run_id, stage_id, "missing_observations",
-                                       claim=claim, multi_workspace_enabled=enabled)
+            await _fail_ingestion_stage(
+                factory,
+                identifier,
+                run_id,
+                stage_id,
+                "missing_observations",
+                claim=claim,
+                multi_workspace_enabled=enabled,
+            )
             return
         work.stage.status = "succeeded"
         work.stage.error_code = None
         work.stage.lease_expires_at = None
-        await _refresh_run_status(session, work.run, scope=work.scope,
-            multi_workspace_enabled=enabled, access_fence=work.access_fence)
-        changed = await sources.record_collection_result_in_uow(session, work.source.id, work.source.generation,
-            datetime.now(UTC), None, scope=work.scope, multi_workspace_enabled=enabled,
-            access_fence=work.access_fence, source_fence=work.source)
+        await _refresh_run_status(
+            session,
+            work.run,
+            scope=work.scope,
+            multi_workspace_enabled=enabled,
+            access_fence=work.access_fence,
+        )
+        changed = await sources.record_collection_result_in_uow(
+            session,
+            work.source.id,
+            work.source.generation,
+            datetime.now(UTC),
+            None,
+            scope=work.scope,
+            multi_workspace_enabled=enabled,
+            access_fence=work.access_fence,
+            source_fence=work.source,
+        )
         native_source = connectors.is_native_provider(work.projection.provider)
-        _update_native_run_lease(work.state, work.run.id,
-            terminal=work.run.status in {"succeeded", "failed"} if native_source else True)
-        await ingestion_api.mark_event_delivered(session, identifier, scope=work.scope, multi_workspace_enabled=enabled)
+        _update_native_run_lease(
+            work.state,
+            work.run.id,
+            terminal=work.run.status in {"succeeded", "failed"} if native_source else True,
+        )
+        await ingestion_api.mark_event_delivered(
+            session, identifier, scope=work.scope, multi_workspace_enabled=enabled
+        )
         logger.info("Ingestion stage completed run_id=%s stage_id=%s", work.run.id, work.stage.id)
-        extras = (make_source_change(work.source.id, work.source.generation, work.source.status,
-                                    scope=work.scope),) if changed else ()
-        await _commit_ingestion_change(session, work.run, work.stage, extras, scope=work.scope,
-            multi_workspace_enabled=enabled, access_fence=work.access_fence)
+        extras = (
+            (
+                make_source_change(
+                    work.source.id, work.source.generation, work.source.status, scope=work.scope
+                ),
+            )
+            if changed
+            else ()
+        )
+        await _commit_ingestion_change(
+            session,
+            work.run,
+            work.stage,
+            extras,
+            scope=work.scope,
+            multi_workspace_enabled=enabled,
+            access_fence=work.access_fence,
+        )
 
 
 @timed("ingestion_stage_ms", stage="collect")
@@ -1126,16 +1804,32 @@ async def process_ingestion_event(ctx: dict[str, object], event_id: str) -> None
     try:
         async with asyncio.timeout(STAGE_TIMEOUT_SECONDS):
             if claim.event_type == "connector.crawl.requested":
-                await _collect_web_job(ctx, factory, event, run_id, stage_id,
-                                       claim=claim, multi_workspace_enabled=enabled)
+                await _collect_web_job(
+                    ctx,
+                    factory,
+                    event,
+                    run_id,
+                    stage_id,
+                    claim=claim,
+                    multi_workspace_enabled=enabled,
+                )
     except (TimeoutError, OSError, OperationalError) as exc:
-        delay = await _schedule_transient_retry(factory, identifier, enabled, event_types, claim, exc)
+        delay = await _schedule_transient_retry(
+            factory, identifier, enabled, event_types, claim, exc
+        )
         if delay is None:
             return
         raise Retry(defer=delay) from exc
     except Exception:  # noqa: BLE001  # last-resort handler: any unexpected error must settle the stage as failed
-        await _fail_ingestion_stage(factory, identifier, run_id, stage_id, "stage_failed",
-                                   claim=claim, multi_workspace_enabled=enabled)
+        await _fail_ingestion_stage(
+            factory,
+            identifier,
+            run_id,
+            stage_id,
+            "stage_failed",
+            claim=claim,
+            multi_workspace_enabled=enabled,
+        )
         return
     await _complete_ingestion_stage(factory, identifier, enabled, event_types, claim)
 
@@ -1176,7 +1870,10 @@ class _PreparedRow:
 
 
 async def _prepare_row(
-    session: AsyncSession, work: WorkerState, enabled: bool, observation: SourceObservation,
+    session: AsyncSession,
+    work: WorkerState,
+    enabled: bool,
+    observation: SourceObservation,
 ) -> _PreparedRow:
     """Validate one accepted observation and build its normalized document input; performs no owner writes.
 
@@ -1190,46 +1887,83 @@ async def _prepare_row(
     record = IngestionRecord.model_validate(persisted_payload)
     if record.provider_id != observation.provider_id:
         raise ValueError("Provider identity does not match accepted observation")
-    accepted_hash = hashlib.sha256(json.dumps(
-        {"version": record.version, "content": record.content, "metadata": record.metadata},
-        sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-    ).encode("utf-8")).hexdigest()
+    accepted_hash = hashlib.sha256(
+        json.dumps(
+            {"version": record.version, "content": record.content, "metadata": record.metadata},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
     if accepted_hash != observation.record_hash:
         raise ValueError("Accepted observation hash does not match its payload")
-    extraction = metadata_extractor_for(projection.provider).extract(ExtractionInput(
-        record=record, observed_at=observation.observed_at, source_provider=projection.provider,
-        telegram_envelope=native_telegram_envelope,
-    ))
+    extraction = metadata_extractor_for(projection.provider).extract(
+        ExtractionInput(
+            record=record,
+            observed_at=observation.observed_at,
+            source_provider=projection.provider,
+            telegram_envelope=native_telegram_envelope,
+        )
+    )
     common = _normalize_common_metadata(record.metadata, record.provider_id)
     provider_scope = await connectors.get_current_provider_scope(
-        session, observation.source_id, generation, scope=work.scope, multi_workspace_enabled=enabled,
+        session,
+        observation.source_id,
+        generation,
+        scope=work.scope,
+        multi_workspace_enabled=enabled,
     )
     accepted_at = observation.received_at
-    if projection.provider in MEASUREMENT_PROVIDER_IDS and (provider_scope is None or accepted_at is None):
+    if projection.provider in MEASUREMENT_PROVIDER_IDS and (
+        provider_scope is None or accepted_at is None
+    ):
         raise ValueError("Accepted world observation is missing its scope or acceptance clock")
     provenance: dict[str, Any] = {
-        "title": common.title, "canonical_url": common.canonical_url,
+        "title": common.title,
+        "canonical_url": common.canonical_url,
         "published_at": common.published_at.isoformat() if common.published_at else None,
-        "content_type": common.content_type, "metadata": common.safe_metadata,
+        "content_type": common.content_type,
+        "metadata": common.safe_metadata,
     }
     if extraction.provider_record is not None:
         provenance["provider_record"] = extraction.provider_record.model_dump(mode="json")
     if provider_scope is not None:
         provenance["provider_scope_discriminator"] = provider_scope.discriminator
     normalized_input = NormalizedDocumentInput(
-        source_id=observation.source_id, expected_source_generation=generation, observation_id=observation.id,
-        provider_id=record.provider_id, provider_version=record.version, accepted_record_hash=observation.record_hash,
-        normalization_version=NORMALIZATION_VERSION, observed_at=observation.observed_at,
-        received_at=observation.received_at, collected_at=observation.collected_at, title=common.title,
-        canonical_url=common.canonical_url, published_at=common.published_at, content_type=common.content_type,
-        content=record.content, provenance=provenance, telegram_order=extraction.telegram_order,
+        source_id=observation.source_id,
+        expected_source_generation=generation,
+        observation_id=observation.id,
+        provider_id=record.provider_id,
+        provider_version=record.version,
+        accepted_record_hash=observation.record_hash,
+        normalization_version=NORMALIZATION_VERSION,
+        observed_at=observation.observed_at,
+        received_at=observation.received_at,
+        collected_at=observation.collected_at,
+        title=common.title,
+        canonical_url=common.canonical_url,
+        published_at=common.published_at,
+        content_type=common.content_type,
+        content=record.content,
+        provenance=provenance,
+        telegram_order=extraction.telegram_order,
     )
-    return _PreparedRow(record, normalized_input, extraction.provider_record, provider_scope, accepted_at)
+    return _PreparedRow(
+        record, normalized_input, extraction.provider_record, provider_scope, accepted_at
+    )
 
 
 async def _write_world_observation(
-    session: AsyncSession, work: WorkerState, state: _SliceState, claim: WorkerClaim, enabled: bool, *,
-    progress: ObservationNormalization, observation: SourceObservation, prepared: _PreparedRow, result: Any,
+    session: AsyncSession,
+    work: WorkerState,
+    state: _SliceState,
+    claim: WorkerClaim,
+    enabled: bool,
+    *,
+    progress: ObservationNormalization,
+    observation: SourceObservation,
+    prepared: _PreparedRow,
+    result: Any,
 ) -> Any:
     """Project one structured measurement into Observations and select the winning document version.
 
@@ -1241,33 +1975,59 @@ async def _write_world_observation(
 
     provider_record, provider_scope = prepared.provider_record, prepared.provider_scope
     generation = work.source.generation
-    if (result.document_id is None or result.document_version_id is None
-            or provider_record is None or provider_record.world_data is None):
+    if (
+        result.document_id is None
+        or result.document_version_id is None
+        or provider_record is None
+        or provider_record.world_data is None
+    ):
         raise NormalizationPreparationConflict("normalization_world_artifact_missing", claim)
     if provider_scope is None or prepared.accepted_at is None:
         raise ValueError("Accepted world observation is missing its scope or acceptance clock")
     if state.observation_preparation is None:
-        raise NormalizationPreparationConflict("normalization_observation_preparation_missing", claim)
+        raise NormalizationPreparationConflict(
+            "normalization_observation_preparation_missing", claim
+        )
     record = prepared.record
-    observation_write, state.observation_preparation = await observations.upsert_from_ingestion_in_uow(
-        session, source_id=observation.source_id, source_generation=generation,
-        ingestion_observation_id=observation.id, document_id=result.document_id,
-        document_version_id=result.document_version_id, external_id=record.provider_id,
-        provider_version=record.version, observed_at=record.observed_at,
+    (
+        observation_write,
+        state.observation_preparation,
+    ) = await observations.upsert_from_ingestion_in_uow(
+        session,
+        source_id=observation.source_id,
+        source_generation=generation,
+        ingestion_observation_id=observation.id,
+        document_id=result.document_id,
+        document_version_id=result.document_version_id,
+        external_id=record.provider_id,
+        provider_version=record.version,
+        observed_at=record.observed_at,
         collected_at=record.collected_at or observation.collected_at or datetime.now(UTC),
-        accepted_at=prepared.accepted_at, provider_scope_discriminator=provider_scope.discriminator,
-        measurement=WorldMeasurement.model_validate(provider_record.world_data.model_dump(mode="python")),
-        preparation=state.observation_preparation, scope=work.scope, multi_workspace_enabled=enabled,
-        access_fence=work.access_fence, source_fence=work.source,
+        accepted_at=prepared.accepted_at,
+        provider_scope_discriminator=provider_scope.discriminator,
+        measurement=WorldMeasurement.model_validate(
+            provider_record.world_data.model_dump(mode="python")
+        ),
+        preparation=state.observation_preparation,
+        scope=work.scope,
+        multi_workspace_enabled=enabled,
+        access_fence=work.access_fence,
+        source_fence=work.source,
     )
     if observation_write is None:
         raise NormalizationPreparationConflict("normalization_observation_rejected", claim)
     if observation_write.selected_current:
         selected_document = await documents.select_current_world_document_version_in_uow(
-            session, document_id=result.document_id, document_version_id=result.document_version_id,
-            expected_source_generation=generation, provider_scope_discriminator=provider_scope.discriminator,
-            preparation=state.document_preparation, scope=work.scope, multi_workspace_enabled=enabled,
-            access_fence=work.access_fence, source_fence=work.source,
+            session,
+            document_id=result.document_id,
+            document_version_id=result.document_version_id,
+            expected_source_generation=generation,
+            provider_scope_discriminator=provider_scope.discriminator,
+            preparation=state.document_preparation,
+            scope=work.scope,
+            multi_workspace_enabled=enabled,
+            access_fence=work.access_fence,
+            source_fence=work.source,
         )
         if not selected_document:
             raise RuntimeError("Accepted current observation has no selectable document version")
@@ -1276,7 +2036,11 @@ async def _write_world_observation(
 
 
 async def _publish_ready_events(
-    session: AsyncSession, work: WorkerState, enabled: bool, observation: SourceObservation, result: Any,
+    session: AsyncSession,
+    work: WorkerState,
+    enabled: bool,
+    observation: SourceObservation,
+    result: Any,
 ) -> None:
     """Publish ``document.version.ready`` and ``news.document.ready`` for a newly created chunked version.
 
@@ -1285,22 +2049,42 @@ async def _publish_ready_events(
     share one journal proof.
     """
     ready_payload = {
-        "workspace_id": str(work.scope.workspace_id), "actor_user_id": work.scope.actor_user_id,
-        "membership_revision": work.scope.membership_revision, "source_id": str(observation.source_id),
-        "document_id": str(result.document_id), "document_version_id": str(result.document_version_id),
-        "source_generation": work.source.generation, "version_number": result.version_number,
+        "workspace_id": str(work.scope.workspace_id),
+        "actor_user_id": work.scope.actor_user_id,
+        "membership_revision": work.scope.membership_revision,
+        "source_id": str(observation.source_id),
+        "document_id": str(result.document_id),
+        "document_version_id": str(result.document_version_id),
+        "source_generation": work.source.generation,
+        "version_number": result.version_number,
     }
     await session.flush()
     for ready_type in ("document.version.ready", "news.document.ready"):
-        await ingestion_api.publish_event(session, DomainEvent(
-            id=uuid7(), type=ready_type, version=1, occurred_at=datetime.now(UTC), producer="modules.ingestion",
-            payload=dict(ready_payload),
-        ), scope=work.scope, multi_workspace_enabled=enabled)
+        await ingestion_api.publish_event(
+            session,
+            DomainEvent(
+                id=uuid7(),
+                type=ready_type,
+                version=1,
+                occurred_at=datetime.now(UTC),
+                producer="modules.ingestion",
+                payload=dict(ready_payload),
+            ),
+            scope=work.scope,
+            multi_workspace_enabled=enabled,
+        )
 
 
 async def _apply_owner_effects(
-    session: AsyncSession, work: WorkerState, state: _SliceState, claim: WorkerClaim, enabled: bool, *,
-    progress: ObservationNormalization, observation: SourceObservation, prepared: _PreparedRow,
+    session: AsyncSession,
+    work: WorkerState,
+    state: _SliceState,
+    claim: WorkerClaim,
+    enabled: bool,
+    *,
+    progress: ObservationNormalization,
+    observation: SourceObservation,
+    prepared: _PreparedRow,
 ) -> None:
     """Enter Documents (and Observations for measurements) for one prepared row and record its disposition.
 
@@ -1309,9 +2093,13 @@ async def _apply_owner_effects(
     """
     try:
         result, state.document_preparation = await documents.upsert_normalized_document_in_uow(
-            session, prepared.normalized_input, preparation=state.document_preparation,
-            scope=work.scope, multi_workspace_enabled=enabled,
-            access_fence=work.access_fence, source_fence=work.source,
+            session,
+            prepared.normalized_input,
+            preparation=state.document_preparation,
+            scope=work.scope,
+            multi_workspace_enabled=enabled,
+            access_fence=work.access_fence,
+            source_fence=work.source,
         )
     except documents.NormalizedDocumentValidationRejected:
         # D guarantees no effects for this record; preserve the latest sibling snapshot.
@@ -1322,10 +2110,21 @@ async def _apply_owner_effects(
     is_measurement = work.projection.provider in MEASUREMENT_PROVIDER_IDS
     if is_measurement and result.disposition != "tombstoned":
         result = await _write_world_observation(
-            session, work, state, claim, enabled, progress=progress, observation=observation,
-            prepared=prepared, result=result)
-    progress.disposition = {"normalized": "normalized", "duplicate": "duplicate", "tombstoned": "skipped"}[
-        result.disposition]
+            session,
+            work,
+            state,
+            claim,
+            enabled,
+            progress=progress,
+            observation=observation,
+            prepared=prepared,
+            result=result,
+        )
+    progress.disposition = {
+        "normalized": "normalized",
+        "duplicate": "duplicate",
+        "tombstoned": "skipped",
+    }[result.disposition]
     state.processed_documents += 1
     progress.error_code = "document_deleted" if result.disposition == "tombstoned" else None
     progress.document_id = result.document_id
@@ -1335,15 +2134,25 @@ async def _apply_owner_effects(
         await _publish_ready_events(session, work, enabled, observation, result)
     if is_measurement:
         # Structured series can change even when the normalized document version is reused.
-        state.knowledge_changes.append(make_knowledge_change(observation.source_id, scope=work.scope))
+        state.knowledge_changes.append(
+            make_knowledge_change(observation.source_id, scope=work.scope)
+        )
     elif result.selected_current and result.created_version:
-        state.knowledge_changes.append(make_knowledge_change(
-            observation.source_id, result.document_id, result.version_number, scope=work.scope))
+        state.knowledge_changes.append(
+            make_knowledge_change(
+                observation.source_id, result.document_id, result.version_number, scope=work.scope
+            )
+        )
 
 
 async def _normalize_row(
-    session: AsyncSession, work: WorkerState, state: _SliceState, claim: WorkerClaim, enabled: bool,
-    progress: ObservationNormalization, observation: SourceObservation,
+    session: AsyncSession,
+    work: WorkerState,
+    state: _SliceState,
+    claim: WorkerClaim,
+    enabled: bool,
+    progress: ObservationNormalization,
+    observation: SourceObservation,
 ) -> None:
     """Normalize one accepted observation and set its journal disposition; the caller counts it as processed.
 
@@ -1360,17 +2169,31 @@ async def _normalize_row(
         prepared = await _prepare_row(session, work, enabled, observation)
         owner_application_started = True
         await _apply_owner_effects(
-            session, work, state, claim, enabled, progress=progress, observation=observation, prepared=prepared)
+            session,
+            work,
+            state,
+            claim,
+            enabled,
+            progress=progress,
+            observation=observation,
+            prepared=prepared,
+        )
     except (ValueError, TypeError) as exc:
         if owner_application_started:
-            raise NormalizationPreparationConflict("normalization_owner_application_failed", claim) from exc
+            raise NormalizationPreparationConflict(
+                "normalization_owner_application_failed", claim
+            ) from exc
         progress.disposition = "failed"
         progress.error_code = "invalid_normalization_record"
         state.failed_documents += 1
 
 
 async def _normalize_rows(
-    session: AsyncSession, work: WorkerState, state: _SliceState, claim: WorkerClaim, enabled: bool,
+    session: AsyncSession,
+    work: WorkerState,
+    state: _SliceState,
+    claim: WorkerClaim,
+    enabled: bool,
 ) -> None:
     """Normalize the slice's rows in accepted order within the byte budget.
 
@@ -1378,7 +2201,11 @@ async def _normalize_rows(
     a single record larger than the whole budget is failed on its own. Remaining rows stay pending.
     """
     for progress, observation in work.normalization_rows:
-        data_bytes = len(json.dumps(observation.payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        data_bytes = len(
+            json.dumps(observation.payload, ensure_ascii=False, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        )
         if state.processed and state.used_bytes + data_bytes > NORMALIZATION_BATCH_BYTES:
             break
         if data_bytes > NORMALIZATION_BATCH_BYTES:
@@ -1405,14 +2232,22 @@ def _normalization_filters(work: WorkerState) -> tuple[Any, ...]:
 
 async def _count_disposition(session: AsyncSession, work: WorkerState, disposition: str) -> int:
     """Count this stage's journal rows with ``disposition`` (``0`` when the scalar is ``None``)."""
-    return int(await session.scalar(
-        select(func.count()).select_from(ObservationNormalization).where(
-            *_normalization_filters(work), ObservationNormalization.disposition == disposition,
+    return int(
+        await session.scalar(
+            select(func.count())
+            .select_from(ObservationNormalization)
+            .where(
+                *_normalization_filters(work),
+                ObservationNormalization.disposition == disposition,
+            )
         )
-    ) or 0)
+        or 0
+    )
 
 
-async def _settle_terminal_run(session: AsyncSession, work: WorkerState, enabled: bool, failed_count: int) -> None:
+async def _settle_terminal_run(
+    session: AsyncSession, work: WorkerState, enabled: bool, failed_count: int
+) -> None:
     """Derive the run status from its stages, mark the event and record the source processing result.
 
     Called only when no row is pending: any failed stage fails the run, all-succeeded succeeds it, otherwise it
@@ -1421,10 +2256,14 @@ async def _settle_terminal_run(session: AsyncSession, work: WorkerState, enabled
     run, stage, event, source = work.run, work.stage, work.event, work.source
     stage.status = "failed" if failed_count else "succeeded"
     stage.error_code = "normalization_failed" if failed_count else None
-    stages = list((await session.scalars(select(IngestionStage).where(IngestionStage.run_id == run.id))).all())
+    stages = list(
+        (await session.scalars(select(IngestionStage).where(IngestionStage.run_id == run.id))).all()
+    )
     if any(item.status == "failed" for item in stages):
         run.status = "failed"
-        run.error_code = next((item.error_code for item in stages if item.status == "failed"), "stage_failed")
+        run.error_code = next(
+            (item.error_code for item in stages if item.status == "failed"), "stage_failed"
+        )
     elif all(item.status == "succeeded" for item in stages):
         run.status = "succeeded"
         run.error_code = None
@@ -1433,13 +2272,25 @@ async def _settle_terminal_run(session: AsyncSession, work: WorkerState, enabled
         run.error_code = None
     event.status = "failed" if failed_count else "delivered"
     await sources.record_processing_result_in_uow(
-        session, source.id, source.generation, datetime.now(UTC), "normalization_failed" if failed_count else None,
-        scope=work.scope, multi_workspace_enabled=enabled, access_fence=work.access_fence, source_fence=work.source,
+        session,
+        source.id,
+        source.generation,
+        datetime.now(UTC),
+        "normalization_failed" if failed_count else None,
+        scope=work.scope,
+        multi_workspace_enabled=enabled,
+        access_fence=work.access_fence,
+        source_fence=work.source,
     )
 
 
 async def _settle_stage(
-    session: AsyncSession, work: WorkerState, state: _SliceState, enabled: bool, *, native_source: bool,
+    session: AsyncSession,
+    work: WorkerState,
+    state: _SliceState,
+    enabled: bool,
+    *,
+    native_source: bool,
 ) -> None:
     """Settle the slice: counts -> stage/run/event status -> native lease -> single commit -> telemetry.
 
@@ -1450,9 +2301,14 @@ async def _settle_stage(
     run, stage, event = work.run, work.stage, work.event
     pending_count = await _count_disposition(session, work, "pending")
     failed_count = await _count_disposition(session, work, "failed")
-    stage.result_count = int(await session.scalar(
-        select(func.coalesce(func.sum(ObservationNormalization.chunk_count), 0)).where(*_normalization_filters(work))
-    ) or 0)
+    stage.result_count = int(
+        await session.scalar(
+            select(func.coalesce(func.sum(ObservationNormalization.chunk_count), 0)).where(
+                *_normalization_filters(work)
+            )
+        )
+        or 0
+    )
     stage.lease_expires_at = None
     if pending_count:
         stage.status = "pending"
@@ -1464,11 +2320,20 @@ async def _settle_stage(
         await _settle_terminal_run(session, work, enabled, failed_count)
     if native_source:
         _update_native_run_lease(
-            work.state, run.id, terminal=(not pending_count or run.status in {"succeeded", "failed"}))
+            work.state,
+            run.id,
+            terminal=(not pending_count or run.status in {"succeeded", "failed"}),
+        )
     extras = tuple(state.knowledge_changes) if state.processed or not pending_count else ()
     await _commit_ingestion_change(
-        session, run, stage, extras, scope=work.scope, multi_workspace_enabled=enabled,
-        access_fence=work.access_fence)
+        session,
+        run,
+        stage,
+        extras,
+        scope=work.scope,
+        multi_workspace_enabled=enabled,
+        access_fence=work.access_fence,
+    )
     if state.processed_documents:
         count("ingestion_documents_total", state.processed_documents, outcome="processed")
     if state.failed_documents:
@@ -1476,7 +2341,11 @@ async def _settle_stage(
 
 
 async def _defer_until_observations_enabled(
-    session: AsyncSession, work: WorkerState, enabled: bool, *, native_source: bool,
+    session: AsyncSession,
+    work: WorkerState,
+    enabled: bool,
+    *,
+    native_source: bool,
 ) -> bool:
     """Defer a measurement slice while the Observations module is lifecycle-disabled; return ``True`` if deferred.
 
@@ -1487,7 +2356,9 @@ async def _defer_until_observations_enabled(
         return False
     from modules.settings.public import module_is_enabled
 
-    if await module_is_enabled(session, "knowledge.observations", scope=work.scope, multi_workspace_enabled=enabled):
+    if await module_is_enabled(
+        session, "knowledge.observations", scope=work.scope, multi_workspace_enabled=enabled
+    ):
         return False
     run, stage, event = work.run, work.stage, work.event
     deferred_until = datetime.now(UTC) + timedelta(seconds=60)
@@ -1502,11 +2373,19 @@ async def _defer_until_observations_enabled(
     if native_source:
         _update_native_run_lease(work.state, run.id, terminal=False)
     await _commit_ingestion_change(
-        session, run, stage, scope=work.scope, multi_workspace_enabled=enabled, access_fence=work.access_fence)
+        session,
+        run,
+        stage,
+        scope=work.scope,
+        multi_workspace_enabled=enabled,
+        access_fence=work.access_fence,
+    )
     return True
 
 
-async def _normalize_slice(session: AsyncSession, identifier: UUID, enabled: bool, box: _ClaimBox) -> None:
+async def _normalize_slice(
+    session: AsyncSession, identifier: UUID, enabled: bool, box: _ClaimBox
+) -> None:
     """Run one bounded normalization slice inside ``session`` (the caller's single transaction).
 
     Locks and gates the event, captures the original claim into ``box`` before any effect, short-circuits
@@ -1514,14 +2393,20 @@ async def _normalize_slice(session: AsyncSession, identifier: UUID, enabled: boo
     delivers the event and releases the native lease; a failed stage is left untouched.
     """
     work = await _lock_worker_event(
-        session, identifier, multi_workspace_enabled=enabled, event_types=("ingestion.normalize.requested",))
+        session,
+        identifier,
+        multi_workspace_enabled=enabled,
+        event_types=("ingestion.normalize.requested",),
+    )
     if work is None or not await _ingestion_enabled(session, work, enabled):
         return
     box.claim = claim = _capture_worker_claim(work)
     run, stage = work.run, work.stage
     native_source = connectors.is_native_provider(work.projection.provider)
     if stage.status == "succeeded":
-        await ingestion_api.mark_event_delivered(session, identifier, scope=work.scope, multi_workspace_enabled=enabled)
+        await ingestion_api.mark_event_delivered(
+            session, identifier, scope=work.scope, multi_workspace_enabled=enabled
+        )
         if native_source:
             _update_native_run_lease(work.state, run.id, terminal=True)
         await session.commit()
@@ -1545,8 +2430,13 @@ async def _normalize_slice(session: AsyncSession, identifier: UUID, enabled: boo
 
 
 async def _settle_failure(
-    factory: async_sessionmaker[AsyncSession], identifier: UUID, enabled: bool, box: _ClaimBox, exc: Exception,
-    event_id: str, ctx: dict[str, object] | None = None,
+    factory: async_sessionmaker[AsyncSession],
+    identifier: UUID,
+    enabled: bool,
+    box: _ClaimBox,
+    exc: Exception,
+    event_id: str,
+    ctx: dict[str, object] | None = None,
 ) -> None:
     """Spend one durable failure attempt for a normalization slice that failed, in a fresh transaction.
 
@@ -1559,8 +2449,14 @@ async def _settle_failure(
     claim = box.claim
     # The failed factory context has exited/rolled back before this fresh transaction.
     # Without this the retry loop below fails silently (e.g. a CHECK violation retried until exhausted).
-    logger.warning("Normalize attempt failed event_id=%s run_id=%s stage_id=%s error_type=%s", event_id,
-        getattr(claim, "run_id", None), getattr(claim, "stage_id", None), type(exc).__name__, exc_info=exc)
+    logger.warning(
+        "Normalize attempt failed event_id=%s run_id=%s stage_id=%s error_type=%s",
+        event_id,
+        getattr(claim, "run_id", None),
+        getattr(claim, "stage_id", None),
+        type(exc).__name__,
+        exc_info=exc,
+    )
     if isinstance(exc, NormalizationPreparationConflict):
         if claim is None:
             claim = exc.claim
@@ -1571,7 +2467,8 @@ async def _settle_failure(
     try:
         async with factory() as session:
             work = await _lock_normalization_retry_event(
-                session, identifier, multi_workspace_enabled=enabled, expected=claim)
+                session, identifier, multi_workspace_enabled=enabled, expected=claim
+            )
             if work is None:
                 return
             run, stage, event = work.run, work.stage, work.event
@@ -1584,7 +2481,7 @@ async def _settle_failure(
                 run.error_code = "retry_exhausted"
                 event.status = "failed"
             else:
-                delay = random.uniform(0.5, min(60.0, 2.0 ** stage.attempts))  # noqa: S311  # retry backoff jitter, not a security value
+                delay = random.uniform(0.5, min(60.0, 2.0**stage.attempts))  # noqa: S311  # retry backoff jitter, not a security value
                 next_attempt_at = datetime.now(UTC) + timedelta(seconds=delay)
                 stage.status = "retrying"
                 stage.error_code = "transient_failure"
@@ -1595,10 +2492,19 @@ async def _settle_failure(
                 _wake_dispatcher_after_commit(session, delay)
             stage.lease_expires_at = None
             if connectors.is_native_provider(work.projection.provider):
-                _update_native_run_lease(work.state, run.id,
-                    terminal=stage.status == "failed" or run.status in {"succeeded", "failed"})
-            await _commit_ingestion_change(session, run, stage, scope=work.scope,
-                multi_workspace_enabled=enabled, access_fence=work.access_fence)
+                _update_native_run_lease(
+                    work.state,
+                    run.id,
+                    terminal=stage.status == "failed" or run.status in {"succeeded", "failed"},
+                )
+            await _commit_ingestion_change(
+                session,
+                run,
+                stage,
+                scope=work.scope,
+                multi_workspace_enabled=enabled,
+                access_fence=work.access_fence,
+            )
     except (HTTPException, DomainError):
         # Original admission loss grants no counter or scheduling authority.
         return
@@ -1663,7 +2569,10 @@ class _UploadClaim:
 
 
 async def _claim_upload_extraction(
-    factory: async_sessionmaker[AsyncSession], settings: Settings, identifier: UUID, enabled: bool,
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    identifier: UUID,
+    enabled: bool,
 ) -> _UploadClaim | None:
     """Mark the upload's document ``processing`` and commit the running stage lease; ``None`` if nothing to run.
 
@@ -1673,8 +2582,12 @@ async def _claim_upload_extraction(
     loader under the early Document/URI locks.
     """
     async with factory() as session:
-        work = await _lock_worker_event(session, identifier, multi_workspace_enabled=enabled,
-                                       event_types=("document.file.uploaded",))
+        work = await _lock_worker_event(
+            session,
+            identifier,
+            multi_workspace_enabled=enabled,
+            event_types=("document.file.uploaded",),
+        )
         if work is None or not await _ingestion_enabled(session, work, enabled):
             return None
         run, stage, event = work.run, work.stage, work.event
@@ -1685,30 +2598,55 @@ async def _claim_upload_extraction(
         raw_uri, mime_type = cast(str, raw_uri), cast(str, mime_type)
         now = datetime.now(UTC)
         if stage.status == "succeeded":
-            await ingestion_api.mark_event_delivered(session, identifier, scope=work.scope, multi_workspace_enabled=enabled)
+            await ingestion_api.mark_event_delivered(
+                session, identifier, scope=work.scope, multi_workspace_enabled=enabled
+            )
             await session.commit()
             return None
-        if stage.status == "failed" or (stage.status == "running" and stage.lease_expires_at and stage.lease_expires_at > now):
+        if stage.status == "failed" or (
+            stage.status == "running" and stage.lease_expires_at and stage.lease_expires_at > now
+        ):
             return None
         stage.status = "running"
         stage.attempts += 1
         stage.lease_expires_at = now + timedelta(seconds=settings.parser_timeout_seconds + 30)
         stage.error_code = None
         run.status = "running"
-        if not await documents.set_extraction_status(session, document_id, source_id, "processing",
-            scope=work.scope, multi_workspace_enabled=enabled, access_fence=work.access_fence, source_fence=work.source,
-            expected_raw_uri=raw_uri, expected_mime_type=mime_type):
+        if not await documents.set_extraction_status(
+            session,
+            document_id,
+            source_id,
+            "processing",
+            scope=work.scope,
+            multi_workspace_enabled=enabled,
+            access_fence=work.access_fence,
+            source_fence=work.source,
+            expected_raw_uri=raw_uri,
+            expected_mime_type=mime_type,
+        ):
             return None
         claim = _capture_worker_claim(work)
-        await _commit_ingestion_change(session, run, stage,
-            (make_knowledge_change(source_id, document_id, scope=work.scope),), scope=work.scope,
-            multi_workspace_enabled=enabled, access_fence=work.access_fence)
+        await _commit_ingestion_change(
+            session,
+            run,
+            stage,
+            (make_knowledge_change(source_id, document_id, scope=work.scope),),
+            scope=work.scope,
+            multi_workspace_enabled=enabled,
+            access_fence=work.access_fence,
+        )
     return _UploadClaim(claim, document_id, source_id, raw_uri, mime_type)
 
 
 async def _publish_extraction(
-    factory: async_sessionmaker[AsyncSession], identifier: UUID, enabled: bool, upload: _UploadClaim, *,
-    parsed: ParsedDocument, drafts: list[Any], extraction_status: str,
+    factory: async_sessionmaker[AsyncSession],
+    identifier: UUID,
+    enabled: bool,
+    upload: _UploadClaim,
+    *,
+    parsed: ParsedDocument,
+    drafts: list[Any],
+    extraction_status: str,
 ) -> None:
     """Persist the parsed text and chunks and settle the stage under the original claim.
 
@@ -1718,15 +2656,44 @@ async def _publish_extraction(
     """
     document_id, source_id = upload.document_id, upload.source_id
     async with factory() as session:
-        work = await _lock_worker_event(session, identifier, multi_workspace_enabled=enabled,
-                                       event_types=("document.file.uploaded",), expected=upload.claim)
-        if work is None or work.stage.status != "running" or work.stage.lease_expires_at is None or work.stage.lease_expires_at <= datetime.now(UTC):
+        work = await _lock_worker_event(
+            session,
+            identifier,
+            multi_workspace_enabled=enabled,
+            event_types=("document.file.uploaded",),
+            expected=upload.claim,
+        )
+        if (
+            work is None
+            or work.stage.status != "running"
+            or work.stage.lease_expires_at is None
+            or work.stage.lease_expires_at <= datetime.now(UTC)
+        ):
             return
-        saved_document_id = await documents.save_extraction(session, document_id, source_id, parsed.text,
-            [{"content": draft.content, "token_count": draft.token_count, "metadata": draft.metadata} for draft in drafts],
-            extraction_status, parsed.metadata, parsed.warnings, "p02-t2-v1",
-            scope=work.scope, multi_workspace_enabled=enabled, access_fence=work.access_fence,
-            source_fence=work.source, expected_raw_uri=upload.raw_uri, expected_mime_type=upload.mime_type)
+        saved_document_id = await documents.save_extraction(
+            session,
+            document_id,
+            source_id,
+            parsed.text,
+            [
+                {
+                    "content": draft.content,
+                    "token_count": draft.token_count,
+                    "metadata": draft.metadata,
+                }
+                for draft in drafts
+            ],
+            extraction_status,
+            parsed.metadata,
+            parsed.warnings,
+            "p02-t2-v1",
+            scope=work.scope,
+            multi_workspace_enabled=enabled,
+            access_fence=work.access_fence,
+            source_fence=work.source,
+            expected_raw_uri=upload.raw_uri,
+            expected_mime_type=upload.mime_type,
+        )
         if saved_document_id != document_id:
             return
         work.stage.status = "succeeded"
@@ -1735,20 +2702,47 @@ async def _publish_extraction(
         work.stage.error_code = None
         work.run.status = extraction_status
         work.run.error_code = None
-        await ingestion_api.mark_event_delivered(session, identifier, scope=work.scope, multi_workspace_enabled=enabled)
-        changed = await sources.record_processing_result_in_uow(session, source_id, work.source.generation,
-            datetime.now(UTC), None, scope=work.scope, multi_workspace_enabled=enabled,
-            access_fence=work.access_fence, source_fence=work.source)
-        extras: list[ReplayDraft] = [make_knowledge_change(source_id, document_id, scope=work.scope)]
+        await ingestion_api.mark_event_delivered(
+            session, identifier, scope=work.scope, multi_workspace_enabled=enabled
+        )
+        changed = await sources.record_processing_result_in_uow(
+            session,
+            source_id,
+            work.source.generation,
+            datetime.now(UTC),
+            None,
+            scope=work.scope,
+            multi_workspace_enabled=enabled,
+            access_fence=work.access_fence,
+            source_fence=work.source,
+        )
+        extras: list[ReplayDraft] = [
+            make_knowledge_change(source_id, document_id, scope=work.scope)
+        ]
         if changed:
-            extras.append(make_source_change(source_id, work.source.generation, work.source.status, scope=work.scope))
-        await _commit_ingestion_change(session, work.run, work.stage, tuple(extras), scope=work.scope,
-            multi_workspace_enabled=enabled, access_fence=work.access_fence)
+            extras.append(
+                make_source_change(
+                    source_id, work.source.generation, work.source.status, scope=work.scope
+                )
+            )
+        await _commit_ingestion_change(
+            session,
+            work.run,
+            work.stage,
+            tuple(extras),
+            scope=work.scope,
+            multi_workspace_enabled=enabled,
+            access_fence=work.access_fence,
+        )
         count("ingestion_documents_total", outcome="processed")
 
 
 async def _record_extraction_failure(
-    factory: async_sessionmaker[AsyncSession], identifier: UUID, enabled: bool, upload: _UploadClaim, exc: Exception,
+    factory: async_sessionmaker[AsyncSession],
+    identifier: UUID,
+    enabled: bool,
+    upload: _UploadClaim,
+    exc: Exception,
 ) -> None:
     """Record any extraction failure as a failed stage/run/event and a ``failed`` document, under the original claim.
 
@@ -1757,8 +2751,13 @@ async def _record_extraction_failure(
     """
     document_id, source_id = upload.document_id, upload.source_id
     async with factory() as session:
-        work = await _lock_worker_event(session, identifier, multi_workspace_enabled=enabled,
-                                       event_types=("document.file.uploaded",), expected=upload.claim)
+        work = await _lock_worker_event(
+            session,
+            identifier,
+            multi_workspace_enabled=enabled,
+            event_types=("document.file.uploaded",),
+            expected=upload.claim,
+        )
         if work is None:
             return
         code = _failure_code(exc)
@@ -1768,18 +2767,48 @@ async def _record_extraction_failure(
         work.run.status = "failed"
         work.run.error_code = code
         work.event.status = "failed"
-        if not await documents.set_extraction_status(session, document_id, source_id, "failed",
-            scope=work.scope, multi_workspace_enabled=enabled, access_fence=work.access_fence, source_fence=work.source,
-            expected_raw_uri=upload.raw_uri, expected_mime_type=upload.mime_type):
+        if not await documents.set_extraction_status(
+            session,
+            document_id,
+            source_id,
+            "failed",
+            scope=work.scope,
+            multi_workspace_enabled=enabled,
+            access_fence=work.access_fence,
+            source_fence=work.source,
+            expected_raw_uri=upload.raw_uri,
+            expected_mime_type=upload.mime_type,
+        ):
             return
-        changed = await sources.record_processing_result_in_uow(session, source_id, work.source.generation,
-            datetime.now(UTC), code, scope=work.scope, multi_workspace_enabled=enabled,
-            access_fence=work.access_fence, source_fence=work.source)
-        extras: list[ReplayDraft] = [make_knowledge_change(source_id, document_id, scope=work.scope)]
+        changed = await sources.record_processing_result_in_uow(
+            session,
+            source_id,
+            work.source.generation,
+            datetime.now(UTC),
+            code,
+            scope=work.scope,
+            multi_workspace_enabled=enabled,
+            access_fence=work.access_fence,
+            source_fence=work.source,
+        )
+        extras: list[ReplayDraft] = [
+            make_knowledge_change(source_id, document_id, scope=work.scope)
+        ]
         if changed:
-            extras.append(make_source_change(source_id, work.source.generation, work.source.status, scope=work.scope))
-        await _commit_ingestion_change(session, work.run, work.stage, tuple(extras), scope=work.scope,
-            multi_workspace_enabled=enabled, access_fence=work.access_fence)
+            extras.append(
+                make_source_change(
+                    source_id, work.source.generation, work.source.status, scope=work.scope
+                )
+            )
+        await _commit_ingestion_change(
+            session,
+            work.run,
+            work.stage,
+            tuple(extras),
+            scope=work.scope,
+            multi_workspace_enabled=enabled,
+            access_fence=work.access_fence,
+        )
         count("ingestion_documents_total", outcome="failed")
 
 
@@ -1809,13 +2838,25 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
     try:
         # The row/URI proof and original dispatch were captured before closing the session.
         async with get_storage_backend(settings).download_to_temp(upload.raw_uri) as source_path:
-            parsed = await parse_file_bounded(source_path, upload.mime_type,
-                settings.parser_timeout_seconds, settings.docx_expanded_max_bytes, settings.pdf_page_max)
+            parsed = await parse_file_bounded(
+                source_path,
+                upload.mime_type,
+                settings.parser_timeout_seconds,
+                settings.docx_expanded_max_bytes,
+                settings.pdf_page_max,
+            )
         parsed = _cap_parsed_text(parsed, settings.parsed_text_max_chars)
         drafts = await to_thread_joined(chunk_text, parsed.text)
         extraction_status = "needs_ocr" if parsed.warnings and not parsed.text else "succeeded"
         await _publish_extraction(
-            factory, identifier, enabled, upload, parsed=parsed, drafts=drafts, extraction_status=extraction_status)
+            factory,
+            identifier,
+            enabled,
+            upload,
+            parsed=parsed,
+            drafts=drafts,
+            extraction_status=extraction_status,
+        )
     except Exception as exc:  # noqa: BLE001  # extraction failure of any kind must be recorded as a failed stage
         await _record_extraction_failure(factory, identifier, enabled, upload, exc)
 
@@ -1862,9 +2903,13 @@ async def cleanup_storage_orphans(ctx: dict[str, object]) -> int:
             return 0
     async with factory() as session:
         referenced = await documents.raw_uris(
-            session, instance_operator=True, multi_workspace_enabled=enabled,
+            session,
+            instance_operator=True,
+            multi_workspace_enabled=enabled,
         )
-    return await get_storage_backend(settings).cleanup_orphans(referenced, settings.storage_orphan_grace_seconds)
+    return await get_storage_backend(settings).cleanup_orphans(
+        referenced, settings.storage_orphan_grace_seconds
+    )
 
 
 async def purge_collection_receipts(ctx: dict[str, object]) -> int:

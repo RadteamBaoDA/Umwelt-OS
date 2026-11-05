@@ -31,10 +31,17 @@ from modules.connectors.provisioning._workflow_steps import (
 
 
 async def _settle_retained_workflow_after_io(
-    session: AsyncSession, source_id: UUID, *,
-    original_operation: dict[str, object], scope: Scope, multi_workspace_enabled: bool,
-    access_fence: AccessFence, outcome: str, remote_id: str | None = None,
-    error_code: str | None = None, next_kind: str | None = None,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    original_operation: dict[str, object],
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    outcome: str,
+    remote_id: str | None = None,
+    error_code: str | None = None,
+    next_kind: str | None = None,
     request: dict[str, object] | None = None,
 ) -> tuple[bool, dict[str, object] | None]:
     """Settle one exact trusted workflow response and return its owned next envelope.
@@ -46,14 +53,24 @@ async def _settle_retained_workflow_after_io(
     """
     try:
         before = await lock_retained_connector_effect(
-            session, source_id, original_operation=original_operation, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            session,
+            source_id,
+            original_operation=original_operation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
         )
     except RetainedEffectAdmissionDenied as denied:
         await session.rollback()
         disposition = await record_retained_workflow_result_in_uow(
-            session, source_id, original_operation=original_operation, scope=scope,
-            access_fence=access_fence, outcome=outcome, remote_id=remote_id, error_code=error_code,
+            session,
+            source_id,
+            original_operation=original_operation,
+            scope=scope,
+            access_fence=access_fence,
+            outcome=outcome,
+            remote_id=remote_id,
+            error_code=error_code,
         )
         if disposition in {"stored", "duplicate"}:
             await session.commit()
@@ -66,38 +83,73 @@ async def _settle_retained_workflow_after_io(
     step_id = str(step["id"])
     if outcome == "known_success" and step.get("kind") == "lookup":
         changed = await prepare_workflow_step(
-            session, source_id, operation_id, step_id, str(next_kind), remote_id, request,
-            original_operation=original_operation, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            session,
+            source_id,
+            operation_id,
+            step_id,
+            str(next_kind),
+            remote_id,
+            request,
+            original_operation=original_operation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
         )
     elif outcome == "known_success":
         changed = await acknowledge_workflow_step(
-            session, source_id, operation_id, step_id, workflow_id=remote_id,
-            original_operation=original_operation, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            session,
+            source_id,
+            operation_id,
+            step_id,
+            workflow_id=remote_id,
+            original_operation=original_operation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
         )
     else:
         changed = await fail_workflow_step(
-            session, source_id, operation_id, step_id, error_code or "n8n_outcome_unknown",
-            unknown=outcome == "unknown", original_operation=original_operation, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            session,
+            source_id,
+            operation_id,
+            step_id,
+            error_code or "n8n_outcome_unknown",
+            unknown=outcome == "unknown",
+            original_operation=original_operation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
         )
     if not changed:
         await session.rollback()
         return False, None
-    next_operation = copy.deepcopy(await session.scalar(select(
-        ConnectorProvisioning.workflow_operation,
-    ).where(ConnectorProvisioning.source_id == source_id)))
+    next_operation = copy.deepcopy(
+        await session.scalar(
+            select(
+                ConnectorProvisioning.workflow_operation,
+            ).where(ConnectorProvisioning.source_id == source_id)
+        )
+    )
     await commit_retained_connector_effect(
-        session, before, source_id=source_id, original_operation=original_operation,
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        before,
+        source_id=source_id,
+        original_operation=original_operation,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
     return True, next_operation if isinstance(next_operation, dict) else None
 
 
 async def _workflow_send_allowed(
-    session: AsyncSession, source_id: UUID, operation: dict[str, object], *,
-    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    session: AsyncSession,
+    source_id: UUID,
+    operation: dict[str, object],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
     transport_entered: bool,
 ) -> bool:
     """Recheck exact original dispatched target; cleanup may use a later Source generation.
@@ -112,34 +164,61 @@ async def _workflow_send_allowed(
 
     try:
         await lock_retained_connector_effect(
-            session, source_id, original_operation=operation, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            session,
+            source_id,
+            original_operation=operation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
         )
         source, row, _slots = await _read_retained_connector_rows(
-            session, source_id, original_operation=operation, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            session,
+            source_id,
+            original_operation=operation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
         )
         current = row.workflow_operation if row is not None else None
         step = operation.get("step")
         cleanup = isinstance(step, dict) and step.get("kind") == "deactivate"
         return bool(
-            source is not None and row is not None and isinstance(step, dict) and current is not None
+            source is not None
+            and row is not None
+            and isinstance(step, dict)
+            and current is not None
             and step.get("state") == "dispatched"
-            and _retained_operation_matches(current, operation, source_id=source_id, scope=scope, access_fence=access_fence)
+            and _retained_operation_matches(
+                current, operation, source_id=source_id, scope=scope, access_fence=access_fence
+            )
             and not current.get("retained_effect_result")
-            and (cleanup and isinstance(step.get("target"), str)
-                 and step.get("target") == operation.get("workflow_id") == row.workflow_id
-                 or not cleanup and not current.get("cleanup_required")
-                 and source.generation == row.source_generation == operation.get("source_generation")
-                 and row.desired_revision == operation.get("revision")
-                 and source.status == "active" and not source.local_only
-                 and await module_is_enabled(session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled))
+            and (
+                cleanup
+                and isinstance(step.get("target"), str)
+                and step.get("target") == operation.get("workflow_id") == row.workflow_id
+                or not cleanup
+                and not current.get("cleanup_required")
+                and source.generation == row.source_generation == operation.get("source_generation")
+                and row.desired_revision == operation.get("revision")
+                and source.status == "active"
+                and not source.local_only
+                and await module_is_enabled(
+                    session,
+                    "connectors",
+                    scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                )
+            )
         )
     except RetainedEffectAdmissionDenied as denied:
         await session.rollback()
         disposition = await record_retained_workflow_result_in_uow(
-            session, source_id, original_operation=operation, scope=scope,
-            access_fence=access_fence, outcome="unknown" if transport_entered else "not_sent",
+            session,
+            source_id,
+            original_operation=operation,
+            scope=scope,
+            access_fence=access_fence,
+            outcome="unknown" if transport_entered else "not_sent",
             error_code="original_access_revoked",
         )
         if disposition in {"stored", "duplicate"}:
@@ -153,8 +232,15 @@ async def _workflow_send_allowed(
 
 
 async def _lookup_workflow_step(
-    session: AsyncSession, source_id: UUID, api: Any, operation: dict[str, Any], body: object,
-    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    session: AsyncSession,
+    source_id: UUID,
+    api: Any,
+    operation: dict[str, Any],
+    body: object,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
 ) -> tuple[str, str | None] | None:
     """Run a ``lookup`` step: find the workflow by name and choose the follow-up step.
 
@@ -177,14 +263,23 @@ async def _lookup_workflow_step(
     if not isinstance(body, dict):
         raise ValueError("Prepared workflow request body is invalid")
     if not await _workflow_send_allowed(
-        session, source_id, operation, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        source_id,
+        operation,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
         transport_entered=True,
     ):
         await _settle_retained_workflow_after_io(
-            session, source_id, original_operation=operation, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
-            outcome="not_sent", error_code="original_effect_send_fenced",
+            session,
+            source_id,
+            original_operation=operation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+            outcome="not_sent",
+            error_code="original_effect_send_fenced",
         )
         return None
     candidate = await api.get_workflow(workflow_id)
@@ -217,8 +312,15 @@ async def _send_workflow_step(api: Any, kind: str, target: object, body: object)
 
 
 async def _settle_failed_workflow_step(
-    session: AsyncSession, source_id: UUID, operation: dict[str, Any], exc: Exception, kind: str,
-    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    session: AsyncSession,
+    source_id: UUID,
+    operation: dict[str, Any],
+    exc: Exception,
+    kind: str,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
 ) -> None:
     """Journal a finite transport failure of a workflow step as a rejection or an unknown outcome.
 
@@ -229,21 +331,29 @@ async def _settle_failed_workflow_step(
 
     response = exc.response if isinstance(exc, HTTPStatusError) else None
     known_rejection = (
-        response is not None and 400 <= response.status_code < 500
-        and response.status_code != 408
+        response is not None and 400 <= response.status_code < 500 and response.status_code != 408
     )
     await _settle_retained_workflow_after_io(
-        session, source_id, original_operation=operation, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        source_id,
+        original_operation=operation,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
         outcome="known_rejection" if known_rejection or kind == "lookup" else "unknown",
         error_code="n8n_request_rejected" if known_rejection else "n8n_outcome_unknown",
     )
 
 
 async def drive_workflow_operation(
-    session: AsyncSession, source_id: UUID, api: Any,
-    *, scope: Scope, multi_workspace_enabled: bool,
-    original_operation: dict[str, object], access_fence: AccessFence,
+    session: AsyncSession,
+    source_id: UUID,
+    api: Any,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    original_operation: dict[str, object],
+    access_fence: AccessFence,
 ) -> bool:
     """Drive at most four exact steps under immutable original envelope/access lineage.
 
@@ -254,21 +364,35 @@ async def drive_workflow_operation(
     """
     for _ in range(4):
         operation = await claim_workflow_step(
-            session, source_id, original_operation=original_operation, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, service_url=api.service_url,
+            session,
+            source_id,
+            original_operation=original_operation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+            service_url=api.service_url,
         )
         if operation is None:
             await session.rollback()
             return False
         if not await _workflow_send_allowed(
-            session, source_id, operation, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            session,
+            source_id,
+            operation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
             transport_entered=False,
         ):
             await _settle_retained_workflow_after_io(
-                session, source_id, original_operation=operation, scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
-                outcome="not_sent", error_code="original_effect_send_fenced",
+                session,
+                source_id,
+                original_operation=operation,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+                access_fence=access_fence,
+                outcome="not_sent",
+                error_code="original_effect_send_fenced",
             )
             return False
         step = operation.get("step")
@@ -279,16 +403,28 @@ async def drive_workflow_operation(
         try:
             if kind == "lookup":
                 lookup = await _lookup_workflow_step(
-                    session, source_id, api, operation, body, scope=scope,
-                    multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+                    session,
+                    source_id,
+                    api,
+                    operation,
+                    body,
+                    scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                    access_fence=access_fence,
                 )
                 if lookup is None:
                     return False
                 next_kind, next_target = lookup
                 changed, next_operation = await _settle_retained_workflow_after_io(
-                    session, source_id, original_operation=operation, scope=scope,
-                    multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
-                    outcome="known_success", remote_id=next_target, next_kind=next_kind,
+                    session,
+                    source_id,
+                    original_operation=operation,
+                    scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                    access_fence=access_fence,
+                    outcome="known_success",
+                    remote_id=next_target,
+                    next_kind=next_kind,
                     request=body if isinstance(body, dict) else {},
                 )
                 if not changed:
@@ -300,9 +436,14 @@ async def drive_workflow_operation(
             workflow_id = await _send_workflow_step(api, kind, step.get("target"), body)
         except asyncio.CancelledError:
             await _settle_retained_workflow_after_io(
-                session, source_id, original_operation=operation, scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
-                outcome="unknown", error_code="n8n_outcome_unknown",
+                session,
+                source_id,
+                original_operation=operation,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+                access_fence=access_fence,
+                outcome="unknown",
+                error_code="n8n_outcome_unknown",
             )
             raise
         except RetainedEffectAdmissionDenied:
@@ -310,14 +451,25 @@ async def drive_workflow_operation(
             raise
         except Exception as exc:  # noqa: BLE001  # finite transport failure is retained for recovery
             await _settle_failed_workflow_step(
-                session, source_id, operation, exc, kind, scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+                session,
+                source_id,
+                operation,
+                exc,
+                kind,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+                access_fence=access_fence,
             )
             return False
         changed, next_operation = await _settle_retained_workflow_after_io(
-            session, source_id, original_operation=operation, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
-            outcome="known_success", remote_id=workflow_id,
+            session,
+            source_id,
+            original_operation=operation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+            outcome="known_success",
+            remote_id=workflow_id,
         )
         if not changed:
             return False

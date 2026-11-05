@@ -42,7 +42,10 @@ class _Session:
 
 def _settings(key=""):
     return SimpleNamespace(
-        n8n_api_key=SimpleNamespace(get_secret_value=lambda: key), n8n_service_url="http://n8n", multi_workspace_enabled=True)
+        n8n_api_key=SimpleNamespace(get_secret_value=lambda: key),
+        n8n_service_url="http://n8n",
+        multi_workspace_enabled=True,
+    )
 
 
 async def _no_n8n(_session, _settings, **_kw):
@@ -62,8 +65,14 @@ async def test_run_tallies_each_outcome_and_reports_resume_cursor(monkeypatch):
     monkeypatch.setattr(ut, "resolve_n8n", _no_n8n)
     summary = await ut.run(lambda: _Session(ids), _settings(), limit=4)
     assert summary == {
-        "dry_run": True, "examined": 4, "upgraded": 1, "would_upgrade": 1, "reconciliation_required": 1,
-        "skipped": 1, "last_source_id": str(ids[-1]), "more": True,
+        "dry_run": True,
+        "examined": 4,
+        "upgraded": 1,
+        "would_upgrade": 1,
+        "reconciliation_required": 1,
+        "skipped": 1,
+        "last_source_id": str(ids[-1]),
+        "more": True,
     }
 
 
@@ -71,7 +80,9 @@ async def test_run_tallies_each_outcome_and_reports_resume_cursor(monkeypatch):
 async def test_run_with_nothing_stale_is_empty(monkeypatch):
     monkeypatch.setattr(ut, "resolve_n8n", _no_n8n)
     summary = await ut.run(lambda: _Session(), _settings(), apply=True)
-    assert summary["examined"] == 0 and summary["last_source_id"] is None and summary["more"] is False
+    assert (
+        summary["examined"] == 0 and summary["last_source_id"] is None and summary["more"] is False
+    )
 
 
 @pytest.mark.asyncio
@@ -148,14 +159,21 @@ async def test_dry_run_changes_nothing(monkeypatch):
 @pytest.mark.asyncio
 async def test_ambiguous_stop_is_reconciliation_required(monkeypatch):
     _calls, factory = _wire(monkeypatch, phase="reconciliation_required")
-    assert await ut._upgrade_one(factory, uuid4(), None, apply=True, flag=True) == "reconciliation_required"
+    assert (
+        await ut._upgrade_one(factory, uuid4(), None, apply=True, flag=True)
+        == "reconciliation_required"
+    )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kwargs", [
-    {"source_status": "paused"}, {"terms": True},
-    {"terms": HTTPException(status_code=409, detail="provider_terms_ineligible")},
-])
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"source_status": "paused"},
+        {"terms": True},
+        {"terms": HTTPException(status_code=409, detail="provider_terms_ineligible")},
+    ],
+)
 async def test_ineligible_sources_are_skipped_untouched(monkeypatch, kwargs):
     calls, factory = _wire(monkeypatch, **kwargs)
     assert await ut._upgrade_one(factory, uuid4(), None, apply=True, flag=True) == "skipped"
@@ -165,4 +183,6 @@ async def test_ineligible_sources_are_skipped_untouched(monkeypatch, kwargs):
 def test_transition_sweep_cursor_key_is_registered():
     from modules.connectors import worker
 
-    assert "connectors_transitions" in worker._CURSOR_KEYS  # an unregistered key made every sweep raise KeyError
+    assert (
+        "connectors_transitions" in worker._CURSOR_KEYS
+    )  # an unregistered key made every sweep raise KeyError

@@ -29,7 +29,11 @@ logger = logging.getLogger(__name__)
 
 
 async def _redact_workspace_traces(
-    factory: async_sessionmaker[AsyncSession], workspace_id: UUID, *, now: datetime, limit: int,
+    factory: async_sessionmaker[AsyncSession],
+    workspace_id: UUID,
+    *,
+    now: datetime,
+    limit: int,
     multi_workspace_enabled: bool,
 ) -> int:
     """Redact one workspace's expired traces in its own session under its owner's current fence.
@@ -42,21 +46,31 @@ async def _redact_workspace_traces(
     async with factory() as session:
         try:
             owner = await workspaces.resolve_workspace_owner_context(
-                session, workspace_id, multi_workspace_enabled=multi_workspace_enabled,
+                session,
+                workspace_id,
+                multi_workspace_enabled=multi_workspace_enabled,
             )
             if owner is None:
                 return 0
             scope = InternalJobScope(
-                workspace_id=owner.workspace_id, actor_user_id=owner.user_id,
+                workspace_id=owner.workspace_id,
+                actor_user_id=owner.user_id,
                 membership_revision=owner.membership_revision,
             )
-            await workspaces.read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            await workspaces.read_access_fence(
+                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+            )
             policy = await settings_public.read_retention_settings(
-                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                session,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
             )
             redacted = await agents.redact_expired_agent_traces(
-                session, cutoff=now - timedelta(days=policy.agent_trace_days), limit=limit,
-                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                session,
+                cutoff=now - timedelta(days=policy.agent_trace_days),
+                limit=limit,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
             )
             await session.commit()
             return redacted
@@ -98,14 +112,22 @@ async def run_retention_maintenance(ctx: dict[str, object]) -> int:
                 last = workspace_id
                 try:
                     traces += await _redact_workspace_traces(
-                        factory, workspace_id, now=now, limit=_TRACE_BUDGET - traces, multi_workspace_enabled=enabled,
+                        factory,
+                        workspace_id,
+                        now=now,
+                        limit=_TRACE_BUDGET - traces,
+                        multi_workspace_enabled=enabled,
                     )
                 except Exception:
-                    logger.warning("agent trace retention failed for workspace %s", workspace_id, exc_info=True)
+                    logger.warning(
+                        "agent trace retention failed for workspace %s", workspace_id, exc_info=True
+                    )
     except AttributeError:
         # Agents trace listing not available in this build: skip the trace phase, keep evidence purge.
         logger.warning("agent trace retention unavailable; skipping trace phase", exc_info=True)
-    await worker_cursors.write_cursor(ctx, TRACE_CURSOR_KEY, None if exhausted else last, _CURSOR_KEYS)
+    await worker_cursors.write_cursor(
+        ctx, TRACE_CURSOR_KEY, None if exhausted else last, _CURSOR_KEYS
+    )
     async with factory() as session:
         evidence = await purge_expired_browser_evidence(session, limit=200)
         # Terminal automation runs (+ cascading actions) past 30 days; owned and bounded by Automations.
@@ -113,7 +135,13 @@ async def run_retention_maintenance(ctx: dict[str, object]) -> int:
         summary = await session.scalar(
             select(MaintenanceSummary).where(MaintenanceSummary.id == 1).with_for_update()
         )
-        if traces or evidence or summary is None or summary.next_eligible_at is None or summary.next_eligible_at <= now:
+        if (
+            traces
+            or evidence
+            or summary is None
+            or summary.next_eligible_at is None
+            or summary.next_eligible_at <= now
+        ):
             if summary is None:
                 summary = MaintenanceSummary(id=1)
                 session.add(summary)

@@ -26,7 +26,9 @@ class _Result:
 class _Connection:
     """Autocommit connection fake recording statement text in order."""
 
-    def __init__(self, log: list[str], *, invalid_leftover: bool = False, fail_create: bool = False) -> None:
+    def __init__(
+        self, log: list[str], *, invalid_leftover: bool = False, fail_create: bool = False
+    ) -> None:
         self.log, self.invalid_leftover, self.fail_create = log, invalid_leftover, fail_create
 
     async def execution_options(self, **options: Any) -> _Connection:
@@ -35,10 +37,14 @@ class _Connection:
 
     async def execute(self, statement: Any, params: Any = None) -> _Result:
         sql = str(statement)
-        self.log.append(sql.split(" ON ")[0] if sql.startswith("CREATE") else sql.split(" WHERE ")[0])
+        self.log.append(
+            sql.split(" ON ")[0] if sql.startswith("CREATE") else sql.split(" WHERE ")[0]
+        )
         if sql.startswith("CREATE") and self.fail_create:
             raise RuntimeError("deadlock detected")
-        return _Result(1 if self.invalid_leftover and sql.startswith("SELECT 1 FROM pg_index") else None)
+        return _Result(
+            1 if self.invalid_leftover and sql.startswith("SELECT 1 FROM pg_index") else None
+        )
 
     async def __aenter__(self) -> Self:
         return self
@@ -60,7 +66,9 @@ async def test_statements_are_concurrent_idempotent_and_partial() -> None:
     drop, create = indexing.vector_index_statements(generation_id, 768)
     name = indexing.vector_index_name(generation_id)
     assert drop == f"DROP INDEX CONCURRENTLY IF EXISTS {name}"
-    assert create.startswith(f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} ON search_index_items USING hnsw")
+    assert create.startswith(
+        f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} ON search_index_items USING hnsw"
+    )
     assert "embedding::vector(768)" in create and f"generation_id = '{generation_id}'" in create
     with pytest.raises(ValueError):
         indexing.vector_index_statements(generation_id, indexing.MAX_VECTOR_DIMENSIONS + 1)
@@ -72,11 +80,15 @@ async def test_build_runs_on_autocommit_with_timeouts_lifted_and_reset() -> None
     await indexing.build_vector_index_concurrently(_Engine(_Connection(log)), generation_id, 3)  # type: ignore[arg-type]
     name = indexing.vector_index_name(generation_id)
     assert log == [
-        "options:AUTOCOMMIT", f"SET statement_timeout = {indexing.HNSW_BUILD_STATEMENT_TIMEOUT_MS}", "SET lock_timeout = 0",
+        "options:AUTOCOMMIT",
+        f"SET statement_timeout = {indexing.HNSW_BUILD_STATEMENT_TIMEOUT_MS}",
+        "SET lock_timeout = 0",
         "SELECT pg_advisory_lock(hashtext(:name))",
         "SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid",  # invalid-leftover probe
         f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name}",
-        "SELECT pg_advisory_unlock(hashtext(:name))", "RESET statement_timeout", "RESET lock_timeout",
+        "SELECT pg_advisory_unlock(hashtext(:name))",
+        "RESET statement_timeout",
+        "RESET lock_timeout",
     ]
 
 
@@ -84,10 +96,12 @@ async def test_invalid_leftover_from_an_interrupted_build_is_dropped_before_the_
     log: list[str] = []
     generation_id = uuid4()
     await indexing.build_vector_index_concurrently(  # type: ignore[arg-type]
-        _Engine(_Connection(log, invalid_leftover=True)), generation_id, 3)
+        _Engine(_Connection(log, invalid_leftover=True)), generation_id, 3
+    )
     name = indexing.vector_index_name(generation_id)
     assert log.index(f"DROP INDEX CONCURRENTLY IF EXISTS {name}") < log.index(
-        f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name}")
+        f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name}"
+    )
 
 
 async def test_failed_build_drops_its_invalid_index_and_reraises() -> None:
@@ -95,12 +109,20 @@ async def test_failed_build_drops_its_invalid_index_and_reraises() -> None:
     generation_id = uuid4()
     with pytest.raises(RuntimeError, match="deadlock"):
         await indexing.build_vector_index_concurrently(  # type: ignore[arg-type]
-            _Engine(_Connection(log, fail_create=True)), generation_id, 3)
+            _Engine(_Connection(log, fail_create=True)), generation_id, 3
+        )
     name = indexing.vector_index_name(generation_id)
-    assert log[-4:] == [f"DROP INDEX CONCURRENTLY IF EXISTS {name}", "SELECT pg_advisory_unlock(hashtext(:name))", "RESET statement_timeout", "RESET lock_timeout"]
+    assert log[-4:] == [
+        f"DROP INDEX CONCURRENTLY IF EXISTS {name}",
+        "SELECT pg_advisory_unlock(hashtext(:name))",
+        "RESET statement_timeout",
+        "RESET lock_timeout",
+    ]
 
 
-_ENGINE = create_async_engine("postgresql+asyncpg://u:p@localhost/db")  # never connects; type is what matters
+_ENGINE = create_async_engine(
+    "postgresql+asyncpg://u:p@localhost/db"
+)  # never connects; type is what matters
 
 
 class _Session:
@@ -127,7 +149,10 @@ class _Session:
 
 def _ctx(generation_id: Any) -> Any:
     return SimpleNamespace(
-        generation_id=generation_id, workspace_id=uuid4(), scope="scope", multi_workspace_enabled=False,
+        generation_id=generation_id,
+        workspace_id=uuid4(),
+        scope="scope",
+        multi_workspace_enabled=False,
         original=SimpleNamespace(fence="FENCE"),
     )
 
@@ -153,12 +178,24 @@ async def test_commit_precedes_build_and_relock_follows(monkeypatch: pytest.Monk
     assert result == (generation, "NEW-FENCE")
     # The activating transaction is committed before the concurrent build; the access-fence then the
     # generation row are locked again afterwards (same order as a claim).
-    assert log == ["commit", "build:AsyncEngine:3", "admit:lock=True:expected=FENCE", "lock-generation", "count-unfinished"]
+    assert log == [
+        "commit",
+        "build:AsyncEngine:3",
+        "admit:lock=True:expected=FENCE",
+        "lock-generation",
+        "count-unfinished",
+    ]
 
 
-@pytest.mark.parametrize(("status", "dimensions", "unfinished"), [("cancelled", 3, 0), ("running", 4, 0), ("running", 3, 2)])
+@pytest.mark.parametrize(
+    ("status", "dimensions", "unfinished"),
+    [("cancelled", 3, 0), ("running", 4, 0), ("running", 3, 2)],
+)
 async def test_state_change_during_build_rolls_back_without_activating(
-    monkeypatch: pytest.MonkeyPatch, status: str, dimensions: int, unfinished: int,
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
+    dimensions: int,
+    unfinished: int,
 ) -> None:
     log: list[str] = []
     generation = SimpleNamespace(id=uuid4(), status="running", dimensions=3)
@@ -173,11 +210,16 @@ async def test_state_change_during_build_rolls_back_without_activating(
     monkeypatch.setattr(indexing, "build_vector_index_concurrently", build)
     monkeypatch.setattr(indexing, "_admit", admit)
     session = _Session(log, changed, unfinished)
-    assert await indexing._build_index_outside_transaction(session, _ctx(generation.id), generation) is None  # type: ignore[arg-type]
+    assert (
+        await indexing._build_index_outside_transaction(session, _ctx(generation.id), generation)
+        is None
+    )  # type: ignore[arg-type]
     assert log[-1] == "rollback"
 
 
-async def test_denied_admission_after_build_rolls_back_and_skips(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_denied_admission_after_build_rolls_back_and_skips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     log: list[str] = []
     generation = SimpleNamespace(id=uuid4(), status="running", dimensions=3)
 
@@ -190,7 +232,10 @@ async def test_denied_admission_after_build_rolls_back_and_skips(monkeypatch: py
     monkeypatch.setattr(indexing, "build_vector_index_concurrently", build)
     monkeypatch.setattr(indexing, "_admit", admit)
     session = _Session(log, generation)
-    assert await indexing._build_index_outside_transaction(session, _ctx(generation.id), generation) is None  # type: ignore[arg-type]
+    assert (
+        await indexing._build_index_outside_transaction(session, _ctx(generation.id), generation)
+        is None
+    )  # type: ignore[arg-type]
     assert log == ["commit", "rollback"]
 
 
@@ -208,7 +253,9 @@ async def test_activate_generation_no_longer_creates_an_index_in_the_transaction
             return None
 
     generation = SimpleNamespace(id=uuid4(), dimensions=3, status="running", error_code="x")
-    await indexing.activate_generation(_Active(), generation, scope=SimpleNamespace(workspace_id=uuid4()))  # type: ignore[arg-type]
+    await indexing.activate_generation(
+        _Active(), generation, scope=SimpleNamespace(workspace_id=uuid4())
+    )  # type: ignore[arg-type]
     assert executed == [] and generation.status == "active" and generation.error_code is None
 
 

@@ -37,7 +37,11 @@ def embedded_ipv4(address: IPAddress) -> ipaddress.IPv4Address | None:
         return address.ipv4_mapped
     if address in _SIXTOFOUR:
         return ipaddress.IPv4Address(address.packed[2:6])
-    if address in _NAT64_WKP or address in _NAT64_LOCAL or (address in _IPV4_COMPAT and int(address) > 1):
+    if (
+        address in _NAT64_WKP
+        or address in _NAT64_LOCAL
+        or (address in _IPV4_COMPAT and int(address) > 1)
+    ):
         return ipaddress.IPv4Address(address.packed[12:])
     return None
 

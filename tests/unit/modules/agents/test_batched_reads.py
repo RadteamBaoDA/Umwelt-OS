@@ -16,11 +16,17 @@ def _row(fenced: bool) -> Any:
 @pytest.mark.asyncio
 async def test_read_current_results_hides_only_stale_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     rows = [_row(False), _row(True), _row(True), _row(True)]
-    results = {r.id: SimpleNamespace(answer="a", model_copy=lambda update: SimpleNamespace(answer=update["answer"]))
-               for r in rows}
+    results = {
+        r.id: SimpleNamespace(
+            answer="a", model_copy=lambda update: SimpleNamespace(answer=update["answer"])
+        )
+        for r in rows
+    }
     monkeypatch.setattr(public, "_read", lambda r: results[r.id])
     monkeypatch.setattr(public, "_result_principal", lambda r: None if r is rows[3] else object())
-    monkeypatch.setattr(public, "_restore_fences", lambda v: {"records": [], "source_generations": {}})
+    monkeypatch.setattr(
+        public, "_restore_fences", lambda v: {"records": [], "source_generations": {}}
+    )
     seen: list[int] = []
 
     async def many(_f: Any, items: list[Any], **_k: Any) -> list[bool]:
@@ -34,17 +40,25 @@ async def test_read_current_results_hides_only_stale_rows(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
-async def test_read_current_results_without_factory_suppresses_fenced_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_read_current_results_without_factory_suppresses_fenced_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     rows = [_row(False), _row(True)]
-    results = {r.id: SimpleNamespace(answer="a", model_copy=lambda update: SimpleNamespace(answer=update["answer"]))
-               for r in rows}
+    results = {
+        r.id: SimpleNamespace(
+            answer="a", model_copy=lambda update: SimpleNamespace(answer=update["answer"])
+        )
+        for r in rows
+    }
     monkeypatch.setattr(public, "_read", lambda r: results[r.id])
     out = await public._read_current_results(rows, None, multi_workspace_enabled=False)
     assert [o.answer for o in out] == ["a", None]
 
 
 @pytest.mark.asyncio
-async def test_conversation_approvals_batch_session_and_link_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_conversation_approvals_batch_session_and_link_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from datetime import UTC, datetime
 
     from core.auth import public as auth
@@ -55,9 +69,19 @@ async def test_conversation_approvals_batch_session_and_link_checks(monkeypatch:
 
     def approval(run_id: Any) -> Any:
         return SimpleNamespace(
-            id=uuid4(), action_id=uuid4(), run_id=run_id, tool_name="t", tool_version="1", arguments={"a": 1},
-            argument_hash="h", destination_id="d", destination_revision="1", status="pending",
-            created_at=datetime.now(UTC), expires_at=datetime.now(UTC), auth_session_hash="hash",
+            id=uuid4(),
+            action_id=uuid4(),
+            run_id=run_id,
+            tool_name="t",
+            tool_version="1",
+            arguments={"a": 1},
+            argument_hash="h",
+            destination_id="d",
+            destination_revision="1",
+            status="pending",
+            created_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC),
+            auth_session_hash="hash",
         )
 
     rows = [approval(run_a), approval(run_a), approval(run_b), approval(run_dead)]
@@ -100,8 +124,12 @@ async def test_conversation_approvals_batch_session_and_link_checks(monkeypatch:
     monkeypatch.setattr(public, "_approval_run_is_revoked", revoked)
     monkeypatch.setattr(public, "_approval_fences_current", fences)
     out = await public.list_conversation_approvals(
-        _Session(), object(), conv, "hash",  # type: ignore[arg-type]
-        scope=SimpleNamespace(workspace_id=uuid4()), multi_workspace_enabled=False,  # type: ignore[arg-type]
+        _Session(),
+        object(),
+        conv,
+        "hash",  # type: ignore[arg-type]
+        scope=SimpleNamespace(workspace_id=uuid4()),
+        multi_workspace_enabled=False,  # type: ignore[arg-type]
     )
     assert len(out) == 3  # the approval whose run has no live link is hidden
     assert counts == {"session": 1, "live": 1, "revoked": 2}  # revocation cached per run

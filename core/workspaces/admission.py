@@ -33,8 +33,12 @@ def actor_id(scope: Scope) -> int:
     return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
 
 
-def require_owner_scope(scope: Scope, *, allowed: tuple[type, ...] = (WorkspaceContext, InternalJobScope),
-                        label: str = "workspace") -> None:
+def require_owner_scope(
+    scope: Scope,
+    *,
+    allowed: tuple[type, ...] = (WorkspaceContext, InternalJobScope),
+    label: str = "workspace",
+) -> None:
     """Reject untyped scopes with ``TypeError`` before any session await.
 
     Args:
@@ -59,10 +63,17 @@ def require_workspace_owner(scope: Scope) -> None:
 
 
 async def admit_scope(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
-    lock: bool = False, expected: AccessFence | None = None,
-    allowed_scopes: tuple[type, ...] | None = None, scope_label: str = "workspace",
-    owner_only: bool = True, admin_read_only_on_lock: bool = False, check_flag: bool = True,
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    lock: bool = False,
+    expected: AccessFence | None = None,
+    allowed_scopes: tuple[type, ...] | None = None,
+    scope_label: str = "workspace",
+    owner_only: bool = True,
+    admin_read_only_on_lock: bool = False,
+    check_flag: bool = True,
 ) -> AccessFence:
     """Admit a scope and return its access fence, optionally locking it.
 
@@ -88,8 +99,13 @@ async def admit_scope(
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     if lock:
         return await workspaces.lock_access_fence(
-            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            scope=scope,
+            expected=expected,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
     return await workspaces.read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )

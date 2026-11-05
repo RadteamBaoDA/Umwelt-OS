@@ -121,7 +121,9 @@ class TestPaginationLinkParsing:
     def test_github_next_page_valid_increment(self) -> None:
         """Valid next Link header on same path returns current page + 1."""
         path = "/repositories/123/issues?per_page=100"
-        link_header = '<https://api.github.com/repositories/123/issues?per_page=100&page=2>; rel="next"'
+        link_header = (
+            '<https://api.github.com/repositories/123/issues?per_page=100&page=2>; rel="next"'
+        )
         next_pg = _github_next_page(link_header, path=path, page=1)
         assert next_pg == 2
 
@@ -152,10 +154,18 @@ class TestPaginationLinkParsing:
         path = "/repositories/123/issues"
         # HTTP
         with pytest.raises(ValueError, match="github_link_invalid"):
-            _github_next_page('<http://api.github.com/repositories/123/issues?page=2>; rel="next"', path=path, page=1)
+            _github_next_page(
+                '<http://api.github.com/repositories/123/issues?page=2>; rel="next"',
+                path=path,
+                page=1,
+            )
         # Attacker host
         with pytest.raises(ValueError, match="github_link_invalid"):
-            _github_next_page('<https://evil.github.com/repositories/123/issues?page=2>; rel="next"', path=path, page=1)
+            _github_next_page(
+                '<https://evil.github.com/repositories/123/issues?page=2>; rel="next"',
+                path=path,
+                page=1,
+            )
 
     def test_github_next_page_multiple_next_links_rejected(self) -> None:
         """Header containing more than one rel='next' link raises ValueError."""
@@ -198,11 +208,19 @@ class TestRateLimitBackoffLogic:
         """Missing or malformed retry headers fallback to 1 min for secondary/429 and 3 min for primary."""
         resp_429 = httpx.Response(429)
         deadline_429 = _rate_limit_deadline(resp_429)
-        assert datetime.now(UTC) + timedelta(seconds=55) <= deadline_429 <= datetime.now(UTC) + timedelta(seconds=65)
+        assert (
+            datetime.now(UTC) + timedelta(seconds=55)
+            <= deadline_429
+            <= datetime.now(UTC) + timedelta(seconds=65)
+        )
 
         resp_403 = httpx.Response(403)
         deadline_403 = _rate_limit_deadline(resp_403)
-        assert datetime.now(UTC) + timedelta(seconds=175) <= deadline_403 <= datetime.now(UTC) + timedelta(seconds=185)
+        assert (
+            datetime.now(UTC) + timedelta(seconds=175)
+            <= deadline_403
+            <= datetime.now(UTC) + timedelta(seconds=185)
+        )
 
     @pytest.mark.asyncio
     async def test_raise_for_provider_limit_on_status_429(self) -> None:
@@ -227,8 +245,12 @@ class TestRateLimitBackoffLogic:
     async def test_raise_for_provider_limit_on_secondary_message(self) -> None:
         """Status 403 with 'secondary rate limit' message in body raises ProviderRateLimited."""
         dummy_request = httpx.Request("GET", "https://api.github.com/resource")
-        body = json.dumps({"message": "You have exceeded a secondary rate limit. Please wait."}).encode()
-        response = httpx.Response(403, content=body, headers={"content-type": "application/json"}, request=dummy_request)
+        body = json.dumps(
+            {"message": "You have exceeded a secondary rate limit. Please wait."}
+        ).encode()
+        response = httpx.Response(
+            403, content=body, headers={"content-type": "application/json"}, request=dummy_request
+        )
         with pytest.raises(ProviderRateLimited):
             await _raise_for_provider_limit(response)
 
@@ -237,7 +259,9 @@ class TestRateLimitBackoffLogic:
         """Status 403 without rate limit indicators raises httpx.HTTPStatusError."""
         dummy_request = httpx.Request("GET", "https://api.github.com/resource")
         body = json.dumps({"message": "Resource not accessible by integration"}).encode()
-        response = httpx.Response(403, content=body, headers={"content-type": "application/json"}, request=dummy_request)
+        response = httpx.Response(
+            403, content=body, headers={"content-type": "application/json"}, request=dummy_request
+        )
         with pytest.raises(httpx.HTTPStatusError):
             await _raise_for_provider_limit(response)
 
@@ -278,7 +302,10 @@ class TestEventParsingAndTargetRouting:
             locator=sha,
             repository_id=github_fence.repository_id,
         )
-        assert github_target_path(github_source_config, github_fence, claim_commit) == f"/repositories/{github_fence.repository_id}/commits/{sha}"
+        assert (
+            github_target_path(github_source_config, github_fence, claim_commit)
+            == f"/repositories/{github_fence.repository_id}/commits/{sha}"
+        )
 
         claim_release = make_hint_claim(
             resource="release",
@@ -286,7 +313,10 @@ class TestEventParsingAndTargetRouting:
             locator="999",
             repository_id=github_fence.repository_id,
         )
-        assert github_target_path(github_source_config, github_fence, claim_release) == f"/repositories/{github_fence.repository_id}/releases/999"
+        assert (
+            github_target_path(github_source_config, github_fence, claim_release)
+            == f"/repositories/{github_fence.repository_id}/releases/999"
+        )
 
     def test_github_target_path_invalid_raises(
         self, github_source_config: GitHubSourceConfig, github_fence: GitHubBindingFence
@@ -365,11 +395,27 @@ class TestGitHubApiAdapter:
     ) -> None:
         """collect_github_repository skips issue records containing 'pull_request' key."""
         raw_issues = [
-            {"id": 1, "number": 1, "title": "Real Issue", "html_url": "https://github.com/octocat/Hello-World/issues/1"},
-            {"id": 2, "number": 2, "title": "PR in Issues", "pull_request": {"url": "..."}, "html_url": "https://github.com/octocat/Hello-World/pull/2"},
+            {
+                "id": 1,
+                "number": 1,
+                "title": "Real Issue",
+                "html_url": "https://github.com/octocat/Hello-World/issues/1",
+            },
+            {
+                "id": 2,
+                "number": 2,
+                "title": "PR in Issues",
+                "pull_request": {"url": "..."},
+                "html_url": "https://github.com/octocat/Hello-World/pull/2",
+            },
         ]
         raw_pulls = [
-            {"id": 3, "number": 3, "title": "Actual PR", "html_url": "https://github.com/octocat/Hello-World/pull/3"},
+            {
+                "id": 3,
+                "number": 3,
+                "title": "Actual PR",
+                "html_url": "https://github.com/octocat/Hello-World/pull/3",
+            },
         ]
 
         def mock_stream(method: str, url: str, **kwargs):
@@ -381,8 +427,10 @@ class TestGitHubApiAdapter:
                 body = json.dumps(raw_issues).encode()
             else:
                 body = json.dumps(raw_pulls).encode()
+
             async def aiter_bytes():
                 yield body
+
             resp.aiter_bytes = aiter_bytes
             resp.__aenter__ = AsyncMock(return_value=resp)
             resp.__aexit__ = AsyncMock(return_value=None)
@@ -450,7 +498,9 @@ class TestHintDrivenSegment:
     """Regression (B1c P1-1): a webhook-hint segment has no cursor state and must still return a proof."""
 
     async def test_collect_github_segment_hint_claim_returns_claim_resource(
-        self, monkeypatch: pytest.MonkeyPatch, github_source_config: GitHubSourceConfig,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        github_source_config: GitHubSourceConfig,
         github_fence: GitHubBindingFence,
     ) -> None:
         from modules.connectors.github.adapter import collect_github_segment
@@ -458,13 +508,19 @@ class TestHintDrivenSegment:
         real_client = httpx.AsyncClient
         transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"number": 42}))
         monkeypatch.setattr(
-            modules.connectors.github.adapter.httpx, "AsyncClient",
+            modules.connectors.github.adapter.httpx,
+            "AsyncClient",
             lambda **kwargs: real_client(transport=transport, **kwargs),
         )
         claim = make_hint_claim(resource="issue", locator_kind="number", locator="42")
         proof = await collect_github_segment(
-            github_source_config, "token", fence=github_fence, cursor_before=None,
-            collected_at=datetime.now(UTC), before_request=AsyncMock(), hint_claim=claim,
+            github_source_config,
+            "token",
+            fence=github_fence,
+            cursor_before=None,
+            collected_at=datetime.now(UTC),
+            before_request=AsyncMock(),
+            hint_claim=claim,
         )
         assert proof.resource == "issue"
         assert proof.hint_claim is claim

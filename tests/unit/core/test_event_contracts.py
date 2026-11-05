@@ -59,7 +59,10 @@ def test_registry_reproduces_the_historical_routing_tables():
         "document.version.ready": "process_document_ready",
         "news.document.ready": "process_news_document_ready",
     }
-    assert registry.producers["document.version.ready"] == {"modules.ingestion", "modules.knowledge.documents"}
+    assert registry.producers["document.version.ready"] == {
+        "modules.ingestion",
+        "modules.knowledge.documents",
+    }
     assert registry.producers["connector.crawl.requested"] == {"modules.connectors"}
 
 
@@ -96,11 +99,18 @@ def test_unknown_producer_duplicate_type_and_second_runtime_are_rejected():
     ok = EventConsumerSpec("x.y", "job", ("modules.a",), HANDLER)
     base = {"consumed_events": ("x.y",), "emitted_events": ("x.y",)}
     with pytest.raises(ValueError, match="no module descriptor"):
-        build_event_registry([_descriptor(**base, event_consumers=(replace(ok, producers=("modules.zzz",)),))])
+        build_event_registry(
+            [_descriptor(**base, event_consumers=(replace(ok, producers=("modules.zzz",)),))]
+        )
     with pytest.raises(ValueError, match="more than one consumer"):
         build_event_registry([_descriptor(**base, event_consumers=(ok, ok))])
     with pytest.raises(ValueError, match="Only one module"):
-        build_event_registry([_descriptor(outbox_runtime="a:b"), replace(ModuleDescriptor(id="b"), outbox_runtime="a:b")])
+        build_event_registry(
+            [
+                _descriptor(outbox_runtime="a:b"),
+                replace(ModuleDescriptor(id="b"), outbox_runtime="a:b"),
+            ]
+        )
     with pytest.raises(ValueError, match="no producers"):
         build_event_registry([_descriptor(**base, event_consumers=(replace(ok, producers=()),))])
 
@@ -128,7 +138,9 @@ def test_every_published_event_type_is_declared_by_its_publisher():
     assert len(published) >= 6  # guard against the scanner silently matching nothing
     for file, kind, producer in published:
         assert kind in registry.routes, f"{file}: {kind} has no consumer in any descriptor"
-        assert producer in registry.routes[kind].producers, f"{file}: {producer} may not publish {kind}"
+        assert producer in registry.routes[kind].producers, (
+            f"{file}: {producer} may not publish {kind}"
+        )
         assert kind in by_id[producer.removeprefix("modules.")].emitted_events
 
 
@@ -140,8 +152,14 @@ async def test_publish_event_rejects_undeclared_types():
     from core.events.publisher import publish_event
     from core.workspaces.schemas import InternalJobScope
 
-    event = DomainEvent(id=uuid4(), type="nope.nothing", version=1, occurred_at=datetime.now(UTC),
-                        producer="modules.ingestion", payload={})
+    event = DomainEvent(
+        id=uuid4(),
+        type="nope.nothing",
+        version=1,
+        occurred_at=datetime.now(UTC),
+        producer="modules.ingestion",
+        payload={},
+    )
     scope = InternalJobScope(workspace_id=uuid4(), actor_user_id=1, membership_revision=1)
     with pytest.raises(ValueError, match="not declared"):
         await publish_event(SimpleNamespace(), event, scope=scope, multi_workspace_enabled=False)
@@ -152,12 +170,16 @@ def test_aggregate_key_uses_workspace_and_source():
     workspace, source = uuid4(), uuid4()
     with_source = SimpleNamespace(workspace_id=workspace, payload={"source_id": str(source)})
     assert aggregate_key(with_source) == (str(workspace), str(source))
-    assert aggregate_key(SimpleNamespace(workspace_id=workspace, payload=None)) == (str(workspace), "")
+    assert aggregate_key(SimpleNamespace(workspace_id=workspace, payload=None)) == (
+        str(workspace),
+        "",
+    )
 
 
 @pytest.mark.asyncio
 async def test_already_delivered_reads_the_outbox_status():
     """Only a ``delivered`` row counts as processed; a missing row does not."""
+
     class Session:
         def __init__(self, status):
             self.status = status

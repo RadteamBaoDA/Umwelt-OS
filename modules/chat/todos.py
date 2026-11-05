@@ -83,12 +83,19 @@ class TodoPatch(BaseModel):
 
 def to_read(row: ChatTodo) -> TodoRead:
     """Project a stored row onto its public shape."""
-    return TodoRead(id=row.id, title=row.title, description=row.description, emoji=row.emoji,
-                    status=row.status, position=row.position)
+    return TodoRead(
+        id=row.id,
+        title=row.title,
+        description=row.description,
+        emoji=row.emoji,
+        status=row.status,
+        position=row.position,
+    )
 
 
-async def _conversation(session: AsyncSession, scope: WorkspaceContext, conversation_id: UUID,
-                        *, lock: bool = False) -> Conversation:
+async def _conversation(
+    session: AsyncSession, scope: WorkspaceContext, conversation_id: UUID, *, lock: bool = False
+) -> Conversation:
     """Load the owner-scoped parent conversation, optionally locking it to serialize list writers.
 
     Scoping by ``actor_user_id`` as well as workspace matches templates.py: the schema pins a
@@ -98,8 +105,10 @@ async def _conversation(session: AsyncSession, scope: WorkspaceContext, conversa
         TodoError: ``not_found`` when the conversation is missing or belongs to another owner/workspace.
     """
     stmt = select(Conversation).where(
-        Conversation.id == conversation_id, Conversation.workspace_id == scope.workspace_id,
-        Conversation.actor_user_id == scope.user_id)
+        Conversation.id == conversation_id,
+        Conversation.workspace_id == scope.workspace_id,
+        Conversation.actor_user_id == scope.user_id,
+    )
     if lock:
         stmt = stmt.with_for_update()
     conversation = await session.scalar(stmt)
@@ -111,12 +120,16 @@ async def _conversation(session: AsyncSession, scope: WorkspaceContext, conversa
 async def _rows(session: AsyncSession, conversation_id: UUID) -> list[ChatTodo]:
     """Return the conversation's todos in stable position order."""
     result = await session.scalars(
-        select(ChatTodo).where(ChatTodo.conversation_id == conversation_id)
-        .order_by(ChatTodo.position, ChatTodo.created_at, ChatTodo.id))
+        select(ChatTodo)
+        .where(ChatTodo.conversation_id == conversation_id)
+        .order_by(ChatTodo.position, ChatTodo.created_at, ChatTodo.id)
+    )
     return list(result)
 
 
-async def list_todos(session: AsyncSession, scope: WorkspaceContext, conversation_id: UUID) -> list[ChatTodo]:
+async def list_todos(
+    session: AsyncSession, scope: WorkspaceContext, conversation_id: UUID
+) -> list[ChatTodo]:
     """List a conversation's todos ordered by position.
 
     Raises:
@@ -134,8 +147,14 @@ def _valid_uuid(value: str | None) -> UUID | None:
         return None
 
 
-async def replace_todos(session: AsyncSession, scope: WorkspaceContext, conversation_id: UUID,
-                        items: Sequence[TodoItem], *, source_response_id: UUID | None = None) -> list[ChatTodo]:
+async def replace_todos(
+    session: AsyncSession,
+    scope: WorkspaceContext,
+    conversation_id: UUID,
+    items: Sequence[TodoItem],
+    *,
+    source_response_id: UUID | None = None,
+) -> list[ChatTodo]:
     """Atomically replace the conversation's whole list (upstream ``manage_todos`` semantics).
 
     The parent conversation is locked first so concurrent replacements serialize. Valid UUID ids that
@@ -164,8 +183,12 @@ async def replace_todos(session: AsyncSession, scope: WorkspaceContext, conversa
             uid = uuid7()
         row = existing.get(uid)
         if row is None:
-            row = ChatTodo(id=uid, workspace_id=conversation.workspace_id, actor_user_id=conversation.actor_user_id,
-                           conversation_id=conversation_id)
+            row = ChatTodo(
+                id=uid,
+                workspace_id=conversation.workspace_id,
+                actor_user_id=conversation.actor_user_id,
+                conversation_id=conversation_id,
+            )
             session.add(row)
         row.title, row.description, row.emoji = item.title, item.description, item.emoji
         row.status, row.position = item.status, position
@@ -179,17 +202,28 @@ async def replace_todos(session: AsyncSession, scope: WorkspaceContext, conversa
     return list(kept.values())
 
 
-async def update_todo_status(session: AsyncSession, scope: WorkspaceContext, conversation_id: UUID, todo_id: UUID,
-                             *, status: TodoStatus | None = None, title: str | None = None) -> ChatTodo:
+async def update_todo_status(
+    session: AsyncSession,
+    scope: WorkspaceContext,
+    conversation_id: UUID,
+    todo_id: UUID,
+    *,
+    status: TodoStatus | None = None,
+    title: str | None = None,
+) -> ChatTodo:
     """Change one todo's status and/or title; the caller commits.
 
     Raises:
         TodoError: ``not_found`` when the conversation or todo is missing or foreign.
     """
     await _conversation(session, scope, conversation_id, lock=True)
-    row = await session.scalar(select(ChatTodo).where(
-        ChatTodo.id == todo_id, ChatTodo.conversation_id == conversation_id,
-        ChatTodo.actor_user_id == scope.user_id))
+    row = await session.scalar(
+        select(ChatTodo).where(
+            ChatTodo.id == todo_id,
+            ChatTodo.conversation_id == conversation_id,
+            ChatTodo.actor_user_id == scope.user_id,
+        )
+    )
     if row is None:
         raise TodoError("not_found", "Todo not found")
     if status is not None:
@@ -205,8 +239,13 @@ def _tool_payload(rows: Sequence[ChatTodo]) -> dict[str, Any]:
     return {"todos": [to_read(r).model_dump(mode="json", exclude={"position"}) for r in rows]}
 
 
-async def run_todo_tool(name: str, raw_args: str, session: AsyncSession, conversation_id: UUID,
-                        response_id: UUID | None = None) -> str:
+async def run_todo_tool(
+    name: str,
+    raw_args: str,
+    session: AsyncSession,
+    conversation_id: UUID,
+    response_id: UUID | None = None,
+) -> str:
     """Execute ``manage_todos`` or ``get_todos`` and return the tool-message JSON; never raises.
 
     The model is trusted only for the arguments: the conversation is loaded by id (the worker already
@@ -216,7 +255,9 @@ async def run_todo_tool(name: str, raw_args: str, session: AsyncSession, convers
     from modules.chat.scope import owner_default_scope
 
     try:
-        conversation = await session.scalar(select(Conversation).where(Conversation.id == conversation_id))
+        conversation = await session.scalar(
+            select(Conversation).where(Conversation.id == conversation_id)
+        )
         if conversation is None:
             return json.dumps({"error": "Conversation not found"})
         scope = await owner_default_scope(session, conversation.actor_user_id)
@@ -226,8 +267,12 @@ async def run_todo_tool(name: str, raw_args: str, session: AsyncSession, convers
             return json.dumps(_tool_payload(await list_todos(session, scope, conversation_id)))
         if name == "manage_todos":
             args = json.loads(raw_args or "{}")
-            payload = TodoReplace.model_validate({"todos": args.get("todos") if isinstance(args, dict) else None})
-            rows = await replace_todos(session, scope, conversation_id, payload.todos, source_response_id=response_id)
+            payload = TodoReplace.model_validate(
+                {"todos": args.get("todos") if isinstance(args, dict) else None}
+            )
+            rows = await replace_todos(
+                session, scope, conversation_id, payload.todos, source_response_id=response_id
+            )
             await session.commit()
             return json.dumps(_tool_payload(rows))
         return json.dumps({"error": f"Unknown todo tool: {name[:64]}"})

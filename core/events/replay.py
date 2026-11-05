@@ -33,9 +33,14 @@ MAX_LIMIT = 1000
 # Single source of truth: types whose replay deletes data (source purge / document cleanup). Stage events are
 # deliberately excluded: replaying failed stages is the routine recovery path, and a stage event cancelled by a
 # source purge (``modules/ingestion/_purge.py``) finds its stage cascaded away and is quarantined again on dispatch.
-DESTRUCTIVE_TYPES = frozenset({
-    "source.purge.requested", "source.purge.coverage", "source.purge.progressed", "document.cleanup.requested",
-})
+DESTRUCTIVE_TYPES = frozenset(
+    {
+        "source.purge.requested",
+        "source.purge.coverage",
+        "source.purge.progressed",
+        "document.cleanup.requested",
+    }
+)
 
 
 def is_destructive(event_type: str) -> bool:
@@ -49,15 +54,33 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     Exits (``SystemExit(2)``) unless exactly one selector style is used: ``--event-id``, or ``--type`` together
     with ``--since``.
     """
-    parser = argparse.ArgumentParser(prog="python -m core.events.replay", description=__doc__.split("\n\n")[0])
-    parser.add_argument("--owner-user-id", type=int, required=True, help="Workspace owner whose events may be replayed")
+    parser = argparse.ArgumentParser(
+        prog="python -m core.events.replay", description=__doc__.split("\n\n")[0]
+    )
+    parser.add_argument(
+        "--owner-user-id",
+        type=int,
+        required=True,
+        help="Workspace owner whose events may be replayed",
+    )
     parser.add_argument("--event-id", type=UUID, help="Replay exactly one event")
-    parser.add_argument("--type", dest="event_type", help="Replay failed events of this type (needs --since)")
-    parser.add_argument("--since", type=_parse_since, help="ISO-8601 instant; only events created at/after it")
-    parser.add_argument("--limit", type=int, default=100, help=f"Maximum rows (1..{MAX_LIMIT}, default 100)")
-    parser.add_argument("--execute", action="store_true", help="Apply the re-queue (default is a dry run)")
-    parser.add_argument("--allow-destructive", action="store_true",
-                        help="Permit replaying purge/cleanup events and stage events a source purge cancelled")
+    parser.add_argument(
+        "--type", dest="event_type", help="Replay failed events of this type (needs --since)"
+    )
+    parser.add_argument(
+        "--since", type=_parse_since, help="ISO-8601 instant; only events created at/after it"
+    )
+    parser.add_argument(
+        "--limit", type=int, default=100, help=f"Maximum rows (1..{MAX_LIMIT}, default 100)"
+    )
+    parser.add_argument(
+        "--execute", action="store_true", help="Apply the re-queue (default is a dry run)"
+    )
+    parser.add_argument(
+        "--allow-destructive",
+        action="store_true",
+        help="Permit replaying purge/cleanup events and stage events a source purge cancelled",
+    )
     args = parser.parse_args(argv)
     if (args.event_id is None) == (args.event_type is None):
         parser.error("use exactly one of --event-id or --type/--since")
@@ -74,29 +97,43 @@ def _parse_since(value: str) -> datetime:
     """Parse an ISO-8601 instant (``Z`` accepted); naive values are rejected to avoid timezone guesses."""
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
-        raise argparse.ArgumentTypeError("--since must include a timezone (e.g. 2026-11-01T00:00:00Z)")
+        raise argparse.ArgumentTypeError(
+            "--since must include a timezone (e.g. 2026-11-01T00:00:00Z)"
+        )
     return parsed.astimezone(UTC)
 
 
 async def select_replayable(
-    session: AsyncSession, *, owner_user_id: int, event_id: UUID | None, event_type: str | None,
-    since: datetime | None, limit: int,
+    session: AsyncSession,
+    *,
+    owner_user_id: int,
+    event_id: UUID | None,
+    event_type: str | None,
+    since: datetime | None,
+    limit: int,
 ) -> list[tuple[UUID, str, datetime]]:
     """Return ``(id, type, created_at)`` of failed events owned by ``owner_user_id``, oldest first.
 
     Read-only. The workspace join proves the row's principal is that workspace's owner. Bounded by ``limit``.
     """
-    stmt = (select(EventOutbox.id, EventOutbox.type, EventOutbox.created_at)
-            .join(Workspace, (Workspace.id == EventOutbox.workspace_id)
-                  & (Workspace.owner_user_id == EventOutbox.actor_user_id))
-            .where(EventOutbox.status == "failed", EventOutbox.actor_user_id == owner_user_id))
+    stmt = (
+        select(EventOutbox.id, EventOutbox.type, EventOutbox.created_at)
+        .join(
+            Workspace,
+            (Workspace.id == EventOutbox.workspace_id)
+            & (Workspace.owner_user_id == EventOutbox.actor_user_id),
+        )
+        .where(EventOutbox.status == "failed", EventOutbox.actor_user_id == owner_user_id)
+    )
     if event_id is not None:
         stmt = stmt.where(EventOutbox.id == event_id)
     if event_type is not None:
         stmt = stmt.where(EventOutbox.type == event_type)
     if since is not None:
         stmt = stmt.where(EventOutbox.created_at >= since)
-    rows = (await session.execute(stmt.order_by(EventOutbox.created_at, EventOutbox.id).limit(limit))).all()
+    rows = (
+        await session.execute(stmt.order_by(EventOutbox.created_at, EventOutbox.id).limit(limit))
+    ).all()
     return [(row.id, row.type, row.created_at) for row in rows]
 
 
@@ -107,9 +144,14 @@ async def requeue(session: AsyncSession, event_ids: Sequence[UUID], *, now: date
     """
     if not event_ids:
         return 0
-    result = await session.execute(update(EventOutbox).where(
-        EventOutbox.id.in_(list(event_ids)), EventOutbox.status == "failed",
-    ).values(status="pending", next_attempt_at=now, dispatched_at=None))
+    result = await session.execute(
+        update(EventOutbox)
+        .where(
+            EventOutbox.id.in_(list(event_ids)),
+            EventOutbox.status == "failed",
+        )
+        .values(status="pending", next_attempt_at=now, dispatched_at=None)
+    )
     return int(getattr(result, "rowcount", 0) or 0)
 
 
@@ -119,20 +161,31 @@ async def run(args: argparse.Namespace, session: AsyncSession) -> int:
     One transaction: the selection and the update share ``session``; a dry run commits nothing.
     """
     found = await select_replayable(
-        session, owner_user_id=args.owner_user_id, event_id=args.event_id, event_type=args.event_type,
-        since=args.since, limit=args.limit)
+        session,
+        owner_user_id=args.owner_user_id,
+        event_id=args.event_id,
+        event_type=args.event_type,
+        since=args.since,
+        limit=args.limit,
+    )
     mode = "EXECUTE" if args.execute else "DRY-RUN"
     destructive = 0
     for event_id, event_type, created_at in found:
         flag = " DESTRUCTIVE" if is_destructive(event_type) else ""
         destructive += bool(flag)
-        print(f"[{mode}] {event_id} {event_type} status=failed created_at={created_at.isoformat()}{flag}")
+        print(
+            f"[{mode}] {event_id} {event_type} status=failed created_at={created_at.isoformat()}{flag}"
+        )
     if destructive and args.execute and not args.allow_destructive:
         # Refuse the whole batch: a partial replay would hide which rows were skipped.
-        print(f"[{mode}] refused: {destructive} destructive event(s); pass --allow-destructive to replay them")
+        print(
+            f"[{mode}] refused: {destructive} destructive event(s); pass --allow-destructive to replay them"
+        )
         return 2
     if destructive and not args.execute and not args.allow_destructive:
-        print(f"[{mode}] note: destructive events present; --execute will refuse without --allow-destructive")
+        print(
+            f"[{mode}] note: destructive events present; --execute will refuse without --allow-destructive"
+        )
     if not found:
         print(f"[{mode}] no failed events match")
         return 1 if args.event_id is not None else 0

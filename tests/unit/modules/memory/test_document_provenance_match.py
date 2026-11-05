@@ -12,9 +12,13 @@ from modules.memory.public import _document_provenance_match
 def _scope() -> DocumentCleanupEvidenceScope:
     version, chunk = uuid4(), uuid4()
     return DocumentCleanupEvidenceScope(
-        operation_id=uuid4(), source_id=uuid4(), document_id=uuid4(),
-        references=(DocumentCleanupEvidenceIdentity(version, chunk, "chunk"),), next_cursor=None,
-        workspace_id=uuid4(), actor_user_id=1,
+        operation_id=uuid4(),
+        source_id=uuid4(),
+        document_id=uuid4(),
+        references=(DocumentCleanupEvidenceIdentity(version, chunk, "chunk"),),
+        next_cursor=None,
+        workspace_id=uuid4(),
+        actor_user_id=1,
     )
 
 
@@ -28,8 +32,13 @@ def test_source_scoped_copy_with_unreadable_or_partial_identity_stays_unresolved
     scope = _scope()
     source = str(scope.source_id)
     assert _document_provenance_match({"source_id": source, "legacy": "x"}, scope) == (False, True)
-    assert _document_provenance_match({"source_id": source, "document_id": None}, scope) == (False, True)
-    assert _document_provenance_match({"source_id": source, "document_id": "not-a-uuid"}, scope) == (False, True)
+    assert _document_provenance_match({"source_id": source, "document_id": None}, scope) == (
+        False,
+        True,
+    )
+    assert _document_provenance_match(
+        {"source_id": source, "document_id": "not-a-uuid"}, scope
+    ) == (False, True)
 
 
 def test_exact_identity_matches_and_other_document_is_never_unresolved() -> None:

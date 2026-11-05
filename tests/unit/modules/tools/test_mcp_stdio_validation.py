@@ -18,10 +18,20 @@ def _profile(root: Path, **over: Any) -> stdio.StdioDeploymentProfile:
     exe = root / "server"
     exe.write_text("#!/bin/sh\n")
     values: dict[str, Any] = {
-        "profile_id": "demo", "profile_hash": "a" * 64, "reviewed_profile_hash": "a" * 64, "enabled": True,
-        "platform": "posix", "executable": str(exe), "argv": ("--flag",), "cwd": str(root),
-        "environment": {"LANG": "C"}, "immutable_root": str(root), "artifact_sha256": {str(exe): "b" * 64},
-        "operation_kind": "ordinary", "runtime_kind": "native", "entry_script": None,
+        "profile_id": "demo",
+        "profile_hash": "a" * 64,
+        "reviewed_profile_hash": "a" * 64,
+        "enabled": True,
+        "platform": "posix",
+        "executable": str(exe),
+        "argv": ("--flag",),
+        "cwd": str(root),
+        "environment": {"LANG": "C"},
+        "immutable_root": str(root),
+        "artifact_sha256": {str(exe): "b" * 64},
+        "operation_kind": "ordinary",
+        "runtime_kind": "native",
+        "entry_script": None,
     }
     values.update(over)
     return stdio.StdioDeploymentProfile(**values)
@@ -33,11 +43,22 @@ def test_profile_fields_accept_valid(tmp_path: Path) -> None:
     assert argv == ("--flag",) and env == {"LANG": "C"} and len(artifacts) == 1
 
 
-@pytest.mark.parametrize("override", [
-    {"profile_id": "bad id"}, {"enabled": False}, {"platform": "nt"}, {"operation_kind": "x"},
-    {"runtime_kind": "ruby"}, {"profile_hash": "zz"}, {"reviewed_profile_hash": "c" * 64},
-    {"argv": ()}, {"argv": ("a\x00",)}, {"environment": {"PATH": "/bin"}}, {"artifact_sha256": {}},
-])
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"profile_id": "bad id"},
+        {"enabled": False},
+        {"platform": "nt"},
+        {"operation_kind": "x"},
+        {"runtime_kind": "ruby"},
+        {"profile_hash": "zz"},
+        {"reviewed_profile_hash": "c" * 64},
+        {"argv": ()},
+        {"argv": ("a\x00",)},
+        {"environment": {"PATH": "/bin"}},
+        {"artifact_sha256": {}},
+    ],
+)
 def test_profile_fields_reject(tmp_path: Path, override: dict[str, Any]) -> None:
     """Every violated bound surfaces as the transport's sanitized error."""
     with pytest.raises(McpTransportError):
@@ -48,7 +69,11 @@ def test_launch_paths_resolve_and_reject_unsafe(tmp_path: Path) -> None:
     """Canonical paths pass; relative, escaping, shell and evaluation-flag launches are refused."""
     profile = _profile(tmp_path)
     root, cwd, exe = stdio._resolve_launch_paths(profile, profile.argv)
-    assert (root, cwd, exe) == (tmp_path.resolve(), tmp_path.resolve(), (tmp_path / "server").resolve())
+    assert (root, cwd, exe) == (
+        tmp_path.resolve(),
+        tmp_path.resolve(),
+        (tmp_path / "server").resolve(),
+    )
     with pytest.raises(McpTransportError, match="absolute"):
         stdio._resolve_launch_paths(_profile(tmp_path, cwd="relative"), ("--flag",))
     with pytest.raises(McpTransportError, match="outside"):
@@ -72,23 +97,40 @@ def test_policy_hash_binds_inputs(tmp_path: Path) -> None:
     with pytest.raises(McpTransportError, match="hash mismatch"):
         stdio._verify_policy_hash(profile, plan)
     policy = {
-        "policy": "bbd-os-mcp-stdio-v1", "profile_id": "demo", "platform": "posix", "enabled": True,
-        "runtime_kind": "native", "entry_script": None, "executable": str(exe), "argv": argv, "cwd": str(cwd),
-        "environment": env, "immutable_root": str(root), "artifact_sha256": artifacts,
+        "policy": "bbd-os-mcp-stdio-v1",
+        "profile_id": "demo",
+        "platform": "posix",
+        "enabled": True,
+        "runtime_kind": "native",
+        "entry_script": None,
+        "executable": str(exe),
+        "argv": argv,
+        "cwd": str(cwd),
+        "environment": env,
+        "immutable_root": str(root),
+        "artifact_sha256": artifacts,
         "limits": {
-            "ordinary_frame": stdio._ORDINARY_FRAME_BYTES, "ordinary_total": stdio._ORDINARY_TOTAL_BYTES,
-            "ordinary_frames": stdio._ORDINARY_FRAMES, "discovery_frame": stdio._DISCOVERY_FRAME_BYTES,
-            "discovery_total": stdio._DISCOVERY_TOTAL_BYTES, "discovery_frames": stdio._DISCOVERY_FRAMES,
+            "ordinary_frame": stdio._ORDINARY_FRAME_BYTES,
+            "ordinary_total": stdio._ORDINARY_TOTAL_BYTES,
+            "ordinary_frames": stdio._ORDINARY_FRAMES,
+            "discovery_frame": stdio._DISCOVERY_FRAME_BYTES,
+            "discovery_total": stdio._DISCOVERY_TOTAL_BYTES,
+            "discovery_frames": stdio._DISCOVERY_FRAMES,
             "outbound_frame": stdio._OUTBOUND_FRAME_BYTES,
         },
     }
-    digest = hashlib.sha256(json.dumps(policy, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
-    stdio._verify_policy_hash(_profile(tmp_path, profile_hash=digest, reviewed_profile_hash=digest), plan)
+    digest = hashlib.sha256(
+        json.dumps(policy, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+    stdio._verify_policy_hash(
+        _profile(tmp_path, profile_hash=digest, reviewed_profile_hash=digest), plan
+    )
 
 
 @pytest.mark.asyncio
 async def test_require_fence_messages() -> None:
     """A stale fence, a failing fence and a hung fence map to the stale/failed messages."""
+
     async def ok() -> bool:
         """Report a current fence."""
         return True
@@ -115,8 +157,10 @@ def test_killpg_probe_classifies_errors(monkeypatch: pytest.MonkeyPatch) -> None
 
     def raising(error: BaseException) -> Any:
         """Build a killpg replacement raising ``error``."""
+
         def fake(_pid: int, _sig: int) -> None:
             raise error
+
         return fake
 
     monkeypatch.setattr(stdio.os, "killpg", raising(ProcessLookupError()), raising=False)

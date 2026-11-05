@@ -97,15 +97,15 @@ class TestRelationshipCreate:
         source_id = uuid4()
         target_id = uuid4()
         invalid_predicates = [
-            "works_for",          # lowercase
-            "worksFor",           # camelCase
-            "WorksFor",           # PascalCase
-            "_WORKS_FOR",         # leading underscore
-            "1ST_INVESTOR",       # leading digit
-            "WORKS FOR",          # space
-            "WORKS-FOR",          # hyphen
-            "",                   # empty
-            "WORKS_FOR!",         # special character
+            "works_for",  # lowercase
+            "worksFor",  # camelCase
+            "WorksFor",  # PascalCase
+            "_WORKS_FOR",  # leading underscore
+            "1ST_INVESTOR",  # leading digit
+            "WORKS FOR",  # space
+            "WORKS-FOR",  # hyphen
+            "",  # empty
+            "WORKS_FOR!",  # special character
         ]
         for pred in invalid_predicates:
             with pytest.raises(ValidationError):
@@ -157,21 +157,33 @@ class TestRelationshipCreate:
         source_id = uuid4()
         target_id = uuid4()
 
-        assert RelationshipCreate(
-            source_entity_id=source_id, target_entity_id=target_id, type="KNOWS", confidence=0.0
-        ).confidence == 0.0
-        assert RelationshipCreate(
-            source_entity_id=source_id, target_entity_id=target_id, type="KNOWS", confidence=1.0
-        ).confidence == 1.0
+        assert (
+            RelationshipCreate(
+                source_entity_id=source_id, target_entity_id=target_id, type="KNOWS", confidence=0.0
+            ).confidence
+            == 0.0
+        )
+        assert (
+            RelationshipCreate(
+                source_entity_id=source_id, target_entity_id=target_id, type="KNOWS", confidence=1.0
+            ).confidence
+            == 1.0
+        )
 
         with pytest.raises(ValidationError):
             RelationshipCreate(
-                source_entity_id=source_id, target_entity_id=target_id, type="KNOWS", confidence=-0.01
+                source_entity_id=source_id,
+                target_entity_id=target_id,
+                type="KNOWS",
+                confidence=-0.01,
             )
 
         with pytest.raises(ValidationError):
             RelationshipCreate(
-                source_entity_id=source_id, target_entity_id=target_id, type="KNOWS", confidence=1.01
+                source_entity_id=source_id,
+                target_entity_id=target_id,
+                type="KNOWS",
+                confidence=1.01,
             )
 
     def test_evidence_max_length_bound(self) -> None:
@@ -195,7 +207,8 @@ class TestRelationshipCreate:
                 source_entity_id=source_id,
                 target_entity_id=target_id,
                 type="KNOWS",
-                evidence=valid_refs + [EvidenceRef(document_version_id=uuid4(), chunk_id=uuid4(), confidence=0.8)],
+                evidence=valid_refs
+                + [EvidenceRef(document_version_id=uuid4(), chunk_id=uuid4(), confidence=0.8)],
             )
 
     def test_extra_fields_forbidden(self) -> None:

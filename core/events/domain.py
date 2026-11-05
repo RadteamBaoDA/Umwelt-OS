@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict
 
 class DomainEvent(BaseModel):
     """Base contract for immutable, versioned domain event payloads."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: UUID

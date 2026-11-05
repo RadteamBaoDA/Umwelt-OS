@@ -19,9 +19,14 @@ def _heavy_slot_users() -> set[str]:
         for node in ast.walk(ast.parse(text)):
             if not isinstance(node, ast.AsyncFunctionDef):
                 continue
-            decorated = any(isinstance(d, ast.Name) and d.id == "bounded_heavy_work" for d in node.decorator_list)
+            decorated = any(
+                isinstance(d, ast.Name) and d.id == "bounded_heavy_work"
+                for d in node.decorator_list
+            )
             direct = any(
-                isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "heavy_job_slot"
+                isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Name)
+                and n.func.id == "heavy_job_slot"
                 for n in ast.walk(node)
             )
             # direct slot users only count in worker.py (modules/tools/browser.py is a request path, not an arq job)
@@ -60,5 +65,9 @@ def _is_heavy(coroutine: object) -> bool:
 def test_every_registered_heavy_job_is_in_the_retry_budget_set() -> None:
     # Runtime view of what arq really registers: catches aliased/attribute/call-form wrapping the AST scan misses.
     jobs = WorkerSettings.functions  # arq Function objects (heavy ones) or plain callables
-    heavy = {getattr(f, "name", None) or f.__name__ for f in jobs if _is_heavy(getattr(f, "coroutine", f))}
+    heavy = {
+        getattr(f, "name", None) or f.__name__
+        for f in jobs
+        if _is_heavy(getattr(f, "coroutine", f))
+    }
     assert heavy == HEAVY_SLOT_JOBS

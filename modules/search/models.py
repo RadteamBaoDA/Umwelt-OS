@@ -23,6 +23,7 @@ from core.ids import uuid7
 
 class Vector(UserDefinedType[Any]):
     """Represent PostgreSQL's pgvector type in SQLAlchemy column metadata."""
+
     cache_ok = True
 
     def get_col_spec(self, **kw: object) -> str:
@@ -35,17 +36,30 @@ class IndexGeneration(Base):
 
     Workspace identity is mandatory and survives nullable or detached canonical references.
     """
+
     __tablename__ = "search_index_generations"
     __table_args__ = (
-        CheckConstraint("status IN ('queued', 'running', 'active', 'failed', 'retired')", name="ck_search_index_generations_status"),
-        Index("uq_search_index_generations_active", "workspace_id", unique=True, postgresql_where=text("status = 'active'")),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_search_index_generations_workspace", ondelete="RESTRICT"),
-        Index("ix_w2_search_index_generations_scope", 'workspace_id', 'id'),
-        Index("ix_w2_search_index_generations_work", 'workspace_id', 'created_at', 'id'),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'active', 'failed', 'retired')",
+            name="ck_search_index_generations_status",
+        ),
+        Index(
+            "uq_search_index_generations_active",
+            "workspace_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_search_index_generations_workspace",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_w2_search_index_generations_scope", "workspace_id", "id"),
+        Index("ix_w2_search_index_generations_work", "workspace_id", "created_at", "id"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     model_id: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -57,25 +71,41 @@ class IndexGeneration(Base):
     dimensions: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
     error_code: Mapped[str | None] = mapped_column(String(64))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
-
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
 
 class SearchIndexItem(Base):
     """Track embedding status and vector data for one chunk in a generation."""
+
     __tablename__ = "search_index_items"
     __table_args__ = (
-        CheckConstraint("status IN ('pending', 'succeeded', 'failed')", name="ck_search_index_items_status"),
-        UniqueConstraint("generation_id", "chunk_id", name="uq_search_index_items_generation_chunk"),
+        CheckConstraint(
+            "status IN ('pending', 'succeeded', 'failed')", name="ck_search_index_items_status"
+        ),
+        UniqueConstraint(
+            "generation_id", "chunk_id", name="uq_search_index_items_generation_chunk"
+        ),
         Index("ix_search_index_items_status", "generation_id", "status"),
         Index("ix_search_index_items_chunk_id", "chunk_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
-    generation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("search_index_generations.id", ondelete="CASCADE"), nullable=False)
-    chunk_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("document_chunks.id", ondelete="CASCADE"), nullable=False)
+    generation_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("search_index_generations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    chunk_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("document_chunks.id", ondelete="CASCADE"), nullable=False
+    )
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
     error_code: Mapped[str | None] = mapped_column(String(64))
     embedding: Mapped[str | None] = mapped_column(Vector())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )

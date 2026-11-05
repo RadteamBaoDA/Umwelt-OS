@@ -16,20 +16,39 @@ def test_cascading_relationships_defer_to_database_cascade() -> None:
         assert rel.property.passive_deletes is True
         assert rel.property.cascade.delete_orphan
     # The DB cascade the ORM now relies on.
-    assert {fk.ondelete for fk in Conversation.messages.property.mapper.local_table.c.conversation_id.foreign_keys} == {"CASCADE"}
-    assert {fk.ondelete for fk in ResponseRun.stream_events.property.mapper.local_table.c.response_id.foreign_keys} == {"CASCADE"}
+    assert {
+        fk.ondelete
+        for fk in Conversation.messages.property.mapper.local_table.c.conversation_id.foreign_keys
+    } == {"CASCADE"}
+    assert {
+        fk.ondelete
+        for fk in ResponseRun.stream_events.property.mapper.local_table.c.response_id.foreign_keys
+    } == {"CASCADE"}
     assert any(c.ondelete == "CASCADE" for c in ResponseRun.__table__.foreign_key_constraints)
 
 
 async def test_list_conversations_orders_by_id_tiebreaker(monkeypatch) -> None:
     session = MagicMock()
     session.scalars = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=[])))
-    monkeypatch.setattr(chat_routes, "owner_default_scope", AsyncMock(return_value=SimpleNamespace(workspace_id=uuid4())))
+    monkeypatch.setattr(
+        chat_routes,
+        "owner_default_scope",
+        AsyncMock(return_value=SimpleNamespace(workspace_id=uuid4())),
+    )
     await chat_routes.list_conversations(
-        session, SimpleNamespace(owner_id=1), MagicMock(headers={}), limit=5, offset=5, archived=False, q=None,
+        session,
+        SimpleNamespace(owner_id=1),
+        MagicMock(headers={}),
+        limit=5,
+        offset=5,
+        archived=False,
+        q=None,
     )
     sql = str(session.scalars.await_args.args[0].compile(dialect=postgresql.dialect()))
-    assert "ORDER BY chat_conversations.pinned DESC, chat_conversations.updated_at DESC, chat_conversations.id DESC" in sql
+    assert (
+        "ORDER BY chat_conversations.pinned DESC, chat_conversations.updated_at DESC, chat_conversations.id DESC"
+        in sql
+    )
 
 
 async def test_get_conversation_run_lookup_filters_by_conversation(monkeypatch) -> None:
@@ -49,10 +68,16 @@ async def test_get_conversation_run_lookup_filters_by_conversation(monkeypatch) 
 
     session.scalars = scalars
     session.execute = execute
-    monkeypatch.setattr(chat_routes, "owner_default_scope", AsyncMock(return_value=SimpleNamespace(workspace_id=uuid4())))
+    monkeypatch.setattr(
+        chat_routes,
+        "owner_default_scope",
+        AsyncMock(return_value=SimpleNamespace(workspace_id=uuid4())),
+    )
     monkeypatch.setattr(chat_routes, "_reject_expired_conversation", lambda c: None)
     try:
-        await chat_routes.get_conversation(cid, session, SimpleNamespace(owner_id=1), MagicMock(headers={}))
+        await chat_routes.get_conversation(
+            cid, session, SimpleNamespace(owner_id=1), MagicMock(headers={})
+        )
     except _Stop:
         pass
     assert statements and "chat_response_runs.conversation_id =" in statements[0]

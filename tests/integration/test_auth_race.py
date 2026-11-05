@@ -76,7 +76,9 @@ async def test_password_change_revokes_other_session_and_old_password() -> None:
         finally:
             if rotated_csrf is not None:
                 # Restore the shared fixture password through the client holding the rotated session.
-                for _ in range(6):  # 409 = owner row still locked after the bounded wait; keep the shared fixture password restorable
+                for _ in range(
+                    6
+                ):  # 409 = owner row still locked after the bounded wait; keep the shared fixture password restorable
                     restored = await post_after_throttle(
                         first,
                         "/api/v1/auth/password",
@@ -134,7 +136,9 @@ async def test_password_change_concurrent_with_login_leaves_consistent_state() -
                 assert (await login(racer, old)).status_code == 200
         finally:
             if rotated_csrf is not None:
-                for _ in range(6):  # 409 = owner row still locked after the bounded wait; keep the shared fixture password restorable
+                for _ in range(
+                    6
+                ):  # 409 = owner row still locked after the bounded wait; keep the shared fixture password restorable
                     restored = await post_after_throttle(
                         owner,
                         "/api/v1/auth/password",

@@ -37,7 +37,8 @@ ALIASES = {
 
 def _required_kwonly(fn: object) -> set[str]:
     return {
-        n for n, p in inspect.signature(fn).parameters.items()  # type: ignore[arg-type]
+        n
+        for n, p in inspect.signature(fn).parameters.items()  # type: ignore[arg-type]
         if p.kind is inspect.Parameter.KEYWORD_ONLY and p.default is inspect.Parameter.empty
     }
 
@@ -49,8 +50,10 @@ def test_chat_calls_pass_required_scope_keywords(name):
     missing = []
     for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
         if not (
-            isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name) and node.func.value.id in ALIASES
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in ALIASES
         ):
             continue
         fn = getattr(importlib.import_module(ALIASES[node.func.value.id]), node.func.attr)
@@ -72,14 +75,27 @@ async def test_filter_current_citations_passes_scope(monkeypatch):
     monkeypatch.setattr(chat_scope, "multi_workspace_enabled", lambda: False)
     seen = {}
 
-    async def lock(session, refs, *, require_active_source=True, require_current_version=False,
-                   selection_fences=None, scope, multi_workspace_enabled):
+    async def lock(
+        session,
+        refs,
+        *,
+        require_active_source=True,
+        require_current_version=False,
+        selection_fences=None,
+        scope,
+        multi_workspace_enabled,
+    ):
         seen.update(scope=scope, flag=multi_workspace_enabled)
         return []
 
     monkeypatch.setattr(documents_public, "lock_chat_evidence_chunks", lock)
     ids = {k: str(uuid4()) for k in ("sourceId", "documentId", "documentVersionId", "chunkId")}
-    assert await chat_public.filter_current_citations(MagicMock(), [ids], scope=OWNER, multi_workspace_enabled=False) == []
+    assert (
+        await chat_public.filter_current_citations(
+            MagicMock(), [ids], scope=OWNER, multi_workspace_enabled=False
+        )
+        == []
+    )
     assert seen == {"scope": OWNER, "flag": False}
 
 
@@ -88,22 +104,34 @@ async def test_retrieval_does_not_swallow_type_errors(monkeypatch):
     from modules.chat import retrieval
     from modules.chat.schemas import AnswerContextRequest
 
-    monkeypatch.setattr(retrieval.search_public, "search", AsyncMock(side_effect=TypeError("bad shape")))
+    monkeypatch.setattr(
+        retrieval.search_public, "search", AsyncMock(side_effect=TypeError("bad shape"))
+    )
     request = AnswerContextRequest(query="q", source_scope=[], entity_ids=[])
     with pytest.raises(TypeError):
-        await retrieval.build_context(MagicMock(), MagicMock(), MagicMock(), MagicMock(), request, OWNER)
+        await retrieval.build_context(
+            MagicMock(), MagicMock(), MagicMock(), MagicMock(), request, OWNER
+        )
 
 
 def _config() -> AIExecutionConfig:
     return AIExecutionConfig(
-        workspace_id=OWNER.workspace_id, actor_user_id=1, membership_revision=2,
-        access_configuration_revision=1, configuration_revision=3, gateway_identity="a" * 64,
-        endpoint_destination_id="omniroute", gateway_base_url="http://x", gateway_api_key="k",
+        workspace_id=OWNER.workspace_id,
+        actor_user_id=1,
+        membership_revision=2,
+        access_configuration_revision=1,
+        configuration_revision=3,
+        gateway_identity="a" * 64,
+        endpoint_destination_id="omniroute",
+        gateway_base_url="http://x",
+        gateway_api_key="k",
         gateway_credential_configured=True,
         defaults=ModelDefaults(background=ModelMapping(model="m", destination="remote")),
         privacy=PrivacySettings(allow_remote_reasoning=True, reasoning_destinations=["omniroute"]),
         request_timeout_seconds=5,
-        web_search_provider="none", web_search_endpoint=None, web_search_api_key="",
+        web_search_provider="none",
+        web_search_endpoint=None,
+        web_search_api_key="",
     )
 
 
@@ -113,10 +141,16 @@ def test_worker_policies_carry_identity():
 
     cfg = _config()
     policy = timeline_worker._policy(cfg, cfg.defaults.background, "omniroute", False)
-    assert (policy.workspace_id, policy.actor_user_id, policy.membership_revision, policy.gateway_identity) == (
-        OWNER.workspace_id, 1, 2, "a" * 64)
+    assert (
+        policy.workspace_id,
+        policy.actor_user_id,
+        policy.membership_revision,
+        policy.gateway_identity,
+    ) == (OWNER.workspace_id, 1, 2, "a" * 64)
     mapping = cfg.defaults.background
-    assert isinstance(entity_worker._policy_allows_extraction(cfg, mapping, "omniroute", False), bool)
+    assert isinstance(
+        entity_worker._policy_allows_extraction(cfg, mapping, "omniroute", False), bool
+    )
 
 
 @pytest.mark.asyncio
@@ -125,14 +159,21 @@ async def test_dependency_snapshot_reports_supported_without_evidence(module):
     worker = importlib.import_module(module)
     redis = MagicMock()
     redis.get = AsyncMock(return_value=None)
-    scope = InternalJobScope(workspace_id=OWNER.workspace_id, actor_user_id=1, membership_revision=2)
+    scope = InternalJobScope(
+        workspace_id=OWNER.workspace_id, actor_user_id=1, membership_revision=2
+    )
     fingerprint, supported = await worker._dependency_snapshot(_config(), redis, scope=scope)
     assert fingerprint
     assert supported is True
 
 
 @pytest.mark.parametrize(
-    "path", ["modules/timeline/worker.py", "modules/knowledge/entities/worker.py", "modules/dashboard/briefs.py"],
+    "path",
+    [
+        "modules/timeline/worker.py",
+        "modules/knowledge/entities/worker.py",
+        "modules/dashboard/briefs.py",
+    ],
 )
 def test_gateway_and_policy_constructions_are_complete(path):
     """Every RequestPolicy/ModelGateway construction names the required identity/fence arguments."""
@@ -142,7 +183,11 @@ def test_gateway_and_policy_constructions_are_complete(path):
     }
     bad = []
     for node in ast.walk(ast.parse((ROOT / path).read_text(encoding="utf-8"))):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in required:
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in required
+        ):
             given = {k.arg for k in node.keywords}
             if None not in given and required[node.func.id] - given:
                 bad.append((node.lineno, node.func.id, sorted(required[node.func.id] - given)))
@@ -156,9 +201,15 @@ async def test_entity_export_validation_builds_workspace_bound_source_fence(monk
 
     now = datetime.now(UTC)
     fence = EntityExportFence(
-        id=uuid4(), created_at=now, updated_at=now, revision=1, alias_ids=[], evidence_ids=[],
+        id=uuid4(),
+        created_at=now,
+        updated_at=now,
+        revision=1,
+        alias_ids=[],
+        evidence_ids=[],
         source_fences=[EntitySourceExportFence(source_id=uuid4(), generation=1)],
-        alias_digest="0" * 64, evidence_digest="0" * 64,
+        alias_digest="0" * 64,
+        evidence_digest="0" * 64,
     )
     patch_entities(monkeypatch, "_admit", AsyncMock())
     patch_entities(monkeypatch, "_actor", lambda scope: 1)
@@ -171,10 +222,18 @@ async def test_entity_export_validation_builds_workspace_bound_source_fence(monk
 
     monkeypatch.setattr(entities_public.sources, "filter_export_eligible_sources", eligible)
     session = MagicMock()
-    session.scalar = AsyncMock(return_value=SimpleNamespace(created_at=now, updated_at=now, revision=1))
+    session.scalar = AsyncMock(
+        return_value=SimpleNamespace(created_at=now, updated_at=now, revision=1)
+    )
     out = await entities_public.validate_export_fences(
-        session, owner_id=1, record_kind="entities", snapshot_at=now, expected_snapshot_count=1,
-        fences=[fence], scope=OWNER, multi_workspace_enabled=False,
+        session,
+        owner_id=1,
+        record_kind="entities",
+        snapshot_at=now,
+        expected_snapshot_count=1,
+        fences=[fence],
+        scope=OWNER,
+        multi_workspace_enabled=False,
     )
     assert out.valid is False
     assert captured["fences"][0].workspace_id == OWNER.workspace_id
@@ -182,15 +241,20 @@ async def test_entity_export_validation_builds_workspace_bound_source_fence(monk
 
 # ---- rereview: before_send configuration fences -------------------------------------------------
 
+
 def _bumped(cfg: AIExecutionConfig, **changes) -> AIExecutionConfig:
     return cfg.model_copy(update=changes)
 
 
 def _chat_cfg() -> AIExecutionConfig:
     cfg = _config()
-    return cfg.model_copy(update={
-        "defaults": cfg.defaults.model_copy(update={"reranker": ModelMapping(model="rr", destination="remote")}),
-    })
+    return cfg.model_copy(
+        update={
+            "defaults": cfg.defaults.model_copy(
+                update={"reranker": ModelMapping(model="rr", destination="remote")}
+            ),
+        }
+    )
 
 
 def _factory():
@@ -201,12 +265,15 @@ def _factory():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", [
-    {"configuration_revision": 4},
-    {"gateway_identity": "b" * 64},
-    {"endpoint_destination_id": "other"},
-    {"defaults": ModelDefaults(background=ModelMapping(model="changed", destination="remote"))},
-])
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"configuration_revision": 4},
+        {"gateway_identity": "b" * 64},
+        {"endpoint_destination_id": "other"},
+        {"defaults": ModelDefaults(background=ModelMapping(model="changed", destination="remote"))},
+    ],
+)
 async def test_chat_config_fence_denies_drift(monkeypatch, change):
     from core.model_gateway.client import PrivacyPolicyDenied
     from modules.chat import scope as chat_scope
@@ -214,11 +281,17 @@ async def test_chat_config_fence_denies_drift(monkeypatch, change):
 
     snap = _config()
     role, mapping = "background", snap.defaults.background
-    monkeypatch.setattr(settings_public, "get_ai_execution_config", AsyncMock(return_value=_bumped(snap, **change)))
+    monkeypatch.setattr(
+        settings_public, "get_ai_execution_config", AsyncMock(return_value=_bumped(snap, **change))
+    )
     with pytest.raises(PrivacyPolicyDenied):
-        await chat_scope.ensure_ai_config_unchanged(_factory(), MagicMock(), MagicMock(), OWNER, snap, role, mapping)
+        await chat_scope.ensure_ai_config_unchanged(
+            _factory(), MagicMock(), MagicMock(), OWNER, snap, role, mapping
+        )
     monkeypatch.setattr(settings_public, "get_ai_execution_config", AsyncMock(return_value=snap))
-    await chat_scope.ensure_ai_config_unchanged(_factory(), MagicMock(), MagicMock(), OWNER, snap, role, mapping)
+    await chat_scope.ensure_ai_config_unchanged(
+        _factory(), MagicMock(), MagicMock(), OWNER, snap, role, mapping
+    )
 
 
 @pytest.mark.asyncio
@@ -228,7 +301,11 @@ async def test_reranker_does_not_send_after_config_revision_bump(monkeypatch):
 
     snap = _chat_cfg()
     configs = iter([snap, _bumped(snap, configuration_revision=snap.configuration_revision + 1)])
-    monkeypatch.setattr(retrieval.settings_public, "get_ai_execution_config", AsyncMock(side_effect=lambda *a, **k: next(configs)))
+    monkeypatch.setattr(
+        retrieval.settings_public,
+        "get_ai_execution_config",
+        AsyncMock(side_effect=lambda *a, **k: next(configs)),
+    )
     monkeypatch.setattr(retrieval, "may_send", lambda *a, **k: True)
     sent = []
 
@@ -242,9 +319,20 @@ async def test_reranker_does_not_send_after_config_revision_bump(monkeypatch):
             return {}
 
     monkeypatch.setattr(retrieval, "ModelGateway", FakeGateway)
-    item = MagicMock(spec=EvidenceItem, local_only=False, content="c", document_version_id="v", chunk_id="c1", source_generation=1)
-    monkeypatch.setattr(retrieval.documents_public, "lock_chat_evidence_chunks", AsyncMock(return_value=[item]))
-    items, status, _ = await retrieval._apply_configured_reranking(AsyncMock(), _factory(), MagicMock(), MagicMock(), "q", [item], OWNER)
+    item = MagicMock(
+        spec=EvidenceItem,
+        local_only=False,
+        content="c",
+        document_version_id="v",
+        chunk_id="c1",
+        source_generation=1,
+    )
+    monkeypatch.setattr(
+        retrieval.documents_public, "lock_chat_evidence_chunks", AsyncMock(return_value=[item])
+    )
+    items, status, _ = await retrieval._apply_configured_reranking(
+        AsyncMock(), _factory(), MagicMock(), MagicMock(), "q", [item], OWNER
+    )
     assert sent == [] and status == "unavailable" and items == [item]
 
 
@@ -252,10 +340,16 @@ async def test_reranker_does_not_send_after_config_revision_bump(monkeypatch):
 async def test_reranker_reraises_type_error(monkeypatch):
     from modules.chat import retrieval
 
-    monkeypatch.setattr(retrieval.settings_public, "get_ai_execution_config", AsyncMock(side_effect=TypeError("shape")))
+    monkeypatch.setattr(
+        retrieval.settings_public,
+        "get_ai_execution_config",
+        AsyncMock(side_effect=TypeError("shape")),
+    )
     item = MagicMock(local_only=False, content="c")
     with pytest.raises(TypeError):
-        await retrieval._apply_configured_reranking(MagicMock(), _factory(), MagicMock(), MagicMock(), "q", [item], OWNER)
+        await retrieval._apply_configured_reranking(
+            MagicMock(), _factory(), MagicMock(), MagicMock(), "q", [item], OWNER
+        )
 
 
 def _brief_env(monkeypatch, *, current_cfg, admit_results):
@@ -264,7 +358,11 @@ def _brief_env(monkeypatch, *, current_cfg, admit_results):
     snap = _config()
     configs = iter([snap, current_cfg(snap)])
     monkeypatch.setattr(briefs, "_admit", AsyncMock(side_effect=admit_results))
-    monkeypatch.setattr(briefs.settings_public, "get_ai_execution_config", AsyncMock(side_effect=lambda *a, **k: next(configs)))
+    monkeypatch.setattr(
+        briefs.settings_public,
+        "get_ai_execution_config",
+        AsyncMock(side_effect=lambda *a, **k: next(configs)),
+    )
     monkeypatch.setattr(context, "relation_to_today", lambda *a, **k: None)
     monkeypatch.setattr(context, "build_daily_widgets", AsyncMock(return_value=[]))
     monkeypatch.setattr(briefs, "_facts", AsyncMock(return_value=[{"k": 1}]))
@@ -295,12 +393,20 @@ async def test_brief_before_send_drift_is_unavailable(monkeypatch, case):
     fence_a, fence_b = object(), object()
     briefs, session, sent = _brief_env(
         monkeypatch,
-        current_cfg=(lambda s: _bumped(s, configuration_revision=s.configuration_revision + 1)) if case == "revision" else (lambda s: s),
+        current_cfg=(lambda s: _bumped(s, configuration_revision=s.configuration_revision + 1))
+        if case == "revision"
+        else (lambda s: s),
         admit_results=[fence_a, fence_a] if case == "revision" else [fence_a, fence_b],
     )
     with pytest.raises(briefs.BriefUnavailable):
         await briefs.generate_brief(
-            session, datetime.now(UTC).date(), "UTC", scope=OWNER, multi_workspace_enabled=False,
-            settings=MagicMock(), redis=MagicMock(), force=True,
+            session,
+            datetime.now(UTC).date(),
+            "UTC",
+            scope=OWNER,
+            multi_workspace_enabled=False,
+            settings=MagicMock(),
+            redis=MagicMock(),
+            force=True,
         )
     assert sent == []

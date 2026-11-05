@@ -47,7 +47,9 @@ class TraceContext(BaseModel):
     tool_call_id: str | None = None
 
 
-_trace: contextvars.ContextVar[TraceContext] = contextvars.ContextVar("trace_context", default=TraceContext())  # noqa: B039  # TraceContext is an immutable dataclass
+_trace: contextvars.ContextVar[TraceContext] = contextvars.ContextVar(
+    "trace_context", default=TraceContext()
+)  # noqa: B039  # TraceContext is an immutable dataclass
 
 
 def current_trace() -> TraceContext:
@@ -68,7 +70,9 @@ def bind_trace(**ids: str | None) -> Iterator[TraceContext]:
 
 def set_trace(**ids: str | None) -> None:
     """Merge non-null IDs into the current context without a scope (the job/request wrapper resets it)."""
-    _trace.set(current_trace().model_copy(update={k: str(v) for k, v in ids.items() if v is not None}))
+    _trace.set(
+        current_trace().model_copy(update={k: str(v) for k, v in ids.items() if v is not None})
+    )
 
 
 # --------------------------------------------------------------------------- redaction
@@ -84,16 +88,34 @@ def set_trace(**ids: str | None) -> None:
 _MASK = "[redacted]"
 _SECRET_KEY = re.compile(
     r"(authorization|cookie|set-cookie|api[-_]?key|secret|password|passwd|token|credential|"
-    r"csrf|session|signature|private[-_]?key)", re.IGNORECASE)
-_CONTENT_KEY = re.compile(r"^(prompt|messages|content|document|documents|text|body|input|output|completion|query)$", re.IGNORECASE)
+    r"csrf|session|signature|private[-_]?key)",
+    re.IGNORECASE,
+)
+_CONTENT_KEY = re.compile(
+    r"^(prompt|messages|content|document|documents|text|body|input|output|completion|query)$",
+    re.IGNORECASE,
+)
 _TEXT_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}"), r"\1 " + _MASK),
-    (re.compile(r"(?i)\b(authorization|set-cookie|cookie|x-api-key|x-csrf-token)\s*[:=]\s*[^\r\n]+"), r"\1: " + _MASK),
+    (
+        re.compile(
+            r"(?i)\b(authorization|set-cookie|cookie|x-api-key|x-csrf-token)\s*[:=]\s*[^\r\n]+"
+        ),
+        r"\1: " + _MASK,
+    ),
     (re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^/\s:@]+(?::[^/\s@]*)?@"), r"\1" + _MASK + "@"),
-    (re.compile(r"(?i)([?&](?:[a-z_]*(?:token|key|secret|password|signature|code|sig)[a-z_]*)=)[^&\s#]+"), r"\1" + _MASK),
+    (
+        re.compile(
+            r"(?i)([?&](?:[a-z_]*(?:token|key|secret|password|signature|code|sig)[a-z_]*)=)[^&\s#]+"
+        ),
+        r"\1" + _MASK,
+    ),
     (re.compile(r"(?i)([?&](?:q|query)=)[^&\s#]+"), r"\1" + _MASK),
     (re.compile(r"\b(?:sk|rk|pk)-[A-Za-z0-9_-]{16,}"), _MASK),
-    (re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}"), _MASK),
+    (
+        re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}"),
+        _MASK,
+    ),
     (re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"), _MASK),
     (re.compile(r"\bAIza[A-Za-z0-9_-]{30,}"), _MASK),
     (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"), _MASK),
@@ -141,7 +163,9 @@ def _freeze_arg(item: Any) -> Any:
     """Freeze one log arg by value so a handler's later __str__/__repr__ cannot emit unchecked text."""
     if type(item) in (int, float, bool, type(None), *_EXACT_NUMERIC_TYPES):
         return item
-    if isinstance(item, int):  # int subclass (IntEnum...): drop its own __str__, keep %d/%s rendering
+    if isinstance(
+        item, int
+    ):  # int subclass (IntEnum...): drop its own __str__, keep %d/%s rendering
         return int.__int__(item)
     if isinstance(item, float):
         return float.__float__(item)
@@ -225,6 +249,7 @@ def log_event(log: logging.Logger, level: int, event: str, **fields: Any) -> Non
 
     Callers must not use this for no-op polls: a poll that changed nothing emits nothing.
     """
+
     def emit() -> None:
         """Format and emit the line."""
         trace = {k: v for k, v in current_trace().model_dump().items() if v}
@@ -235,6 +260,7 @@ def log_event(log: logging.Logger, level: int, event: str, **fields: Any) -> Non
 
 
 # --------------------------------------------------------------------------- run metadata
+
 
 class RunMeta(BaseModel):
     """Metadata-only run summary returned by each owning module's public ``list_run_meta`` (no content)."""
@@ -248,10 +274,13 @@ class RunMeta(BaseModel):
     finished_at: datetime | None = None
     origin_run_id: str | None = None
     model_identity: str | None = None
-    token_usage: Any = None  # raw provider usage mapping, or an int total (agent); None when unknown
+    token_usage: Any = (
+        None  # raw provider usage mapping, or an int total (agent); None when unknown
+    )
 
 
 # --------------------------------------------------------------------------- usage
+
 
 class PriceRate(BaseModel):
     """Owner-configured per-1k-token rate; the estimate it yields is never authoritative billing."""
@@ -275,8 +304,13 @@ class Usage(BaseModel):
     latency_ms: float | None = None
 
 
-def usage_from_response(response: Any, *, model_identity: str | None, latency_ms: float | None = None,
-                        rate: PriceRate | None = None) -> Usage:
+def usage_from_response(
+    response: Any,
+    *,
+    model_identity: str | None,
+    latency_ms: float | None = None,
+    rate: PriceRate | None = None,
+) -> Usage:
     """Build a ``Usage`` from a provider response dict; missing/invalid token fields remain null."""
     raw = response.get("usage") if isinstance(response, Mapping) else None
     raw = raw if isinstance(raw, Mapping) else {}
@@ -289,11 +323,21 @@ def usage_from_response(response: Any, *, model_identity: str | None, latency_ms
                 return item
         return None
 
-    usage = Usage(model_identity=model_identity, tokens_in=count("prompt_tokens", "input_tokens"),
-                  tokens_out=count("completion_tokens", "output_tokens"), latency_ms=latency_ms)
-    if rate is not None and rate.model_identity == model_identity and usage.tokens_in is not None \
-            and usage.tokens_out is not None:
-        usage.estimated_cost = (usage.tokens_in * rate.input_per_1k + usage.tokens_out * rate.output_per_1k) / 1000
+    usage = Usage(
+        model_identity=model_identity,
+        tokens_in=count("prompt_tokens", "input_tokens"),
+        tokens_out=count("completion_tokens", "output_tokens"),
+        latency_ms=latency_ms,
+    )
+    if (
+        rate is not None
+        and rate.model_identity == model_identity
+        and usage.tokens_in is not None
+        and usage.tokens_out is not None
+    ):
+        usage.estimated_cost = (
+            usage.tokens_in * rate.input_per_1k + usage.tokens_out * rate.output_per_1k
+        ) / 1000
         usage.estimate_model, usage.estimate_rate_as_of = rate.model_identity, rate.rate_as_of
     return usage
 
@@ -325,7 +369,12 @@ class MetricsRegistry:
 
     def _key(self, name: str, labels: Mapping[str, str], store: dict[_Key, Any]) -> _Key:
         """Normalise labels and fold into the overflow series once the per-metric bound is hit."""
-        key: _Key = (name, tuple(sorted((str(k)[:MAX_LABEL_LEN], str(v)[:MAX_LABEL_LEN]) for k, v in labels.items())))
+        key: _Key = (
+            name,
+            tuple(
+                sorted((str(k)[:MAX_LABEL_LEN], str(v)[:MAX_LABEL_LEN]) for k, v in labels.items())
+            ),
+        )
         if key in store:
             return key
         if self._series.get(name, 0) >= MAX_SERIES:
@@ -350,9 +399,19 @@ class MetricsRegistry:
         """Return a JSON-safe copy: counters and histograms as lists of {name, labels, ...} rows."""
         return {
             "buckets_ms": list(BUCKETS_MS),
-            "counters": [{"name": n, "labels": dict(lb), "value": v} for (n, lb), v in self.counters.items()],
-            "histograms": [{"name": n, "labels": dict(lb), "count": int(r[0]), "sum_ms": round(r[1], 3),
-                            "buckets": [int(x) for x in r[2:]]} for (n, lb), r in self.histograms.items()],
+            "counters": [
+                {"name": n, "labels": dict(lb), "value": v} for (n, lb), v in self.counters.items()
+            ],
+            "histograms": [
+                {
+                    "name": n,
+                    "labels": dict(lb),
+                    "count": int(r[0]),
+                    "sum_ms": round(r[1], 3),
+                    "buckets": [int(x) for x in r[2:]],
+                }
+                for (n, lb), r in self.histograms.items()
+            ],
         }
 
 
@@ -387,8 +446,15 @@ def observe_ms(name: str, started: float, **labels: str) -> None:
     _isolated(lambda: registry.observe(name, (time.perf_counter() - started) * 1000, **labels))
 
 
-def record_model_call(capability: str, role: str | None, started: float, ok: bool, response: Any = None,
-                      model_identity: str | None = None, first_token_ms: float | None = None) -> Usage | None:
+def record_model_call(
+    capability: str,
+    role: str | None,
+    started: float,
+    ok: bool,
+    response: Any = None,
+    model_identity: str | None = None,
+    first_token_ms: float | None = None,
+) -> Usage | None:
     """Record model-call latency/outcome and token totals; unknown usage is counted, never zeroed."""
     result: list[Usage | None] = [None]
 
@@ -406,11 +472,15 @@ def record_model_call(capability: str, role: str | None, started: float, ok: boo
             result[0] = usage
             if usage.tokens_in is None and usage.tokens_out is None:
                 registry.inc("model_usage_unknown_total", **labels)
-            for field, metric in (("tokens_in", "model_tokens_in_total"), ("tokens_out", "model_tokens_out_total")):
+            for field, metric in (
+                ("tokens_in", "model_tokens_in_total"),
+                ("tokens_out", "model_tokens_out_total"),
+            ):
                 if getattr(usage, field) is not None:
                     registry.inc(metric, getattr(usage, field), **labels)
 
     _isolated(work)
+
     # The optional exporter receives only the summary already exposed by observability; it never
     # receives the provider response, prompt, completion, exception text, or credentials.
     def export_summary() -> None:
@@ -433,6 +503,7 @@ def record_model_call(capability: str, role: str | None, started: float, ok: boo
 
 # --------------------------------------------------------------------------- Redis publication
 
+
 async def flush_metrics(redis: Any, *, force: bool = False) -> None:
     """Publish this process's snapshot to Redis (throttled); a Redis failure is swallowed."""
     now = time.monotonic()
@@ -441,8 +512,11 @@ async def flush_metrics(redis: Any, *, force: bool = False) -> None:
     registry.last_flush = now
     try:
         await asyncio.wait_for(
-            redis.set(f"{SNAPSHOT_KEY_PREFIX}{_PROCESS_ROLE}:{os.getpid()}", json.dumps(registry.snapshot()),
-                      ex=SNAPSHOT_TTL_SECONDS),
+            redis.set(
+                f"{SNAPSHOT_KEY_PREFIX}{_PROCESS_ROLE}:{os.getpid()}",
+                json.dumps(registry.snapshot()),
+                ex=SNAPSHOT_TTL_SECONDS,
+            ),
             timeout=_REDIS_TIMEOUT_SECONDS,
         )
     except Exception as exc:  # noqa: BLE001  # best-effort telemetry; any Redis failure is logged at debug and dropped
@@ -464,14 +538,18 @@ async def read_snapshots(redis: Any) -> list[dict[str, Any]]:
                 raw = await redis.get(key)
                 if raw:
                     data = json.loads(raw)
-                    data["process"] = (key.decode() if isinstance(key, bytes) else key)[len(SNAPSHOT_KEY_PREFIX):]
+                    data["process"] = (key.decode() if isinstance(key, bytes) else key)[
+                        len(SNAPSHOT_KEY_PREFIX) :
+                    ]
                     out.append(data)
     except Exception as exc:  # noqa: BLE001  # best-effort telemetry read; failure yields an empty snapshot list
         logger.debug("telemetry snapshot read failed (%s)", type(exc).__name__)
     return out
 
 
-def instrument_job(fn: F, *, run_id_kind: str | None = None, success_return_outcome: str = "ok") -> F:  # noqa: UP047  # keep TypeVar/TypeAlias spelling; PEP 695 rewrite is style-only
+def instrument_job(
+    fn: F, *, run_id_kind: str | None = None, success_return_outcome: str = "ok"
+) -> F:  # noqa: UP047  # keep TypeVar/TypeAlias spelling; PEP 695 rewrite is style-only
     """Wrap an ARQ job to record queue delay, duration and outcome by function name; behavior is unchanged.
 
     ``run_id_kind`` ("agent_run_id"/"ingestion_run_id") binds the first argument; domain jobs can
@@ -487,6 +565,7 @@ def instrument_job(fn: F, *, run_id_kind: str | None = None, success_return_outc
         token = _trace.set(current_trace())
         outcome = "ok"
         try:
+
             def pre() -> None:
                 """Bind the run id and record how long the job waited in the queue."""
                 if run_id_kind and args:
@@ -523,10 +602,14 @@ def instrument_job(fn: F, *, run_id_kind: str | None = None, success_return_outc
     return wrapper  # type: ignore[return-value]
 
 
-def timed(metric: str, **labels: str) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
+def timed(
+    metric: str, **labels: str
+) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
     """Decorator recording an async function's duration into ``metric`` with fixed labels."""
+
     def deco(fn: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
         """Wrap ``fn``."""
+
         @functools.wraps(fn)
         async def inner(*args: Any, **kwargs: Any) -> Any:
             """Run ``fn`` and observe its duration regardless of outcome."""
@@ -535,5 +618,7 @@ def timed(metric: str, **labels: str) -> Callable[[Callable[..., Awaitable[Any]]
                 return await fn(*args, **kwargs)
             finally:
                 observe_ms(metric, started, **labels)
+
         return inner
+
     return deco

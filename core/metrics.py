@@ -35,62 +35,119 @@ _TTFT_BUCKETS = (0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 15.0, 30.0, 60.0)
 _LAG_BUCKETS = (0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5)
 
 HTTP_REQUESTS = Counter(
-    "umwelt_http_requests_total", "HTTP requests by method, route template and status code.",
-    ("method", "route", "status"), registry=REGISTRY)
+    "umwelt_http_requests_total",
+    "HTTP requests by method, route template and status code.",
+    ("method", "route", "status"),
+    registry=REGISTRY,
+)
 HTTP_DURATION = Histogram(
-    "umwelt_http_request_duration_seconds", "HTTP request latency by method and route template.",
-    ("method", "route"), buckets=_HTTP_BUCKETS, registry=REGISTRY)
+    "umwelt_http_request_duration_seconds",
+    "HTTP request latency by method and route template.",
+    ("method", "route"),
+    buckets=_HTTP_BUCKETS,
+    registry=REGISTRY,
+)
 ARQ_QUEUE_DEPTH = Gauge(
-    "umwelt_arq_queue_depth", "Jobs waiting in an arq queue (sorted-set cardinality).", ("queue",), registry=REGISTRY)
+    "umwelt_arq_queue_depth",
+    "Jobs waiting in an arq queue (sorted-set cardinality).",
+    ("queue",),
+    registry=REGISTRY,
+)
 ARQ_QUEUE_OLDEST_AGE = Gauge(
-    "umwelt_arq_queue_oldest_job_age_seconds", "Age of the oldest due job in an arq queue (0 when empty).",
-    ("queue",), registry=REGISTRY)
+    "umwelt_arq_queue_oldest_job_age_seconds",
+    "Age of the oldest due job in an arq queue (0 when empty).",
+    ("queue",),
+    registry=REGISTRY,
+)
 OUTBOX_PENDING = Gauge(
-    "umwelt_outbox_pending_count", "Event-outbox rows waiting for delivery.", registry=REGISTRY)
+    "umwelt_outbox_pending_count", "Event-outbox rows waiting for delivery.", registry=REGISTRY
+)
 OUTBOX_LAG = Gauge(
-    "umwelt_outbox_oldest_pending_age_seconds", "Age of the oldest undelivered outbox row (0 when none).",
-    registry=REGISTRY)
+    "umwelt_outbox_oldest_pending_age_seconds",
+    "Age of the oldest undelivered outbox row (0 when none).",
+    registry=REGISTRY,
+)
 OUTBOX_ROWS_TOTAL = Gauge(
-    "umwelt_outbox_rows_total", "Estimated total event_outbox rows (pg_class.reltuples, not an exact count).",
-    registry=REGISTRY)
+    "umwelt_outbox_rows_total",
+    "Estimated total event_outbox rows (pg_class.reltuples, not an exact count).",
+    registry=REGISTRY,
+)
 OUTBOX_PURGE_BACKLOG = Gauge(
     "umwelt_outbox_purge_backlog",
     "Terminal event_outbox rows already past their retention cutoff (bounded count; 0 when the purge keeps up).",
-    registry=REGISTRY)
+    registry=REGISTRY,
+)
 CRON_DURATION = Histogram(
-    "umwelt_cron_job_duration_seconds", "Scheduled job run time by job name.", ("job",),
-    buckets=_JOB_BUCKETS, registry=REGISTRY)
+    "umwelt_cron_job_duration_seconds",
+    "Scheduled job run time by job name.",
+    ("job",),
+    buckets=_JOB_BUCKETS,
+    registry=REGISTRY,
+)
 CRON_LAST_SUCCESS = Gauge(
-    "umwelt_cron_job_last_success_timestamp_seconds", "Unix time of the last successful run of a scheduled job.",
-    ("job",), registry=REGISTRY)
+    "umwelt_cron_job_last_success_timestamp_seconds",
+    "Unix time of the last successful run of a scheduled job.",
+    ("job",),
+    registry=REGISTRY,
+)
 CRON_FAILURES = Counter(
-    "umwelt_cron_job_failures_total", "Failed runs of a scheduled job.", ("job",), registry=REGISTRY)
+    "umwelt_cron_job_failures_total", "Failed runs of a scheduled job.", ("job",), registry=REGISTRY
+)
 JOBS = Counter(
-    "umwelt_jobs_total", "Event-driven background jobs by function name and outcome.", ("job", "outcome"),
-    registry=REGISTRY)
+    "umwelt_jobs_total",
+    "Event-driven background jobs by function name and outcome.",
+    ("job", "outcome"),
+    registry=REGISTRY,
+)
 JOB_DURATION = Histogram(
-    "umwelt_job_duration_seconds", "Event-driven background job run time by function name and outcome.",
-    ("job", "outcome"), buckets=_JOB_BUCKETS, registry=REGISTRY)
+    "umwelt_job_duration_seconds",
+    "Event-driven background job run time by function name and outcome.",
+    ("job", "outcome"),
+    buckets=_JOB_BUCKETS,
+    registry=REGISTRY,
+)
 INGESTION_STAGE = Counter(
-    "umwelt_ingestion_stage_total", "Ingestion pipeline stage executions by stage and outcome.",
-    ("stage", "outcome"), registry=REGISTRY)
+    "umwelt_ingestion_stage_total",
+    "Ingestion pipeline stage executions by stage and outcome.",
+    ("stage", "outcome"),
+    registry=REGISTRY,
+)
 BREAKER_OPEN_UNTIL = Gauge(
     "umwelt_model_breaker_open_until_timestamp_seconds",
     "Unix time until which the provider circuit breaker was last seen open (0 = never seen open).",
-    ("provider",), registry=REGISTRY)
+    ("provider",),
+    registry=REGISTRY,
+)
 BREAKER_OPENED = Counter(
-    "umwelt_model_breaker_rejections_total", "Model calls rejected because the provider breaker was open.",
-    ("provider",), registry=REGISTRY)
+    "umwelt_model_breaker_rejections_total",
+    "Model calls rejected because the provider breaker was open.",
+    ("provider",),
+    registry=REGISTRY,
+)
 EVENT_LOOP_LAG = Gauge(
-    "umwelt_event_loop_lag_seconds", "Most recent event-loop scheduling delay (sleep overshoot).", registry=REGISTRY)
+    "umwelt_event_loop_lag_seconds",
+    "Most recent event-loop scheduling delay (sleep overshoot).",
+    registry=REGISTRY,
+)
 EVENT_LOOP_LAG_HIST = Histogram(
-    "umwelt_event_loop_lag_histogram_seconds", "Event-loop scheduling delay distribution.",
-    buckets=_LAG_BUCKETS, registry=REGISTRY)
+    "umwelt_event_loop_lag_histogram_seconds",
+    "Event-loop scheduling delay distribution.",
+    buckets=_LAG_BUCKETS,
+    registry=REGISTRY,
+)
 CHAT_TTFT = Histogram(
-    "umwelt_chat_time_to_first_token_seconds", "Time from model request to the first streamed token.",
-    ("capability",), buckets=_TTFT_BUCKETS, registry=REGISTRY)
+    "umwelt_chat_time_to_first_token_seconds",
+    "Time from model request to the first streamed token.",
+    ("capability",),
+    buckets=_TTFT_BUCKETS,
+    registry=REGISTRY,
+)
 SAMPLE_ERRORS = Counter(
-    "umwelt_metrics_sample_errors_total", "Failed periodic metric samples.", ("sampler",), registry=REGISTRY)
+    "umwelt_metrics_sample_errors_total",
+    "Failed periodic metric samples.",
+    ("sampler",),
+    registry=REGISTRY,
+)
 
 # Ingestion job function -> pipeline stage label (fixed set; job names come from the worker registry).
 _INGESTION_STAGES = {
@@ -123,6 +180,7 @@ def record_http(method: str, route: str | None, status: int, seconds: float) -> 
     mounted sub-apps, 404 probes) collapses to one ``unmatched`` series so scanners cannot grow
     cardinality.
     """
+
     def work() -> None:
         """Update the request counter and latency histogram."""
         label = safe_label(route) if route else _UNMATCHED_ROUTE
@@ -138,6 +196,7 @@ _KNOWN_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OP
 
 def record_job(job: str, outcome: str, seconds: float) -> None:
     """Record an event-driven job run and, for ingestion jobs, the matching pipeline stage outcome."""
+
     def work() -> None:
         """Update job and ingestion-stage series."""
         name, result = safe_label(job), safe_label(outcome)
@@ -152,6 +211,7 @@ def record_job(job: str, outcome: str, seconds: float) -> None:
 
 def record_cron(job: str, seconds: float, ok: bool) -> None:
     """Record one scheduled-job run: duration always, last-success time on success, a failure count otherwise."""
+
     def work() -> None:
         """Update cron series."""
         name = safe_label(job)
@@ -175,6 +235,7 @@ def record_breaker_open(provider: str, remaining_seconds: float, *, rejected: bo
     ``rejected`` (default) also counts a rejected call; pass False when the breaker was merely observed
     open after a failure.
     """
+
     def work() -> None:
         """Update breaker series."""
         name = safe_label(provider)
@@ -212,13 +273,22 @@ class _PoolCollector(Collector):
     def collect(self) -> Iterable[GaugeMetricFamily]:
         """Yield one sample per live engine for size, checked-out connections and overflow."""
         families = {
-            "size": GaugeMetricFamily("umwelt_db_pool_size", "Configured connections held by the pool.", labels=["pool"]),
+            "size": GaugeMetricFamily(
+                "umwelt_db_pool_size", "Configured connections held by the pool.", labels=["pool"]
+            ),
             "checked_out": GaugeMetricFamily(
-                "umwelt_db_pool_checked_out", "Connections currently checked out.", labels=["pool"]),
+                "umwelt_db_pool_checked_out", "Connections currently checked out.", labels=["pool"]
+            ),
             "overflow": GaugeMetricFamily(
-                "umwelt_db_pool_overflow", "Overflow connections currently open beyond pool size.", labels=["pool"]),
+                "umwelt_db_pool_overflow",
+                "Overflow connections currently open beyond pool size.",
+                labels=["pool"],
+            ),
             "max": GaugeMetricFamily(
-                "umwelt_db_pool_max_connections", "Pool size plus allowed overflow.", labels=["pool"]),
+                "umwelt_db_pool_max_connections",
+                "Pool size plus allowed overflow.",
+                labels=["pool"],
+            ),
         }
         # Sorted by id for a stable label order within one scrape; labels are positional indexes.
         for index, engine in enumerate(sorted(self._engines, key=id)):
@@ -227,7 +297,9 @@ class _PoolCollector(Collector):
                 continue
             label = [str(index)]
             size = int(pool.size())
-            overflow = max(int(pool.overflow()), 0)  # QueuePool reports negative until the pool fills
+            overflow = max(
+                int(pool.overflow()), 0
+            )  # QueuePool reports negative until the pool fills
             families["size"].add_metric(label, size)
             families["checked_out"].add_metric(label, int(pool.checkedout()))
             families["overflow"].add_metric(label, overflow)
@@ -329,6 +401,8 @@ def start_worker_metrics_server(port: int, bind: str = "127.0.0.1") -> bool:
     try:
         start_http_server(port, addr=bind, registry=REGISTRY)
     except OSError as exc:
-        logger.warning("worker metrics server could not bind %s:%s (%s)", bind, port, type(exc).__name__)
+        logger.warning(
+            "worker metrics server could not bind %s:%s (%s)", bind, port, type(exc).__name__
+        )
         return False
     return True

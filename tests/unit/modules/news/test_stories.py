@@ -44,7 +44,9 @@ from modules.news.stories import (
     cluster_observation,
 )
 
-FENCE = AccessFence(workspace_id=uuid4(), user_id=1, membership_revision=2, configuration_revision=3)
+FENCE = AccessFence(
+    workspace_id=uuid4(), user_id=1, membership_revision=2, configuration_revision=3
+)
 SCOPE = InternalJobScope(workspace_id=FENCE.workspace_id, actor_user_id=1, membership_revision=2)
 KW = {"scope": SCOPE, "multi_workspace_enabled": True}
 
@@ -128,8 +130,11 @@ class TestStoryCursorCodec:
         filters = StoryFilter(source_ids=[s_id])
         fh = _filter_hash(filters)
         cursor = StoryCursor(
-            domain="news_stories", workspace_id=FENCE.workspace_id, actor_user_id=1,
-            membership_revision=2, configuration_revision=3,
+            domain="news_stories",
+            workspace_id=FENCE.workspace_id,
+            actor_user_id=1,
+            membership_revision=2,
+            configuration_revision=3,
             sort="observed_at_desc_story_id_desc",
             filter_hash=fh,
             as_of=now,
@@ -150,8 +155,11 @@ class TestStoryCursorCodec:
         filters = StoryFilter()
         fh = _filter_hash(filters)
         cursor = StoryCursor(
-            domain="news_stories", workspace_id=FENCE.workspace_id, actor_user_id=1,
-            membership_revision=2, configuration_revision=3,
+            domain="news_stories",
+            workspace_id=FENCE.workspace_id,
+            actor_user_id=1,
+            membership_revision=2,
+            configuration_revision=3,
             sort="observed_at_desc_story_id_desc",
             filter_hash=fh,
             as_of=now,
@@ -162,8 +170,16 @@ class TestStoryCursorCodec:
         )
         encoded = _encode_cursor(cursor)
         with pytest.raises(DomainError) as exc_info:
-            _decode_cursor(encoded, AccessFence(workspace_id=FENCE.workspace_id, user_id=1, membership_revision=9,
-                                                configuration_revision=3), filters)  # stale revision
+            _decode_cursor(
+                encoded,
+                AccessFence(
+                    workspace_id=FENCE.workspace_id,
+                    user_id=1,
+                    membership_revision=9,
+                    configuration_revision=3,
+                ),
+                filters,
+            )  # stale revision
         assert exc_info.value.status_code == 422
         assert "Invalid story cursor" in exc_info.value.detail
 
@@ -171,7 +187,9 @@ class TestStoryCursorCodec:
 class TestStoryClustering:
     """Tests for cluster_observation idempotency, exact matching, and fuzzy thresholds."""
 
-    def _sample_projection(self, doc_id: UUID | None = None, local_only: bool = False) -> SimpleNamespace:
+    def _sample_projection(
+        self, doc_id: UUID | None = None, local_only: bool = False
+    ) -> SimpleNamespace:
         """Build a mock news document projection."""
         chunk = SimpleNamespace(id=uuid4(), content="First paragraph of the news article")
         now = datetime.now(UTC)
@@ -206,8 +224,12 @@ class TestStoryClustering:
     async def test_cluster_observation_projection_missing_returns_none(self) -> None:
         """cluster_observation returns None when get_news_document_projection returns None."""
         session = AsyncMock()
-        with patch("modules.knowledge.documents.public.get_news_document_projection", return_value=None):
-            result = await cluster_observation(session, document_id=uuid4(), expected_source_generation=1, **KW)
+        with patch(
+            "modules.knowledge.documents.public.get_news_document_projection", return_value=None
+        ):
+            result = await cluster_observation(
+                session, document_id=uuid4(), expected_source_generation=1, **KW
+            )
             assert result is None
 
     @pytest.mark.asyncio
@@ -218,9 +240,15 @@ class TestStoryClustering:
         session.add = MagicMock()
         proj = self._sample_projection()
         measurement = SimpleNamespace(data_kind="measurement")
-        with patch("modules.knowledge.documents.public.get_news_document_projection", return_value=proj), \
-                patch("modules.news.stories.get_provider_spec", return_value=measurement):
-            result = await cluster_observation(session, document_id=proj.document_id, expected_source_generation=1, **KW)
+        with (
+            patch(
+                "modules.knowledge.documents.public.get_news_document_projection", return_value=proj
+            ),
+            patch("modules.news.stories.get_provider_spec", return_value=measurement),
+        ):
+            result = await cluster_observation(
+                session, document_id=proj.document_id, expected_source_generation=1, **KW
+            )
         assert result is None
         session.add.assert_not_called()
 
@@ -238,8 +266,12 @@ class TestStoryClustering:
         )
         session.scalar.return_value = prior_obs
 
-        with patch("modules.knowledge.documents.public.get_news_document_projection", return_value=proj):
-            result = await cluster_observation(session, document_id=proj.document_id, expected_source_generation=1, **KW)
+        with patch(
+            "modules.knowledge.documents.public.get_news_document_projection", return_value=proj
+        ):
+            result = await cluster_observation(
+                session, document_id=proj.document_id, expected_source_generation=1, **KW
+            )
             assert result == existing_story_id
 
     @pytest.mark.asyncio
@@ -251,20 +283,30 @@ class TestStoryClustering:
         existing_story_id = uuid4()
 
         existing_story = NewsStory(id=existing_story_id, algorithm_version=ALGORITHM_VERSION)
-        existing_identity = NewsStoryIdentity(story_id=existing_story_id, identity_key="url_key", algorithm_version=ALGORITHM_VERSION)
+        existing_identity = NewsStoryIdentity(
+            story_id=existing_story_id, identity_key="url_key", algorithm_version=ALGORITHM_VERSION
+        )
 
         # 1st scalar: prior observation (None), 2nd scalar: existing identity, 3rd scalar: existing story
         session.scalar.side_effect = [
-            None,               # prior NewsObservation
+            None,  # prior NewsObservation
             existing_identity,  # NewsStoryIdentity
-            existing_story,     # NewsStory
-            None,               # identity check url
-            None,               # identity check hash
+            existing_story,  # NewsStory
+            None,  # identity check url
+            None,  # identity check hash
         ]
 
-        with patch("modules.knowledge.documents.public.get_news_document_projection", return_value=proj), \
-             patch("modules.knowledge.entities.public.list_version_membership_refs", return_value=[]):
-            result = await cluster_observation(session, document_id=proj.document_id, expected_source_generation=1, **KW)
+        with (
+            patch(
+                "modules.knowledge.documents.public.get_news_document_projection", return_value=proj
+            ),
+            patch(
+                "modules.knowledge.entities.public.list_version_membership_refs", return_value=[]
+            ),
+        ):
+            result = await cluster_observation(
+                session, document_id=proj.document_id, expected_source_generation=1, **KW
+            )
             assert result == existing_story_id
 
     @pytest.mark.asyncio
@@ -273,7 +315,11 @@ class TestStoryClustering:
         session = AsyncMock()
         proj = self._sample_projection(local_only=True)
         res = await _fuzzy_candidate(
-            session, projection=proj, current_entity_ids={"ent-1"}, observed_at=datetime.now(UTC), **KW  # type: ignore[arg-type]
+            session,
+            projection=proj,
+            current_entity_ids={"ent-1"},
+            observed_at=datetime.now(UTC),
+            **KW,  # type: ignore[arg-type]
         )
         assert res is None
 
@@ -283,7 +329,11 @@ class TestStoryClustering:
         session = AsyncMock()
         proj = self._sample_projection(local_only=False)
         res = await _fuzzy_candidate(
-            session, projection=proj, current_entity_ids=set(), observed_at=datetime.now(UTC), **KW  # type: ignore[arg-type]
+            session,
+            projection=proj,
+            current_entity_ids=set(),
+            observed_at=datetime.now(UTC),
+            **KW,  # type: ignore[arg-type]
         )
         assert res is None
 
@@ -332,14 +382,26 @@ class TestStoryClustering:
         )
         similarity_res = SimpleNamespace(items=[sim_item], capability="search")
 
-        with patch("modules.knowledge.documents.public.get_news_document_projection", return_value=candidate_proj), \
-             patch("modules.knowledge.entities.public.list_version_membership_refs", return_value=[entity_ref]), \
-             patch("modules.search.public.compare_news_evidence_embeddings", return_value=similarity_res):
+        with (
+            patch(
+                "modules.knowledge.documents.public.get_news_document_projection",
+                return_value=candidate_proj,
+            ),
+            patch(
+                "modules.knowledge.entities.public.list_version_membership_refs",
+                return_value=[entity_ref],
+            ),
+            patch(
+                "modules.search.public.compare_news_evidence_embeddings",
+                return_value=similarity_res,
+            ),
+        ):
             res = await _fuzzy_candidate(
                 session,
                 projection=proj,  # type: ignore[arg-type]
                 current_entity_ids={"00000000-0000-0000-0000-000000000001"},
-                observed_at=now, **KW,
+                observed_at=now,
+                **KW,
             )
             assert res is None  # Below 0.92 threshold -> rejected!
 
@@ -352,16 +414,28 @@ class TestStoryDetailCursor:
         sources = (uuid4(),)
         after = (uuid4(), uuid4(), uuid4())
         as_of = datetime.now(UTC)
-        return story_id, sources, after, as_of, _encode_detail_cursor(FENCE, story_id, sources, as_of, after, True)
+        return (
+            story_id,
+            sources,
+            after,
+            as_of,
+            _encode_detail_cursor(FENCE, story_id, sources, as_of, after, True),
+        )
 
     def test_roundtrip(self) -> None:
         """A current-fence token decodes to the pinned sources, snapshot, position and flag."""
         story_id, sources, after, as_of, token = self._token()
         assert _decode_detail_cursor(token, FENCE, story_id, ()) == (sources, as_of, after, True)
 
-    @pytest.mark.parametrize("field,value", [
-        ("membership_revision", 9), ("configuration_revision", 9), ("user_id", 7), ("workspace_id", uuid4()),
-    ])
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("membership_revision", 9),
+            ("configuration_revision", 9),
+            ("user_id", 7),
+            ("workspace_id", uuid4()),
+        ],
+    )
     def test_stale_or_foreign_fence_rejected(self, field: str, value: object) -> None:
         """Revision, actor or workspace drift rejects the token before any position is applied."""
         story_id, _s, _a, _t, token = self._token()
@@ -381,11 +455,20 @@ class TestStoryDetailCursor:
         """The pre-cutover owner-only token format is no longer accepted."""
         import base64
         import json
+
         story_id = uuid4()
-        raw = json.dumps({
-            "owner_id": 1, "story_id": str(story_id), "source_ids": [], "as_of": datetime.now(UTC).isoformat(),
-            "after": [str(uuid4())] * 3, "source_selection_incomplete": False,
-        }, sort_keys=True, separators=(",", ":"))
+        raw = json.dumps(
+            {
+                "owner_id": 1,
+                "story_id": str(story_id),
+                "source_ids": [],
+                "as_of": datetime.now(UTC).isoformat(),
+                "after": [str(uuid4())] * 3,
+                "source_selection_incomplete": False,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         token = base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
         with pytest.raises(DomainError) as exc:
             _decode_detail_cursor(token, FENCE, story_id, ())
@@ -394,13 +477,24 @@ class TestStoryDetailCursor:
 
 def test_plain_excerpt_strips_title_and_markdown() -> None:
     """Leading title copies and Markdown markers are removed from excerpts."""
-    assert _plain_excerpt("US approves sale", "US approves sale. The **American-made** [jets](http://x) ![i](y)") == "The American-made jets"
-    assert _plain_excerpt("T", "### Misc Changes\n- fix(turbopack) `x`") == "Misc Changes fix(turbopack) x"
+    assert (
+        _plain_excerpt(
+            "US approves sale", "US approves sale. The **American-made** [jets](http://x) ![i](y)"
+        )
+        == "The American-made jets"
+    )
+    assert (
+        _plain_excerpt("T", "### Misc Changes\n- fix(turbopack) `x`")
+        == "Misc Changes fix(turbopack) x"
+    )
 
 
 def test_plain_excerpt_strips_release_label_and_inline_heading() -> None:
     """Release feeds' "Tag:" label, repeated title and inline ### markers are removed."""
-    assert _plain_excerpt("v16.5.0-canary.34", "Tag: v16.5.0-canary.34 ### Credits Thanks") == "Credits Thanks"
+    assert (
+        _plain_excerpt("v16.5.0-canary.34", "Tag: v16.5.0-canary.34 ### Credits Thanks")
+        == "Credits Thanks"
+    )
 
 
 def test_plain_excerpt_truncates_at_word_boundary() -> None:

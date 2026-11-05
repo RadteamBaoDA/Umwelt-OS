@@ -23,6 +23,7 @@ Four independent concerns live here, stdlib-only apart from the Prometheus recor
 Nothing here is authority: leases and timestamps are best-effort scheduling aids; every job remains
 idempotent against its durable rows.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -46,7 +47,9 @@ CRON_QUEUE = "arq:cron"
 WAKE_JOB_PREFIX = "wake:"
 WAKE_FLAG_PREFIX = "cron:wake:"
 RERUN_FLAG_PREFIX = "cron:rerun:"
-RUN_CRON_FUNCTION = "run_cron_job"  # plain arq function (not a CronJob) that executes a named cron job
+RUN_CRON_FUNCTION = (
+    "run_cron_job"  # plain arq function (not a CronJob) that executes a named cron job
+)
 WAKE_FLAG_TTL_MS = 5_000
 RERUN_FLAG_TTL_MS = 60_000
 MAX_RERUNS = 3
@@ -56,9 +59,7 @@ CATCH_UP_FACTOR = 2
 
 # Compare-and-delete / compare-and-pexpire so a holder never releases or extends a successor's lease.
 _RELEASE_LUA = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
-_RENEW_LUA = (
-    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end"
-)
+_RENEW_LUA = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end"
 
 
 def stable_offset(name: str, modulus: int, salt: str = "") -> int:
@@ -176,8 +177,12 @@ def record_cron_skip(name: str) -> None:
     """Count a run skipped because another holder owned the lease (observability only)."""
     previous = _RUNS.get(name, CronRun())
     _RUNS[name] = CronRun(
-        previous.last_success_at, previous.last_failure_at, previous.last_duration_seconds,
-        previous.successes, previous.failures, previous.skipped + 1,
+        previous.last_success_at,
+        previous.last_failure_at,
+        previous.last_duration_seconds,
+        previous.successes,
+        previous.failures,
+        previous.skipped + 1,
     )
 
 
@@ -191,7 +196,9 @@ def reset_cron_status() -> None:
     _RUNS.clear()
 
 
-async def persist_cron_run(redis: Any, name: str, duration: float, ok: bool, *, now: float | None = None) -> None:
+async def persist_cron_run(
+    redis: Any, name: str, duration: float, ok: bool, *, now: float | None = None
+) -> None:
     """Mirror a successful run to ``cron:last_success`` as ``"<epoch>:<duration_ms>"``; failures are not stored.
 
     Best-effort: a Redis error is logged and ignored so bookkeeping can never fail a job.
@@ -218,19 +225,28 @@ async def read_last_success(redis: Any) -> dict[str, float]:
 
 
 def overdue_jobs(
-    periods: Mapping[str, int], last_success: Mapping[str, float], *, now: float | None = None,
+    periods: Mapping[str, int],
+    last_success: Mapping[str, float],
+    *,
+    now: float | None = None,
 ) -> list[str]:
     """Names whose last success is missing or older than ``CATCH_UP_FACTOR`` x period (sorted, deterministic)."""
     stamp = time.time() if now is None else now
     return sorted(
-        name for name, period in periods.items()
+        name
+        for name, period in periods.items()
         if name not in last_success or stamp - last_success[name] > CATCH_UP_FACTOR * period
     )
 
 
 async def _run_under_lease(
-    function: Callable[..., Coroutine[Any, Any, Any]], redis: Any, name: str, ttl: int,
-    ctx: dict[str, Any], args: tuple[Any, ...], kwargs: dict[str, Any],
+    function: Callable[..., Coroutine[Any, Any, Any]],
+    redis: Any,
+    name: str,
+    ttl: int,
+    ctx: dict[str, Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
 ) -> tuple[bool, Any]:
     """Run ``function`` once while holding the lease; return ``(ran, result)`` (``ran`` False = lease held).
 
@@ -273,7 +289,10 @@ async def _rerun_requested(redis: Any, name: str) -> bool:
 
 
 def single_flight(
-    function: Callable[..., Coroutine[Any, Any, Any]], *, name: str, period_seconds: int,
+    function: Callable[..., Coroutine[Any, Any, Any]],
+    *,
+    name: str,
+    period_seconds: int,
 ) -> Callable[..., Coroutine[Any, Any, Any]]:
     """Wrap a cron coroutine so at most one run per ``name`` executes cluster-wide.
 
@@ -312,7 +331,9 @@ def single_flight(
 _WAKE_HOOK: Callable[..., Awaitable[None]] | None = None
 
 
-async def _run_hook(hook: Callable[..., Awaitable[None]], job_name: str, defer_seconds: float = 1.0) -> None:
+async def _run_hook(
+    hook: Callable[..., Awaitable[None]], job_name: str, defer_seconds: float = 1.0
+) -> None:
     """Await the wake hook as a task body, swallowing errors (a lost wake falls back to the safety-net poll)."""
     with contextlib.suppress(Exception):
         await hook(job_name, defer_seconds)
@@ -339,8 +360,12 @@ async def wake(redis: Any, job_name: str, *, defer_seconds: float = 1.0) -> bool
         if not await redis.set(flag, "1", nx=True, px=WAKE_FLAG_TTL_MS):
             return False  # a wake is already pending; it will observe this commit too
         job = await redis.enqueue_job(
-            RUN_CRON_FUNCTION, job_name, True, _job_id=f"{WAKE_JOB_PREFIX}{job_name}:{secrets.token_hex(6)}",
-            _queue_name=CRON_QUEUE, _defer_by=defer_seconds,
+            RUN_CRON_FUNCTION,
+            job_name,
+            True,
+            _job_id=f"{WAKE_JOB_PREFIX}{job_name}:{secrets.token_hex(6)}",
+            _queue_name=CRON_QUEUE,
+            _defer_by=defer_seconds,
         )
     except Exception:  # noqa: BLE001 - the periodic safety net still runs the job
         _log.warning("cron wake enqueue failed", extra={"cron_job": job_name}, exc_info=True)

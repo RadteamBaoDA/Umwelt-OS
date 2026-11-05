@@ -3,7 +3,9 @@ from argon2.exceptions import VerificationError
 
 _hasher = PasswordHasher(time_cost=2, memory_cost=19_456, parallelism=1)
 # One bounded startup hash equalizes absent-email password work. It is never an account hash.
-_dummy_password_hash = _hasher.hash("authentication timing placeholder; never an account credential")
+_dummy_password_hash = _hasher.hash(
+    "authentication timing placeholder; never an account credential"
+)
 
 
 def hash_password(password: str) -> str:

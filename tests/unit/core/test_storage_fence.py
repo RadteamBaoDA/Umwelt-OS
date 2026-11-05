@@ -19,7 +19,10 @@ WORKSPACE = UUID(int=40)
 
 def test_physical_contention_is_nonblocking_and_does_not_mark_live_writer_erased(tmp_path):
     with workspace_filesystem_lease(tmp_path, WORKSPACE):
-        with pytest.raises(WorkspaceStorageBusy), workspace_filesystem_lease(tmp_path, WORKSPACE, erase=True):
+        with (
+            pytest.raises(WorkspaceStorageBusy),
+            workspace_filesystem_lease(tmp_path, WORKSPACE, erase=True),
+        ):
             pytest.fail("Erasure overtook a physical writer")
         with workspace_filesystem_lease(tmp_path, UUID(int=41)):
             pass
@@ -39,8 +42,13 @@ except WorkspaceStorageBusy:
     raise SystemExit(0)
 """
     with workspace_filesystem_lease(tmp_path, WORKSPACE):
-        result = subprocess.run([sys.executable, "-c", child, str(tmp_path), str(WORKSPACE)],  # noqa: S603  # test-only subprocess with fixed arguments
-                                cwd=Path(__file__).resolve().parents[3], capture_output=True, timeout=15, check=False)
+        result = subprocess.run(
+            [sys.executable, "-c", child, str(tmp_path), str(WORKSPACE)],  # noqa: S603  # test-only subprocess with fixed arguments
+            cwd=Path(__file__).resolve().parents[3],
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
     assert result.returncode == 0
 
 
@@ -51,8 +59,14 @@ async def test_stale_sql_admitted_upload_cannot_create_any_content_after_erasure
         pass
     for _retry in range(2):
         with pytest.raises(WorkspaceStorageBusy, match="erased"):
-            await storage.save_upload(tmp_path, UploadFile(io.BytesIO(b"late-content")),
-                                      uuid4(), ".txt", 100, workspace_id=WORKSPACE)
+            await storage.save_upload(
+                tmp_path,
+                UploadFile(io.BytesIO(b"late-content")),
+                uuid4(),
+                ".txt",
+                100,
+                workspace_id=WORKSPACE,
+            )
     assert not (tmp_path / "workspaces").exists()
     marker = tmp_path / ".storage-fences" / f"{WORKSPACE}.lock"
     assert marker.read_bytes() == b"1"
@@ -67,7 +81,10 @@ def test_corrupt_deletion_marker_fails_closed_in_both_directions(tmp_path):
     marker = directory / f"{WORKSPACE}.lock"
     marker.write_bytes(b"invalid")
     for erase in (False, True):
-        with pytest.raises(RuntimeError, match="invalid"), workspace_filesystem_lease(tmp_path, WORKSPACE, erase=erase):
+        with (
+            pytest.raises(RuntimeError, match="invalid"),
+            workspace_filesystem_lease(tmp_path, WORKSPACE, erase=erase),
+        ):
             pytest.fail("Corrupt marker was admitted")
     assert marker.read_bytes() == b"invalid"
 
@@ -84,12 +101,16 @@ async def test_writer_with_lost_sql_lease_still_blocks_erasure_until_physical_pu
             return await super().read(size)
 
     upload = PausedUpload(io.BytesIO(b"original-before-erasure"))
-    task = asyncio.create_task(storage.save_upload(tmp_path, upload, uuid4(), ".txt", 100,
-                                                    workspace_id=WORKSPACE))
+    task = asyncio.create_task(
+        storage.save_upload(tmp_path, upload, uuid4(), ".txt", 100, workspace_id=WORKSPACE)
+    )
     try:
         await asyncio.wait_for(started.wait(), timeout=5)
         # Simulate SQL connection loss: only the independent destination lock remains.
-        with pytest.raises(WorkspaceStorageBusy), workspace_filesystem_lease(tmp_path, WORKSPACE, erase=True):
+        with (
+            pytest.raises(WorkspaceStorageBusy),
+            workspace_filesystem_lease(tmp_path, WORKSPACE, erase=True),
+        ):
             pytest.fail("Erasure raced a physical upload")
     finally:
         release.set()
@@ -97,13 +118,21 @@ async def test_writer_with_lost_sql_lease_still_blocks_erasure_until_physical_pu
     with workspace_filesystem_lease(tmp_path, WORKSPACE, erase=True):
         (tmp_path / uri).unlink()
     with pytest.raises(WorkspaceStorageBusy):
-        await storage.save_upload(tmp_path, UploadFile(io.BytesIO(b"stale-retry")),
-                                  uuid4(), ".txt", 100, workspace_id=WORKSPACE)
+        await storage.save_upload(
+            tmp_path,
+            UploadFile(io.BytesIO(b"stale-retry")),
+            uuid4(),
+            ".txt",
+            100,
+            workspace_id=WORKSPACE,
+        )
     assert not list((tmp_path / "workspaces").rglob("*.txt"))
 
 
 @pytest.mark.asyncio
-async def test_cancellation_joins_thread_and_removes_temp_before_releasing_destination_lock(tmp_path, monkeypatch):
+async def test_cancellation_joins_thread_and_removes_temp_before_releasing_destination_lock(
+    tmp_path, monkeypatch
+):
     started, finish = threading.Event(), threading.Event()
     original_write = storage._write_block
 
@@ -114,14 +143,25 @@ async def test_cancellation_joins_thread_and_removes_temp_before_releasing_desti
         original_write(temporary, digest, block)
 
     monkeypatch.setattr(storage, "_write_block", blocked_write)
-    task = asyncio.create_task(storage.save_upload(tmp_path, UploadFile(io.BytesIO(b"cancel-me")),
-                                                    uuid4(), ".txt", 100, workspace_id=WORKSPACE))
+    task = asyncio.create_task(
+        storage.save_upload(
+            tmp_path,
+            UploadFile(io.BytesIO(b"cancel-me")),
+            uuid4(),
+            ".txt",
+            100,
+            workspace_id=WORKSPACE,
+        )
+    )
     try:
         assert await asyncio.wait_for(asyncio.to_thread(started.wait, 5), timeout=6)
         task.cancel()
         await asyncio.sleep(0)
         assert not task.done()
-        with pytest.raises(WorkspaceStorageBusy), workspace_filesystem_lease(tmp_path, WORKSPACE, erase=True):
+        with (
+            pytest.raises(WorkspaceStorageBusy),
+            workspace_filesystem_lease(tmp_path, WORKSPACE, erase=True),
+        ):
             pytest.fail("Cancelled physical writer was still running")
     finally:
         finish.set()
@@ -147,8 +187,14 @@ async def test_upload_rejects_real_junction_before_creating_peer_content(tmp_pat
     _winapi.CreateJunction(str(peer), str(junction))
     try:
         with pytest.raises(ValueError, match="symlink"):
-            await storage.save_upload(tmp_path, UploadFile(io.BytesIO(b"new-content")),
-                                      document, ".txt", 100, workspace_id=WORKSPACE)
+            await storage.save_upload(
+                tmp_path,
+                UploadFile(io.BytesIO(b"new-content")),
+                document,
+                ".txt",
+                100,
+                workspace_id=WORKSPACE,
+            )
         assert not list(peer.iterdir())
     finally:
         junction.rmdir()
@@ -163,7 +209,10 @@ def test_marker_directory_cannot_be_redirected_by_junction(tmp_path):
     junction = tmp_path / ".storage-fences"
     _winapi.CreateJunction(str(peer), str(junction))
     try:
-        with pytest.raises(ValueError, match="junction"), workspace_filesystem_lease(tmp_path, WORKSPACE, erase=True):
+        with (
+            pytest.raises(ValueError, match="junction"),
+            workspace_filesystem_lease(tmp_path, WORKSPACE, erase=True),
+        ):
             pytest.fail("Marker was written in a redirected directory")
         assert not list(peer.iterdir())
     finally:

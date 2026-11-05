@@ -43,11 +43,19 @@ async def minio_config() -> S3Config:
     key, secret = os.getenv("S3_TEST_ACCESS_KEY", ""), os.getenv("S3_TEST_SECRET_KEY", "")
     bucket = f"it-{uuid4().hex[:20]}"
     async with aioboto3.Session().client(
-        "s3", endpoint_url=endpoint, region_name="us-east-1", aws_access_key_id=key, aws_secret_access_key=secret,
+        "s3",
+        endpoint_url=endpoint,
+        region_name="us-east-1",
+        aws_access_key_id=key,
+        aws_secret_access_key=secret,
     ) as client:
         await client.create_bucket(Bucket=bucket)
     return S3Config(
-        bucket=bucket, endpoint_url=endpoint, access_key_id=key, secret_access_key=secret, part_size_bytes=5 * MIB,
+        bucket=bucket,
+        endpoint_url=endpoint,
+        access_key_id=key,
+        secret_access_key=secret,
+        part_size_bytes=5 * MIB,
     )
 
 
@@ -61,14 +69,18 @@ def pg_fence() -> PostgresStorageFence:
 
 
 async def test_multipart_roundtrip_conditional_create_and_listing(
-    minio_config: S3Config, pg_fence: PostgresStorageFence,
+    minio_config: S3Config,
+    pg_fence: PostgresStorageFence,
 ) -> None:
     backend = S3StorageBackend(minio_config, pg_fence)
     workspace = uuid4()
     key = build_document_key(workspace, uuid4(), ".bin")
     payload = b"a" * (5 * MIB) + b"b" * 1234
     stored = await backend.put_stream(
-        key, _chunks(payload[: 3 * MIB], payload[3 * MIB :]), 20 * MIB, workspace_id=workspace,
+        key,
+        _chunks(payload[: 3 * MIB], payload[3 * MIB :]),
+        20 * MIB,
+        workspace_id=workspace,
     )
     assert stored.size == len(payload)
     assert b"".join([block async for block in backend.open_stream(key)]) == payload
@@ -82,7 +94,9 @@ async def test_multipart_roundtrip_conditional_create_and_listing(
     assert not await backend.exists(key)
 
 
-async def test_presigned_download_forces_attachment(minio_config: S3Config, pg_fence: PostgresStorageFence) -> None:
+async def test_presigned_download_forces_attachment(
+    minio_config: S3Config, pg_fence: PostgresStorageFence
+) -> None:
     backend = S3StorageBackend(replace(minio_config, presigned_downloads=True), pg_fence)
     workspace = uuid4()
     key = build_document_key(workspace, uuid4(), ".html")
@@ -94,7 +108,9 @@ async def test_presigned_download_forces_attachment(minio_config: S3Config, pg_f
     assert fetched.headers["content-type"].startswith("text/plain")
 
 
-async def test_postgres_fence_excludes_writers_and_erasure_flag_is_permanent(pg_fence: PostgresStorageFence) -> None:
+async def test_postgres_fence_excludes_writers_and_erasure_flag_is_permanent(
+    pg_fence: PostgresStorageFence,
+) -> None:
     workspace = uuid4()
     async with pg_fence.ahold(workspace):
         with pytest.raises(WorkspaceStorageBusy):

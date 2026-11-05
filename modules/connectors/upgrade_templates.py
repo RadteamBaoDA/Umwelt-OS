@@ -46,30 +46,56 @@ _STALE = (
 
 
 async def _upgrade_one(
-    factory: async_sessionmaker[AsyncSession], source_id: UUID, api: Any | None, *, apply: bool, flag: bool,
+    factory: async_sessionmaker[AsyncSession],
+    source_id: UUID,
+    api: Any | None,
+    *,
+    apply: bool,
+    flag: bool,
 ) -> str:
     """Return one of would_upgrade / upgraded / reconciliation_required / skipped for a single source."""
     async with factory() as session:
         try:
-            workspace_id = await session.scalar(text("SELECT workspace_id FROM sources WHERE id = :id"), {"id": source_id})
+            workspace_id = await session.scalar(
+                text("SELECT workspace_id FROM sources WHERE id = :id"), {"id": source_id}
+            )
             row = await session.get(ConnectorProvisioning, source_id)
-            owner = await session.scalar(select(WorkspaceMembership).where(
-                WorkspaceMembership.workspace_id == workspace_id, WorkspaceMembership.role == "owner",
-            )) if workspace_id is not None else None
+            owner = (
+                await session.scalar(
+                    select(WorkspaceMembership).where(
+                        WorkspaceMembership.workspace_id == workspace_id,
+                        WorkspaceMembership.role == "owner",
+                    )
+                )
+                if workspace_id is not None
+                else None
+            )
             if owner is None or row is None:
                 await session.rollback()
                 return "skipped"
             scope = InternalJobScope(
-                workspace_id=workspace_id, actor_user_id=owner.user_id, membership_revision=owner.revision,
-                source_id=source_id, source_generation=row.source_generation)
+                workspace_id=workspace_id,
+                actor_user_id=owner.user_id,
+                membership_revision=owner.revision,
+                source_id=source_id,
+                source_generation=row.source_generation,
+            )
             revision = row.desired_revision
             await session.rollback()
-            if not await module_is_enabled(session, "connectors", scope=scope, multi_workspace_enabled=flag):
+            if not await module_is_enabled(
+                session, "connectors", scope=scope, multi_workspace_enabled=flag
+            ):
                 await session.rollback()
                 return "skipped"
             fence = await read_access_fence(session, scope=scope, multi_workspace_enabled=flag)
-            source = await sources.get_connector_source(session, source_id, multi_workspace_enabled=flag, scope=scope)
-            if source is None or source.status != "active" or source.type not in registry.SUPPORTED_TYPES:
+            source = await sources.get_connector_source(
+                session, source_id, multi_workspace_enabled=flag, scope=scope
+            )
+            if (
+                source is None
+                or source.status != "active"
+                or source.type not in registry.SUPPORTED_TYPES
+            ):
                 await session.rollback()
                 return "skipped"
             await provider_terms.require_terms_eligible(session, source)
@@ -77,12 +103,37 @@ async def _upgrade_one(
             if not apply:
                 return "would_upgrade"
             begun = await provisioning.begin_backend_transition_in_uow(
-                session, source_id, revision, "n8n", scope=scope, multi_workspace_enabled=flag, access_fence=fence)
-            await commit_with_replay(session, [
-                make_source_change(source.id, source.generation, source.status, connector_state=begun.state, scope=scope),
-            ], access_fence=fence, multi_workspace_enabled=flag, scope=scope)
+                session,
+                source_id,
+                revision,
+                "n8n",
+                scope=scope,
+                multi_workspace_enabled=flag,
+                access_fence=fence,
+            )
+            await commit_with_replay(
+                session,
+                [
+                    make_source_change(
+                        source.id,
+                        source.generation,
+                        source.status,
+                        connector_state=begun.state,
+                        scope=scope,
+                    ),
+                ],
+                access_fence=fence,
+                multi_workspace_enabled=flag,
+                scope=scope,
+            )
             phase = await provisioning.advance_backend_transition(
-                session, source_id, api, scope=scope, multi_workspace_enabled=flag, access_fence=fence)
+                session,
+                source_id,
+                api,
+                scope=scope,
+                multi_workspace_enabled=flag,
+                access_fence=fence,
+            )
             return "reconciliation_required" if phase == "reconciliation_required" else "upgraded"
         except (HTTPException, DomainError) as exc:
             await session.rollback()
@@ -92,7 +143,11 @@ async def _upgrade_one(
 
 
 async def run(
-    factory: async_sessionmaker[AsyncSession], settings: Settings, *, apply: bool = False, limit: int = 50,
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    *,
+    apply: bool = False,
+    limit: int = 50,
     after: UUID | None = None,
 ) -> dict[str, Any]:
     """Process at most ``limit`` stale sources after ``after``; idempotent, safe to re-run with ``last_source_id``.
@@ -103,23 +158,45 @@ async def run(
         n8n = await resolve_n8n(session, settings)
         await session.rollback()
     if not n8n.enabled:
-        return {"dry_run": not apply, "examined": 0, "upgraded": 0, "would_upgrade": 0,
-                "reconciliation_required": 0, "skipped": 0, "last_source_id": None, "more": False,
-                "disabled": True}
+        return {
+            "dry_run": not apply,
+            "examined": 0,
+            "upgraded": 0,
+            "would_upgrade": 0,
+            "reconciliation_required": 0,
+            "skipped": 0,
+            "last_source_id": None,
+            "more": False,
+            "disabled": True,
+        }
     api = N8nApi(n8n.service_url, n8n.api_key, settings) if n8n.api_key else None
-    statement = select(ConnectorProvisioning.source_id).where(*_STALE).order_by(ConnectorProvisioning.source_id).limit(limit)
+    statement = (
+        select(ConnectorProvisioning.source_id)
+        .where(*_STALE)
+        .order_by(ConnectorProvisioning.source_id)
+        .limit(limit)
+    )
     if after is not None:
         statement = statement.where(ConnectorProvisioning.source_id > after)
     async with factory() as session:
         ids = list((await session.scalars(statement)).all())
         await session.rollback()
     summary: dict[str, Any] = {
-        "dry_run": not apply, "examined": len(ids), "upgraded": 0, "would_upgrade": 0,
-        "reconciliation_required": 0, "skipped": 0,
-        "last_source_id": str(ids[-1]) if ids else None, "more": len(ids) >= limit,
+        "dry_run": not apply,
+        "examined": len(ids),
+        "upgraded": 0,
+        "would_upgrade": 0,
+        "reconciliation_required": 0,
+        "skipped": 0,
+        "last_source_id": str(ids[-1]) if ids else None,
+        "more": len(ids) >= limit,
     }
     for source_id in ids:
-        summary[await _upgrade_one(factory, source_id, api, apply=apply, flag=settings.multi_workspace_enabled)] += 1
+        summary[
+            await _upgrade_one(
+                factory, source_id, api, apply=apply, flag=settings.multi_workspace_enabled
+            )
+        ] += 1
     return summary
 
 
@@ -128,7 +205,12 @@ async def _main(args: argparse.Namespace) -> int:
     settings = Settings()
     engine, factory = make_session_factory(settings.admin_database_url, pool_size=2, max_overflow=0)
     try:
-        print(json.dumps(await run(factory, settings, apply=args.apply, limit=args.limit, after=args.after), indent=2))
+        print(
+            json.dumps(
+                await run(factory, settings, apply=args.apply, limit=args.limit, after=args.after),
+                indent=2,
+            )
+        )
     finally:
         await engine.dispose()
     return 0

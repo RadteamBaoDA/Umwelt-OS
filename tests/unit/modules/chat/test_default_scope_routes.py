@@ -58,7 +58,9 @@ async def test_account_read_dependency_returns_auth_row() -> None:
     assert await chat_routes._account_write(auth, SCOPE) is auth
 
 
-async def test_explicit_invited_header_is_409_default_workspace_required(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_explicit_invited_header_is_409_default_workspace_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from core.workspaces import dependencies as deps
 
     account = MagicMock(id=2, default_workspace_id=uuid4())
@@ -71,7 +73,11 @@ async def test_explicit_invited_header_is_409_default_workspace_required(monkeyp
 def test_retrieval_requires_the_callers_scope() -> None:
     """R6: no owner-constant fallback; retrieval entrypoints take the actor's default scope."""
     assert not hasattr(retrieval, "owner_scope_kwargs")
-    for fn in (retrieval.build_context, retrieval.revalidate_context_fence, retrieval._apply_configured_reranking):
+    for fn in (
+        retrieval.build_context,
+        retrieval.revalidate_context_fence,
+        retrieval._apply_configured_reranking,
+    ):
         param = inspect.signature(fn).parameters["scope"]
         assert param.default is inspect.Parameter.empty
 

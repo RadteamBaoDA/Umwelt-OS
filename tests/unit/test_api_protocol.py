@@ -4,7 +4,9 @@ from apps.api.protocol import NoDelayHttpToolsProtocol
 
 
 def test_protocol_sets_tcp_nodelay_on_accepted_socket() -> None:
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)  # proto=0, like uvicorn's pre-bound socket
+    srv = socket.socket(
+        socket.AF_INET, socket.SOCK_STREAM
+    )  # proto=0, like uvicorn's pre-bound socket
     srv.bind(("127.0.0.1", 0))
     srv.listen()
     cli = socket.create_connection(srv.getsockname())
@@ -23,4 +25,3 @@ def test_protocol_sets_tcp_nodelay_on_accepted_socket() -> None:
     assert conn.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY) == 1
     for s in (srv, cli, conn):
         s.close()
-

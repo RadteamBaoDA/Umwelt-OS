@@ -51,7 +51,9 @@ def _build_s3_backend(settings: Any) -> StorageBackend:
     from core.storage.pg_fence import PostgresStorageFence, fence_engine
     from core.storage.s3 import S3Config, S3StorageBackend
 
-    return S3StorageBackend(S3Config.from_settings(settings), PostgresStorageFence(fence_engine(settings.database_url)))
+    return S3StorageBackend(
+        S3Config.from_settings(settings), PostgresStorageFence(fence_engine(settings.database_url))
+    )
 
 
 register_storage_backend("s3", _build_s3_backend)

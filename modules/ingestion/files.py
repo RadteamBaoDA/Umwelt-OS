@@ -4,7 +4,10 @@ from typing import BinaryIO
 
 SUPPORTED = {
     ".pdf": ("application/pdf", b"%PDF-"),
-    ".docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", b"PK\x03\x04"),
+    ".docx": (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        b"PK\x03\x04",
+    ),
     ".json": ("application/json", None),
     ".csv": ("text/csv", None),
     ".txt": ("text/plain", None),
@@ -13,7 +16,9 @@ SUPPORTED = {
 }
 
 
-def validate_upload(filename: str | None, declared_mime: str | None, file: BinaryIO) -> tuple[str, str, str]:
+def validate_upload(
+    filename: str | None, declared_mime: str | None, file: BinaryIO
+) -> tuple[str, str, str]:
     """Validate extension, declared type, signature, archive structure, and UTF-8; rewind before returning."""
     extension = Path(filename or "").suffix.lower()
     supported = SUPPORTED.get(extension)

@@ -23,8 +23,14 @@ def normalize_mcp_url(value: str, *, origin_only: bool = False) -> tuple[str, st
             raise ValueError("MCP endpoint URL must use HTTP or HTTPS")
         if parsed.netloc.endswith(":"):
             raise ValueError("MCP endpoint URL has an empty port")
-        if (parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment
-                or "?" in value or "#" in value):
+        if (
+            parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or "?" in value
+            or "#" in value
+        ):
             raise ValueError("MCP endpoint URL must not contain credentials, query, or fragment")
         if "%" in parsed.hostname:
             raise ValueError("Scoped IP destinations are not supported")
@@ -42,10 +48,10 @@ def normalize_mcp_url(value: str, *, origin_only: bool = False) -> tuple[str, st
         except UnicodeError as exc:
             raise ValueError("MCP endpoint hostname is invalid") from exc
         labels = host.split(".")
-        if (len(host) > 253 or any(
-                len(label) > 63 or not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", label)
-                for label in labels
-        )):
+        if len(host) > 253 or any(
+            len(label) > 63 or not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", label)
+            for label in labels
+        ):
             raise ValueError("MCP endpoint hostname is invalid") from None
     if not host:
         raise ValueError("MCP endpoint hostname is invalid")

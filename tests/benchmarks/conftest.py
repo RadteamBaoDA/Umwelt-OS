@@ -12,7 +12,9 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     """
     if os.getenv("RUN_BENCHMARKS") == "1":
         return
-    skip = pytest.mark.skip(reason="benchmark: set RUN_BENCHMARKS=1 to run (docs/performance-report.md)")
+    skip = pytest.mark.skip(
+        reason="benchmark: set RUN_BENCHMARKS=1 to run (docs/performance-report.md)"
+    )
     for item in items:
         if "benchmark" in item.keywords:
             item.add_marker(skip)

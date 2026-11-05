@@ -49,7 +49,9 @@ router = APIRouter(
     dependencies=[Depends(module_dependency("knowledge.documents"))],
 )
 Session = Annotated[AsyncSession, Depends(get_session)]
-WorkspaceRead = Annotated[WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)]
+WorkspaceRead = Annotated[
+    WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)
+]
 WorkspaceStandardRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
@@ -61,7 +63,9 @@ def _require_document_route_owner(scope: WorkspaceContext | AdminWorkspaceReadCo
 
 
 async def _gate_member_read(
-    request: Request, session: AsyncSession, scope: WorkspaceContext | AdminWorkspaceReadContext,
+    request: Request,
+    session: AsyncSession,
+    scope: WorkspaceContext | AdminWorkspaceReadContext,
     document_ids: tuple[UUID, ...],
 ) -> None:
     """Arm the publication gate for a member read; owners are unaffected.
@@ -75,27 +79,49 @@ async def _gate_member_read(
         raise TypeError("invariant violated: unexpected type for scope")
     flag = request.app.state.settings.multi_workspace_enabled
     unique = tuple(dict.fromkeys(document_ids))
-    grants = await read_resource_grants(session, scope=scope, kind="document", resource_ids=unique) if unique else ()
+    grants = (
+        await read_resource_grants(session, scope=scope, kind="document", resource_ids=unique)
+        if unique
+        else ()
+    )
     if len(grants) != len(unique):
         raise HTTPException(status_code=404, detail="Document not found")
     fence = await read_access_fence(session, scope=scope, multi_workspace_enabled=flag)
-    require_publication_gate(request, PublicationFence(
-        scope=scope, access_fence=fence, auth_session=authenticated_session_ref(request), grants=grants))
+    require_publication_gate(
+        request,
+        PublicationFence(
+            scope=scope,
+            access_fence=fence,
+            auth_session=authenticated_session_ref(request),
+            grants=grants,
+        ),
+    )
 
 
 def as_member_document_read(document: Document) -> MemberDocumentRead:
     """Project a shared Document without Source, storage URI, external id or metadata."""
     return MemberDocumentRead(
-        id=document.id, title=document.title, content_type=document.content_type,
-        mime_type=document.mime_type, canonical_url=document.canonical_url, author=document.author,
-        current_version=document.current_version, content_hash=document.content_hash,
-        extraction_status=document.extraction_status, published_at=document.published_at,
-        observed_at=document.observed_at, language=document.language,
-        has_raw=document.raw_uri is not None, created_at=document.created_at, updated_at=document.updated_at,
+        id=document.id,
+        title=document.title,
+        content_type=document.content_type,
+        mime_type=document.mime_type,
+        canonical_url=document.canonical_url,
+        author=document.author,
+        current_version=document.current_version,
+        content_hash=document.content_hash,
+        extraction_status=document.extraction_status,
+        published_at=document.published_at,
+        observed_at=document.observed_at,
+        language=document.language,
+        has_raw=document.raw_uri is not None,
+        created_at=document.created_at,
+        updated_at=document.updated_at,
     )
 
 
-async def _lock_document_write_request(request: Request, session: AsyncSession, scope: WorkspaceContext) -> None:
+async def _lock_document_write_request(
+    request: Request, session: AsyncSession, scope: WorkspaceContext
+) -> None:
     """Admit the exact request session before public Source/Document locks through commit.
 
     Workspace-write dependency retains CSRF/module admission. Auth owns session
@@ -103,23 +129,34 @@ async def _lock_document_write_request(request: Request, session: AsyncSession, 
     here. No external I/O/commit occurs; W4 separately fences the final response send.
     """
     _require_document_route_owner(scope)
-    await lock_access_fence(session, scope=scope,
+    await lock_access_fence(
+        session,
+        scope=scope,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-        auth_sessions=(authenticated_session_ref(request),))
+        auth_sessions=(authenticated_session_ref(request),),
+    )
 
 
 @router.post("/provider-snapshots", response_model=list[ProviderDocumentSnapshotRead])
 async def read_provider_snapshots(
-    payload: ProviderSnapshotRequest, session: Session, request: Request,
+    payload: ProviderSnapshotRequest,
+    session: Session,
+    request: Request,
     workspace: WorkspaceStandardRead,
 ) -> list[ProviderDocumentSnapshotRead]:
     """Return exact immutable provider versions after owner-route authentication."""
     _require_document_route_owner(workspace)
     try:
-        return await public.read_provider_snapshots(session, payload.version_ids, scope=workspace,
-            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+        return await public.read_provider_snapshots(
+            session,
+            payload.version_ids,
+            scope=workspace,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail="One or more provider versions are unavailable") from exc
+        raise HTTPException(
+            status_code=404, detail="One or more provider versions are unavailable"
+        ) from exc
 
 
 @router.get("/provider-snapshots", response_model=ProviderDocumentSnapshotList)
@@ -136,8 +173,12 @@ async def list_provider_snapshots(
     _require_document_route_owner(workspace)
     try:
         return await public.list_provider_snapshots(
-            session, source_ids=source_ids, channel_ids=channel_ids,
-            limit=limit, cursor=cursor, scope=workspace,
+            session,
+            source_ids=source_ids,
+            channel_ids=channel_ids,
+            limit=limit,
+            cursor=cursor,
+            scope=workspace,
             multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
         )
     except ValueError as exc:
@@ -185,12 +226,20 @@ async def list_documents(
     Public query applies Source deletion scope before paging. Response send fencing is W4;
     selected identity never enables pending provider/gadget/deletion/citation handlers.
     """
-    items, next_cursor = await public.list_documents(session, limit, cursor, source_id,
-        scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-        exclude_measurements=exclude_measurements)
+    items, next_cursor = await public.list_documents(
+        session,
+        limit,
+        cursor,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        exclude_measurements=exclude_measurements,
+    )
     if scope.role == "member":
         await _gate_member_read(request, session, scope, tuple(item.id for item in items))
-        return MemberDocumentList(items=[as_member_document_read(item) for item in items], next_cursor=next_cursor)
+        return MemberDocumentList(
+            items=[as_member_document_read(item) for item in items], next_cursor=next_cursor
+        )
     return DocumentList(items=[as_document_read(item) for item in items], next_cursor=next_cursor)
 
 
@@ -211,16 +260,27 @@ async def list_dashboard_projections(
     _require_document_route_owner(workspace)
     try:
         return await public.list_gadget_document_projections(
-            session, source_ids=tuple(source_ids), limit=limit, cursor=cursor,
+            session,
+            source_ids=tuple(source_ids),
+            limit=limit,
+            cursor=cursor,
             channel_ids=tuple(channel_ids) if channel_ids is not None else None,
-            language=language, since=since, include_dismissed=include_dismissed,
-            scope=workspace, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+            language=language,
+            since=since,
+            include_dismissed=include_dismissed,
+            scope=workspace,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail="Dashboard projection scope is invalid") from exc
+        raise HTTPException(
+            status_code=422, detail="Dashboard projection scope is invalid"
+        ) from exc
 
 
-@router.put("/{document_id}/versions/{version_number}/interaction", response_model=GadgetDocumentInteractionRead)
+@router.put(
+    "/{document_id}/versions/{version_number}/interaction",
+    response_model=GadgetDocumentInteractionRead,
+)
 async def set_dashboard_document_interaction(
     document_id: UUID,
     version_number: Annotated[int, Path(ge=1, le=2_147_483_647)],
@@ -232,8 +292,12 @@ async def set_dashboard_document_interaction(
     """Set durable owner read/bookmark state for an active exact current document version."""
     await _lock_document_write_request(request, session, workspace)
     result = await public.set_gadget_document_interaction(
-        session, document_id=document_id, version_number=version_number, payload=payload,
-        scope=workspace, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        session,
+        document_id=document_id,
+        version_number=version_number,
+        payload=payload,
+        scope=workspace,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
     if result is None:
         raise HTTPException(status_code=409, detail="Document version is stale or unavailable")
@@ -242,7 +306,10 @@ async def set_dashboard_document_interaction(
 
 @router.post("", response_model=DocumentRead, status_code=201)
 async def create_document(
-    payload: DocumentCreate, session: Session, request: Request, scope: WorkspaceWrite,
+    payload: DocumentCreate,
+    session: Session,
+    request: Request,
+    scope: WorkspaceWrite,
 ) -> DocumentRead:
     """Create an owner root/version with exact request-session locks before Source/key writes.
 
@@ -251,8 +318,12 @@ async def create_document(
     """
     await _lock_document_write_request(request, session, scope)
     try:
-        document = await public.create_document(session, payload, scope=scope,
-            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+        document = await public.create_document(
+            session,
+            payload,
+            scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -264,15 +335,22 @@ async def create_document(
 
 @router.get("/{document_id}/raw")
 async def get_raw_document(
-    document_id: UUID, request: Request, session: Session, scope: WorkspaceRead,
+    document_id: UUID,
+    request: Request,
+    session: Session,
+    scope: WorkspaceRead,
 ) -> Response:
     """Keep bootstrap-only file admission while using the scoped owner root locator.
 
     Retain private/no-store/nosniff headers and exact storage path behavior. The root query
     denies foreign/data-purged content, but it is not W4 actual FileResponse-send proof.
     """
-    document = await public.get_document(session, document_id, scope=scope,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    document = await public.get_document(
+        session,
+        document_id,
+        scope=scope,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
     if document is None or document.raw_uri is None:
         raise HTTPException(status_code=404, detail="Raw document not found")
     await _gate_member_read(request, session, scope, (document.id,))
@@ -285,7 +363,9 @@ async def get_raw_document(
         raise HTTPException(status_code=404, detail="Raw document not found")
     filename = str(document.metadata_json.get("filename", "download"))
     response = await storage.afile_response(
-        document.raw_uri, media_type=document.mime_type or "application/octet-stream", filename=filename,
+        document.raw_uri,
+        media_type=document.mime_type or "application/octet-stream",
+        filename=filename,
     )
     response.headers["Cache-Control"] = "private, no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -294,15 +374,22 @@ async def get_raw_document(
 
 @router.get("/{document_id}", response_model=DocumentRead | MemberDocumentRead)
 async def get_document(
-    document_id: UUID, session: Session, request: Request, scope: WorkspaceRead,
+    document_id: UUID,
+    session: Session,
+    request: Request,
+    scope: WorkspaceRead,
 ) -> DocumentRead | MemberDocumentRead:
     """Read one retained root; foreign, deleted and ungranted IDs are the same 404.
 
     Scope query admission preserves inactive retained metadata and Source purge privacy;
     it does not replace the separately owned exact-session final response-send fence.
     """
-    document = await public.get_document(session, document_id, scope=scope,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    document = await public.get_document(
+        session,
+        document_id,
+        scope=scope,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
     if scope.role == "member":
@@ -329,8 +416,13 @@ async def update_document(
         getattr(payload, key) is None for key in payload.model_fields_set
     ):
         raise HTTPException(status_code=422, detail="At least one non-null field is required")
-    document = await public.update_document(session, document_id, payload, scope=scope,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    document = await public.update_document(
+        session,
+        document_id,
+        payload,
+        scope=scope,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
     return as_document_read(document)
@@ -344,11 +436,16 @@ async def delete_document(
     await _lock_document_write_request(request, session, scope)
     try:
         operation = await public.delete_document(
-            session, document_id, scope=scope,
-            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+            session,
+            document_id,
+            scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        )
     except DocumentCleanupPreparationLimitError as exc:
         # The session dependency rolls the whole transaction back; nothing was mutated.
-        raise HTTPException(status_code=409, detail="document_cleanup_dependency_limit_exceeded") from exc
+        raise HTTPException(
+            status_code=409, detail="document_cleanup_dependency_limit_exceeded"
+        ) from exc
     if operation is None:
         raise HTTPException(status_code=404, detail="Document not found")
     return DocumentDeletionRead(
@@ -383,17 +480,22 @@ async def delete_document(
 
 @router.get("/deletion-operations/{operation_id}", response_model=DocumentDeletionRead)
 async def get_deletion_operation(
-    operation_id: UUID, session: Session, request: Request, scope: WorkspaceRead,
+    operation_id: UUID,
+    session: Session,
+    request: Request,
+    scope: WorkspaceRead,
 ) -> DocumentDeletionRead:
     """Return owner-only durable status; a receipt whose authority is missing/stale reports action-required."""
     _require_document_route_owner(scope)
     flag = request.app.state.settings.multi_workspace_enabled
     operation = await public.get_document_cleanup_operation(
-        session, operation_id, scope=scope, multi_workspace_enabled=flag)
+        session, operation_id, scope=scope, multi_workspace_enabled=flag
+    )
     if operation is None:
         raise HTTPException(status_code=404, detail="Document cleanup operation not found")
     authority_error = await public.cleanup_authority_error(
-        session, operation, scope=scope, multi_workspace_enabled=flag)
+        session, operation, scope=scope, multi_workspace_enabled=flag
+    )
     return DocumentDeletionRead(
         operation_id=operation.id,
         status=operation.status,
@@ -440,8 +542,12 @@ async def update_content(
     await _lock_document_write_request(request, session, scope)
     try:
         document = await public.append_content(
-            session, document_id, payload.expected_version, payload.content,
-            scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+            session,
+            document_id,
+            payload.expected_version,
+            payload.content,
+            scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -464,8 +570,14 @@ async def list_versions(
     Deny members before enrichment, preserve ascending ordering/404 and defer actual-send
     admission to W4. Workspace context alone does not enable shared-document history.
     """
-    versions, next_cursor = await public.list_versions(session, document_id, limit, cursor,
-        scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    versions, next_cursor = await public.list_versions(
+        session,
+        document_id,
+        limit,
+        cursor,
+        scope=scope,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
     if versions is None:
         raise HTTPException(status_code=404, detail="Document not found")
     await _gate_member_read(request, session, scope, (document_id,))
@@ -488,8 +600,13 @@ async def get_version(
     Deny members before root/version query; scoped unavailable versions are 404. Source purge
     privacy and retained inactive eligibility stay in owner query, with W4 send work separate.
     """
-    version = await public.get_version(session, document_id, number, scope=scope,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    version = await public.get_version(
+        session,
+        document_id,
+        number,
+        scope=scope,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
     if version is None:
         raise HTTPException(status_code=404, detail="Document version not found")
     await _gate_member_read(request, session, scope, (document_id,))
@@ -512,8 +629,11 @@ async def get_citation_target(
     by the version IDs supplied in the navigation URL.
     """
     chunks = await public.read_chat_evidence_chunks(
-        session, [(document_version_id, chunk_id)], require_current_version=False,
-        scope=workspace, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        session,
+        [(document_version_id, chunk_id)],
+        require_current_version=False,
+        scope=workspace,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
     if not chunks or chunks[0].document_id != document_id:
         raise HTTPException(status_code=404, detail="Citation evidence is no longer available")

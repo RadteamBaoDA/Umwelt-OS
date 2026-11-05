@@ -58,16 +58,26 @@ async def test_translation_recovery_enqueues_on_model_queue() -> None:
     session.scalars = AsyncMock(return_value=SimpleNamespace(all=lambda: [tid]))
     redis = MagicMock()
     redis.enqueue_job = AsyncMock()
-    assert await worker.recover_translation_jobs({"session_factory": _factory(session), "redis": redis}) == 1
+    assert (
+        await worker.recover_translation_jobs(
+            {"session_factory": _factory(session), "redis": redis}
+        )
+        == 1
+    )
     assert redis.enqueue_job.await_args.kwargs["_queue_name"] == MODEL_QUEUE
 
 
-@pytest.mark.parametrize(("module", "job"), [
-    ("modules.timeline.worker", "process_timeline_extraction_work"),
-    ("modules.knowledge.entities.worker", "process_entity_extraction_work"),
-])
+@pytest.mark.parametrize(
+    ("module", "job"),
+    [
+        ("modules.timeline.worker", "process_timeline_extraction_work"),
+        ("modules.knowledge.entities.worker", "process_entity_extraction_work"),
+    ],
+)
 async def test_extraction_recovery_enqueues_on_model_queue(
-    monkeypatch: pytest.MonkeyPatch, module: str, job: str,
+    monkeypatch: pytest.MonkeyPatch,
+    module: str,
+    job: str,
 ) -> None:
     import importlib
 
@@ -77,15 +87,26 @@ async def test_extraction_recovery_enqueues_on_model_queue(
     timeline = module.startswith("modules.timeline")
     public = worker.timeline if timeline else worker.entities
     monkeypatch.setattr(public, "list_blocked_extraction_work", AsyncMock(return_value=[]))
-    monkeypatch.setattr(public, "list_recoverable_extraction_work", AsyncMock(return_value=[work_id]))
+    monkeypatch.setattr(
+        public, "list_recoverable_extraction_work", AsyncMock(return_value=[work_id])
+    )
     monkeypatch.setattr(public, "terminalize_exhausted_extraction_work", AsyncMock(), raising=False)
-    monkeypatch.setattr(worker.documents, "list_ready_version_refs", AsyncMock(return_value=([], None)))
+    monkeypatch.setattr(
+        worker.documents, "list_ready_version_refs", AsyncMock(return_value=([], None))
+    )
     redis = MagicMock()
     for attr in ("get", "set", "delete", "enqueue_job"):
         setattr(redis, attr, AsyncMock(return_value=None))
-    ctx = {"session_factory": _factory(_recovery_session(ws)), "redis": redis,
-           "settings": MagicMock(multi_workspace_enabled=False)}
-    recover = worker.recover_timeline_extraction_work if timeline else worker.recover_entity_extraction_work
+    ctx = {
+        "session_factory": _factory(_recovery_session(ws)),
+        "redis": redis,
+        "settings": MagicMock(multi_workspace_enabled=False),
+    }
+    recover = (
+        worker.recover_timeline_extraction_work
+        if timeline
+        else worker.recover_entity_extraction_work
+    )
     await recover(ctx)
     redis.enqueue_job.assert_awaited_once()
     assert redis.enqueue_job.await_args.args[0] == job
@@ -102,13 +123,29 @@ async def test_claims_honour_lease_seconds_parameter(monkeypatch: pytest.MonkeyP
     patch_entities(monkeypatch, "_admit", AsyncMock())
     for module, kwargs in ((entities, {}), (timeline, {})):
         for seconds in (None, 195):
-            work = SimpleNamespace(status="pending", lease_expires_at=None, attempt=0, next_attempt_at=now,
-                                   lease_owner=None, error_code=None)
+            work = SimpleNamespace(
+                status="pending",
+                lease_expires_at=None,
+                attempt=0,
+                next_attempt_at=now,
+                lease_owner=None,
+                error_code=None,
+            )
             session = MagicMock()
             session.scalar = AsyncMock(return_value=work)
             session.flush = AsyncMock()
             extra = {} if seconds is None else {"lease_seconds": seconds}
             claimed = await module.claim_extraction_work(
-                session, uuid4(), "owner", now, scope=scope, multi_workspace_enabled=False, **extra, **kwargs)
+                session,
+                uuid4(),
+                "owner",
+                now,
+                scope=scope,
+                multi_workspace_enabled=False,
+                **extra,
+                **kwargs,
+            )
             assert claimed is work
-            assert (work.lease_expires_at - now).total_seconds() == (110 if seconds is None else seconds)
+            assert (work.lease_expires_at - now).total_seconds() == (
+                110 if seconds is None else seconds
+            )

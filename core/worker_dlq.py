@@ -16,6 +16,7 @@ CLI (run from the api image, owner/operator only; replay is a dry run unless ``-
     python -m core.worker_dlq replay [--id UUID ...] [--execute]
     python -m core.worker_dlq purge --older-than-days N [--execute]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -77,17 +78,25 @@ class WorkerDeadLetter(Base):
     args_ref: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     replayable: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     error_class: Mapped[str] = mapped_column(String(128), nullable=False)
-    error_message: Mapped[str] = mapped_column(String(ERROR_MESSAGE_LIMIT), nullable=False, server_default="")
+    error_message: Mapped[str] = mapped_column(
+        String(ERROR_MESSAGE_LIMIT), nullable=False, server_default=""
+    )
     attempts: Mapped[int] = mapped_column(Integer, nullable=False)
-    first_failed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    last_failed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    first_failed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_failed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
     replayed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     replay_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
 
 def args_digest(args: Sequence[Any], kwargs: dict[str, Any]) -> str:
     """SHA-256 of the canonical JSON of the arguments (``repr`` fallback); the arguments themselves are not kept."""
-    canonical = json.dumps([list(args), kwargs], sort_keys=True, default=repr, separators=(",", ":"))
+    canonical = json.dumps(
+        [list(args), kwargs], sort_keys=True, default=repr, separators=(",", ":")
+    )
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
@@ -110,8 +119,15 @@ def scrub_message(message: str) -> str:
 
 
 async def record_dead_letter(
-    factory: async_sessionmaker[AsyncSession], *, queue: str, job_name: str, job_id: str,
-    args: Sequence[Any], kwargs: dict[str, Any], exc: BaseException, attempts: int,
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    queue: str,
+    job_name: str,
+    job_id: str,
+    args: Sequence[Any],
+    kwargs: dict[str, Any],
+    exc: BaseException,
+    attempts: int,
 ) -> None:
     """Upsert the dead-letter row for ``(queue, job_id)`` in its own short transaction (commit included).
 
@@ -119,17 +135,28 @@ async def record_dead_letter(
     """
     refs = replayable_refs(args, kwargs)
     values = {
-        "id": uuid7(), "queue": queue, "job_name": job_name[:128], "job_id": job_id[:256],
-        "args_digest": args_digest(args, kwargs), "args_ref": refs, "replayable": refs is not None,
-        "error_class": type(exc).__name__[:128], "error_message": scrub_message(str(exc)), "attempts": attempts,
+        "id": uuid7(),
+        "queue": queue,
+        "job_name": job_name[:128],
+        "job_id": job_id[:256],
+        "args_digest": args_digest(args, kwargs),
+        "args_ref": refs,
+        "replayable": refs is not None,
+        "error_class": type(exc).__name__[:128],
+        "error_message": scrub_message(str(exc)),
+        "attempts": attempts,
     }
     statement = pg_insert(WorkerDeadLetter).values(**values)
     statement = statement.on_conflict_do_update(
         constraint="uq_worker_dead_letters_queue_job",
         set_={
-            "error_class": statement.excluded.error_class, "error_message": statement.excluded.error_message,
-            "attempts": statement.excluded.attempts, "last_failed_at": func.now(), "replayed_at": None,
-            "args_digest": statement.excluded.args_digest, "args_ref": statement.excluded.args_ref,
+            "error_class": statement.excluded.error_class,
+            "error_message": statement.excluded.error_message,
+            "attempts": statement.excluded.attempts,
+            "last_failed_at": func.now(),
+            "replayed_at": None,
+            "args_digest": statement.excluded.args_digest,
+            "args_ref": statement.excluded.args_ref,
             "replayable": statement.excluded.replayable,
         },
     )
@@ -154,7 +181,10 @@ def _arq_will_run_again(exc: BaseException, attempt: int, max_tries: int, timed_
 
 
 def dead_letter(
-    function: Callable[..., Coroutine[Any, Any, Any]], *, max_tries: int, queue: str,
+    function: Callable[..., Coroutine[Any, Any, Any]],
+    *,
+    max_tries: int,
+    queue: str,
     timeout_seconds: float | None = None,
 ) -> Callable[..., Coroutine[Any, Any, Any]]:
     """Wrap an arq job so every attempt after which arq will not run it again lands in ``worker_dead_letters``.
@@ -166,6 +196,7 @@ def dead_letter(
     original exception is always re-raised, recording errors are logged and swallowed, and without a
     session factory in ``ctx`` the wrapper is a pass-through. ``functools.wraps`` keeps arq's name.
     """
+
     @wraps(function)
     async def guarded(ctx: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
         """Run the job; persist a dead-letter row when arq will not retry the failure."""
@@ -177,15 +208,24 @@ def dead_letter(
             attempt = raw_attempt if isinstance(raw_attempt, int) else 1
             factory = ctx.get("session_factory")
             timed_out = (
-                isinstance(exc, asyncio.CancelledError) and timeout_seconds is not None
+                isinstance(exc, asyncio.CancelledError)
+                and timeout_seconds is not None
                 and time.monotonic() - started >= timeout_seconds - TIMEOUT_MARGIN_SECONDS
             )
             if factory is not None and not _arq_will_run_again(exc, attempt, max_tries, timed_out):
                 try:
-                    await asyncio.shield(record_dead_letter(
-                        factory, queue=queue, job_name=str(function.__name__),
-                        job_id=str(ctx.get("job_id", "")), args=args, kwargs=kwargs, exc=exc, attempts=attempt,
-                    ))
+                    await asyncio.shield(
+                        record_dead_letter(
+                            factory,
+                            queue=queue,
+                            job_name=str(function.__name__),
+                            job_id=str(ctx.get("job_id", "")),
+                            args=args,
+                            kwargs=kwargs,
+                            exc=exc,
+                            attempts=attempt,
+                        )
+                    )
                 except Exception:  # noqa: BLE001 - never mask the job's own failure
                     _log.warning("dead-letter record failed", exc_info=True)
             raise
@@ -203,18 +243,26 @@ class ReplayPlan:
 
 
 async def list_dead_letters(
-    factory: async_sessionmaker[AsyncSession], *, limit: int = 50,
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    limit: int = 50,
 ) -> list[WorkerDeadLetter]:
     """Return the newest ``limit`` (max 500) dead letters, most recent failure first (read-only)."""
     async with factory() as session:
         result = await session.scalars(
-            select(WorkerDeadLetter).order_by(WorkerDeadLetter.last_failed_at.desc()).limit(max(1, min(limit, 500)))
+            select(WorkerDeadLetter)
+            .order_by(WorkerDeadLetter.last_failed_at.desc())
+            .limit(max(1, min(limit, 500)))
         )
         return list(result)
 
 
 async def replay_dead_letters(
-    factory: async_sessionmaker[AsyncSession], redis: Any, *, ids: Sequence[UUID] = (), execute: bool = False,
+    factory: async_sessionmaker[AsyncSession],
+    redis: Any,
+    *,
+    ids: Sequence[UUID] = (),
+    execute: bool = False,
 ) -> ReplayPlan:
     """Plan (default) or perform re-enqueueing of un-replayed, replayable dead letters.
 
@@ -227,13 +275,17 @@ async def replay_dead_letters(
         query = select(WorkerDeadLetter).where(WorkerDeadLetter.replayed_at.is_(None))
         if ids:
             query = query.where(WorkerDeadLetter.id.in_(list(ids)))
-        rows = list(await session.scalars(query.order_by(WorkerDeadLetter.first_failed_at).limit(500)))
+        rows = list(
+            await session.scalars(query.order_by(WorkerDeadLetter.first_failed_at).limit(500))
+        )
         ready = [row for row in rows if row.replayable and row.args_ref is not None]
         skipped = [row for row in rows if row not in ready]
         if execute:
             for row in ready:
                 await redis.enqueue_job(
-                    row.job_name, *(row.args_ref or []), _job_id=f"dlq:{row.id}:{row.replay_count + 1}",
+                    row.job_name,
+                    *(row.args_ref or []),
+                    _job_id=f"dlq:{row.id}:{row.replay_count + 1}",
                     _queue_name=row.queue,
                 )
                 row.replayed_at = datetime.now(UTC)
@@ -243,7 +295,10 @@ async def replay_dead_letters(
 
 
 async def purge_dead_letters(
-    factory: async_sessionmaker[AsyncSession], *, older_than: timedelta, execute: bool = False,
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    older_than: timedelta,
+    execute: bool = False,
 ) -> int:
     """Count (dry run) or delete dead letters whose last failure is older than ``older_than``; returns the count."""
     cutoff = datetime.now(UTC) - older_than
@@ -260,11 +315,15 @@ async def purge_dead_letters(
 
 def _parser() -> argparse.ArgumentParser:
     """Build the ``list`` / ``replay`` / ``purge`` argument parser (dry run unless ``--execute``)."""
-    parser = argparse.ArgumentParser(prog="python -m core.worker_dlq", description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(
+        prog="python -m core.worker_dlq", description=__doc__.split("\n\n")[0]
+    )
     sub = parser.add_subparsers(dest="command", required=True)
     listing = sub.add_parser("list", help="show recent dead letters")
     listing.add_argument("--limit", type=int, default=50)
-    replay = sub.add_parser("replay", help="re-enqueue replayable dead letters (dry run by default)")
+    replay = sub.add_parser(
+        "replay", help="re-enqueue replayable dead letters (dry run by default)"
+    )
     replay.add_argument("--id", dest="ids", action="append", type=UUID, default=[])
     replay.add_argument("--execute", action="store_true")
     purge = sub.add_parser("purge", help="delete old dead letters (dry run by default)")
@@ -275,9 +334,11 @@ def _parser() -> argparse.ArgumentParser:
 
 def _format(row: WorkerDeadLetter) -> str:
     """One-line, secret-free description of a dead letter."""
-    return (f"{row.id} {row.queue} {row.job_name} tries={row.attempts} replayable={row.replayable} "
-            f"replayed={row.replay_count} last={row.last_failed_at:%Y-%m-%dT%H:%M:%SZ} "
-            f"{row.error_class}: {row.error_message}")
+    return (
+        f"{row.id} {row.queue} {row.job_name} tries={row.attempts} replayable={row.replayable} "
+        f"replayed={row.replay_count} last={row.last_failed_at:%Y-%m-%dT%H:%M:%SZ} "
+        f"{row.error_class}: {row.error_message}"
+    )
 
 
 async def _run(arguments: argparse.Namespace) -> int:
@@ -302,8 +363,12 @@ async def _run(arguments: argparse.Namespace) -> int:
         elif arguments.command == "replay":
             if arguments.execute:
                 # Sentinel mode: our pool carries the sentinel password; direct mode: arq's own pool.
-                pool = build_worker_redis_pool(settings) or await create_pool(build_redis_settings(settings))
-            plan = await replay_dead_letters(factory, pool, ids=arguments.ids, execute=arguments.execute)
+                pool = build_worker_redis_pool(settings) or await create_pool(
+                    build_redis_settings(settings)
+                )
+            plan = await replay_dead_letters(
+                factory, pool, ids=arguments.ids, execute=arguments.execute
+            )
             verb = "replayed" if plan.executed else "would replay"
             for row in plan.replayable:
                 print(f"{verb}: {_format(row)}")
@@ -313,7 +378,10 @@ async def _run(arguments: argparse.Namespace) -> int:
                 print("dry run; pass --execute to enqueue")
         else:
             count = await purge_dead_letters(
-                factory, older_than=timedelta(days=arguments.older_than_days), execute=arguments.execute)
+                factory,
+                older_than=timedelta(days=arguments.older_than_days),
+                execute=arguments.execute,
+            )
             print(f"{'deleted' if arguments.execute else 'would delete'} {count} dead letters")
         return 0
     finally:

@@ -64,7 +64,8 @@ def _fold(value: str) -> str:
 
 
 def compile_rules(
-    rules: Sequence[HighlightRule], topic_terms: Mapping[UUID, list[str]] | None = None,
+    rules: Sequence[HighlightRule],
+    topic_terms: Mapping[UUID, list[str]] | None = None,
 ) -> list[CompiledRule]:
     """Resolve topic terms and compile each rule's patterns once; topics absent from the map are unresolved."""
     compiled: list[CompiledRule] = []
@@ -79,19 +80,35 @@ def compile_rules(
                 unresolved += 1
         unique = tuple(dict.fromkeys(terms))
         distinct = unique[:per_rule]
-        gate = re.compile(
-            "|".join(rf"\b{re.escape(term)}\b" for term in sorted(distinct, key=len, reverse=True)), re.IGNORECASE,
-        ) if distinct else None
-        compiled.append(CompiledRule(
-            rule, distinct,
-            tuple(re.compile(rf"\b{re.escape(term)}\b", re.IGNORECASE) for term in distinct), unresolved,
-            tuple(_fold(term) for term in distinct), gate, len(unique) - len(distinct),
-        ))
+        gate = (
+            re.compile(
+                "|".join(
+                    rf"\b{re.escape(term)}\b" for term in sorted(distinct, key=len, reverse=True)
+                ),
+                re.IGNORECASE,
+            )
+            if distinct
+            else None
+        )
+        compiled.append(
+            CompiledRule(
+                rule,
+                distinct,
+                tuple(re.compile(rf"\b{re.escape(term)}\b", re.IGNORECASE) for term in distinct),
+                unresolved,
+                tuple(_fold(term) for term in distinct),
+                gate,
+                len(unique) - len(distinct),
+            )
+        )
     return compiled
 
 
 def match_compiled(
-    text: str, compiled: Sequence[CompiledRule], *, source_id: UUID | None = None,
+    text: str,
+    compiled: Sequence[CompiledRule],
+    *,
+    source_id: UUID | None = None,
 ) -> list[HighlightMatch]:
     """Match text against pre-compiled rules; results are ordered critical first."""
     if not text or not compiled:
@@ -101,15 +118,21 @@ def match_compiled(
     for item in compiled:
         rule = item.rule
         if source_id is not None and (
-            source_id in rule.exclude_source_ids or (rule.source_ids and source_id not in rule.source_ids)
+            source_id in rule.exclude_source_ids
+            or (rule.source_ids and source_id not in rule.source_ids)
         ):
             continue
         # Cheap substring pre-check, then one alternation pass; only then per-term checks (exact, keeps
         # overlapping terms such as "new york" and "york" both reported).
-        if item.gate is None or not any(term in folded_text for term in item.folded) or not item.gate.search(text):
+        if (
+            item.gate is None
+            or not any(term in folded_text for term in item.folded)
+            or not item.gate.search(text)
+        ):
             continue
         matched_words = [
-            term for term, folded, pattern in zip(item.terms, item.folded, item.patterns, strict=True)
+            term
+            for term, folded, pattern in zip(item.terms, item.folded, item.patterns, strict=True)
             if folded in folded_text and pattern.search(text)
         ]
         if matched_words:
@@ -119,10 +142,15 @@ def match_compiled(
                 reason += f" ({item.unresolved} topic(s) unavailable)"
             if item.truncated:
                 reason += f" ({item.truncated} topic term(s) not checked)"
-            matches.append(HighlightMatch(
-                rule_id=rule.id, matched_keywords=tuple(matched_words), severity=rule.severity,
-                notify=rule.notify, reason=reason[:1000],
-            ))
+            matches.append(
+                HighlightMatch(
+                    rule_id=rule.id,
+                    matched_keywords=tuple(matched_words),
+                    severity=rule.severity,
+                    notify=rule.notify,
+                    reason=reason[:1000],
+                )
+            )
     matches.sort(key=lambda m: _SEVERITY_ORDER.get(m.severity, 0), reverse=True)
     return matches
 
@@ -133,25 +161,36 @@ def _minutes(value: str) -> int:
 
 
 def notification_allowed(
-    rule: HighlightRule, now: datetime, tz: tzinfo, last_notified: datetime | None,
+    rule: HighlightRule,
+    now: datetime,
+    tz: tzinfo,
+    last_notified: datetime | None,
 ) -> bool:
     """Decide delivery only: expired, quiet-hours (suppressed, not deferred) and cooldown skip the notification."""
     if rule.expires_at is not None and now >= rule.expires_at:
         return False
     if rule.quiet_start is not None and rule.quiet_end is not None:
         local = now.astimezone(tz)
-        current, start, end = local.hour * 60 + local.minute, _minutes(rule.quiet_start), _minutes(rule.quiet_end)
+        current, start, end = (
+            local.hour * 60 + local.minute,
+            _minutes(rule.quiet_start),
+            _minutes(rule.quiet_end),
+        )
         if (start <= current < end) if start < end else (current >= start or current < end):
             return False
     return not (
-        rule.cooldown_minutes and last_notified is not None
+        rule.cooldown_minutes
+        and last_notified is not None
         and now - last_notified < timedelta(minutes=rule.cooldown_minutes)
     )
 
 
 def evaluate_highlights(
-    text: str, rules: list[HighlightRule], *,
-    source_id: UUID | None = None, topic_terms: Mapping[UUID, list[str]] | None = None,
+    text: str,
+    rules: list[HighlightRule],
+    *,
+    source_id: UUID | None = None,
+    topic_terms: Mapping[UUID, list[str]] | None = None,
 ) -> list[HighlightMatch]:
     """Evaluate text against highlight rules and return explainable matches (compiles per call).
 

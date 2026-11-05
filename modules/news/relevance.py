@@ -94,7 +94,11 @@ async def load_active_goals(
 
 
 async def _story_entity_ids(
-    session: AsyncSession, story: StoryRead, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    story: StoryRead,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
     projection_cache: dict[UUID, Any] | None,
 ) -> tuple[set[str], str | None]:
     """Resolve canonical entity IDs retained on the story's current evidence versions.
@@ -114,7 +118,10 @@ async def _story_entity_ids(
             current = projection_cache[item.document_id]
         else:
             current = await documents.get_news_document_projection(
-                session, item.document_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                session,
+                item.document_id,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
             )
             if projection_cache is not None:
                 projection_cache[item.document_id] = current
@@ -126,8 +133,11 @@ async def _story_entity_ids(
             break
         try:
             refs = await entities.list_version_membership_refs(
-                session, item.document_version_id, [chunk.id for chunk in current.chunks],
-                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                session,
+                item.document_version_id,
+                [chunk.id for chunk in current.chunks],
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
             )
         except ValueError:
             # A bounded membership overflow makes only the optional entity signal
@@ -140,8 +150,11 @@ async def _story_entity_ids(
 
 
 def _score_topic_profiles(
-    topic_records: list[Any], story_tokens: set[str], entity_ids: set[str],
-    entity_hits: set[str], profile_revisions: list[dict[str, str | int]],
+    topic_records: list[Any],
+    story_tokens: set[str],
+    entity_ids: set[str],
+    entity_hits: set[str],
+    profile_revisions: list[dict[str, str | int]],
 ) -> tuple[float, list[str]]:
     """Score topic profiles by weighted keyword overlap; return the best value and hit IDs.
 
@@ -157,7 +170,9 @@ def _score_topic_profiles(
         if linked:
             entity_hits.update(linked)
         if linked or overlap:
-            profile_revisions.append({"kind": "topic", "id": str(profile.id), "revision": profile.revision})
+            profile_revisions.append(
+                {"kind": "topic", "id": str(profile.id), "revision": profile.revision}
+            )
         if overlap:
             value = min(1.0, len(overlap) / max(1, len(terms)) * min(profile.weight, 10.0) / 10.0)
             topic_hits.append((value, str(profile.id), overlap))
@@ -166,8 +181,11 @@ def _score_topic_profiles(
 
 
 def _score_goal_profiles(
-    goal_records: list[Any], story_tokens: set[str], entity_ids: set[str],
-    entity_hits: set[str], profile_revisions: list[dict[str, str | int]],
+    goal_records: list[Any],
+    story_tokens: set[str],
+    entity_ids: set[str],
+    entity_hits: set[str],
+    profile_revisions: list[dict[str, str | int]],
 ) -> tuple[float, list[str]]:
     """Score active goals by lexical overlap; return the best value and matching goal IDs.
 
@@ -181,40 +199,87 @@ def _score_goal_profiles(
         overlap = story_tokens.intersection(terms)
         linked = entity_ids.intersection(str(value) for value in goal.entity_ids)
         if overlap or linked:
-            goal_value = max(goal_value, min(1.0, len(overlap) / max(1, len(terms)) if terms else 0.0))
+            goal_value = max(
+                goal_value, min(1.0, len(overlap) / max(1, len(terms)) if terms else 0.0)
+            )
             goal_evidence_ids.append(str(goal.id))
-            profile_revisions.append({"kind": "goal", "id": str(goal.id), "revision": goal.revision})
+            profile_revisions.append(
+                {"kind": "goal", "id": str(goal.id), "revision": goal.revision}
+            )
             entity_hits.update(linked)
     return goal_value, goal_evidence_ids
 
 
 def _story_signals(
-    story: StoryRead, now: datetime, *, topic_records: list[Any], goal_records: list[Any],
-    topic_value: float, topic_evidence_ids: list[str], goal_value: float, goal_evidence_ids: list[str],
-    entity_ids: set[str], entity_hits: set[str], membership_incomplete: str | None,
+    story: StoryRead,
+    now: datetime,
+    *,
+    topic_records: list[Any],
+    goal_records: list[Any],
+    topic_value: float,
+    topic_evidence_ids: list[str],
+    goal_value: float,
+    goal_evidence_ids: list[str],
+    entity_ids: set[str],
+    entity_hits: set[str],
+    membership_incomplete: str | None,
 ) -> dict[str, RecordedSignal]:
     """Assemble the seven named signals with availability and bounded evidence IDs. Pure."""
     sources = {str(item.source_id) for item in story.evidence}
-    ages = [max(0.0, (now - item.observed_at.astimezone(UTC)).total_seconds() / 3600) for item in story.evidence]
+    ages = [
+        max(0.0, (now - item.observed_at.astimezone(UTC)).total_seconds() / 3600)
+        for item in story.evidence
+    ]
     recency = max((max(0.0, 1.0 - age / 72.0) for age in ages), default=0.0)
     return {
-        "topic": RecordedSignal(value=topic_value, available=bool(topic_records), method="weighted_keyword_overlap", evidence_ids=topic_evidence_ids[:100]),
+        "topic": RecordedSignal(
+            value=topic_value,
+            available=bool(topic_records),
+            method="weighted_keyword_overlap",
+            evidence_ids=topic_evidence_ids[:100],
+        ),
         "entity": RecordedSignal(
             value=1.0 if entity_hits else 0.0,
-            available=membership_incomplete is None and bool(entity_ids) and bool(topic_records or goal_records),
+            available=membership_incomplete is None
+            and bool(entity_ids)
+            and bool(topic_records or goal_records),
             method=membership_incomplete or "canonical_entity_overlap",
             evidence_ids=[] if membership_incomplete else sorted(entity_hits)[:100],
         ),
-        "goal": RecordedSignal(value=goal_value, available=bool(goal_records), method="active_goal_lexical_overlap", evidence_ids=goal_evidence_ids[:100]),
+        "goal": RecordedSignal(
+            value=goal_value,
+            available=bool(goal_records),
+            method="active_goal_lexical_overlap",
+            evidence_ids=goal_evidence_ids[:100],
+        ),
         "project": _empty("project_public_owner_unavailable"),
-        "recency": RecordedSignal(value=recency, available=bool(ages), method="max(0,1-age_hours/72)", evidence_ids=[str(item.document_version_id) for item in story.evidence[:100]]),
-        "importance": RecordedSignal(value=min(1.0, len(sources) / 3.0), available=bool(sources), method="distinct_active_source_proxy", evidence_ids=sorted(sources)[:100]),
-        "novelty": RecordedSignal(value=1.0 if story.evidence_count <= 1 else 0.0, available=bool(story.evidence), method="exact_identity_first_support", evidence_ids=[str(item.document_id) for item in story.evidence[:100]]),
+        "recency": RecordedSignal(
+            value=recency,
+            available=bool(ages),
+            method="max(0,1-age_hours/72)",
+            evidence_ids=[str(item.document_version_id) for item in story.evidence[:100]],
+        ),
+        "importance": RecordedSignal(
+            value=min(1.0, len(sources) / 3.0),
+            available=bool(sources),
+            method="distinct_active_source_proxy",
+            evidence_ids=sorted(sources)[:100],
+        ),
+        "novelty": RecordedSignal(
+            value=1.0 if story.evidence_count <= 1 else 0.0,
+            available=bool(story.evidence),
+            method="exact_identity_first_support",
+            evidence_ids=[str(item.document_id) for item in story.evidence[:100]],
+        ),
     }
 
 
 async def score_relevance(
-    session: AsyncSession, story: StoryRead, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    story: StoryRead,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
     as_of: datetime | None = None,
     preloaded_topics: list[Any] | None = None,
     preloaded_goals: list[Any] | None = None,
@@ -235,41 +300,71 @@ async def score_relevance(
     now = (as_of or datetime.now(UTC)).astimezone(UTC)
     story_tokens = _tokens(" ".join(f"{story.title} {story.excerpt}".split()))
     entity_ids, membership_incomplete = await _story_entity_ids(
-        session, story, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        story,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         projection_cache=projection_cache,
     )
     if preloaded_topics is not None:
         topic_records = preloaded_topics
     else:
         topic_records = await load_active_topics(
-            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
     topic_complete = bool(getattr(topic_records, "complete", True))
     entity_hits: set[str] = set()
     profile_revisions: list[dict[str, str | int]] = []
     topic_value, topic_evidence_ids = _score_topic_profiles(
-        topic_records, story_tokens, entity_ids, entity_hits, profile_revisions,
+        topic_records,
+        story_tokens,
+        entity_ids,
+        entity_hits,
+        profile_revisions,
     )
     if preloaded_goals is not None:
         goal_records = preloaded_goals
     else:
         goal_records = await load_active_goals(
-            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
     goal_complete = bool(getattr(goal_records, "complete", True))
     goal_value, goal_evidence_ids = _score_goal_profiles(
-        goal_records, story_tokens, entity_ids, entity_hits, profile_revisions,
+        goal_records,
+        story_tokens,
+        entity_ids,
+        entity_hits,
+        profile_revisions,
     )
     signals = _story_signals(
-        story, now, topic_records=topic_records, goal_records=goal_records, topic_value=topic_value,
-        topic_evidence_ids=topic_evidence_ids, goal_value=goal_value, goal_evidence_ids=goal_evidence_ids,
-        entity_ids=entity_ids, entity_hits=entity_hits, membership_incomplete=membership_incomplete,
+        story,
+        now,
+        topic_records=topic_records,
+        goal_records=goal_records,
+        topic_value=topic_value,
+        topic_evidence_ids=topic_evidence_ids,
+        goal_value=goal_value,
+        goal_evidence_ids=goal_evidence_ids,
+        entity_ids=entity_ids,
+        entity_hits=entity_hits,
+        membership_incomplete=membership_incomplete,
     )
     weights = {name: 1.0 / len(SIGNAL_NAMES) for name in SIGNAL_NAMES}
     score = round(sum(weights[name] * signals[name].value for name in SIGNAL_NAMES), 6)
     why = [name for name in SIGNAL_NAMES if signals[name].available and signals[name].value > 0]
     return RelevanceRead(
-        score=score, why_relevant=why, signals=signals, weights=weights,
-        profile_revisions=profile_revisions[:2000], as_of=now,
-        complete=topic_complete and goal_complete and story.evidence_count <= 100 and membership_incomplete is None,
+        score=score,
+        why_relevant=why,
+        signals=signals,
+        weights=weights,
+        profile_revisions=profile_revisions[:2000],
+        as_of=now,
+        complete=topic_complete
+        and goal_complete
+        and story.evidence_count <= 100
+        and membership_incomplete is None,
     )

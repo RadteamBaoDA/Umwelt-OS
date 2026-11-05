@@ -22,9 +22,7 @@ class RelationshipDescriptor(ModuleDescriptor):
     tools: tuple[str, ...] = ()
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
-    routers: tuple[RouterSpec, ...] = (
-        RouterSpec("modules.knowledge.relationships.routes", 100),
-    )
+    routers: tuple[RouterSpec, ...] = (RouterSpec("modules.knowledge.relationships.routes", 100),)
     erasure_module: str | None = "modules.knowledge.relationships.erasure"
     erasure_order: int = 110
 

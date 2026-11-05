@@ -64,9 +64,12 @@ async def test_document_purge_keeps_current_bookmarked_and_protected():
         seen.append(col)
         return observations.current_observation_references(col, field="document_version_id")
 
-    assert await documents.purge_expired_document_versions(
-        session, CUTOFFS, limit=7, is_protected=protect
-    ) == 2
+    assert (
+        await documents.purge_expired_document_versions(
+            session, CUTOFFS, limit=7, is_protected=protect
+        )
+        == 2
+    )
     sql = _sql(session)
     assert len(seen) == 1
     assert "current_version" in sql

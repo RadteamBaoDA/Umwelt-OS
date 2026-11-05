@@ -51,7 +51,9 @@ _CURSOR_KEYS = frozenset({AUTO_INDEX_CURSOR_KEY, ACTIVE_INDEX_CURSOR_KEY, QUEUED
 # 180s); the time limit only gates *starting* another item, so one in-flight embed still fits.
 INDEX_RUN_ITEMS = 50
 MAX_EMBED_BATCH = 128  # upper bound for SEARCH_EMBED_BATCH_SIZE
-INDEX_RUN_BATCH_ITEMS = 2048  # chunk cap per invocation on the batched path (the time budget usually binds first)
+INDEX_RUN_BATCH_ITEMS = (
+    2048  # chunk cap per invocation on the batched path (the time budget usually binds first)
+)
 INDEX_RUN_SECONDS = 45
 # Per-chunk progress events are coalesced: clients only invalidate queries / poll, and status
 # changes (claim of a queued generation, finalize, failure) are always published.
@@ -63,7 +65,11 @@ logger = logging.getLogger(__name__)
 
 
 async def _admit(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool, lock: bool = False,
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    lock: bool = False,
     expected: AccessFence | None = None,
 ) -> AccessFence:
     """Admit Search access before its own roots, with optional ordered publication locking."""
@@ -71,10 +77,15 @@ async def _admit(
         raise ForbiddenError(detail="Workspace owner required")
     if lock:
         return await workspaces.lock_access_fence(
-            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            scope=scope,
+            expected=expected,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
     fence = await workspaces.read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if expected is not None and fence != expected:
         # read_access_fence has no expected keyword; compare the full detached value here.
@@ -85,6 +96,7 @@ async def _admit(
 @dataclass(frozen=True)
 class IndexProjection:
     """Snapshot public generation counters used to decide whether to publish."""
+
     generation_id: UUID
     status: str
     indexed_items: int
@@ -92,21 +104,29 @@ class IndexProjection:
 
 
 async def _index_projection(
-    session: AsyncSession, generation_id: UUID, *, scope: Scope,
+    session: AsyncSession,
+    generation_id: UUID,
+    *,
+    scope: Scope,
 ) -> IndexProjection | None:
     """Read a generation's lifecycle and succeeded/failed item counts."""
     row = await session.execute(
-        select(IndexGeneration.id, IndexGeneration.status)
-        .where(IndexGeneration.id == generation_id, IndexGeneration.workspace_id == scope.workspace_id)
+        select(IndexGeneration.id, IndexGeneration.status).where(
+            IndexGeneration.id == generation_id, IndexGeneration.workspace_id == scope.workspace_id
+        )
     )
     generation = row.one_or_none()
     if generation is None:
         return None
-    counts = dict((await session.execute(
-        select(SearchIndexItem.status, func.count())
-        .where(SearchIndexItem.generation_id == generation_id)
-        .group_by(SearchIndexItem.status)
-    )).all())
+    counts = dict(
+        (
+            await session.execute(
+                select(SearchIndexItem.status, func.count())
+                .where(SearchIndexItem.generation_id == generation_id)
+                .group_by(SearchIndexItem.status)
+            )
+        ).all()
+    )
     return IndexProjection(
         generation_id=generation.id,
         status=generation.status,
@@ -135,15 +155,20 @@ async def _commit_index_change(
     after = await _index_projection(session, generation_id, scope=scope) if publish else None
     drafts = []
     if after is not None and after != before:
-        drafts.append(make_index_change(
-            after.generation_id,
-            after.status,
-            after.indexed_items,
-            after.failed_items,
-            scope=scope,
-        ))
+        drafts.append(
+            make_index_change(
+                after.generation_id,
+                after.status,
+                after.indexed_items,
+                after.failed_items,
+                scope=scope,
+            )
+        )
     await commit_with_replay(
-        session, drafts, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        drafts,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence,
     )
 
@@ -153,18 +178,29 @@ def _vector_literal(values: list[float]) -> str:
     return json.dumps(values)
 
 
-def embedding_values(response: object, expected_dimensions: int | None = None) -> tuple[list[float], str | None]:
+def embedding_values(
+    response: object, expected_dimensions: int | None = None
+) -> tuple[list[float], str | None]:
     """Validate one finite, nonzero, bounded embedding and return its model identity."""
-    if not isinstance(response, dict) or not isinstance(response.get("data"), list) or len(response["data"]) != 1:
+    if (
+        not isinstance(response, dict)
+        or not isinstance(response.get("data"), list)
+        or len(response["data"]) != 1
+    ):
         raise ValueError("Invalid embedding response")
     returned_model = response.get("model")
-    if returned_model is not None and (not isinstance(returned_model, str) or not returned_model.strip()):
+    if returned_model is not None and (
+        not isinstance(returned_model, str) or not returned_model.strip()
+    ):
         raise ValueError("Embedding response model identity is invalid")
     row = response["data"][0]
     if not isinstance(row, dict) or not isinstance(row.get("embedding"), list):
         raise ValueError("Invalid embedding response")
     values = row["embedding"]
-    if not 1 <= len(values) <= MAX_VECTOR_DIMENSIONS or expected_dimensions not in (None, len(values)):
+    if not 1 <= len(values) <= MAX_VECTOR_DIMENSIONS or expected_dimensions not in (
+        None,
+        len(values),
+    ):
         raise ValueError("Embedding dimensions do not match the index generation")
     # Validate finiteness, reject booleans/NaNs, verify non-zero norm, and coerce to float in a single pass.
     parsed: list[float] = []
@@ -184,24 +220,45 @@ def embedding_values(response: object, expected_dimensions: int | None = None) -
 
 
 def gateway(
-    config: AIExecutionConfig, redis: Redis, before_send: Callable[[], Awaitable[None]], *, scope: Scope,
+    config: AIExecutionConfig,
+    redis: Redis,
+    before_send: Callable[[], Awaitable[None]],
+    *,
+    scope: Scope,
 ) -> ModelGateway:
     """Construct the model gateway bound to one scope, config revision, identity and fresh send check."""
-    config = ai_settings.derive_for_role(config, "embedding")   # embedding is this module's only role
-    return ModelGateway(redis, config.gateway_base_url, config.gateway_api_key,
-        config.endpoint_destination_id or "remote", config.request_timeout_seconds,
-        scope=scope, gateway_identity=config.gateway_identity,
+    config = ai_settings.derive_for_role(
+        config, "embedding"
+    )  # embedding is this module's only role
+    return ModelGateway(
+        redis,
+        config.gateway_base_url,
+        config.gateway_api_key,
+        config.endpoint_destination_id or "remote",
+        config.request_timeout_seconds,
+        scope=scope,
+        gateway_identity=config.gateway_identity,
         model_identity=config.model_identity,
-        configuration_revision=config.configuration_revision, before_send=before_send,
-        approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers, kind=config.gateway_kind)
+        configuration_revision=config.configuration_revision,
+        before_send=before_send,
+        approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
+        allow_public_endpoints=config.allow_public_providers,
+        kind=config.gateway_kind,
+    )
 
 
 async def configured_embedding(
-    session: AsyncSession, settings: Settings, redis: Redis, *, scope: Scope,
+    session: AsyncSession,
+    settings: Settings,
+    redis: Redis,
+    *,
+    scope: Scope,
 ) -> tuple[AIExecutionConfig, ModelMapping | None, RequestPolicy]:
     """Return scoped gateway config, embedding role and privacy-constrained policy."""
     config = ai_settings.derive_for_role(
-        await ai_settings.get_ai_execution_config(session, settings, redis, scope=scope), "embedding")
+        await ai_settings.get_ai_execution_config(session, settings, redis, scope=scope),
+        "embedding",
+    )
     destination = config.endpoint_destination_id
     privacy = config.privacy
     policy = RequestPolicy(
@@ -224,6 +281,7 @@ class EmbeddingAuthority:
     This is preparation, never authorization: every later publication compares it again
     under the ordered locks and aborts, never rebases, when anything differs.
     """
+
     fence: AccessFence
     config: AIExecutionConfig
     mapping: ModelMapping | None
@@ -231,13 +289,24 @@ class EmbeddingAuthority:
 
     def permitted(self) -> bool:
         """Return whether the observed configuration may send embeddings at all."""
-        return (self.mapping is not None and not self.config.endpoint_policy_denied
-                and may_send(self.policy, "embedding", self.mapping,
-                             self.config.endpoint_destination_id or "remote",
-                             bool(self.config.gateway_api_key), "embeddings"))
+        return (
+            self.mapping is not None
+            and not self.config.endpoint_policy_denied
+            and may_send(
+                self.policy,
+                "embedding",
+                self.mapping,
+                self.config.endpoint_destination_id or "remote",
+                bool(self.config.gateway_api_key),
+                "embeddings",
+            )
+        )
 
     def unchanged(
-        self, config: AIExecutionConfig, mapping: ModelMapping | None, policy: RequestPolicy,
+        self,
+        config: AIExecutionConfig,
+        mapping: ModelMapping | None,
+        policy: RequestPolicy,
     ) -> bool:
         """Compare a fresh read with the original revision, gateway identity, mapping and policy."""
         return (
@@ -255,11 +324,17 @@ class EmbeddingAuthority:
 
 
 async def capture_authority(
-    session: AsyncSession, settings: Settings, redis: Redis, *, scope: Scope,
+    session: AsyncSession,
+    settings: Settings,
+    redis: Redis,
+    *,
+    scope: Scope,
 ) -> EmbeddingAuthority:
     """Admit the owner scope first, then read config; return the detached original snapshot."""
     fence = await _admit(
-        session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=settings.multi_workspace_enabled,
     )
     config, mapping, policy = await configured_embedding(session, settings, redis, scope=scope)
     return EmbeddingAuthority(fence, config, mapping, policy)
@@ -274,9 +349,12 @@ def eligible_chunks(*, workspace_id: UUID) -> Select[UUID, str, UUID]:
         .join(Source, Source.id == Document.source_id)
         .where(
             Document.current_version == DocumentVersion.version_number,
-            Document.workspace_id == workspace_id, Source.workspace_id == workspace_id,
+            Document.workspace_id == workspace_id,
+            Source.workspace_id == workspace_id,
             Document.extraction_status.in_(("ready", "succeeded")),
-            Source.status == "active", Source.local_only.is_(False), Source.rag_index_enabled.is_(True),
+            Source.status == "active",
+            Source.local_only.is_(False),
+            Source.rag_index_enabled.is_(True),
             or_(
                 Source.configuration["skip_embedding"].as_boolean().is_(None),
                 Source.configuration["skip_embedding"].as_boolean().is_(False),
@@ -286,8 +364,13 @@ def eligible_chunks(*, workspace_id: UUID) -> Select[UUID, str, UUID]:
 
 
 async def _dedupe_or_create(
-    session: AsyncSession, mapping: ModelMapping, model_identity: str, *,
-    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    session: AsyncSession,
+    mapping: ModelMapping,
+    model_identity: str,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
     honor_retry_delay: bool = False,
 ) -> IndexGeneration | None:
     """Reuse or create the workspace generation; the caller already holds the generation mutex.
@@ -298,45 +381,79 @@ async def _dedupe_or_create(
     space only, so web search, prompt or preference saves never force a rebuild.
     """
     if honor_retry_delay:
-        latest = await session.scalar(select(IndexGeneration).where(
-            IndexGeneration.workspace_id == scope.workspace_id,
-        ).order_by(IndexGeneration.created_at.desc(), IndexGeneration.id).limit(1))
-        if (latest is not None and latest.status == "failed"
-                and latest.model_id == mapping.model and latest.model_version == mapping.version
-                and latest.gateway_identity == model_identity
-                and datetime.now(UTC) - latest.updated_at < AUTO_INDEX_RETRY_DELAY):
+        latest = await session.scalar(
+            select(IndexGeneration)
+            .where(
+                IndexGeneration.workspace_id == scope.workspace_id,
+            )
+            .order_by(IndexGeneration.created_at.desc(), IndexGeneration.id)
+            .limit(1)
+        )
+        if (
+            latest is not None
+            and latest.status == "failed"
+            and latest.model_id == mapping.model
+            and latest.model_version == mapping.version
+            and latest.gateway_identity == model_identity
+            and datetime.now(UTC) - latest.updated_at < AUTO_INDEX_RETRY_DELAY
+        ):
             await session.rollback()
             return None
-    existing = await session.scalar(select(IndexGeneration).where(
-        IndexGeneration.workspace_id == scope.workspace_id,
-        IndexGeneration.status.in_(("queued", "running", "active")),
-    ).order_by(IndexGeneration.created_at.desc(), IndexGeneration.id).limit(1).with_for_update())
+    existing = await session.scalar(
+        select(IndexGeneration)
+        .where(
+            IndexGeneration.workspace_id == scope.workspace_id,
+            IndexGeneration.status.in_(("queued", "running", "active")),
+        )
+        .order_by(IndexGeneration.created_at.desc(), IndexGeneration.id)
+        .limit(1)
+        .with_for_update()
+    )
     if existing is not None and existing.status in {"queued", "running"}:
-        if (existing.gateway_identity != model_identity or existing.model_id != mapping.model
-                or existing.model_version != mapping.version):
+        if (
+            existing.gateway_identity != model_identity
+            or existing.model_id != mapping.model
+            or existing.model_version != mapping.version
+        ):
             raise ValueError("An index generation for another gateway is still running")
         await commit_with_replay(
-            session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            [],
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
             access_fence=access_fence,
         )
         return existing
-    if (existing is not None and existing.status == "active"
-            and existing.gateway_identity == model_identity and existing.model_id == mapping.model
-            and existing.model_version == mapping.version):
+    if (
+        existing is not None
+        and existing.status == "active"
+        and existing.gateway_identity == model_identity
+        and existing.model_id == mapping.model
+        and existing.model_version == mapping.version
+    ):
         await commit_with_replay(
-            session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            [],
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
             access_fence=access_fence,
         )
         return existing
     generation = IndexGeneration(
-        workspace_id=scope.workspace_id, model_id=mapping.model,
-        model_version=mapping.version, gateway_identity=model_identity,
+        workspace_id=scope.workspace_id,
+        model_id=mapping.model,
+        model_version=mapping.version,
+        gateway_identity=model_identity,
     )
     session.add(generation)
     await session.flush()
     await _commit_index_change(
-        session, None, generation_id=generation.id, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        None,
+        generation_id=generation.id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
     await session.refresh(generation)
     return generation
@@ -344,14 +461,21 @@ async def _dedupe_or_create(
 
 async def _take_generation_mutex(session: AsyncSession, scope: Scope) -> None:
     """Serialize generation creation for one workspace with a transaction advisory lock."""
-    await session.execute(text(
-        "SELECT pg_advisory_xact_lock(hashtextextended('search.generation:' || :workspace_id, 0))"
-    ), {"workspace_id": str(scope.workspace_id)})
+    await session.execute(
+        text(
+            "SELECT pg_advisory_xact_lock(hashtextextended('search.generation:' || :workspace_id, 0))"
+        ),
+        {"workspace_id": str(scope.workspace_id)},
+    )
 
 
 async def create_generation(
-    session: AsyncSession, mapping: ModelMapping, model_identity: str, *,
-    scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    mapping: ModelMapping,
+    model_identity: str,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> IndexGeneration:
     """Create or reuse one admitted workspace generation under its durable advisory lock.
 
@@ -359,12 +483,19 @@ async def create_generation(
     which compares the original access fence and configuration under the same mutex.
     """
     access_fence = await _admit(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        lock=True,
     )
     await _take_generation_mutex(session, scope)
     generation = await _dedupe_or_create(
-        session, mapping, model_identity, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        mapping,
+        model_identity,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
     if generation is None:  # unreachable: retry delay is only honored by the authority seam
         raise RuntimeError("Generation creation returned no row")
@@ -372,8 +503,13 @@ async def create_generation(
 
 
 async def create_generation_for_authority(
-    session: AsyncSession, authority: EmbeddingAuthority, settings: Settings, redis: Redis, *,
-    scope: Scope, honor_retry_delay: bool = False,
+    session: AsyncSession,
+    authority: EmbeddingAuthority,
+    settings: Settings,
+    redis: Redis,
+    *,
+    scope: Scope,
+    honor_retry_delay: bool = False,
 ) -> IndexGeneration | None:
     """Publish a generation only if the originally observed authority still holds under the mutex.
 
@@ -383,26 +519,42 @@ async def create_generation_for_authority(
     """
     multi_workspace_enabled = settings.multi_workspace_enabled
     access_fence = await _admit(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        lock=True,
         expected=authority.fence,
     )
     await _take_generation_mutex(session, scope)
     if not await ai_settings.module_is_enabled(
-        session, "search", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        "search",
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     ):
         raise ConflictError(detail="Search module is disabled")
     config, mapping, policy = await configured_embedding(session, settings, redis, scope=scope)
-    if mapping is None or not authority.unchanged(config, mapping, policy) or not authority.permitted():
+    if (
+        mapping is None
+        or not authority.unchanged(config, mapping, policy)
+        or not authority.permitted()
+    ):
         raise ConflictError(detail="Search configuration changed")
     return await _dedupe_or_create(
-        session, mapping, config.model_identity, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        mapping,
+        config.model_identity,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
         honor_retry_delay=honor_retry_delay,
     )
 
 
 async def _reconcile_automatic_generations(
-    factory: async_sessionmaker[AsyncSession], settings: Settings, redis: Redis,
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    redis: Redis,
     ctx: dict[str, object],
 ) -> None:
     """Create eligible per-workspace generations from bounded identity-only Documents discovery.
@@ -415,7 +567,9 @@ async def _reconcile_automatic_generations(
     """
     after = await read_cursor(ctx, AUTO_INDEX_CURSOR_KEY, _CURSOR_KEYS)
     async with factory() as session:
-        workspace_ids = await documents.list_indexable_workspace_ids(session, after=after, limit=100)
+        workspace_ids = await documents.list_indexable_workspace_ids(
+            session, after=after, limit=100
+        )
         await session.rollback()
     if not workspace_ids and after is not None:
         async with factory() as session:
@@ -429,34 +583,50 @@ async def _reconcile_automatic_generations(
         try:
             async with factory() as session:
                 owner = await workspaces.resolve_workspace_owner_context(
-                    session, workspace_id, multi_workspace_enabled=settings.multi_workspace_enabled,
+                    session,
+                    workspace_id,
+                    multi_workspace_enabled=settings.multi_workspace_enabled,
                 )
                 if owner is None:
                     await session.rollback()
                     continue
                 scope = InternalJobScope(
-                    workspace_id=workspace_id, actor_user_id=owner.user_id,
+                    workspace_id=workspace_id,
+                    actor_user_id=owner.user_id,
                     membership_revision=owner.membership_revision,
                 )
                 authority = await capture_authority(session, settings, redis, scope=scope)
-                if not await ai_settings.module_is_enabled(
-                    session, "search", scope=scope,
-                    multi_workspace_enabled=settings.multi_workspace_enabled,
-                ) or not authority.permitted():
+                if (
+                    not await ai_settings.module_is_enabled(
+                        session,
+                        "search",
+                        scope=scope,
+                        multi_workspace_enabled=settings.multi_workspace_enabled,
+                    )
+                    or not authority.permitted()
+                ):
                     await session.rollback()
                     continue
                 has_chunks = await session.scalar(
-                    eligible_chunks(workspace_id=workspace_id).with_only_columns(DocumentChunk.id).limit(1)
+                    eligible_chunks(workspace_id=workspace_id)
+                    .with_only_columns(DocumentChunk.id)
+                    .limit(1)
                 )
                 if has_chunks is None:
                     await session.rollback()
                     continue
                 await create_generation_for_authority(
-                    session, authority, settings, redis, scope=scope, honor_retry_delay=True,
+                    session,
+                    authority,
+                    settings,
+                    redis,
+                    scope=scope,
+                    honor_retry_delay=True,
                 )
         except Exception as exc:  # one unavailable tenant must not starve later workspace IDs
             if isinstance(exc, ValueError) or (
-                isinstance(exc, (DomainError, HTTPException)) and exc.status_code in {401, 403, 404, 409}
+                isinstance(exc, (DomainError, HTTPException))
+                and exc.status_code in {401, 403, 404, 409}
             ):
                 continue
             raise
@@ -465,12 +635,14 @@ async def _reconcile_automatic_generations(
 
 
 async def _candidate_page(
-    factory: async_sessionmaker[AsyncSession], statuses: tuple[str, ...], after: UUID | None,
+    factory: async_sessionmaker[AsyncSession],
+    statuses: tuple[str, ...],
+    after: UUID | None,
 ) -> list[tuple[UUID, UUID]]:
     """Return one bounded keyset page of (generation, workspace) identities, wrapping at the end."""
     async with factory() as session:
         rows: list[tuple[UUID, UUID]] = []
-        for lower in ((after, None) if after is not None else (None,)):
+        for lower in (after, None) if after is not None else (None,):
             query = select(IndexGeneration.id, IndexGeneration.workspace_id).where(
                 IndexGeneration.status.in_(statuses),
             )
@@ -502,7 +674,9 @@ async def index_pending_chunks(ctx: dict[str, object]) -> int:
         logger.warning("w2_cursor_state missing; search cursors are per-job")
     state = cast(dict[str, str], ctx.setdefault(STATE_KEY, {}))
     async with factory() as session:
-        await documents.backfill_current_chunks(session, multi_workspace_enabled=settings.multi_workspace_enabled)
+        await documents.backfill_current_chunks(
+            session, multi_workspace_enabled=settings.multi_workspace_enabled
+        )
     await _reconcile_automatic_generations(factory, settings, redis, ctx)
 
     classes = [
@@ -536,9 +710,18 @@ class _AuthorityChanged(Exception):  # control-flow signal, not an error conditi
 
 
 async def _recheck_prepared(
-    session: AsyncSession, *, scope: Scope, settings: Settings, redis: Redis,
-    original: EmbeddingAuthority, source_id: UUID, source_generation: int | None,
-    chunk_id: UUID, content: str, workspace_id: UUID, lock: bool,
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    settings: Settings,
+    redis: Redis,
+    original: EmbeddingAuthority,
+    source_id: UUID,
+    source_generation: int | None,
+    chunk_id: UUID,
+    content: str,
+    workspace_id: UUID,
+    lock: bool,
 ) -> tuple[AccessFence, bool, int | None]:
     """Re-admit against the original fence, then Source, then exact chunk, in lock order.
 
@@ -548,45 +731,66 @@ async def _recheck_prepared(
     """
     try:
         fence = await _admit(
-            session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
-            lock=lock, expected=original.fence,
+            session,
+            scope=scope,
+            multi_workspace_enabled=settings.multi_workspace_enabled,
+            lock=lock,
+            expected=original.fence,
         )
     except (DomainError, HTTPException) as exc:
         if exc.status_code in {401, 403, 404, 409}:
             raise _AuthorityChanged from exc
         raise
     if fence != original.fence or not await ai_settings.module_is_enabled(
-        session, "search", scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+        session,
+        "search",
+        scope=scope,
+        multi_workspace_enabled=settings.multi_workspace_enabled,
     ):
         raise _AuthorityChanged
     source = await sources.lock_source(
-        session, source_id, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=settings.multi_workspace_enabled,
         expected_access_fence=fence,
     )
     if lock:  # publication: lock the Document (after Source) so a concurrent re-version serializes
         document_id = await session.scalar(
-            select(DocumentVersion.document_id).join(
-                DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id,
-            ).where(DocumentChunk.id == chunk_id)
+            select(DocumentVersion.document_id)
+            .join(
+                DocumentChunk,
+                DocumentChunk.document_version_id == DocumentVersion.id,
+            )
+            .where(DocumentChunk.id == chunk_id)
         )
         if document_id is not None:
             await documents.lock_document_ids(
-                session, [document_id], scope=scope,
+                session,
+                [document_id],
+                scope=scope,
                 multi_workspace_enabled=settings.multi_workspace_enabled,
             )
     current = await session.scalar(
         select(DocumentChunk.content)
         .join(DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id)
         .join(Document, Document.id == DocumentVersion.document_id)
-        .where(DocumentChunk.id == chunk_id, Document.workspace_id == workspace_id,
-               Document.current_version == DocumentVersion.version_number,
-               Document.extraction_status.in_(("ready", "succeeded")))
+        .where(
+            DocumentChunk.id == chunk_id,
+            Document.workspace_id == workspace_id,
+            Document.current_version == DocumentVersion.version_number,
+            Document.extraction_status.in_(("ready", "succeeded")),
+        )
     )
     generation = source.generation if source is not None else None
-    live = (source is not None and source.status == "active" and not source.local_only
-            and source.rag_index_enabled
-            and current == content
-            and (source_generation is None or generation == source_generation))
+    live = (
+        source is not None
+        and source.status == "active"
+        and not source.local_only
+        and source.rag_index_enabled
+        and current == content
+        and (source_generation is None or generation == source_generation)
+    )
     config, mapping, policy = await configured_embedding(session, settings, redis, scope=scope)
     if not original.unchanged(config, mapping, policy):
         raise _AuthorityChanged
@@ -638,8 +842,11 @@ class _ClaimedChunk:
 
 
 async def _prepare_index_run(
-    factory: async_sessionmaker[AsyncSession], redis: Redis, settings: Settings,
-    generation_id: UUID, workspace_id: UUID,
+    factory: async_sessionmaker[AsyncSession],
+    redis: Redis,
+    settings: Settings,
+    generation_id: UUID,
+    workspace_id: UUID,
 ) -> tuple[_RunContext | None, int | None]:
     """Capture the original authority for one run and validate the generation against it.
 
@@ -651,13 +858,16 @@ async def _prepare_index_run(
     """
     async with factory() as session:
         owner = await workspaces.resolve_workspace_owner_context(
-            session, workspace_id, multi_workspace_enabled=settings.multi_workspace_enabled,
+            session,
+            workspace_id,
+            multi_workspace_enabled=settings.multi_workspace_enabled,
         )
         if owner is None:
             await session.rollback()
             return None, None
         scope = InternalJobScope(
-            workspace_id=workspace_id, actor_user_id=owner.user_id,
+            workspace_id=workspace_id,
+            actor_user_id=owner.user_id,
             membership_revision=owner.membership_revision,
         )
 
@@ -666,7 +876,9 @@ async def _prepare_index_run(
             await session.rollback()
             captured = await capture_authority(session, settings, redis, scope=scope)
             if not await ai_settings.module_is_enabled(
-                session, "search", scope=scope,
+                session,
+                "search",
+                scope=scope,
                 multi_workspace_enabled=settings.multi_workspace_enabled,
             ):
                 await session.rollback()
@@ -682,28 +894,41 @@ async def _prepare_index_run(
                 raise
             # Denial is terminal for a queued/running generation; the active one keeps serving.
             await terminalize(
-                factory, IndexGeneration, generation_id, workspace_id, code,
+                factory,
+                IndexGeneration,
+                generation_id,
+                workspace_id,
+                code,
                 from_status=("queued", "running"),
             )
             return None, None
         if captured is None:
             return None, None
         original = captured
-        generation = await session.scalar(select(IndexGeneration).where(
-            IndexGeneration.id == generation_id, IndexGeneration.workspace_id == workspace_id,
-        ))
+        generation = await session.scalar(
+            select(IndexGeneration).where(
+                IndexGeneration.id == generation_id,
+                IndexGeneration.workspace_id == workspace_id,
+            )
+        )
         if generation is None or not original.permitted():
             await session.rollback()
             return None, None
         mapping, config = original.mapping, original.config
-        if (mapping is None or mapping.model != generation.model_id
-                or mapping.version != generation.model_version
-                or config.model_identity != generation.gateway_identity):  # column stores model_identity
+        if (
+            mapping is None
+            or mapping.model != generation.model_id
+            or mapping.version != generation.model_version
+            or config.model_identity != generation.gateway_identity
+        ):  # column stores model_identity
             if generation.status != "active":
                 before = await _index_projection(session, generation_id, scope=scope)
                 generation.status, generation.error_code = "failed", "model_unavailable"
                 await _commit_index_change(
-                    session, before, generation_id=generation_id, scope=scope,
+                    session,
+                    before,
+                    generation_id=generation_id,
+                    scope=scope,
                     multi_workspace_enabled=settings.multi_workspace_enabled,
                     access_fence=original.fence,
                 )
@@ -715,8 +940,11 @@ async def _prepare_index_run(
 
 
 async def _finalize_exhausted_generation(
-    session: AsyncSession, ctx: _RunContext, generation: IndexGeneration,
-    before: IndexProjection | None, access_fence: AccessFence,
+    session: AsyncSession,
+    ctx: _RunContext,
+    generation: IndexGeneration,
+    before: IndexProjection | None,
+    access_fence: AccessFence,
 ) -> None:
     """Finalize a running generation whose first (unfiltered) claim probe found nothing pending.
 
@@ -729,21 +957,29 @@ async def _finalize_exhausted_generation(
     nothing is published.
     """
     if generation.status == "running":
-        await session.execute(text(
-            "DELETE FROM search_index_items i WHERE i.generation_id = :generation_id "
-            "AND i.status IN ('pending', 'failed') AND NOT EXISTS ("
-            "SELECT 1 FROM document_chunks c "
-            "JOIN document_versions v ON v.id = c.document_version_id "
-            "JOIN documents d ON d.id = v.document_id "
-            "JOIN sources s ON s.id = d.source_id "
-            "WHERE c.id = i.chunk_id AND v.version_number = d.current_version "
-            "AND d.workspace_id = :workspace_id AND s.workspace_id = :workspace_id "
-            "AND d.extraction_status IN ('ready', 'succeeded') "
-            "AND s.status = 'active' AND s.local_only = false AND s.rag_index_enabled = true)"
-        ), {"generation_id": ctx.generation_id, "workspace_id": str(ctx.workspace_id)})
-        failed = await session.scalar(select(func.count()).select_from(SearchIndexItem).where(
-            SearchIndexItem.generation_id == ctx.generation_id, SearchIndexItem.status != "succeeded",
-        ))
+        await session.execute(
+            text(
+                "DELETE FROM search_index_items i WHERE i.generation_id = :generation_id "
+                "AND i.status IN ('pending', 'failed') AND NOT EXISTS ("
+                "SELECT 1 FROM document_chunks c "
+                "JOIN document_versions v ON v.id = c.document_version_id "
+                "JOIN documents d ON d.id = v.document_id "
+                "JOIN sources s ON s.id = d.source_id "
+                "WHERE c.id = i.chunk_id AND v.version_number = d.current_version "
+                "AND d.workspace_id = :workspace_id AND s.workspace_id = :workspace_id "
+                "AND d.extraction_status IN ('ready', 'succeeded') "
+                "AND s.status = 'active' AND s.local_only = false AND s.rag_index_enabled = true)"
+            ),
+            {"generation_id": ctx.generation_id, "workspace_id": str(ctx.workspace_id)},
+        )
+        failed = await session.scalar(
+            select(func.count())
+            .select_from(SearchIndexItem)
+            .where(
+                SearchIndexItem.generation_id == ctx.generation_id,
+                SearchIndexItem.status != "succeeded",
+            )
+        )
         if failed:
             generation.status = "failed"
             generation.error_code = "item_failed"
@@ -757,8 +993,12 @@ async def _finalize_exhausted_generation(
             generation, access_fence = relocked
             await activate_generation(session, generation, scope=ctx.scope)
     await _commit_index_change(
-        session, before, generation_id=ctx.generation_id, scope=ctx.scope,
-        multi_workspace_enabled=ctx.multi_workspace_enabled, access_fence=access_fence,
+        session,
+        before,
+        generation_id=ctx.generation_id,
+        scope=ctx.scope,
+        multi_workspace_enabled=ctx.multi_workspace_enabled,
+        access_fence=access_fence,
     )
 
 
@@ -774,8 +1014,11 @@ async def _claim_next_chunk(ctx: _RunContext, state: _RunState) -> _ClaimedChunk
     async with ctx.factory() as session:
         try:
             access_fence = await _admit(
-                session, scope=ctx.scope, multi_workspace_enabled=ctx.multi_workspace_enabled,
-                lock=True, expected=ctx.original.fence,
+                session,
+                scope=ctx.scope,
+                multi_workspace_enabled=ctx.multi_workspace_enabled,
+                lock=True,
+                expected=ctx.original.fence,
             )
         except (DomainError, HTTPException) as exc:
             await session.rollback()
@@ -783,27 +1026,42 @@ async def _claim_next_chunk(ctx: _RunContext, state: _RunState) -> _ClaimedChunk
                 return None
             raise
         if not await ai_settings.module_is_enabled(
-            session, "search", scope=ctx.scope,
+            session,
+            "search",
+            scope=ctx.scope,
             multi_workspace_enabled=ctx.multi_workspace_enabled,
         ):
             await session.rollback()
             return None
-        generation = await session.scalar(select(IndexGeneration).where(
-            IndexGeneration.id == ctx.generation_id, IndexGeneration.workspace_id == ctx.workspace_id,
-        ).with_for_update())
+        generation = await session.scalar(
+            select(IndexGeneration)
+            .where(
+                IndexGeneration.id == ctx.generation_id,
+                IndexGeneration.workspace_id == ctx.workspace_id,
+            )
+            .with_for_update()
+        )
         if generation is None or generation.status not in {"queued", "running", "active"}:
             await session.rollback()
             return None
         claim_was_queued = generation.status == "queued"
         # Projection is needed to publish the queued->running claim or a first-probe finalize.
-        before = (await _index_projection(session, ctx.generation_id, scope=ctx.scope)
-                  if claim_was_queued or state.last_chunk is None else None)
+        before = (
+            await _index_projection(session, ctx.generation_id, scope=ctx.scope)
+            if claim_was_queued or state.last_chunk is None
+            else None
+        )
         if claim_was_queued:
             generation.status = "running"
-        claim = eligible_chunks(workspace_id=ctx.workspace_id).outerjoin(
-            SearchIndexItem,
-            (SearchIndexItem.chunk_id == DocumentChunk.id) & (SearchIndexItem.generation_id == ctx.generation_id),
-        ).where((SearchIndexItem.id.is_(None)) | (SearchIndexItem.status == "pending"))
+        claim = (
+            eligible_chunks(workspace_id=ctx.workspace_id)
+            .outerjoin(
+                SearchIndexItem,
+                (SearchIndexItem.chunk_id == DocumentChunk.id)
+                & (SearchIndexItem.generation_id == ctx.generation_id),
+            )
+            .where((SearchIndexItem.id.is_(None)) | (SearchIndexItem.status == "pending"))
+        )
         if state.last_chunk is not None:
             claim = claim.where(DocumentChunk.id > state.last_chunk)
         row = (await session.execute(claim.order_by(DocumentChunk.id).limit(1))).first()
@@ -822,24 +1080,32 @@ async def _claim_next_chunk(ctx: _RunContext, state: _RunState) -> _ClaimedChunk
             return None
         chunk_id, content, source_id = row
         state.last_chunk = chunk_id
-        item = await session.scalar(select(SearchIndexItem).where(
-            SearchIndexItem.generation_id == ctx.generation_id, SearchIndexItem.chunk_id == chunk_id,
-        ))
+        item = await session.scalar(
+            select(SearchIndexItem).where(
+                SearchIndexItem.generation_id == ctx.generation_id,
+                SearchIndexItem.chunk_id == chunk_id,
+            )
+        )
         if item is None:
             item = SearchIndexItem(generation_id=ctx.generation_id, chunk_id=chunk_id)
             session.add(item)
             await session.flush()
         claimed = _ClaimedChunk(chunk_id, content, source_id, item.id, generation.dimensions)
         await _commit_index_change(
-            session, before, generation_id=ctx.generation_id, scope=ctx.scope,
-            multi_workspace_enabled=ctx.multi_workspace_enabled, access_fence=access_fence,
+            session,
+            before,
+            generation_id=ctx.generation_id,
+            scope=ctx.scope,
+            multi_workspace_enabled=ctx.multi_workspace_enabled,
+            access_fence=access_fence,
             publish=claim_was_queued,
         )
     return claimed
 
 
 async def _embed_claimed_chunk(
-    ctx: _RunContext, claimed: _ClaimedChunk,
+    ctx: _RunContext,
+    claimed: _ClaimedChunk,
 ) -> tuple[list[float], str | None, int | None] | None:
     """Embed one claimed chunk with no DB transaction open during the gateway call.
 
@@ -851,15 +1117,28 @@ async def _embed_claimed_chunk(
     # Short preparation transaction: access -> Source -> chunk, then release every lock.
     async with ctx.factory() as session:
         _fence, live, source_generation = await _recheck_prepared(
-            session, scope=ctx.scope, settings=ctx.settings, redis=ctx.redis, original=ctx.original,
-            source_id=claimed.source_id, source_generation=None, chunk_id=claimed.chunk_id,
-            content=claimed.content, workspace_id=ctx.workspace_id, lock=False,
+            session,
+            scope=ctx.scope,
+            settings=ctx.settings,
+            redis=ctx.redis,
+            original=ctx.original,
+            source_id=claimed.source_id,
+            source_generation=None,
+            chunk_id=claimed.chunk_id,
+            content=claimed.content,
+            workspace_id=ctx.workspace_id,
+            lock=False,
         )
         await session.rollback()
     if not live or source_generation is None:
         await _drop_pending_item(
-            ctx.factory, scope=ctx.scope, settings=ctx.settings, original=ctx.original,
-            item_id=claimed.item_id, generation_id=ctx.generation_id, workspace_id=ctx.workspace_id,
+            ctx.factory,
+            scope=ctx.scope,
+            settings=ctx.settings,
+            original=ctx.original,
+            item_id=claimed.item_id,
+            generation_id=ctx.generation_id,
+            workspace_id=ctx.workspace_id,
         )
         return None
 
@@ -868,9 +1147,16 @@ async def _embed_claimed_chunk(
         async with ctx.factory() as check:
             try:
                 _f, still_live, _g = await _recheck_prepared(
-                    check, scope=ctx.scope, settings=ctx.settings, redis=ctx.redis, original=ctx.original,
-                    source_id=claimed.source_id, source_generation=source_generation,
-                    chunk_id=claimed.chunk_id, content=claimed.content, workspace_id=ctx.workspace_id,
+                    check,
+                    scope=ctx.scope,
+                    settings=ctx.settings,
+                    redis=ctx.redis,
+                    original=ctx.original,
+                    source_id=claimed.source_id,
+                    source_generation=source_generation,
+                    chunk_id=claimed.chunk_id,
+                    content=claimed.content,
+                    workspace_id=ctx.workspace_id,
                     lock=False,
                 )
             except _AuthorityChanged as exc:
@@ -878,19 +1164,28 @@ async def _embed_claimed_chunk(
             finally:
                 await check.rollback()
             if not still_live:
-                raise PrivacyPolicyDenied("Embedding source changed before send") from _SourceStale()
+                raise PrivacyPolicyDenied(
+                    "Embedding source changed before send"
+                ) from _SourceStale()
 
     mapping = ctx.original.mapping
     response = await gateway(ctx.original.config, ctx.redis, recheck_send, scope=ctx.scope).embed(
-        "embedding", mapping, ctx.original.policy, [claimed.content],
+        "embedding",
+        mapping,
+        ctx.original.policy,
+        [claimed.content],
     )
     values, returned_model = embedding_values(response, claimed.dimensions)
     return values, returned_model, source_generation
 
 
 async def _publish_embedding(
-    ctx: _RunContext, state: _RunState, claimed: _ClaimedChunk, source_generation: int | None,
-    values: list[float], returned_model: str | None,
+    ctx: _RunContext,
+    state: _RunState,
+    claimed: _ClaimedChunk,
+    source_generation: int | None,
+    values: list[float],
+    returned_model: str | None,
 ) -> bool:
     """Publish one embedding under the ordered locks; return False when the loop must stop.
 
@@ -906,33 +1201,67 @@ async def _publish_embedding(
     # Publication: same lock order (access -> Source -> chunk -> generation/item).
     async with ctx.factory() as session:
         fence, live, _g = await _recheck_prepared(
-            session, scope=ctx.scope, settings=ctx.settings, redis=ctx.redis, original=ctx.original,
-            source_id=claimed.source_id, source_generation=source_generation, chunk_id=claimed.chunk_id,
-            content=claimed.content, workspace_id=ctx.workspace_id, lock=True,
+            session,
+            scope=ctx.scope,
+            settings=ctx.settings,
+            redis=ctx.redis,
+            original=ctx.original,
+            source_id=claimed.source_id,
+            source_generation=source_generation,
+            chunk_id=claimed.chunk_id,
+            content=claimed.content,
+            workspace_id=ctx.workspace_id,
+            lock=True,
         )
-        generation = await session.scalar(select(IndexGeneration).where(
-            IndexGeneration.id == ctx.generation_id, IndexGeneration.workspace_id == ctx.workspace_id,
-        ).with_for_update())
-        item = await session.scalar(select(SearchIndexItem).join(
-            IndexGeneration, IndexGeneration.id == SearchIndexItem.generation_id,
-        ).where(
-            SearchIndexItem.id == claimed.item_id, IndexGeneration.workspace_id == ctx.workspace_id,
-        ).with_for_update())
-        if not live or generation is None or item is None or generation.status not in {"running", "active"}:
+        generation = await session.scalar(
+            select(IndexGeneration)
+            .where(
+                IndexGeneration.id == ctx.generation_id,
+                IndexGeneration.workspace_id == ctx.workspace_id,
+            )
+            .with_for_update()
+        )
+        item = await session.scalar(
+            select(SearchIndexItem)
+            .join(
+                IndexGeneration,
+                IndexGeneration.id == SearchIndexItem.generation_id,
+            )
+            .where(
+                SearchIndexItem.id == claimed.item_id,
+                IndexGeneration.workspace_id == ctx.workspace_id,
+            )
+            .with_for_update()
+        )
+        if (
+            not live
+            or generation is None
+            or item is None
+            or generation.status not in {"running", "active"}
+        ):
             if item is not None:
                 before = await _index_projection(session, item.generation_id, scope=ctx.scope)
                 await session.delete(item)
                 await _commit_index_change(
-                    session, before, generation_id=item.generation_id, scope=ctx.scope,
-                    multi_workspace_enabled=ctx.multi_workspace_enabled, access_fence=fence,
+                    session,
+                    before,
+                    generation_id=item.generation_id,
+                    scope=ctx.scope,
+                    multi_workspace_enabled=ctx.multi_workspace_enabled,
+                    access_fence=fence,
                 )
             else:
                 await session.rollback()
             return True
         now = time.monotonic()
-        publish = state.unemitted + 1 >= INDEX_EVENT_ITEMS or now - state.last_emit >= INDEX_EVENT_SECONDS
-        before = (await _index_projection(session, ctx.generation_id, scope=ctx.scope)
-                  if publish else None)
+        publish = (
+            state.unemitted + 1 >= INDEX_EVENT_ITEMS or now - state.last_emit >= INDEX_EVENT_SECONDS
+        )
+        before = (
+            await _index_projection(session, ctx.generation_id, scope=ctx.scope)
+            if publish
+            else None
+        )
         if generation.dimensions is None:
             generation.response_model_id = returned_model
             generation.dimensions = len(values)
@@ -943,19 +1272,31 @@ async def _publish_embedding(
             item.error_code = "model_identity_changed"
             # Status change: always published (before=None differs from any projection).
             await _commit_index_change(
-                session, before, generation_id=ctx.generation_id, scope=ctx.scope,
-                multi_workspace_enabled=ctx.multi_workspace_enabled, access_fence=fence,
+                session,
+                before,
+                generation_id=ctx.generation_id,
+                scope=ctx.scope,
+                multi_workspace_enabled=ctx.multi_workspace_enabled,
+                access_fence=fence,
             )
             return False
         elif generation.dimensions != len(values):
             raise ValueError("Embedding dimensions changed during indexing")
-        await session.execute(text("UPDATE search_index_items SET embedding = CAST(:embedding AS vector) WHERE id = :item_id"),
-                              {"embedding": embedding_literal, "item_id": claimed.item_id})
+        await session.execute(
+            text(
+                "UPDATE search_index_items SET embedding = CAST(:embedding AS vector) WHERE id = :item_id"
+            ),
+            {"embedding": embedding_literal, "item_id": claimed.item_id},
+        )
         item.status = "succeeded"
         item.error_code = None
         await _commit_index_change(
-            session, before, generation_id=ctx.generation_id, scope=ctx.scope,
-            multi_workspace_enabled=ctx.multi_workspace_enabled, access_fence=fence,
+            session,
+            before,
+            generation_id=ctx.generation_id,
+            scope=ctx.scope,
+            multi_workspace_enabled=ctx.multi_workspace_enabled,
+            access_fence=fence,
             publish=publish,
         )
         state.completed += 1
@@ -966,7 +1307,9 @@ async def _publish_embedding(
     return True
 
 
-async def _process_claimed_chunk(ctx: _RunContext, state: _RunState, claimed: _ClaimedChunk) -> bool:
+async def _process_claimed_chunk(
+    ctx: _RunContext, state: _RunState, claimed: _ClaimedChunk
+) -> bool:
     """Embed and publish one claimed chunk, mapping failures to the loop's continue/stop decision.
 
     Returns True to continue with the next chunk, False to stop the batch. Authority changes and
@@ -978,7 +1321,9 @@ async def _process_claimed_chunk(ctx: _RunContext, state: _RunState, claimed: _C
         if embedded is None:
             return True
         values, returned_model, source_generation = embedded
-        return await _publish_embedding(ctx, state, claimed, source_generation, values, returned_model)
+        return await _publish_embedding(
+            ctx, state, claimed, source_generation, values, returned_model
+        )
     except _AuthorityChanged:
         return False  # stale output discarded; the item stays pending for a fresh invocation
     except (DomainError, HTTPException) as exc:
@@ -990,24 +1335,39 @@ async def _process_claimed_chunk(ctx: _RunContext, state: _RunState, claimed: _C
             return False  # leave pending for a fresh invocation
         if isinstance(exc.__cause__, _SourceStale):
             await _drop_pending_item(
-                ctx.factory, scope=ctx.scope, settings=ctx.settings, original=ctx.original,
-                item_id=claimed.item_id, generation_id=ctx.generation_id, workspace_id=ctx.workspace_id,
+                ctx.factory,
+                scope=ctx.scope,
+                settings=ctx.settings,
+                original=ctx.original,
+                item_id=claimed.item_id,
+                generation_id=ctx.generation_id,
+                workspace_id=ctx.workspace_id,
             )
             return True
         await _fail_item(
-            ctx.factory, scope=ctx.scope, settings=ctx.settings, original=ctx.original,
-            item_id=claimed.item_id, workspace_id=ctx.workspace_id,
+            ctx.factory,
+            scope=ctx.scope,
+            settings=ctx.settings,
+            original=ctx.original,
+            item_id=claimed.item_id,
+            workspace_id=ctx.workspace_id,
         )
     except (ModelGatewayError, RedisError, ValueError):
         await _fail_item(
-            ctx.factory, scope=ctx.scope, settings=ctx.settings, original=ctx.original,
-            item_id=claimed.item_id, workspace_id=ctx.workspace_id,
+            ctx.factory,
+            scope=ctx.scope,
+            settings=ctx.settings,
+            original=ctx.original,
+            item_id=claimed.item_id,
+            workspace_id=ctx.workspace_id,
         )
     return True
 
 
 def embedding_batch_values(
-    response: object, count: int, expected_dimensions: int | None = None,
+    response: object,
+    count: int,
+    expected_dimensions: int | None = None,
 ) -> tuple[list[list[float]], str | None]:
     """Validate a ``count``-input embedding response and return the vectors in input order plus the model.
 
@@ -1023,7 +1383,12 @@ def embedding_batch_values(
     if all(isinstance(i, int) and not isinstance(i, bool) for i in indexes):
         if sorted(cast(list[int], indexes)) != list(range(count)):
             raise ValueError("Invalid embedding response")
-        data = [row for _, row in sorted(zip(cast(list[int], indexes), data, strict=True), key=lambda p: p[0])]
+        data = [
+            row
+            for _, row in sorted(
+                zip(cast(list[int], indexes), data, strict=True), key=lambda p: p[0]
+            )
+        ]
     model = cast(dict[str, object], response).get("model")
     vectors: list[list[float]] = []
     for row in data:
@@ -1061,8 +1426,11 @@ async def _claim_chunk_batch(ctx: _RunContext, state: _RunState, limit: int) -> 
     async with ctx.factory() as session:
         try:
             access_fence = await _admit(
-                session, scope=ctx.scope, multi_workspace_enabled=ctx.multi_workspace_enabled,
-                lock=True, expected=ctx.original.fence,
+                session,
+                scope=ctx.scope,
+                multi_workspace_enabled=ctx.multi_workspace_enabled,
+                lock=True,
+                expected=ctx.original.fence,
             )
         except (DomainError, HTTPException) as exc:
             await session.rollback()
@@ -1070,31 +1438,49 @@ async def _claim_chunk_batch(ctx: _RunContext, state: _RunState, limit: int) -> 
                 return []
             raise
         if not await ai_settings.module_is_enabled(
-            session, "search", scope=ctx.scope, multi_workspace_enabled=ctx.multi_workspace_enabled,
+            session,
+            "search",
+            scope=ctx.scope,
+            multi_workspace_enabled=ctx.multi_workspace_enabled,
         ):
             await session.rollback()
             return []
-        generation = await session.scalar(select(IndexGeneration).where(
-            IndexGeneration.id == ctx.generation_id, IndexGeneration.workspace_id == ctx.workspace_id,
-        ).with_for_update())
+        generation = await session.scalar(
+            select(IndexGeneration)
+            .where(
+                IndexGeneration.id == ctx.generation_id,
+                IndexGeneration.workspace_id == ctx.workspace_id,
+            )
+            .with_for_update()
+        )
         if generation is None or generation.status not in {"queued", "running", "active"}:
             await session.rollback()
             return []
         claim_was_queued = generation.status == "queued"
-        before = (await _index_projection(session, ctx.generation_id, scope=ctx.scope)
-                  if claim_was_queued or state.last_chunk is None else None)
+        before = (
+            await _index_projection(session, ctx.generation_id, scope=ctx.scope)
+            if claim_was_queued or state.last_chunk is None
+            else None
+        )
         if claim_was_queued:
             generation.status = "running"
-        claim = eligible_chunks(workspace_id=ctx.workspace_id).outerjoin(
-            SearchIndexItem,
-            (SearchIndexItem.chunk_id == DocumentChunk.id) & (SearchIndexItem.generation_id == ctx.generation_id),
-        ).where((SearchIndexItem.id.is_(None)) | (SearchIndexItem.status == "pending"))
+        claim = (
+            eligible_chunks(workspace_id=ctx.workspace_id)
+            .outerjoin(
+                SearchIndexItem,
+                (SearchIndexItem.chunk_id == DocumentChunk.id)
+                & (SearchIndexItem.generation_id == ctx.generation_id),
+            )
+            .where((SearchIndexItem.id.is_(None)) | (SearchIndexItem.status == "pending"))
+        )
         if state.last_chunk is not None:
             claim = claim.where(DocumentChunk.id > state.last_chunk)
         rows = list((await session.execute(claim.order_by(DocumentChunk.id).limit(limit))).all())
         if not rows:
             if state.last_chunk is not None:
-                await session.rollback()  # keyset exhausted, not necessarily nothing pending (see single claim)
+                await (
+                    session.rollback()
+                )  # keyset exhausted, not necessarily nothing pending (see single claim)
             elif generation.status != "running":
                 await session.rollback()
                 state.idle = True
@@ -1102,26 +1488,42 @@ async def _claim_chunk_batch(ctx: _RunContext, state: _RunState, limit: int) -> 
                 await _finalize_exhausted_generation(session, ctx, generation, before, access_fence)
             return []
         state.last_chunk = rows[-1][0]
-        known = {item.chunk_id: item for item in await session.scalars(select(SearchIndexItem).where(
-            SearchIndexItem.generation_id == ctx.generation_id,
-            SearchIndexItem.chunk_id.in_([row[0] for row in rows]),
-        ))}
+        known = {
+            item.chunk_id: item
+            for item in await session.scalars(
+                select(SearchIndexItem).where(
+                    SearchIndexItem.generation_id == ctx.generation_id,
+                    SearchIndexItem.chunk_id.in_([row[0] for row in rows]),
+                )
+            )
+        }
         for chunk_id, _content, _source in rows:
             if chunk_id not in known:
-                known[chunk_id] = SearchIndexItem(generation_id=ctx.generation_id, chunk_id=chunk_id)
+                known[chunk_id] = SearchIndexItem(
+                    generation_id=ctx.generation_id, chunk_id=chunk_id
+                )
                 session.add(known[chunk_id])
         await session.flush()
-        claimed = [_ClaimedChunk(cid, content, sid, known[cid].id, generation.dimensions) for cid, content, sid in rows]
+        claimed = [
+            _ClaimedChunk(cid, content, sid, known[cid].id, generation.dimensions)
+            for cid, content, sid in rows
+        ]
         await _commit_index_change(
-            session, before, generation_id=ctx.generation_id, scope=ctx.scope,
-            multi_workspace_enabled=ctx.multi_workspace_enabled, access_fence=access_fence,
+            session,
+            before,
+            generation_id=ctx.generation_id,
+            scope=ctx.scope,
+            multi_workspace_enabled=ctx.multi_workspace_enabled,
+            access_fence=access_fence,
             publish=claim_was_queued,
         )
     return claimed
 
 
 async def _recheck_batch(
-    ctx: _RunContext, chunks: list[_ClaimedChunk], generations: list[int | None],
+    ctx: _RunContext,
+    chunks: list[_ClaimedChunk],
+    generations: list[int | None],
 ) -> tuple[list[bool], list[int | None]]:
     """Revalidate every chunk of a batch in ONE short non-locking session (access -> Source -> chunk order).
 
@@ -1134,9 +1536,17 @@ async def _recheck_batch(
         try:
             for chunk, generation in zip(chunks, generations, strict=True):
                 _fence, ok, source_generation = await _recheck_prepared(
-                    session, scope=ctx.scope, settings=ctx.settings, redis=ctx.redis, original=ctx.original,
-                    source_id=chunk.source_id, source_generation=generation, chunk_id=chunk.chunk_id,
-                    content=chunk.content, workspace_id=ctx.workspace_id, lock=False,
+                    session,
+                    scope=ctx.scope,
+                    settings=ctx.settings,
+                    redis=ctx.redis,
+                    original=ctx.original,
+                    source_id=chunk.source_id,
+                    source_generation=generation,
+                    chunk_id=chunk.chunk_id,
+                    content=chunk.content,
+                    workspace_id=ctx.workspace_id,
+                    lock=False,
                 )
                 live.append(ok and source_generation is not None)
                 seen.append(source_generation)
@@ -1146,7 +1556,9 @@ async def _recheck_batch(
 
 
 async def _embed_chunk_batch(
-    ctx: _RunContext, claimed: list[_ClaimedChunk], survivors: list[_ClaimedChunk] | None = None,
+    ctx: _RunContext,
+    claimed: list[_ClaimedChunk],
+    survivors: list[_ClaimedChunk] | None = None,
 ) -> _EmbeddedBatch | None:
     """Embed the live chunks of a claim with one gateway request and no DB transaction open during it.
 
@@ -1166,8 +1578,13 @@ async def _embed_chunk_batch(
             kept.append(generation)
         else:
             await _drop_pending_item(
-                ctx.factory, scope=ctx.scope, settings=ctx.settings, original=ctx.original,
-                item_id=chunk.item_id, generation_id=ctx.generation_id, workspace_id=ctx.workspace_id,
+                ctx.factory,
+                scope=ctx.scope,
+                settings=ctx.settings,
+                original=ctx.original,
+                item_id=chunk.item_id,
+                generation_id=ctx.generation_id,
+                workspace_id=ctx.workspace_id,
             )
     if survivors is not None:
         survivors[:] = chunks
@@ -1184,14 +1601,19 @@ async def _embed_chunk_batch(
             raise PrivacyPolicyDenied("Embedding source changed before send") from _SourceStale()
 
     response = await gateway(ctx.original.config, ctx.redis, recheck_send, scope=ctx.scope).embed(
-        "embedding", ctx.original.mapping, ctx.original.policy, [chunk.content for chunk in chunks],
+        "embedding",
+        ctx.original.mapping,
+        ctx.original.policy,
+        [chunk.content for chunk in chunks],
     )
     vectors, returned_model = embedding_batch_values(response, len(chunks), chunks[0].dimensions)
     return _EmbeddedBatch(chunks, kept, vectors, returned_model)
 
 
 async def _lock_batch_sources(
-    session: AsyncSession, ctx: _RunContext, batch: _EmbeddedBatch,
+    session: AsyncSession,
+    ctx: _RunContext,
+    batch: _EmbeddedBatch,
 ) -> tuple[AccessFence, dict[UUID, bool]]:
     """Re-admit under lock and revalidate each chunk in canonical (Source id, chunk id) order.
 
@@ -1208,9 +1630,17 @@ async def _lock_batch_sources(
     for i in order:
         chunk = batch.chunks[i]
         fence, ok, _g = await _recheck_prepared(
-            session, scope=ctx.scope, settings=ctx.settings, redis=ctx.redis, original=ctx.original,
-            source_id=chunk.source_id, source_generation=batch.generations[i], chunk_id=chunk.chunk_id,
-            content=chunk.content, workspace_id=ctx.workspace_id, lock=True,
+            session,
+            scope=ctx.scope,
+            settings=ctx.settings,
+            redis=ctx.redis,
+            original=ctx.original,
+            source_id=chunk.source_id,
+            source_generation=batch.generations[i],
+            chunk_id=chunk.chunk_id,
+            content=chunk.content,
+            workspace_id=ctx.workspace_id,
+            lock=True,
         )
         live[chunk.chunk_id] = ok
     if fence is None:
@@ -1218,7 +1648,9 @@ async def _lock_batch_sources(
     return fence, live
 
 
-async def _publish_embedding_batch(ctx: _RunContext, state: _RunState, batch: _EmbeddedBatch) -> bool:
+async def _publish_embedding_batch(
+    ctx: _RunContext, state: _RunState, batch: _EmbeddedBatch
+) -> bool:
     """Publish a whole batch in ONE transaction; return False when the loop must stop.
 
     Lock order: access -> Sources (sorted) -> Documents -> generation -> items (sorted by id), all
@@ -1227,18 +1659,35 @@ async def _publish_embedding_batch(ctx: _RunContext, state: _RunState, batch: _E
     item of the batch (published) and stops; a dimension change raises ``ValueError``. Live vectors are
     written with a single executemany UPDATE, and progress events are coalesced via ``state``.
     """
-    literals = [_vector_literal(values) for values in batch.vectors]  # serialize before taking locks
+    literals = [
+        _vector_literal(values) for values in batch.vectors
+    ]  # serialize before taking locks
     async with ctx.factory() as session:
         fence, live = await _lock_batch_sources(session, ctx, batch)
-        generation = await session.scalar(select(IndexGeneration).where(
-            IndexGeneration.id == ctx.generation_id, IndexGeneration.workspace_id == ctx.workspace_id,
-        ).with_for_update())
-        items = {item.id: item for item in await session.scalars(select(SearchIndexItem).join(
-            IndexGeneration, IndexGeneration.id == SearchIndexItem.generation_id,
-        ).where(
-            SearchIndexItem.id.in_([chunk.item_id for chunk in batch.chunks]),
-            IndexGeneration.workspace_id == ctx.workspace_id,
-        ).order_by(SearchIndexItem.id).with_for_update())}
+        generation = await session.scalar(
+            select(IndexGeneration)
+            .where(
+                IndexGeneration.id == ctx.generation_id,
+                IndexGeneration.workspace_id == ctx.workspace_id,
+            )
+            .with_for_update()
+        )
+        items = {
+            item.id: item
+            for item in await session.scalars(
+                select(SearchIndexItem)
+                .join(
+                    IndexGeneration,
+                    IndexGeneration.id == SearchIndexItem.generation_id,
+                )
+                .where(
+                    SearchIndexItem.id.in_([chunk.item_id for chunk in batch.chunks]),
+                    IndexGeneration.workspace_id == ctx.workspace_id,
+                )
+                .order_by(SearchIndexItem.id)
+                .with_for_update()
+            )
+        }
         running = generation is not None and generation.status in {"running", "active"}
         writes: list[dict[str, object]] = []
         stale: list[SearchIndexItem] = []
@@ -1251,37 +1700,56 @@ async def _publish_embedding_batch(ctx: _RunContext, state: _RunState, batch: _E
             else:
                 stale.append(item)
         now = time.monotonic()
-        publish = state.unemitted + len(writes) >= INDEX_EVENT_ITEMS or now - state.last_emit >= INDEX_EVENT_SECONDS
-        before = (await _index_projection(session, ctx.generation_id, scope=ctx.scope)
-                  if publish or stale else None)
+        publish = (
+            state.unemitted + len(writes) >= INDEX_EVENT_ITEMS
+            or now - state.last_emit >= INDEX_EVENT_SECONDS
+        )
+        before = (
+            await _index_projection(session, ctx.generation_id, scope=ctx.scope)
+            if publish or stale
+            else None
+        )
         for item in stale:
             await session.delete(item)
         if writes and generation is not None:
             dimensions = len(batch.vectors[0])
             if generation.dimensions is None:
-                generation.response_model_id, generation.dimensions = batch.returned_model, dimensions
+                generation.response_model_id, generation.dimensions = (
+                    batch.returned_model,
+                    dimensions,
+                )
             elif batch.returned_model != generation.response_model_id:
                 generation.status, generation.error_code = "failed", "model_identity_changed"
                 for write in writes:
                     failed_item = items[cast(UUID, write["item_id"])]
                     failed_item.status, failed_item.error_code = "failed", "model_identity_changed"
                 await _commit_index_change(
-                    session, before, generation_id=ctx.generation_id, scope=ctx.scope,
-                    multi_workspace_enabled=ctx.multi_workspace_enabled, access_fence=fence,
+                    session,
+                    before,
+                    generation_id=ctx.generation_id,
+                    scope=ctx.scope,
+                    multi_workspace_enabled=ctx.multi_workspace_enabled,
+                    access_fence=fence,
                 )
                 return False
             elif generation.dimensions != dimensions:
                 raise ValueError("Embedding dimensions changed during indexing")
             await session.execute(
-                text("UPDATE search_index_items SET embedding = CAST(:embedding AS vector) WHERE id = :item_id"),
+                text(
+                    "UPDATE search_index_items SET embedding = CAST(:embedding AS vector) WHERE id = :item_id"
+                ),
                 writes,
             )
             for write in writes:
                 done = items[cast(UUID, write["item_id"])]
                 done.status, done.error_code = "succeeded", None
         await _commit_index_change(
-            session, before, generation_id=ctx.generation_id, scope=ctx.scope,
-            multi_workspace_enabled=ctx.multi_workspace_enabled, access_fence=fence,
+            session,
+            before,
+            generation_id=ctx.generation_id,
+            scope=ctx.scope,
+            multi_workspace_enabled=ctx.multi_workspace_enabled,
+            access_fence=fence,
             publish=publish or bool(stale),
         )
         state.completed += len(writes)
@@ -1296,12 +1764,18 @@ async def _fail_batch(ctx: _RunContext, claimed: list[_ClaimedChunk]) -> None:
     """Mark every item of a batch failed (each under the original fence, own short transaction)."""
     for chunk in claimed:
         await _fail_item(
-            ctx.factory, scope=ctx.scope, settings=ctx.settings, original=ctx.original,
-            item_id=chunk.item_id, workspace_id=ctx.workspace_id,
+            ctx.factory,
+            scope=ctx.scope,
+            settings=ctx.settings,
+            original=ctx.original,
+            item_id=chunk.item_id,
+            workspace_id=ctx.workspace_id,
         )
 
 
-async def _process_claimed_batch(ctx: _RunContext, state: _RunState, claimed: list[_ClaimedChunk]) -> bool:
+async def _process_claimed_batch(
+    ctx: _RunContext, state: _RunState, claimed: list[_ClaimedChunk]
+) -> bool:
     """Embed and publish one claimed batch; return True to continue, False to stop the run.
 
     Authority changes and 401/403/404/409 admission denials stop (items stay pending). A stale Source or a
@@ -1309,7 +1783,9 @@ async def _process_claimed_batch(ctx: _RunContext, state: _RunState, claimed: li
     its neighbours. Gateway/Redis errors fail every item of the batch (as the per-chunk path would, one
     request at a time); other errors propagate.
     """
-    survivors = list(claimed)  # narrowed to the live chunks once the batch recheck has dropped the stale ones
+    survivors = list(
+        claimed
+    )  # narrowed to the live chunks once the batch recheck has dropped the stale ones
     try:
         embedded = await _embed_chunk_batch(ctx, claimed, survivors)
         if embedded is None:
@@ -1332,15 +1808,20 @@ async def _process_claimed_batch(ctx: _RunContext, state: _RunState, claimed: li
     except (ModelGatewayError, RedisError):
         await _fail_batch(ctx, claimed)
         return True
-    for chunk in survivors:  # fallback: identical to the single-chunk pipeline, one request per chunk
+    for (
+        chunk
+    ) in survivors:  # fallback: identical to the single-chunk pipeline, one request per chunk
         if not await _process_claimed_chunk(ctx, state, chunk):
             return False
     return True
 
 
 async def _index_generation(
-    factory: async_sessionmaker[AsyncSession], redis: Redis, settings: Settings,
-    generation_id: UUID, workspace_id: UUID,
+    factory: async_sessionmaker[AsyncSession],
+    redis: Redis,
+    settings: Settings,
+    generation_id: UUID,
+    workspace_id: UUID,
 ) -> int | None:
     """Index a bounded batch of chunks (items and time) of one generation; None when skipped.
 
@@ -1378,54 +1859,89 @@ async def _index_generation(
 
 
 async def _drop_pending_item(
-    factory: async_sessionmaker[AsyncSession], *, scope: Scope, settings: Settings,
-    original: EmbeddingAuthority, item_id: UUID, generation_id: UUID, workspace_id: UUID,
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    scope: Scope,
+    settings: Settings,
+    original: EmbeddingAuthority,
+    item_id: UUID,
+    generation_id: UUID,
+    workspace_id: UUID,
 ) -> None:
     """Delete a pending item whose Source/chunk is no longer eligible, under the original fence."""
     async with factory() as session:
         try:
             fence = await _admit(
-                session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
-                lock=True, expected=original.fence,
+                session,
+                scope=scope,
+                multi_workspace_enabled=settings.multi_workspace_enabled,
+                lock=True,
+                expected=original.fence,
             )
         except (DomainError, HTTPException):
             await session.rollback()
             return
-        item = await session.scalar(select(SearchIndexItem).join(
-            IndexGeneration, IndexGeneration.id == SearchIndexItem.generation_id,
-        ).where(
-            SearchIndexItem.id == item_id, IndexGeneration.workspace_id == workspace_id,
-        ).with_for_update())
+        item = await session.scalar(
+            select(SearchIndexItem)
+            .join(
+                IndexGeneration,
+                IndexGeneration.id == SearchIndexItem.generation_id,
+            )
+            .where(
+                SearchIndexItem.id == item_id,
+                IndexGeneration.workspace_id == workspace_id,
+            )
+            .with_for_update()
+        )
         if item is None:
             await session.rollback()
             return
         before = await _index_projection(session, generation_id, scope=scope)
         await session.delete(item)
         await _commit_index_change(
-            session, before, generation_id=generation_id, scope=scope,
-            multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=fence,
+            session,
+            before,
+            generation_id=generation_id,
+            scope=scope,
+            multi_workspace_enabled=settings.multi_workspace_enabled,
+            access_fence=fence,
         )
 
 
 async def _fail_item(
-    factory: async_sessionmaker[AsyncSession], *, scope: Scope, settings: Settings,
-    original: EmbeddingAuthority, item_id: UUID, workspace_id: UUID,
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    scope: Scope,
+    settings: Settings,
+    original: EmbeddingAuthority,
+    item_id: UUID,
+    workspace_id: UUID,
 ) -> None:
     """Mark one item failed, but only while the original access fence still holds."""
     async with factory() as session:
         try:
             fence = await _admit(
-                session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
-                lock=True, expected=original.fence,
+                session,
+                scope=scope,
+                multi_workspace_enabled=settings.multi_workspace_enabled,
+                lock=True,
+                expected=original.fence,
             )
         except (DomainError, HTTPException):
             await session.rollback()
             return
-        item = await session.scalar(select(SearchIndexItem).join(
-            IndexGeneration, IndexGeneration.id == SearchIndexItem.generation_id,
-        ).where(
-            SearchIndexItem.id == item_id, IndexGeneration.workspace_id == workspace_id,
-        ).with_for_update())
+        item = await session.scalar(
+            select(SearchIndexItem)
+            .join(
+                IndexGeneration,
+                IndexGeneration.id == SearchIndexItem.generation_id,
+            )
+            .where(
+                SearchIndexItem.id == item_id,
+                IndexGeneration.workspace_id == workspace_id,
+            )
+            .with_for_update()
+        )
         if item is None:
             await session.rollback()
             return
@@ -1433,8 +1949,12 @@ async def _fail_item(
         item.status = "failed"
         item.error_code = "embedding_failed"
         await _commit_index_change(
-            session, before, generation_id=item.generation_id, scope=scope,
-            multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=fence,
+            session,
+            before,
+            generation_id=item.generation_id,
+            scope=scope,
+            multi_workspace_enabled=settings.multi_workspace_enabled,
+            access_fence=fence,
         )
 
 
@@ -1466,7 +1986,9 @@ def vector_index_statements(generation_id: UUID, dimensions: int) -> tuple[str, 
 HNSW_BUILD_STATEMENT_TIMEOUT_MS = 2 * 60 * 60 * 1000
 
 
-async def build_vector_index_concurrently(engine: AsyncEngine, generation_id: UUID, dimensions: int) -> None:
+async def build_vector_index_concurrently(
+    engine: AsyncEngine, generation_id: UUID, dimensions: int
+) -> None:
     """Build one generation's HNSW index with ``CREATE INDEX CONCURRENTLY`` on its own autocommit connection.
 
     Takes no lock that blocks writes to ``search_index_items`` (the previous in-transaction build did) but must
@@ -1489,18 +2011,27 @@ async def build_vector_index_concurrently(engine: AsyncEngine, generation_id: UU
             # Finite on purpose (was 0 = unbounded): the build waits for older open transactions, so an
             # idle-in-transaction session would otherwise hang it forever. On timeout the invalid leftover is
             # dropped below and the next indexing pass retries. See docs/operations.md "Search HNSW indexes".
-            await connection.execute(text(f"SET statement_timeout = {HNSW_BUILD_STATEMENT_TIMEOUT_MS}"))
+            await connection.execute(
+                text(f"SET statement_timeout = {HNSW_BUILD_STATEMENT_TIMEOUT_MS}")
+            )
             await connection.execute(text("SET lock_timeout = 0"))
             # Session-level advisory lock keyed by the index name serializes builders of the same generation
             # (the generation row lock is released before the build). Without it a second finalize would see the
             # first builder's in-progress (indisvalid = false) index as a leftover and drop it. Blocking is
             # intended: after the first builder finishes, the probe below finds a valid index and the create is a no-op.
-            await connection.execute(text("SELECT pg_advisory_lock(hashtext(:name))"), {"name": name})
+            await connection.execute(
+                text("SELECT pg_advisory_lock(hashtext(:name))"), {"name": name}
+            )
             locked = True
-            invalid = (await connection.execute(text(
-                "SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
-                "WHERE c.relname = :name AND NOT i.indisvalid"
-            ), {"name": name})).first()
+            invalid = (
+                await connection.execute(
+                    text(
+                        "SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                        "WHERE c.relname = :name AND NOT i.indisvalid"
+                    ),
+                    {"name": name},
+                )
+            ).first()
             if invalid is not None:
                 await connection.execute(text(drop))
             try:
@@ -1511,18 +2042,26 @@ async def build_vector_index_concurrently(engine: AsyncEngine, generation_id: UU
                 try:
                     await connection.execute(text(drop))
                 except Exception:  # cleanup must not mask the build failure
-                    logger.warning("Could not drop invalid HNSW index %s after a failed build", name, exc_info=True)
+                    logger.warning(
+                        "Could not drop invalid HNSW index %s after a failed build",
+                        name,
+                        exc_info=True,
+                    )
                 raise
         finally:
             # Pooled connection: release the session lock and timeouts, but never let a broken/cancelled
             # connection mask the original error; discard it instead so the pool cannot reuse dirty state.
             try:
                 if locked:
-                    await connection.execute(text("SELECT pg_advisory_unlock(hashtext(:name))"), {"name": name})
+                    await connection.execute(
+                        text("SELECT pg_advisory_unlock(hashtext(:name))"), {"name": name}
+                    )
                 await connection.execute(text("RESET statement_timeout"))
                 await connection.execute(text("RESET lock_timeout"))
             except BaseException:
-                logger.warning("Could not reset HNSW build connection state; invalidating it", exc_info=True)
+                logger.warning(
+                    "Could not reset HNSW build connection state; invalidating it", exc_info=True
+                )
                 try:
                     await connection.invalidate()
                 except Exception:
@@ -1546,7 +2085,9 @@ def async_engine_for_session(session: AsyncSession) -> AsyncEngine:
 
 
 async def _build_index_outside_transaction(
-    session: AsyncSession, ctx: _RunContext, generation: IndexGeneration,
+    session: AsyncSession,
+    ctx: _RunContext,
+    generation: IndexGeneration,
 ) -> tuple[IndexGeneration, AccessFence] | None:
     """Commit, build the generation's HNSW index concurrently, then re-lock and re-validate for activation.
 
@@ -1561,13 +2102,18 @@ async def _build_index_outside_transaction(
     dimensions = generation.dimensions
     if dimensions is None:
         return None
-    engine = async_engine_for_session(session)  # resolve before commit so a misconfiguration fails without side effects
+    engine = async_engine_for_session(
+        session
+    )  # resolve before commit so a misconfiguration fails without side effects
     await session.commit()
     await build_vector_index_concurrently(engine, ctx.generation_id, dimensions)
     try:
         access_fence = await _admit(
-            session, scope=ctx.scope, multi_workspace_enabled=ctx.multi_workspace_enabled,
-            lock=True, expected=ctx.original.fence,
+            session,
+            scope=ctx.scope,
+            multi_workspace_enabled=ctx.multi_workspace_enabled,
+            lock=True,
+            expected=ctx.original.fence,
         )
     except (DomainError, HTTPException) as exc:
         await session.rollback()
@@ -1576,20 +2122,43 @@ async def _build_index_outside_transaction(
         raise
     # populate_existing: the commit above kept the old instance (expire_on_commit=False), so refresh it
     # from the row we now hold the lock on instead of trusting pre-build attribute values.
-    current = await session.scalar(select(IndexGeneration).where(
-        IndexGeneration.id == ctx.generation_id, IndexGeneration.workspace_id == ctx.workspace_id,
-    ).with_for_update().execution_options(populate_existing=True))
-    unfinished = await session.scalar(select(func.count()).select_from(SearchIndexItem).where(
-        SearchIndexItem.generation_id == ctx.generation_id, SearchIndexItem.status != "succeeded",
-    )) if current is not None else 0
-    if current is None or current.status != "running" or current.dimensions != dimensions or unfinished:
+    current = await session.scalar(
+        select(IndexGeneration)
+        .where(
+            IndexGeneration.id == ctx.generation_id,
+            IndexGeneration.workspace_id == ctx.workspace_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    unfinished = (
+        await session.scalar(
+            select(func.count())
+            .select_from(SearchIndexItem)
+            .where(
+                SearchIndexItem.generation_id == ctx.generation_id,
+                SearchIndexItem.status != "succeeded",
+            )
+        )
+        if current is not None
+        else 0
+    )
+    if (
+        current is None
+        or current.status != "running"
+        or current.dimensions != dimensions
+        or unfinished
+    ):
         await session.rollback()
         return None
     return current, access_fence
 
 
 async def activate_generation(
-    session: AsyncSession, generation: IndexGeneration, *, scope: Scope,
+    session: AsyncSession,
+    generation: IndexGeneration,
+    *,
+    scope: Scope,
 ) -> None:
     """Retire only the admitted workspace's active predecessor and mark ``generation`` active.
 
@@ -1600,11 +2169,15 @@ async def activate_generation(
     """
     if generation.dimensions is None or not 1 <= generation.dimensions <= MAX_VECTOR_DIMENSIONS:
         raise ValueError("Invalid generation dimensions")
-    prior = await session.scalar(select(IndexGeneration).where(
-        IndexGeneration.workspace_id == scope.workspace_id,
-        IndexGeneration.status == "active",
-        IndexGeneration.id != generation.id,
-    ).with_for_update())
+    prior = await session.scalar(
+        select(IndexGeneration)
+        .where(
+            IndexGeneration.workspace_id == scope.workspace_id,
+            IndexGeneration.status == "active",
+            IndexGeneration.id != generation.id,
+        )
+        .with_for_update()
+    )
     if prior is not None:
         prior.status = "retired"
         await session.flush()
@@ -1619,10 +2192,13 @@ async def purge_version_embeddings(session: AsyncSession, document_version_id: U
     chunks of ``document_version_id`` (served by the ``search_index_items(chunk_id)`` index), so
     other versions, documents and workspaces are untouched; the version id is workspace-owned.
     """
-    await session.execute(text(
-        "DELETE FROM search_index_items WHERE chunk_id IN "
-        "(SELECT id FROM document_chunks WHERE document_version_id = :v)"
-    ), {"v": document_version_id})
+    await session.execute(
+        text(
+            "DELETE FROM search_index_items WHERE chunk_id IN "
+            "(SELECT id FROM document_chunks WHERE document_version_id = :v)"
+        ),
+        {"v": document_version_id},
+    )
 
 
 documents.register_version_superseded_hook(purge_version_embeddings)

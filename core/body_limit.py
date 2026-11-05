@@ -57,9 +57,15 @@ class BodyLimitMiddleware:
     @staticmethod
     async def _reject(send: Send) -> None:
         body = b'{"detail":"Request body too large"}'
-        await send({"type": "http.response.start", "status": 413, "headers": [
-            (b"content-type", b"application/json"), (b"content-length", str(len(body)).encode()),
-            (b"connection", b"close"),
-        ]})
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 413,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode()),
+                    (b"connection", b"close"),
+                ],
+            }
+        )
         await send({"type": "http.response.body", "body": body})
-

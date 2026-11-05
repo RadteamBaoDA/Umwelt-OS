@@ -36,7 +36,10 @@ def map_iss_position(payload: object, collected_at: datetime) -> list[IngestionR
     observed = provider_instant(payload.get("timestamp"), collected_at, unit="s")
     try:
         lat, lon = finite_decimal(payload.get("latitude")), finite_decimal(payload.get("longitude"))
-        altitude, velocity = finite_decimal(payload.get("altitude")), finite_decimal(payload.get("velocity"))
+        altitude, velocity = (
+            finite_decimal(payload.get("altitude")),
+            finite_decimal(payload.get("velocity")),
+        )
     except ValueError as exc:
         raise ProviderPayloadError("iss_position_value_invalid") from exc
     if not (-90 <= lat <= 90 and -180 <= lon <= 180 and altitude > 0 and velocity >= 0):
@@ -45,17 +48,30 @@ def map_iss_position(payload: object, collected_at: datetime) -> list[IngestionR
     stamp = int(observed.timestamp())
     lat_f, lon_f = round(float(lat), 4), round(float(lon), 4)
     alt_km = altitude.quantize(Decimal("0.1"))
-    return [build_record(
-        provider="iss_position", identity=f"iss_position:25544:{stamp}",
-        content=f"ISS at {lat_f}, {lon_f}, altitude {alt_km} km",
-        title="ISS position", observed_at=observed, collected_at=collected_at,
-        version=content_version("iss_position", stamp, lat_f, lon_f), metric="iss_altitude", value=altitude,
-        unit="km", latitude=lat_f, longitude=lon_f, quality="provider_reported",
-        provider_fields={
-            "velocity_kmh": float(velocity), "timestamp": stamp,
-            "visibility": visibility if visibility in _VISIBILITY else None,
-        },
-    )]
+    return [
+        build_record(
+            provider="iss_position",
+            identity=f"iss_position:25544:{stamp}",
+            content=f"ISS at {lat_f}, {lon_f}, altitude {alt_km} km",
+            title="ISS position",
+            observed_at=observed,
+            collected_at=collected_at,
+            version=content_version("iss_position", stamp, lat_f, lon_f),
+            metric="iss_altitude",
+            value=altitude,
+            unit="km",
+            latitude=lat_f,
+            longitude=lon_f,
+            quality="provider_reported",
+            provider_fields={
+                "velocity_kmh": float(velocity),
+                "timestamp": stamp,
+                "visibility": visibility if visibility in _VISIBILITY else None,
+            },
+        )
+    ]
 
 
-SPACE_ADAPTERS: dict[str, PureAdapter] = {"iss_position": PureAdapter(iss_position_request, map_iss_position)}
+SPACE_ADAPTERS: dict[str, PureAdapter] = {
+    "iss_position": PureAdapter(iss_position_request, map_iss_position)
+}

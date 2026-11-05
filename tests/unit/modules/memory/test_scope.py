@@ -47,13 +47,16 @@ def test_every_content_method_requires_scope() -> None:
         assert params["multi_workspace_enabled"].default is inspect.Parameter.empty, name
 
 
-@pytest.mark.parametrize("call", [
-    lambda svc: svc.get_memories(**{**CTX, "scope": MEMBER}),
-    lambda svc: svc.get_active_memory_context(**{**CTX, "scope": MEMBER}),
-    lambda svc: svc.get_candidates(**{**CTX, "scope": MEMBER}),
-    lambda svc: svc.get_privacy_config(**{**CTX, "scope": MEMBER}),
-    lambda svc: svc.forget_memory(uuid4(), **{**CTX, "scope": MEMBER}),
-])
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda svc: svc.get_memories(**{**CTX, "scope": MEMBER}),
+        lambda svc: svc.get_active_memory_context(**{**CTX, "scope": MEMBER}),
+        lambda svc: svc.get_candidates(**{**CTX, "scope": MEMBER}),
+        lambda svc: svc.get_privacy_config(**{**CTX, "scope": MEMBER}),
+        lambda svc: svc.forget_memory(uuid4(), **{**CTX, "scope": MEMBER}),
+    ],
+)
 async def test_member_is_denied_before_any_query(call) -> None:
     session = MagicMock()
     session.execute = AsyncMock()
@@ -81,8 +84,12 @@ async def test_get_memories_filters_workspace_before_limit() -> None:
         return MagicMock(all=list)
 
     session.scalars = scalars
-    with patch.object(public.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)) as admit, \
-            patch.object(public, "lock_export_privacy", AsyncMock()):
+    with (
+        patch.object(
+            public.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)
+        ) as admit,
+        patch.object(public, "lock_export_privacy", AsyncMock()),
+    ):
         await MemoryService(session).get_memories(limit=5, **CTX)
     admit.assert_awaited_once()
     where = _where(seen[0])
@@ -100,9 +107,11 @@ def test_export_scope_is_workspace_bound() -> None:
 async def test_export_page_rejects_foreign_owner_id_before_query() -> None:
     session = MagicMock()
     session.scalar = AsyncMock()
-    with patch.object(public.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)), \
-            patch.object(public, "lock_export_privacy", AsyncMock()), \
-            pytest.raises(ValueError):
+    with (
+        patch.object(public.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)),
+        patch.object(public, "lock_export_privacy", AsyncMock()),
+        pytest.raises(ValueError),
+    ):
         await public.export_page(session, owner_id=99, record_kind="memories", **CTX)
     session.scalar.assert_not_awaited()
 
@@ -116,7 +125,9 @@ async def test_read_export_privacy_is_scoped_and_admitted() -> None:
         return MagicMock(one_or_none=lambda: None)
 
     session.execute = execute
-    with patch.object(public.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)) as admit:
+    with patch.object(
+        public.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)
+    ) as admit:
         result = await public.read_export_privacy(session, **CTX)
     admit.assert_awaited_once()
     assert result.persisted is False

@@ -46,13 +46,28 @@ class ContentTranslation(Base):
     __tablename__ = "content_translations"
     __table_args__ = (
         CheckConstraint(f"status IN ({_STATUS_SQL})", name="ck_content_translations_status"),
-        CheckConstraint(f"resource_type IN ({_RESOURCE_SQL})", name="ck_content_translations_resource_type"),
+        CheckConstraint(
+            f"resource_type IN ({_RESOURCE_SQL})", name="ck_content_translations_resource_type"
+        ),
         CheckConstraint("target_language IN ('vi', 'en')", name="ck_content_translations_target"),
         CheckConstraint("attempt_count >= 0", name="ck_content_translations_attempts"),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_content_translations_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_content_translations_workspace",
+            ondelete="CASCADE",
+        ),
         UniqueConstraint(
-            "workspace_id", "actor_user_id", "resource_type", "resource_id", "resource_revision",
-            "content_hash", "visibility_hash", "target_language", "config_hash", "prompt_version",
+            "workspace_id",
+            "actor_user_id",
+            "resource_type",
+            "resource_id",
+            "resource_revision",
+            "content_hash",
+            "visibility_hash",
+            "target_language",
+            "config_hash",
+            "prompt_version",
             name="uq_content_translations_fingerprint",
         ),
         Index("ix_content_translations_scope", "workspace_id", "status", "created_at"),
@@ -63,7 +78,9 @@ class ContentTranslation(Base):
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-    actor_user_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
+    actor_user_id: Mapped[int] = mapped_column(
+        ForeignKey("owner.id", ondelete="CASCADE"), nullable=False
+    )
     resource_type: Mapped[str] = mapped_column(String(16), nullable=False)
     resource_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     resource_revision: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -83,9 +100,15 @@ class ContentTranslation(Base):
     slot_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_expiry)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_expiry
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
 
 class TranslationBatch(Base):
@@ -95,18 +118,29 @@ class TranslationBatch(Base):
     __table_args__ = (
         CheckConstraint("target_language IN ('vi', 'en')", name="ck_translation_batches_target"),
         CheckConstraint("settings_revision > 0", name="ck_translation_batches_revision"),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_translation_batches_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_translation_batches_workspace",
+            ondelete="CASCADE",
+        ),
         Index("ix_translation_batches_actor", "workspace_id", "actor_user_id", "created_at"),
         Index("ix_translation_batches_expiry", "expires_at"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-    actor_user_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
+    actor_user_id: Mapped[int] = mapped_column(
+        ForeignKey("owner.id", ondelete="CASCADE"), nullable=False
+    )
     target_language: Mapped[str] = mapped_column(String(2), nullable=False)
     settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_expiry)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_expiry
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class TranslationBatchItem(Base):
@@ -114,10 +148,24 @@ class TranslationBatchItem(Base):
 
     __tablename__ = "translation_batch_items"
     __table_args__ = (
-        CheckConstraint(f"resource_type IN ({_RESOURCE_SQL})", name="ck_translation_batch_items_resource_type"),
-        ForeignKeyConstraint(["batch_id"], ["translation_batches.id"], name="fk_translation_batch_items_batch", ondelete="CASCADE"),
-        ForeignKeyConstraint(["translation_id"], ["content_translations.id"], name="fk_translation_batch_items_translation", ondelete="SET NULL"),
-        UniqueConstraint("batch_id", "resource_type", "resource_id", name="uq_translation_batch_items_ref"),
+        CheckConstraint(
+            f"resource_type IN ({_RESOURCE_SQL})", name="ck_translation_batch_items_resource_type"
+        ),
+        ForeignKeyConstraint(
+            ["batch_id"],
+            ["translation_batches.id"],
+            name="fk_translation_batch_items_batch",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["translation_id"],
+            ["content_translations.id"],
+            name="fk_translation_batch_items_translation",
+            ondelete="SET NULL",
+        ),
+        UniqueConstraint(
+            "batch_id", "resource_type", "resource_id", name="uq_translation_batch_items_ref"
+        ),
         Index("ix_translation_batch_items_translation", "translation_id"),
     )
 
@@ -128,7 +176,9 @@ class TranslationBatchItem(Base):
     resource_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     resource_revision: Mapped[str] = mapped_column(String(128), nullable=False)
     translation_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class TranslationAdmissionSlot(Base):
@@ -138,7 +188,10 @@ class TranslationAdmissionSlot(Base):
     __table_args__ = (
         CheckConstraint("id = 1", name="ck_translation_admission_slots_singleton"),
         CheckConstraint("fencing_token >= 0", name="ck_translation_admission_slots_token"),
-        CheckConstraint("(translation_id IS NULL) = (expires_at IS NULL)", name="ck_translation_admission_slots_holder"),
+        CheckConstraint(
+            "(translation_id IS NULL) = (expires_at IS NULL)",
+            name="ck_translation_admission_slots_holder",
+        ),
     )
 
     id: Mapped[int] = mapped_column(SmallInteger, primary_key=True)

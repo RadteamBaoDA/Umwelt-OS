@@ -24,8 +24,13 @@ def admitted():
 
 def evidence(**overrides: object) -> DocumentCleanupEvidenceScope:
     values: dict[str, object] = {
-        "operation_id": uuid4(), "source_id": uuid4(), "document_id": uuid4(), "references": (),
-        "next_cursor": None, "workspace_id": WS, "actor_user_id": 7,
+        "operation_id": uuid4(),
+        "source_id": uuid4(),
+        "document_id": uuid4(),
+        "references": (),
+        "next_cursor": None,
+        "workspace_id": WS,
+        "actor_user_id": 7,
     }
     values.update(overrides)
     return DocumentCleanupEvidenceScope(**values)  # type: ignore[arg-type]
@@ -67,7 +72,11 @@ class Recorder:
 
     def assert_selects_bound(self, *values: object) -> None:
         """Every SELECT binds each of ``values`` (workspace id, actor id) as a parameter."""
-        pairs = [(t, p) for t, p in zip(self.sql, self.params, strict=False) if t.lstrip().upper().startswith("SELECT")]
+        pairs = [
+            (t, p)
+            for t, p in zip(self.sql, self.params, strict=False)
+            if t.lstrip().upper().startswith("SELECT")
+        ]
         assert pairs
         for _text, params in pairs:
             for value in values:

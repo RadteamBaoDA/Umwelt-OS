@@ -52,13 +52,21 @@ def _wire(monkeypatch: pytest.MonkeyPatch, failing: str, exc: Exception) -> tupl
     monkeypatch.setattr(routes, "authenticated_session_ref", lambda _r: "ref")
     monkeypatch.setattr(routes, "lock_access_fence", AsyncMock())
     monkeypatch.setattr(routes.sources, "lock_source_set", AsyncMock(return_value=locked))
-    monkeypatch.setattr(routes.sources, "get_source_fence", AsyncMock(
-        side_effect=exc if failing == "fence" else None, return_value=fence))
-    monkeypatch.setattr(routes.public, "receive_file", AsyncMock(
-        side_effect=exc if failing == "receive_file" else None))
+    monkeypatch.setattr(
+        routes.sources,
+        "get_source_fence",
+        AsyncMock(side_effect=exc if failing == "fence" else None, return_value=fence),
+    )
+    monkeypatch.setattr(
+        routes.public,
+        "receive_file",
+        AsyncMock(side_effect=exc if failing == "receive_file" else None),
+    )
     monkeypatch.setattr(routes, "workspace_storage_lease", _lease)
     monkeypatch.setattr(routes, "AsyncSession", _Writer)
-    monkeypatch.setattr(routes, "to_thread_joined", AsyncMock(return_value=(".txt", "text/plain", "a.txt")))
+    monkeypatch.setattr(
+        routes, "to_thread_joined", AsyncMock(return_value=(".txt", "text/plain", "a.txt"))
+    )
     monkeypatch.setattr(routes, "iter_upload", lambda _u: iter([b"abc"]))
     session = MagicMock()
     session.rollback = AsyncMock()
@@ -66,21 +74,37 @@ def _wire(monkeypatch: pytest.MonkeyPatch, failing: str, exc: Exception) -> tupl
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("failing", "exc"), [
-    ("receive_file", ConflictError("Upload capture proof is stale")),
-    ("receive_file", NotFoundError("Source not found")),
-    ("fence", ConflictError("Source is not active")),
-])
+@pytest.mark.parametrize(
+    ("failing", "exc"),
+    [
+        ("receive_file", ConflictError("Upload capture proof is stale")),
+        ("receive_file", NotFoundError("Source not found")),
+        ("fence", ConflictError("Source is not active")),
+    ],
+)
 async def test_domain_error_rejection_cleans_up_raw_blob(
-    monkeypatch: pytest.MonkeyPatch, failing: str, exc: Exception,
+    monkeypatch: pytest.MonkeyPatch,
+    failing: str,
+    exc: Exception,
 ) -> None:
     """A ``DomainError`` from the publish step re-raises after ``rollback`` and ``storage.delete(raw_uri)``."""
     storage, session = _wire(monkeypatch, failing, exc)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-        settings=SimpleNamespace(upload_max_bytes=1024, data_dir="x", multi_workspace_enabled=False),
-        session_factory=MagicMock(),
-    )))
-    upload = UploadFile(io.BytesIO(b"abc"), size=3, filename="a.txt", headers=Headers({"content-type": "text/plain"}))
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(
+                    upload_max_bytes=1024, data_dir="x", multi_workspace_enabled=False
+                ),
+                session_factory=MagicMock(),
+            )
+        )
+    )
+    upload = UploadFile(
+        io.BytesIO(b"abc"),
+        size=3,
+        filename="a.txt",
+        headers=Headers({"content-type": "text/plain"}),
+    )
     with pytest.raises(type(exc)):
         await routes._intake_upload(request, session, SCOPE, uuid4(), upload)  # type: ignore[arg-type]
     storage.delete.assert_awaited_once_with("raw/k")

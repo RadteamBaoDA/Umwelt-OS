@@ -60,7 +60,11 @@ def _module_map():
 @pytest.fixture(autouse=True)
 def _admitted():
     """Admission and fenced commits are covered in test_scope.py; here they succeed."""
-    with patch("modules.agents.access.workspaces.read_access_fence", AsyncMock(return_value=FENCE)),             patch("modules.agents.access.workspaces.lock_access_fence", AsyncMock(return_value=FENCE)),             patch("modules.agents.public.commit_with_replay", AsyncMock()) as commit:
+    with (
+        patch("modules.agents.access.workspaces.read_access_fence", AsyncMock(return_value=FENCE)),
+        patch("modules.agents.access.workspaces.lock_access_fence", AsyncMock(return_value=FENCE)),
+        patch("modules.agents.public.commit_with_replay", AsyncMock()) as commit,
+    ):
         yield commit
 
 
@@ -87,8 +91,12 @@ class TestAgentRunDispatch:
         def _mock_add(obj: object) -> None:
             now = datetime.now(UTC)
             for attr, val in [
-                ("steps", 0), ("tool_calls", 0), ("active_seconds", 0),
-                ("token_usage_unknown", False), ("created_at", now), ("updated_at", now)
+                ("steps", 0),
+                ("tool_calls", 0),
+                ("active_seconds", 0),
+                ("token_usage_unknown", False),
+                ("created_at", now),
+                ("updated_at", now),
             ]:
                 if getattr(obj, attr, None) is None:
                     setattr(obj, attr, val)
@@ -130,8 +138,13 @@ class TestAgentRunDispatch:
 
         with pytest.raises(DomainError) as exc_info:
             await create_profile_run_in_uow(
-                session, auth_session_hash="hash", profile_id="supervisor",
-                request=request, registry=registry, config=None, **CTX,
+                session,
+                auth_session_hash="hash",
+                profile_id="supervisor",
+                request=request,
+                registry=registry,
+                config=None,
+                **CTX,
             )
         assert exc_info.value.status_code == 422
         assert "token_budget_unavailable" in exc_info.value.detail
@@ -161,8 +174,13 @@ class TestAgentRunDispatch:
 
         with pytest.raises(DomainError) as exc_info:
             await create_profile_run_in_uow(
-                session, auth_session_hash="hash", profile_id="supervisor",
-                request=request, registry=registry, config=None, **CTX,
+                session,
+                auth_session_hash="hash",
+                profile_id="supervisor",
+                request=request,
+                registry=registry,
+                config=None,
+                **CTX,
             )
         assert exc_info.value.status_code == 409
         assert "Client request ID was already used" in exc_info.value.detail
@@ -179,7 +197,8 @@ class TestStepLifecycleAndManagement:
         now = datetime.now(UTC)
         run = AgentRun(
             id=run_id,
-            owner_id=1, **EPOCH,
+            owner_id=1,
+            **EPOCH,
             agent_id="assistant",
             status="running",
             cancel_requested=False,
@@ -201,7 +220,10 @@ class TestStepLifecycleAndManagement:
         scalars_mock.all.return_value = []
         session.scalars.return_value = scalars_mock
 
-        with patch("modules.agents.public.publish_agent_activity_safely", return_value=None),                 patch("modules.agents.public.purge_browser_results_in_uow", AsyncMock()):
+        with (
+            patch("modules.agents.public.publish_agent_activity_safely", return_value=None),
+            patch("modules.agents.public.purge_browser_results_in_uow", AsyncMock()),
+        ):
             result = await request_cancel(session, run_id, MagicMock(), **CTX)
             assert isinstance(result, AgentRunRead)
             assert run.cancel_requested is True
@@ -211,16 +233,20 @@ class TestStepLifecycleAndManagement:
     async def test_purge_agent_runs_deletes_rows(self) -> None:
         """purge_agent_runs cancels, redacts, and purges given runs returning count."""
         session = AsyncMock()
-        r1 = AgentRun(id=uuid4(), owner_id=1, checkpoint_thread_id="t1", status="queued", allowed_tools=[])
-        r2 = AgentRun(id=uuid4(), owner_id=1, checkpoint_thread_id="t2", status="queued", allowed_tools=[])
+        r1 = AgentRun(
+            id=uuid4(), owner_id=1, checkpoint_thread_id="t1", status="queued", allowed_tools=[]
+        )
+        r2 = AgentRun(
+            id=uuid4(), owner_id=1, checkpoint_thread_id="t2", status="queued", allowed_tools=[]
+        )
 
         scalars_mock = MagicMock()
         scalars_mock.all.side_effect = [
             [r1, r2],  # agent runs query
-            [],        # approvals r1
-            [],        # effects r1
-            [],        # approvals r2
-            [],        # effects r2
+            [],  # approvals r1
+            [],  # effects r1
+            [],  # approvals r2
+            [],  # effects r2
         ]
         session.scalars.return_value = scalars_mock
 
@@ -267,7 +293,8 @@ class TestToolAuthorizationAndEvidenceFences:
     def test_result_principal_construction_all_sources(self) -> None:
         """_result_principal creates ToolExecutionPrincipal with owner_all_sources=True when profile_snapshot is None."""
         run = AgentRun(
-            owner_id=1, **EPOCH,
+            owner_id=1,
+            **EPOCH,
             allowed_tools=["knowledge.search", "webhook.send"],
             profile_snapshot=None,
         )
@@ -280,11 +307,15 @@ class TestToolAuthorizationAndEvidenceFences:
         assert "source.read" in kwargs["capabilities"]
         assert "webhook.send" in kwargs["capabilities"]
         # Recipe J: the scope is rebuilt from the durable original epoch, never the live one.
-        assert kwargs["scope"] == InternalJobScope(workspace_id=WS, actor_user_id=1, membership_revision=1)
+        assert kwargs["scope"] == InternalJobScope(
+            workspace_id=WS, actor_user_id=1, membership_revision=1
+        )
 
     def test_result_principal_quarantines_legacy_null_epoch(self) -> None:
         """A run without a captured original epoch gets no principal, so its answer stays suppressed."""
-        run = AgentRun(owner_id=1, workspace_id=WS, allowed_tools=["knowledge.search"], profile_snapshot=None)
+        run = AgentRun(
+            owner_id=1, workspace_id=WS, allowed_tools=["knowledge.search"], profile_snapshot=None
+        )
         assert _result_principal(run) is None
 
     def test_result_principal_fails_closed_on_oversized_sources(self) -> None:
@@ -381,7 +412,8 @@ class TestBrowserBudgetTrackingAndAuthority:
 
         run = AgentRun(
             id=run_id,
-            owner_id=1, **EPOCH,
+            owner_id=1,
+            **EPOCH,
             status="running",
             browser_jobs=2,  # Limit reached!
             browser_pages=1,
@@ -402,12 +434,19 @@ class TestBrowserBudgetTrackingAndAuthority:
 
         session.scalar.side_effect = [run, MagicMock(spec=AgentProfile), tool_call]
 
-        with patch("modules.agents.public._browser_profile_current", return_value=True), \
-             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):
+        with (
+            patch("modules.agents.public._browser_profile_current", return_value=True),
+            patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()),
+        ):
             with pytest.raises(PermissionError, match="Browser run budget is exhausted"):
                 await reserve_browser_run_budget_in_uow(
-                    session, run_id=run_id, claim_generation=1,
-                    tool_slot=1, args_digest=args_digest, requested_pages=2, **CTX,
+                    session,
+                    run_id=run_id,
+                    claim_generation=1,
+                    tool_slot=1,
+                    args_digest=args_digest,
+                    requested_pages=2,
+                    **CTX,
                 )
 
     @pytest.mark.asyncio
@@ -421,7 +460,8 @@ class TestBrowserBudgetTrackingAndAuthority:
 
         run = AgentRun(
             id=run_id,
-            owner_id=1, **EPOCH,
+            owner_id=1,
+            **EPOCH,
             status="running",
             browser_jobs=1,
             browser_pages=5,  # 5 + 2 = 7 > 6 limit!
@@ -442,12 +482,19 @@ class TestBrowserBudgetTrackingAndAuthority:
 
         session.scalar.side_effect = [run, MagicMock(spec=AgentProfile), tool_call]
 
-        with patch("modules.agents.public._browser_profile_current", return_value=True), \
-             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):
+        with (
+            patch("modules.agents.public._browser_profile_current", return_value=True),
+            patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()),
+        ):
             with pytest.raises(PermissionError, match="Browser run budget is exhausted"):
                 await reserve_browser_run_budget_in_uow(
-                    session, run_id=run_id, claim_generation=1,
-                    tool_slot=1, args_digest=args_digest, requested_pages=2, **CTX,
+                    session,
+                    run_id=run_id,
+                    claim_generation=1,
+                    tool_slot=1,
+                    args_digest=args_digest,
+                    requested_pages=2,
+                    **CTX,
                 )
 
     @pytest.mark.asyncio
@@ -461,7 +508,8 @@ class TestBrowserBudgetTrackingAndAuthority:
 
         run = AgentRun(
             id=run_id,
-            owner_id=1, **EPOCH,
+            owner_id=1,
+            **EPOCH,
             status="running",
             browser_jobs=0,
             browser_pages=0,
@@ -483,12 +531,21 @@ class TestBrowserBudgetTrackingAndAuthority:
 
         session.scalar.side_effect = [run, MagicMock(spec=AgentProfile), tool_call]
 
-        with patch("modules.agents.public._browser_profile_current", return_value=True), \
-             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):
-            with pytest.raises(PermissionError, match="Browser run active-time budget is exhausted"):
+        with (
+            patch("modules.agents.public._browser_profile_current", return_value=True),
+            patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()),
+        ):
+            with pytest.raises(
+                PermissionError, match="Browser run active-time budget is exhausted"
+            ):
                 await reserve_browser_run_budget_in_uow(
-                    session, run_id=run_id, claim_generation=1,
-                    tool_slot=1, args_digest=args_digest, requested_pages=1, **CTX,
+                    session,
+                    run_id=run_id,
+                    claim_generation=1,
+                    tool_slot=1,
+                    args_digest=args_digest,
+                    requested_pages=1,
+                    **CTX,
                 )
 
     @pytest.mark.asyncio
@@ -515,7 +572,8 @@ class TestBrowserBudgetTrackingAndAuthority:
 
         run = AgentRun(
             id=run_id,
-            owner_id=1, **EPOCH,
+            owner_id=1,
+            **EPOCH,
             status="running",
             cancel_requested=True,
             claim_generation=1,

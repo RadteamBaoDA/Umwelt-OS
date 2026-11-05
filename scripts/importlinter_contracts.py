@@ -58,7 +58,11 @@ class ModulePublicApiContract(Contract):
         )
         root = cast("str", self.package)
         allowed = cast("set[str]", self.allowed_submodules)
-        packages = {m[: -len(".descriptor")] for m in graph.modules if m.startswith(root + ".") and m.endswith(".descriptor")}
+        packages = {
+            m[: -len(".descriptor")]
+            for m in graph.modules
+            if m.startswith(root + ".") and m.endswith(".descriptor")
+        }
         packages |= cast("set[str]", self.extra_packages or set())
         ordered = sorted(packages, key=len, reverse=True)  # longest prefix wins for nested packages
 
@@ -73,12 +77,17 @@ class ModulePublicApiContract(Contract):
                 target = owner(imported)
                 if target is None or target == own or imported == target:
                     continue
-                if imported[len(target) + 1:].split(".")[0] in allowed:
+                if imported[len(target) + 1 :].split(".")[0] in allowed:
                     continue
-                lines = tuple(d["line_number"] for d in graph.get_import_details(importer=importer, imported=imported))
+                lines = tuple(
+                    d["line_number"]
+                    for d in graph.get_import_details(importer=importer, imported=imported)
+                )
                 violations.append({"importer": importer, "imported": imported, "lines": lines})
         if verbose:
-            output.print(f"Checked {len(packages)} module packages; found {len(violations)} private imports.")
+            output.print(
+                f"Checked {len(packages)} module packages; found {len(violations)} private imports."
+            )
         return ContractCheck(
             kept=not violations,
             warnings=list(removal.warnings),

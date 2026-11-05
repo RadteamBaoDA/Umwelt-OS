@@ -45,8 +45,13 @@ def _session() -> MagicMock:
 
 
 def _ctx(session: Any) -> dict[str, Any]:
-    return {"session_factory": _Factory(session), "settings": SimpleNamespace(multi_workspace_enabled=False, background_llm_timeout_seconds=60),
-            "redis": MagicMock()}
+    return {
+        "session_factory": _Factory(session),
+        "settings": SimpleNamespace(
+            multi_workspace_enabled=False, background_llm_timeout_seconds=60
+        ),
+        "redis": MagicMock(),
+    }
 
 
 def _deny(status: int) -> AsyncMock:
@@ -72,17 +77,27 @@ async def test_stale_is_reresolved_exactly_once() -> None:
 
 # Each case: (name, code, expected terminal code or None for a no-mutation skip).
 CASES: list[tuple[str, int, str | None]] = [
-    ("documents", 404, None), ("entities_ready", 404, None), ("news", 401, None), ("dashboard", 404, None),
-    ("graph", 404, PERMISSION_LOST), ("graph", 409, STALE_SCOPE),
-    ("timeline", 404, PERMISSION_LOST), ("timeline", 409, STALE_SCOPE),
-    ("entities_work", 404, PERMISSION_LOST), ("entities_work", 409, STALE_SCOPE),
-    ("search", 401, PERMISSION_LOST), ("search", 409, STALE_SCOPE),
+    ("documents", 404, None),
+    ("entities_ready", 404, None),
+    ("news", 401, None),
+    ("dashboard", 404, None),
+    ("graph", 404, PERMISSION_LOST),
+    ("graph", 409, STALE_SCOPE),
+    ("timeline", 404, PERMISSION_LOST),
+    ("timeline", 409, STALE_SCOPE),
+    ("entities_work", 404, PERMISSION_LOST),
+    ("entities_work", 409, STALE_SCOPE),
+    ("search", 401, PERMISSION_LOST),
+    ("search", 409, STALE_SCOPE),
 ]
 
 
 @pytest.mark.parametrize(("name", "status", "terminal"), CASES)
 async def test_denial_never_raises_and_is_terminal(
-    monkeypatch: pytest.MonkeyPatch, name: str, status: int, terminal: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    status: int,
+    terminal: str | None,
 ) -> None:
     session = _session()
     ctx = _ctx(session)
@@ -96,8 +111,11 @@ async def test_denial_never_raises_and_is_terminal(
     deny = _deny(status)
     run: Callable[[], Any]
     if name == "documents":
-        monkeypatch.setattr(documents_worker.ingestion, "read_document_cleanup_event_operation_id",
-                            AsyncMock(return_value=uuid4()))
+        monkeypatch.setattr(
+            documents_worker.ingestion,
+            "read_document_cleanup_event_operation_id",
+            AsyncMock(return_value=uuid4()),
+        )
         monkeypatch.setattr(documents_worker.ingestion, "resolve_ingestion_event_scope", deny)
         run = lambda: documents_worker.process_document_cleanup(ctx, event)  # noqa: E731  # terse test stub
     elif name == "entities_ready":
@@ -107,11 +125,16 @@ async def test_denial_never_raises_and_is_terminal(
         monkeypatch.setattr(news_worker.ingestion, "resolve_ingestion_event_scope", deny)
         run = lambda: news_worker.process_news_document_ready(ctx, event)  # noqa: E731  # terse test stub
     elif name == "dashboard":
-        monkeypatch.setattr(dashboard_worker.workspaces, "list_workspace_job_candidate_ids",
-                            AsyncMock(return_value=[WS]))
+        monkeypatch.setattr(
+            dashboard_worker.workspaces,
+            "list_workspace_job_candidate_ids",
+            AsyncMock(return_value=[WS]),
+        )
         monkeypatch.setattr(dashboard_worker.workspaces, "resolve_workspace_owner_context", owner)
         monkeypatch.setattr(dashboard_worker.briefs, "_admit", deny)
-        monkeypatch.setattr(dashboard_worker, "_read_workspace_cursor", AsyncMock(return_value=None))
+        monkeypatch.setattr(
+            dashboard_worker, "_read_workspace_cursor", AsyncMock(return_value=None)
+        )
         monkeypatch.setattr(dashboard_worker, "_write_workspace_cursor", AsyncMock())
         run = lambda: dashboard_worker.run_scheduled_brief(ctx)  # noqa: E731  # terse test stub
     elif name == "graph":
@@ -129,8 +152,11 @@ async def test_denial_never_raises_and_is_terminal(
         monkeypatch.setattr(mod, "terminalize", recorded)
         target = mod.timeline if name == "timeline" else mod.entities
         monkeypatch.setattr(target, "claim_extraction_work", deny)
-        entry = (timeline_worker.process_timeline_extraction_work if name == "timeline"
-                 else entities_worker.process_entity_extraction_work)
+        entry = (
+            timeline_worker.process_timeline_extraction_work
+            if name == "timeline"
+            else entities_worker.process_entity_extraction_work
+        )
         entry = getattr(entry, "__wrapped__", entry)  # skip the heavy-slot decorator
         run = lambda: entry(ctx, str(uuid4()))  # noqa: E731  # terse test stub
     else:
@@ -138,7 +164,8 @@ async def test_denial_never_raises_and_is_terminal(
         monkeypatch.setattr(search_indexing, "capture_authority", deny)
         monkeypatch.setattr(search_indexing, "terminalize", recorded)
         run = lambda: search_indexing._index_generation(  # noqa: E731  # terse test stub
-            _Factory(session), MagicMock(), ctx["settings"], uuid4(), WS)
+            _Factory(session), MagicMock(), ctx["settings"], uuid4(), WS
+        )
 
     await run()  # never raises
     if terminal is None:

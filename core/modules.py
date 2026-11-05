@@ -47,11 +47,36 @@ from modules.translations.descriptor import descriptor as translations
 ModuleRegistry: TypeAlias = dict[str, ModuleDescriptor]  # noqa: UP040 - mypy-friendly alias
 
 LIFECYCLE_DESCRIPTORS: tuple[ModuleDescriptor, ...] = (
-    sources, ingestion, documents, observations, entities, relationships, timeline, search, temporal,
-    dashboard, tasks, goals, news, notifications, chat, memory, tools, agents,
-    automations, observability, connectors, export,
+    sources,
+    ingestion,
+    documents,
+    observations,
+    entities,
+    relationships,
+    timeline,
+    search,
+    temporal,
+    dashboard,
+    tasks,
+    goals,
+    news,
+    notifications,
+    chat,
+    memory,
+    tools,
+    agents,
+    automations,
+    observability,
+    connectors,
+    export,
 )
-PLATFORM_DESCRIPTORS: tuple[ModuleDescriptor, ...] = (settings, translations, pick, model_gateway, mcp_widgets)
+PLATFORM_DESCRIPTORS: tuple[ModuleDescriptor, ...] = (
+    settings,
+    translations,
+    pick,
+    model_gateway,
+    mcp_widgets,
+)
 
 # Routers owned by core packages (not modules); positions share the global RouterSpec order space.
 CORE_ROUTERS: tuple[RouterSpec, ...] = (
@@ -63,7 +88,9 @@ CORE_ROUTERS: tuple[RouterSpec, ...] = (
 )
 
 
-def register_modules(descriptors: Iterable[ModuleDescriptor] = LIFECYCLE_DESCRIPTORS) -> ModuleRegistry:
+def register_modules(
+    descriptors: Iterable[ModuleDescriptor] = LIFECYCLE_DESCRIPTORS,
+) -> ModuleRegistry:
     """Build the descriptor registry and reject duplicate IDs or missing dependencies.
 
     Args:
@@ -79,7 +106,9 @@ def register_modules(descriptors: Iterable[ModuleDescriptor] = LIFECYCLE_DESCRIP
             raise ValueError(f"Duplicate module id: {descriptor.id}")
         registry[descriptor.id] = descriptor
     for descriptor in registry.values():
-        missing = (set(descriptor.dependencies) | set(getattr(descriptor, "optional_dependencies", ()))) - registry.keys()
+        missing = (
+            set(descriptor.dependencies) | set(getattr(descriptor, "optional_dependencies", ()))
+        ) - registry.keys()
         if missing:
             raise ValueError(
                 f"Module {descriptor.id} has missing dependencies: {', '.join(sorted(missing))}"
@@ -87,7 +116,9 @@ def register_modules(descriptors: Iterable[ModuleDescriptor] = LIFECYCLE_DESCRIP
     return registry
 
 
-def effective_modules(disabled: Iterable[str], descriptors: ModuleRegistry | None = None) -> ModuleRegistry:
+def effective_modules(
+    disabled: Iterable[str], descriptors: ModuleRegistry | None = None
+) -> ModuleRegistry:
     """Return descriptor copies with explicit disables and unavailable dependencies applied transitively.
 
     Only hard ``dependencies`` cascade; ``optional_dependencies`` record import coupling and never disable a module.
@@ -99,19 +130,25 @@ def effective_modules(disabled: Iterable[str], descriptors: ModuleRegistry | Non
         changed = False
         for module_id, descriptor in registry.items():
             if module_id not in unavailable and (
-                not descriptor.enabled or any(dependency in unavailable for dependency in descriptor.dependencies)
+                not descriptor.enabled
+                or any(dependency in unavailable for dependency in descriptor.dependencies)
             ):
                 unavailable.add(module_id)
                 changed = True
-    return {module_id: replace(descriptor, enabled=module_id not in unavailable)
-            for module_id, descriptor in registry.items()}
+    return {
+        module_id: replace(descriptor, enabled=module_id not in unavailable)
+        for module_id, descriptor in registry.items()
+    }
 
 
 def scheduled_job_owners(descriptors: ModuleRegistry | None = None) -> dict[str, str]:
     """Map declared worker entry points to their owning module for persisted dispatch gates."""
     registry = descriptors or register_modules()
-    return {job_name: module_id for module_id, descriptor in registry.items()
-            for job_name in getattr(descriptor, "scheduled_jobs", ())}
+    return {
+        job_name: module_id
+        for module_id, descriptor in registry.items()
+        for job_name in getattr(descriptor, "scheduled_jobs", ())
+    }
 
 
 def composition_descriptors() -> tuple[ModuleDescriptor, ...]:
@@ -135,7 +172,9 @@ def ordered_router_specs(
     owners = {item.id: item for item in composition_descriptors()}
     if registry:
         owners.update(registry)
-    entries: list[tuple[RouterSpec, ModuleDescriptor | None]] = [(spec, None) for spec in CORE_ROUTERS]
+    entries: list[tuple[RouterSpec, ModuleDescriptor | None]] = [
+        (spec, None) for spec in CORE_ROUTERS
+    ]
     entries.extend((spec, item) for item in owners.values() for spec in item.routers)
     entries.sort(key=lambda entry: entry[0].order)
     orders = [spec.order for spec, _ in entries]
@@ -150,7 +189,10 @@ def erasure_descriptors() -> tuple[ModuleDescriptor, ...]:
     The order encodes foreign-key/cleanup dependencies for ordinary table erasure and must stay
     stable; duplicates raise ``ValueError`` rather than relying on sort stability.
     """
-    items = sorted((item for item in composition_descriptors() if item.erasure_module), key=lambda i: i.erasure_order)
+    items = sorted(
+        (item for item in composition_descriptors() if item.erasure_module),
+        key=lambda i: i.erasure_order,
+    )
     if len({item.erasure_order for item in items}) != len(items):
         raise ValueError("Erasure orders must be unique")
     return tuple(items)

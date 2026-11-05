@@ -23,9 +23,7 @@ class SearchDescriptor(ModuleDescriptor):
     tools: tuple[str, ...] = ("search.query",)
     navigation: tuple[dict[str, str], ...] = ({"label": "Search", "href": "/search"},)
     settings_schema: dict[str, object] | None = None
-    routers: tuple[RouterSpec, ...] = (
-        RouterSpec("modules.search.routes", 270),
-    )
+    routers: tuple[RouterSpec, ...] = (RouterSpec("modules.search.routes", 270),)
     erasure_module: str | None = "modules.search.erasure"
     erasure_order: int = 170
 

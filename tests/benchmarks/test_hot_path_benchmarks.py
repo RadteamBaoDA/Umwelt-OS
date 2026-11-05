@@ -67,12 +67,20 @@ def _flush_results() -> Iterator[None]:
     if target and _RESULTS:
         with open(target, "w", encoding="utf-8") as handle:
             json.dump(
-                {"python": platform.python_version(), "machine": platform.machine(), "results": _RESULTS},
-                handle, indent=2, sort_keys=True,
+                {
+                    "python": platform.python_version(),
+                    "machine": platform.machine(),
+                    "results": _RESULTS,
+                },
+                handle,
+                indent=2,
+                sort_keys=True,
             )
 
 
-_SIMPLE_SQL = "SELECT count(*) FROM scoped_observations WHERE observed_at > now() - interval '7 days'"
+_SIMPLE_SQL = (
+    "SELECT count(*) FROM scoped_observations WHERE observed_at > now() - interval '7 days'"
+)
 _CTE_SQL = (
     "WITH recent AS (SELECT provider, value, observed_at FROM scoped_observations "
     "WHERE observed_at > now() - interval '30 days'), "
@@ -108,7 +116,9 @@ def test_bench_sql_guard_reject() -> None:
 
 _MARKDOWN = "\n\n".join(
     f"## Section {i}\n\n"
-    + " ".join(f"Sentence {i}-{j} describes fictional dashboard metric alpha{j}." for j in range(40))
+    + " ".join(
+        f"Sentence {i}-{j} describes fictional dashboard metric alpha{j}." for j in range(40)
+    )
     for i in range(30)
 )
 
@@ -119,58 +129,88 @@ def test_bench_chunk_text() -> None:
     assert len(chunks) > 5
 
 
-def _citation_fixture(evidence_count: int, citation_count: int) -> tuple[list[EvidenceItem], list[Citation | dict[str, Any]]]:
+def _citation_fixture(
+    evidence_count: int, citation_count: int
+) -> tuple[list[EvidenceItem], list[Citation | dict[str, Any]]]:
     """Build matching evidence items and citations whose quotes are contained in the evidence."""
     source_id = uuid4()
     evidence: list[EvidenceItem] = []
     citations: list[Citation | dict[str, Any]] = []
     for index in range(evidence_count):
         item = EvidenceItem(
-            source_id=source_id, source_generation=1, local_only=False, document_id=uuid4(),
-            document_version_id=uuid4(), version_number=1, chunk_id=uuid4(), chunk_index=index,
-            content=f"Evidence {index}: the quarterly report shows revenue growth of {index} percent. " * 20,
-            title=f"Document {index}", canonical_url=f"https://example.test/doc/{index}",
+            source_id=source_id,
+            source_generation=1,
+            local_only=False,
+            document_id=uuid4(),
+            document_version_id=uuid4(),
+            version_number=1,
+            chunk_id=uuid4(),
+            chunk_index=index,
+            content=f"Evidence {index}: the quarterly report shows revenue growth of {index} percent. "
+            * 20,
+            title=f"Document {index}",
+            canonical_url=f"https://example.test/doc/{index}",
         )
         evidence.append(item)
         if index < citation_count:
-            citations.append({
-                "sourceId": str(item.source_id), "documentId": str(item.document_id),
-                "documentVersionId": str(item.document_version_id), "chunkId": str(item.chunk_id),
-                "title": "ignored", "quote": f"revenue growth of {index} percent",
-            })
+            citations.append(
+                {
+                    "sourceId": str(item.source_id),
+                    "documentId": str(item.document_id),
+                    "documentVersionId": str(item.document_version_id),
+                    "chunkId": str(item.chunk_id),
+                    "title": "ignored",
+                    "quote": f"revenue growth of {index} percent",
+                }
+            )
     return evidence, citations
 
 
 def test_bench_validate_citations() -> None:
     """Validate 5 citations against 20 retrieved evidence items (typical grounded answer)."""
     evidence, citations = _citation_fixture(20, 5)
-    result = measure("citations.validate_5_of_20", lambda: validate_citations(citations, evidence), rounds=300)
+    result = measure(
+        "citations.validate_5_of_20", lambda: validate_citations(citations, evidence), rounds=300
+    )
     assert result.is_valid and len(result.valid_citations) == 5
 
 
 def test_bench_validate_citations_large() -> None:
     """Validate 20 citations against 100 evidence items (upper bound of the retrieval context)."""
     evidence, citations = _citation_fixture(100, 20)
-    result = measure("citations.validate_20_of_100", lambda: validate_citations(citations, evidence), rounds=100)
+    result = measure(
+        "citations.validate_20_of_100", lambda: validate_citations(citations, evidence), rounds=100
+    )
     assert result.is_valid and len(result.valid_citations) == 20
 
 
-_DELTA = json.dumps({"id": "chatcmpl-1", "object": "chat.completion.chunk", "choices": [
-    {"index": 0, "delta": {"content": "tok12 "}, "finish_reason": None}]})
-_REASONING = json.dumps({"choices": [{"index": 0, "delta": {"reasoning_content": "Considering the question"}}]})
+_DELTA = json.dumps(
+    {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "choices": [{"index": 0, "delta": {"content": "tok12 "}, "finish_reason": None}],
+    }
+)
+_REASONING = json.dumps(
+    {"choices": [{"index": 0, "delta": {"reasoning_content": "Considering the question"}}]}
+)
 
 
 def test_bench_parse_sse_chunk() -> None:
     """Decode one provider ``data:`` payload into delta fields (executed once per streamed chunk)."""
     chunk = measure("sse.parse_chunk_content", lambda: worker._parse_sse_chunk(_DELTA), rounds=5000)
     assert chunk is not None and chunk.content == "tok12 "
-    reasoning = measure("sse.parse_chunk_reasoning", lambda: worker._parse_sse_chunk(_REASONING), rounds=5000)
+    reasoning = measure(
+        "sse.parse_chunk_reasoning", lambda: worker._parse_sse_chunk(_REASONING), rounds=5000
+    )
     assert reasoning is not None and reasoning.reasoning == "Considering the question"
 
 
 def test_bench_format_sse_event() -> None:
     """Format one outgoing SSE frame (executed once per delivered event)."""
     frame = measure(
-        "sse.format_event", lambda: format_sse_event("message.delta", {"text": "tok12 "}, event_id="r:12"), rounds=5000
+        "sse.format_event",
+        lambda: format_sse_event("message.delta", {"text": "tok12 "}, event_id="r:12"),
+        rounds=5000,
     )
     assert frame == 'id: r:12\nevent: message.delta\ndata: {"text":"tok12 "}\n\n'

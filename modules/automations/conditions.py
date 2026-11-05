@@ -11,12 +11,25 @@ FieldType = Literal["string", "number", "boolean"]
 TRIGGER_FIELDS: dict[str, dict[str, FieldType]] = {
     "schedule": {"weekday": "number", "hour": "number"},
     "new_event": {"event_type": "string", "source_id": "string", "importance": "number"},
-    "new_document": {"source_id": "string", "source_type": "string", "mime_type": "string", "title": "string"},
+    "new_document": {
+        "source_id": "string",
+        "source_type": "string",
+        "mime_type": "string",
+        "title": "string",
+    },
     "entity_changed": {"entity_id": "string", "entity_type": "string", "change": "string"},
     "task_due": {
-        "status": "string", "goal_id": "string", "hours_until_due": "number", "created_by_automation": "boolean",
+        "status": "string",
+        "goal_id": "string",
+        "hours_until_due": "number",
+        "created_by_automation": "boolean",
     },
-    "goal_deadline": {"goal_id": "string", "status": "string", "days_until_deadline": "number", "progress": "number"},
+    "goal_deadline": {
+        "goal_id": "string",
+        "status": "string",
+        "days_until_deadline": "number",
+        "progress": "number",
+    },
     "webhook": {"event": "string"},
     "connector_sync_result": {"source_id": "string", "status": "string", "new_items": "number"},
 }
@@ -45,7 +58,11 @@ def check_condition(trigger_type: str, field: str, operator: str, value: Any) ->
     if operator in _ORDERED and kind != "number":
         raise ValueError(f"operator '{operator}' requires a numeric field")
     if operator == "in":
-        if not isinstance(value, list) or not 1 <= len(value) <= MAX_IN_VALUES or not all(_is_type(v, kind) for v in value):
+        if (
+            not isinstance(value, list)
+            or not 1 <= len(value) <= MAX_IN_VALUES
+            or not all(_is_type(v, kind) for v in value)
+        ):
             raise ValueError(f"'in' needs 1-{MAX_IN_VALUES} {kind} values")
     elif not _is_type(value, kind):
         raise ValueError(f"value for '{field}' must be {kind}")
@@ -59,7 +76,9 @@ def validate_sample(trigger_type: str, sample: dict[str, Any]) -> None:
             raise ValueError(f"sample field '{key}' is not a valid {trigger_type} field")
 
 
-def evaluate(conditions: list[dict[str, Any]], sample: dict[str, Any]) -> tuple[bool, list[dict[str, Any]]]:
+def evaluate(
+    conditions: list[dict[str, Any]], sample: dict[str, Any]
+) -> tuple[bool, list[dict[str, Any]]]:
     """Evaluate all conditions (AND) against a flat payload.
 
     Returns ``(matched, reasons)``; reasons carry index/field/operator/outcome codes only,
