@@ -22,6 +22,7 @@ import httpx
 
 from core.async_runtime import run_dns_lookup
 from core.heavy_work import to_thread_joined
+from core.net_policy import embedded_ipv4
 from modules.ingestion.public import IngestionRecord
 from modules.knowledge.documents.public import ProviderRecordMetadata
 
@@ -104,6 +105,10 @@ async def _resolve_local_addresses(host: str, port: int) -> list[Any]:
     except ValueError as exc:
         raise LocalServiceError("destination_invalid") from exc
     for address in parsed_addresses:
+        # NAT64/6to4/compat encodings of link-local (cloud metadata) are rejected via the IPv4 they carry.
+        carried = embedded_ipv4(address)
+        if carried is not None and (carried.is_link_local or carried.is_unspecified or carried.is_multicast):
+            raise LocalServiceError("destination_not_allowed")
         if (address.is_link_local or address.is_multicast or address.is_unspecified
                 or address.is_reserved and not address.is_loopback):
             raise LocalServiceError("destination_not_allowed")

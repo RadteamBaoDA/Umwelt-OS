@@ -21,6 +21,7 @@ from httpx2 import (
 )
 
 from core.mcp_endpoint import normalize_mcp_url
+from core.net_policy import embedded_ipv4, is_public_address
 
 
 class McpTransportError(RuntimeError):
@@ -278,13 +279,16 @@ class McpPinnedHttpTransport(AsyncBaseTransport):
             )
             # IPv6 loopback overlaps ipaddress's reserved classification; allow only its exact HTTP CIDR grant.
             approved_http_loopback = scheme == "http" and address.is_loopback and exception_allowed
-            if (address.is_link_local or address.is_multicast or address.is_unspecified
+            # NAT64/6to4/compat encodings are judged by the IPv4 they carry (metadata 169.254.169.254).
+            carried = embedded_ipv4(address)
+            if (carried is not None and carried.is_link_local
+                    or address.is_link_local or address.is_multicast or address.is_unspecified
                     or address.is_reserved and not approved_http_loopback
                     or address.is_loopback and scheme != "http"):
                 raise McpTransportError("MCP destination resolved to a special-use address")
             if scheme == "http" and (not exception_allowed or not (address.is_private or address.is_loopback)):
                 raise McpTransportError("Plain HTTP MCP destinations require an approved private or loopback CIDR")
-            if not address.is_global and not exception_allowed:
+            if not is_public_address(address) and not exception_allowed:
                 raise McpTransportError("MCP destination resolved to a non-public address")
             normalized.append(address.compressed)
         return normalized[0]
