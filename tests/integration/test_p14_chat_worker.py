@@ -35,11 +35,18 @@ def _docker(*args: str, timeout: float = 120) -> str:
     return result.stdout.strip()
 
 
-def _start_after_exit(container: str) -> None:
-    """Restore a SIGTERMed container. `docker kill` returns before arq's graceful shutdown ends, and
-    `docker start` on a still-running container is a silent no-op, after which it exits and stays down."""
+def _start_after_exit(container: str, wait_seconds: float = 90) -> None:
+    """Restore a SIGTERMed container and always leave it running.
+
+    `docker kill --signal=SIGTERM` returns before arq's graceful drain ends and `docker start` on a still-running
+    container is a silent no-op, so first wait (bounded) for the real exit. If the drain overruns the bound the
+    container is force-killed so the restart is real and the following tests still have a worker.
+    """
     try:
-        _docker("wait", container, timeout=60)
+        _docker("wait", container, timeout=wait_seconds)
+    except subprocess.TimeoutExpired:
+        _docker("kill", container)
+        _docker("wait", container, timeout=30)
     finally:
         _docker("start", container)
         assert _docker("inspect", "-f", "{{.State.Running}}", container) == "true", "container not restarted"
@@ -209,84 +216,77 @@ async def test_stopped_chat_worker_leaves_run_pending_then_completes_when_starte
         await asyncio.sleep(1)
 
 
-@pytest.mark.asyncio
-@requires_docker
-async def test_chat_worker_sigterm_mid_stream_recovers_within_30s(
-    chat_ready: AsyncClient, committed_engine: AsyncEngine,
-) -> None:
-    """SIGTERM mid-stream: the run reaches pending/streaming-again/terminal quickly, not after the 660 s sweep."""
-    client = chat_ready
-    worker_container = _service_container("chat-worker")
-    response_id = await _send(client, "hello [fake:tokens=2000,delay_ms=50]")
+async def _run_status(engine: AsyncEngine, response_id: str) -> str:
+    """Read one chat run's committed status."""
+    async with engine.connect() as connection:
+        return str((await connection.execute(
+            text("SELECT status FROM chat_response_runs WHERE id = :id"), {"id": response_id},
+        )).scalar_one())
 
-    async def status() -> str:
-        async with committed_engine.connect() as connection:
-            return str((await connection.execute(
-                text("SELECT status FROM chat_response_runs WHERE id = :id"), {"id": response_id},
-            )).scalar_one())
 
-    deadline = time.monotonic() + 30
-    while await status() != "streaming":
-        assert time.monotonic() < deadline, "run never started streaming"
-        await asyncio.sleep(0.5)
-    await asyncio.sleep(1)
-    await asyncio.to_thread(_docker, "kill", "--signal=SIGTERM", worker_container)
+async def _wait_status(engine: AsyncEngine, response_id: str, wanted: set[str], seconds: float) -> str:
+    """Poll until the run status is in `wanted`; fail at the deadline (bounded by asyncio.timeout)."""
+    current = ""
     try:
-        # Worker is down; the release hook must have left the run non-streaming (pending or failed).
-        deadline = time.monotonic() + 15
-        while await status() == "streaming":
-            assert time.monotonic() < deadline, "run stayed streaming after SIGTERM"
-            await asyncio.sleep(0.5)
-    finally:
-        await asyncio.to_thread(_start_after_exit, worker_container)
-    deadline = time.monotonic() + 30
-    while await status() in {"pending", "streaming"}:
-        assert time.monotonic() < deadline, "run did not reach a terminal state within 30 s of restart"
-        await asyncio.sleep(1)
+        async with asyncio.timeout(seconds):
+            while (current := await _run_status(engine, response_id)) not in wanted:  # noqa: ASYNC110  # DB poll, no event to await
+                await asyncio.sleep(0.5)
+    except TimeoutError:
+        pytest.fail(f"run stuck in {current!r}, wanted {sorted(wanted)} within {seconds}s")
+    return current
 
 
 @pytest.mark.asyncio
 @requires_docker
-async def test_chat_worker_sigterm_before_first_delta_returns_pending_then_completes(
+async def test_chat_worker_sigterm_drains_running_run_to_completion(
     chat_ready: AsyncClient, committed_engine: AsyncEngine,
 ) -> None:
-    """SIGTERM while the model has not produced a token: run goes back to pending, then completes cleanly."""
+    """SIGTERM mid-stream: arq drains the running job (job_completion_wait ~ CHAT_JOB_TIMEOUT + 5, compose
+    stop_grace_period 660 s), so the run is never handed back; it streams on to `completed` with the full text."""
     client = chat_ready
     worker_container = _service_container("chat-worker")
-    response_id = await _send(client, "hello [fake:tokens=5,delay_ms=5,first_delay_ms=20000]")
-
-    async def status() -> str:
-        async with committed_engine.connect() as connection:
-            return str((await connection.execute(
-                text("SELECT status FROM chat_response_runs WHERE id = :id"), {"id": response_id},
-            )).scalar_one())
-
-    deadline = time.monotonic() + 30
-    while await status() != "streaming":
-        assert time.monotonic() < deadline, "run never started streaming"
-        await asyncio.sleep(0.5)
-    await asyncio.sleep(1)
-    await asyncio.to_thread(_docker, "kill", "--signal=SIGTERM", worker_container)
+    response_id = await _send(client, "hello [fake:tokens=60,delay_ms=100]")  # ~6 s of streaming
     try:
-        deadline = time.monotonic() + 15
-        while await status() == "streaming":
-            assert time.monotonic() < deadline, "run stayed streaming after SIGTERM"
-            await asyncio.sleep(0.5)
-        assert await status() == "pending"
+        await _wait_status(committed_engine, response_id, {"streaming"}, 30)
+        await asyncio.to_thread(_docker, "kill", "--signal=SIGTERM", worker_container)
+        # Drain contract: the run must go streaming -> completed, never back to pending/failed.
+        assert await _wait_status(committed_engine, response_id, {"completed", "pending", "failed"}, 60) == "completed"
     finally:
         await asyncio.to_thread(_start_after_exit, worker_container)
-    deadline = time.monotonic() + 60
-    while await status() != "completed":
-        assert time.monotonic() < deadline, "run did not complete after chat-worker restart"
-        await asyncio.sleep(1)
+    streamed = "".join(
+        str(data["text"]) async for _, event, data in _events(client, response_id, None) if event == "message.delta"
+    )
+    assert streamed == fake_text(60)
+
+
+@pytest.mark.asyncio
+@requires_docker
+async def test_chat_worker_sigterm_leaves_unstarted_run_pending_then_completes(
+    chat_ready: AsyncClient, committed_engine: AsyncEngine,
+) -> None:
+    """A run enqueued after SIGTERM is not picked up (arq stops polling while draining): it stays `pending`
+    while the in-flight run finishes, and completes once the worker is restarted, with contiguous event seqs."""
+    client = chat_ready
+    worker_container = _service_container("chat-worker")
+    running_id = await _send(client, "hello [fake:tokens=60,delay_ms=100]")
+    pending_id = ""
+    try:
+        await _wait_status(committed_engine, running_id, {"streaming"}, 30)
+        await asyncio.to_thread(_docker, "kill", "--signal=SIGTERM", worker_container)
+        pending_id = await _send(client, "hello [fake:tokens=5,delay_ms=5]")
+        assert await _wait_status(committed_engine, running_id, {"completed", "pending", "failed"}, 60) == "completed"
+        await asyncio.sleep(2)
+        assert await _run_status(committed_engine, pending_id) == "pending"  # nobody left to start it
+    finally:
+        await asyncio.to_thread(_start_after_exit, worker_container)
+    await _wait_status(committed_engine, pending_id, {"completed"}, 60)
     async with committed_engine.connect() as connection:
         rows = (await connection.execute(
             text("SELECT seq, event_id FROM chat_stream_events WHERE response_id = :id ORDER BY seq"),
-            {"id": response_id},
+            {"id": pending_id},
         )).all()
     seqs = [r[0] for r in rows]
-    assert len(seqs) == len(set(seqs)) and len({r[1] for r in rows}) == len(rows)
-    assert seqs.count(1) == 1 and rows[0][0] == 1
+    assert seqs == list(range(1, len(seqs) + 1)) and len({r[1] for r in rows}) == len(rows)
 
 
 @pytest.mark.asyncio
