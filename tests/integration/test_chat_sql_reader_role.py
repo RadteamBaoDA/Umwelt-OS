@@ -9,15 +9,17 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
+from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
 from modules.chat import db_query
 from modules.chat.db_query import CHAT_SQL_LOGIN_ROLE, _run_sql_as_reader
+from tests.integration.test_observation_history import POINT, _observation, _seed
 
 pytestmark = pytest.mark.integration
 
@@ -40,14 +42,43 @@ async def reader_engine(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AsyncE
     db_query._reader_engines.clear()
 
 
-async def test_scoped_query_runs_as_reader_and_returns_rows(reader_engine: AsyncEngine) -> None:
-    """A scoped query works repeatedly and an unknown workspace yields zero rows."""
-    for _ in range(2):
+async def test_scoped_query_runs_as_reader_and_returns_rows(
+    reader_engine: AsyncEngine, ready_owner_client: AsyncClient, committed_engine: AsyncEngine,
+) -> None:
+    """The fence returns the seeded rows for the exact (workspace, source) pair and nothing for any other pair."""
+    seed = await _seed(ready_owner_client, committed_engine)
+    async with AsyncSession(committed_engine, expire_on_commit=False) as session:
+        await _observation(session, seed, revision=1, observed_at=POINT, accepted_at=POINT,
+                           version_id=seed.new_version_id, current=True)
+        await session.commit()
+
+    async def count(view: str, workspace_id: UUID, source_ids: list[UUID]) -> int:
+        """Count ``view`` rows through the real reader path for one fence."""
         rows = await _run_sql_as_reader(
-            "SELECT count(*) AS n FROM scoped_observations",
-            workspace_id=uuid4(), allowed_source_ids=[uuid4()], max_rows=5,
+            f"SELECT count(*) AS n FROM {view}",  # noqa: S608  # test-local constant view name
+            workspace_id=workspace_id, allowed_source_ids=source_ids, max_rows=5,
         )
-        assert [dict(row) for row in rows] == [{"n": 0}]
+        return int(dict(rows[0])["n"])
+
+    try:
+        for _ in range(2):  # second pass proves the cached pool is reusable
+            assert await count("scoped_observations", seed.workspace_id, [seed.source_id]) == 1
+            assert await count("scoped_observations", seed.workspace_id, [uuid4()]) == 0
+            assert await count("scoped_observations", uuid4(), [seed.source_id]) == 0
+        assert await count("scoped_documents", seed.workspace_id, [seed.source_id]) == 1
+        assert await count("scoped_documents", seed.workspace_id, [uuid4()]) == 0
+        assert await count("scoped_documents", uuid4(), [seed.source_id]) == 0
+        docs = await _run_sql_as_reader(
+            "SELECT content_excerpt, document_version_id FROM scoped_documents",
+            workspace_id=seed.workspace_id, allowed_source_ids=[seed.source_id], max_rows=5,
+        )
+        assert [dict(row) for row in docs] == [{"content_excerpt": "v2", "document_version_id": seed.new_version_id}]
+    finally:
+        # Remove the committed observation rows; the API-created source/document stay (the harness resets the stack).
+        async with AsyncSession(committed_engine) as session:
+            for table in ("observations", "source_observations", "ingestion_batches"):
+                await session.execute(text(f"DELETE FROM {table} WHERE source_id = :id"), {"id": seed.source_id})  # noqa: S608
+            await session.commit()
 
 
 async def test_session_user_is_the_login_role_and_cannot_switch_to_app_role(reader_engine: AsyncEngine) -> None:

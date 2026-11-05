@@ -438,13 +438,15 @@ def _reader_engine() -> AsyncEngine:
 
     The URL comes only from ``CHAT_SQL_READER_DATABASE_URL``; there is deliberately no fallback to the
     application connection, because that would reintroduce a ``RESET ROLE`` path to the app user.
-    Engines are cached per URL for the process lifetime (small pool, no overflow, short pool timeout).
+    The engine (and so the URL) is cached for the process lifetime (small pool, no overflow, short pool timeout).
 
     Raises:
         ChatSqlReaderUnavailableError: the setting is empty.
     """
+    if _reader_engines:  # settings are read once per process: the URL is fixed after the first engine is built
+        return next(iter(_reader_engines.values()))
     url = Settings().chat_sql_reader_database_url
-    if not url:
+    if not url:  # not cached, so setting the URL later enables the mode; unset stays fail-closed
         raise ChatSqlReaderUnavailableError("sql mode is disabled: CHAT_SQL_READER_DATABASE_URL is not configured")
     engine = _reader_engines.get(url)
     if engine is None:

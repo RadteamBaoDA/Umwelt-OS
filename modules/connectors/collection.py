@@ -44,6 +44,7 @@ from modules.connectors.collection_schemas import CollectionAdmissionRead, Colle
 from modules.connectors.models import ConnectorCollectionRequest, ConnectorProvisioning
 from modules.connectors.provider_specs import (
     INCREMENTAL_PROVIDERS,
+    LOCAL_SERVICE_PROVIDERS,
     get_provider_spec,
     get_quota_policies,
     get_realtime_tier,
@@ -78,7 +79,7 @@ KEYED_PROVIDERS = {provider: row.placement for provider, row in KEYED.items()}  
 SIMPLE_NATIVE = frozenset({"youtube", "arxiv", "huggingface", "bluesky", "reddit", "mastodon", "x", "github_releases", "alpha_vantage", "open_meteo", "google_mail", "google_calendar", "google_drive", "health", "home_assistant", "notion", "slack"})
 # Both HTTP-shaped error families a collaborator (Sources, terms, access admission) may raise.
 _HTTP_ERRORS = (HTTPException, DomainError)
-HEADER_AUTH_PROVIDERS = frozenset({"health", "home_assistant"})
+HEADER_AUTH_PROVIDERS = LOCAL_SERVICE_PROVIDERS
 REVISIONED_REST_PROVIDERS = frozenset({"notion", "slack", "mastodon", "x"})
 REFUSED_HERE: frozenset[str] = frozenset()  # providers that must never run here (GitHub/Telegram are native now)
 Snapshot = tuple[int, int, int]

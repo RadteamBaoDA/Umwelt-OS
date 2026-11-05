@@ -719,6 +719,8 @@ def evaluate_terms(
 # connector imports, so this module-level import is cycle-safe.
 from modules.connectors.backends import FIXED_SCOPE_PROVIDERS  # noqa: E402
 
+# Providers that fetch private/LAN addresses; only the instance operator may create or configure them.
+LOCAL_SERVICE_PROVIDERS: frozenset[str] = frozenset({"health", "home_assistant"})
 BUILTIN_PROVIDERS: frozenset[str] = frozenset(
     spec.id for spec in FREE_PROVIDER_SPECS
     if spec.id in FIXED_SCOPE_PROVIDERS and not spec.key_required and spec.code_implemented

@@ -78,4 +78,9 @@ def downgrade() -> None:
     """Drop the views, schema and role; they hold no durable data (the base tables are untouched)."""
     op.execute(f"DROP SCHEMA IF EXISTS {_SCHEMA} CASCADE")
     op.execute("DO $$ BEGIN EXECUTE format('REVOKE ALL ON DATABASE %I FROM " + _ROLE + "', current_database()); END $$")
-    op.execute(f"DROP ROLE IF EXISTS {_ROLE}")
+    # Roles are cluster-wide: another database (or a leftover grant) may still depend on this one, and a
+    # failed DROP must not abort the downgrade of this database; leave the passwordless role in place.
+    op.execute(
+        "DO $$ BEGIN DROP ROLE IF EXISTS " + _ROLE + "; "
+        "EXCEPTION WHEN dependent_objects_still_exist THEN NULL; END $$"
+    )

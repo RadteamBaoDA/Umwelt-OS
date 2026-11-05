@@ -49,3 +49,17 @@ async def test_put_configuration_403_for_non_operator(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await provisioning_routes.put_configuration(uuid4(), None, None, request, SimpleNamespace())  # type: ignore[arg-type]
     assert exc.value.status_code == 403
+
+
+@pytest.mark.parametrize("provider", ["health", "home_assistant"])
+async def test_create_source_403_for_non_operator(provider):
+    """Creating a local-service source fails clearly for a non-operator, before any database access."""
+    from modules.sources import routes
+    from modules.sources.schemas import SourceCreate
+
+    payload = SourceCreate(type="api", name="lan", provider=provider)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=SimpleNamespace(multi_workspace_enabled=True))))
+    scope = SimpleNamespace(role="owner", user_id=2)
+    with pytest.raises(HTTPException) as exc:
+        await routes.create_source(payload, None, request, scope)  # type: ignore[arg-type]
+    assert exc.value.status_code == 403

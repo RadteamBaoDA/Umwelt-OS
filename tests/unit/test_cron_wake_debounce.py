@@ -76,6 +76,7 @@ async def test_continuation_commits_coalesce_through_the_real_commit_hook() -> N
         session.commit()  # after_commit schedules the hook task on the running loop
         await asyncio.sleep(0)
         await asyncio.sleep(0)
+        session.close()
 
     cron.set_wake_hook(hook)
     try:

@@ -3,7 +3,7 @@
 The guard parses the statement with PostgreSQL's own parser (``pglast`` / libpg_query) and applies a
 *default-deny* policy to the resulting syntax tree: only an explicit set of node types, relations,
 functions, operators and cast targets is accepted. It is the first of three layers (parser allowlist,
-least-privilege ``umwelt_chat_sql_reader`` role, read-only transaction). A regex denylist is
+least-privilege ``umwelt_chat_sql_login`` role (migration 0017), read-only transaction). A regex denylist is
 deliberately not used as a layer: it missed real bypasses (``chat_messages``, ``query_to_xml``) and
 rejected legitimate literals such as ``ILIKE '%set%'``.
 """
