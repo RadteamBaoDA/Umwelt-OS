@@ -231,7 +231,8 @@ async def test_consent_revoked_while_fence_waits_sends_nothing(
     conversation_id, run_id, fence = await _run(factory, "revocation race")
     monkeypatch.setattr(worker, "approved_web_search_transport", _fake_provider)
     async with factory() as holder:
-        await lock_export_privacy(holder)
+        ws_id = (await holder.execute(text("SELECT workspace_id FROM chat_response_runs WHERE id = :i"), {"i": run_id})).scalar_one()
+        await lock_export_privacy(holder, ws_id)
         async with factory() as claim:  # the worker claims the run before searching
             await claim.execute(text("UPDATE chat_response_runs SET status = 'streaming' WHERE id = :i"), {"i": run_id})
             await claim.commit()
