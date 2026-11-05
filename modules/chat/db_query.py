@@ -12,7 +12,7 @@ import json
 import re
 from contextlib import suppress
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -462,24 +462,20 @@ def _reader_engine() -> AsyncEngine:
     return engine
 
 
-def _scope_settings(workspace_id: UUID, allowed_source_ids: list[UUID]) -> dict[str, str]:
-    """Return the ``umwelt.*`` settings that parameterise the ``chat_sql`` scoped views.
-
-    Raises:
-        TypeError: ``workspace_id`` or any source id is not a ``uuid.UUID`` (a plain ``str`` is refused so no
-            free text ever becomes a fence value).
-    """
-    if not isinstance(workspace_id, UUID) or not all(isinstance(sid, UUID) for sid in allowed_source_ids):
-        raise TypeError("workspace_id and every allowed source id must be uuid.UUID instances")
-    return {
-        "umwelt.chat_sql_workspace": str(workspace_id),
-        "umwelt.chat_sql_sources": ",".join(str(sid) for sid in allowed_source_ids),
-    }
+_FENCE_TTL_SECONDS = 10
+_UPSERT_FENCE = text(
+    "INSERT INTO chat_sql.query_fence (backend_pid, workspace_id, source_ids, expires_at) "
+    "VALUES (:pid, :ws, CAST(:src AS uuid[]), clock_timestamp() + make_interval(secs => :ttl)) "
+    "ON CONFLICT (backend_pid) DO UPDATE SET workspace_id = EXCLUDED.workspace_id, "
+    "source_ids = EXCLUDED.source_ids, expires_at = EXCLUDED.expires_at"
+)
+_DELETE_FENCE = text("DELETE FROM chat_sql.query_fence WHERE backend_pid = :pid")
 
 
 async def _run_sql_as_reader(
     clean_sql: str,
     *,
+    app_engine: AsyncEngine,
     workspace_id: UUID,
     allowed_source_ids: list[UUID],
     max_rows: int,
@@ -489,20 +485,31 @@ async def _run_sql_as_reader(
     The connection is a separate pool logged in as ``umwelt_chat_sql_login`` (no role membership, no table
     privileges, read-only by default), so the database enforces read-only access to the two ``chat_sql``
     scoped views even if the parser allowlist were bypassed: there is no ``SET ROLE`` path to the app user.
-    The views are permanent and fenced per transaction via ``set_config(..., is_local=true)``; nothing is
-    created in the session. Ordering: scope settings, ``SET TRANSACTION READ ONLY``, statement timeout, then
-    ``SELECT * FROM (<sql>) LIMIT :max_rows``; the transaction is always rolled back (nothing to commit).
+    The views are fenced by ``chat_sql.query_fence``, which the reader cannot touch: ordering is reader
+    ``pg_backend_pid()``; then, on a short separate ``app_engine`` transaction that is COMMITTED, an upsert of
+    the fence row (10 s expiry) for that pid; then ``SET TRANSACTION READ ONLY``, the statement timeout and
+    ``SELECT * FROM (<sql>) LIMIT :max_rows`` on the reader; finally the reader transaction is rolled back and
+    the fence row deleted via ``app_engine`` (even on error; the expiry covers a crash). The fence key is the
+    reader backend pid, and a reader connection serves one query at a time, so concurrent queries on
+    different pooled connections never share a row.
 
     Raises:
         ChatSqlReaderUnavailableError: the reader DSN is not configured (checked before any I/O).
-        TypeError: ``workspace_id``/source ids are not ``uuid.UUID``.
+        TypeError: ``workspace_id``/source ids are not ``uuid.UUID`` (a plain ``str`` is refused so no free
+            text ever becomes a fence value).
     """
-    scope_settings = _scope_settings(workspace_id, allowed_source_ids)  # validates ids before any I/O
+    if not isinstance(workspace_id, UUID) or not all(isinstance(sid, UUID) for sid in allowed_source_ids):
+        raise TypeError("workspace_id and every allowed source id must be uuid.UUID instances")
     engine = _reader_engine()
     async with engine.connect() as conn:
+        pid: int | None = None
         try:
-            for name, value in scope_settings.items():
-                await conn.execute(text("SELECT set_config(:name, :value, true)"), {"name": name, "value": value})
+            pid = (await conn.execute(text("SELECT pg_backend_pid()"))).scalar_one()
+            async with app_engine.begin() as app_conn:  # own transaction: the fence must be committed before the reader runs
+                await app_conn.execute(
+                    _UPSERT_FENCE,
+                    {"pid": pid, "ws": workspace_id, "src": list(allowed_source_ids), "ttl": _FENCE_TTL_SECONDS},
+                )
             await conn.execute(text("SET TRANSACTION READ ONLY"))
             await conn.execute(text(f"SET LOCAL statement_timeout = {_READER_STATEMENT_TIMEOUT_MS}"))
             res = await conn.execute(
@@ -512,6 +519,9 @@ async def _run_sql_as_reader(
             return list(res.mappings().all())
         finally:
             await conn.rollback()  # read-only work: discard the transaction so the pooled connection is clean
+            if pid is not None:
+                async with app_engine.begin() as app_conn:
+                    await app_conn.execute(_DELETE_FENCE, {"pid": pid})
 
 
 async def _execute_sql_mode(
@@ -531,6 +541,7 @@ async def _execute_sql_mode(
     clean_sql = validate_readonly_sql(sql_query)
     mappings = await _run_sql_as_reader(
         clean_sql,
+        app_engine=cast(AsyncEngine, session.bind),  # separate short app-role transaction; never the caller's
         workspace_id=workspace_id,
         allowed_source_ids=allowed_source_ids,
         max_rows=min(limit, MAX_DB_QUERY_ROWS),

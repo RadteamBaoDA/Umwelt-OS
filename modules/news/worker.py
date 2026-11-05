@@ -7,6 +7,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core import worker_cursors
@@ -43,13 +44,16 @@ async def _write_cursor(ctx: dict[str, object], key: str, cursor: UUID | None) -
 
 
 async def _ensure_recovery_checkpoint(session: AsyncSession, workspace_id: UUID) -> None:
-    """Flush a missing workspace checkpoint after current owner admission and before commit."""
-    checkpoint = await session.scalar(select(NewsRecoveryCheckpoint).where(
+    """Create-if-missing then row-lock the workspace checkpoint inside the caller's transaction (no commit).
+
+    ``ON CONFLICT DO NOTHING`` makes the worker and the recovery cron safe to race on first creation; the
+    following ``FOR UPDATE`` select serializes them on the (possibly just-inserted) row.
+    """
+    await session.execute(pg_insert(NewsRecoveryCheckpoint).values(workspace_id=workspace_id)
+        .on_conflict_do_nothing(index_elements=["workspace_id"]))
+    await session.scalar(select(NewsRecoveryCheckpoint).where(
         NewsRecoveryCheckpoint.workspace_id == workspace_id,
-    ).with_for_update())
-    if checkpoint is None:
-        session.add(NewsRecoveryCheckpoint(workspace_id=workspace_id))
-        await session.flush()
+    ).with_for_update().execution_options(populate_existing=True))
 
 
 @dataclass(frozen=True)

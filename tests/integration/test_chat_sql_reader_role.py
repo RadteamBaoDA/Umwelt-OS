@@ -56,7 +56,7 @@ async def test_scoped_query_runs_as_reader_and_returns_rows(
         """Count ``view`` rows through the real reader path for one fence."""
         rows = await _run_sql_as_reader(
             f"SELECT count(*) AS n FROM {view}",  # noqa: S608  # test-local constant view name
-            workspace_id=workspace_id, allowed_source_ids=source_ids, max_rows=5,
+            app_engine=committed_engine, workspace_id=workspace_id, allowed_source_ids=source_ids, max_rows=5,
         )
         return int(dict(rows[0])["n"])
 
@@ -70,7 +70,8 @@ async def test_scoped_query_runs_as_reader_and_returns_rows(
         assert await count("scoped_documents", uuid4(), [seed.source_id]) == 0
         docs = await _run_sql_as_reader(
             "SELECT content_excerpt, document_version_id FROM scoped_documents",
-            workspace_id=seed.workspace_id, allowed_source_ids=[seed.source_id], max_rows=5,
+            app_engine=committed_engine, workspace_id=seed.workspace_id, allowed_source_ids=[seed.source_id],
+            max_rows=5,
         )
         assert [dict(row) for row in docs] == [{"content_excerpt": "v2", "document_version_id": seed.new_version_id}]
     finally:
@@ -102,6 +103,10 @@ async def test_session_user_is_the_login_role_and_cannot_switch_to_app_role(read
         "SELECT count(*) FROM public.chat_messages",
         "SELECT count(*) FROM public.observations",
         "SELECT lo_from_bytea(0, 'x'::bytea)",
+        "SELECT lo_create(0)",
+        "CREATE TEMP TABLE t (x int)",
+        "SELECT pg_advisory_lock(1)",
+        "SELECT pg_notify('x', 'y')",
     ],
 )
 async def test_writes_and_base_table_reads_fail_even_after_leaving_read_only(
@@ -116,10 +121,78 @@ async def test_writes_and_base_table_reads_fail_even_after_leaving_read_only(
         assert (await conn.execute(text("SHOW default_transaction_read_only"))).scalar_one() == "on"
 
 
-async def test_validator_bypass_is_denied_by_the_database(reader_engine: AsyncEngine) -> None:
+async def test_validator_bypass_is_denied_by_the_database(
+    reader_engine: AsyncEngine, committed_engine: AsyncEngine,
+) -> None:
     """Base tables are unreadable through the tool's own execution path."""
     with pytest.raises(DBAPIError):
         await _run_sql_as_reader(
             "SELECT count(*) AS n FROM public.chat_messages",
-            workspace_id=uuid4(), allowed_source_ids=[uuid4()], max_rows=5,
+            app_engine=committed_engine, workspace_id=uuid4(), allowed_source_ids=[uuid4()], max_rows=5,
         )
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "INSERT INTO chat_sql.query_fence (backend_pid, workspace_id, source_ids, expires_at) "
+        "VALUES (1, gen_random_uuid(), '{}', now() + interval '1 hour')",
+        "UPDATE chat_sql.query_fence SET workspace_id = gen_random_uuid()",
+        "DELETE FROM chat_sql.query_fence",
+        "SELECT * FROM chat_sql.query_fence",
+    ],
+)
+async def test_reader_has_no_privilege_on_the_fence_table(reader_engine: AsyncEngine, sql: str) -> None:
+    """The reader cannot read or write the fence, so it cannot retarget it."""
+    async with reader_engine.connect() as conn:
+        with pytest.raises(DBAPIError):
+            await conn.execute(text(sql))
+        await conn.rollback()
+
+
+async def test_guc_and_foreign_pid_fence_rows_do_not_widen_the_views(
+    reader_engine: AsyncEngine, ready_owner_client: AsyncClient, committed_engine: AsyncEngine,
+) -> None:
+    """``set_config`` from the reader changes nothing, and a fence row for another pid yields zero rows."""
+    seed = await _seed(ready_owner_client, committed_engine)
+    other_workspace = uuid4()
+    async with AsyncSession(committed_engine, expire_on_commit=False) as session:
+        await _observation(session, seed, revision=1, observed_at=POINT, accepted_at=POINT,
+                           version_id=seed.new_version_id, current=True)
+        await session.commit()
+    try:
+        async with reader_engine.connect() as conn:
+            pid = (await conn.execute(text("SELECT pg_backend_pid()"))).scalar_one()
+            await conn.rollback()
+            async with committed_engine.begin() as app:  # fence belongs to a DIFFERENT pid
+                await app.execute(
+                    text("INSERT INTO chat_sql.query_fence VALUES (:pid, :ws, CAST(:src AS uuid[]), "
+                         "clock_timestamp() + interval '30 seconds') ON CONFLICT (backend_pid) DO NOTHING"),
+                    {"pid": pid + 1_000_000, "ws": seed.workspace_id, "src": [seed.source_id]},
+                )
+            for name, value in (("umwelt.chat_sql_workspace", str(seed.workspace_id)),
+                                ("umwelt.chat_sql_sources", str(seed.source_id))):
+                await conn.execute(text("SELECT set_config(:n, :v, true)"), {"n": name, "v": value})
+            for view in ("scoped_observations", "scoped_documents"):
+                n = (await conn.execute(text(f"SELECT count(*) FROM {view}"))).scalar_one()  # noqa: S608
+                assert n == 0
+            await conn.rollback()
+        # With a real fence for another workspace the seeded rows stay invisible.
+        rows = await _run_sql_as_reader(
+            "SELECT count(*) AS n FROM scoped_observations",
+            app_engine=committed_engine, workspace_id=other_workspace, allowed_source_ids=[seed.source_id], max_rows=5,
+        )
+        assert dict(rows[0])["n"] == 0
+    finally:
+        async with AsyncSession(committed_engine) as session:
+            await session.execute(text("DELETE FROM chat_sql.query_fence"))
+            for table in ("observations", "source_observations", "ingestion_batches"):
+                await session.execute(text(f"DELETE FROM {table} WHERE source_id = :id"), {"id": seed.source_id})  # noqa: S608
+            await session.commit()
+
+
+async def test_app_role_keeps_advisory_locks_and_temp_tables(committed_engine: AsyncEngine) -> None:
+    """Migration 0019 revokes PUBLIC grants but the application role still locks and creates temp tables."""
+    async with committed_engine.begin() as conn:
+        await conn.execute(text("SELECT pg_advisory_xact_lock(1)"))
+        await conn.execute(text("CREATE TEMP TABLE t_0019 (x int) ON COMMIT DROP"))

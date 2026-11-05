@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from core.chunking import chunk_text
 from core.config import Settings
 from core.cron import notify_on_commit
-from core.errors import ConflictError, DomainError
+from core.errors import ConflictError, DomainError, NotFoundError
 from core.events import DomainEvent
 from core.events.dispatch import valid_event_envelope
 from core.heavy_work import bounded_heavy_work, to_thread_joined
@@ -257,8 +257,12 @@ async def _lock_normalization_retry_event(
     if await ingestion_api.resolve_ingestion_run_scope(session, expected.run_id,
         multi_workspace_enabled=multi_workspace_enabled) != scope:
         return None
-    locked = await sources.lock_source_set(session, (cast(UUID, scope.source_id),), scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=expected.access_fence)
+    try:
+        locked = await sources.lock_source_set(session, (cast(UUID, scope.source_id),), scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=expected.access_fence)
+    except NotFoundError:
+        # Source generation advanced or Source vanished: treat as lost admission, not a worker crash.
+        return None
     source = locked.fences[0]
     if (source is None or source != expected.source_fence or source.status != "active"
             or source.generation != scope.source_generation):
@@ -377,8 +381,12 @@ async def _lock_worker_source(
     providers. Returns ``(locked_set, source_fence, projection)`` or ``None`` when any comparison fails.
     """
     scope, delivery = admitted.scope, admitted.delivery
-    locked = await sources.lock_source_set(session, (cast(UUID, scope.source_id),), scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=admitted.access_fence)
+    try:
+        locked = await sources.lock_source_set(session, (cast(UUID, scope.source_id),), scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=admitted.access_fence)
+    except NotFoundError:
+        # Generation advanced or Source gone: the dispatcher gate fails the outbox row; no work here.
+        return None
     source = locked.fences[0]
     if source is None or source.status != "active" or source.generation != scope.source_generation:
         return None
