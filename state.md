@@ -4,6 +4,7 @@
 - Plan gốc: `docs/superpowers/plans/2026-11-04-code-quality-remediation-plan.md`
 - Đã merge: [PR #1](https://github.com/RadteamBaoDA/Umwelt-OS/pull/1) → `feature/fix-ui` (merge commit `cc5045b2`, head `186e8120` của `feature/fix-ui-quality`)
 - Dừng theo yêu cầu owner ("Stop toàn bộ") — goal đã clear.
+- Head hiện tại `feature/fix-ui`: `6364deea` (PR #1 + `state.md` + patch WIP). Mọi nhánh (`feature/fix-ui`, `feature/fix-ui-quality`, `wp/boundaries`, `wp/outbox-events`) đã push, local = remote; không còn thay đổi chưa commit.
 
 ## 1. Đã hoàn thành (đã merge vào `feature/fix-ui`)
 
