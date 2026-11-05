@@ -19,6 +19,7 @@ from modules.chat.models import Message, StreamEvent
 from modules.chat.schemas import parse_generative_ui
 from modules.chat.user_input import InputOutcome
 from modules.settings.public import VizRouterResolved
+from tests.unit.modules.chat._worker_patch import patch_worker
 from tests.unit.modules.chat.test_p14_generation_worker import _Gen
 from tests.unit.typing_regressions.test_none_handling_regressions import _config, _factory
 
@@ -64,7 +65,7 @@ class _UIGen(_Gen):
         super().__init__(monkeypatch, [], prompt)
         self.rounds = rounds
         self.requests: list[dict[str, Any]] = []
-        monkeypatch.setattr(worker, "STREAM_FLUSH_SECONDS", 3600.0)  # only milestones publish
+        patch_worker(monkeypatch, "STREAM_FLUSH_SECONDS", 3600.0)  # only milestones publish
         # Internal router by default; the fake session's scripted reads must not be spent on settings lookups.
         monkeypatch.setattr(worker.settings_public, "resolve_viz_router", AsyncMock(return_value=VizRouterResolved()))
 
@@ -145,11 +146,11 @@ async def test_cancel_mid_tool_stream_publishes_no_widget(monkeypatch: pytest.Mo
             yield line
             cancelled["on"] = True  # Stop arrives while the tool arguments are still streaming
 
-    monkeypatch.setattr(worker, "ModelGateway", lambda **kw: type("G", (), {"stream": staticmethod(stream)})())
-    monkeypatch.setattr(worker, "is_run_cancelled", AsyncMock(side_effect=lambda *a, **k: cancelled["on"]))
+    patch_worker(monkeypatch, "ModelGateway", lambda **kw: type("G", (), {"stream": staticmethod(stream)})())
+    patch_worker(monkeypatch, "is_run_cancelled", AsyncMock(side_effect=lambda *a, **k: cancelled["on"]))
     marked = AsyncMock()
-    monkeypatch.setattr(worker, "_mark_cancelled", marked)
-    monkeypatch.setattr(worker, "CANCEL_CHECK_INTERVAL", 0.0)
+    patch_worker(monkeypatch, "_mark_cancelled", marked)
+    patch_worker(monkeypatch, "CANCEL_CHECK_INTERVAL", 0.0)
     await gen.run()
     assert marked.await_count + sum(1 for c in gen.session.commit.await_args_list) > 0
     assert gen.events("message.ui.done") == []
@@ -456,7 +457,7 @@ async def test_typesafe_router_uses_pinned_transport(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(worker.settings_public, "resolve_viz_router", AsyncMock(
         return_value=VizRouterResolved(kind="typesafe", allow_remote=True, typesafe_key="k")))
     pinned = MagicMock(return_value="transport")
-    monkeypatch.setattr(worker, "approved_web_search_transport", pinned)
+    patch_worker(monkeypatch, "approved_web_search_transport", pinned)
     classify = AsyncMock(return_value=("bar_chart", {}))
     monkeypatch.setattr(worker.viz, "classify_typesafe", classify)
     await gen.run(ai_allowed_endpoint_hosts=(), web_search_allowed_cidrs=())
@@ -551,7 +552,7 @@ async def test_todo_tools_are_offered_and_run_inside_the_loop(monkeypatch: pytes
         [_call(0, name="manage_todos", args='{"todos": []}', call_id="td")], _table_round("w"), END,
     ])
     tool = AsyncMock(return_value='{"todos": []}')
-    monkeypatch.setattr(worker, "run_todo_tool", tool)
+    patch_worker(monkeypatch, "run_todo_tool", tool)
     await gen.run()
     gen.failed.assert_not_awaited()
     assert {"manage_todos", "get_todos", "request_user_input"} <= {t["function"]["name"] for t in gen.requests[0]["tools"]}
@@ -570,8 +571,8 @@ async def test_user_input_parks_then_continues_with_the_answer(monkeypatch: pyte
     gen = _UIGen(monkeypatch, [[_text("Need one thing. "), *_ask({"kind": "text", "prompt": "Your name?"})], [_text("Thanks.")]])
     create = AsyncMock(return_value={"request_id": "rid"})
     wait = AsyncMock(return_value=InputOutcome("answered", '{"status": "answered", "answer": "Ada"}'))
-    monkeypatch.setattr(worker, "create_input_request", create)
-    monkeypatch.setattr(worker, "await_user_input", wait)
+    patch_worker(monkeypatch, "create_input_request", create)
+    patch_worker(monkeypatch, "await_user_input", wait)
     await gen.run(chat_input_request_ttl_seconds=60)
     gen.failed.assert_not_awaited()
     create.assert_awaited_once()
@@ -588,8 +589,8 @@ async def test_user_input_expiry_or_cancel_stops_without_terminal_output(
     monkeypatch: pytest.MonkeyPatch, outcome: str,
 ) -> None:
     gen = _UIGen(monkeypatch, [[_text("Partial. "), *_ask({"kind": "text", "prompt": "Name?"})], [_text("never")]])
-    monkeypatch.setattr(worker, "create_input_request", AsyncMock(return_value={"request_id": "rid"}))
-    monkeypatch.setattr(worker, "await_user_input", AsyncMock(return_value=InputOutcome(outcome, "{}")))  # type: ignore[arg-type]
+    patch_worker(monkeypatch, "create_input_request", AsyncMock(return_value={"request_id": "rid"}))
+    patch_worker(monkeypatch, "await_user_input", AsyncMock(return_value=InputOutcome(outcome, "{}")))  # type: ignore[arg-type]
     await gen.run()
     gen.failed.assert_not_awaited()
     assert len(gen.requests) == 1
@@ -600,7 +601,7 @@ async def test_user_input_expiry_or_cancel_stops_without_terminal_output(
 async def test_invalid_user_input_args_return_an_error_and_never_park(monkeypatch: pytest.MonkeyPatch) -> None:
     gen = _UIGen(monkeypatch, [_ask({"kind": "choice", "prompt": "Pick"}), [_text("Ok.")]])
     create = AsyncMock()
-    monkeypatch.setattr(worker, "create_input_request", create)
+    patch_worker(monkeypatch, "create_input_request", create)
     await gen.run()
     gen.failed.assert_not_awaited()
     create.assert_not_awaited()
@@ -610,8 +611,8 @@ async def test_invalid_user_input_args_return_an_error_and_never_park(monkeypatc
 async def test_user_input_is_limited_to_two_per_turn(monkeypatch: pytest.MonkeyPatch) -> None:
     gen = _UIGen(monkeypatch, [_ask({"kind": "text", "prompt": "Again?"})])  # the model keeps asking
     create = AsyncMock(return_value={"request_id": "rid"})
-    monkeypatch.setattr(worker, "create_input_request", create)
-    monkeypatch.setattr(worker, "await_user_input", AsyncMock(return_value=InputOutcome("answered", "{}")))
+    patch_worker(monkeypatch, "create_input_request", create)
+    patch_worker(monkeypatch, "await_user_input", AsyncMock(return_value=InputOutcome("answered", "{}")))
     await gen.run()
     assert create.await_count == worker.MAX_USER_INPUT_REQUESTS_PER_TURN == 2
     assert len(gen.requests) == 3 and gen.events("message.done")

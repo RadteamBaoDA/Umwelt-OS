@@ -13,6 +13,7 @@ from modules.chat.generative_ui.tools.form import _resolve_slots, build_meeting_
 from modules.chat.generative_ui.tools.plan import _first_provenance
 from modules.chat.generative_ui.tools.query import query_records
 from modules.chat.schemas import AnswerContext, AnswerContextRequest
+from tests.unit.modules.chat._worker_patch import patch_worker
 from tests.unit.typing_regressions.test_none_handling_regressions import _evidence
 
 
@@ -67,11 +68,11 @@ class _Session:
 async def _fence(monkeypatch: pytest.MonkeyPatch, *, cancelled: bool, evidence_ok: bool, with_evidence: bool) -> tuple[Any, list[str]]:
     calls: list[str] = []
     run = SimpleNamespace(status="streaming")
-    monkeypatch.setattr(worker, "_lock_live_response", AsyncMock(return_value=(True, run)))
-    monkeypatch.setattr(worker, "is_run_cancelled", AsyncMock(return_value=cancelled))
-    monkeypatch.setattr(worker, "_cancel_response_locked", AsyncMock(side_effect=lambda *_a: calls.append("cancel")))
-    monkeypatch.setattr(worker, "_privacy_cancel_locked", AsyncMock(side_effect=lambda *_a: calls.append("redact")))
-    monkeypatch.setattr(worker, "revalidate_context_fence", AsyncMock(return_value=(evidence_ok, [])))
+    patch_worker(monkeypatch, "_lock_live_response", AsyncMock(return_value=(True, run)))
+    patch_worker(monkeypatch, "is_run_cancelled", AsyncMock(return_value=cancelled))
+    patch_worker(monkeypatch, "_cancel_response_locked", AsyncMock(side_effect=lambda *_a: calls.append("cancel")))
+    patch_worker(monkeypatch, "_privacy_cancel_locked", AsyncMock(side_effect=lambda *_a: calls.append("redact")))
+    patch_worker(monkeypatch, "revalidate_context_fence", AsyncMock(return_value=(evidence_ok, [])))
     c = worker._RunCtx(
         response_id=uuid4(), session_factory=None, settings=None, redis=None,  # type: ignore[arg-type]
         conversation_id=uuid4(), privacy_fence={}, seq=3, job_scope=SimpleNamespace(),  # type: ignore[arg-type]

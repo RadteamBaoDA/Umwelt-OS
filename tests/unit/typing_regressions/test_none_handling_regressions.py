@@ -31,6 +31,7 @@ from core.model_gateway.schemas import (
 from core.workspaces import public as core_workspaces_public
 from core.workspaces.schemas import InternalJobScope, WorkspaceContext
 from modules.chat.schemas import AnswerContext, AnswerContextRequest, EvidenceItem
+from tests.unit.modules.chat._worker_patch import patch_worker
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 OWNER = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1)
@@ -370,16 +371,16 @@ async def test_chat_completion_persists_message_with_citations(monkeypatch: pyte
         yield "data: [DONE]"
 
     seq = iter(range(100, 200))
-    monkeypatch.setattr(worker, "_lock_live_response", AsyncMock(return_value=(True, MagicMock())))
-    monkeypatch.setattr(worker, "is_run_cancelled", AsyncMock(return_value=False))
-    monkeypatch.setattr(worker, "revalidate_context_fence", AsyncMock(return_value=(True, [])))
-    monkeypatch.setattr(worker, "_next_event_seq", AsyncMock(side_effect=lambda *a, **k: next(seq)))
-    monkeypatch.setattr(worker, "build_context", AsyncMock(return_value=context))
-    monkeypatch.setattr(worker, "_admit_job", AsyncMock(return_value=(OWNER, MagicMock())))
+    patch_worker(monkeypatch, "_lock_live_response", AsyncMock(return_value=(True, MagicMock())))
+    patch_worker(monkeypatch, "is_run_cancelled", AsyncMock(return_value=False))
+    patch_worker(monkeypatch, "revalidate_context_fence", AsyncMock(return_value=(True, [])))
+    patch_worker(monkeypatch, "_next_event_seq", AsyncMock(side_effect=lambda *a, **k: next(seq)))
+    patch_worker(monkeypatch, "build_context", AsyncMock(return_value=context))
+    patch_worker(monkeypatch, "_admit_job", AsyncMock(return_value=(OWNER, MagicMock())))
     monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config(defaults=ModelDefaults())))
-    monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
+    patch_worker(monkeypatch, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
     failed = AsyncMock()
-    monkeypatch.setattr(worker, "_mark_failed", failed)
+    patch_worker(monkeypatch, "_mark_failed", failed)
 
     await worker.run_response_generation(
         response_id, _factory(session), SimpleNamespace(ai_allowed_endpoint_cidrs=()), MagicMock(),  # type: ignore[arg-type]
@@ -429,15 +430,15 @@ async def test_chat_completion_uncited_answer_emits_no_citations(monkeypatch: py
         yield "data: [DONE]"
 
     seq = iter(range(100, 200))
-    monkeypatch.setattr(worker, "_lock_live_response", AsyncMock(return_value=(True, MagicMock())))
-    monkeypatch.setattr(worker, "is_run_cancelled", AsyncMock(return_value=False))
-    monkeypatch.setattr(worker, "revalidate_context_fence", AsyncMock(return_value=(True, [])))
-    monkeypatch.setattr(worker, "_next_event_seq", AsyncMock(side_effect=lambda *a, **k: next(seq)))
-    monkeypatch.setattr(worker, "build_context", AsyncMock(return_value=context))
-    monkeypatch.setattr(worker, "_admit_job", AsyncMock(return_value=(OWNER, MagicMock())))
+    patch_worker(monkeypatch, "_lock_live_response", AsyncMock(return_value=(True, MagicMock())))
+    patch_worker(monkeypatch, "is_run_cancelled", AsyncMock(return_value=False))
+    patch_worker(monkeypatch, "revalidate_context_fence", AsyncMock(return_value=(True, [])))
+    patch_worker(monkeypatch, "_next_event_seq", AsyncMock(side_effect=lambda *a, **k: next(seq)))
+    patch_worker(monkeypatch, "build_context", AsyncMock(return_value=context))
+    patch_worker(monkeypatch, "_admit_job", AsyncMock(return_value=(OWNER, MagicMock())))
     monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config(defaults=ModelDefaults())))
-    monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
-    monkeypatch.setattr(worker, "_mark_failed", AsyncMock())
+    patch_worker(monkeypatch, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
+    patch_worker(monkeypatch, "_mark_failed", AsyncMock())
 
     await worker.run_response_generation(
         response_id, _factory(session), SimpleNamespace(ai_allowed_endpoint_cidrs=()), MagicMock(),  # type: ignore[arg-type]
@@ -478,15 +479,15 @@ async def _run_chat_with_answer(
         yield "data: [DONE]"
 
     seq = iter(range(100, 200))
-    monkeypatch.setattr(worker, "_lock_live_response", AsyncMock(return_value=(True, MagicMock())))
-    monkeypatch.setattr(worker, "is_run_cancelled", AsyncMock(return_value=False))
-    monkeypatch.setattr(worker, "revalidate_context_fence", AsyncMock(return_value=(True, [])))
-    monkeypatch.setattr(worker, "_next_event_seq", AsyncMock(side_effect=lambda *a, **k: next(seq)))
-    monkeypatch.setattr(worker, "build_context", AsyncMock(return_value=context))
-    monkeypatch.setattr(worker, "_admit_job", AsyncMock(return_value=(OWNER, MagicMock())))
+    patch_worker(monkeypatch, "_lock_live_response", AsyncMock(return_value=(True, MagicMock())))
+    patch_worker(monkeypatch, "is_run_cancelled", AsyncMock(return_value=False))
+    patch_worker(monkeypatch, "revalidate_context_fence", AsyncMock(return_value=(True, [])))
+    patch_worker(monkeypatch, "_next_event_seq", AsyncMock(side_effect=lambda *a, **k: next(seq)))
+    patch_worker(monkeypatch, "build_context", AsyncMock(return_value=context))
+    patch_worker(monkeypatch, "_admit_job", AsyncMock(return_value=(OWNER, MagicMock())))
     monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config(defaults=ModelDefaults())))
-    monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
-    monkeypatch.setattr(worker, "_mark_failed", AsyncMock())
+    patch_worker(monkeypatch, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
+    patch_worker(monkeypatch, "_mark_failed", AsyncMock())
     await worker.run_response_generation(
         response_id, _factory(session), SimpleNamespace(ai_allowed_endpoint_cidrs=()), MagicMock(),  # type: ignore[arg-type]
     )

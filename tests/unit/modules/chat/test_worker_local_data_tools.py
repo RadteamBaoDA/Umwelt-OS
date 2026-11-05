@@ -6,8 +6,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from modules.chat import ui_theme, worker
+from modules.chat import ui_theme
 from modules.chat.models import StreamEvent
+from tests.unit.modules.chat._worker_patch import patch_worker
 from tests.unit.modules.chat.test_generative_ui_worker import END, _call, _table_round, _UIGen
 
 
@@ -19,7 +20,7 @@ def _tool_messages(gen: _UIGen) -> list[dict]:
 async def test_template_tool_runs_inside_the_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     gen = _UIGen(monkeypatch, [[_call(0, name="list_templates", args="{}", call_id="lt")], _table_round("w"), END])
     runner = AsyncMock(return_value='{"templates": [], "pending_template": null}')
-    monkeypatch.setattr(worker, "run_template_tool", runner)
+    patch_worker(monkeypatch, "run_template_tool", runner)
     await gen.run()
     gen.failed.assert_not_awaited()
     runner.assert_awaited_once()
@@ -38,7 +39,7 @@ async def test_set_theme_emits_event_and_seq_continues(monkeypatch: pytest.Monke
     async def publish(session, run_id, raw):  # the scripted fake session cannot answer the max(seq) query
         return await real(SimpleNamespace(scalar=AsyncMock(return_value=3), add=session.add), run_id, raw)
 
-    monkeypatch.setattr(worker, "publish_theme", publish)
+    patch_worker(monkeypatch, "publish_theme", publish)
     await gen.run()
     gen.failed.assert_not_awaited()
     (theme,) = gen.events("ui.theme")
