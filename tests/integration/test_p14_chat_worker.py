@@ -254,7 +254,7 @@ async def test_chat_worker_sigterm_drains_running_run_to_completion(
     finally:
         await asyncio.to_thread(_start_after_exit, worker_container)
     streamed = "".join(
-        str(data["text"]) async for _, event, data in _events(client, response_id, None) if event == "message.delta"
+        [str(data["text"]) async for _, event, data in _events(client, response_id, None) if event == "message.delta"]
     )
     assert streamed == fake_text(60)
 
