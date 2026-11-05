@@ -168,3 +168,14 @@ async def test_already_delivered_reads_the_outbox_status():
     assert await already_delivered(Session("delivered"), uuid4()) is True
     assert await already_delivered(Session("queued"), uuid4()) is False
     assert await already_delivered(Session(None), uuid4()) is False
+
+
+def test_validate_resolves_every_handler_and_the_runtime(monkeypatch):
+    """Boot validation imports each handler (must be an EventHandler) so a bad target fails at startup."""
+    from core.events.registry import EventHandler
+
+    registry = validate_event_contracts()
+    assert all(isinstance(registry.handler(t), EventHandler) for t in registry.routes)
+    monkeypatch.setattr(registry, "handler", lambda t: object())
+    with pytest.raises(ValueError, match="not an EventHandler"):
+        validate_event_contracts()

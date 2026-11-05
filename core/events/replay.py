@@ -10,6 +10,7 @@ Only ``failed`` rows are eligible, and only rows whose principal is the named wo
 ``actor_user_id`` must equal ``--owner-user-id`` and the workspace's ``owner_user_id``). Re-queuing sets the row
 back to ``pending`` with ``next_attempt_at = now`` and a cleared ``dispatched_at``; the dispatcher then claims it
 like a new event (fresh job id), re-validating the envelope, so a still-invalid event is quarantined again.
+Destructive types (purge, cleanup, purge-cancelled stage events) need ``--allow-destructive``.
 Without ``--execute`` nothing is written. Selection is bounded by ``--limit`` (default 100, max 1000).
 """
 
@@ -29,6 +30,17 @@ from core.events.model import EventOutbox
 from core.workspaces.models import Workspace
 
 MAX_LIMIT = 1000
+# Single source of truth: types whose replay is destructive (purge/cleanup) or would resurrect work a source
+# purge cancelled (``modules/ingestion/_purge.py`` marks stage events of purged runs ``failed``).
+DESTRUCTIVE_TYPES = frozenset({
+    "source.purge.requested", "source.purge.coverage", "source.purge.progressed", "document.cleanup.requested",
+    "ingestion.stage.requested", "connector.crawl.requested", "ingestion.normalize.requested",
+})
+
+
+def is_destructive(event_type: str) -> bool:
+    """Return whether replaying ``event_type`` needs ``--allow-destructive`` (purge, cleanup, purge-cancelled)."""
+    return event_type in DESTRUCTIVE_TYPES
 
 
 def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
@@ -44,6 +56,8 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--since", type=_parse_since, help="ISO-8601 instant; only events created at/after it")
     parser.add_argument("--limit", type=int, default=100, help=f"Maximum rows (1..{MAX_LIMIT}, default 100)")
     parser.add_argument("--execute", action="store_true", help="Apply the re-queue (default is a dry run)")
+    parser.add_argument("--allow-destructive", action="store_true",
+                        help="Permit replaying purge/cleanup events and stage events a source purge cancelled")
     args = parser.parse_args(argv)
     if (args.event_id is None) == (args.event_type is None):
         parser.error("use exactly one of --event-id or --type/--since")
@@ -108,8 +122,17 @@ async def run(args: argparse.Namespace, session: AsyncSession) -> int:
         session, owner_user_id=args.owner_user_id, event_id=args.event_id, event_type=args.event_type,
         since=args.since, limit=args.limit)
     mode = "EXECUTE" if args.execute else "DRY-RUN"
+    destructive = 0
     for event_id, event_type, created_at in found:
-        print(f"[{mode}] {event_id} {event_type} created_at={created_at.isoformat()}")
+        flag = " DESTRUCTIVE" if is_destructive(event_type) else ""
+        destructive += bool(flag)
+        print(f"[{mode}] {event_id} {event_type} status=failed created_at={created_at.isoformat()}{flag}")
+    if destructive and args.execute and not args.allow_destructive:
+        # Refuse the whole batch: a partial replay would hide which rows were skipped.
+        print(f"[{mode}] refused: {destructive} destructive event(s); pass --allow-destructive to replay them")
+        return 2
+    if destructive and not args.execute and not args.allow_destructive:
+        print(f"[{mode}] note: destructive events present; --execute will refuse without --allow-destructive")
     if not found:
         print(f"[{mode}] no failed events match")
         return 1 if args.event_id is not None else 0

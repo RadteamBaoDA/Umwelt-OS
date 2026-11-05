@@ -203,7 +203,16 @@ def get_event_registry() -> EventRegistry:
 def validate_event_contracts() -> EventRegistry:
     """Startup hook: validate descriptor event declarations and return the registry.
 
+    Also imports every route's handler and the scope runtime so a mistyped ``module:Attr`` target fails at boot.
+
     Raises:
-        ValueError: See ``build_event_registry``.
+        ValueError: See ``build_event_registry``; also when a resolved handler is not an ``EventHandler``.
+        AttributeError, ImportError, LookupError: A handler/runtime target cannot be resolved.
     """
-    return get_event_registry()
+    registry = get_event_registry()
+    for event_type in registry.routes:
+        if not isinstance(registry.handler(event_type), EventHandler):
+            raise ValueError(f"Handler for {event_type} is not an EventHandler")
+    if registry.runtime_target:
+        registry.runtime()
+    return registry
